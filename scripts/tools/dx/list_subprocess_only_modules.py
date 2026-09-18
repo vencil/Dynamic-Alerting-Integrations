@@ -1,69 +1,79 @@
 #!/usr/bin/env python3
-"""list_subprocess_only_modules.py — 哪些模組**只**被 subprocess 測到（coverage 盲點）。
+"""list_subprocess_only_modules.py — 每個模組被哪一種進入點執行到（以 coverage 實測為準）。
 
-以 subprocess 呼叫工具的測試**對 coverage.py 完全不可見**（它預設不追子行程）⇒ 一支工具
-可以有完整且有偵測力的測試，而報表把它讀成「從未被 import」
-（TRK-379 / [#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)）。
+TRK-379 / [#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)。
 
-述詞
-----
-對 coverage source 內的每個模組 `M`：
+本工具回答的問題
+----------------
+對 coverage source 內的每個模組**檔案**，整輪測試把它執行起來的進入點是哪一種：
+in-process（測試直接 import 後呼叫）、subprocess（測試起子行程跑它）、兩者、或都沒有。
 
-- `imported(M)` — 有測試檔以 AST 可見的方式 import 它（`import` / `from … import` /
-  `importlib.import_module("…")` / `spec_from_file_location("…")`）。
-- `subprocess(M)` — 有測試檔**同時**起子行程（`sys.executable` / `subprocess.`）
-  **且**在檔案內文提到該模組的路徑或檔名。
+⛔ **這不再是「盲點」清單。** 自 `tests/conftest.py` 接上 subprocess coverage 之後，
+以子行程執行的模組**對 coverage 是可見的**——「只走 subprocess」仍然為真，但它是一種
+**進入點型態**，不是一個量測缺口。把它讀成盲點會高估問題。真正的缺口只剩 `unexecuted`
+（見下方「本工具答不出來的事」）。
 
-分類：`subprocess(M) and not imported(M)` ⇒ **盲點**。
+判定方式：權威 oracle，不是述詞
+--------------------------------
+`tests/conftest.py` 把子行程的 coverage 設定標上 `context = "subprocess"`（機制見該檔
+註解），於是**每一行被記錄的程式碼都自己帶著它是由哪種行程執行的**。本工具只是去讀
+那份資料：
 
-⚠️ `subprocess(M)` 是字串啟發式，**兩個方向都會錯**，所以這份清單是**待查名單不是判定**：
+- `{"subprocess"}`      ⇒ `subprocess_only`
+- `{""}`                ⇒ `in_process_only`
+- `{"", "subprocess"}`  ⇒ `both`
+- 完全沒有執行到的行    ⇒ `unexecuted`
 
-- 高估：測試檔的**任何文字**出現 `<stem>.py` 就算數
-  （`test_prose_mentioning_a_stem_creates_a_false_positive`）。
-- 低估（⛔ 更危險）：路徑若是**間接**組出來的，該模組落進 `untested` 而不是 `blind_spots`
-  ——真盲點被歸成「根本沒測試」（`test_indirectly_built_paths_are_a_false_negative`）。
+⛔ **前一版以 AST stem-matching 判定，連同它六條已知界線，已於本版整組退役。**
+那六條全是同一個 decidability 問題的實例（從 AST 判不出 `import X` 解析到誰），而本版
+以**檔案路徑**為鍵、以實際執行為據，該問題在這裡不存在。不要把它們搬回來。
 
-⛔ **不要重新引入 `--verify`**（拿真 coverage 抽驗那個子功能，已移除）：它只走訪
-`blind_spots` 所以結構上看不到被錯誤排除的模組；它跑 `--cov=<stem>`，stem 撞到已安裝套件
-時量到的是**那個套件**（對專案的 `json.py` 實測 `--cov=json` 量到 stdlib），沒資料 ⇒ 假確認、
-有資料 ⇒ 假否定；而且它零測試釘住。
+⛔ **不要重新引入 `--verify` 那個形狀**（已移除的舊子功能：對每個 stem 跑 `--cov=<stem>`
+抽驗）。它錯在兩處而本版兩處都不同：它只走訪 `blind_spots` 所以結構上看不到被錯誤排除
+的模組（本版走訪**整個母體**），且 `--cov=<stem>` 在 stem 撞到已安裝套件時量到的是那個
+套件（本版不用 stem，讀的是整輪實跑的資料檔）。
 
-已知界線（都造成假陰性，本工具不修）
-------------------------------------
-分類以檔名 stem 為鍵，所以任何撞到 stem 的東西都會遮蔽真盲點。六條各有一格
-`test_known_limit_*`（⑷ 兩半各一格）：⑴ 兩個專案檔共用 stem；⑵ 同名的 stdlib 或第三方
-套件被 import；⑶ `from pkg import name` 的 `name` 從 AST 看不出是模組還是符號；
-⑷ `ast.walk` 不看可達性（`if TYPE_CHECKING:` 之下、以及函式 body 內的 import）；
-⑸ `from __future__ import annotations` 遮蔽 `annotations.py`；⑹ 測試檔的**相對** import
-在本 repo 的設定下指不到 source root（⛔ 那是設定的性質不是定理——`source = ["tests"]` 時
-就指得到，反例釘在 `test_a_relative_import_does_reach_a_module_when_source_is_tests`）。
+本工具答不出來的事（刻意留白，不是疏忽）
+----------------------------------------
+⚠️ `unexecuted` **合併了兩件事**：真的沒有任何測試碰它、以及有測試碰它但那次執行
+**沒被記錄**。後者有兩個已知成因：(a) 測試以 `env={...}` 從頭組環境而不帶 `os.environ`，
+子行程因此收不到 `COVERAGE_PROCESS_CONFIG`；(b) 該檔是 symlink 而它的目標落在 coverage
+`source` 之外——coverage 以 realpath 過 `source` 過濾器，整段執行連進資料庫的機會都沒有。
+⛔ 從 coverage 資料**無法**區分這兩者與「真的沒測試」——那正是本工具倚賴的 oracle 的
+邊界。要縮小它只能去改那些測試或那個 symlink，不能靠這裡多寫一條述詞。
+（目標**在** `source` 內的 symlink 則是量得到的，兩側都以 realpath 正規化後可對上。）
 
-⛔ **不要為 ⑵⑶⑷⑸⑹ 再寫一版述詞。** 它們全是同一個 decidability 問題：從 AST 看不出
-`import X` 解析到誰。要真的修得換到有權威 oracle 的那一面（import 系統／coverage 自己的
-量測），那是另一張票。
+⚠️ 本工具**不再回報「哪些測試檔碰到這個模組」**。coverage 的靜態 context 記錄的是行程
+種類不是測試身分；要那個資訊得改用 `--cov-context=test` 的動態 context，那會取代本工具
+倚賴的靜態標記。⇒ 兩者擇一，本工具選了前者。
+
+⚠️ 讀到的是**某一次**測試執行留下的資料。它是否對應當下的樹，本工具不驗證也無從驗證；
+母體與資料完全不相交時走 rc 2，但「部分過期」讀起來會正常。⇒ 要現況就先重跑測試。
 
 Usage / Exit codes
 ------------------
 ::
 
-    python3 scripts/tools/dx/list_subprocess_only_modules.py [--json]
+    # 先產生資料（conftest 會在 --cov 時自動接上 subprocess coverage）
+    pytest tests/ --cov
+    python3 scripts/tools/dx/list_subprocess_only_modules.py [--json] [--coverage-data PATH]
 
-- ``0`` — 產出了清單（**不**因為有盲點而失敗：這是界定範圍用的報告，不是閘門）
+- ``0`` — 產出了分類（**不**因為有 `subprocess_only` 或 `unexecuted` 而失敗：這是界定
+  範圍用的報告，不是閘門）
 - ``2`` — **量不到**：不是 git repo、讀不到 pyproject 的 coverage source、母體為空、
-  或 **coverage 拒絕 ``omit`` 裡的某條 pattern**（設定讀不懂 ⇒ 量不到，不是換個 matcher
-  的理由）
+  coverage 拒絕 ``omit`` 裡的某條 pattern、**找不到或讀不懂 coverage 資料檔**、
+  **資料裡沒有任何 `subprocess` context**（⇒ 它是在未接線的情況下產生的，回答不了本
+  問題）、**資料出現未知的 context**（⇒ 分類規則不再是全稱的）、或**母體與資料完全
+  不相交**（⇒ 這份資料描述的不是這棵樹）
 """
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
-import re
 import subprocess
 import sys
 import tomllib
-from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
@@ -192,145 +202,223 @@ def omit_matcher(omit: set[str]) -> "Callable[[str], bool] | None":
     return _match
 
 
-def build(repo: Path) -> dict:
+# 子行程的 coverage 設定在 tests/conftest.py 標上這個 context。⛔ 兩邊是同一個字串
+# 的兩份寫法；漂掉時本工具會在「未知 context」那條走 rc 2 而不是靜默分錯桶——失敗是
+# 大聲的，但它仍然是兩份，改一邊要改另一邊。
+SUBPROCESS_CONTEXT = "subprocess"
+IN_PROCESS_CONTEXT = ""
+
+BUCKETS = ("subprocess_only", "both", "in_process_only", "unexecuted")
+
+
+def read_coverage_data(path: Path):
+    """讀 coverage 資料檔；讀不到一律轉成 ``RuntimeError``（呼叫端走 rc 2）。
+
+    ⛔ 這裡的每一種失敗都是「量不到」，不是「量了沒事」。檔案不存在最常見的原因是
+    **還沒跑過測試**，而那和「跑了但沒有 subprocess」在分類結果上長得一模一樣（兩者都
+    會讓每個模組落進 ``unexecuted``）⇒ 必須在讀取階段就分開。
+
+    釘住：``test_missing_coverage_data_is_rc2`` / ``test_unreadable_coverage_data_is_rc2``。
+    """
+    try:
+        import coverage  # noqa: PLC0415
+    except Exception as exc:  # pragma: no cover - 環境缺 coverage
+        raise RuntimeError(f"匯入 coverage 失敗，無從讀取量測資料：{exc}") from exc
+
+    if not path.exists():
+        raise RuntimeError(
+            f"找不到 coverage 資料檔：{path}。先跑 `pytest tests/ --cov` 產生它"
+            "（conftest 會在 --cov 時自動接上 subprocess coverage）"
+        )
+    data = coverage.CoverageData(basename=str(path))
+    try:
+        data.read()
+    except Exception as exc:
+        raise RuntimeError(f"coverage 資料檔讀不懂（{path}）：{exc}") from exc
+    return data
+
+
+def _measured_key(repo: Path, measured: str) -> str:
+    """把 coverage 記錄的一筆路徑正規化成可與母體比對的鍵。
+
+    ⛔ **不能直接 `os.path.realpath(measured)`。** coverage 在 `relative_files` 模式下
+    記錄的是**字面相對字串**（實測：`measured_files()` 回 `'scripts/tools/ops/a.py'`，
+    `os.path.isabs` 為 False），而 `realpath` 會拿**讀取端的 cwd** 去解它。於是同一份
+    資料、同一個 `--repo`，只要工具不是從 repo 根目錄跑，真正被執行過的模組就會靜默
+    落進 `unexecuted`——一份看起來完全正常的錯答案。相對路徑一律先接到 `repo` 底下。
+    釘住：`test_relative_path_coverage_data_is_resolved_against_the_repo_not_the_cwd`。
+
+    ⚠️ 兩邊都取 `realpath`（母體那側見 `build()`）是為了 symlink：coverage 記錄的是
+    `os.path.realpath` 解過的目標路徑，而 `git ls-files` 列的是 symlink 自己的路徑。
+    只正規化一邊的話，一個被 symlink 指到、確實跑過的模組會永遠落進 `unexecuted`。
+    釘住：`test_a_symlinked_module_matches_its_measured_target`。
+    """
+    if not os.path.isabs(measured):
+        measured = os.path.join(str(repo), measured)
+    return os.path.realpath(measured)
+
+
+def contexts_by_module(repo: Path, data) -> dict:
+    """realpath -> 該檔被記錄到的 context 集合（只含真的執行過的行）。
+
+    鍵是 realpath 而不是 repo 相對路徑，理由見 `_measured_key`；`build()` 以同樣的
+    正規化去查母體，兩側必須用同一把尺。
+    """
+    out = {}
+    for measured in data.measured_files():
+        key = _measured_key(repo, measured)
+        contexts = set()
+        for line_contexts in data.contexts_by_lineno(measured).values():
+            contexts.update(line_contexts)
+        out[key] = contexts
+    return out
+
+
+def population(repo: Path) -> list:
+    """coverage source 內、未被 omit 排除、且被 git 追蹤的所有模組檔案路徑。"""
     sources, omit = coverage_sources(repo)
     if not sources:
         raise RuntimeError("pyproject.toml 讀不到 [tool.coverage.run] source")
     is_omitted = omit_matcher(omit)
-
-    modules: dict[str, str] = {}
+    modules = set()
     for src in sources:
         # ⚠️ `**/` 至少要吃一層目錄 ⇒ **只給 `{src}/**/*.py` 會漏掉該目錄的頂層檔案**。
         # 兩個 pathspec 都給（git ls-files 取聯集）。⛔ 不要「精簡」成一個：哪一個是
-        # 全集取決於 git 的 pathspec 設定（預設 `*` 跨 `/`，`:(glob)` magic 則否），
-        # 而漏掉頂層那一次是**靜默**的——母體少一截，報告仍然長得正常。
-        # 釘住：`test_top_level_modules_are_in_the_population` /
-        #       `test_top_level_test_files_are_in_the_population`
-        for p in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
-            if is_omitted is not None and is_omitted(p):
+        # 全集取決於 git 的 pathspec 設定，而漏掉頂層那一次是**靜默**的——母體少一截，
+        # 報告仍然長得正常。釘住：`test_top_level_modules_are_in_the_population`。
+        for path in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
+            if is_omitted is not None and is_omitted(path):
                 continue
-            modules[p] = Path(p).stem
-    stem_to_paths: dict[str, list[str]] = defaultdict(list)
-    for p, stem in modules.items():
-        stem_to_paths[stem].append(p)
+            modules.add(path)
+    return sorted(modules), sources
 
-    tests = [t for t in tracked(repo, "tests/*.py", "tests/**/*.py")
-             if Path(t).name.startswith("test_")]
 
-    imported: dict[str, set[str]] = defaultdict(set)
-    subproc: dict[str, set[str]] = defaultdict(set)
-    spawners: set[str] = set()
+def build(repo: Path, data_path: Path) -> dict:
+    modules, sources = population(repo)
+    if not modules:
+        raise RuntimeError("母體是空的（coverage source 內沒有任何被追蹤的 .py）")
 
-    for t in tests:
-        text = (repo / t).read_text(encoding="utf-8", errors="replace")
-        spawns = "sys.executable" in text or "subprocess." in text
-        if "sys.executable" in text:
-            spawners.add(t)
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            tree = None
-        if tree is not None:
-            for node in ast.walk(tree):
-                names: list[str] = []
-                if isinstance(node, ast.Import):
-                    names = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    # ⚠️ 這裡**不分 `node.level`**，而那是已知的假陰性通道（界線 ⑹），
-                    #   不是疏忽——理由與「不要再寫一版述詞」的理由都在模組 docstring。
-                    #   釘住：`test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`
-                    #   與反例 `test_a_relative_import_does_reach_a_module_when_source_is_tests`。
-                    # ⛔ 不能只看 `node.module`。`from scripts.tools.ops import mytool`
-                    #   的 `node.module` 末段是 `ops`，真正的模組名在 `node.names` 裡；
-                    #   只看前者會讓一個**確實有 in-process 進入點**的模組被列進
-                    #   `blind_spots`（假陽性）。
-                    #   釘住：`test_package_level_from_import_counts_as_in_process`。
-                    names = ([node.module] if node.module else []) \
-                        + [a.name for a in node.names]
-                for n in names:
-                    last = n.split(".")[-1]
-                    if last in stem_to_paths:
-                        imported[last].add(t)
-            for pat in (r'import_module\(\s*["\']([\w.]+)["\']',
-                        r'spec_from_file_location\(\s*["\']([\w.]+)["\']'):
-                for m in re.finditer(pat, text):
-                    last = m.group(1).split(".")[-1]
-                    if last in stem_to_paths:
-                        imported[last].add(t)
-        if spawns:
-            for stem, paths in stem_to_paths.items():
-                if any(p in text for p in paths) or f"{stem}.py" in text:
-                    subproc[stem].add(t)
+    data = read_coverage_data(data_path)
 
-    blind = sorted(s for s in subproc if s not in imported)
+    # ⛔ 未知 context ⇒ rc 2，不是丟進 else 桶。分類規則只在 context 集合是
+    #   {"", "subprocess"} 的子集時才是全稱的；多出任何一個（例如有人開了
+    #   --cov-context=test 的動態 context）就代表這份資料的語意不是本工具假設的那個。
+    #   釘住：`test_an_unknown_context_is_rc2`。
+    measured_contexts = set(data.measured_contexts())
+    unknown = measured_contexts - {IN_PROCESS_CONTEXT, SUBPROCESS_CONTEXT}
+    if unknown:
+        raise RuntimeError(
+            f"coverage 資料裡有本工具不認得的 context {sorted(unknown)}；"
+            f"分類規則只涵蓋 {IN_PROCESS_CONTEXT!r} 與 {SUBPROCESS_CONTEXT!r}"
+        )
+    if SUBPROCESS_CONTEXT not in measured_contexts:
+        raise RuntimeError(
+            f"coverage 資料裡沒有任何 {SUBPROCESS_CONTEXT!r} context ⇒ 它是在未接上 "
+            "subprocess coverage 的情況下產生的，回答不了「哪一種進入點」這個問題。"
+            "確認 tests/conftest.py 的接線仍在，然後重跑 `pytest tests/ --cov`"
+        )
+
+    ctx_map = contexts_by_module(repo, data)
+    # 母體那側用同一把尺正規化（realpath），否則 symlink 與相對路徑資料兩種情況下
+    # 兩邊的鍵永遠對不上，而對不上的表現是「全部 unexecuted」——看起來正常的錯答案。
+    keys = {module: os.path.realpath(str(repo / module)) for module in modules}
+
+    # ⛔ 母體與資料完全不相交 ⇒ 這份資料描述的不是這棵樹（例如從別的 worktree 複製
+    #   過來的 .coverage）。全部落進 unexecuted 會長得像「整個 repo 都沒測試」，那是
+    #   一個看起來正常的錯答案。釘住：`test_data_describing_another_tree_is_rc2`。
+    if not any(keys[m] in ctx_map for m in modules):
+        raise RuntimeError(
+            f"coverage 資料檔（{data_path}）與母體完全不相交："
+            f"{len(modules)} 個模組沒有任何一個出現在資料裡"
+        )
+
+    buckets = {name: [] for name in BUCKETS}
+    for module in modules:
+        ctxs = ctx_map.get(keys[module]) or set()
+        if not ctxs:
+            buckets["unexecuted"].append(module)
+        elif ctxs == {SUBPROCESS_CONTEXT}:
+            buckets["subprocess_only"].append(module)
+        elif ctxs == {IN_PROCESS_CONTEXT}:
+            buckets["in_process_only"].append(module)
+        elif ctxs == {IN_PROCESS_CONTEXT, SUBPROCESS_CONTEXT}:
+            buckets["both"].append(module)
+        else:  # pragma: no cover - 上面的 unknown 守衛已經攔掉
+            raise RuntimeError(
+                f"{module} 的 context 集合 {sorted(ctxs)} 不在分類規則涵蓋範圍內"
+            )
+
     return {
         "sources": sources,
+        "coverage_data": str(data_path),
         "modules": len(modules),
-        "stems": len(stem_to_paths),
-        "tests": len(tests),
-        "tests_with_sys_executable": len(spawners),
-        "blind_spots": [
-            {"module": stem_to_paths[s][0], "stem": s, "tests": sorted(subproc[s])}
-            for s in blind
-        ],
-        "both": sorted(s for s in subproc if s in imported),
-        "import_only": sorted(s for s in imported if s not in subproc),
-        "untested": sorted(s for s in stem_to_paths if s not in subproc and s not in imported),
+        "measured_contexts": sorted(measured_contexts),
+        **{name: buckets[name] for name in BUCKETS},
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: "list[str] | None" = None) -> int:
     # ⛔ try_utf8_stdout() 要在 argparse 之前：`--help` 裡的 CJK 在 legacy Windows
     # console（cp950/cp936）會在 argparse 印出來之前就 UnicodeEncodeError。
     try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description=i18n_text(
-            "列出 coverage source 範圍內、只被 subprocess 測到的模組——"
-            "那些模組對 coverage.py 完全不可見，報表把它們讀成「從未被 import」。",
-            "List modules inside the coverage source that are only exercised "
-            "through subprocess. coverage.py cannot see them, so the report "
-            "reads them as never imported.",
+            "依 coverage 實測，列出 coverage source 內每個模組是被 in-process、"
+            "subprocess、兩者、或都沒有執行到。",
+            "Classify every module inside the coverage source by the kind of "
+            "entry point that actually executed it, from real coverage data: "
+            "in-process, subprocess, both, or neither.",
         ),
     )
     ap.add_argument("--repo", default=str(_REPO_ROOT),
                     help=i18n_text("要掃描的 repo 根目錄", "repository root to scan"))
+    ap.add_argument("--coverage-data", default=None,
+                    help=i18n_text("coverage 資料檔（預設：<repo>/.coverage）",
+                                   "coverage data file (default: <repo>/.coverage)"))
     ap.add_argument("--json", action="store_true",
                     help=i18n_text("輸出 JSON", "emit JSON"))
     args = ap.parse_args(argv)
 
+    def unmeasurable(reason: str) -> int:
+        """rc 2 的唯一出口：診斷走 stderr，stdout **完全不寫**——`--json` 時也一樣。
+
+        ⛔ 不要「順手」在這裡吐一份 JSON 錯誤文件。本 repo 的 `--json` 契約對這支
+        工具釘的是相反的方向：`test_dx_json_stdout_contract` 的 `not-a-git-repo`
+        recipe 要求 rc 2 時 stdout 為空，理由寫在那裡——**「量不到」不得偽裝成一份
+        空的 JSON 清單**。下游看到的是 rc 2 + 空 stdout，那兩件事一起才是明確的。
+        """
+        print(f"[subproc-only] ⛔ 量不到：{reason}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     repo = Path(args.repo).resolve()
     if not (repo / ".git").exists():
-        print(f"[subproc-only] ⛔ 量不到：{repo} 不是 git repo", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+        return unmeasurable(f"{repo} 不是 git repo")
+    data_path = Path(args.coverage_data) if args.coverage_data else repo / ".coverage"
     try:
-        data = build(repo)
+        data = build(repo, data_path)
     except (RuntimeError, subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
-        print(f"[subproc-only] ⛔ 量不到：{exc}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    if not data["stems"] or not data["tests"]:
-        print("[subproc-only] ⛔ 量不到：母體是空的（模組或測試檔為 0）。"
-              "工具失能與零命中長得一樣。", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+        return unmeasurable(str(exc))
 
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return EXIT_OK
 
     print(f"[subproc-only] coverage source: {', '.join(data['sources'])}")
-    print(f"  模組（去重後的 stem）        : {data['stems']}")
-    print(f"  測試檔                       : {data['tests']}"
-          f"（含 sys.executable: {data['tests_with_sys_executable']}）")
+    print(f"  coverage 資料檔              : {data['coverage_data']}")
+    print(f"  模組（檔案）                 : {data['modules']}")
     print()
-    print(f"  ⛔ 只被 subprocess 測到（盲點）: {len(data['blind_spots'])}")
-    print(f"     兩種都有（重疊）           : {len(data['both'])}")
-    print(f"     只被 import 測到           : {len(data['import_only'])}")
-    print(f"     兩種都沒有                 : {len(data['untested'])}")
+    print(f"  只被 subprocess 執行到       : {len(data['subprocess_only'])}")
+    print(f"  兩種進入點都有               : {len(data['both'])}")
+    print(f"  只被 in-process 執行到       : {len(data['in_process_only'])}")
+    print(f"  ⚠️ 整輪都沒被執行到          : {len(data['unexecuted'])}")
     print()
-    print("  ⚠️ 母體 ≠ 盲點數：含 sys.executable 的測試檔數**不等於**盲點數，")
-    print("     因為多數模組同時有 in-process 進入點。上面第二列就是那個重疊。")
+    print("  ⚠️「只被 subprocess 執行到」不是盲點：conftest 接上 subprocess coverage")
+    print("     之後那些模組是被量到的。它是進入點型態，不是量測缺口。")
+    print("  ⚠️「整輪都沒被執行到」合併了「真的沒測試」與「有測試但沒被記錄」——")
+    print("     從 coverage 資料分不出來，見本工具 docstring。")
     print()
-    for e in data["blind_spots"]:
-        print(f"    {e['module']}")
+    for module in data["subprocess_only"]:
+        print(f"    {module}")
     return EXIT_OK
 
 

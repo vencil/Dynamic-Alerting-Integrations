@@ -1,11 +1,17 @@
-"""coverage 盲點清單產生器的測試 (TRK-379 / #1746)。
+"""進入點型態分類器的測試 (TRK-379 / #1746)。
 
-⛔ 工具的述詞、rc 契約與六條已知界線**只寫在工具自己的 docstring 裡**，這裡不複製——
+⛔ 工具的述詞、rc 契約與它答不出來的事**只寫在工具自己的 docstring 裡**，這裡不複製——
 重複的宣稱必然有一份先腐爛（這份的舊版就把「兩個方向都會錯」寫成只會高估）。
+
+⚠️ 本檔的 fixture 都自己合成 coverage 資料檔。⛔ **不能對真實 repo 跑這支工具**：它讀的
+是整輪測試跑完才寫出來的 `.coverage`，而本檔是那一輪的一部分——測試執行當下那份資料要嘛
+不存在、要嘛是上一輪的。母體類斷言因此改問 `population()`（它不碰 coverage 資料）。
 """
 from __future__ import annotations
 
+import importlib.util as _ilu
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -32,7 +38,55 @@ def _json(repo: Path) -> dict:
     return json.loads(proc.stdout)
 
 
-def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
+# ⛔ 不要在這裡再寫一次字面量。context 名稱的 SSOT 是工具自己的常數；測試端另立一份
+# 副本時，改了生產端卻漏改這裡，會讓本檔十餘格以「不認得的 context ⇒ rc 2」一起紅，
+# 而失敗訊息不會指向真正的根因。⇒ 直接取用，讓副本不存在。
+# ⛔ 註冊名刻意**不是**真實模組名。`tests/conftest.py` 把 scripts/tools/dx 放進
+# sys.path，所以別的測試檔可以直接 `import list_subprocess_only_modules`——若這裡用
+# 真實名稱佔住 sys.modules，那個 import 會拿到這裡 exec 過、可能已被別格 monkeypatch
+# 的物件，而不是一次乾淨載入。那是「兩份事實、一份先腐爛」透過行程全域快取發生。
+_MOD_NAME = "_subproc_only_under_test"
+_spec = _ilu.spec_from_file_location(_MOD_NAME, _TOOL)
+_mod = _ilu.module_from_spec(_spec)
+sys.modules[_MOD_NAME] = _mod
+_spec.loader.exec_module(_mod)
+
+IN_PROCESS = _mod.IN_PROCESS_CONTEXT
+SUBPROCESS = _mod.SUBPROCESS_CONTEXT
+
+
+def _write_coverage(repo: Path, mapping: dict, relative: bool = False) -> Path:
+    """在 `repo` 寫一份合成的 coverage 資料檔。
+
+    `mapping` 是 `{repo 相對路徑: set(contexts)}`。**空 set 代表「被量到但零執行行」**
+    ——那正是 `unexecuted` 桶的形狀，與「這個檔完全不在資料裡」在分類上同義，兩者都要
+    有測試（見 `test_a_file_absent_from_the_data_is_unexecuted`）。
+    """
+    import coverage
+
+    path = repo / ".coverage"
+    data = coverage.CoverageData(basename=str(path))
+    for rel, contexts in mapping.items():
+        # `relative=True` 重現 coverage 的 `relative_files` 模式：資料檔裡存的是字面
+        # 相對字串，不是絕對路徑（實測 measured_files() 回 'scripts/tools/ops/a.py'）。
+        absolute = rel if relative else str(repo / rel)
+        if not contexts:
+            data.set_context(IN_PROCESS)
+            data.add_lines({absolute: []})
+            continue
+        for context in contexts:
+            data.set_context(context)
+            data.add_lines({absolute: [1]})
+    data.write()
+    return path
+
+
+def _fixture(tmp_path: Path, files: dict, coverage_map: "dict | None" = None) -> Path:
+    """建一個小 git repo；`coverage_map` 沒給時，每個 source 內的模組預設走 subprocess。
+
+    ⚠️ 預設值刻意是 `{SUBPROCESS}` 而不是空的：資料裡**完全沒有** subprocess context 時
+    工具走 rc 2（它無從得知接線在不在），那樣每一格測到的都會是那條守衛。
+    """
     for name, body in files.items():
         fp = tmp_path / name
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -46,187 +100,38 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fx"],
         cwd=tmp_path, check=True, timeout=60,
     )
+    if coverage_map is None:
+        coverage_map = {n: {SUBPROCESS} for n in files
+                        if n.startswith("scripts/tools/") and n.endswith(".py")}
+    if coverage_map:
+        _write_coverage(tmp_path, coverage_map)
     return tmp_path
-
-
-def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
-    """⛔ 把 fixture 的測試檔**真的跑一次**——「AST 認得這個形狀」不等於「它能執行」。
-
-    ⚠️ 一格 fixture 可以在 AST 上長得完全正確，而在 pytest 下收集期就 ImportError
-    （`from . import x` 沒有 `__init__.py` 就是這樣）。⇒ 要主張 fixture「真的執行過」，
-    唯一的辦法是把它跑起來。
-    """
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", rel, "-q"],
-        cwd=repo, capture_output=True, text=True, timeout=300,
-    )
-    assert proc.returncode == 0, (
-        f"fixture 的 {rel} 根本跑不起來 ⇒ 「它是真的 in-process 進入點」這句話沒有依據。\n"
-        f"rc={proc.returncode}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-1000:]}"
-    )
-    # ⛔ rc 0 **不等於**「那個 import 真的執行過」：pytest 對「收集到的測試全部 skip」也回 0
-    #    （實測：一格 `pytest.skip()` ⇒ rc 0；零格收集到 ⇒ rc 5）。只看 rc 的話，一個被
-    #    吞掉例外後 skip 掉的 fixture 會被這個 helper 蓋章成「跑起來了」。
-    # ⚠️ 而「有一格 passed」這個較弱的版本**也不夠**——dogfood 打死過：fixture 有兩格，
-    #    只 skip 掉帶 import 的那格，另一格照樣 passed，輸出是 `1 passed, 1 skipped`。
-    #    ⇒ 這裡要的是**全數通過**：有 passed，且沒有 skipped／error／xfail。
-    assert " passed" in proc.stdout, (
-        f"fixture 的 {rel} rc 是 0，但沒有任何一格真的 passed ⇒ 那個 import 有沒有執行過"
-        f"量不到，不能當成證據。\nstdout:\n{proc.stdout[-2000:]}"
-    )
-    for weasel in ("skipped", "error", "xfail", "xpass"):
-        assert weasel not in proc.stdout, (
-            f"fixture 的 {rel} 有 {weasel} ⇒ 不能保證帶 import 的那格真的執行過。"
-            f"⛔ 這個 helper 的全部價值就是「跑過」與「看起來跑過」可區分。\n"
-            f"stdout:\n{proc.stdout[-2000:]}"
-        )
 
 # ---------------------------------------------------------------------------
 # 生產樹：母體與分類
 # ---------------------------------------------------------------------------
-def test_blind_spot_entries_are_well_formed(tmp_path: Path) -> None:
-    """每個 `blind_spots` 條目必須是 `.py` 路徑且附上歸因的測試檔。
-
-    ⛔ **不要把這格搬回真樹**。對真樹斷言 `blind_spots` 非空與工具契約矛盾（「不因為有
-    盲點而失敗、不是閘門」），而且**會懲罰成功**——這條線的目標就是消滅盲點。而拿掉那句
-    之後，剩下的 `for e in data["blind_spots"]:` 迴圈**對空清單平凡為真**：一個永遠回空
-    報告的工具也會過。⇒ 只在**保證有條目**的合成 fixture 上斷言。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/only_sub.py": _TOOL_SRC,
-        "tests/test_s.py":
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/only_sub.py"])\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"], "fixture 沒造出盲點——這格失去意義了"
-    for e in data["blind_spots"]:
-        assert e["module"].endswith(".py")
-        assert e["tests"], f"{e['module']} 被判為盲點卻沒有任何測試檔？"
 
 
 def test_population_is_not_vacuous() -> None:
     """⚠️ 反空轉下限 —— 票明寫的對照組：掃描面歸零的實作也會「通過」。
 
-    ⚠️ 一支自我量測的工具，母體與分類會被它自己的落地影響（工具本身依序落在
-    ``untested`` → ``blind_spots`` → ``both``），所以這裡只放**下限**，不放快照——
-    下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
+    ⚠️ 這裡只放**下限**，不放快照：母體隨 repo 長大，快照會變成每次加檔案都要改的
+    數字。下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
 
     ⛔ 下限擋的是「歸零」，不是「少一截」：枚舉若只給 ``{src}/**/*.py``（``**/`` 至少要吃
     一層目錄 ⇒ ``{src}/*.py`` 整層不在母體裡），數字仍遠高於這裡的下限。抓「少一截」的是
     ``test_top_level_modules_are_in_the_population`` 那幾格。
     """
-    data = _json(_REPO_ROOT)
-    assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}"
-    assert data["tests"] >= 200, f"測試母體只剩 {data['tests']}"
-    assert data["tests_with_sys_executable"] >= 40, (
-        f"含 sys.executable 的測試檔只剩 {data['tests_with_sys_executable']}"
-    )
-
-
-def test_classification_is_an_exact_partition() -> None:
-    """四個桶互斥且窮盡——否則「重疊多少」這個問題本身就沒有答案。
-
-    ⛔ 這一格才是票真正要的東西：票問的是「含 `sys.executable` 的測試檔數不等於盲點數，
-    重疊多少沒人量過」。沒有 partition 保證，任何重疊數字都可能重複計數。
-    """
-    data = _json(_REPO_ROOT)
-    total = (len(data["blind_spots"]) + len(data["both"])
-             + len(data["import_only"]) + len(data["untested"]))
-    assert total == data["stems"], (
-        f"四個桶加起來 {total} != 模組數 {data['stems']}——分類不是 partition"
-    )
-
-
-def test_overlap_is_classified_as_both_not_blind(tmp_path: Path) -> None:
-    """同時有 subprocess 與 in-process 進入點的模組必須落在 `both`，不是 `blind_spots`。
-
-    ⛔ **不要改成斷言真樹當下的分布**（`len(both) > len(blind_spots)` 之類）：那不是分類
-    邏輯，合法的樹變動就會讓它紅。⛔ 也**不要寫倍數**——沒有機制撐著的比例一定會漂。
-    這格斷言的是**分類行為**本身。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/dual.py": _TOOL_SRC,
-        "tests/test_dual_inproc.py":
-            'import sys\nsys.path.insert(0, "scripts/tools/ops")\n'
-            'import dual\ndef test_i():\n    assert dual.main() == 0\n',
-        "tests/test_dual_sub.py":
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/dual.py"])\n',
-    })
-    data = _json(repo)
-    assert data["both"] == ["dual"]
-    assert data["blind_spots"] == []
+    modules, sources = _mod.population(_REPO_ROOT)
+    assert "scripts/tools" in sources, sources
+    assert len(modules) >= 150, f"模組母體只剩 {len(modules)}"
+    assert all(m.endswith(".py") for m in modules), "母體裡有非 .py"
 
 
 # ---------------------------------------------------------------------------
 # 述詞：合成 fixture
 # ---------------------------------------------------------------------------
 _TOOL_SRC = "def main():\n    return 0\n"
-
-
-def test_subprocess_only_module_is_a_blind_spot(tmp_path: Path) -> None:
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_mytool.py": (
-            "import subprocess, sys\n"
-            "def test_x():\n"
-            "    subprocess.run([sys.executable, 'scripts/tools/ops/mytool.py'])\n"
-        ),
-    })
-    data = _json(repo)
-    assert [e["stem"] for e in data["blind_spots"]] == ["mytool"], data
-
-
-def test_module_with_an_in_process_entrypoint_is_not_a_blind_spot(tmp_path: Path) -> None:
-    """同一支工具，只要有任何測試**直接 import** 它，就不算盲點。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_sub.py": (
-            "import subprocess, sys\n"
-            "def test_x():\n"
-            "    subprocess.run([sys.executable, 'scripts/tools/ops/mytool.py'])\n"
-        ),
-        "tests/test_imp.py": "import mytool\ndef test_y():\n    assert mytool.main() == 0\n",
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == [], data
-    assert "mytool" in data["both"], data
-
-
-def test_importlib_entrypoints_count_as_in_process(tmp_path: Path) -> None:
-    """``import_module`` / ``spec_from_file_location`` 也是 in-process 進入點。
-
-    ⚠️ 這條 repo 裡很多測試是用 ``spec_from_file_location`` 載入工具的（工具檔名
-    不是合法 module path），只認 ``import`` 會把它們全部誤判成盲點。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_sub.py": (
-            "import subprocess, sys\n"
-            "def test_x():\n"
-            "    subprocess.run([sys.executable, 'scripts/tools/ops/mytool.py'])\n"
-        ),
-        "tests/test_spec.py": (
-            "import importlib.util\n"
-            "def test_y():\n"
-            "    importlib.util.spec_from_file_location('mytool', 'x')\n"
-        ),
-    })
-    assert _json(repo)["blind_spots"] == []
-
-
-def test_untested_module_is_not_reported_as_a_blind_spot(tmp_path: Path) -> None:
-    """⛔ 「沒有測試」與「有測試但 coverage 看不到」是兩件事，不可混為一談。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/lonely.py": _TOOL_SRC,
-        "tests/test_nothing.py": "def test_x():\n    assert True\n",
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == []
-    assert data["untested"] == ["lonely"]
 
 
 def test_omit_list_is_honoured(tmp_path: Path) -> None:
@@ -252,9 +157,9 @@ def test_omit_list_is_honoured(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
                     "commit", "-qm", "omit"], cwd=repo, check=True, timeout=60)
-    stems = [e["stem"] for e in _json(repo)["blind_spots"]]
-    assert "mytool" not in stems, stems      # 被 omit ⇒ 不該出現
-    assert stems == ["other"], stems         # 對照：沒被 omit 的照樣出現
+    got = _json(repo)["subprocess_only"]
+    assert "scripts/tools/ops/mytool.py" not in got, got   # 被 omit ⇒ 不該出現
+    assert got == ["scripts/tools/ops/other.py"], got      # 對照：沒被 omit 的照樣出現
 
 
 # ---------------------------------------------------------------------------
@@ -284,25 +189,6 @@ def test_empty_population_is_rc2_not_an_empty_list(tmp_path: Path) -> None:
     assert "量不到" in proc.stderr
 
 
-def test_blind_spots_do_not_make_it_fail(tmp_path: Path) -> None:
-    """⚠️ 本工具是報告不是閘門：有盲點也回 0。
-
-    ⛔ 刻意的——票的第一交付物是「界定範圍」，不是修。要不要把它變成閘門是
-    後續決策，不在本票。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_mytool.py": (
-            "import subprocess, sys\n"
-            "def test_x():\n"
-            "    subprocess.run([sys.executable, 'scripts/tools/ops/mytool.py'])\n"
-        ),
-    })
-    proc = _run(repo)
-    assert proc.returncode == 0
-    assert "mytool" in proc.stdout
-
-
 def test_top_level_modules_are_in_the_population(tmp_path: Path) -> None:
     """⛔ ``{src}/**/*.py`` **漏掉該目錄的頂層檔案**（``**/`` 至少要吃一層目錄）。
 
@@ -320,59 +206,42 @@ def test_top_level_modules_are_in_the_population(tmp_path: Path) -> None:
             "    subprocess.run([sys.executable, 'scripts/tools/ops/nested.py'])\n"
         ),
     })
-    stems = sorted(e["stem"] for e in _json(repo)["blind_spots"])
-    assert stems == ["nested", "toplevel"], (
-        f"頂層模組沒進母體：{stems}——`{{src}}/**/*.py` 單獨用會漏掉 `{{src}}/*.py` 那一層"
+    got = sorted(_json(repo)["subprocess_only"])
+    assert got == ["scripts/tools/ops/nested.py", "scripts/tools/toplevel.py"], (
+        f"頂層模組沒進母體：{got}——`{{src}}/**/*.py` 單獨用會漏掉 `{{src}}/*.py` 那一層"
     )
 
 
-def test_top_level_test_files_are_in_the_population(tmp_path: Path) -> None:
-    """同一個 glob 缺口的另一半：``tests/*.py`` 直接放的測試檔也要算進母體。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_toplevel.py": (      # ⚠️ 直接在 tests/ 下，不在子目錄
-            "import subprocess, sys\n"
-            "def test_x():\n"
-            "    subprocess.run([sys.executable, 'scripts/tools/ops/mytool.py'])\n"
-        ),
-    })
-    data = _json(repo)
-    assert data["tests"] == 1, data
-    assert [e["stem"] for e in data["blind_spots"]] == ["mytool"], data
-
-
 # ---------------------------------------------------------------------------
-# in-process 進入點 —— ⛔ 上面每一格都是 subprocess，對 coverage.py 完全不可見
+# in-process 進入點
 # ---------------------------------------------------------------------------
-# ⚠️ 這支工具**自己就出現在自己產出的盲點清單裡**（實測 `No data was collected`）：
-# 它的測試全是 subprocess。那不只是笑話，是本票論點的又一個實例，而且發生在專門
-# 用來量這個問題的工具上。⇒ 補 in-process 進入點；下面第一格就拿「它不再回報自己」
-# 當控制項——這是這支工具獨有的、可自證的驗法。
-import importlib.util as _ilu
+# ⚠️ 這段標題原本寫「上面每一格都是 subprocess，對 coverage.py 完全不可見」——那句話
+# 在 tests/conftest.py 接上 subprocess coverage 之後**已經不成立**，留著會誤導下一棒。
+# 砍掉而不是改寫：現在「以 subprocess 呼叫」不再蘊含「量不到」，所以那個對比沒有內容。
 
-_spec = _ilu.spec_from_file_location("list_subprocess_only_modules", _TOOL)
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-
-
-def test_the_tool_no_longer_reports_itself() -> None:
-    """⭐ 自證：補了 in-process 進入點之後，它就不該再出現在自己的盲點清單裡。
-
-    ⛔ 這一格若紅，代表 in-process 進入點斷了——而那正是本工具存在要偵測的東西。
-    """
-    data = _mod.build(_REPO_ROOT)
-    blind = [e["module"] for e in data["blind_spots"]]
-    assert not any("list_subprocess_only_modules" in m for m in blind), (
-        "本工具又變回自己的盲點了（in-process 進入點斷了）：\n" + "\n".join(blind)
-    )
+# ⚰️ `test_the_tool_no_longer_reports_itself` 在換底時退役（TRK-379）。它問「本工具有沒有
+#    in-process 進入點」，而換底後那個答案只能從**整輪跑完才存在**的 coverage 資料讀出來
+#    ——測試執行當下那份資料不存在，所以這一格在它自己要跑的時刻**不可判定**。
+#    ⛔ 不要用「上一輪留下的 .coverage」把它救回來：那會讓這一格在資料過期時靜默地用舊
+#    事實蓋章，而「量不到」與「量了沒事」正是本票要分開的兩件事。
+#    ⚠️ **它守的那件事現在沒有任何東西在守**，這是一個有意識的取捨不是疏漏。先前這裡
+#    寫「改由下面兩格守」是不準確的：下面兩格測的是合成 fixture 上的 rc／型別契約，
+#    與「本工具用真實一輪 coverage 資料跑時不再把自己列進 subprocess_only」是兩件事。
+#    本檔以 `_mod` 直接呼叫 `build()`／`main()` 確實構成 in-process 進入點（斷了會
+#    ImportError 而不是靜默），但那只保住進入點存在，答不了原本那個自我指涉的問題。
 
 
-def test_main_returns_int_not_none() -> None:
+def test_main_returns_int_not_none(tmp_path: Path) -> None:
     """⛔ `main()` 必須**回傳** rc，不是只印東西然後回 None。
 
     subprocess 測試結構上抓不到這一類：`sys.exit(None)` 的行程 rc 就是 0。
     """
-    rc = _mod.main(["--repo", str(_REPO_ROOT), "--json"])
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/mytool.py": _TOOL_SRC,
+        "tests/test_x.py": "def test_x():\n    pass\n",
+    })
+    rc = _mod.main(["--repo", str(repo), "--coverage-data", str(repo / ".coverage"),
+                    "--json"])
     assert isinstance(rc, int) and rc == 0
 
 
@@ -385,14 +254,6 @@ def test_coverage_sources_parses_pyproject() -> None:
     sources, omit = _mod.coverage_sources(_REPO_ROOT)
     assert "scripts/tools" in sources, sources
     assert any(o.endswith("validate_all.py") for o in omit), omit
-
-
-def test_build_partition_is_exact_in_process() -> None:
-    """同 partition 斷言，但走 in-process ⇒ 這一段邏輯對 coverage 可見。"""
-    d = _mod.build(_REPO_ROOT)
-    total = (len(d["blind_spots"]) + len(d["both"])
-             + len(d["import_only"]) + len(d["untested"]))
-    assert total == d["stems"]
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +322,8 @@ def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
 
     若各案答案相同，一個完全不讀檔、永遠回傳那個常數的實作就會全過。
     ⛔ 但它只殺得掉「常數」那一類。**已知邊界**：以下三種**非常數**、一樣不看 TOML 結構的
-    實作，對現有案例**仍然全過**（實測）——
+    實作，依案例集推演應該一樣全過（⚠️ **未建構驗證**——先前這裡寫「實測」，但檔案裡
+    從來沒有這三支假解析器的實作，那個「實測」沒有留下任何痕跡可以重跑）——
 
     - 取檔案裡所有以 ``scripts/`` 開頭的引號字串
     - 取**最長**的那個 ``source = [...]`` 清單（平手取後者）
@@ -540,111 +402,6 @@ def test_coverage_source_of_the_wrong_shape_is_rc2(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 已知界線 —— ⛔ 這兩格釘的是「目前就是這樣」，不是「應該這樣」
-# 它們存在的理由是：工具 docstring 明寫了這兩條界線，而沒有機制的宣稱一定會漂。
-# 若日後有人修好其中一條，這裡會紅 ⇒ 請連同 docstring 的「已知界線」一起改。
-# ---------------------------------------------------------------------------
-def test_known_limit_two_project_files_sharing_a_stem_are_merged(tmp_path: Path) -> None:
-    """兩個不同專案檔共用 stem ⇒ 被合併成一筆，真盲點連痕跡都不留。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/a/dup.py": "def main(): return 0\n",
-        "scripts/tools/b/dup.py": "def main(): return 0\n",
-        "tests/test_a.py": 'import subprocess, sys\n'
-                           'def test_a():\n'
-                           '    subprocess.run([sys.executable, "scripts/tools/a/dup.py"])\n',
-        "tests/test_b.py": 'import sys\nsys.path.insert(0, "scripts/tools/b")\n'
-                           'import dup\ndef test_b():\n    assert dup.main() == 0\n',
-    })
-    data = _json(repo)
-    assert data["modules"] == 2 and data["stems"] == 1, "測試資料沒造出撞名"
-    # a/dup.py 只被 subprocess 測到 ⇒ 依工具自己的定義是盲點，但它被 b/dup.py 吃掉了
-    assert data["blind_spots"] == []
-    assert data["both"] == ["dup"]
-
-
-def test_known_limit_a_stdlib_import_shadows_a_project_stem(tmp_path: Path) -> None:
-    """測試檔 `import json`（stdlib）會讓專案的 `json.py` 從盲點變成 both。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/json.py": "def main(): return 0\n",
-        "tests/test_json_tool.py": 'import json, subprocess, sys\n'
-                                   'def test_x():\n'
-                                   '    out = subprocess.run(\n'
-                                   '        [sys.executable, "scripts/tools/ops/json.py"],\n'
-                                   '        capture_output=True)\n'
-                                   '    json.loads(out.stdout or b"{}")\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == []
-    assert data["both"] == ["json"]
-
-
-# ---------------------------------------------------------------------------
-# `subprocess(M)` 啟發式的**兩個方向** —— ⛔ 只釘一個方向等於宣稱另一個方向不存在
-# ---------------------------------------------------------------------------
-def test_prose_mentioning_a_stem_creates_a_false_positive(tmp_path: Path) -> None:
-    """高估：一句無關的 docstring 就能讓模組被列成盲點，還附一份無關的 tests 清單。"""
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/report.py": "def main(): return 0\n",
-        "scripts/tools/ops/other_tool.py": "def main(): return 0\n",
-        "tests/test_unrelated.py":
-            '"""Unrelated. See legacy_report.py for the behaviour we replaced."""\n'
-            'import subprocess, sys\n'
-            'def test_unrelated():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/other_tool.py"])\n',
-    })
-    blind = {e["stem"]: e["tests"] for e in _json(repo)["blind_spots"]}
-    assert "report" in blind, "假陽性沒重現——這格失去意義了，請檢查述詞是否已改"
-    assert blind["report"] == ["tests/test_unrelated.py"], (
-        "被歸因的測試檔根本沒碰過該模組，這正是這格要記錄的形狀"
-    )
-
-
-def test_indirectly_built_paths_are_a_false_negative(tmp_path: Path) -> None:
-    """⛔ 低估，而且方向與本工具的用途相反。
-
-    測試檔真的以 subprocess 跑了該模組，但路徑是從 `conftest.py` 的常數組出來的，
-    檔案內文沒有 `mytool.py` 這串字 ⇒ 落進 `untested`（無害桶）而不是 `blind_spots`。
-    一個真盲點被讀成「根本沒測試」。⚠️ 這格釘的是**現況**不是期望行為。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": "def main(): return 0\n",
-        "tests/conftest.py":
-            'import pathlib\n'
-            'TOOL_PATH = pathlib.Path("scripts") / "tools" / "ops" / ("my" + "tool" + ".py")\n',
-        "tests/test_real_exercise.py":
-            'import subprocess, sys\n'
-            'from conftest import TOOL_PATH\n'
-            'def test_x():\n'
-            '    subprocess.run([sys.executable, str(TOOL_PATH)], capture_output=True)\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == [], "假陰性沒重現——若已修好，請一併更新工具 docstring"
-    assert data["untested"] == ["mytool"], (
-        "真正只被 subprocess 跑到的模組落在 untested，這就是那個假陰性"
-    )
-
-
-def test_known_limit_a_third_party_import_also_shadows_a_project_stem(
-    tmp_path: Path,
-) -> None:
-    """界線 ⑵ 寫的是「stdlib **或**第三方套件」，兩半各要有一格。
-
-    ⚠️ 只釘一種形狀，等於讓另一種形狀的宣稱沒有機制背書。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/pytest.py": "def main(): return 0\n",
-        "tests/test_shadow.py":
-            'import pytest, subprocess, sys\n'
-            'def test_x():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/pytest.py"])\n'
-            '    assert pytest is not None\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == []
-    assert data["both"] == ["pytest"]
-
-
-# ---------------------------------------------------------------------------
 # CodeRabbit #1830 的三條 —— 每條兩個方向各一格
 # ---------------------------------------------------------------------------
 def test_wildcard_omit_is_honoured(tmp_path: Path) -> None:
@@ -666,7 +423,7 @@ def test_wildcard_omit_is_honoured(tmp_path: Path) -> None:
         '[tool.coverage.run]\nsource = ["scripts/tools"]\n'
         'omit = ["scripts/tools/gen/*.py"]\n', encoding="utf-8"
     )
-    mods = [e["module"] for e in _json(repo)["blind_spots"]]
+    mods = _json(repo)["subprocess_only"]
     assert "scripts/tools/gen/generated.py" not in mods, "wildcard omit 沒被遵守"
     assert mods == ["scripts/tools/keep/kept.py"], "只有未被 omit 的那個該留下"
 
@@ -687,275 +444,7 @@ def test_non_matching_omit_does_not_exclude(tmp_path: Path) -> None:
         '[tool.coverage.run]\nsource = ["scripts/tools"]\n'
         'omit = ["scripts/tools/somewhere/else/*.py"]\n', encoding="utf-8"
     )
-    assert [e["module"] for e in _json(repo)["blind_spots"]] == [
-        "scripts/tools/keep/kept.py"
-    ]
-
-
-def test_package_level_from_import_counts_as_in_process(tmp_path: Path) -> None:
-    """`from scripts.tools.ops import mytool` 是真的 in-process 進入點。
-
-    ⛔ 修前只看 `node.module`（末段是 `ops`），不看 `node.names` ⇒ 一個**確實被
-    in-process 測到**的模組被列進 `blind_spots`（假陽性，實測）。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/mytool.py": _TOOL_SRC,
-        "tests/test_inproc.py":
-            'from scripts.tools.ops import mytool\n'
-            'def test_i():\n    assert mytool.main() == 0\n',
-        "tests/test_sub.py":
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/mytool.py"])\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == []
-    assert data["both"] == ["mytool"]
-
-
-def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
-    tmp_path: Path,
-) -> None:
-    """⛔ 這是修 `ImportFrom` 假陽性**換來**的假陰性（界線 ⑶），不是可以順手修掉的東西。
-
-    從 AST 看不出 `from pkg import name` 的 `name` 是**模組**還是**符號**（函式／類別／
-    常數），要分辨得解析 pkg 本身。⇒ 為了讓 `from scripts.tools.ops import mytool` 算成
-    in-process 進入點（CodeRabbit 報的假陽性，真的存在），就必須接受一個同名的**符號**
-    也會被算進去，於是遮蔽一個真盲點。
-
-    ⚠️ 這格斷言的是**現況**不是期望行為。若日後有人把它修好（例如解析 pkg 判斷是否為
-    模組），這格會紅——請連同工具 docstring 的「已知界線」一起改。
-
-    實測：測試檔只有 `from dataclasses import lonely`（一個符號名，剛好撞到模組 stem）
-    加一個 subprocess 呼叫，該模組就從 `blind_spots` 移到 `both`。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/lonely.py": _TOOL_SRC,
-        "tests/test_unrelated.py":
-            'from dataclasses import lonely\n'
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/lonely.py"])\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == [], "假陰性沒重現——若已修好請一併更新 docstring"
-    assert data["both"] == ["lonely"]
-
-
-def test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module(
-    tmp_path: Path,
-) -> None:
-    """⛔ `from . import x` 在**本 repo 的設定下**不是指向專案模組的 in-process 進入點。
-
-    相對 import 的錨是**測試自己的 package**：`from . import relmod` 指到的是
-    `tests/relmod.py`，不是 `scripts/tools/ops/relmod.py`。而本 repo 的 source root 與
-    `tests/` 不相交，所以工具把 `node.names` 算成該 stem 的進入點**是撞名**（界線 ⑶ 的同一
-    個機制），方向是**靜默假陰性**：真盲點被吃掉、報告上不留痕跡。
-
-    ⛔ **不要改成跳過 `level > 0`**：理由（decidability，以及「不要再寫一版述詞」）寫在
-    工具的模組 docstring，不在這裡複述。
-    ⚠️ 這條界線目前是**預備性**的：本 repo 的 `tests/` 底下沒有 `__init__.py`，也沒有真的
-    relative import。它守的是「哪天有人這樣寫，報告會靜默少一筆」這件事被記得。
-    ⚠️ 前提是 source root 與 `tests/` 不相交——那**不是**結構定理，下面有斷言，反例釘在
-    `test_a_relative_import_does_reach_a_module_when_source_is_tests`。
-    """
-    repo = _fixture(tmp_path, {
-        # 專案模組：只被 subprocess 測到 ⇒ 本該是盲點
-        "scripts/tools/ops/relmod.py": _TOOL_SRC,
-        "scripts/tools/ops/control.py": _TOOL_SRC,
-        # ⛔ 測試自己的 package 裡有一個**同名**的 helper，相對 import 真正指到的是它
-        "tests/__init__.py": "",
-        "tests/relmod.py": "def helper():\n    return 'I am tests/relmod.py'\n",
-        "tests/test_rel.py":
-            'from . import relmod\n'
-            'import subprocess, sys\n'
-            'def test_i():\n'
-            "    assert relmod.helper() == 'I am tests/relmod.py'\n"
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/relmod.py"])\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
-    })
-    # ⛔ 先證明這個 fixture 真的跑得起來：「AST 認得」不等於「能執行」
-    _assert_fixture_actually_runs(repo, "tests/test_rel.py")
-
-    # ⛔ 這格成立的**前提**是 source root 與 tests/ 不相交，把它變成斷言而不是假設：
-    #    `source = ["tests"]` 時相對 import 真的指得到（反例釘在
-    #    `test_a_relative_import_does_reach_a_module_when_source_is_tests`）。
-    fixture_sources = tomllib.loads(
-        (repo / "pyproject.toml").read_text(encoding="utf-8")
-    )["tool"]["coverage"]["run"]["source"]
-    assert not any(src == "tests" or src.startswith("tests/") for src in fixture_sources), (
-        f"fixture 的 source root {fixture_sources} 與 tests/ 相交 ⇒ 這格的前提不成立"
-    )
-
-    data = _json(repo)
-    assert data["both"] == ["relmod"], (
-        "假陰性沒重現。⚠️ 若已改成跳過 level > 0 的 import，請一併更新本格與工具 docstring"
-    )
-    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
-        "⚠️ 對照組：同一顆 fixture 裡沒被撞名遮到的那個必須留在 blind_spots，"
-        "否則這格量到的是「母體塌了」而不是「遮蔽發生了」"
-    )
-
-
-def test_the_relative_import_fixture_needs_its_package_marker(tmp_path: Path) -> None:
-    """⚠️ 反向對照：拿掉 `tests/__init__.py`，同一個 fixture 就**跑不起來**。
-
-    ⛔ 沒有這格的話，上一格補的 `__init__.py` 看起來只是多寫一行。它釘的是：
-    `from . import x` 這個形狀**只在 package 裡**才是真的進入點，而 `_assert_fixture_
-    actually_runs` 確實分得出跑得起來與跑不起來（否則它是個永遠回真的裝飾）。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/relmod.py": _TOOL_SRC,
-        "tests/test_rel.py":
-            'from . import relmod\n'
-            'def test_i():\n    assert relmod.main() == 0\n',
-    })
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/test_rel.py", "-q"],
-        cwd=repo, capture_output=True, text=True, timeout=300,
-    )
-    assert proc.returncode != 0, "沒有 __init__.py 卻跑得起來 ⇒ 上一格的對照前提不成立"
-    assert "attempted relative import" in (proc.stdout + proc.stderr), (
-        f"紅的原因不是相對 import ⇒ 這格量到的不是它要量的東西。stdout={proc.stdout[-800:]}"
-    )
-
-
-def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
-    """⛔ `ast.walk` 不看可達性：`if TYPE_CHECKING:` 之下的 import 執行期永遠不跑，
-    卻被算成 in-process 進入點 ⇒ 真盲點被遮蔽（假陰性）。
-
-    ⚠️ 本格釘的是**現況**。只修 `TYPE_CHECKING` 這一種會給出部分覆蓋與虛假的安全感——
-    函式內的 import 同構（該函式可能從未被呼叫）且**無法從 AST 判定**，所以整條列為
-    已知界線而不是修掉一半。日後若真的處理了可達性，這格會紅，請連 docstring 一起改。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/nevercalled.py": _TOOL_SRC,
-        "tests/test_tc.py":
-            'from typing import TYPE_CHECKING\n'
-            'if TYPE_CHECKING:\n'
-            '    import nevercalled\n'
-            'def test_x():\n    pass\n',
-        "tests/test_sub2.py":
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/nevercalled.py"])\n',
-    })
-    data = _json(repo)
-    assert data["blind_spots"] == [], "假陰性沒重現——若已修好請一併更新 docstring"
-    assert data["both"] == ["nevercalled"]
-
-
-def test_known_limit_a_function_body_import_also_counts_as_an_entry_point(
-    tmp_path: Path,
-) -> None:
-    """⛔ 已知界線 ⑷ 的**另一半**：函式內的 import 也被算成 in-process 進入點。
-
-    ⚠️ 界線 ⑷ 有**兩半**：`if TYPE_CHECKING:`（釘在
-    `test_known_limit_ast_walk_ignores_reachability`）與函式 body 內的 import（這格）。
-    只釘一半，另一半可以靜默回歸。
-
-    `never_called()` 從來沒被呼叫，`import neverfunc` 執行期永遠不跑，但 `ast.walk` 看得到。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/neverfunc.py": _TOOL_SRC,
-        "scripts/tools/ops/control.py": _TOOL_SRC,
-        "tests/test_fn.py":
-            'import subprocess, sys\n'
-            'def never_called():\n'
-            '    import neverfunc\n'
-            '    return neverfunc\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/neverfunc.py"])\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
-    })
-    data = _json(repo)
-    assert data["both"] == ["neverfunc"], (
-        "假陰性沒重現——若已修好（能判可達性）請一併更新工具 docstring 的已知界線 ⑷"
-    )
-    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
-        "⚠️ 對照組：同一顆 fixture 裡沒被函式內 import 遮到的那個必須留在 blind_spots，"
-        "否則這格量到的是「母體塌了」而不是「遮蔽發生了」"
-    )
-
-
-def test_known_limit_future_annotations_shadows_a_module_named_annotations(
-    tmp_path: Path,
-) -> None:
-    """⛔ 已知界線 ⑸：`from __future__ import annotations` 遮蔽 `annotations.py`。
-
-    ⚠️ 機制與 ⑵ / ⑶ 相同（from-import 的 name 撞上模組 stem），但**普遍得多**——它是多數
-    測試檔的第一行，不是「剛好 import 到同名套件」。⛔ **這裡不寫比例**：下面的斷言對當下
-    的母體重算，紅的時候會印出實際值。
-    """
-    repo = _fixture(tmp_path, {
-        "scripts/tools/ops/annotations.py": _TOOL_SRC,
-        "scripts/tools/ops/control.py": _TOOL_SRC,
-        "tests/test_fut.py":
-            'from __future__ import annotations\n'
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/annotations.py"])\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
-    })
-    data = _json(repo)
-    assert data["both"] == ["annotations"], (
-        "假陰性沒重現——若已修好（`__future__` 被特判掉）請一併更新已知界線 ⑸"
-    )
-    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
-        "⚠️ 對照組：沒被遮到的那個必須留在 blind_spots，否則量到的是母體塌了"
-    )
-
-    # ⛔ 「普遍得多」那句話的**機制就在這裡**：對當下的母體重算，不寫死任何比例。
-    #    母體用工具自己的 `tracked()` + 同一個 `test_*` 濾法，與 `build()` 掃的完全一致。
-    scanned = [
-        t for t in _mod.tracked(_REPO_ROOT, "tests/*.py", "tests/**/*.py")
-        if Path(t).name.startswith("test_")
-    ]
-    assert scanned, "母體是空的 ⇒ 量不到，不是量了沒事"
-    carriers = [
-        t for t in scanned
-        if "from __future__ import annotations"
-        in (_REPO_ROOT / t).read_text(encoding="utf-8", errors="replace")
-    ]
-    assert len(carriers) * 2 > len(scanned), (
-        "⚠️ `from __future__ import annotations` 已經不是多數測試檔的寫法了"
-        f"（{len(carriers)} / {len(scanned)}）⇒ 已知界線 ⑸ 的「普遍得多」要改寫"
-    )
-
-
-def test_a_relative_import_does_reach_a_module_when_source_is_tests(tmp_path: Path) -> None:
-    """⚠️ 反例：`source = ["tests"]` 時，測試檔的相對 import **真的**指到 source root 的模組。
-
-    ⛔ 這格是為了不讓上一格的界線被讀成結構定理。`tests/sibling.py` 同時是測試自己的
-    package 成員**與**一個 source root 底下的模組，工具把它算進 `both` 完全正確。
-
-    成因讀 `build()` 就看得到：測試的 pathspec 是**寫死**的 `tests/*.py` / `tests/**/*.py`，
-    與 `source` 互不參照 ⇒ 沒有任何東西保證兩者不相交。⇒ ⑹ 是**設定的性質**，不是定理。
-    """
-    repo = _fixture(tmp_path, {
-        "tests/__init__.py": "",
-        "tests/sibling.py": _TOOL_SRC,
-        "tests/test_x.py":
-            'from . import sibling\n'
-            'import subprocess, sys\n'
-            'def test_i():\n    assert sibling.main() == 0\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "tests/sibling.py"])\n',
-    })
-    (repo / "pyproject.toml").write_text(
-        '[tool.coverage.run]\nsource = ["tests"]\nomit = []\n', encoding="utf-8"
-    )
-    _assert_fixture_actually_runs(repo, "tests/test_x.py")
-
-    data = _json(repo)
-    assert data["both"] == ["sibling"], (
-        "反例沒重現 ⇒ 上一格的「本 repo 設定下指不到」可能被讀成無條件的結構定理。"
-        f"實得 both={data['both']} blind={[e['stem'] for e in data['blind_spots']]}"
-    )
-    assert data["blind_spots"] == [], (
-        "⚠️ 這裡不該有盲點：sibling 兩種進入點都有，而 __init__ / test_x 沒被 subprocess 跑過"
-    )
+    assert _json(repo)["subprocess_only"] == ["scripts/tools/keep/kept.py"]
 
 
 def test_a_coverage_rejected_omit_pattern_is_rc2(tmp_path: Path) -> None:
@@ -1024,3 +513,234 @@ def test_the_matcher_follows_coverage_not_fnmatch() -> None:
             under += 1
     assert over, "案例表沒有『fnmatch 多配』的方向 ⇒ 只釘了一半"
     assert under, "案例表沒有『fnmatch 少配』的方向 ⇒ 只釘了一半"
+
+
+# ---------------------------------------------------------------------------
+# 換底後的判定：coverage context 是權威 oracle
+# ⛔ 每個桶都要**兩個方向**——只釘「會進這個桶」等於沒防住一個把所有東西都丟進來的實作。
+# ---------------------------------------------------------------------------
+def _classify(tmp_path: Path, coverage_map: dict) -> dict:
+    """三個模組固定存在，由 `coverage_map` 決定各自的 context。"""
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+        "scripts/tools/ops/b.py": _TOOL_SRC,
+        "scripts/tools/ops/c.py": _TOOL_SRC,
+    }, coverage_map=coverage_map)
+    return _json(repo)
+
+
+def test_subprocess_context_only_lands_in_subprocess_only(tmp_path: Path) -> None:
+    data = _classify(tmp_path, {
+        "scripts/tools/ops/a.py": {SUBPROCESS},
+        "scripts/tools/ops/b.py": {IN_PROCESS, SUBPROCESS},
+    })
+    assert data["subprocess_only"] == ["scripts/tools/ops/a.py"]
+    # 對照：同一份資料裡，兩種 context 的那個**不在**這個桶
+    assert "scripts/tools/ops/b.py" not in data["subprocess_only"]
+
+
+def test_default_context_only_lands_in_in_process_only(tmp_path: Path) -> None:
+    data = _classify(tmp_path, {
+        "scripts/tools/ops/a.py": {IN_PROCESS},
+        "scripts/tools/ops/b.py": {SUBPROCESS},
+    })
+    assert data["in_process_only"] == ["scripts/tools/ops/a.py"]
+    assert "scripts/tools/ops/b.py" not in data["in_process_only"]
+
+
+def test_both_contexts_land_in_both(tmp_path: Path) -> None:
+    data = _classify(tmp_path, {
+        "scripts/tools/ops/a.py": {IN_PROCESS, SUBPROCESS},
+        "scripts/tools/ops/b.py": {SUBPROCESS},
+    })
+    assert data["both"] == ["scripts/tools/ops/a.py"]
+    assert "scripts/tools/ops/b.py" not in data["both"]
+
+
+def test_a_measured_file_with_no_lines_is_unexecuted(tmp_path: Path) -> None:
+    """被 coverage 認得但零執行行 ⇒ `unexecuted`，不是「有 in-process context」。
+
+    ⚠️ 這是實測形狀：coverage 對 source 內從未執行的檔案照樣列進 `measured_files()`。
+    把它讀成「有 context」會讓沒跑過的模組混進 `in_process_only`。
+    """
+    data = _classify(tmp_path, {
+        "scripts/tools/ops/a.py": set(),        # 量到、零行
+        "scripts/tools/ops/b.py": {SUBPROCESS},
+    })
+    assert "scripts/tools/ops/a.py" in data["unexecuted"]
+    assert "scripts/tools/ops/a.py" not in data["in_process_only"]
+
+
+def test_a_file_absent_from_the_data_is_unexecuted(tmp_path: Path) -> None:
+    """完全不在資料裡 ⇒ 與「量到但零行」同一個桶。兩種形狀都要有格子。"""
+    data = _classify(tmp_path, {"scripts/tools/ops/b.py": {SUBPROCESS}})
+    assert "scripts/tools/ops/a.py" in data["unexecuted"]
+    assert "scripts/tools/ops/c.py" in data["unexecuted"]
+
+
+def test_classification_is_an_exact_partition(tmp_path: Path) -> None:
+    """四個桶必須是母體的**嚴格劃分**：不重不漏。
+
+    ⛔ 只檢查「加起來等於母體」會放過重複計數；只檢查「兩兩不交」會放過漏掉的模組。
+    兩個都要。
+    """
+    data = _classify(tmp_path, {
+        "scripts/tools/ops/a.py": {SUBPROCESS},
+        "scripts/tools/ops/b.py": {IN_PROCESS},
+        "scripts/tools/ops/c.py": {IN_PROCESS, SUBPROCESS},
+    })
+    buckets = [data[name] for name in
+               ("subprocess_only", "both", "in_process_only", "unexecuted")]
+    flat = [m for b in buckets for m in b]
+    assert len(flat) == len(set(flat)), f"有模組被重複計數：{flat}"
+    assert len(flat) == data["modules"], (
+        f"桶內共 {len(flat)} 個，母體 {data['modules']} 個——有模組沒被分類"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 「量不到」的五條路 —— ⛔ 每一條都必須與「量了沒事」可區分
+# ---------------------------------------------------------------------------
+def test_missing_coverage_data_is_rc2(tmp_path: Path) -> None:
+    """⛔ 沒有資料檔 ⇒ rc 2，不是「所有模組都 unexecuted」那份看起來正常的答案。"""
+    repo = _fixture(tmp_path, {"scripts/tools/ops/a.py": _TOOL_SRC}, coverage_map={})
+    proc = _run(repo)
+    assert proc.returncode == 2, proc.stdout
+    assert "找不到 coverage 資料檔" in proc.stderr
+
+
+def test_unreadable_coverage_data_is_rc2(tmp_path: Path) -> None:
+    repo = _fixture(tmp_path, {"scripts/tools/ops/a.py": _TOOL_SRC}, coverage_map={})
+    (repo / ".coverage").write_text("not a sqlite db", encoding="utf-8")
+    proc = _run(repo)
+    assert proc.returncode == 2, proc.stdout
+    assert "讀不懂" in proc.stderr
+
+
+def test_data_without_any_subprocess_context_is_rc2(tmp_path: Path) -> None:
+    """⛔ 資料是在未接線的情況下產生的 ⇒ 回答不了本問題，必須拒答。
+
+    ⚠️ 這是本次換底最重要的一格：若不拒答，一份未接線的資料會讓每個模組落進
+    `in_process_only`／`unexecuted`，**`subprocess_only` 為空**——讀起來像「問題解決了」。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+    }, coverage_map={"scripts/tools/ops/a.py": {IN_PROCESS}})
+    proc = _run(repo)
+    assert proc.returncode == 2, proc.stdout
+    assert "subprocess" in proc.stderr and "context" in proc.stderr
+
+
+def test_an_unknown_context_is_rc2(tmp_path: Path) -> None:
+    """⛔ 出現規則沒涵蓋的 context ⇒ rc 2。分類規則只在 context 是已知集合的子集時全稱。"""
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+    }, coverage_map={"scripts/tools/ops/a.py": {SUBPROCESS, "tests/x.py::test_y|run"}})
+    proc = _run(repo)
+    assert proc.returncode == 2, proc.stdout
+    assert "不認得的 context" in proc.stderr
+
+
+def test_data_describing_another_tree_is_rc2(tmp_path: Path) -> None:
+    """⛔ 資料與母體完全不相交 ⇒ 這份資料描述的不是這棵樹。
+
+    ⚠️ 不拒答的話全部落進 `unexecuted`，長得像「整個 repo 都沒測試」——一個看起來
+    正常的錯答案。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+    }, coverage_map={"scripts/tools/ops/does_not_exist_here.py": {SUBPROCESS}})
+    proc = _run(repo)
+    assert proc.returncode == 2, proc.stdout
+    assert "不相交" in proc.stderr
+
+
+def test_a_coverage_data_path_can_be_given_explicitly(tmp_path: Path) -> None:
+    """對照組：`--coverage-data` 真的被用到（不是永遠讀 repo root 的那個）。"""
+    repo = _fixture(tmp_path, {"scripts/tools/ops/a.py": _TOOL_SRC}, coverage_map={})
+    elsewhere = tmp_path / "moved"
+    elsewhere.mkdir()
+    _write_coverage(repo, {"scripts/tools/ops/a.py": {SUBPROCESS}})
+    (repo / ".coverage").rename(elsewhere / ".coverage")
+    assert _run(repo).returncode == 2, "資料檔被搬走了卻沒有 rc 2"
+    proc = _run(repo, "--coverage-data", str(elsewhere / ".coverage"), "--json")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["subprocess_only"] == ["scripts/tools/ops/a.py"]
+
+
+def test_json_mode_writes_nothing_to_stdout_when_unmeasurable(tmp_path: Path) -> None:
+    """⛔ rc 2 時 stdout 必須**完全空**，`--json` 也一樣。
+
+    ⚠️ 我第一版把這條寫反了：看到契約測試的泛用提示「emit the one JSON document to
+    stdout on THIS path too」就讓 rc 2 吐了一份 `{"unmeasurable": true}`。但本 repo
+    對這支工具釘的是相反方向（`test_dx_json_stdout_contract` 的 `not-a-git-repo`
+    recipe）：**「量不到」不得偽裝成一份空的 JSON 清單**。rc 2 + 空 stdout 兩件事
+    一起才是明確的訊號。
+    """
+    repo = _fixture(tmp_path, {"scripts/tools/ops/a.py": _TOOL_SRC}, coverage_map={})
+    proc = _run(repo, "--json")
+    assert proc.returncode == 2
+    assert proc.stdout.strip() == "", f"rc 2 卻寫了 stdout：{proc.stdout[:200]!r}"
+    assert "量不到" in proc.stderr, "診斷應該在 stderr"
+
+
+def test_json_mode_does_emit_a_document_on_the_happy_path(tmp_path: Path) -> None:
+    """對照組：量得到的時候**必須**有一份 JSON——否則上一格對一支永遠不輸出的實作也成立。"""
+    repo = _fixture(tmp_path, {"scripts/tools/ops/a.py": _TOOL_SRC})
+    proc = _run(repo, "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["subprocess_only"] == ["scripts/tools/ops/a.py"]
+
+
+# ---------------------------------------------------------------------------
+# 路徑正規化 —— 兩側必須用同一把尺（盲審 finding）
+# ---------------------------------------------------------------------------
+def test_relative_path_coverage_data_is_resolved_against_the_repo_not_the_cwd(
+    tmp_path: Path,
+) -> None:
+    """⛔ `relative_files` 模式的資料檔存的是字面相對字串；解它要用 `--repo`，不是 cwd。
+
+    ⚠️ 本格由盲審找出。用 cwd 去解的話，工具只要不是從受掃 repo 的根目錄跑，真正被
+    執行過的模組就會靜默落進 `unexecuted`——rc 0、報告長得完全正常。這一格的 `_run`
+    本來就從別的目錄啟動子行程，所以它同時也是那個情境的重現。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+        "scripts/tools/ops/b.py": _TOOL_SRC,
+    }, coverage_map={})
+    _write_coverage(repo, {
+        "scripts/tools/ops/a.py": {SUBPROCESS},
+        "scripts/tools/ops/b.py": {IN_PROCESS},
+    }, relative=True)
+    data = _json(repo)
+    assert data["subprocess_only"] == ["scripts/tools/ops/a.py"], data
+    assert data["in_process_only"] == ["scripts/tools/ops/b.py"], data
+    assert data["unexecuted"] == [], (
+        "相對路徑被拿 cwd 去解了 ⇒ 執行過的模組被誤報成從未執行"
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="平台不支援 symlink")
+def test_a_symlinked_module_matches_its_measured_target(tmp_path: Path) -> None:
+    """⛔ `git ls-files` 列 symlink 自己的路徑，coverage 記錄 realpath 解過的目標。
+
+    ⚠️ 本格由盲審找出。只正規化一邊的話，一個被 symlink 指到、確實跑過的模組會永遠
+    落進 `unexecuted`，而且 rc 是 0。
+    """
+    repo = _fixture(tmp_path, {"scripts/tools/ops/real.py": _TOOL_SRC}, coverage_map={})
+    link = repo / "scripts" / "tools" / "ops" / "link.py"
+    try:
+        os.symlink(repo / "scripts" / "tools" / "ops" / "real.py", link)
+    except (OSError, NotImplementedError) as exc:       # Windows 無權限時
+        pytest.skip(f"建不了 symlink：{exc}")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "link"], cwd=repo, check=True, timeout=60)
+    _write_coverage(repo, {"scripts/tools/ops/real.py": {SUBPROCESS}})
+
+    data = _json(repo)
+    assert "scripts/tools/ops/link.py" in data["subprocess_only"], (
+        f"symlink 沒有對應到它被量測的目標：{data}"
+    )
+    assert "scripts/tools/ops/link.py" not in data["unexecuted"], data

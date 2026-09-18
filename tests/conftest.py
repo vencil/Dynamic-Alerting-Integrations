@@ -253,5 +253,68 @@ def patch_repo_root(monkeypatch, tmp_path):
         monkeypatch.setattr(module, attr, target)
         return tmp_path
     return _patch
+# ── Subprocess coverage (TRK-379) ────────────────────────────────────
+#
+# Much of this suite drives tools as `subprocess.run([sys.executable, tool,
+# ...])`. Those children are invisible to coverage by default, so a module
+# reached ONLY that way reports exactly like a module no test reaches at all:
+# "could not measure" and "measured, nothing wrong" become the same reading.
+#
+# The mechanism is coverage's own `a1_coverage.pth`, which every interpreter
+# runs at startup: it calls `coverage.process_startup()` when
+# COVERAGE_PROCESS_START is set. Exporting it in the parent is therefore
+# enough -- a hand-written sitecustomize.py (what #1746 originally prescribed)
+# is NOT needed and would be a second copy of a mechanism coverage ships.
+#
+# There is no alternative route: pytest-cov 7.x removed its own subprocess
+# support entirely (the package no longer contains the string COV_CORE), so
+# COVERAGE_PROCESS_START is the only thing that makes these children visible.
+#
+# The coverage context the child measurement is tagged with. ⛔ The tool that
+# reads it (scripts/tools/dx/list_subprocess_only_modules.py) holds the same
+# string; test_the_child_config_carries_the_context_the_tool_reads binds the two.
+SUBPROCESS_CONTEXT = "subprocess"
 
 
+# ⛔ The child config is DERIVED FROM THE PARENT's live Coverage config, not
+# re-read from pyproject.toml. Three CodeRabbit findings on #1885 shared this
+# one root cause, and all three were reproduced before this rewrite:
+#
+#   * data_file — pytest-cov builds its parent Coverage in an earlier hook, so
+#     setting COVERAGE_FILE here cannot move the parent. Forcing the child to
+#     REPO_ROOT/.coverage while the parent honoured an externally-set
+#     COVERAGE_FILE left the children orphaned: measured with
+#     `COVERAGE_FILE=<elsewhere> pytest --cov`, the parent wrote 1 file and
+#     **31 child data files piled up in the repo root**, never combined. Every
+#     subprocess measurement silently vanished — the exact shape this wiring
+#     exists to abolish.
+#   * source — `coverage_gap_analysis.py` runs pytest with a source-VALUED
+#     `--cov=<paths>`, which overrides coverage's own source list. A child built
+#     from pyproject.toml would then measure a wider scope than the parent, so
+#     the two sides of the context comparison would not be the same population.
+#   * --no-cov — pytest-cov still registers `_cov` and sets `_disabled` when
+#     `--no-cov` is passed, so keying only on "is the plugin registered" exported
+#     the child config against an explicit request not to measure.
+#
+# Deriving from the parent closes all three at once and deletes the second copy
+# of the configuration rather than keeping it in step by hand. `serialize()`
+# absolutises paths, so a child started in another cwd still writes beside the
+# parent.
+def pytest_configure(config):
+    """Make subprocess-invoked tools visible to coverage, when coverage is on."""
+    plugin = config.pluginmanager.get_plugin("_cov")
+    if plugin is None or getattr(plugin, "_disabled", False):
+        return
+    parent = getattr(getattr(plugin, "cov_controller", None), "cov", None)
+    if parent is None:          # coverage plugin present but never started
+        return
+
+    from coverage.config import CoverageConfig
+
+    # ⚠️ Copy via serialize/deserialize: mutating `parent.config` would change
+    # what the PARENT measures. `deserialize` is a classmethod returning a new
+    # config, not an in-place load.
+    child = CoverageConfig.deserialize(parent.config.serialize())
+    child.context = SUBPROCESS_CONTEXT
+    os.environ["COVERAGE_PROCESS_CONFIG"] = child.serialize()
+    os.environ.pop("COVERAGE_PROCESS_START", None)
