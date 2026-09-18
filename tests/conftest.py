@@ -270,53 +270,51 @@ def patch_repo_root(monkeypatch, tmp_path):
 # support entirely (the package no longer contains the string COV_CORE), so
 # COVERAGE_PROCESS_START is the only thing that makes these children visible.
 #
-# COVERAGE_FILE must be absolute. A relative data_file is resolved against
-# each CHILD's cwd, and 161 subprocess call sites in this suite pass
-# `cwd=<tmp_path>`; those data files would be deleted with the tmp dir and the
-# measurement would vanish silently. Pinning it to the repo root keeps every
-# child's data beside the parent's, where `coverage combine` finds it.
-# `parallel = true` in pyproject.toml is what stops the children from
-# overwriting each other (see the comment there).
-#
-# Gated on coverage actually being active: `get_plugin("_cov")` is None
-# without --cov. Setting it unconditionally would litter .coverage.* files
-# over ordinary test runs.
-#
-# ⛔ Deliberately NOT handled here: a test that builds `env={...}` from
-# scratch instead of `{**os.environ, ...}` gives its child no
-# COVERAGE_PROCESS_START, so that child stays unmeasured. This suite has that
-# shape. It is not a silent failure -- list_subprocess_only_modules.py reads
-# real coverage data, so such a module is reported as a blind spot, which is
-# the truth.
-#
-# The child config is passed as COVERAGE_PROCESS_CONFIG (serialized config)
-# rather than COVERAGE_PROCESS_START (a config FILE PATH) for one reason: it
-# lets us tag the child's measurement with a coverage CONTEXT. Without that
-# tag, once subprocess coverage is on, the data says "this module was covered"
-# but not "by which kind of entry point" -- and the whole point of
-# list_subprocess_only_modules.py is to answer the second question. With it,
-# that tool reads an authoritative oracle instead of guessing from the AST.
+# The coverage context the child measurement is tagged with. ⛔ The tool that
+# reads it (scripts/tools/dx/list_subprocess_only_modules.py) holds the same
+# string; test_the_child_config_carries_the_context_the_tool_reads binds the two.
 SUBPROCESS_CONTEXT = "subprocess"
 
 
+# ⛔ The child config is DERIVED FROM THE PARENT's live Coverage config, not
+# re-read from pyproject.toml. Three CodeRabbit findings on #1885 shared this
+# one root cause, and all three were reproduced before this rewrite:
+#
+#   * data_file — pytest-cov builds its parent Coverage in an earlier hook, so
+#     setting COVERAGE_FILE here cannot move the parent. Forcing the child to
+#     REPO_ROOT/.coverage while the parent honoured an externally-set
+#     COVERAGE_FILE left the children orphaned: measured with
+#     `COVERAGE_FILE=<elsewhere> pytest --cov`, the parent wrote 1 file and
+#     **31 child data files piled up in the repo root**, never combined. Every
+#     subprocess measurement silently vanished — the exact shape this wiring
+#     exists to abolish.
+#   * source — `coverage_gap_analysis.py` runs pytest with a source-VALUED
+#     `--cov=<paths>`, which overrides coverage's own source list. A child built
+#     from pyproject.toml would then measure a wider scope than the parent, so
+#     the two sides of the context comparison would not be the same population.
+#   * --no-cov — pytest-cov still registers `_cov` and sets `_disabled` when
+#     `--no-cov` is passed, so keying only on "is the plugin registered" exported
+#     the child config against an explicit request not to measure.
+#
+# Deriving from the parent closes all three at once and deletes the second copy
+# of the configuration rather than keeping it in step by hand. `serialize()`
+# absolutises paths, so a child started in another cwd still writes beside the
+# parent.
 def pytest_configure(config):
     """Make subprocess-invoked tools visible to coverage, when coverage is on."""
-    if config.pluginmanager.get_plugin("_cov") is None:
+    plugin = config.pluginmanager.get_plugin("_cov")
+    if plugin is None or getattr(plugin, "_disabled", False):
         return
-    import coverage
+    parent = getattr(getattr(plugin, "cov_controller", None), "cov", None)
+    if parent is None:          # coverage plugin present but never started
+        return
 
-    data_file = os.path.join(REPO_ROOT, ".coverage")
-    os.environ.setdefault("COVERAGE_FILE", data_file)
+    from coverage.config import CoverageConfig
 
-    # Derive the child config FROM the project config rather than shipping a
-    # second config file: a copy of source/omit would rot out of step with
-    # pyproject.toml and nothing would say so.
-    # ⚠️ `parallel` 不在這裡設：它是從 pyproject.toml 繼承來的，再寫一次是冗餘的第二
-    # 份。dogfood 打死過那個寫法——刪掉那行時測試**全綠**，因為斷言讀到的是繼承值。
-    # 守住它的是 test_the_child_config_carries_the_context_the_tool_reads 對衍生設定的
-    # 斷言，而那一格對「pyproject 裡的 parallel 被拿掉」會轉紅。
-    child = coverage.Coverage(config_file=os.path.join(REPO_ROOT, "pyproject.toml")).config
-    child.data_file = data_file
+    # ⚠️ Copy via serialize/deserialize: mutating `parent.config` would change
+    # what the PARENT measures. `deserialize` is a classmethod returning a new
+    # config, not an in-place load.
+    child = CoverageConfig.deserialize(parent.config.serialize())
     child.context = SUBPROCESS_CONTEXT
     os.environ["COVERAGE_PROCESS_CONFIG"] = child.serialize()
     os.environ.pop("COVERAGE_PROCESS_START", None)

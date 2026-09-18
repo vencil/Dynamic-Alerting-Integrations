@@ -23,10 +23,16 @@ markers = [
 # Single source of truth for coverage config (setup.cfg [coverage:*] removed)
 [tool.coverage.run]
 source = ["scripts/tools", "components/da-tools/app"]
-# ⛔ parallel 不是效能選項，是正確性選項（TRK-379）。測試以 subprocess 呼叫工具時，
-# coverage 的 a1_coverage.pth 會在每個子行程各自啟動一份 coverage；沒有 parallel 就
-# 全部寫同一個 .coverage，last writer wins。實測同一模組：parallel+combine 量到 93%、
-# 無 parallel 只量到 64.3%——差值是被覆寫掉的真實執行，不是沒被執行。
+# parallel 不是效能選項，是正確性選項（TRK-379）：測試以 subprocess 呼叫工具時，
+# a1_coverage.pth 會在每個子行程各自啟動一份 coverage；沒有 parallel 就全部寫同一個
+# .coverage，last writer wins。
+# ⚠️ 這一行對本 repo 現行路徑**不生效也不必要**，留著只為裸 `coverage run`：本 repo 的
+# coverage 一律經 pytest-cov，而 pytest-cov 一律傳 data_suffix=True（engine.py:240/290/393），
+# coverage 又把它直接當 parallel（control.py:331 `parallel=bool_or_none(data_suffix)`），
+# 於是 parent 的 parallel 恆為 True，tests/conftest.py 的 child 再從 parent 衍生。實測：
+# 拿掉這一行，parent.parallel / child.parallel 都仍是 True。
+# ⛔ 因此**沒有任何測試守得住這一行**——刪掉它不會有東西轉紅。別把「拿掉就掉到 64.3%」
+# 當成現況：那是 child config 還直接重讀 pyproject 的舊接線下量到的，該接線已被 #1885 換掉。
 # ⚠️ 連帶：任何裸 `coverage report/xml` 前必須先 `coverage combine`；pytest-cov 會自己 combine。
 parallel = true
 omit = [

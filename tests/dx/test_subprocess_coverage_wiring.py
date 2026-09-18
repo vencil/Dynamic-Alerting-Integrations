@@ -43,6 +43,34 @@ class _FakeConfig:
         self.pluginmanager = _FakePluginManager(cov)
 
 
+class _FakeController:
+    def __init__(self, cov):
+        self.cov = cov
+
+
+class _FakePlugin:
+    """Stands in for pytest-cov's `_cov` plugin.
+
+    ⚠️ Carries a REAL `coverage.Coverage` so the derivation is tested against
+    the actual config object, not a dict that happens to have the right keys.
+    """
+
+    def __init__(self, parent_cov, disabled=False):
+        self._disabled = disabled
+        self.cov_controller = _FakeController(parent_cov) if parent_cov else None
+
+
+def _parent(tmp_path, source=None, data_file=None, parallel=True):
+    """A parent Coverage whose settings are deliberately NOT pyproject's."""
+    import coverage
+
+    cov = coverage.Coverage()
+    cov.config.source = source or [str(tmp_path / "some" / "other" / "scope")]
+    cov.config.data_file = data_file or str(tmp_path / "parent.coverage")
+    cov.config.parallel = parallel
+    return cov
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
     for key in _ENV_KEYS:
@@ -56,14 +84,9 @@ def _conftest():
     return _load(_CONFTEST, "_wiring_conftest_under_test")
 
 
-def test_the_wiring_exports_a_child_config_when_coverage_is_on(clean_env) -> None:
-    _conftest().pytest_configure(_FakeConfig(cov=object()))
+def test_the_wiring_exports_a_child_config_when_coverage_is_on(clean_env, tmp_path) -> None:
+    _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(_parent(tmp_path))))
     assert clean_env.get("COVERAGE_PROCESS_CONFIG"), "沒有匯出子行程設定"
-    assert clean_env.get("COVERAGE_FILE"), "沒有釘住絕對路徑的資料檔"
-    assert os.path.isabs(clean_env["COVERAGE_FILE"]), (
-        f"COVERAGE_FILE 不是絕對路徑：{clean_env['COVERAGE_FILE']}——"
-        "相對路徑會讓帶 cwd= 的子行程把資料寫進自己的暫存目錄然後被刪掉"
-    )
 
 
 def test_the_wiring_is_a_no_op_without_coverage(clean_env) -> None:
@@ -77,7 +100,7 @@ def test_the_wiring_is_a_no_op_without_coverage(clean_env) -> None:
         assert key not in clean_env, f"沒開 coverage 卻設了 {key}"
 
 
-def test_the_child_config_carries_the_context_the_tool_reads(clean_env) -> None:
+def test_the_child_config_carries_the_context_the_tool_reads(clean_env, tmp_path) -> None:
     """⛔ conftest 與工具各有一份 `"subprocess"` 字串；這一格是唯一把它們綁住的東西。
 
     漂掉的後果不是靜默分錯桶（工具會在「未知 context」走 rc 2），但那是一個**全紅**
@@ -92,15 +115,12 @@ def test_the_child_config_carries_the_context_the_tool_reads(clean_env) -> None:
         f"tool={tool.SUBPROCESS_CONTEXT!r}"
     )
 
-    conftest.pytest_configure(_FakeConfig(cov=object()))
+    conftest.pytest_configure(_FakeConfig(cov=_FakePlugin(_parent(tmp_path))))
     # ⚠️ `deserialize` 是 classmethod 且**回傳**新 config，不是 in-place。
     config = coverage.config.CoverageConfig.deserialize(
         clean_env["COVERAGE_PROCESS_CONFIG"]
     )
     assert config.context == tool.SUBPROCESS_CONTEXT
-    assert config.parallel is True, (
-        "子行程設定沒有 parallel ⇒ 多個子行程會寫同一個資料檔，last writer wins"
-    )
 
 
 def _measure_child(tmp_path: Path, env_extra: dict) -> set:
@@ -156,3 +176,62 @@ def test_a_child_without_the_config_is_not_measured_at_all(tmp_path: Path) -> No
     assert contexts == set(), (
         f"沒有設定卻被量到 {contexts} ⇒ 上一格測到的不是接線的效果"
     )
+
+
+# ---------------------------------------------------------------------------
+# 從父行程衍生 —— CodeRabbit 在 #1885 提的三條，逐條兩個方向
+# ---------------------------------------------------------------------------
+def test_the_child_follows_the_parent_data_file_not_the_repo_root(clean_env, tmp_path):
+    """⛔ 子行程的資料檔必須跟著**父行程實際用的**那個，不是寫死的 repo root。
+
+    ⚠️ 實測過舊寫法的後果：`COVERAGE_FILE=<別處> pytest --cov` 下父行程寫 1 個檔、
+    **31 個子行程資料檔堆在 repo root** 成為孤兒，父行程永遠不會 combine 它們——
+    subprocess 量測全部靜默消失。
+    """
+    import coverage
+
+    parent = _parent(tmp_path, data_file=str(tmp_path / "elsewhere" / "p.coverage"))
+    _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(parent)))
+    child = coverage.config.CoverageConfig.deserialize(
+        clean_env["COVERAGE_PROCESS_CONFIG"])
+    assert os.path.realpath(child.data_file) == os.path.realpath(parent.config.data_file), (
+        f"子 {child.data_file} != 父 {parent.config.data_file}"
+    )
+    assert os.path.isabs(child.data_file), "相對路徑會讓帶 cwd= 的子行程寫進自己的暫存目錄"
+
+
+def test_the_child_follows_the_parent_source_not_pyproject(clean_env, tmp_path):
+    """⛔ 子行程的 source 必須跟著父行程，不是重讀 pyproject。
+
+    ⚠️ `coverage_gap_analysis.py` 以 source 值的 `--cov=<paths>` 呼叫 pytest，那會覆寫
+    coverage 自己的 source。子行程若讀 pyproject 就會量到比父行程更寬的範圍，兩邊
+    context 比較的母體就不是同一個。
+    """
+    import coverage
+
+    narrow = [str(tmp_path / "narrow_scope")]
+    parent = _parent(tmp_path, source=narrow)
+    _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(parent)))
+    child = coverage.config.CoverageConfig.deserialize(
+        clean_env["COVERAGE_PROCESS_CONFIG"])
+    assert child.source == [os.path.abspath(narrow[0])], child.source
+    # 對照：pyproject 的 source 不得洩漏進來
+    assert not any("components/da-tools" in s for s in (child.source or [])), child.source
+
+
+def test_no_cov_is_honoured(clean_env, tmp_path):
+    """⛔ `--cov ... --no-cov` 時 pytest-cov 仍會註冊 `_cov`，只是把它標成 disabled。
+
+    只看「plugin 有沒有註冊」會在使用者明確要求不量測時照樣讓子行程開始量。
+    """
+    _conftest().pytest_configure(
+        _FakeConfig(cov=_FakePlugin(_parent(tmp_path), disabled=True)))
+    for key in _ENV_KEYS:
+        assert key not in clean_env, f"--no-cov 之下卻設了 {key}"
+
+
+def test_a_registered_but_unstarted_plugin_does_not_export(clean_env):
+    """對照組：plugin 在但 controller 還沒有 Coverage ⇒ 不匯出，也不炸。"""
+    _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(None)))
+    for key in _ENV_KEYS:
+        assert key not in clean_env, f"沒有父 Coverage 卻設了 {key}"
