@@ -1,5 +1,6 @@
 """Tests for diagnose.py — tenant health check tool."""
 
+import io
 import json
 import os
 import sys
@@ -276,6 +277,36 @@ class TestCheck:
         out = json.loads(capsys.readouterr().out)
         assert out["status"] == "healthy"
         assert out["tenant"] == "db-a"
+
+    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.query_prometheus")
+    def test_check_writes_to_the_given_stream_not_sys_stdout(
+        self, mock_qp, mock_cmd, capsys,
+    ):
+        """`out=` 讓呼叫端不必動到行程全域就能拿到文件。
+
+        ⛔ 這個 seam 存在的理由在 check() 的 docstring 裡：唯一的替代方案
+        `contextlib.redirect_stdout` 換的是行程全域的 `sys.stdout`，平行呼叫時
+        會把真 stdout 弄丟。batch_diagnose.py 曾經就是那個形狀。
+
+        兩個方向都斷言：文件**進了** buf，而且**沒有**同時漏到 stdout —— 少了
+        後半，一個「寫 buf 也寫 stdout」的實作會照樣通過，而那正是把行程全域
+        重新拖下水的寫法。
+        """
+        mock_cmd.return_value = "Running"
+        mock_qp.side_effect = [
+            ([{"value": [1700000000, "1"]}], None),       # mysql_up
+            ([], None),                                     # maintenance
+            ([], None),                                     # silent
+        ]
+
+        buf = io.StringIO()
+        before = sys.stdout
+        diagnose.check("db-a", "http://prom:9090", out=buf)
+
+        assert json.loads(buf.getvalue())["tenant"] == "db-a"
+        assert capsys.readouterr().out == "", "帶了 out= 就不該再寫 stdout"
+        assert sys.stdout is before, "check() 不得改動行程全域的 sys.stdout"
 
     @mock.patch("diagnose.run_cmd")
     @mock.patch("diagnose.query_prometheus")

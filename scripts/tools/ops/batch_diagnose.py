@@ -129,14 +129,19 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
     Returns dict: {tenant, status, ...} or {tenant, status: "timeout"}.
     """
     import io
-    from contextlib import redirect_stdout
 
     start = time.monotonic()
     try:
-        # Capture diagnose.check() stdout (it prints JSON)
+        # ⛔ Ask check() to write into OUR buffer. Do NOT reach for
+        # `contextlib.redirect_stdout`: it rebinds the PROCESS-GLOBAL
+        # `sys.stdout`, and this function runs in a ThreadPoolExecutor worker.
+        # With two tenants the interleaving "A enters, B enters, A exits,
+        # B exits" makes B restore A's buffer, so the real stdout is gone for
+        # good and main()'s JSON report lands in a dead StringIO — the process
+        # exits 0 having printed nothing. Measured before this fix: 91 of 100
+        # runs of `batch_diagnose --tenants a,b --json` produced empty stdout.
         buf = io.StringIO()
-        with redirect_stdout(buf):
-            diagnose_check(tenant, prom_url)
+        diagnose_check(tenant, prom_url, out=buf)
         output = buf.getvalue().strip()
         if output:
             result = json.loads(output)
