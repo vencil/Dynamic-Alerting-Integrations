@@ -16,10 +16,9 @@
 #
 # Triggers (pre-push only) — read from the PUSHED REFSPEC since #1690. ⛔ The
 #   trigger set is `DOC_RE` below and nowhere else: a second spelling of it in
-#   prose drifts, and it already had (it omitted docs/**/*.html, of which this
-#   repo tracks 3). ⚠️ The `jsx` branch below matches nothing today — every
-#   tracked .jsx lives under tools/, none under docs/ — so it is insurance,
-#   not evidence; do not cite it when arguing this set is hard to restate.
+#   prose drifts, and it already had (it omitted docs/**/*.html, which this
+#   repo tracks). ⚠️ The `jsx` branch matches nothing today — every tracked
+#   .jsx is under tools/ — so it is insurance, not evidence.
 #
 # Tiered execution:
 #   Tier 1 — Native `mkdocs` on PATH: run directly
