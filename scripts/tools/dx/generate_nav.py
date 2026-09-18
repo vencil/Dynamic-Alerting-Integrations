@@ -5,9 +5,15 @@
 自動分類到 nav 區段，並比對 mkdocs.yml 現有 nav 找出遺漏。
 
 用法:
-  python3 scripts/tools/generate_nav.py              # 顯示建議 nav
-  python3 scripts/tools/generate_nav.py --check      # CI 模式：偵測遺漏
-  python3 scripts/tools/generate_nav.py --update      # 更新 mkdocs.yml nav
+  python3 scripts/tools/dx/generate_nav.py              # 顯示報告
+  python3 scripts/tools/dx/generate_nav.py --check      # CI 模式：偵測遺漏
+
+⚠️ 本工具**只讀不寫**，不會改 mkdocs.yml——nav 要照報告手動更新。曾經有一個
+`--update` 旗標宣稱會寫回，但它從來沒有實作（`args.update` 從未被讀取），跑它與
+不帶旗標完全同義；#1884 把它刪掉，不留一個說謊的介面。
+
+⚠️ `--check` 只對 `missing`（檔案在、nav 沒列）觸發 rc 1；`extra`（nav 列了、檔案
+不在）只印出來，rc 仍為 0。缺口記在 #1884。
 """
 
 import argparse
@@ -131,8 +137,6 @@ def main():
     )
     parser.add_argument('--check', action='store_true',
                         help='CI mode: exit 1 if docs missing from nav')
-    parser.add_argument('--update', action='store_true',
-                        help='Update mkdocs.yml nav section')
     parser.add_argument('--repo-root', default='.',
                         help='Repository root directory')
     args = parser.parse_args()
