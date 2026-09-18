@@ -6273,3 +6273,95 @@ def test_the_cli_spells_the_da_tools_image_exactly_once() -> None:
         f"DA_TOOLS_IMAGE assignment. A second literal is a code path that "
         f"keeps shipping ghcr.io after the customer passed --da-tools-image."
     )
+
+
+# ============================================================
+# ── 7. The two generators held to EACH OTHER, not to two copies
+#      of one expectation (#1351 待辦 2) ──
+# ============================================================
+#
+# Sections 3 and 4 pin each leg to a literal: `_EXPECTED_GH_TOP_LEVEL` /
+# `_EXPECTED_GH_JOBS` for the CLI, an inline set for the portal preview. Those
+# catch "this leg drifted from its spec" and are not redundant with what is
+# below — but they share one blind spot, and it is the one a person actually
+# walks into: change a generator, watch its own test go red, update that test's
+# expectation, green. Two expectations edited one at a time never disagree with
+# each other, so nothing says the two ARTIFACTS diverged.
+#
+# ⛔ This section compares the two artifacts directly, so "update the
+# expectation" cannot be done in one leg. Measured on the TOP-LEVEL axis, which
+# is where two separate literals actually exist: giving the preview a
+# `concurrency:` key AND updating section 4's inline set to match — the full
+# "update the expectation" move — leaves every other test in this file green and
+# reds only the assertion below.
+#
+# ⚠️ The JOB-NAME half is belt-and-braces, not new coverage, and saying so is
+# the point of this note. Job names already come from ONE shared source:
+# `_GH_JOB_EVENTS` / `_GH_JOB_NEEDS` are passed to `_assert_job_event_reachability`
+# for BOTH legs, so there is no second expectation to quietly update. Measured:
+# renaming the preview's `validate` job and updating section 4's inline job set
+# with it still reds `test_portal_preview_job_event_gating`. The equality is kept
+# because it is the literal floor #1351 待辦 2 asks for and it costs one line —
+# but it is not what this section buys.
+#
+# ⚠️ What this does NOT buy at all: it does not reduce the divergence, it
+# declares it. The two hand-kept generators remain two. #1351's other branch
+# (converge to one template) was decided against; this is the gate that decision
+# requires.
+
+# The ONE top-level key the legs are allowed to differ on, and the direction.
+# It is the `env:` 區塊 row of #1351's own divergence table: the CLI declares
+# DA_TOOLS_IMAGE / CONFIG_DIR / MONITORING_NS there and refers to them as
+# `${{ env.… }}`, the preview inlines the image instead. Closing that row is a
+# change to what customers are shown, so it is a product decision tracked
+# separately — NOT something this test may quietly absorb by widening.
+#
+# ⛔ Exact set, not `<=`. A subset form would pass when the CLI silently lost
+# `env:` (every `${{ env.DA_TOOLS_IMAGE }}` in the shipped workflow resolving to
+# empty, which is a broken pipeline in the customer's repo, not a tidy-up).
+_DECLARED_TOP_LEVEL_ONLY_IN_CLI = {"env"}
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_two_generators_agree_on_the_workflow_skeleton(
+        generated, tmp_path, deploy) -> None:
+    """Job set equal; top-level keys equal except one declared difference."""
+    cli = yaml.safe_load(
+        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+
+    # Anti-vacuity first: an empty-vs-empty comparison is not agreement, and
+    # both `jobs` blocks failing to parse would satisfy every `==` below.
+    assert cli.get("jobs"), f"the CLI workflow for deploy={deploy} has no jobs"
+    assert portal.get("jobs"), f"the portal preview for deploy={deploy} has no jobs"
+
+    assert set(cli["jobs"]) == set(portal["jobs"]), (
+        f"the two customer-CI generators disagree on the job set for "
+        f"deploy={deploy}:\n"
+        f"  CLI    (scripts/tools/ops/init_project.py): {sorted(cli['jobs'])}\n"
+        f"  portal (cicd-setup-wizard/utils/generators.js): "
+        f"{sorted(portal['jobs'])}\n"
+        f"A job that exists in one and not the other is a customer being shown "
+        f"a pipeline they will not get. Fix the generator — updating one leg's "
+        f"own expectation is what this test exists to stop."
+    )
+
+    extra_in_portal = set(portal) - set(cli)
+    assert extra_in_portal == set(), (
+        f"the portal preview grew top-level key(s) the CLI artifact does not "
+        f"have for deploy={deploy}: {sorted(map(str, extra_in_portal))}. Either "
+        f"the CLI leg needs the same key, or the preview is promising structure "
+        f"`da-tools init` does not write."
+    )
+
+    extra_in_cli = set(cli) - set(portal)
+    assert extra_in_cli == _DECLARED_TOP_LEVEL_ONLY_IN_CLI, (
+        f"the declared top-level difference changed for deploy={deploy}: got "
+        f"{sorted(map(str, extra_in_cli))}, declared "
+        f"{sorted(_DECLARED_TOP_LEVEL_ONLY_IN_CLI)}.\n"
+        f"⛔ Widening this set is how a new divergence gets absorbed as if it "
+        f"were always intended. A NEW key here means the two generators just "
+        f"drifted; a MISSING one means the CLI dropped a block the shipped "
+        f"workflow refers to. Neither is fixed by editing the constant."
+    )
