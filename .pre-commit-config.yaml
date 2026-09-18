@@ -214,7 +214,7 @@ repos:
       # severity classification; applies the SAME centralized exemption model
       # (its own (path, check) registry in check_k8s_manifests.py, mirrored to
       # docs/internal/iac-lint-baseline.md). The ticket scoped this as a stub
-      # ("0 raw manifests") but k8s/ holds 42 real ones, so it's a real layer.
+      # ("0 raw manifests") but k8s/ holds real ones, so it's a real layer.
       # MANUAL stage like L2 (needs the engine; ~3-5s). Hard gate is the CI
       # step in the "Container SAST L2 (Helm)" job; run locally on demand:
       #   pre-commit run k8s-manifests-sast-check --hook-stage manual --all-files

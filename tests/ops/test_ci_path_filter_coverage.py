@@ -41,8 +41,9 @@ disclosed boundary, because all of this module's assertions are negative
     job merely invokes (the filters themselves carry the entries this costs,
     found by tracing what those scripts read — see the ⛔ blocks in docs-ci.yaml
     and validate.yaml); a directory-shaped dependency (`pytest tests/`); a
-    workflow-level `on.<event>.paths:`, which both scanned workflows' banners
-    forbid but nothing enforces; and everything `_command_verb` lists as a gap.
+    workflow-level `on.<event>.paths:`, which the docs-ci.yaml and
+    validate.yaml banners forbid but nothing enforces; and everything
+    `_command_verb` lists as a gap.
 
 The shared failure mode all three exist to prevent: a path-skipped required
 check reports `skipped`, which SATISFIES branch protection. Nothing about such
@@ -493,7 +494,8 @@ def _merge_filter_block(into: dict[str, list[str]], parsed: dict,
 
     ⛔ A second step redefining a name would silently win, and
     `_filter_patterns("python")` would quietly stop meaning the detect job's
-    python filter. One step per workflow today — split out as a pure function
+    python filter. One step per workflow when this was written — split out as
+    a pure function
     purely so the refusal can be pinned: it was the module's one fail-loud path
     with no test, because the caller needs a workflow on disk to exercise it.
     """
@@ -1109,8 +1111,9 @@ def test_detect_outputs_are_forced_true_off_a_pull_request() -> None:
                     "redundant; the catch-all lives in the FILTER, which on a "
                     "push is never evaluated.")
     assert checked >= 4, (
-        f"only {checked} PR-gated detect output(s) were checked; ci.yml has "
-        "four today (go/python/portal/docs) and this floor has NO headroom.\n"
+        f"only {checked} PR-gated detect output(s) were checked; this floor "
+        "was set to ci.yml's outputs at the time (go/python/portal/docs) with "
+        "NO headroom.\n"
         "⛔ Workflows untouched? Then discovery regressed and this test would "
         "otherwise pass by examining nothing. ⚠️ Deliberately retired a "
         "filter? Lower this floor in the SAME commit and name the filter.")
@@ -1143,7 +1146,7 @@ def test_paths_filter_action_stays_on_the_verified_major() -> None:
         "  * a different MAJOR (`@v4`): read the action's `MatchOptions` "
         "upstream FIRST. Still `dot: true` -> update `verified`. `dot` now "
         "defaults OFF -> updating `verified` IS the disarm: `**` stops "
-        "matching the 94 dot-bearing tracked paths while `_is_catch_all` "
+        "matching every dot-bearing tracked path while `_is_catch_all` "
         "keeps insisting it covers them. Teach `_covers` the new default "
         "BEFORE touching this line.\n"
         "  * a SHA pin: strictly better and the matcher is unchanged. Record "
@@ -1397,7 +1400,7 @@ VAR_PREFIX = re.compile(r"^\$\{?(?:GITHUB_WORKSPACE|CI_PROJECT_DIR)\}?/")
 # ⛔ The same root has a THIRD spelling, and an earlier version of the comment
 # above claimed the two env vars were "the ones that actually denote the
 # checkout" — false: `${{ github.workspace }}` is the GitHub-expression form and
-# this repo already uses it (config-diff.yaml, nightly-race.yaml ×2). It cannot
+# this repo's workflows use it (e.g. config-diff.yaml). It cannot
 # be handled by VAR_PREFIX, because `${{ github.workspace }}/x` contains spaces:
 # tokenising splits it into `${{`, `github.workspace`, `}}/x`, the interpreter
 # branch takes `${{` as the script argument and stops — the real path never
@@ -1452,14 +1455,14 @@ def _gated_jobs(workflow_path: Path) -> dict[str, list[str]]:
          This workflow tree already relies on the escape hatch — every
          aggregate gate (`python-tests`, `all-checks`, …) writes `if: always()`
          precisely to opt out — so the first contributor who forgets it creates
-         a silently gated leg. Today that changes nothing: all four such jobs
-         carry `always()`, which is what makes this cheap to add now.
+         a silently gated leg. When this was written it changed nothing: every
+         such job carried `always()`, which is what made it cheap to add.
 
     ⛔ Still an idiom, not a semantics. What is DETECTED but NOT PARSED now
     raises below. What is not even detected: a gate expressed without touching
     the detect job's outputs at all (a separate `if:` on a step — see
-    `_job_step_files` — or a workflow-level `on.<event>.paths:`, which both
-    scanned workflows' banners forbid but nothing enforces).
+    `_job_step_files` — or a workflow-level `on.<event>.paths:`, which the
+    docs-ci.yaml and validate.yaml banners forbid but nothing enforces).
     """
     known = _workflow_filters(workflow_path)
     jobs = _load_workflow(workflow_path)["jobs"]
@@ -1633,9 +1636,9 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
     relative script argument resolves against the step's directory, not the
     repo root, so `working-directory: tools/portal` + `node ci/gen.js` was
     tested as `<root>/ci/gen.js`, found missing, and dropped — the dependency
-    became invisible with every test green. Ten steps across the gated legs
-    already set `working-directory`; none of them names a relative script
-    TODAY, which is the only reason this was latent rather than live. The
+    became invisible with every test green. Steps across the gated legs
+    already set `working-directory`; when this was fixed none of them named a
+    relative script, the only reason it was latent rather than live. The
     step directory is tried FIRST and the repo root second, which is right for
     both spellings: a genuinely relative path resolves where the shell would,
     and a root-anchored one (VAR_PREFIX / WORKSPACE_EXPR already stripped) does
@@ -1654,7 +1657,7 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
             "when steps failed: the aggregate gate's `RUN_RESULT = success` "
             "branch passes and the required check goes green over a failing "
             "test run. ⛔ Step-level tolerance one scope up; the idiom exists "
-            "at job level twice here (backtest, self-review-pass2).")
+            "at job level in this repo (e.g. backtest, self-review-pass2).")
     found: set[str] = set()
     for step in job.get("steps") or []:
         step_if = str(step.get("if", ""))
@@ -1679,8 +1682,9 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
                 "this predicate is too broad — but do NOT narrow it to "
                 "`_run_script_files`-resolves-a-tracked-file: that helper "
                 "deliberately does not resolve DIRECTORY arguments, so "
-                "`pytest tests/` resolves to nothing and 3 of the 5 gated legs' "
-                "primary test steps would fall outside it. Narrow on an axis "
+                "`pytest tests/` resolves to nothing, so every gated leg whose "
+                "primary test step names a directory falls outside it. "
+                "Narrow on an axis "
                 "that cannot swallow the test step: steps with no `run:`.")
         if gating_step_if:
             raise AssertionError(
@@ -1854,10 +1858,10 @@ def _command_files(tokens: list[str]):
     # for one meant a message that SHOWS the fix became a dependency:
     #   echo "::error::spec drift. Run python3 scripts/tools/dx/bump_docs.py"
     # yielded `bump_docs.py`. Naming the fix command in `::error::` is this
-    # repo's convention (ci.yml does it twice), so this was live, not
-    # hypothetical — safe only by the accident that those two say `make`,
-    # which is not an interpreter. Third instance of the same position bug in
-    # this one function, after `./` and `pip`.
+    # repo's convention (ci.yml does it), so this was live, not
+    # hypothetical — safe only by the accident that ci.yml's instances
+    # named `make`, which is not an interpreter. Third instance of the same
+    # position bug in this one function, after `./` and `pip`.
     if verb is not None and verb in INTERPRETERS:
         # The first NON-FLAG argument, and only that one. Flags are skipped
         # rather than stopping the scan, so `python3 -u x.py` and `bash -x
@@ -1966,8 +1970,8 @@ def test_gating_filter_covers_every_file_its_job_runs() -> None:
 # discovery is a substring test on the file's text: swap `dorny/paths-filter`
 # for another action (or hoist the detect job into a reusable workflow) and
 # that workflow silently leaves the guard's world, taking its legs' coverage
-# assertions with it. A threshold like `>= 5` did not catch that — ci.yml
-# alone yields exactly 5.
+# assertions with it. A count threshold did not catch that — ci.yml alone
+# could meet it.
 SCANNED_WORKFLOWS = {"ci.yml", "docs-ci.yaml", "validate.yaml"}
 
 # ⛔ And the gated legs themselves, as an exact set. Pinning only the workflow
@@ -2842,10 +2846,10 @@ def test_looks_like_a_path_bounds_are_reference_pinned() -> None:
     """Shape B's only throttle, pinned by reference rather than by effect.
 
     Each bound could be deleted with every other test still green (blind
-    review) — not because they do nothing (they drop hundreds of candidates
-    each; the figures live at `_MAX_PATH_LEN` and are deliberately stated ONCE)
-    but because what they drop is not a tracked file anyway, so nothing
-    downstream notices. That makes them exactly the kind of quiet safety a
+    review) — not because they do nothing (each drops candidates; the figures
+    were removed on purpose, see the note above `_MAX_PATH_LEN`) but because
+    what they drop is not a tracked file anyway, so nothing downstream
+    notices. That makes them exactly the kind of quiet safety a
     refactor removes by accident.
 
     ⛔ Do not restate those counts here. Three review rounds in a row caught a
@@ -2865,10 +2869,9 @@ def test_looks_like_a_path_bounds_are_reference_pinned() -> None:
     # and the one bound that IS pinned by effect, kept here for completeness
     assert not _looks_like_a_path("index.md")
 
-    # A NUL byte must be judged "not a path", never crash the scan. `tests/**`
-    # already holds three such literals (none with a `/`, so none reaches the
-    # filesystem today). Review raised this as a ValueError risk needing its
-    # own `except`; measured on both platforms, `Path.is_file()` returns False
+    # A NUL byte must be judged "not a path", never crash the scan: `tests/**`
+    # does hold such literals. Review raised this as a ValueError risk needing
+    # its own `except`; measured on both platforms, `Path.is_file()` returns False
     # rather than raising (it has swallowed ValueError since 3.8), so no extra handler was added — an
     # `except` clause that can never fire reads like a second line of defence
     # while being none. This pins the OUTCOME, which is what matters if that
@@ -3420,12 +3423,11 @@ def test_gated_scanner_still_justifies_every_filter_entry_it_used_to() -> None:
             step_files = _job_step_files(workflow_path, job)
             for name in names:
                 files_by_filter[name] |= step_files
-        # ⛔ Keyed by (filter, pattern). The same pattern STRING appears in two
-        # filters of one workflow five times in ci.yml (`rule-packs/**`,
-        # `try-local/**`, `flaky-tests.yaml`, `.github/workflows/ci.yml`,
-        # `docs/**`), and a bare-string set would call it justified when either
-        # filter's legs matched — reintroducing, one level down, the exact
-        # cross-filter credit this rescope removed.
+        # ⛔ Keyed by (filter, pattern). The same pattern STRING can appear in
+        # two filters of one workflow (ci.yml does it, e.g. `rule-packs/**`
+        # in both `go` and `python`), and a bare-string set would call it
+        # justified when either filter's legs matched — reintroducing, one
+        # level down, the exact cross-filter credit this rescope removed.
         justified = {
             (name, pattern)
             for name in filters for pattern in filters[name]
