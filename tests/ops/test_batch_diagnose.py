@@ -243,9 +243,8 @@ class TestRunDiagnoseForTenant:
 
     def test_healthy_result(self, monkeypatch):
         """正常診斷回傳 JSON 結果。"""
-        def mock_check(tenant, prom_url):
-            import sys
-            sys.stdout.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+        def mock_check(tenant, prom_url, *, out):
+            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
         assert result["tenant"] == "db-a"
@@ -254,19 +253,49 @@ class TestRunDiagnoseForTenant:
 
     def test_empty_output(self, monkeypatch):
         """空輸出回傳 error 狀態。"""
-        monkeypatch.setattr(bd, "diagnose_check", lambda t, p: None)
+        monkeypatch.setattr(bd, "diagnose_check", lambda t, p, *, out: None)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
         assert result["status"] == "error"
         assert "empty output" in result["issues"][0]
 
     def test_exception_caught(self, monkeypatch):
         """例外回傳 error 狀態。"""
-        def mock_check(tenant, prom_url):
+        def mock_check(tenant, prom_url, *, out):
             raise OSError("connection refused")
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
         assert result["status"] == "error"
         assert "connection refused" in result["issues"][0]
+
+    def test_the_worker_never_rebinds_process_global_stdout(self, monkeypatch):
+        """⛔ 這一格守的是機制，不是時序。
+
+        舊寫法用 `contextlib.redirect_stdout(buf)` 抓 check() 的輸出。它換掉的是
+        **行程全域**的 `sys.stdout`，而本函式跑在 ThreadPoolExecutor 的 worker
+        裡：兩條執行緒交錯成「A 進 → B 進 → A 出 → B 出」時，B 存下的「舊值」
+        已經是 A 的 buffer，B 離開時就把真 stdout 永久換成它 —— 之後 main() 印
+        的 JSON 報告全進了那個 StringIO，行程 rc 0、stdout 全空、stderr 全空。
+
+        ⚠️ 用「跑很多次看會不會空」來守這件事是錯的守法：那是在賭時序，紅綠都
+        不可靠。這裡改成對著**唯一的成因**斷言 —— worker 執行期間 `sys.stdout`
+        必須還是原本那一個物件。單執行緒、完全確定，舊寫法必紅。
+        """
+        seen = []
+
+        def mock_check(tenant, prom_url, *, out):
+            seen.append(sys.stdout)
+            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+
+        monkeypatch.setattr(bd, "diagnose_check", mock_check)
+        before = sys.stdout
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom")
+
+        assert result["status"] == "healthy"
+        assert seen == [before], (
+            "check() 執行期間 sys.stdout 被換掉了 —— 有人又把行程全域當成捕捉"
+            "輸出的手段；平行 worker 下這會讓真 stdout 一去不回"
+        )
+        assert sys.stdout is before
 
 
 # ── discover_tenants JSON decode ──────────────────────────────────
