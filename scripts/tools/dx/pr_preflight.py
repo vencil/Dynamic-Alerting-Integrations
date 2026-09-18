@@ -942,8 +942,22 @@ def check_behind_main() -> CheckResult:
     )
 
 
+# ⛔ 本檢查刻意只量對 origin/main 的衝突，不自己去找 PR 真正的 base。
+# 三種替代做法都實作並量過，全部否決（量測與逐條理由在 #1476）：手動 `--base-ref`
+# 旗標有四條 fail-open（打錯／過期／空字串／合法但不是 PR 的 base）；從
+# `gh pr view --json baseRefName` 推導引入 `git fetch` 參數注入、每次多 6–8 秒，
+# 而且主路徑 dev container 裡沒有 `gh` 所以完全不生效；base 非 main 時降成 WARN
+# 等於放棄 stacked PR 的衝突偵測。最近 300 支 PR 有 299 支 base=main。
+# ⇒ 由 FAIL 訊息交代限制與出路，由人決定，不要再往工具裡塞第四種。
+_STACKED_PR_NOTE = (
+    "\n⛔ 本檢查只量對 origin/main 的衝突。這支 PR 的 base 若不是 main，上面的衝突"
+    "可能整批繼承自父分支——用 `git merge-tree --write-tree HEAD origin/<父分支>` "
+    "確認；乾淨的話本項不適用（#1476），push 走 owner 核准的 GIT_PREFLIGHT_BYPASS=1。"
+)
+
+
 def check_conflict() -> CheckResult:
-    """Dry-run merge 偵測衝突（不改工作區）。
+    """Dry-run merge 偵測衝突（不改工作區），比對對象固定是 origin/main（見上方 ⛔）。
 
     策略優先級：
     1. behind == 0 → 已同步，不需要 merge
@@ -970,7 +984,7 @@ def check_conflict() -> CheckResult:
             "Conflict",
             Status.FAIL,
             f"{len(conflicts)} 個檔案衝突 — 必須先 merge main 並解衝突",
-            detail=detail,
+            detail=detail + _STACKED_PR_NOTE,
         )
 
     # merge-tree not available (old git) — use merge --no-commit fallback
@@ -999,7 +1013,7 @@ def check_conflict() -> CheckResult:
             "Conflict",
             Status.FAIL,
             f"{len(conflict_files)} 個檔案衝突",
-            detail=detail,
+            detail=detail + _STACKED_PR_NOTE,
         )
 
     # Merge failed for non-conflict reasons (FUSE, permission, etc.)
