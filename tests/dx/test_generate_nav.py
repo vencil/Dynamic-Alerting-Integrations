@@ -9,8 +9,10 @@
   2. `--check` 的兩個方向。⚠️ 沒有這一半，第 1 格會是平凡為真：一支整個壞掉、對任何
      argv 都回 rc 2 的實作，照樣能讓「`--update` 被拒絕」通過。
 
-⚠️ 已知且**刻意不在這裡守**：`--check` 對 `extra`（nav 列了、檔案不在）不觸發 rc 1。
-那是現況、不是這一役改的，缺口記在 #1884，不要在這裡把它斷言成「應該如此」。
+  3. `--check` 對 `extra`（nav 列了、檔案不在）回 rc 0。⚠️ 這一格是**現況存證，不是
+     規格**：這一役的 docstring 把這個行為寫進散文，寫下而不守就是下一句會腐爛的散文；
+     而 #1884 認定它是缺口。⇒ 釘住是為了「有人改動它時會有東西喊」。讀到它紅不要當成
+     回歸，去看 #1884 是不是把 `extra` 改成觸發 rc 1 了。
 """
 
 import subprocess
@@ -72,3 +74,28 @@ def test_the_dead_update_flag_is_gone(tmp_path):
         f"若它又被加回來，請確認 args.update 真的有被讀取。\nstderr:\n{proc.stderr}"
     )
     assert "--update" in proc.stderr, "argparse 的拒絕訊息應指名這個未知旗標"
+
+
+def test_check_does_not_fail_on_extra_entries_today(tmp_path):
+    """現況存證：nav 列了、檔案不在（`extra`）時 `--check` 仍回 rc 0，只把它印出來。
+
+    ⚠️ 不是在主張「應該如此」。實測（`--repo-root` 合成 repo，nav 列 real.md + ghost.md）：
+    rc 0，stdout 有 `In nav but not found: 1`。沒有這一格，第一格的 `missing` 斷言
+    即使在「對任何差異都回 rc 1」的實作下也照樣全綠。缺口本身記在 #1884。
+    """
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "real.md").write_text(
+        '---\ntitle: "Real"\ntags: [dx]\nlang: zh\n---\n# Real\n', encoding="utf-8")
+    # real.md 有被列 ⇒ 沒有 missing；ghost.md 被列但檔案不存在 ⇒ 只有 extra
+    (tmp_path / "mkdocs.yml").write_text(
+        "site_name: t\nnav:\n  - Real: docs/real.md\n  - Ghost: docs/ghost.md\n",
+        encoding="utf-8")
+    proc = _run(tmp_path, "--check")
+    assert proc.returncode == EXIT_OK, (
+        f"`extra` 不該觸發 rc 1（現況）。實得 rc={proc.returncode}。若 #1884 已把 extra "
+        f"改成違規，請改這一格而不是刪它。\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "ghost.md" in proc.stdout, (
+        "rc 0 還不夠：它必須真的看到那筆 extra 並印出來，否則一支完全忽略 nav 的實作也會綠。"
+        f"\nstdout:\n{proc.stdout}"
+    )

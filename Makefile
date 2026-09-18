@@ -789,7 +789,7 @@ migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-con
 
 .PHONY: generate-alert-reference
 generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md（預設直接寫檔；--dry-run 只印、--check 偵測 drift）
-	@python3 ./scripts/tools/dx/generate_alert_reference.py
+	@python3 ./scripts/tools/dx/generate_alert_reference.py $(ARGS)
 
 .PHONY: generate-nav
 generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構（只讀；nav 依報告手動更新）
