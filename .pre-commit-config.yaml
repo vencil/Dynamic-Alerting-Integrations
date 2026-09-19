@@ -1032,8 +1032,9 @@ repos:
         files: ^docs/.*\.md$
 
       # Fence hygiene: a ```yaml fence in docs/ must actually be YAML. Split
-      # out from md-yaml-drift-check (below) on purpose — it covers EVERY
-      # fenced block rather than only those that look like tenant config, and a
+      # out from md-yaml-drift-check (below) on purpose — it covers every
+      # fenced block that is not explicitly exempted by an ignore marker,
+      # rather than only those that look like tenant config, and a
       # mislabelled directory-tree diagram must not be able to block an
       # unrelated schema fix. Parses with safe_load_all: `---`-separated k8s
       # manifests are valid YAML and four blocks in docs/ are exactly that.
