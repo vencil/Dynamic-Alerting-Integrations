@@ -347,6 +347,10 @@ if "%PR_NUM%"=="" (
 ) else (
     python scripts/tools/dx/pr_preflight.py --skip-hooks --pr %PR_NUM%
 )
+REM Propagate the tool's rc (#1472). This used to `goto :done` unconditionally,
+REM i.e. `exit /b 0` even when the report said BLOCKED: fixing rc inside the
+REM Python tool buys nothing if this wrapper swallows it one layer up.
+if %ERRORLEVEL% NEQ 0 goto :done_err
 goto :done
 
 :do_fix_hooks

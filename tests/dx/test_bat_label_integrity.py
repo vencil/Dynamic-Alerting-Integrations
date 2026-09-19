@@ -109,6 +109,28 @@ def test_defines_done_and_done_err(bat_path: pathlib.Path) -> None:
     assert "done_err" in labels, f"{bat_path.name} missing :done_err label"
 
 
+def test_pr_preflight_handler_propagates_the_tools_rc() -> None:
+    """#1472 — `:do_pr_preflight` must not end in a bare `goto :done`.
+
+    The handler runs pr_preflight.py, which returns 1 when the report is
+    BLOCKED. Falling through to `:done` turns that into `exit /b 0`, so a
+    caller chaining on this wrapper reads a blocked branch as ready. The
+    check is structural (the block must reach `:done_err`), not a string
+    match on the exact `if` line, so rewording the guard keeps it green.
+    """
+    lines = _read_normalized(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat")
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == ":do_pr_preflight")
+    block = []
+    for ln in lines[start + 1:]:
+        if re.match(r"^:[A-Za-z_]", ln):        # next label ends the block
+            break
+        block.append(ln)
+    assert any("pr_preflight.py" in ln for ln in block), "block no longer runs the tool"
+    assert any("done_err" in ln for ln in block), (
+        ":do_pr_preflight swallows a non-zero rc from pr_preflight.py (#1472)"
+    )
+
+
 @pytest.mark.parametrize("bat_path", BAT_FILES, ids=lambda p: p.name)
 def test_mcp_caller_pattern_documented(bat_path: pathlib.Path) -> None:
     """Header must document the MCP PowerShell cmd-redirect caller pattern.

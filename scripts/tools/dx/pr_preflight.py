@@ -7,8 +7,9 @@
 用法：
   python scripts/tools/dx/pr_preflight.py                    # 完整檢查
   python scripts/tools/dx/pr_preflight.py --skip-hooks       # 跳過 pre-commit --all-files（守衛 wiring 仍會檢查）
-  python scripts/tools/dx/pr_preflight.py --ci               # CI 模式（exit 1 on failure）
   python scripts/tools/dx/pr_preflight.py --pr 23            # 指定 PR 號碼
+
+結束碼：有 FAIL 回 1（無條件，#1472），只有 WARN 或全過回 0。
 
 設計原則：
   - 純 diagnostic，不改檔案、不 merge、不 push
@@ -1524,8 +1525,9 @@ def main() -> int:
 範例：
   %(prog)s                    # 完整檢查（含 local hooks）
   %(prog)s --skip-hooks       # 跳過 pre-commit --all-files（快速檢查；守衛 wiring 仍會檢查）
-  %(prog)s --ci               # CI 模式（有 FAIL 則 exit 1）
   %(prog)s --pr 23            # 指定 PR 號碼
+
+結束碼：有 FAIL 回 1，只有 WARN 或全過回 0。
 """,
     )
     parser.add_argument(
@@ -1534,7 +1536,8 @@ def main() -> int:
         help="跳過 pre-commit run --all-files（快速模式）。"
              "⛔ 不跳「pre-push 守衛在不在 push 路徑上」那一半（#1811）",
     )
-    parser.add_argument("--ci", action="store_true", help="CI 模式：有 FAIL 時 exit 1")
+    # ⛔ 不要加回 `--ci`（#1472）：有 FAIL 就非零是無條件的，那個旗標只會是一個
+    # 不影響任何結果的開關。本工具沒有「只報告不判定」的模式。
     parser.add_argument("--pr", type=int, default=None, help="指定 PR 號碼（不指定則自動偵測）")
     parser.add_argument(
         "--check-commit-msg",
@@ -1624,7 +1627,11 @@ def main() -> int:
         if marker:
             print(f"   ↳ wrote preflight marker: {marker.name}")
 
-    if args.ci and report.has_failure:
+    # ⛔ FAIL ⇒ 非零，不看任何旗標（#1472）。報告印 BLOCKED 而 rc 是 0 時，
+    # `make pr-preflight && git push` 會把它讀成通過；真正擋下來的 marker 要到
+    # **下一個** push 才生效。WARN 維持 0：`Behind main` 這類警告幾乎每次都有，
+    # 讓它非零等於讓 rc 永遠非零。
+    if report.has_failure:
         return EXIT_VIOLATION
     return EXIT_OK
 
