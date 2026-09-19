@@ -16,6 +16,27 @@ exclude_docs: |
   README-root.md
   README-root.en.md
 
+# Docs that are deliberately NOT in the nav (gitignore-style, relative to
+# docs_dir). This is the *declaration* half of `validation.nav.omitted_files`
+# below: without it that gate would flag all 72 of these and never go green.
+#
+# The list is not new policy — it is the same exemption set that
+# scripts/tools/dx/generate_nav.py has carried in its EXCLUDE_PATTERNS
+# constant, plus the ZH-primary/EN-auxiliary language policy. Moving it here
+# puts it next to the nav it talks about, where a reader editing the nav can
+# see it, instead of in a Python constant that MkDocs cannot read.
+#
+# ⚠️ `internal/` is NOT a uniform exemption. `internal/test-coverage-matrix.md`
+# is deliberately IN the nav (under 場景) and stays there — `not_in_nav` only
+# suppresses the "exists but is not in the nav" complaint for files that are
+# absent from the nav. It never removes anything from the nav, and mkdocs does
+# not warn about the overlap (measured, not assumed).
+not_in_nav: |
+  internal/
+  includes/
+  tags.md
+  *.en.md
+
 # Link validation (mkdocs >= 1.6 native).
 # `anchors` defaults to `info`, i.e. swallowed by the build log — which is how
 # a batch of `#section` links rotted unnoticed. Promoting it to `warn` makes
@@ -31,6 +52,15 @@ exclude_docs: |
 # `toc.slugify` for a GFM-compatible one — staged separately as B3. Do NOT
 # lower this back to `info` to make the count go away.
 validation:
+  nav:
+    # mkdocs defaults this to `info`, i.e. swallowed by the build log — which is
+    # exactly how 58 published docs drifted out of the nav unnoticed until #1902
+    # (3 of them with no inbound link at all, reachable only by guessing a URL).
+    # `warn` makes mkdocs_strict_check.sh fail on it, so the nav cannot silently
+    # fall behind docs/ again. The complementary direction (a nav entry whose
+    # file is gone) is already gated by `nav.not_found`, which mkdocs defaults
+    # to `warn`.
+    omitted_files: warn
   links:
     anchors: warn
 
