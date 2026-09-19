@@ -40,8 +40,9 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 
 | 想做什麼 | 指令 |
 |---------|------|
-| 跑全部 Python 測試 | `make test` |
+| 跑全部 Python 測試 | `make test`（xdist 平行；worker 數走 `PYTEST_WORKERS`：Linux / 容器 / CI 是 `auto`，Windows host 預設 6，可 `make test PYTEST_WORKERS=8` 覆蓋） |
 | 跑特定測試 | `make test ARGS="-k <pattern>"` |
+| 在 dev container 跑 | `make dc-test`（`-n auto`；單檔 debug 用 `make dc-test ARGS="-n 0 tests/ops/test_foo.py"`） |
 | 看覆蓋率 | `make coverage`（HTML：`ARGS="--html"`） |
 | 跑 Playwright E2E | `make test-e2e` |
 | 跑 Playwright 單一 spec | `make test-e2e ARGS="saved-views.spec.ts"` |
