@@ -77,6 +77,35 @@ IGNORE_RE = re.compile(r"<!--\s*md-yaml-drift:\s*ignore\s*[—\-:]\s*(\S.*?)\s*-
 # (components/threshold-exporter/app/pkg/config/docs_defaults_sample_test.go).
 FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b")
 
+# ── `--check crd` scope ──────────────────────────────────────────────────────
+# Where the vendored CRD schemas live. Produced by
+# scripts/tools/dx/generate_crd_schemas.py from pinned upstream CRDs; see
+# docs/schemas/crd/SOURCES.yaml for why upstream rather than a catalog.
+CRD_SCHEMA_DIR = ("docs", "schemas", "crd")
+
+# apiVersion groups whose objects are NOT cluster resources: these are apiserver
+# CONFIG FILE formats, passed with --audit-policy-file / --admission-control-
+# config-file. `kubectl apply` never sees them, so "the API server would reject
+# this" — the failure this gate speaks for — cannot happen to them. Listed with
+# the reason so a later reader does not "fix" the gap by adding schemas.
+NON_CLUSTER_GROUPS = {
+    "audit.k8s.io",              # Policy — kube-apiserver audit policy file
+    "apiserver.config.k8s.io",   # AdmissionConfiguration — admission config file
+}
+
+# Built-in k8s kinds are deliberately OUT of scope for now: validating them
+# needs the whole upstream schema bundle, and their required-field surface is
+# thin. Kept as an explicit list rather than a "looks built-in" predicate
+# because the list rots SAFELY — a group missing from it is treated as a CRD and
+# fails closed asking for a schema, which is loud. A suffix rule would do the
+# opposite and silently wave through anything ending in `.k8s.io`.
+BUILTIN_GROUPS = {
+    "",                              # core (`apiVersion: v1`)
+    "apps", "batch", "policy", "autoscaling",
+    "networking.k8s.io", "rbac.authorization.k8s.io", "storage.k8s.io",
+    "apiextensions.k8s.io", "scheduling.k8s.io", "coordination.k8s.io",
+}
+
 
 class MdYamlDriftChecker:
     """掃描 Markdown 中的 YAML code blocks 並驗證 schema 合規性。"""
@@ -332,6 +361,118 @@ class MdYamlDriftChecker:
         print("valid here and is what `kubectl apply -f` expects).")
         return EXIT_VIOLATION
 
+    def run_crd(self) -> int:
+        """Every k8s object embedded in docs/ must satisfy its real CRD schema.
+
+        The defect class this speaks for is a reader copying a block and having
+        the API server reject it (#1353: an ArgoCD Application with no
+        `spec.project`, which the CRD makes required). Nothing covered it — the
+        original was found by a human doing a category sweep by hand.
+
+        ⛔ A missing schema is a VIOLATION, not a skip. That is the whole design
+        of this pass. Measured three times over while building it: the stripped
+        `example/prometheus-operator-crd/` variant, and datreeio's CRDs-catalog,
+        BOTH lack `AlertmanagerConfig` v1beta1 — the exact version six blocks in
+        docs/ declare, and the version carrying four real defects. Under a
+        skip-on-missing rule this gate would have reported a clean run while
+        validating none of them. `-ignore-missing-schemas` is kubeconform's name
+        for that trap; this pass has no such flag.
+
+        ⛔ Validation is against the FULL openAPIV3Schema, not just the
+        top-level required fields. That shortcut was prototyped and rejected on
+        measurement: the four AlertmanagerConfig defects live at
+        `spec.receivers[].slackConfigs[].apiURL`, four levels down, and a
+        required-only pass reported 0 violations on the same inputs — green, and
+        blind to every defect present.
+
+        False positives were the stated risk (docs abbreviate). Measured at
+        adoption: 31 in-scope objects, 4 violations, all four genuine. The
+        shared `md-yaml-drift: ignore — <reason>` marker is the escape hatch if
+        one ever appears; no block needed it.
+        """
+        base = self.repo_root.joinpath(*CRD_SCHEMA_DIR)
+        issues: List[Dict] = []
+        skipped: List[str] = []
+        checked = 0
+        out_of_scope: Dict[str, int] = {}
+        docs_dir = self.repo_root / "docs"
+
+        for md_file in sorted(docs_dir.rglob("*.md")):
+            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
+            for line_num, yaml_content in self._extract_yaml_blocks(md_file, skipped):
+                try:
+                    documents = list(yaml.safe_load_all(yaml_content))
+                except yaml.YAMLError:
+                    continue  # fence hygiene is `--check fences`' job
+                for data in documents:
+                    if not isinstance(data, dict):
+                        continue
+                    api_version, kind = data.get("apiVersion"), data.get("kind")
+                    if not isinstance(api_version, str) or not isinstance(kind, str):
+                        continue
+                    group, _, version = api_version.rpartition("/")
+                    if group in NON_CLUSTER_GROUPS:
+                        out_of_scope[f"{api_version} {kind} (not a cluster object)"] = \
+                            out_of_scope.get(f"{api_version} {kind} (not a cluster object)", 0) + 1
+                        continue
+                    if group in BUILTIN_GROUPS:
+                        out_of_scope[f"{api_version} {kind} (built-in, out of scope)"] = \
+                            out_of_scope.get(f"{api_version} {kind} (built-in, out of scope)", 0) + 1
+                        continue
+                    schema_path = base / group / f"{kind}_{version}.json"
+                    if not schema_path.exists():
+                        issues.append({
+                            "file": rel_path, "line": line_num,
+                            "what": f"{api_version} {kind}",
+                            "error": (f"no vendored schema at "
+                                      f"{'/'.join(CRD_SCHEMA_DIR)}/{group}/{kind}_{version}.json "
+                                      f"— add {{group: {group}, kind: {kind}, "
+                                      f"version: {version}}} to docs/schemas/crd/SOURCES.yaml "
+                                      f"and run `make crd-schemas`"),
+                        })
+                        continue
+                    try:
+                        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError) as e:
+                        print(f"ERROR: cannot read {schema_path}: {e}", file=sys.stderr)
+                        return EXIT_CALLER_ERROR
+                    checked += 1
+                    errors = sorted(jsonschema.Draft7Validator(schema).iter_errors(data),
+                                    key=lambda err: list(err.path))
+                    for err in errors:
+                        where = "/".join(str(x) for x in err.path) or "<root>"
+                        issues.append({
+                            "file": rel_path, "line": line_num,
+                            "what": f"{api_version} {kind}",
+                            "error": f"{where}: {err.message}",
+                        })
+                    if self.verbose and not errors:
+                        print(f"  OK   {rel_path}:{line_num} ({api_version} {kind})")
+
+        print("=" * 60)
+        print("MARKDOWN EMBEDDED CRD OBJECTS")
+        print("=" * 60)
+        print(f"CRD objects validated:       {checked}")
+        self._print_skipped(skipped)
+        # Printed, never silent: a gate that drops inputs quietly reads as
+        # "covered everything" when it did not.
+        for label in sorted(out_of_scope):
+            print(f"  out of scope: {label:<52} {out_of_scope[label]}")
+        print(f"Schema violations:           {len(issues)}")
+        print()
+        if not issues:
+            print("✓ Every k8s object embedded in docs/ matches its CRD schema.")
+            return EXIT_OK
+        for issue in issues:
+            print(f"  [CRD] {issue['file']}:{issue['line']} ({issue['what']})")
+            print(f"        {issue['error']}")
+        print()
+        print("A reader copies these blocks verbatim. A block the API server would")
+        print("reject is a broken instruction, not a stylistic problem — fix the")
+        print("example against the CRD, or re-vendor the schema if upstream really")
+        print("changed (`make crd-schemas`, then review the diff).")
+        return EXIT_VIOLATION
+
     def iter_config_units(self):
         """Yield every documented config unit as (rel_path, line, data).
 
@@ -488,9 +629,10 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show all scanned blocks")
     parser.add_argument("--repo-root", default=".", help="Repository root (default: .)")
     parser.add_argument(
-        "--check", choices=("schema", "fences"), default="schema",
+        "--check", choices=("schema", "fences", "crd"), default="schema",
         help="Which check to run: 'schema' (default; tenant-config blocks vs "
-             "JSON Schema) or 'fences' (every ```yaml block in docs/ must parse). "
+             "JSON Schema), 'fences' (every ```yaml block in docs/ must parse), "
+             "or 'crd' (every embedded k8s object vs its real CRD schema). "
              "They are separate hooks so one cannot mask the other.")
     args = parser.parse_args()
 
@@ -500,7 +642,8 @@ def main():
         return EXIT_CALLER_ERROR
 
     checker = MdYamlDriftChecker(str(repo_root), verbose=args.verbose)
-    exit_code = checker.run_fences() if args.check == "fences" else checker.run()
+    dispatch = {"fences": checker.run_fences, "crd": checker.run_crd}
+    exit_code = dispatch.get(args.check, checker.run)()
 
     if args.ci:
         return exit_code
