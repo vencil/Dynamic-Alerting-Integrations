@@ -139,11 +139,8 @@ try {
             if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
             Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan
             & python @preflight_args
-            # ⛔ 把工具的 rc 傳出去（#1472）。少了這行，`-File` 呼叫一律回 0、
-            # session 內 `$?` 是 True，`… && gh pr create` 會在 preflight 判
-            # BLOCKED 之後照樣往下走。⛔ 這行刻意留在這個 case 裡而不是 switch
-            # 之後：放外面會連 `ci-status` 一起傳，而 `gh pr checks` 用 rc 8
-            # 表示「checks pending」，那會把「還在跑」變成 wrapper 的失敗。
+            # ⛔ 傳出工具的 rc（#1472），且 ⛔ 只在這個 case 裡傳：放到 switch
+            # 之後會連 `ci-status` 一起傳，而 `gh pr checks` 的 rc 8 是 pending。
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
     }

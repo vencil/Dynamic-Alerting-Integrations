@@ -115,16 +115,9 @@ def test_defines_done_and_done_err(bat_path: pathlib.Path) -> None:
 def _wrapper_rc(tmp_path: pathlib.Path, wrapper: str, tool_rc: int) -> int:
     """Run `<wrapper> pr-preflight` against a stub pr_preflight.py; return its rc.
 
-    ⛔ Behavioural, not a syntax scan (#1472). The first version of this check
-    matched `goto :done_err` / `exit $LASTEXITCODE` as text, and a blind review
-    walked through it five ways — `@REM` comment-out, an unreachable `goto`, a
-    condition that can never hold, the PowerShell guard parked inside
-    `if ($false)`, and the same text moved into the `<# #>` header. Every one of
-    them kept the scan green while the wrapper returned 0. Running the thing is
-    the only predicate that covers a form nobody enumerated.
-
+    ⛔ Behavioural on purpose (#1472): the syntax-scan version of this check was
+    walked through five different ways while the wrapper still returned 0.
     Both wrappers resolve the repo root from their own location, so a temp tree
-    holding `scripts/ops/<wrapper>` + a stub `scripts/tools/dx/pr_preflight.py`
     is a complete fixture.
     """
     (tmp_path / "scripts" / "ops").mkdir(parents=True, exist_ok=True)
@@ -145,12 +138,7 @@ def _wrapper_rc(tmp_path: pathlib.Path, wrapper: str, tool_rc: int) -> int:
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
 @pytest.mark.parametrize("wrapper", ["win_git_escape.bat", "win_git_escape.ps1"])
 def test_wrapper_pr_preflight_propagates_a_failing_rc(tmp_path, wrapper) -> None:
-    """#1472 — a BLOCKED report must not reach the caller as success.
-
-    Both wrappers used to end their pr-preflight handler without looking at the
-    tool's rc, so `<wrapper> pr-preflight && gh pr create` ran the second half
-    on a blocked branch.
-    """
+    """#1472 — a BLOCKED report must not reach the caller as success."""
     assert _wrapper_rc(tmp_path, wrapper, tool_rc=1) != 0, (
         f"{wrapper} swallows a non-zero rc from pr_preflight.py (#1472)"
     )
@@ -159,20 +147,16 @@ def test_wrapper_pr_preflight_propagates_a_failing_rc(tmp_path, wrapper) -> None
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
 @pytest.mark.parametrize("wrapper", ["win_git_escape.bat", "win_git_escape.ps1"])
 def test_wrapper_pr_preflight_stays_zero_when_the_tool_passes(tmp_path, wrapper) -> None:
-    """The must-ring control for the test above: a passing tool stays rc 0.
-
-    Without it, `exit 1` on every path would satisfy the propagation check.
-    """
+    """Must-ring control: `exit 1` everywhere would satisfy the check above."""
     assert _wrapper_rc(tmp_path, wrapper, tool_rc=0) == 0, (
         f"{wrapper} reports failure for a passing preflight"
     )
 
 
 def test_ps1_pr_preflight_case_runs_the_tool() -> None:
-    """Cross-platform smoke: the behavioural checks above only run on Windows.
+    """Cross-platform smoke — the rc predicate above is Windows-only.
 
-    ⛔ This asserts the wrapper still invokes the tool, nothing about rc — the
-    rc predicate is behavioural on purpose (see `_wrapper_rc`).
+    ⛔ Asserts invocation, never rc: rc is behavioural (see `_wrapper_rc`).
     """
     src = (REPO_ROOT / "scripts" / "ops" / "win_git_escape.ps1").read_text(encoding="utf-8")
     body = "\n".join(

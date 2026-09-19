@@ -368,27 +368,21 @@ class TestMainOrchestrator:
     def test_exit_code_follows_the_report_not_a_flag(
         self, monkeypatch, tmp_path, cli_argv, kwargs, want_rc
     ):
-        """#1472 — FAIL ⇒ 1 無條件；WARN ⇒ 0（`Behind main` 幾乎每次都有）。
-
-        ⛔ 這三格不帶任何旗標：舊行為要 `--ci` 才會非零，於是報告印 BLOCKED 的
-        同一次執行對 `cmd && git push` 是成功。
-        """
+        """#1472 — FAIL ⇒ 1 無條件；WARN ⇒ 0。⛔ 三格都不帶旗標。"""
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch, **kwargs)
         cli_argv("pr_preflight.py")
         assert pp.main() == want_rc
 
     def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
-        """⛔ `--ci` 已刪（#1472）。它若被悄悄加回來，上面三格仍會綠——
-        argparse 收下一個不影響結果的旗標，正是本次要消滅的東西。"""
+        """⛔ `--ci` 已刪（#1472）：加回來不會讓上面三格轉紅。"""
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
         cli_argv("pr_preflight.py", "--ci")
         with pytest.raises(SystemExit) as exc:
             pp.main()
         assert exc.value.code == 2
-        # ⛔ 訊息要指名票號：argparse 的通用 "unrecognized arguments" 也會給 rc 2，
-        # 所以少了這一格，「旗標去哪了」這句話可以被無聲拿掉而測試照樣綠（實測）。
+        # ⛔ 訊息要指名票號，否則 argparse 的通用錯誤同樣是 rc 2。
         assert "1472" in capsys.readouterr().err
 
     @pytest.mark.parametrize(

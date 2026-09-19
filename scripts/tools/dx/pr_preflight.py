@@ -1536,8 +1536,7 @@ def main() -> int:
         help="跳過 pre-commit run --all-files（快速模式）。"
              "⛔ 不跳「pre-push 守衛在不在 push 路徑上」那一半（#1811）",
     )
-    # ⛔ 不要加回 `--ci`（#1472）：有 FAIL 就非零是無條件的，那個旗標只會是一個
-    # 不影響任何結果的開關。本工具沒有「只報告不判定」的模式。
+    # ⛔ 不要加回 `--ci`（#1472）：判定無條件，旗標只會是個不影響結果的開關。
     parser.add_argument("--pr", type=int, default=None, help="指定 PR 號碼（不指定則自動偵測）")
     parser.add_argument(
         "--check-commit-msg",
@@ -1567,10 +1566,7 @@ def main() -> int:
         help="Base ref for trailer-scan range (default: origin/main). "
              "Pair with `actions/checkout@v4 fetch-depth: 0` in CI.",
     )
-    # ⛔ `parser.error`（rc 2）而不是 return：`main()` 的 return 值不會讓
-    # `sys.exit(main())` 以外的呼叫端知道出了什麼事，而這條路的讀者是「照舊指令
-    # 打了 --ci」的人——他要的是一句話說明旗標去哪了，不是 argparse 的通用
-    # unrecognized arguments。
+    # ⛔ `parser.error` 而不是 return：`main()` 的 return 不會 raise，測試會紅。
     if "--ci" in sys.argv[1:]:
         parser.error(
             "--ci 已移除（#1472）：有 FAIL 就回 rc 1 現在是無條件的，"
@@ -1636,10 +1632,7 @@ def main() -> int:
         if marker:
             print(f"   ↳ wrote preflight marker: {marker.name}")
 
-    # ⛔ FAIL ⇒ 非零，不看任何旗標（#1472）。報告印 BLOCKED 而 rc 是 0 時，
-    # `make pr-preflight && git push` 會把它讀成通過；真正擋下來的 marker 要到
-    # **下一個** push 才生效。WARN 維持 0：`Behind main` 這類警告幾乎每次都有，
-    # 讓它非零等於讓 rc 永遠非零。
+    # ⛔ FAIL ⇒ 非零，不看任何旗標；⛔ WARN 維持 0（#1472）。
     if report.has_failure:
         return EXIT_VIOLATION
     return EXIT_OK
