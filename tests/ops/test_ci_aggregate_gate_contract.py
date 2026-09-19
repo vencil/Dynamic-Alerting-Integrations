@@ -988,7 +988,7 @@ UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {
     # gate as the run leg cannot mislead a required check because no check
     # reads its result.
     "python-coverage": (
-        "ADVISORY coverage leg (owner decision, PR #TBD): same tree and flags "
+        "ADVISORY coverage leg (owner decision, PR #1910): same tree and flags "
         "as python-tests-run plus --cov; uploads coverage-py3.13 for "
         "coverage-delta.yml and reddens on --cov-fail-under, but backs no "
         "required check — it is deliberately absent from the python-tests "
