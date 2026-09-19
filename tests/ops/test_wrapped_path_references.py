@@ -422,6 +422,13 @@ def _tokens(text: str) -> set[str]:
         _extensionless_token().findall(text))
 
 
+# The character class both token patterns are made of — see `_wrapped_references`
+# for why a run of it on each side of a line break is the only place a hidden
+# token can live.
+_TOKEN_RUN_TAIL = re.compile(r"[A-Za-z0-9_.\-/]+$")
+_TOKEN_RUN_HEAD = re.compile(r"[A-Za-z0-9_.\-/]+")
+
+
 # A continuation: the newline, the next line's indent, and its comment marker if
 # it has one. `*` covers `/* … */` blocks that carry a leading star; a block
 # comment without one is just indentation, which the `?` allows.
@@ -713,7 +720,25 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
     for index in range(len(lines) - 1):
         raw = lines[index] + "\n" + lines[index + 1]
         prefix = LINE_PREFIX.match(lines[index + 1]).group(0)
-        rejoined = lines[index] + lines[index + 1][len(prefix):]
+        body = lines[index + 1][len(prefix):]
+        # ⛔ Only the run of token characters that STRADDLES the join can be a
+        # token the break hides: every other token of the rejoined window is
+        # intact in `raw` and would be discarded by the `token in raw` test
+        # below anyway. So tokenise that run alone — the maximal token-class
+        # run ending line N plus the one opening line N+1's body — and skip
+        # the pair when either side is empty. Same reported set, measured
+        # over the whole tree against the tokenise-everything version this
+        # replaced (744,633 `_tokens` calls and 28 s per run on a dev host).
+        # Exact because both token patterns are built from this class:
+        # the extension pattern's body is `[A-Za-z0-9_.\-/]+`, the
+        # extensionless one is bounded by lookarounds on the same class and
+        # its names are tracked paths, which today contain nothing outside
+        # it (`git ls-files | grep -P '[^A-Za-z0-9_.\-/]'` is empty).
+        tail = _TOKEN_RUN_TAIL.search(lines[index])
+        head = _TOKEN_RUN_HEAD.match(body)
+        if not tail or not head:
+            continue
+        rejoined = tail.group(0) + head.group(0)
         for token in sorted(_tokens(rejoined)):
             if token in raw:
                 continue

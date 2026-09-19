@@ -50,6 +50,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -356,6 +357,7 @@ def _is_sole_invocation(command: str) -> bool:
     return bool(argv) and argv[-1] == _SCRIPT_REL and _invokes_script(command)
 
 
+@lru_cache(maxsize=1)
 def _workflow_path() -> Path:
     """The workflow that RUNS the script — discovered, not named.
 
@@ -390,7 +392,11 @@ def _workflow_path() -> Path:
     return unique[0]
 
 
+@lru_cache(maxsize=1)
 def _workflow() -> dict:
+    """Parsed once: eight call sites asked for it, and `_workflow_path` itself
+    parses every workflow under `.github/workflows` to find the one that runs
+    the script — the profile showed 420 `yaml.safe_load` calls for one test."""
     return yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
 
 
