@@ -5,11 +5,15 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # ── pytest-xdist worker 數（make test / coverage / test-skip-audit 共用）──
-# Linux / CI / dev container：auto（=核心數）。
-# Windows host：不用 auto。本 repo 的測試大量 spawn 子程序（sys.executable、
-# git），Windows 上每顆 spawn 又慢一個數量級（AV 即時掃描 + CreateProcess）；
-# 16 個 worker 同時 spawn 會把子程序餓到 subprocess.TimeoutExpired，整套
-# 反而跑不完（量測見 PR 說明）。要調：make test PYTEST_WORKERS=8。
+# ⚠️ 這個數字是效能參數，不是正確性參數。本 repo 的測試大量 spawn 子程序
+# （sys.executable、git）並各自帶 timeout=10~300；子程序被環境拖慢到超過
+# 那個 timeout 就是 subprocess.TimeoutExpired——Windows host 與 Linux 容器
+# 都量到過，改 worker 數兩邊都消不掉它（根治是少 spawn + 共用 runner，
+# 見 test-map.md §平行 vs 循序）。
+# Windows host 預設 6 的唯一依據：同一子集 6 與 16 wall 相同（spawn-bound，
+# 多開沒有收益），少開只是少一點 AV / CreateProcess 壓力。Linux 沒有乾淨的
+# 對照數字，維持 auto。OS 只是「spawn 成本高的機器」的代理變數，換機器要
+# 重量；要調：make test PYTEST_WORKERS=8。
 ifeq ($(OS),Windows_NT)
 PYTEST_WORKERS ?= 6
 else
