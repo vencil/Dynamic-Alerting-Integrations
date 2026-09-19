@@ -965,87 +965,148 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 - Message 一律走檔案（`commit-file` 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）
 - Sandbox 側呼叫時自動 detect `cmd.exe`，不存在則印出可複製的 Windows 指令給 user 手動執行（那種情境下 hook-gate 仍會先跑，結果是 sandbox 驗過再手動收尾）
 
-### 修復層 D：Dev Container Push（pre-push hook 撈到無關 drift 時的備援）
+### 修復層 D：Dev Container Push（Windows 側 hook spawn 不起來時）
 
-**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
+**適用情境**：push 必須帶著 hook 跑（本 repo 一律如此），而 Windows 原生 git 這條路上 hook 可能 spawn 不起來——`.git/hooks/pre-push` 若由 pre-commit 產生，第一行 `INSTALL_PYTHON` 是**容器內的絕對路徑**（陷阱 #36），Windows 上不存在，只能 fallback 去找 PATH 上的 `pre-commit`。與其賭那個 fallback，不如直接從容器推。
 
-⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
+| 面向 | Windows 原生 git（§修復層 C 主幹） | Dev Container push（本層） |
+|---|---|---|
+| pre-push hook spawn | ✗ 依賴 `INSTALL_PYTHON` fallback（陷阱 #36） | ✓ 那個路徑就在容器裡 |
+| pre-commit checks | ✗ 只能靠 sandbox 側先跑過（`make win-commit`） | ✓ 原地執行 |
+| 和 CI 的環境一致性 | 低（Windows + Git for Windows） | 高（ubuntu-latest 等價） |
+| credential helper | Git Credential Manager 自動處理 | 要手動注入 token（見下） |
+| MCP 呼叫路徑 | `cmd /c <batch>` → `git.exe` → 各種 PATH / DLL 陷阱 | `docker exec vibe-dev-container bash -c '...'` |
 
-#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
-
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它關掉整條 pre-push（含擋直推 main 那道，那道沒有旗標），不是你剛證明無關的那一道。repo 內仍有教人用它的地方，行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487)。
-⛔ 上面這個 A/B 對**三道 pre-push 守衛不適用**：它們沒有 pre-commit hook id，失效方向是**假綠**（兩邊都 0 個 `error:` ⇒ 判成 pre-existing drift ⇒ 叫你繞過）。改跑 `bash scripts/ops/prepush_dispatch.sh`：argv 是 remote 名與 URL，stdin 是 `<local_ref> <local_sha> <remote_ref> <remote_sha>`——⛔ **沒餵 stdin 就是 rc=0 全綠**。
+**credential 注入**（不動 `git config`、不寫 token 進 remote URL）：
 
 ```bash
-# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+# 1. 先從 Windows 側把 gh token 落到容器可讀的檔案（必須在掛載目錄下）
+#    Windows cmd:
+#    "C:\Program Files\GitHub CLI\gh.exe" auth token > C:\Users\<USER>\vibe-k8s-lab\.dev_push_token
+#    ⚠️ gh auth 的 scope 必須含 workflow（gh auth refresh -s workflow）
+
+# 2. 容器內 push（TOKEN 只活在該次 git process 的 env，不寫檔不入 log）
+cd /workspaces/vibe-k8s-lab
+TOKEN=$(tr -d '\r\n' < .dev_push_token)
+git -c credential.helper='' \
+    -c credential.helper="!f() { echo username=x-access-token; echo password=$TOKEN; }; f" \
+    push origin <branch>
+
+# 3. 完成後立即刪掉 token 檔
+rm -f .dev_push_token
+```
+
+**注意事項**：
+
+- `credential.helper=''` 一定要排在前面：那一格是把既有 helper 清掉（否則 GCM / cache helper 會先問 username 就失敗），清掉之後才附加 script helper。順序反過來無效。
+- `tr -d '\r\n'` 是因為 Windows 的 `gh` 寫出的 token 可能帶 `\r\n`，留著會讓 `password=` 那行壞掉。
+- token 檔名一律以 `.dev_` 開頭（`.gitignore` 已有 `.dev_*`），push 完立刻 `rm`。
+- 走這條路徑後，`git push` 的 MCP runtime / exit code 仍然不可信，一樣用 §修復層 C 的 `git ls-remote origin HEAD` 比對 SHA 驗證。
+- `--dry-run` 下 pre-push hook 還是會跑（只是不發 pack），可以先 dry-run 驗 credential 與 hook 都 OK 再真推。
+
+### 修復層 E：pre-push 守衛擋路時怎麼判
+
+⚠️ **先分清楚是哪一種**：本層處理「hook 跑起來了、然後擋住你」。「hook 根本 spawn 不起來」是上一節（§修復層 D）。
+
+#### 擋在 push 路徑上的是哪三道
+
+`scripts/ops/prepush_dispatch.sh` 依序跑三支守衛。⛔ **它們不是 pre-commit hook、沒有 hook id**，`pre-commit run <id>` 叫不到它們，`.pre-commit-config.yaml` 裡也找不到。
+
+| 守衛 | 擋什麼 | 輸出前綴 | 旗標 |
+|---|---|---|---|
+| `protect_main_push.sh` | 直推 main / master | `[protect_main_push]` | ⛔ 無——這道**沒有**旗標 |
+| `require_preflight_pass.sh` | 缺 `.git/.preflight-ok.<SHA>` marker | `[require_preflight_pass]` | `GIT_PREFLIGHT_BYPASS=1`（需 owner 核准） |
+| `pre_push_mkdocs_strict.sh` | mkdocs strict build 失敗 | `[pre-push-mkdocs]` | `MKDOCS_STRICT_BYPASS=1` |
+
+⛔ **不要用 `--no-verify`**：它關掉整條 pre-push（含擋直推 main 那道，而那道沒有旗標），不是你剛證明無關的那一道。repo 內仍有教人用它的地方，行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487)。
+
+#### 決策樹
+
+```
+Q1. 輸出前綴是哪一支？
+    ├─ [protect_main_push] → 你在推 main/master。這不是 drift，是規則：
+    │      開 branch + PR。⛔ 沒有旗標，也不要拆 hook。
+    ├─ [require_preflight_pass] → marker 綁 commit SHA，commit 之後要重跑：
+    │      make pr-preflight（剛證過 hooks 綠時可用 make pr-preflight-quick）。
+    │      ⛔ 站在別的 commit 上跑 preflight 寫的是「那一顆」的 marker，
+    │         這次 push 仍然被擋。
+    └─ [pre-push-mkdocs] → 走 Q2。
+
+Q2. 這個紅是這次 commits 造成的嗎？（用下面的 A/B）
+    ⛔ 它建的是「被推的那顆 commit」——把 local_sha checkout 進一棵 detached
+       worktree 再建站。⇒ 工作樹裡還沒 commit 的修正它看不到，「我明明改好了」
+       的畫面通常是還沒 commit。
+    ├─ head 紅、base 綠 → 這次引入的，修掉（本機重現：make lint-docs-mkdocs）。
+    └─ 兩邊都紅 → pre-existing drift。用 MKDOCS_STRICT_BYPASS=1 git push 過這次，
+           並另開一張票修 drift。
+           ⛔ 這是「這次救火」，不是「以後都這樣推」。
+```
+
+⚠️ 本機沒有 `mkdocs` 時這道走 Tier 2：**印 WARN 但不擋**（CI 是後盾）。⇒ 它沒擋你**不等於**站台建得起來。
+
+#### A/B：證明失敗跟這次 commits 有沒有關係
+
+⛔ 舊寫法（`pre-commit run <hook-id>` 跑 base / head 比對 `error:` 數）**對上面三道不適用**：它們沒有 id，叫不到；而失效方向是**假綠**——兩邊都 0 個 `error:` ⇒ 判成 pre-existing drift ⇒ 叫你繞過。三道守衛要直接跑 dispatcher，**而且一定要餵 stdin**：
+
+```bash
+# argv 是 remote 名與 URL，stdin 是 git 的 refspec 協定列：
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# ⛔ 沒餵 stdin 就是 rc=0 全綠——那是「沒有東西可判」，不是「通過」。
+BR=$(git symbolic-ref --short HEAD)
 BASE=$(git merge-base HEAD origin/main)
-WT=/tmp/wt-$BASE
 
-git worktree add "$WT" "$BASE" 2>/dev/null || true
-cd "$WT"
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
-ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
+# ⛔ 先確認這個 refspec 真的描述了 ≥1 個 commit。零筆時守衛會短路，
+#    畫面同樣是 rc=0 而且**一行輸出都沒有**——與「三道都過」無法區分。
+git rev-list --count "$BASE"..HEAD
 
-cd - >/dev/null
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
-ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
-
-echo "base=$ERR_BASE head=$ERR_HEAD"
-# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
-# head > base → 這次引入了新問題，不要 --no-verify
-git worktree remove "$WT"
+bash scripts/ops/prepush_dispatch.sh origin "$(git remote get-url origin)" <<EOF
+refs/heads/$BR $(git rev-parse HEAD) refs/heads/$BR $BASE
+EOF
+echo "rc=$?"
 ```
 
-同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）：
+⚠️ 上面刻意用 heredoc 而不是 `printf … | bash …`：管線的 rc 是**最後一節**的，要讀守衛自己的 rc 就別接管線。
+
+base 側對照組：在 base commit 的 worktree 裡把同一段再跑一次，比對 rc 與輸出。
 
 ```bash
-grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
-```
-
-#### Layer 2 — 決策樹（明確 if-else）
-
-pre-push hook 失敗後，按順序回答：
-
-```
-Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
-    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
-    └─ 是（pre-existing drift）→ 走 Q2
-
-
-### 修復層 D · pre-push drift 三層改進（Layer 1-3）
-
-與 §修復層 C · 替代路線 D 互補但不同根因：§替代路線 D 處理「pre-push hook spawn 失敗（Linux python 路徑寫死）」，本節處理「pre-push hook 跑起來了、但掃到**非本次 commits 的 pre-existing drift**」。Windows 原生 git + 容器 git 兩條路徑都可能遇到。
-
-**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
-
-⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
-
-#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
-
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它關掉整條 pre-push（含擋直推 main 那道，那道沒有旗標），不是你剛證明無關的那一道。repo 內仍有教人用它的地方，行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487)。
-⛔ 上面這個 A/B 對**三道 pre-push 守衛不適用**：它們沒有 pre-commit hook id，失效方向是**假綠**（兩邊都 0 個 `error:` ⇒ 判成 pre-existing drift ⇒ 叫你繞過）。改跑 `bash scripts/ops/prepush_dispatch.sh`：argv 是 remote 名與 URL，stdin 是 `<local_ref> <local_sha> <remote_ref> <remote_sha>`——⛔ **沒餵 stdin 就是 rc=0 全綠**。
-
-```bash
-# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
 BASE=$(git merge-base HEAD origin/main)
-WT=/tmp/wt-$BASE
-
-git worktree add "$WT" "$BASE" 2>/dev/null || true
-cd "$WT"
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
-ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
-
-cd - >/dev/null
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
-ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
-
-echo "base=$ERR_BASE head=$ERR_HEAD"
-# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
-# head > base → 這次引入了新問題，不要 --no-verify
-git worktree remove "$WT"
+git worktree add /tmp/wt-$BASE "$BASE"
+# 進 /tmp/wt-$BASE 重跑上面那段（⛔ 指令要 anchor 在 worktree 路徑上）
+git worktree remove /tmp/wt-$BASE
 ```
 
-同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
+**真的是 pre-commit stage 的 hook**（有人顯式給它 `stages: [pre-push]`）時，才輪到舊寫法——在 base worktree 與 HEAD 各跑一次，比對 `error:` 數：
 
 ```bash
-grep -r "
+pre-commit run <hook-id> --all-files
+```
+
+同時驗 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）：
+
+```bash
+grep -rn "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
+```
+
+#### 配置層：`default_stages: ['pre-commit']` 是 invariant
+
+`.pre-commit-config.yaml` 頂層設了：
+
+```yaml
+default_stages: ['pre-commit']
+```
+
+原理：pre-commit 若**未**設 `default_stages`，hook 預設會跑在**所有** git stage（pre-commit + pre-push + pre-merge-commit + …）。於是任何「掃全 repo 而非只看 staged files」的 hook（例：`bilingual-structure-check` 掃 `.en.md` 整份對照）都會在 `git push` 時因 **pre-existing drift** 擋路。PR #21 就是這樣被 62 對 ZH/EN 檔案的舊 drift 擋住（23 errors + 18 warnings），而那批 commits 本身完全乾淨。
+
+鎖成 `['pre-commit']` 之後，`git push` 不再被那類 hook 擋，CI 仍然照跑——CI 是 `pre-commit run <id>` 按名字叫，不受 `stages` 限制。需要某支跑在別的 stage 時，在**該支** hook 顯式加 `stages: [pre-push]` / `stages: [manual]`。
+
+⛔ **這一行被拿掉，上面整個情境就會一次復活**。發現它不見時先還原設定再說，不要接受「改用 `--no-verify` 救援」的路線。當年的取捨紀錄見 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
+
+#### 結論是「要改 commit message」時：`reword_chain.py`
+
+若判下來要修的是 commit message 而不是 tree 內容（例：trailer 劈裂、commitlint 紅），但又不想跑 `git rebase -i`（會觸發 commit-msg hook、改掉 committer date、需要 interactive editor），用 `scripts/tools/dx/reword_chain.py`：純 `git commit-tree` plumbing，保留 tree SHA + author/committer 身份與時間戳，失敗有 backup tag 一鍵復原。適合 agent / CI 環境批次改寫 N 個 commit subject。
+
+```bash
+python3 scripts/tools/dx/reword_chain.py mapping.tsv --dry-run   # 先看計畫
+python3 scripts/tools/dx/reword_chain.py mapping.tsv
+```
