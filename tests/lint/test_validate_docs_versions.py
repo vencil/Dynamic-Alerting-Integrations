@@ -602,6 +602,42 @@ class TestCheckExporterVersion:
 # ============================================================
 
 
+@pytest.fixture(scope="module")
+def repo_json_baseline():
+    """`main(["--json"])` against the real tree, run once per module.
+
+    Three tests below only READ the real-tree answer (the JSON smoke test,
+    the readable-source control, and the "before" half of the
+    unreadable-source differential). Each full run walks the whole input
+    set — CI's `--durations` showed ~9–15 s per run on the 4-core runner —
+    so the read-only consumers share one. Tests that monkeypatch the tool
+    keep their own runs: a baseline taken under a patch would not be one.
+
+    Returned as (payload, exit_code_or_None). `sys.argv` and stdout are
+    restored here rather than by `monkeypatch`/`capsys`, which are
+    function-scoped and cannot serve a module fixture. The tool's caches
+    are cleared first, the same way the autouse fixture does per test.
+    """
+    import contextlib
+    import io
+    mod._FILE_CACHE.clear()
+    mod._CONTENT_CACHE.clear()
+    mod._RGLOB_CACHE.clear()
+    saved_argv = sys.argv
+    sys.argv = ["validate_docs_versions", "--json"]
+    out = io.StringIO()
+    code = None
+    try:
+        with contextlib.redirect_stdout(out):
+            try:
+                mod.main()
+            except SystemExit as exc:
+                code = exc.code
+    finally:
+        sys.argv = saved_argv
+    return json.loads(out.getvalue()), code
+
+
 class TestRepoSmoke:
 
     def test_repo_actually_runs(self, monkeypatch):
@@ -626,16 +662,10 @@ class TestRepoSmoke:
                 f"unexpected exit code {e.code} from repo scan"
             )
 
-    def test_repo_json_output_parseable(self, monkeypatch, capsys):
+    def test_repo_json_output_parseable(self, repo_json_baseline):
         """`--json` against the real repo must emit valid JSON with the
         expected top-level keys."""
-        monkeypatch.setattr(sys, "argv", ["validate_docs_versions", "--json"])
-        try:
-            mod.main()
-        except SystemExit:
-            pass
-        out = capsys.readouterr().out
-        payload = json.loads(out)
+        payload, _ = repo_json_baseline
         assert "source_of_truth" in payload
         assert "issues" in payload
         assert "summary" in payload
@@ -865,7 +895,8 @@ class TestPlatformVersionSourceIsLoadBearing:
         return json.loads(capsys.readouterr().out), code
 
     def test_unreadable_source_is_an_error_not_a_skip(self, tmp_path,
-                                                      monkeypatch, capsys):
+                                                      monkeypatch, capsys,
+                                                      repo_json_baseline):
         """The whole point: no platform version ⇒ an ERROR, not a silent skip.
 
         ⛔ The exit-code half is asserted **differentially**, against a control
@@ -876,8 +907,10 @@ class TestPlatformVersionSourceIsLoadBearing:
         cancels whatever unrelated errors exist, in either direction: this
         stays honest on a dirty tree and does not go red because of one.
         """
-        # Control first: the real CLAUDE.md, same tree, same checks.
-        before, _ = self._run_json(monkeypatch, capsys)
+        # Control first: the real CLAUDE.md, same tree, same checks. Shared
+        # with the other read-only consumers — `--ci` only decides the exit
+        # code (`main()`'s single `args.ci` branch), the payload is the same.
+        before, _ = repo_json_baseline
         assert not [i for i in before["issues"]
                     if i["check"].endswith("-version-source")], before["summary"]
         baseline_errors = before["summary"]["errors"]
@@ -898,19 +931,14 @@ class TestPlatformVersionSourceIsLoadBearing:
         assert code not in (0, None), (
             "--ci must exit non-zero once the source of truth is unreadable")
 
-    def test_readable_source_raises_no_such_error(self, monkeypatch, capsys):
+    def test_readable_source_raises_no_such_error(self, repo_json_baseline):
         """⛔ Must-tolerate control.
 
         A check that only ever fires cannot be told apart from one wired to
         fire unconditionally; this runs against the real CLAUDE.md, which
         does carry a platform version.
         """
-        monkeypatch.setattr(sys, "argv", ["validate_docs_versions", "--json"])
-        try:
-            mod.main()
-        except SystemExit:
-            pass
-        payload = json.loads(capsys.readouterr().out)
+        payload, _ = repo_json_baseline
         assert payload["source_of_truth"]["platform"], (
             "the real CLAUDE.md should yield a platform version")
         assert not [i for i in payload["issues"]
