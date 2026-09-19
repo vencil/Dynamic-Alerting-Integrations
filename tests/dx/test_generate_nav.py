@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
 """generate_nav.py 的行為守衛。
 
-分兩層，來源不同、判準也不同：
+本工具**不是閘門**：它印一份 nav 草稿，rc 永遠是 0（除非 `docs/` 不存在）。
+「文件漏收進 nav」由 `mkdocs.yml` 的 `validation.nav.*` 在 build 時判定，經
+`mkdocs_strict_check.sh` 轉成 rc（#1903）。⇒ 這裡沒有任何一格在驗 rc 承載的違規
+語意，因為它不再承載。
 
-**第一層 — CLI 契約**（刪 `--update` 那一役量的，見下）。
-**第二層 — 內容驗證**（#1884 要的那組：nav 比對結果、front matter 解析、section
-分類）。⚠️ 第一層只問 rc，而 rc 只承載「有沒有 missing」；一支 nav 比對整個算錯、
-但剛好沒有 missing 的實作，第一層全綠。⇒ 內容驗證不是第一層的加強版，是另一個問題。
+⛔ 本檔最重要的兩格，守的是這支工具**實際燒掉的兩個缺陷**，而不是它宣稱的功能：
 
-第一層釘住的是：
+  1. **草稿的路徑座標系**。退役掉的那半邊之所以從來沒對過，是因為它拿 nav 條目
+     （相對 `docs_dir`：`adr/001-….md`）去比對掃描結果（相對 repo root：
+     `docs/adr/001-….md`），交集實測為 0。⇒ 草稿必須印 nav 自己的座標，否則
+     每一行都要手工改過才能貼。
+  2. **這支工具不准再讀 `mkdocs.yml`**。#1903 在 mkdocs.yml 加了
+     `validation:` → `nav:`，而舊的剖析用 `line.strip() == 'nav:'` 比對，於是它
+     在第 61 行就以為進了 nav 區塊、在下一個頂層鍵 break，真正的 nav（283 行）
+     永遠讀不到——`109 in nav` 一夜變成 `0`，而**沒有任何東西轉紅**，因為全 repo
+     只有 `make generate-nav` 一個呼叫點。⇒ 那一格用「給它兩份內容天差地遠的
+     mkdocs.yml、以及完全不給」來釘住它的輸出不受其影響。
 
-  1. `--update` 已不存在。它曾經被宣告、被 `--help` 與三處散文宣傳，卻從來沒有實作
-     （`args.update` 從未被讀取）——跑它與不帶旗標完全同義，是一個會說謊的介面。
-  2. `--check` 的兩個方向。⚠️ 沒有這一半，第 1 格會是平凡為真：一支整個壞掉、對任何
-     argv 都回 rc 2 的實作，照樣能讓「`--update` 被拒絕」通過。
-
-  3. `--check` 對 `extra`（nav 列了、檔案不在）回 rc 0。⚠️ 這一格是**現況存證，不是
-     規格**：這一役的 docstring 把這個行為寫進散文，寫下而不守就是下一句會腐爛的散文；
-     而 #1884 認定它是缺口。⇒ 釘住是為了「有人改動它時會有東西喊」。讀到它紅不要當成
-     回歸，去看 #1884 是不是把 `extra` 改成觸發 rc 1 了。
-
-第二層（#1884）釘住的是**報告內容**而不是 rc：missing / extra 各自列了哪些路徑、
-front matter 怎麼被解析、tags 怎麼被分到 section。每一格都先斷言合成樹真的造出它
-宣稱的狀態，再問結論——否則「乾淨 ⇒ 沒報任何東西」在一支掃描面歸零的實作上也是綠的。
+其餘各格是 front matter 解析與 section 分類，來源是 #1884。
 """
 
 import re
@@ -38,18 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPO_ROOT / "scripts" / "tools" / "dx" / "generate_nav.py"
 
 EXIT_OK = 0
-EXIT_VIOLATION = 1
 EXIT_CALLER_ERROR = 2
-
-
-def _repo(tmp_path: Path, *, nav_lists_the_doc: bool) -> Path:
-    """合成一個最小 repo root：一份帶 front matter 的文件 + 一份 mkdocs.yml。"""
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "orphan.md").write_text(
-        '---\ntitle: "Orphan"\ntags: [dx]\nlang: zh\n---\n# Orphan\n', encoding="utf-8")
-    nav = "  - Orphan: docs/orphan.md\n" if nav_lists_the_doc else "  - Home: index.md\n"
-    (tmp_path / "mkdocs.yml").write_text(f"site_name: t\nnav:\n{nav}", encoding="utf-8")
-    return tmp_path
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -59,175 +45,144 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.mark.parametrize("listed, expected", [
-    (False, EXIT_VIOLATION),   # 文件在、nav 沒列 ⇒ 違規
-    (True, EXIT_OK),           # nav 列了 ⇒ 乾淨
-])
-def test_check_reports_both_directions(tmp_path, listed, expected):
-    """`--check` 兩個方向都要動，否則「永遠回 0」與「永遠回 1」都能過。"""
-    repo = _repo(tmp_path, nav_lists_the_doc=listed)
-    proc = _run(repo, "--check")
-    assert proc.returncode == expected, (
-        f"--check 對 nav_lists_the_doc={listed} 回 rc={proc.returncode}，"
-        f"期待 {expected}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
-
-
-def test_the_dead_update_flag_is_gone(tmp_path):
-    """⛔ `--update` 必須被拒絕，而不是被靜默忽略。
-
-    刪除前的實測：帶 `--update` 跑完 rc 0，而 mkdocs.yml 的 sha256 前後相同——它什麼
-    也沒做，卻讓呼叫者以為 nav 已經被寫回。⇒ 這一格守的是「不留說謊的介面」，不是
-    「永遠不准有 --update」：真要實作寫回，連同這一格一起改。
-    """
-    repo = _repo(tmp_path, nav_lists_the_doc=True)
-    proc = _run(repo, "--update")
-    assert proc.returncode == EXIT_CALLER_ERROR, (
-        f"--update 應被 argparse 拒絕（rc {EXIT_CALLER_ERROR}），實得 rc={proc.returncode}。"
-        f"若它又被加回來，請確認 args.update 真的有被讀取。\nstderr:\n{proc.stderr}"
-    )
-    assert "--update" in proc.stderr, "argparse 的拒絕訊息應指名這個未知旗標"
-
-
-def test_check_does_not_fail_on_extra_entries_today(tmp_path):
-    """現況存證：nav 列了、檔案不在（`extra`）時 `--check` 仍回 rc 0，只把它印出來。
-
-    ⚠️ 不是在主張「應該如此」。實測（`--repo-root` 合成 repo，nav 列 real.md + ghost.md）：
-    rc 0，stdout 有 `In nav but not found: 1`。沒有這一格，第一格的 `missing` 斷言
-    即使在「對任何差異都回 rc 1」的實作下也照樣全綠。缺口本身記在 #1884。
-    """
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "real.md").write_text(
-        '---\ntitle: "Real"\ntags: [dx]\nlang: zh\n---\n# Real\n', encoding="utf-8")
-    # real.md 有被列 ⇒ 沒有 missing；ghost.md 被列但檔案不存在 ⇒ 只有 extra
-    (tmp_path / "mkdocs.yml").write_text(
-        "site_name: t\nnav:\n  - Real: docs/real.md\n  - Ghost: docs/ghost.md\n",
-        encoding="utf-8")
-    proc = _run(tmp_path, "--check")
-    assert proc.returncode == EXIT_OK, (
-        f"`extra` 不該觸發 rc 1（現況）。實得 rc={proc.returncode}。若 #1884 已把 extra "
-        f"改成違規，請改這一格而不是刪它。\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
-    assert "ghost.md" in proc.stdout, (
-        "rc 0 還不夠：它必須真的看到那筆 extra 並印出來，否則一支完全忽略 nav 的實作也會綠。"
-        f"\nstdout:\n{proc.stdout}"
-    )
-
-
-def test_the_check_help_admits_the_gap_it_does_not_cover(tmp_path):
-    """⛔ `--check` 的 `--help` 必須自己說出「另一個方向沒被守」。
-
-    上一格釘的是**行為**，這一格釘的是**介面上的說法**。兩者分開是因為它們會各自
-    腐爛：`help='CI mode: exit 1 if docs missing from nav'` 這種寫法沒有說謊，但
-    讀者拿著「我刪了一份文件、忘了改 nav」這個場景去讀它，學不到自己沒被保護——
-    而這正是 #1884 驗收條件 2 要求寫明的那件事。
-
-    ⛔ **斷言的是「兩個 rc 都被提到」，不是只有 `#1884` 這個 token。** 本格的前一版
-    只問 token 在不在，而 token 在 caveat 被刪掉之後可以留著：實測
-    `help='CI mode: exit 1 if docs missing from nav (#1884)'` 讓那一版全綠——
-    caveat 沒了、守衛還說綠。⇒ 那是這支 repo 反覆在燒的同一個形狀：**述詞比對的是
-    字串，而問題問的是性質。** 改法是把錨放到 caveat 的語意核心：舊 help 只講得出
-    `exit 1`，而「反方向仍然過關」這件事講不出來就沒有 `exit 0`。
-
-    ⚠️ 仍然不是「這段散文讀得懂」的證明——沒有斷言能買到那個。它買到的是：
-    `--check` 的 help 同時提到兩個 rc 並指回 #1884。要換措辭可以，但這三樣得留著；
-    真的把 `extra` 改成觸發 rc 1 時，caveat 該整段刪掉，這一格會紅並把改動者帶到
-    上一格的現況存證。
-
-    ⚠️ 切片必須收在下一個選項的標題處：argparse 會把長 help 折行，只問「整段
-    `--help` 裡有沒有」會讓 caveat 掛在任何一個選項底下都算過。
-    """
-    out = _run(tmp_path, "--help").stdout   # argparse 在碰 --repo-root 之前就印完退出
-    assert "--check" in out and "--repo-root" in out, (
-        f"前置條件：--help 必須同時列出這兩個選項才切得出區塊\n{out}"
-    )
-    block = " ".join(out[out.index("  --check"):out.index("  --repo-root")].split())
-
-    missing = [token for token in ("exit 1", "exit 0", "#1884") if token not in block]
-    assert not missing, (
-        f"`--check` 的 help 少了 {missing}。它必須同時講出 `missing` 觸發 exit 1、"
-        "`extra` 仍是 exit 0，並指回 #1884——少掉 `exit 0` 那半就退回成一句只說"
-        "「什麼會觸發」的話，讀者學不到自己沒被保護。"
-        f"\n--check 區塊:\n{block}"
-    )
-
-
-# ===========================================================================
-# 第二層：內容驗證（#1884）
-#
-# ⛔ rc 只承載「有沒有 missing」。以下各格問的是**報告內容**：哪些路徑被算成
-# missing、哪些被算成 extra、front matter 被解析成什麼、tags 被分到哪個 section。
-# 一支把這些全算錯、但剛好沒有 missing 的實作，第一層那三格全綠。
-# ===========================================================================
-
-
 def _fm(title: str, tags: str = "[]", lang: str = "zh") -> str:
     """一份最小但合法的 front matter（`---` 必須落在第 0 byte，見下方那一格）。"""
     return f'---\ntitle: "{title}"\ntags: {tags}\nlang: {lang}\n---\n# {title}\n'
 
 
-def _tree(tmp_path: Path, *, docs: dict, nav: list, trailing_yaml: str = "") -> Path:
-    """合成一棵最小 repo root：`docs/` 底下的檔案 + 一份 mkdocs.yml。
+def _tree(tmp_path: Path, *, docs: dict, mkdocs_yml: str | None = None) -> Path:
+    """合成一棵最小 repo root。
 
-    docs          — {相對 repo root 的路徑: 檔案內容}
-    nav           — mkdocs.yml `nav:` 區段底下的行（自帶縮排）
-    trailing_yaml — 接在 nav 之後的頂層 YAML，用來測「nav 區段在哪裡結束」
+    docs        — {相對 repo root 的路徑: 檔案內容}
+    mkdocs_yml  — mkdocs.yml 的整份內容；`None` 表示**完全不建立這個檔**。
+                  ⛔ 預設就是 `None`：這支工具不該讀它，測試也不該餵它。
     """
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs").mkdir(exist_ok=True)
     for rel, body in docs.items():
         f = tmp_path / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body, encoding="utf-8")
-    nav_block = "".join(f"{line}\n" for line in nav)
-    (tmp_path / "mkdocs.yml").write_text(
-        f"site_name: t\nnav:\n{nav_block}{trailing_yaml}", encoding="utf-8")
+    if mkdocs_yml is not None:
+        (tmp_path / "mkdocs.yml").write_text(mkdocs_yml, encoding="utf-8")
     return tmp_path
 
 
-def _report(repo: Path) -> str:
-    """跑一次報告模式（不帶 `--check`）並回傳 stdout。"""
+def _draft(repo: Path) -> str:
+    """跑一次並回傳 stdout（rc 必須是 0）。"""
     proc = _run(repo)
     assert proc.returncode == EXIT_OK, (
-        f"報告模式不該失敗，rc={proc.returncode}\nstderr:\n{proc.stderr}"
+        f"草稿模式不該失敗，rc={proc.returncode}\nstderr:\n{proc.stderr}"
     )
     return proc.stdout
 
 
-# --- nav 比對結果本身 ------------------------------------------------------
+# --- CLI 契約：已退役的旗標必須被拒絕，不是被靜默忽略 -----------------------
 
 
-def test_missing_and_extra_are_reported_by_path_not_just_counted(tmp_path):
-    """missing 與 extra 各自列出**哪些路徑**，而且同一份報告裡兩邊都要對。
+@pytest.mark.parametrize("flag", ["--update", "--check"])
+def test_a_retired_flag_is_rejected_not_silently_ignored(flag):
+    """⛔ 兩個旗標都曾經存在、都會誤導呼叫者，刪掉之後必須**報錯**。
 
-    ⚠️ 只驗「Missing from nav: 1」那個數字買不到內容正確性——一支把 missing 與
-    extra 算反的實作，兩個數字都還是 1。所以這一格同時斷言第三件事：**已列在 nav
-    裡的那份文件不出現在任何一邊**。
+    `--update` 宣稱會寫回 mkdocs.yml，但 `args.update` 從未被讀取：實測帶著它跑
+    rc 0、mkdocs.yml 的 sha256 前後相同（#1884 刪除）。
+    `--check` 宣稱在守「文件漏收進 nav」，但它比對的兩個集合不在同一個座標系，
+    交集實測為 0 ⇒ 它把幾乎每份文件都報成 missing，那個 rc 沒有人能拿來行動。
+
+    ⇒ 守的是「不留說謊的介面」，不是「永遠不准有這兩個名字」：真要實作寫回或
+    真要在這裡做閘門，連同這一格一起改。
     """
-    repo = _tree(
-        tmp_path,
-        docs={
-            "docs/listed.md": _fm("Listed"),
-            "docs/orphan.md": _fm("Orphan"),
-        },
-        nav=["  - Listed: docs/listed.md", "  - Ghost: docs/ghost.md"],
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--repo-root", ".", flag],
+        capture_output=True, text=True, timeout=60,
     )
-    assert not (repo / "docs" / "ghost.md").exists(), "前置條件：ghost 必須真的不存在"
-
-    out = _report(repo)
-    assert "docs/orphan.md" in out, f"檔案在、nav 沒列 ⇒ 應被列為 missing\n{out}"
-    assert "In nav but not found: 1" in out and "docs/ghost.md" in out, (
-        f"nav 列了、檔案不在 ⇒ 應被列為 extra\n{out}"
+    assert proc.returncode == EXIT_CALLER_ERROR, (
+        f"{flag} 應被 argparse 拒絕（rc {EXIT_CALLER_ERROR}），實得 rc={proc.returncode}。"
+        f"\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
-    assert "docs/listed.md" not in out, (
-        f"兩邊都對上的文件不該出現在任何一張清單裡\n{out}"
+    assert flag in proc.stderr, "argparse 的拒絕訊息應指名這個未知旗標"
+
+
+# --- 草稿的座標系與資料來源 ------------------------------------------------
+
+
+def test_the_draft_emits_paths_relative_to_docs_dir_not_to_the_repo_root(tmp_path):
+    """⛔ 草稿的路徑必須是 nav 自己的座標（相對 `docs_dir`）。
+
+    這一格守的就是退役掉那半邊的死因。斷言**雙向**：正確形式在、repo-root 形式
+    不在——只驗前半的話，一支把兩種都印出來的實作照樣綠。
+    """
+    repo = _tree(tmp_path, docs={"docs/adr/001-x.md": _fm("ADR One", tags="[adr]")})
+    out = _draft(repo)
+    assert "- ADR One: adr/001-x.md" in out, (
+        f"草稿要能直接貼進 nav ⇒ 路徑相對 docs_dir\n{out}"
+    )
+    assert "docs/adr/001-x.md" not in out, (
+        f"repo-root 相對路徑貼進 nav 會指向 docs/docs/…，不可出現\n{out}"
     )
 
 
-def test_excluded_and_english_docs_are_not_reported_missing(tmp_path):
-    """`EXCLUDE_PATTERNS` 與 `.en.md` 不進 nav 比對。
+def test_the_draft_does_not_depend_on_mkdocs_yml_at_all(tmp_path):
+    """⛔ 餵三種 mkdocs.yml（含會絆倒舊剖析的那種）與完全不餵，輸出必須逐字元相同。
 
-    ⚠️ 反空轉：同一棵樹裡放一份**該**被報 missing 的文件。少了它，一支掃描面
-    歸零的實作（什麼都不報）也會讓前兩個斷言通過。
+    #1903 在 mkdocs.yml 加了 `validation:` → `nav:`；舊剖析用
+    `line.strip() == 'nav:'` 比對，於是在那個縮排的 `nav:` 就進入 nav 區塊、
+    在下一個頂層鍵 break，真正的 nav 永遠讀不到。沒有任何閘門在跑這支工具，
+    所以它靜默壞掉。⇒ 讓「它不讀那個檔」成為一件**被守住**的事，而不是一句散文。
+
+    ⚠️ 反空轉：先斷言草稿真的有內容。少了它，一支對任何輸入都印空字串的實作，
+    「三者相同」會平凡為真。
+    """
+    docs = {"docs/a.md": _fm("Doc A", tags="[architecture]")}
+    variants = {
+        "沒有 mkdocs.yml": None,
+        "有 nav 區塊": "site_name: t\nnav:\n  - Doc A: a.md\n",
+        "validation.nav 在前、真 nav 在後": (
+            "site_name: t\nvalidation:\n  nav:\n    omitted_files: warn\n"
+            "theme:\n  name: material\nnav:\n  - Doc A: a.md\n"
+        ),
+    }
+    outs = {}
+    for label, yml in variants.items():
+        repo = _tree(tmp_path / label.replace(" ", "_"), docs=docs, mkdocs_yml=yml)
+        outs[label] = _draft(repo)
+
+    first = next(iter(outs.values()))
+    assert "- Doc A: a.md" in first, f"反空轉：草稿必須真的有內容\n{first}"
+    for label, out in outs.items():
+        assert out == first, (
+            f"mkdocs.yml 的內容改變了輸出（變體「{label}」）——這支工具不該讀它\n"
+            f"--- {label} ---\n{out}\n--- 基準 ---\n{first}"
+        )
+
+
+def test_bridged_rule_packs_are_drafted_at_their_nav_path(tmp_path):
+    """`rule-packs/*.md` 由 mkdocs hook 橋進站台，其 nav 路徑就是 repo 相對路徑。
+
+    ⚠️ `docs/rule-packs/` 在磁碟上不存在（實測 `ls` 不到、git 也沒有），是
+    `scripts/mkdocs/rule_packs_bridge.py` 在 build 時生出來的。⇒ 掃描面必須另外
+    涵蓋它，否則草稿會漏掉整個 Rule Pack 區段。
+
+    ⚠️ 反空轉：同時斷言 repo root 底下**沒有被橋接**的 `.md` 不進草稿——它們不可能
+    成為 nav 條目，印出來只會誤導。
+    """
+    repo = _tree(tmp_path, docs={"docs/a.md": _fm("Doc A")})
+    (repo / "rule-packs").mkdir()
+    (repo / "rule-packs" / "README.md").write_text(_fm("Rule Packs"), encoding="utf-8")
+    (repo / "CLAUDE.md").write_text(_fm("Not Bridged"), encoding="utf-8")
+
+    out = _draft(repo)
+    assert "- Rule Packs: rule-packs/README.md" in out, f"橋接的檔案要進草稿\n{out}"
+    assert "Not Bridged" not in out, (
+        f"repo root 的 .md 沒有被橋接，不可能是 nav 條目，不該進草稿\n{out}"
+    )
+
+
+def test_excluded_and_english_docs_stay_out_of_the_draft(tmp_path):
+    """`EXCLUDE_PATTERNS` 與 `.en.md` 不進草稿。
+
+    ⚠️ 反空轉：同一棵樹裡放一份**該**出現的文件。少了它，一支掃描面歸零的實作
+    （什麼都不印）也會讓前兩個斷言通過。
     """
     repo = _tree(
         tmp_path,
@@ -236,34 +191,27 @@ def test_excluded_and_english_docs_are_not_reported_missing(tmp_path):
             "docs/guide.en.md": _fm("English"),
             "docs/included.md": _fm("Included"),
         },
-        nav=["  - Placeholder: docs/placeholder.md"],
     )
-    out = _report(repo)
-    assert "docs/included.md" in out, f"反空轉：這一份必須被報出來\n{out}"
-    assert "docs/internal/notes.md" not in out, f"internal/ 應被排除\n{out}"
-    assert "docs/guide.en.md" not in out, f".en.md 應被跳過\n{out}"
+    out = _draft(repo)
+    assert "included.md" in out, f"反空轉：這一份必須被印出來\n{out}"
+    assert "internal/notes.md" not in out, f"internal/ 應被排除\n{out}"
+    assert "guide.en.md" not in out, f".en.md 應被跳過\n{out}"
 
 
-def test_a_md_path_below_the_nav_section_does_not_count_as_listed(tmp_path):
-    """`nav:` 區段在下一個頂層 key 處結束——之後的 `.md` 不算被列入。
+def test_a_doc_without_front_matter_falls_back_to_its_filename(tmp_path):
+    """端到端：沒有 front matter 的文件，草稿裡的標題是檔名 stem。"""
+    repo = _tree(tmp_path, docs={"docs/no-front-matter.md": "# 只有一個標題\n"})
+    out = _draft(repo)
+    assert "- no-front-matter: no-front-matter.md" in out, f"標題應退回 stem\n{out}"
 
-    ⇒ 這一格的合成樹裡，`docs/theme-ref.md` 的路徑**字面上出現在 mkdocs.yml**，
-    但它在 `theme:` 底下。若實作只是整檔 grep `.md`，它會被誤判成已列入、於是
-    不報 missing；正確行為是報 missing。
-    """
-    repo = _tree(
-        tmp_path,
-        docs={"docs/theme-ref.md": _fm("ThemeRef")},
-        nav=["  - Home: docs/home.md"],
-        trailing_yaml="theme:\n  name: material\n  logo: docs/theme-ref.md\n",
+
+def test_a_missing_docs_dir_is_a_caller_error(tmp_path):
+    """`docs/` 不存在 ⇒ rc 2 並印到 stderr，而不是印一份空草稿說一切正常。"""
+    proc = _run(tmp_path)
+    assert proc.returncode == EXIT_CALLER_ERROR, (
+        f"實得 rc={proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
-    raw = (repo / "mkdocs.yml").read_text(encoding="utf-8")
-    assert "docs/theme-ref.md" in raw, "前置條件：這個路徑必須字面出現在 mkdocs.yml 裡"
-
-    out = _report(repo)
-    assert "Missing from nav: 1" in out and "docs/theme-ref.md" in out, (
-        f"nav 區段外的 .md 不該被當成已列入\n{out}"
-    )
+    assert "docs directory not found" in proc.stderr
 
 
 # --- front matter 解析 -----------------------------------------------------
@@ -273,7 +221,7 @@ def test_front_matter_must_start_at_the_very_first_byte(tmp_path):
     """開頭多一個空行，整份 front matter 就不被認（正規表達式錨在 `^---`）。
 
     ⚠️ 這不是缺陷而是現況，值得釘住的理由是**它會靜默降級**：解析失敗不報錯，
-    title 直接退回檔名 stem，報告看起來仍然正常。
+    title 直接退回檔名 stem，草稿看起來仍然正常。
     """
     good = tmp_path / "good.md"
     bad = tmp_path / "bad.md"
@@ -302,19 +250,6 @@ def test_a_line_without_a_colon_is_skipped_not_fatal(tmp_path):
 def test_an_unreadable_or_missing_file_parses_to_empty(tmp_path):
     """讀不到的檔回空 dict 而不是丟例外——`scan_docs` 靠這個不中斷。"""
     assert gn.extract_front_matter(tmp_path / "nope.md") == {}
-
-
-def test_a_doc_without_front_matter_falls_back_to_its_filename(tmp_path):
-    """端到端：沒有 front matter 的文件，報告裡的標題是檔名 stem。"""
-    repo = _tree(
-        tmp_path,
-        docs={"docs/no-front-matter.md": "# 只有一個標題\n"},
-        nav=[],
-    )
-    out = _report(repo)
-    assert "- no-front-matter: docs/no-front-matter.md" in out, (
-        f"標題應退回 stem\n{out}"
-    )
 
 
 # --- classify_section ------------------------------------------------------
@@ -361,7 +296,7 @@ def test_unknown_or_empty_tags_fall_back_to_the_reference_section(tags):
 
 
 def _section_block(report: str, heading: str) -> str:
-    """報告裡 `  {heading}:` 底下、**到下一個 section 標題為止**的那一段。
+    """草稿裡 `  {heading}:` 底下、**到下一個 section 標題為止**的那一段。
 
     ⛔ 不可以用 `report[report.index(heading):]`：那會一路延伸到輸出結尾，於是
     「兩個標題都還在、但文件全被塞進後面那個 section」也會通過。實測過那個假報告
@@ -373,8 +308,8 @@ def _section_block(report: str, heading: str) -> str:
     return report[start:after[0]] if after else report[start:]
 
 
-def test_missing_docs_are_grouped_under_their_section_heading(tmp_path):
-    """端到端：missing 的文件依 tags 被列在各自的 section 標題底下。
+def test_docs_are_grouped_under_their_section_heading(tmp_path):
+    """端到端：文件依 tags 被列在各自的 section 標題底下。
 
     ⚠️ 斷言**雙向**：每份文件要在自己的 section 區塊裡，而且**不在**另一個區塊裡。
     只驗前半的話，一支把兩份都歸到同一個 section 的實作照樣綠。
@@ -385,14 +320,13 @@ def test_missing_docs_are_grouped_under_their_section_heading(tmp_path):
             "docs/arch.md": _fm("Arch Doc", tags="[architecture]"),
             "docs/start.md": _fm("Start Doc", tags="[getting-started]"),
         },
-        nav=[],
     )
-    out = _report(repo)
-    assert "Missing from nav: 2" in out, f"前置條件：兩份都該是 missing\n{out}"
+    out = _draft(repo)
+    assert "Scanned 2 docs" in out, f"前置條件：兩份都該被掃到\n{out}"
 
     arch_block = _section_block(out, "核心架構")
     start_block = _section_block(out, "快速入門")
-    assert "- Arch Doc: docs/arch.md" in arch_block, f"arch 應在核心架構底下\n{out}"
-    assert "- Start Doc: docs/start.md" in start_block, f"start 應在快速入門底下\n{out}"
+    assert "- Arch Doc: arch.md" in arch_block, f"arch 應在核心架構底下\n{out}"
+    assert "- Start Doc: start.md" in start_block, f"start 應在快速入門底下\n{out}"
     assert "- Start Doc" not in arch_block, f"start 不該出現在核心架構區塊\n{out}"
     assert "- Arch Doc" not in start_block, f"arch 不該出現在快速入門區塊\n{out}"

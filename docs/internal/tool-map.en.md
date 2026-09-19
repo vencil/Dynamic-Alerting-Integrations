@@ -110,7 +110,7 @@ lang: en
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
-| `generate_nav.py` | 從 docs/ 目錄自動生成 MkDocs nav 結構 |
+| `generate_nav.py` | 從 docs/ 的 front matter 產生一份 MkDocs nav 草稿 |
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
