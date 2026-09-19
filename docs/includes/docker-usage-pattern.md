@@ -23,3 +23,25 @@
 > ⚠️ 上面釘的 `v2.9.0` 是撰文時的 GA 版。文件中凡把某個修正描述成「下一版映像起」
 > 或指名一個晚於它的版本（例如「自 v2.10.0 起」），都要把這個 tag 換掉才拿得到
 > （`latest` 目前指向同一顆映像）。
+> ⛔ **其餘範例一律省略上面那段前綴，只寫 `da-tools <command>`。** 那個形式照抄進
+> 終端機會得到 `bash: da-tools: command not found`（rc 127）——`da-tools` 不是可以裝
+> 進 `$PATH` 的執行檔，沒有任何 `install` 步驟會讓它出現。要讓那些範例真的能照抄，
+> 先在你的 shell 定義一個同名函式：
+> ```bash
+> # bash：貼進 ~/.bashrc，或在當前 shell 執行一次
+> da-tools() {
+>   local tty=()
+>   [ -t 0 ] && [ -t 1 ] && tty=(-t)
+>   docker run --rm -i "${tty[@]}" --network=host \
+>     --user "$(id -u):$(id -g)" \
+>     -v "$(pwd):/workspace" -w /workspace \
+>     ghcr.io/vencil/da-tools:v2.9.0 "$@"
+> }
+> ```
+> ⛔ **函式名含連字號只有 bash 吃**：`/bin/sh`（dash）實測回
+> `Syntax error: Bad function name`、結束碼 2。`#!/bin/sh` 的腳本裡請改用別的名字
+> （例如 `datools`）或直接寫整串 `docker run`。
+> ⛔ **不要拿它接 CI。** 函式只活在定義它的那個 shell，CI 的 `script:` 是另一個
+> 行程——CI 請用整串 `docker run`，或把映像設成 job 的容器。
+> ⚠️ 它掛的是 `$(pwd)`，所以要**在你的 repo 根目錄**執行，範例裡的相對路徑
+> （`--config-dir conf.d/`）才對得上，理由同上一段。
