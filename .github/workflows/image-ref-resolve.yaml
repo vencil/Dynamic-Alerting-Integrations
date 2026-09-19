@@ -18,7 +18,7 @@ name: Image Ref Resolve
 #   * `delivered` — what a CUSTOMER installs: the third-party refs `da-tools init`
 #                   writes into their repo (#1337 follow-up). Those live in
 #                   `scripts/**`, outside every glob this checker had, outside
-#                   Renovate's three customManagers (all key on `@sha256:`), and
+#                   Renovate's customManagers (all key on `@sha256:`), and
 #                   outside the nightly CVE matrix — i.e. nothing answered "does
 #                   this ref still exist?" for them at all.
 #
@@ -55,7 +55,7 @@ on:
       - "scripts/ops/check_image_refs_resolve.py"
       # ⛔ Same discipline as the `values*` line above, for the `delivered`
       # scope: this file IS the pin table that scope reads, so a PR that bumps
-      # one of the four customer-facing refs must be the PR that re-resolves
+      # one of the customer-facing refs must be the PR that re-resolves
       # them. Widening the scan face without widening the trigger face gives a
       # gate that CAN see the pins and is never invoked when one changes.
       # Pinned by a sibling assertion in the nightly-scan matrix-drift module.

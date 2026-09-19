@@ -15,7 +15,7 @@
 #   - guard exit 2 → workflow FAIL (caller error); comment + log link.
 #
 # ⚠️ "FAIL" is not "blocks merge", which is what these lines used to say.
-# `Defaults Impact Guard` is not among the nineteen required status checks
+# `Defaults Impact Guard` is not among the required status checks
 # on main (`gh api repos/{owner}/{repo}/branches/main/protection`), so a red
 # run turns the merge box yellow and nothing more. What it protects is the
 # reviewer's PR comment, and that is worth saying accurately (#1419).

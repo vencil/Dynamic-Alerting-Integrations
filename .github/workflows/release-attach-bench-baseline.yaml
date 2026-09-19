@@ -5,7 +5,8 @@
 # published GitHub Release as a release asset.
 #
 # Why this design (vs running the bench fresh on the release runner):
-#   - Fresh bench takes ~10-15 min (13 benchmarks × count=6 × 3s); using the
+#   - Fresh bench takes ~10-15 min (see `make benchmark-report` for what it
+#     runs and at what count); using the
 #     latest nightly artifact takes ~30s and gives a more representative
 #     measurement (the nightly schedule deliberately picks 03:00 UTC for low
 #     runner contention; release-time runner could be noisy).
@@ -21,8 +22,8 @@
 #     `v*` tag itself does not auto-create a Release.
 #   - Triggering on `release: published` ensures the asset attaches when the
 #     Release actually exists (vs racing tag push and release create).
-#   - Works for all five version lines (v*, exporter/v*, tools/v*, portal/v*,
-#     tenant-api/v*) since `release: published` fires regardless of tag prefix.
+#   - Works for every version line since `release: published` fires regardless
+#     of tag prefix.
 
 name: Attach Bench Baseline to Release
 

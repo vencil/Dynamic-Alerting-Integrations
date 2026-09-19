@@ -10,9 +10,9 @@ name: Weekly Fuzz
 # Why weekly, not nightly:
 #   - Fuzz signal is slow-drifting; new bugs appearing within a week
 #     of injection don't need 24-hour granularity.
-#   - 3 nightly jobs already exist (bench-record / nightly-race /
-#     nightly-mutation-pilot), all stacked at 03 UTC or 16-17 UTC. A
-#     4th nightly competes for the GitHub-hosted runner pool.
+#   - Nightly jobs already exist (bench-record / nightly-race /
+#     nightly-mutation-pilot among them), stacked at 03 UTC or 16-17 UTC.
+#     One more nightly competes for the GitHub-hosted runner pool.
 #   - One weekly slot lets each fuzz function run for 5 minutes vs
 #     the ~45 seconds it would get under a 5-min/day budget — fuzz
 #     coverage is non-linear, longer single runs find deeper bugs.
