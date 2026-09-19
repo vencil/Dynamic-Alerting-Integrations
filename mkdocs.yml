@@ -247,15 +247,26 @@ extra_javascript:
 nav:
   - 首頁: index.md
   - 快速入門:
+    - 快速入門導覽: getting-started/README.md
     - Platform Engineers: getting-started/for-platform-engineers.md
     - Domain Experts: getting-started/for-domain-experts.md
     - Tenants: getting-started/for-tenants.md
+    - 決策者評估指南: getting-started/for-decision-makers.md
+    - 部署決策矩陣: getting-started/decision-matrix.md
   - 核心架構:
     - 架構與設計: architecture-and-design.md
     - 性能基準: benchmarks.md
     - 告警設計入門: alerting-design-fundamentals.md
     - 告警門檻與錯誤預算: alerting-slo-error-budget.md
     - 告警動作與冪等: alerting-best-practices.md
+    - 設計深潛:
+      - 總覽: design/README.md
+      - Config-Driven 架構設計: design/config-driven.md
+      - Rule Packs 與 Projected Volume 架構: design/rule-packs.md
+      - 高可用性 (HA) 設計: design/high-availability.md
+      - Runtime Canary 設計: design/runtime-canary.md
+      - Recipe 預覽設計: design/recipe-would-fire-preview.md
+      - 未來擴展路線: design/roadmap-future.md
     - 架構決策 (ADR):
       - 總覽: adr/README.md
       - ADR-001 Severity Dedup via Inhibit: adr/001-severity-dedup-via-inhibit.md
@@ -263,7 +274,36 @@ nav:
       - ADR-003 Sentinel Alert Pattern: adr/003-sentinel-alert-pattern.md
       - ADR-004 Federation Central Exporter First: adr/004-federation-central-exporter-first.md
       - ADR-005 Projected Volume: adr/005-projected-volume-for-rule-packs.md
+      - ADR-006 租戶映射拓撲: adr/006-tenant-mapping-topologies.md
+      - ADR-007 跨域路由設定檔與域策略: adr/007-cross-domain-routing-profiles.md
+      - ADR-008 Operator-Native 整合路徑: adr/008-operator-native-integration-path.md
+      - ADR-009 Tenant Manager CRUD API 架構: adr/009-tenant-manager-crud-api.md
+      - ADR-010 Multi-Tenant Grouping Architecture: adr/010-multi-tenant-grouping.md
+      - ADR-011 PR-based Write-back 模式: adr/011-pr-based-write-back.md
+      - ADR-012 threshold-heatmap 色盲補丁: adr/012-colorblind-hotfix-structured-severity-return.md
+      - ADR-013 Component Health Scanner: adr/013-component-health-token-density-metric.md
+      - ADR-014 wizard.jsx design token 遷移: adr/014-wizard-arbitrary-value-token-migration.md
+      - ADR-015 [data-theme] 單軌 dark mode: adr/015-data-theme-single-track-dark-mode.md
+      - ADR-016 conf.d/ 目錄分層 + 混合模式 + 遷移策略: adr/016-conf-d-directory-hierarchy-mixed-mode.md
+      - ADR-017 _defaults.yaml 繼承語意 + dual-hash hot-reload: adr/017-defaults-yaml-inheritance-dual-hash.md
+      - ADR-018 Profile-as-Directory-Default: adr/018-profile-as-directory-default.md
+      - ADR-019 Planning SSOT: adr/019-planning-ssot.md
+      - ADR-020 Tenant Federation: adr/020-tenant-federation.md
+      - ADR-021 Tenant Log Query: adr/021-tenant-log-query-federation.md
+      - ADR-022 tenant-api Dev-Auth Bypass: adr/022-dev-auth-bypass-four-layer-containment.md
+      - ADR-023 tenant-api 寫入平面: adr/023-write-plane-single-writer-invariant.md
+      - ADR-024 宣告式 Dimensional 告警引擎: adr/024-version-aware-threshold-via-dimensional-label.md
+      - ADR-025 告警平面自我存活性: adr/025-alerting-plane-self-liveness.md
+      - ADR-026 Node/Cluster 維護告警抑制: adr/026-node-maintenance-liveness-suppression.md
+      - ADR-028 Federation 撤銷儲存 tamper-evidence: adr/028-federation-revocation-tamper-evidence.md
+      - ADR-029 租戶自訂告警跨租戶查詢隔離: adr/029-custom-alert-cross-tenant-query-scoping.md
+      - ADR-030 決策層遷移驗證: adr/030-decision-layer-migration-validation.md
+      - ADR-031 slo_burn_rate recipe: adr/031-slo-burn-rate-recipe.md
+      - ADR-032 夜跑效能成對交錯量測: adr/032-paired-interleaved-bench-measurement.md
+      - ADR-033 與運維執行平面的協同介面: adr/033-ops-execution-plane-interface.md
+      - ADR-034 合法值不得同時當作無法辨識時的 fallback: adr/034-legal-value-as-fallback.md
   - 整合指南:
+    - 整合指南導覽: integration/README.md
     - BYO Prometheus: integration/byo-prometheus-integration.md
     - BYO Alertmanager: integration/byo-alertmanager-integration.md
     - 告警平面自我存活性 (Watchdog): integration/alerting-plane-self-liveness.md
@@ -273,17 +313,27 @@ nav:
     - Tenant Federation: integration/tenant-federation.md
     - GitOps 部署: integration/gitops-deployment.md
     - 部署容量規劃: integration/deployment-sizing.md
+    - Prometheus Operator 手冊 (Hub): integration/prometheus-operator-integration.md
+    - Operator Prometheus: integration/operator-prometheus-integration.md
+    - Operator Alertmanager: integration/operator-alertmanager-integration.md
+    - Operator GitOps 部署: integration/operator-gitops-deployment.md
+    - Tenant Log Query: integration/tenant-log-query.md
+    - GitLab CE SSO: integration/gitlab-ce-sso.md
+    - VCS 整合 (GitHub / GitLab): vcs-integration-guide.md
   - 遷移:
     - 遷移指南: migration-guide.md
     - 遷移引擎: migration-engine.md
     - Migration Toolkit 安裝: migration-toolkit-installation.md
     - Shadow Monitoring SOP: shadow-monitoring-sop.md
     - Migration Troubleshooting Checklist: integration/troubleshooting-checklist.md
+    - Operator Shadow Monitoring: integration/operator-shadow-monitoring.md
+    - 漸進式遷移 Playbook: scenarios/incremental-migration-playbook.md
   - 治理與安全:
     - 治理與安全: governance-security.md
     - Custom Rule 治理: custom-rule-governance.md
     - 跨租戶 ConfigMap 硬化: cross-tenant-configmap-hardening.md
   - 場景:
+    - 場景指南導覽: scenarios/README.md
     - Alert Routing Split: scenarios/alert-routing-split.md
     - 測試覆蓋矩陣: internal/test-coverage-matrix.md
     - Shadow Monitoring 切換: scenarios/shadow-monitoring-cutover.md
@@ -292,15 +342,24 @@ nav:
     - 多叢集 Federation: scenarios/multi-cluster-federation.md
     - Tenant 生命週期: scenarios/tenant-lifecycle.md
     - Multi-System Migration Playbook: scenarios/multi-system-migration-playbook.md
+    - 動手實驗：從零到生產告警: scenarios/hands-on-lab.md
+    - GitOps CI/CD 整合: scenarios/gitops-ci-integration.md
+    - 多域名階層式配置: scenarios/multi-domain-conf-layout.md
+    - Flat → conf.d 切換決策: scenarios/flat-to-conf-d-cutover-decision.md
+    - 千租戶規模管理: scenarios/manage-at-scale.md
+    - Shadow Audit 告警品質評估: scenarios/shadow-audit.md
+    - 驗證場景與平台行為: scenarios/verified-scenarios.md
   - 參考:
     - da-tools CLI: cli-reference.md
     - CLI 速查表: cheat-sheet.md
     - 互動式工具: interactive-tools.md
     - API 端點: api/README.md
+    - Tenant API Hardening: api/tenant-api-hardening.md
     - Grafana Dashboards: grafana-dashboards.md
     - Rule Packs: rule-packs/README.md
     - Alert 速查: rule-packs/ALERT-REFERENCE.md
     - JSON Schema: schemas/README.md
+    - Migration State Schema: schemas/migration-state.md
     - 故障排查: troubleshooting.md
     - 術語表: glossary.md
     - Changelog: CHANGELOG.md
