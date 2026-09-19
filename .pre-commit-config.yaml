@@ -889,10 +889,10 @@ repos:
         # line-count regressions immediately. Locks in the progress
         # from PR-2d (#153 Phase 1+2+3 / S#69-S#72): codebase had 0
         # soft-cap line-count warnings as of S#72, this keeps it that
-        # way. Pre-existing ~330 `style={{}}` warnings stay non-fatal
+        # way. Pre-existing `style={{}}` warnings stay non-fatal
         # because `--strict-linecount` is granular (NOT `--strict`).
         # Separate cleanup track will eventually activate
-        # `--strict-static` once all 330 cleared. See PR #160 / S#71
+        # `--strict-static` once they are cleared. See PR #160 / S#71
         # for the granular-flag design rationale.
         # Initially proposed as `stages: [manual]` but PR #162 first
         # CI run failed with "No hook with id ... in stage pre-commit"
@@ -1032,8 +1032,8 @@ repos:
         files: ^docs/.*\.md$
 
       # Fence hygiene: a ```yaml fence in docs/ must actually be YAML. Split
-      # out from md-yaml-drift-check (below) on purpose — it covers ALL 472
-      # fenced blocks rather than the ~38 that look like tenant config, and a
+      # out from md-yaml-drift-check (below) on purpose — it covers EVERY
+      # fenced block rather than only those that look like tenant config, and a
       # mislabelled directory-tree diagram must not be able to block an
       # unrelated schema fix. Parses with safe_load_all: `---`-separated k8s
       # manifests are valid YAML and four blocks in docs/ are exactly that.
@@ -1521,8 +1521,8 @@ repos:
         # annotations), the shared extractor, or the gate itself changes. FAIL
         # on DEAD (no job admits a consumed metric — the #1203 tenant-api /
         # alertmanager disease), a NEW unknown-source metric, or a
-        # KNOWN_UNKNOWN_SOURCE exit-lock breach; the 8 helm-only unknowns are
-        # INFO. Single-cluster face only — federation plane assignment is the
+        # KNOWN_UNKNOWN_SOURCE exit-lock breach; the helm-only unknowns listed
+        # there are INFO. Single-cluster face only — federation plane assignment is the
         # split tool's contract, not this gate's (see module docstring).
         # ⛔ `_lint_helpers.py` belongs here: this gate now DELEGATES both of
         # its parsers to it (#1494), so an edit there can change this gate's
