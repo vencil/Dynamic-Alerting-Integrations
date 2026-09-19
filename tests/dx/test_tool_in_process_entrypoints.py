@@ -80,12 +80,20 @@ def test_generate_nav_exits_instead_of_returning(argv, tmp_path, capsys):
 
     ⚠️ 這一格釘的是「目前就是這樣」，不是「應該這樣」。改簽章不在本票範圍內；將來若有人
     把它改成 `return`，這一格會紅並提醒他一併更新這裡與上面的參數表。
+
+    ⛔ 也斷言那個 rc 2 是**工具自己**給的（`docs/` 不存在走 caller-error 路徑），不是
+    argparse 拒收未知旗標給的。先前這一格帶著 `--check` 跑；`--check` 退役後 argparse
+    照樣回 2，於是它**仍然綠、卻已經不在驗 docstring 說的那件事**。rc 相同而來源換掉，
+    是這類格子最容易腐爛的方式，所以把來源也釘住。
     """
-    argv("--check", "--repo-root", str(tmp_path))
+    argv("--repo-root", str(tmp_path))
     with pytest.raises(SystemExit) as excinfo:
         generate_nav.main()
-    capsys.readouterr()
+    err = capsys.readouterr().err
     assert excinfo.value.code == 2
+    assert "docs directory not found" in err, (
+        f"rc 2 必須來自工具自己的 caller-error 路徑，不是 argparse\nstderr: {err!r}"
+    )
 
 
 def test_custom_alerts_package_imports_in_process():
@@ -139,21 +147,23 @@ def test_generate_nav_reports_the_number_of_docs_it_actually_scanned(
 ):
     """驗到的：它報出來的掃描數等於**本格放進去的**檔案數，所以輸出不是寫死的。
 
-    ⛔ **沒有**驗到：nav 比對、front matter 解析、section 分類、`--check` 的判定。一支
-    「只數 docs/**/*.md 個數並印出來、其他什麼都不做」的實作會通過本格。⇒ 這格買到的
-    是「有去讀那棵樹」，不是「nav 產生邏輯正確」。專屬測試檔在
-    `tests/dx/test_generate_nav.py`，但它守的是 `--check` 的三個 rc 方向與「`--update`
-    已死」；front matter 解析與 section 分類至今仍然沒有任何東西在守，缺口記在 #1884。
+    ⛔ **沒有**驗到：草稿的路徑座標系、front matter 解析、section 分類。一支「只數
+    docs/**/*.md 個數並印出來、其他什麼都不做」的實作會通過本格。⇒ 這格買到的是
+    「有去讀那棵樹」，不是「nav 草稿正確」。那些由 `tests/dx/test_generate_nav.py` 守。
+
+    ⚠️ `--check` 已退役（#1884）：這支工具不再做 nav 比對，rc 恆 0——除非 `docs/` 不在，
+    那一路由上一格守。所以這裡斷言的是 `== 0` 而不是先前的 `in (0, 1)`：`1` 已經不可達，
+    留著會讓一支永遠回 1 的壞實作照樣過。
     """
     docs = tmp_path / "docs"
     docs.mkdir()
     for i in range(doc_count):
         (docs / f"d{i}.md").write_text(f"# d{i}\n", encoding="utf-8")
-    argv("--check", "--repo-root", str(tmp_path))
+    argv("--repo-root", str(tmp_path))
     with pytest.raises(SystemExit) as excinfo:
         generate_nav.main()
     out = capsys.readouterr().out
-    assert excinfo.value.code in (0, 1), excinfo.value.code
+    assert excinfo.value.code == 0, excinfo.value.code
     assert f"Scanned {doc_count} docs" in out, (
         f"報出來的掃描數與實際放進去的 {doc_count} 個不符：{out[:200]!r}"
     )
