@@ -40,9 +40,10 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -77,8 +78,29 @@ TIMEOUT = 60
 UNPINNED = ("/main/", "/master/", "/HEAD/", "/latest/", "releases/latest/")
 
 
+def _validate_source_url(url: str) -> Optional[str]:
+    """Refuse a source URL that cannot serve as a trustworthy oracle.
+
+    These URLs come from `SOURCES.yaml`, which is repo content rather than user
+    input — but "it is in the repo" is not a security property, and both
+    failures here are silent ones. A `file://` source would make the gate's
+    oracle a local file nobody reviews; an `http://` one would let anyone on the
+    path rewrite the schema that decides whether documentation is correct. An
+    unpinned ref is the same class of problem one step removed.
+    """
+    scheme = urllib.parse.urlsplit(url).scheme
+    if scheme != "https":
+        return f"url must be https:// (got {scheme or 'no scheme'}): {url}"
+    if any(tok in url for tok in UNPINNED):
+        return f"url is not pinned to a version: {url}"
+    return None
+
+
 def _fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+    err = _validate_source_url(url)
+    if err:
+        raise ValueError(err)
+    with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:  # nosec B310  # https-only, enforced on the line above
         return resp.read()
 
 
@@ -127,12 +149,13 @@ def run(check_only: bool) -> int:
 
     for src in sources:
         sid, url = src["id"], src["url"]
-        if any(tok in url for tok in UNPINNED):
-            print(f"ERROR: {sid}: url is not pinned to a version: {url}", file=sys.stderr)
+        bad_url = _validate_source_url(url)
+        if bad_url:
+            print(f"ERROR: {sid}: {bad_url}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         try:
             raw = _fetch(url)
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             print(f"ERROR: {sid}: fetch failed ({type(e).__name__}: {e})", file=sys.stderr)
             return EXIT_CALLER_ERROR
 
