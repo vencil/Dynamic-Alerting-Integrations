@@ -147,16 +147,16 @@ resolve", which is the state #1397's failure scenario is actually about — and 
 documented: an unresolvable property "will evaluate to an empty string"
 (contexts reference). dorny emits `true` or `false`, plus the same empty
 string. Detect result and `*_changed` are taken
-exhaustively, and so is the leg axis: `5^legs` per gate, in full. A covering design
-lived here for one round and `_leg_tuples` records why it was reverted —
-the saving was 0.76 s, and the blind region was 60 of 125 leg tuples while
-the comment admitted only the 24 of them with three mutually distinct values. Today: 75 cells for a one-leg gate, 1875 for `go-tests`, 2025 in
-total.
+exhaustively. The leg axis is the full `5^legs` product up to three legs and
+a strength-3 covering array beyond — `_leg_tuples` records both flips of
+that decision and the measurements behind each: the first covering design
+was reverted because its blind region was 60 of 125 tuples at three legs;
+the full product was reverted at five legs because CI measured it at 168 s
+for `go-tests` alone (93,750 bash runs), 23 % of the Python job.
 
-⚠️ Cost, on THIS shape (2025 cells, each executed twice — see `_RUNNER_ENV`):
-roughly **6–13 s in the dev container** and **2–4 minutes on a Windows dev
-host**, both as ranges over five and three independent runs. CI is Linux, so
-the small one governs; `go-tests` is ~4 s of it.
+⚠️ Cost is a function of the leg count and is measured where it matters, in
+CI, by the `--durations` list at the end of the Python job's log. No figure
+is kept here: two earlier ones went stale within a month.
 
 ⛔ RANGES, not point values, and that is the third correction to this
 paragraph. Every previous version stated a number measured for one shape that
@@ -635,31 +635,109 @@ def _expected_exit(detect: str, legs: tuple[str, ...],
     return 0
 
 
-def _leg_tuples(leg_count: int) -> list[tuple[str, ...]]:
-    """The FULL cross product over the leg axis.
+# Up to this many legs the leg axis is the FULL product (125 tuples at three).
+# Beyond it, a strength-3 covering array — see `_leg_tuples`.
+_FULL_PRODUCT_MAX_LEGS = 3
+_COVERING_STRENGTH = 3
 
-    ⛔ This was a covering design (all-equal plus every pair of positions,
-    others `success`) for exactly one round, on the argument that the full
-    product is exponential and adding a leg is the growth path ci.yml invites.
-    Blind review killed the argument on both halves and it is worth recording
-    why, because the reasoning was seductive:
 
-      * the SAVING was measured and is negligible where it matters: 1875 cells
-        for `go-tests` in 1.59 s against 975 in 0.83 s in the dev container.
-        The exemption was justified by a Windows dev-host figure in a module
-        that states three paragraphs earlier that CI is Linux and "the figure
-        that matters is the small one";
-      * the BLIND SPOT was mis-stated. The docstring claimed only backdoors
-        needing three mutually DISTINCT leg values escaped. Measured: 60 of
-        125 tuples at three legs were never generated, including
-        `('failure', 'skipped', 'skipped')` — two distinct values, and the
-        ordinary shape of a docs-only PR where the one leg that runs fails.
+def _bush_orthogonal_array(q: int) -> list[tuple[int, ...]]:
+    """OA(q^3, q+1, q, 3) for prime q — Bush's construction.
 
-    ⇒ Correctness over a fraction of a second. If a fourth leg ever makes this
-    genuinely expensive, the honest move is to measure it again on CI, not to
-    re-derive a cheaper sample from the same wish.
+    Row (a, b, c) is the polynomial a·x² + b·x + c evaluated at x = 0..q-1,
+    plus a last column holding `a`. Any THREE columns of the result contain
+    every one of the q^3 value triples exactly once, which is the property
+    `_leg_tuples` needs; `q+1` is the most columns this construction gives.
     """
-    return sorted(itertools.product(_RESULT_DOMAIN, repeat=leg_count))
+    assert q >= 2 and all(q % d for d in range(2, q)), "q must be prime"
+    return [tuple((a * x * x + b * x + c) % q for x in range(q)) + (a,)
+            for a, b, c in itertools.product(range(q), repeat=3)]
+
+
+def _strength_3_rows(leg_count: int, q: int) -> set[tuple[int, ...]]:
+    """Rows over `range(q)` in which every 3 positions see every value triple.
+
+    ≤ q+1 legs: the Bush array as is (q^3 rows). More legs: the Bush rows
+    extended by every value assignment of the extra columns, then a greedy
+    pick of the rows covering the most still-uncovered (positions, values)
+    triples until none remain. Deterministic — no randomness anywhere.
+    """
+    base = _bush_orthogonal_array(q)
+    if leg_count <= q + 1:
+        return {row[:leg_count] for row in base}
+    extra = leg_count - (q + 1)
+    positions = list(itertools.combinations(range(leg_count), 3))
+    # Each candidate's (positions, values) triples, computed once — the
+    # first cut recomputed them per greedy step and cost 10 s on CI for
+    # the 7-leg control alone.
+    candidates = [(row + tail,
+                   frozenset((pos, tuple((row + tail)[i] for i in pos))
+                             for pos in positions))
+                  for row in base
+                  for tail in itertools.product(range(q), repeat=extra)]
+    uncovered = {(pos, vals) for pos in positions
+                 for vals in itertools.product(range(q), repeat=3)}
+    chosen: set[tuple[int, ...]] = set()
+    while uncovered:
+        best, best_cover = max(candidates,
+                               key=lambda c: (len(c[1] & uncovered), c[0]))
+        assert best_cover & uncovered, "greedy covering stalled"
+        chosen.add(best)
+        uncovered -= best_cover
+    return chosen
+
+
+def _leg_tuples(leg_count: int) -> list[tuple[str, ...]]:
+    """The leg axis: the full product up to three legs, a strength-3 covering
+    array beyond that, plus every all-equal and single-deviation tuple.
+
+    ⛔ History, because the reasoning has flipped twice and both flips were
+    measured. Round one shipped a covering design (all-equal plus every pair
+    of positions) and blind review killed it: the saving in the dev container
+    was 1.59 s vs 0.83 s for the 3-leg `go-tests` of the day, and the design's
+    blind region was 60 of 125 tuples — including `('failure', 'skipped',
+    'skipped')`, the ordinary docs-only-PR shape. The reverted docstring
+    ended: "if a fourth leg ever makes this genuinely expensive, the honest
+    move is to measure it again on CI."
+
+    The fifth leg arrived (#1873 and its siblings) and CI was measured
+    (#1899's `--durations`): `go-tests` at 5 legs is 5^5 = 3125 leg tuples ×
+    15 detect/changed cells × 2 passes = 93,750 bash runs, **168 s on the
+    4-core runner — 23 % of the whole Python job and its critical path**.
+    That is the condition the old docstring named, so the sample is back,
+    designed against the recorded blind spot rather than the old wish:
+
+      * STRENGTH 3, not 2: any three legs, in any positions, see every one of
+        the 125 value triples (Bush's OA(125, 6, 5, 3) for ≤ 6 legs; a greedy
+        extension past that). `('failure', 'skipped', 'skipped')` and every
+        other ≤3-leg pattern is therefore generated at every position.
+      * The extremes the gate's `for` loop is really about are added
+        explicitly: every all-equal tuple, and every tuple that deviates from
+        all-`success` in exactly one leg (the "one leg went wrong" shape).
+      * `test_leg_tuples_are_a_strength_3_covering_array` checks both
+        properties by brute force, so the construction cannot rot silently.
+
+    ⚠️ Honest boundary: a gate whose verdict depended on four or more legs
+    jointly, in a way no three of them reveal, is invisible to this sample.
+    The shipped gates reduce over legs with a single `for` loop (any bad leg
+    → exit 1), which has no such interaction; a gate that grew one would
+    need this bound raised, and the test above is where that shows.
+
+    Sizes today: 3 legs → 125 (full), 5 legs → 125 + 20 extremes ≈ 145
+    tuples instead of 3125.
+    """
+    if leg_count <= _FULL_PRODUCT_MAX_LEGS:
+        return sorted(itertools.product(_RESULT_DOMAIN, repeat=leg_count))
+    q = len(_RESULT_DOMAIN)
+    rows = _strength_3_rows(leg_count, q)
+    rows |= {(v,) * leg_count for v in range(q)}
+    success = _RESULT_DOMAIN.index("success")
+    for pos in range(leg_count):
+        for v in range(q):
+            row = [success] * leg_count
+            row[pos] = v
+            rows.add(tuple(row))
+    return sorted(tuple(_RESULT_DOMAIN[i] for i in row) for row in rows)
 
 
 def _cases(leg_count: int, filter_count: int):
@@ -2434,6 +2512,40 @@ def test_every_simulated_runner_var_is_visible_to_the_differential() -> None:
         "name to _RUNNER_ENV.")
 
 
+@pytest.mark.parametrize("leg_count", [4, 5, 6, 7],
+                         ids=lambda n: f"{n}-legs")
+def test_leg_tuples_are_a_strength_3_covering_array(leg_count: int) -> None:
+    """Brute-force the two properties `_leg_tuples` promises past three legs.
+
+    ⛔ The first covering design died because its blind region was asserted
+    in prose and measured only after the fact (60 of 125 tuples, not the
+    claimed 24). This is the measurement, run every time: every choice of
+    three positions must see every value triple — which is precisely the
+    3-leg product the old design missed, at every position — and the two
+    families of extremes must be present verbatim. 7 legs exercises the
+    greedy extension past Bush's 6-column limit.
+    """
+    tuples = set(_leg_tuples(leg_count))
+    q = len(_RESULT_DOMAIN)
+    all_triples = set(itertools.product(_RESULT_DOMAIN, repeat=3))
+    for positions in itertools.combinations(range(leg_count), 3):
+        seen = {tuple(t[i] for i in positions) for t in tuples}
+        assert seen == all_triples, (
+            f"legs {positions} miss {sorted(all_triples - seen)[:5]}… "
+            f"({len(all_triples - seen)} of {len(all_triples)} triples)")
+    for value in _RESULT_DOMAIN:
+        assert (value,) * leg_count in tuples, value
+    for pos in range(leg_count):
+        for value in _RESULT_DOMAIN:
+            row = ["success"] * leg_count
+            row[pos] = value
+            assert tuple(row) in tuples, (pos, value)
+    # The point of the exercise: a fraction of the product, not all of it.
+    assert len(tuples) < q ** leg_count, len(tuples)
+    # Nothing outside the domain leaked in from the integer construction.
+    assert {v for t in tuples for v in t} <= set(_RESULT_DOMAIN)
+
+
 def test_the_derivation_helpers_can_actually_fail(tmp_path: Path) -> None:
     """The four helpers whose weakening was shown to let a real attack land.
 
@@ -2444,8 +2556,10 @@ def test_the_derivation_helpers_can_actually_fail(tmp_path: Path) -> None:
     (`_gates` pinning `step=0`), and `always() && …` (`_normalised_condition`
     answering `always()` regardless).
     """
-    # `_leg_tuples`: the full product, and it must contain a MIXED tuple —
-    # collapsing the domain to success/skipped kept every existing assertion.
+    # `_leg_tuples`: the full product up to three legs, and it must contain a
+    # MIXED tuple — collapsing the domain to success/skipped kept every
+    # existing assertion. (Beyond three legs the covering array has its own
+    # control, `test_leg_tuples_are_a_strength_3_covering_array`.)
     assert len(_leg_tuples(3)) == len(_RESULT_DOMAIN) ** 3, len(_leg_tuples(3))
     assert ("failure", "skipped", "success") in _leg_tuples(3)
     assert len(_leg_tuples(1)) == len(_RESULT_DOMAIN)
