@@ -114,6 +114,44 @@ def test_check_does_not_fail_on_extra_entries_today(tmp_path):
     )
 
 
+def test_the_check_help_admits_the_gap_it_does_not_cover(tmp_path):
+    """⛔ `--check` 的 `--help` 必須自己說出「另一個方向沒被守」。
+
+    上一格釘的是**行為**，這一格釘的是**介面上的說法**。兩者分開是因為它們會各自
+    腐爛：`help='CI mode: exit 1 if docs missing from nav'` 這種寫法沒有說謊，但
+    讀者拿著「我刪了一份文件、忘了改 nav」這個場景去讀它，學不到自己沒被保護——
+    而這正是 #1884 驗收條件 2 要求寫明的那件事。
+
+    ⛔ **斷言的是「兩個 rc 都被提到」，不是只有 `#1884` 這個 token。** 本格的前一版
+    只問 token 在不在，而 token 在 caveat 被刪掉之後可以留著：實測
+    `help='CI mode: exit 1 if docs missing from nav (#1884)'` 讓那一版全綠——
+    caveat 沒了、守衛還說綠。⇒ 那是這支 repo 反覆在燒的同一個形狀：**述詞比對的是
+    字串，而問題問的是性質。** 改法是把錨放到 caveat 的語意核心：舊 help 只講得出
+    `exit 1`，而「反方向仍然過關」這件事講不出來就沒有 `exit 0`。
+
+    ⚠️ 仍然不是「這段散文讀得懂」的證明——沒有斷言能買到那個。它買到的是：
+    `--check` 的 help 同時提到兩個 rc 並指回 #1884。要換措辭可以，但這三樣得留著；
+    真的把 `extra` 改成觸發 rc 1 時，caveat 該整段刪掉，這一格會紅並把改動者帶到
+    上一格的現況存證。
+
+    ⚠️ 切片必須收在下一個選項的標題處：argparse 會把長 help 折行，只問「整段
+    `--help` 裡有沒有」會讓 caveat 掛在任何一個選項底下都算過。
+    """
+    out = _run(tmp_path, "--help").stdout   # argparse 在碰 --repo-root 之前就印完退出
+    assert "--check" in out and "--repo-root" in out, (
+        f"前置條件：--help 必須同時列出這兩個選項才切得出區塊\n{out}"
+    )
+    block = " ".join(out[out.index("  --check"):out.index("  --repo-root")].split())
+
+    missing = [token for token in ("exit 1", "exit 0", "#1884") if token not in block]
+    assert not missing, (
+        f"`--check` 的 help 少了 {missing}。它必須同時講出 `missing` 觸發 exit 1、"
+        "`extra` 仍是 exit 0，並指回 #1884——少掉 `exit 0` 那半就退回成一句只說"
+        "「什麼會觸發」的話，讀者學不到自己沒被保護。"
+        f"\n--check 區塊:\n{block}"
+    )
+
+
 # ===========================================================================
 # 第二層：內容驗證（#1884）
 #
