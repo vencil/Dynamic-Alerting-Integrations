@@ -296,7 +296,8 @@ pytest -m regression               # 僅跑回歸測試
 
 ### 平行 vs 循序判斷規則（ROI r6 D 波）
 
-- **全套（或跨多目錄大子集）→ `-n auto`**（`make test` 已是預設）：host 實測全套 serial ~491s vs `-n auto` ~131s（3.8×）。
+- **全套（或跨多目錄大子集）→ xdist 平行**（`make test` 已是預設）：host 實測全套 serial vs `-n auto` 約 3.8×（ROI r6 D 波）。
+- **worker 數走 Makefile 的 `PYTEST_WORKERS`**：Linux / 容器 / CI 是 `auto`；**Windows host 預設 6、不用 auto**——本套測試大量 spawn 子程序（`sys.executable`、`git`），Windows 每顆 spawn 慢一個數量級，16 個 worker 同時 spawn 會把子程序餓到 `subprocess.TimeoutExpired`、整套反而跑不完（量測在該 PR）。要調：`make test PYTEST_WORKERS=8`。`make dc-test` 在容器內固定 `-n auto`，單檔 debug 用 `ARGS="-n 0"`。
 - **單檔 / 單測試 / 單目錄小子集 → serial**：xdist 啟動開銷 ~2s，小子集平行反而更慢；直接 `pytest tests/ops/test_foo.py` 或 `make test-serial ARGS="-k foo"`。
 - **需要 pdb / 確定性測試順序 → `make test-serial`**（xdist 與 pdb 不相容）。
 - 依賴：`-n auto` 需 `pytest-xdist`——dev container 由 `postCreateCommand` 預裝；host 端缺它時 `pip install pytest-xdist`（否則 pytest 直接 unrecognized arguments）。

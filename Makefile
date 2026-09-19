@@ -4,6 +4,18 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
+# ── pytest-xdist worker 數（make test / coverage / test-skip-audit 共用）──
+# Linux / CI / dev container：auto（=核心數）。
+# Windows host：不用 auto。本 repo 的測試大量 spawn 子程序（sys.executable、
+# git），Windows 上每顆 spawn 又慢一個數量級（AV 即時掃描 + CreateProcess）；
+# 16 個 worker 同時 spawn 會把子程序餓到 subprocess.TimeoutExpired，整套
+# 反而跑不完（量測見 PR 說明）。要調：make test PYTEST_WORKERS=8。
+ifeq ($(OS),Windows_NT)
+PYTEST_WORKERS ?= 6
+else
+PYTEST_WORKERS ?= auto
+endif
+
 # 所有 recipe 的 Python 一律跑在 UTF-8 mode（PEP 540；與逐行 `-X utf8` 等價，
 # 實測 `PYTHONUTF8=1 python foo.py` 與 `python -X utf8 foo.py` 行為相同）。
 #
@@ -411,8 +423,11 @@ dc-run: ## 在 Dev Container 內跑任意指令。用：make dc-run CMD="go vet 
 	@bash scripts/ops/dx-run.sh $(CMD)
 
 .PHONY: dc-test
-dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
-	@bash scripts/ops/dx-run.sh pytest $(ARGS)
+dc-test: ## 在 Dev Container 內跑 pytest（xdist -n auto；可選 ARGS="-k foo"；單檔 debug 加 ARGS="-n 0"）
+	## 容器是 Linux、xdist 已預裝，平行沒有 host 那種 AV / spawn 成本——
+	## 之前這裡是 serial，主路徑反而比 `make test` 慢。ARGS 在後面，
+	## `-n 0` 可覆蓋回 serial（pytest 取最後一個 -n）。
+	@bash scripts/ops/dx-run.sh pytest -n auto $(ARGS)
 
 .PHONY: dc-go-test
 dc-go-test: ## 在 Dev Container 內跑 Go tests（預設全 CI module；MOD= / PKG= 縮小範圍；Go 僅在 container 內可用）
@@ -1000,12 +1015,13 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 # Python 測試 & 覆蓋率
 # ----------------------------------------------------------
 .PHONY: test
-test: ## 執行 Python 單元測試（pytest -n auto 平行；CI 同設定。debug → make test-serial）
-	## Parallel (xdist -n auto) IS the default（ROI r6 D 波實測：host 全套
-	## serial ~491s vs -n auto ~131s，3.8x）。Matches CI's ci.yml (-n auto).
+test: ## 執行 Python 單元測試（pytest -n $(PYTEST_WORKERS) 平行；CI 同設定。debug → make test-serial）
+	## Parallel (xdist) IS the default（ROI r6 D 波實測：host 全套 serial
+	## vs -n auto 約 3.8x）。Matches CI's ci.yml (-n auto).
 	## 判斷規則：單檔 / 單目錄小子集 serial 反而快——xdist 啟動 ~2s 蓋過
 	## 收益，直接 `pytest tests/ops/` 或用 make test-serial。
-	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n auto --tb=short $(ARGS)
+	## Worker 數走 PYTEST_WORKERS（定義見上方）：Windows host 不用 auto。
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n $(PYTEST_WORKERS) --tb=short $(ARGS)
 
 .PHONY: test-serial
 test-serial: ## pytest 循序版（pdb / 確定性順序 / 單檔小子集 debug 用）
@@ -1017,7 +1033,7 @@ test-fast: ## (alias) 同 make test——歷史名稱保留，肌肉記憶用
 
 .PHONY: coverage
 coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
-	@python3 -m pytest tests/ --ignore=tests/federation-e2e \
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n $(PYTEST_WORKERS) \
 		--cov --cov-report=term-missing \
 		$(if $(findstring --html,$(ARGS)),--cov-report=html:.build/htmlcov) \
 		--tb=short -q
@@ -1060,7 +1076,7 @@ portal-bundle-budget: ## Check portal dist bundle size budgets (TRK-232a; per-to
 .PHONY: test-skip-audit
 test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 	@echo "=== Test Skip Audit ==="
-	@SKIP_COUNT=$$(python3 -m pytest tests/ --ignore=tests/federation-e2e --tb=no -q 2>&1 \
+	@SKIP_COUNT=$$(python3 -m pytest tests/ --ignore=tests/federation-e2e -n $(PYTEST_WORKERS) --tb=no -q 2>&1 \
 		| grep -Eo '[0-9]+ skipped' | grep -Eo '^[0-9]+' || echo 0); \
 	BUDGET=5; \
 	echo "  Skip count: $$SKIP_COUNT / budget: $$BUDGET"; \
