@@ -70,11 +70,14 @@ downgrade.
 from __future__ import annotations
 
 import ast
+import contextlib
+import json
 import os
 import pathlib
 import re
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -235,6 +238,30 @@ def trees(tmp_path_factory) -> dict[str, pathlib.Path]:
     return out
 
 
+@pytest.fixture(scope="session")
+def sweep_base(tmp_path_factory) -> pathlib.Path:
+    """One sandbox root per session for `_observed`'s per-tool runs."""
+    return tmp_path_factory.mktemp("confd_case_parity_sweep")
+
+
+_OBSERVED: dict[str, "_Outcome"] = {}
+
+
+def _observed(tool: pathlib.Path, flag: str,
+              trees: dict[str, pathlib.Path],
+              base: pathlib.Path) -> "_Outcome":
+    """`_observe`, at most once per tool per process.
+
+    Three consumers used to run the same tool over the same three trees
+    independently — the two per-tool tests and the session sweep — so every
+    tool was spawned nine times per worker. The observation is a pure
+    function of (tool, trees); it is computed on first use and reused.
+    """
+    if tool.name not in _OBSERVED:
+        _OBSERVED[tool.name] = _observe(tool, flag, trees, base / tool.name)
+    return _OBSERVED[tool.name]
+
+
 # ── running one tool ──────────────────────────────────────────────────
 def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
          sandbox: pathlib.Path) -> tuple[str, str, int] | None:
@@ -362,8 +389,8 @@ def _observe(tool: pathlib.Path, flag: str,
 @pytest.mark.parametrize(
     "tool,flag", ALL_TOOLS, ids=[p.name for p, _ in ALL_TOOLS])
 def test_tool_reads_upper_case_names_the_same(
-        tool: pathlib.Path, flag: str, trees, tmp_path: pathlib.Path) -> None:
-    outcome = _observe(tool, flag, trees, tmp_path)
+        tool: pathlib.Path, flag: str, trees, sweep_base) -> None:
+    outcome = _observed(tool, flag, trees, sweep_base)
     if outcome.skip_reason:
         pytest.skip(f"NOT MEASURED — {outcome.skip_reason}")
     assert outcome.lower == outcome.upper, (
@@ -409,7 +436,7 @@ _LOWER_ONLY_NAMES = ("_defaults.yaml", "_defaults.yml",
 @pytest.mark.parametrize(
     "tool,flag", ALL_TOOLS, ids=[p.name for p, _ in ALL_TOOLS])
 def test_tool_does_not_name_a_file_that_is_not_there(
-        tool: pathlib.Path, flag: str, trees, tmp_path: pathlib.Path) -> None:
+        tool: pathlib.Path, flag: str, trees, sweep_base) -> None:
     """On the upper-case tree, no lower-case fixture name may be printed.
 
     ⛔ This is the class the A/B comparison structurally cannot see. Both
@@ -424,7 +451,7 @@ def test_tool_does_not_name_a_file_that_is_not_there(
     lower-case file, so naming one sends the operator to edit something
     that does not exist.
     """
-    outcome = _observe(tool, flag, trees, tmp_path)
+    outcome = _observed(tool, flag, trees, sweep_base)
     if outcome.skip_reason:
         pytest.skip(f"NOT MEASURED — {outcome.skip_reason}")
     # ⛔ Whole path components, not substrings. The first version matched
@@ -598,13 +625,82 @@ KNOWN_INSENSITIVE: set[str] = {
 # fixture rather than by changing any tool.
 
 
+def _outcome_to_json(o: _Outcome) -> dict:
+    return {"skip_reason": o.skip_reason, "insensitive": o.insensitive,
+            "lower": list(o.lower) if o.lower else "",
+            "upper": list(o.upper) if o.upper else "",
+            "upper_raw": o.upper_raw}
+
+
+def _outcome_from_json(d: dict) -> _Outcome:
+    return _Outcome(skip_reason=d["skip_reason"], insensitive=d["insensitive"],
+                    lower=tuple(d["lower"]) if d["lower"] else "",
+                    upper=tuple(d["upper"]) if d["upper"] else "",
+                    upper_raw=d["upper_raw"])
+
+
 @pytest.fixture(scope="session")
-def _all_outcomes(trees, tmp_path_factory) -> dict[str, _Outcome]:
-    base = tmp_path_factory.mktemp("confd_case_parity_sweep")
-    return {
-        tool.name: _observe(tool, flag, trees, base / tool.name)
-        for tool, flag in ALL_TOOLS
-    }
+def _all_outcomes(trees, sweep_base, tmp_path_factory) -> dict[str, _Outcome]:
+    """Every tool observed once — per SESSION, not per xdist worker.
+
+    A session fixture under xdist is one sweep per worker: CI's
+    `--durations` showed this setup at 27–32 s on whichever test first
+    asked for it on each of the four workers. The sweep only reads the
+    tools and the trees, so its result is a value the workers can share:
+    the first worker to get the lock writes it under the xdist run's common
+    temp root (`getbasetemp().parent`, per pytest's own recipe); the others
+    read it. Without xdist there is no shared parent worth trusting — the
+    grandparent is shared across *sessions* — so the sweep just runs.
+    """
+    def sweep() -> dict[str, _Outcome]:
+        return {tool.name: _observed(tool, flag, trees, sweep_base)
+                for tool, flag in ALL_TOOLS}
+
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        return sweep()
+    shared = tmp_path_factory.getbasetemp().parent
+    cache = shared / "confd_case_parity_outcomes.json"
+    with _exclusive(shared / "confd_case_parity_outcomes.lock"):
+        if cache.is_file():
+            data = json.loads(cache.read_text(encoding="utf-8"))
+        else:
+            data = {name: _outcome_to_json(o) for name, o in sweep().items()}
+            tmp = cache.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            tmp.replace(cache)
+    return {name: _outcome_from_json(d) for name, d in data.items()}
+
+
+@contextlib.contextmanager
+def _exclusive(lock: pathlib.Path):
+    """A cross-process lock with no dependency: an O_EXCL-created file.
+
+    Held for the duration of one sweep (tens of seconds); a holder that dies
+    leaves the file behind, so a waiter gives up after `_LOCK_TIMEOUT_S` with
+    a message naming the file rather than hanging the whole session.
+    """
+    deadline = time.monotonic() + _LOCK_TIMEOUT_S
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"{lock} held for more than {_LOCK_TIMEOUT_S}s — a worker "
+                    "died mid-sweep; delete the file to unblock")
+            time.sleep(0.5)
+    try:
+        os.close(fd)
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except FileNotFoundError:
+            pass
+
+
+_LOCK_TIMEOUT_S = 600
 
 
 def test_the_unmeasurable_set_is_named(_all_outcomes) -> None:

@@ -588,22 +588,29 @@ def _repo_root_names(tree: ast.AST) -> set[str]:
     return derived | (present & _CONVENTIONAL_ROOT_NAMES)
 
 
-def _root_name_parts(tree: ast.AST) -> tuple[set[str], set[str]]:
+@lru_cache(maxsize=None)
+def _root_name_parts(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     """(names bound to `parents[N]`, every Name in the module).
 
     The two halves `_repo_root_names` combines, exposed so the compat-list
     measurement can vary the conventional set without re-deriving either — a
     hand-rolled copy there would drift the moment the derivation changes.
+
+    Cached per tree and computed in ONE walk. The trees come from
+    `_parsed_test_modules` (itself cached), so identity is stable and the
+    cache is keyed on it. Before this, `_repo_root_names` and the compat-list
+    measurement each re-walked every module twice: CI's `--durations` put
+    `test_compat_root_names_are_all_load_bearing` at 46 s and a profile
+    showed 7.1 M `ast.walk` steps, four passes per module where one does.
     """
-    derived = {
-        target.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and _is_parents_subscript(node.value)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    }
-    present = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-    return derived, present
+    derived: set[str] = set()
+    present: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            present.add(node.id)
+        elif isinstance(node, ast.Assign) and _is_parents_subscript(node.value):
+            derived |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    return frozenset(derived), frozenset(present)
 
 
 def _is_parents_subscript(node: ast.AST) -> bool:
@@ -716,19 +723,43 @@ def _module_repo_paths_with(tree: ast.AST, roots: set[str],
     duplicate of this body drifted against the original, and a second one had
     grown back before review caught it.
     """
+    divs, literals = _path_candidates(tree)
     out: set[str] = set()
-    for node in ast.walk(tree):
-        if ("A" in shapes and isinstance(node, ast.BinOp)
-                and isinstance(node.op, ast.Div)):
+    if "A" in shapes:
+        for node in divs:
             parts = _div_literals(node, roots)
             if parts:
                 out.add("/".join(parts))
-        elif ("B" in shapes and isinstance(node, ast.Constant)
-                and isinstance(node.value, str)):
+    if "B" in shapes:
+        out |= literals
+    return out
+
+
+@lru_cache(maxsize=None)
+def _path_candidates(tree: ast.AST) -> tuple[tuple[ast.BinOp, ...],
+                                             frozenset[str]]:
+    """Every `/` BinOp and every path-looking string literal in `tree`, once.
+
+    `_module_repo_paths_with` is asked the same module under several root
+    sets (the compat-list measurement, `_modules_needing_compat`'s two
+    `_shape_a_paths` calls, the scanner itself), and only the root set
+    changes between calls — the nodes worth looking at do not. Walking the
+    whole module per call was the bulk of the 46 s CI cost of
+    `test_compat_root_names_are_all_load_bearing`; this keeps the walk to one
+    per tree and leaves the root-dependent part (`_div_literals`) per call.
+    ⚠️ Nested `/` chains contribute every inner BinOp too, exactly as the
+    walk did — an inner join without the root marker flattens to `[]`.
+    """
+    divs: list[ast.BinOp] = []
+    literals: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            divs.append(node)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             v = node.value.strip()
             if _looks_like_a_path(v):
-                out.add(v)
-    return out
+                literals.add(v)
+    return tuple(divs), frozenset(literals)
 
 
 # ⛔ Bound the candidate BEFORE it reaches the filesystem. Shape B accepts any
@@ -796,11 +827,7 @@ def _modules_needing_compat(
     """
     out: list[tuple[str, set[str]]] = []
     for module, tree in modules if modules is not None else _parsed_test_modules():
-        candidates: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and "__file__" in ast.dump(node.value):
-                candidates |= {t.id for t in node.targets
-                               if isinstance(t, ast.Name)}
+        candidates = set(_file_bound_names(tree))
         if not candidates:
             continue
         recognised = _repo_root_names(tree)
@@ -808,6 +835,26 @@ def _modules_needing_compat(
                 tree, recognised):
             out.append((module, candidates))
     return out
+
+
+@lru_cache(maxsize=None)
+def _file_bound_names(tree: ast.AST) -> frozenset[str]:
+    """Names assigned from an expression that mentions `__file__`.
+
+    One walk per tree, cached. The previous form ran `ast.dump` on every
+    `Assign` value and searched the dump for the substring — a full
+    re-serialisation of each right-hand side, per module, per call. The
+    question is the same: does the value's subtree contain the Name
+    `__file__`. (A string literal spelling `"__file__"` no longer counts;
+    it never bound a path.)
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(n, ast.Name) and n.id == "__file__"
+                for n in ast.walk(node.value)):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    return frozenset(names)
 
 
 def _shape_a_paths(tree: ast.AST, roots: set[str]) -> set[str]:
