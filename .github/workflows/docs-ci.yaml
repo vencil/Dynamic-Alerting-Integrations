@@ -105,7 +105,7 @@ jobs:
               #     check_doc_links.py; nothing else here reaches it.
               # ⚠️ The sweep is in-process, so it under-reports any leg that
               # fans out through subprocess — `drift-checks` (validate_all.py,
-              # 13 subprocess calls) is the one that does. Its inputs are NOT
+              # which shells out) is the one that does. Its inputs are NOT
               # established by this measurement.
               - ".doclinkignore"
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"
@@ -158,7 +158,7 @@ jobs:
         with:
           node-version: "18"
           # NOTE: cache: "npm" is intentionally omitted — this repo has no
-          # root-level package-lock.json (only docs/interactive/ has one).
+          # root-level package-lock.json.
           # Enabling cache without a lockfile makes setup-node fail with
           # "Dependencies lock file is not found".
 
@@ -435,7 +435,7 @@ jobs:
           # need. Measured under a meta_path finder that blocks site-packages
           # selectively:
           #   * pyyaml is the ONLY hard requirement — block it and a large
-          #     share of the 51 commands land in `blind`, which is a hard error
+          #     share of the da-tools subcommands land in `blind`, a hard error
           #     and turns this step red. ⚠️ No count is quoted here on purpose:
           #     three independent runs of that experiment produced three
           #     different numbers (20 / 30 / 47) because the answer depends on

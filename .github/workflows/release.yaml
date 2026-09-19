@@ -145,7 +145,7 @@ jobs:
       # the release job. "post-push" is the real caveat — the image is already in
       # the registry, so what it actually blocks is the release JOB going green,
       # not the publication of that image. ⚠️ Be precise about the second-order
-      # effect: in four of the five jobs this is the LAST step, so nothing further
+      # effect: in every job but release-da-tools this is the LAST step, so nothing
       # is prevented; only release-da-tools has steps after it (cosign signing,
       # SBOM, cross-compiled archives, the GitHub Release itself), and there a red
       # Trivy really does stop those from happening.
