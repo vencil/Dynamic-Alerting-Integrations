@@ -31,11 +31,7 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 
 --8<-- "docs/includes/docker-usage-pattern.en.md"
 
-> Subsequent examples omit this prefix and show only `da-tools <command>` form.
-> **`da-tools` is not an executable you can install onto `$PATH`** — it is an
-> entry point inside the image, so copying a bare `da-tools ...` line gets you
-> `bash: da-tools: command not found`. For how to obtain the image (including
-> air-gapped `docker load`), see the
+> For how to obtain the image (including air-gapped `docker load`), see the
 > [Migration Toolkit installation guide](../migration-toolkit-installation.en.md).
 
 ⚠️ **A problem the mount does not explain, and changing the mount
@@ -351,6 +347,7 @@ metadata:
   name: dynamic-alerting
   namespace: argocd
 spec:
+  project: default
   source:
     repoURL: https://github.com/your-org/your-repo.git
     targetRevision: main
@@ -496,7 +493,22 @@ git push origin feature/lower-connections
 
 ## 6. Multi-Team Sharded Mode
 
-In large organizations, different teams may maintain their own `conf.d/` directories. Merging multiple sources is done with `assemble_config_dir.py`:
+In large organizations, different teams may maintain their own `conf.d/` directories. Merging multiple sources is done with `assemble_config_dir.py`.
+
+⛔ **This section is currently reachable only by maintainers of this project.**
+Unlike every other command on this page, `assemble_config_dir.py` has **no
+`da-tools` subcommand** and is not packaged into the `ghcr.io/vencil/da-tools`
+image — the line below needs a source checkout of this repository, which the
+[prerequisites](#prerequisites) do not ask you for. If you need this capability,
+please open an issue. Until then the workable substitute is to copy each team's
+`conf.d/` into one directory in your own CI and run `da-tools validate-config`
+over it. ⚠️ **What you lose is not the whole-tree risk below**: a cross-file
+duplicate tenant is still reported (measured: rc 1, `tenant_uniqueness` FAIL).
+What you lose is same-FILENAME-across-sources detection — and the copy step
+itself silently overwrites one of them, so two teams each shipping a
+`db-a.yaml` leave one file behind and `validate-config` exits 0.
+
+From a source checkout of this project, the command is:
 
 ```bash
 # Merge multi-team conf.d/ into unified output
@@ -517,19 +529,6 @@ counts them in the duplicate-tenant question, but still assembles and exits 0);
 and on a round that refuses, the previous round's complete, appliable artifact
 is still sitting there. Clear the output directory each round, or treat it as
 append-only.
-
-⛔ **This section is currently reachable only by maintainers of this project.**
-Unlike every other command on this page, `assemble_config_dir.py` has **no
-`da-tools` subcommand** and is not packaged into the `ghcr.io/vencil/da-tools`
-image — the line above needs a source checkout of this repository, which the
-[prerequisites](#prerequisites) do not ask you for. If you need this capability,
-please open an issue. Until then the workable substitute is to copy each team's
-`conf.d/` into one directory in your own CI and run `da-tools validate-config`
-over it. ⚠️ **What you lose is not the whole-tree risk above**: a cross-file
-duplicate tenant is still reported (measured: rc 1, `tenant_uniqueness` FAIL).
-What you lose is same-FILENAME-across-sources detection — and the copy step
-itself silently overwrites one of them, so two teams each shipping a
-`db-a.yaml` leave one file behind and `validate-config` exits 0.
 
 ## 7. Troubleshooting
 
