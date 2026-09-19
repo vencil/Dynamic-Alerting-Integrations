@@ -1,0 +1,78 @@
+{
+  "sources": {
+    "argo-cd": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/argoproj.io/Application_v1alpha1.json"
+      ],
+      "ref": "v3.5.0",
+      "sha256": "5dde0e229249b6b707beb98674c1deae3949d5c319a6c45b9f5a80c99618e40c",
+      "url": "https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.0/manifests/crds/application-crd.yaml"
+    },
+    "cert-manager": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/cert-manager.io/Certificate_v1.json",
+        "docs/schemas/crd/cert-manager.io/ClusterIssuer_v1.json"
+      ],
+      "ref": "v1.19.1",
+      "sha256": "256e9fce929af2f984c604b6fc1ed00e4f95b226a81c1ad6bca051a5115c4a17",
+      "url": "https://github.com/cert-manager/cert-manager/releases/download/v1.19.1/cert-manager.crds.yaml"
+    },
+    "external-secrets": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/external-secrets.io/ExternalSecret_v1beta1.json",
+        "docs/schemas/crd/external-secrets.io/SecretStore_v1beta1.json"
+      ],
+      "ref": "v0.20.1",
+      "sha256": "6dbddd8019cc7b9ea375e2888216b7b120579fac30e593820c87986ed8b33793",
+      "url": "https://raw.githubusercontent.com/external-secrets/external-secrets/v0.20.1/deploy/crds/bundle.yaml"
+    },
+    "flux-kustomize-controller": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/kustomize.toolkit.fluxcd.io/Kustomization_v1.json"
+      ],
+      "ref": "v1.7.0",
+      "sha256": "cdc8286a3c88ed441b486288416c7c3090cfeb0595ec2f15730cd3dac7be7f98",
+      "url": "https://raw.githubusercontent.com/fluxcd/kustomize-controller/v1.7.0/config/crd/bases/kustomize.toolkit.fluxcd.io_kustomizations.yaml"
+    },
+    "flux-source-controller": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/source.toolkit.fluxcd.io/GitRepository_v1.json"
+      ],
+      "ref": "v1.7.0",
+      "sha256": "2a30ef3e41278a09aecdb038b7bc6b12916d22698542356a53a4f019ad66f02b",
+      "url": "https://raw.githubusercontent.com/fluxcd/source-controller/v1.7.0/config/crd/bases/source.toolkit.fluxcd.io_gitrepositories.yaml"
+    },
+    "prometheus-operator-alertmanagerconfig": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/monitoring.coreos.com/AlertmanagerConfig_v1beta1.json"
+      ],
+      "ref": "v0.86.0",
+      "sha256": "c245ea0e6694952d1116ed9cc1e2c426e46369ead2f85559749a3bff410b553e",
+      "url": "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_alertmanagerconfigs.yaml"
+    },
+    "prometheus-operator-prometheusrule": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/monitoring.coreos.com/PrometheusRule_v1.json"
+      ],
+      "ref": "v0.86.0",
+      "sha256": "c2047897b7f663b62b3f448d21dc5f17817875f8d86ced510efc2f7ea20d7da7",
+      "url": "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_prometheusrules.yaml"
+    },
+    "prometheus-operator-servicemonitor": {
+      "fetched": "2026-09-19",
+      "outputs": [
+        "docs/schemas/crd/monitoring.coreos.com/ServiceMonitor_v1.json"
+      ],
+      "ref": "v0.86.0",
+      "sha256": "75067bd1d76af0e4eecbb5e635e444fd825faaa075746ba7e4d8e1fbb5e5353b",
+      "url": "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_servicemonitors.yaml"
+    }
+  }
+}
