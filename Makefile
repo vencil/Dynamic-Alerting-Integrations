@@ -8,17 +8,13 @@ SHELL := /bin/bash
 # ⚠️ 這個數字是效能參數，不是正確性參數。本 repo 的測試大量 spawn 子程序
 # （sys.executable、git）並各自帶 timeout=10~300；子程序被環境拖慢到超過
 # 那個 timeout 就是 subprocess.TimeoutExpired——Windows host 與 Linux 容器
-# 都量到過，改 worker 數兩邊都消不掉它（根治是少 spawn + 共用 runner，
-# 見 test-map.md §平行 vs 循序）。
-# Windows host 預設 6 的唯一依據：同一子集 6 與 16 wall 相同（spawn-bound，
-# 多開沒有收益），少開只是少一點 AV / CreateProcess 壓力。Linux 沒有乾淨的
-# 對照數字，維持 auto。OS 只是「spawn 成本高的機器」的代理變數，換機器要
-# 重量；要調：make test PYTEST_WORKERS=8。
-ifeq ($(OS),Windows_NT)
-PYTEST_WORKERS ?= 6
-else
+# 都量到過、6 與 16 個 worker 都出現過，改 worker 數消不掉它（根治是少
+# spawn + 共用 runner，見 test-map.md §平行 vs 循序）。
+# 預設 auto、不分平台：曾經給 Windows host 設 6，依據只有「6 與 16 wall
+# 相同」——那證明 6 沒有損失，沒證明 auto 有損失，而一個 OS 分支會讓讀者
+# 以為 Windows 有問題。這套測試 spawn-bound，多開 worker 收益有限；想調就
+# 自己量：make test PYTEST_WORKERS=6。
 PYTEST_WORKERS ?= auto
-endif
 
 # 所有 recipe 的 Python 一律跑在 UTF-8 mode（PEP 540；與逐行 `-X utf8` 等價，
 # 實測 `PYTHONUTF8=1 python foo.py` 與 `python -X utf8 foo.py` 行為相同）。
@@ -1024,7 +1020,7 @@ test: ## 執行 Python 單元測試（pytest -n $(PYTEST_WORKERS) 平行；CI �
 	## vs -n auto 約 3.8x）。Matches CI's ci.yml (-n auto).
 	## 判斷規則：單檔 / 單目錄小子集 serial 反而快——xdist 啟動 ~2s 蓋過
 	## 收益，直接 `pytest tests/ops/` 或用 make test-serial。
-	## Worker 數走 PYTEST_WORKERS（定義見上方）：Windows host 不用 auto。
+	## Worker 數走 PYTEST_WORKERS（定義與理由見檔頭；預設 auto、不分平台）。
 	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n $(PYTEST_WORKERS) --tb=short $(ARGS)
 
 .PHONY: test-serial
