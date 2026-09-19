@@ -431,17 +431,21 @@ jobs:
           # and tags for the tag-boundary walk to work.
           fetch-depth: 0
 
-      - name: Fetch the PR base (changelog-format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
+      - name: Fetch the PR base (changelog-format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # Shell-guarded rather than a step `if:` so the callers stay
-        # identical (docs-ci's copy sits in a path-gated job, where
-        # tests/ops/test_ci_path_filter_coverage.py refuses computed step
-        # conditions). GITHUB_BASE_REF is empty on push / schedule runs.
+        # A plain `run:`, never a step `if:`: docs-ci's copy sits in a
+        # path-gated job, where tests/ops/test_ci_path_filter_coverage.py
+        # refuses computed step conditions.
         run: |
-          if [ -n "${GITHUB_BASE_REF}" ]; then
-            git fetch --no-tags origin "${GITHUB_BASE_REF}"
-          fi
+          # ⛔ Unconditional, and defaulted: the cap now resolves its base
+          # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
+          # which falls back to origin/main off a PR run instead of to HEAD.
+          # The old `if [ -n "$GITHUB_BASE_REF" ]` guard was correct only while
+          # "no base ref" meant "compare against HEAD, always green"; on a push
+          # to main it would now leave origin/main unfetched and the cap would
+          # exit 2 — fail-closed, but red for the wrong reason.
+          git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
@@ -2003,13 +2007,18 @@ jobs:
           # cause as the Lint job fix in #9 — apply it here too.
           fetch-depth: 0
 
-      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
+      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
         # Same step as the Lint job: the cap exits 2 when the base ref is
         # absent rather than silently falling back to HEAD.
         run: |
-          if [ -n "${GITHUB_BASE_REF}" ]; then
-            git fetch --no-tags origin "${GITHUB_BASE_REF}"
-          fi
+          # ⛔ Unconditional, and defaulted: the cap now resolves its base
+          # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
+          # which falls back to origin/main off a PR run instead of to HEAD.
+          # The old `if [ -n "$GITHUB_BASE_REF" ]` guard was correct only while
+          # "no base ref" meant "compare against HEAD, always green"; on a push
+          # to main it would now leave origin/main unfetched and the cap would
+          # exit 2 — fail-closed, but red for the wrong reason.
+          git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6

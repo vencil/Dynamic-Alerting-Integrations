@@ -14,18 +14,43 @@ from pathlib import Path
 
 import pytest
 
+import _lint_helpers as lint_helpers
 import generate_changelog as gc
-from _lib_exitcodes import EXIT_CALLER_ERROR
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION
+
+# A base ref that exists nowhere and is never resolved: the autouse fixture
+# hands it to `main()` so a test that does not care about base resolution
+# cannot accidentally depend on the runner's refs, and so any test that DOES
+# care is visible — it names its own base or restores the real resolver.
+_SENTINEL_BASE = "origin/tests-choose-their-own-base"
+
+# The resolver the MODULE imported, captured before any fixture can patch it
+# over. `_hermetic_diff_base` rebinds `gc.resolve_diff_base`, so reading that
+# attribute inside a test says what the fixture did, not what the tool does.
+_GC_RESOLVER_AT_IMPORT = gc.resolve_diff_base
 
 
 @pytest.fixture(autouse=True)
-def _no_pr_environment(monkeypatch):
-    """GitHub sets GITHUB_BASE_REF for EVERY job of a pull_request run, the
-    Python Tests job included. `default_cap_base()` reads it, so without this
-    every in-process `main()` test would resolve the base against the runner
-    (origin/main present → base_label changes; absent → exit 2). Blind
-    review, PR-C: three tests red on every PR. Tests choose their own base."""
+def _hermetic_diff_base(monkeypatch):
+    """Keep base resolution out of the runner's `.git`.
+
+    GitHub sets GITHUB_BASE_REF for EVERY job of a pull_request run, the
+    Python Tests job included, and the cap resolves its base through
+    `_lint_helpers.resolve_diff_base()` — which probes the RUNNER's refs
+    ($LINT_DIFF_BASE, else origin/$GITHUB_BASE_REF, else origin/main) and
+    exits 2 when none resolves. So without this fixture every in-process
+    `main()` test would answer a question about the runner's checkout depth:
+    ref present → the base_label in the message changes; absent → exit 2.
+    Blind review, PR-C: three tests red on every PR.
+
+    ⛔ The patched resolver is a SENTINEL, not `HEAD`. Handing back "HEAD"
+    here would reinstate exactly the fail-open default this file's
+    `TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed` exists to forbid,
+    and every cell of that matrix would still pass — it restores the real
+    resolver against a real repo."""
     monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
+    monkeypatch.setattr(gc, "resolve_diff_base", lambda *a, **k: _SENTINEL_BASE)
 
 
 def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
@@ -968,20 +993,27 @@ class TestSectionGrowthCap:
         monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
         assert gc.main() == 1
         out = capsys.readouterr().out
-        assert "grew by" in out and "over HEAD" in out
+        # ⛔ `over <the resolver's answer>`, which is what pins that main()
+        # uses it: the sentinel can only appear here by way of
+        # `resolve_diff_base`. A reinstated local `HEAD` default fails here.
+        assert "grew by" in out and f"over {_SENTINEL_BASE}" in out
 
 
 class TestEveryCiCallerFetchesThePrBase:
-    """`default_cap_base` exits 2 on a PR run without origin/<base>; a caller
-    that runs the lint without the fetch step turns every PR red (round 3
-    found the third caller, `make lint-docs`, without it).
+    """The cap exits 2 without a resolvable base ref; a caller that runs the
+    lint without the fetch step turns every PR red (round 3 found the third
+    caller, `make lint-docs`, without it).
 
     Population = jobs that run the lint as a shell command. The fourth
     execution path — this test file itself, in-process, under the Python
     Tests job — is not a caller: the autouse `_no_pr_environment` fixture
     strips GITHUB_BASE_REF so it never consults the runner's refs."""
 
-    FETCH = 'git fetch --no-tags origin "${GITHUB_BASE_REF}"'
+    # ⛔ `:-main`, and no `if [ -n "$GITHUB_BASE_REF" ]` around it. Off a PR
+    # run the cap resolves origin/main (it no longer falls back to HEAD), so
+    # a guard that skipped the fetch on a push to main would leave the ref
+    # unfetched and the cap would exit 2 there.
+    FETCH = 'git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"'
 
     def test_each_workflow_job_that_runs_the_lint_fetches_the_base_first(self):
         import yaml
@@ -1000,33 +1032,153 @@ class TestEveryCiCallerFetchesThePrBase:
         assert sorted(hits) == ["drift-checks", "lint", "lint-docs"], hits
 
 
-class TestCapBase:
-    def test_default_base_is_head_without_github_base_ref(self, monkeypatch):
-        monkeypatch.setattr(gc, "_ref_exists", lambda ref: True)
-        assert gc.default_cap_base({}) == "HEAD"
+def _pr_shaped_repo(tmp_path, monkeypatch, entry: str, *,
+                    base_ref: str = "origin/main", fetch_base: bool = True):
+    """A real git repo shaped like a PR: *entry* is COMMITTED on top of a base
+    commit, and ``refs/remotes/<base_ref>`` points at that base commit.
 
-    def test_pr_run_uses_origin_base_when_fetched(self, monkeypatch):
-        monkeypatch.setattr(gc, "_ref_exists", lambda ref: ref == "origin/main")
-        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "origin/main"
+    ⛔ That shape is the whole point. It is the only one that tells the two
+    candidate answers apart: against ``origin/<base>`` the growth IS the new
+    entry, against ``HEAD`` it is zero, because HEAD already contains it. A
+    fixture that left the entry unstaged would be red under both and could not
+    discriminate — which is how the fail-open default survived unnoticed.
 
-    def test_pr_run_without_the_fetched_base_is_none_not_head(self, monkeypatch):
-        """Falling back to HEAD on a PR run would be a cap that silently does
-        not exist; the answer is None and main() turns it into exit 2."""
-        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
-        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) is None
+    ``fetch_base=False`` omits the remote-tracking ref: that absence is what a
+    shallow clone (or a ``fetch-depth: 1`` checkout) actually looks like to
+    this code path, and the ONLY thing it looks at.
 
-    def test_unfetched_pr_base_is_a_caller_error_naming_the_fetch(self, tmp_path, monkeypatch, capsys):
-        f = tmp_path / "history.md"
-        f.write_text(_unreleased(_entry("n", 10)), encoding="utf-8")
-        monkeypatch.setenv("GITHUB_BASE_REF", "main")
-        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
-        monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
+    Patches ``_lint_helpers.REPO_ROOT`` so the real resolver probes THIS repo,
+    restores the real resolver over the autouse sentinel, and chdirs in so
+    ``_git_show`` reads the same tree. No mocks past that line.
+    """
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def run(*a):
+        return subprocess.run(["git", *a], cwd=repo, check=True,
+                              capture_output=True, text=True, timeout=60)
+
+    run("init", "-q")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    f = repo / "history.md"
+    f.write_text(_unreleased(_entry("legacy", 60)), encoding="utf-8")
+    run("add", "history.md")
+    run("commit", "-q", "-m", "the base commit")
+    base_sha = run("rev-parse", "HEAD").stdout.strip()
+    if fetch_base:
+        run("update-ref", f"refs/remotes/{base_ref}", base_sha)
+    f.write_text(_unreleased(_entry("legacy", 60), entry), encoding="utf-8")
+    run("add", "history.md")
+    run("commit", "-q", "-m", "the PR commit")
+
+    monkeypatch.setattr(lint_helpers, "REPO_ROOT", repo)
+    monkeypatch.setattr(gc, "resolve_diff_base", lint_helpers.resolve_diff_base)
+    monkeypatch.chdir(repo)
+    return repo
+
+
+class TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed:
+    """The cap's base comes from ``_lint_helpers.resolve_diff_base`` — the one
+    fail-closed resolver every other diff-aware lint in this repo already used.
+
+    ⛔ This file used to carry a SECOND resolver (``default_cap_base`` +
+    ``_ref_exists``) that answered ``HEAD`` whenever ``GITHUB_BASE_REF`` was
+    unset. Off a PR run — that is, inside ``make pr-preflight``, the one gate a
+    contributor actually runs before pushing — the cap then measured the
+    working tree against a commit that ALREADY CONTAINED the entry: growth 0,
+    green forever. One repo, two base resolutions, one fail-closed and one
+    fail-open; #1894 and #1903 both went green locally and turned three CI jobs
+    red on that single asymmetry.
+
+    Every cell drives ``main()`` over a real git repo through the real
+    resolver and real ``git show``. The matrix:
+
+    ==  ==========================================  ===========================
+    id  repo / env                                  expected
+    ==  ==========================================  ===========================
+    A   3,000-char entry committed, origin/main     rc 1, "over origin/main"
+    B   200-char entry committed, origin/main       rc 0                (control)
+    C   3,000-char entry, origin/main NOT fetched   rc 2 + fetch hint, both streams
+    D   GITHUB_BASE_REF=rel-1, origin/rel-1 there   rc 1, "over origin/rel-1"
+    E   GITHUB_BASE_REF=rel-1, ref NOT fetched      rc 2                (CI, unchanged)
+    ==  ==========================================  ===========================
+
+    ⚠️ **B is the anti-vacuity cell.** Without it, an implementation that
+    reported a finding for every input would pass A, C, D and E, and so would
+    one that exited 2 unconditionally. A and B differ in ONE thing — the size
+    of the committed entry — so between them they say the cap measures rather
+    than merely fires.
+    """
+
+    def test_a_over_the_cap_on_a_branch_is_red_against_origin_main(
+            self, tmp_path, monkeypatch, capsys):
+        """⛔ The anti-vacuity half that the old default could not do at all:
+        the entry is already committed, so a `HEAD` base sees zero growth."""
+        _pr_shaped_repo(tmp_path, monkeypatch, _entry("fat", 3000))
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc == EXIT_VIOLATION, out
+        assert "grew by" in out and "over origin/main" in out, out
+
+    def test_b_a_compliant_entry_on_the_same_branch_stays_green(
+            self, tmp_path, monkeypatch, capsys):
+        """Control cell. Same repo shape, same command, smaller entry."""
+        _pr_shaped_repo(tmp_path, monkeypatch, _entry("slim", 200))
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "grew by" not in out, out
+
+    def test_c_an_unfetched_origin_main_is_rc2_on_both_streams_not_a_pass(
+            self, tmp_path, monkeypatch, capsys):
+        """⛔ "cannot measure" must stay distinguishable from "measured, fine".
+        Off a PR run the old code answered HEAD here and printed a ✅."""
+        _pr_shaped_repo(tmp_path, monkeypatch, _entry("fat", 3000),
+                        fetch_base=False)
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
         assert gc.main() == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
-        # both streams: validate_all's runner shows stdout only
-        assert "git fetch --no-tags origin main" in captured.err
-        assert "git fetch --no-tags origin main" in captured.out
+        # both streams: validate_all's runner shows stdout only, the hook shows both
+        for stream in (captured.out, captured.err):
+            assert "does not resolve" in stream, stream
+            assert "git fetch --no-tags origin main" in stream, stream
 
+    def test_d_a_pr_run_still_resolves_origin_github_base_ref(
+            self, tmp_path, monkeypatch, capsys):
+        """CI behaviour is unchanged: with GITHUB_BASE_REF set the answer is
+        still `origin/<that ref>`, not the origin/main default."""
+        _pr_shaped_repo(tmp_path, monkeypatch, _entry("fat", 3000),
+                        base_ref="origin/rel-1")
+        monkeypatch.setenv("GITHUB_BASE_REF", "rel-1")
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc == EXIT_VIOLATION, out
+        assert "over origin/rel-1" in out, out
+
+    def test_e_a_pr_run_without_the_fetched_base_is_still_a_caller_error(
+            self, tmp_path, monkeypatch, capsys):
+        """The path the retired `default_cap_base` covered by returning None."""
+        _pr_shaped_repo(tmp_path, monkeypatch, _entry("fat", 3000),
+                        fetch_base=False)
+        monkeypatch.setenv("GITHUB_BASE_REF", "rel-1")
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        assert gc.main() == EXIT_CALLER_ERROR
+        assert "git fetch --no-tags origin rel-1" in capsys.readouterr().err
+
+    def test_the_tool_holds_no_second_base_resolver_of_its_own(self):
+        """The name the tool resolves through IS the shared one. Weaker than
+        the cells above (a new local resolver under a new name would still
+        pass), which is why it is not the guard — it is the cheap statement of
+        intent that survives a rename."""
+        assert _GC_RESOLVER_AT_IMPORT is lint_helpers.resolve_diff_base
+        assert not hasattr(gc, "default_cap_base")
+
+
+class TestCapBase:
     def test_negative_cap_is_a_caller_error_not_a_silent_off_switch(self, tmp_path, monkeypatch):
         f = tmp_path / "history.md"
         f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")

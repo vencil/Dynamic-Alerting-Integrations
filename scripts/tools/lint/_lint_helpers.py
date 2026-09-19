@@ -552,8 +552,10 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
         hint_branch = base.removeprefix("origin/")
         raise DiffBaseMissingError(
             f"git diff base ref '{base}' does not resolve in this repo.\n"
-            f"  - In CI: ensure actions/checkout@v4 uses fetch-depth: 0\n"
-            f"    (or `git fetch origin {hint_branch}` before lint)\n"
+            f"  - In CI: `git fetch --no-tags origin {hint_branch}` before the\n"
+            f"    lint. ⛔ `actions/checkout@v4` with fetch-depth: 0 alone does\n"
+            f"    NOT guarantee a refs/remotes/origin/{hint_branch} ref (measured;\n"
+            f"    see the fetch step in .github/workflows/ci.yml)\n"
             f"  - Locally: ensure you have an up-to-date `origin/main`\n"
             f"    (run `git fetch origin main`)\n"
             f"  - Override with $LINT_DIFF_BASE if your base branch differs\n"
