@@ -282,7 +282,7 @@ JSON 快照位於 `tests/snapshots/*.json`。
 ## 常用指令
 
 ```bash
-make test                           # 全量測試（-n auto 平行；CI 同設定；自動遞迴 ops/dx/lint/shared）
+make test                           # 全量測試（xdist -n $(PYTEST_WORKERS)：Linux/容器/CI=auto、Windows host=6，見下；自動遞迴 ops/dx/lint/shared）
 make test-serial                    # 循序 + -v（pdb / 確定性順序 debug 用）
 make test ARGS="-m 'not slow'"     # 跳過慢速測試
 pytest tests/ops/                   # 僅跑 ops 測試（單目錄小子集：serial 就好，見下）
