@@ -1423,6 +1423,321 @@ jobs:
             bash "$t"
           done
 
+      - name: Run pytest
+        # ⛔ No --cov here, on purpose: this is the REQUIRED leg, and coverage
+        # is the largest single multiplier on its wall time (measured in the
+        # dev container: collection 12x slower under the tracer, execution
+        # +50%; on the 4-core runner every worker paid ~2 min collecting under
+        # coverage before its first test). Coverage runs in `python-coverage`
+        # below — same tree, same flags plus --cov — as an ADVISORY job.
+        # -n auto: parallel execution via pytest-xdist (see Install step).
+        # --ignore: CI skips 3 slow/benchmark suites for speed —
+        #   test_property.py     — Hypothesis property-based tests (@slow)
+        #   test_benchmark.py    — Performance baselines (@benchmark @slow)
+        #   test_pipeline_integration.py — End-to-end pipeline test
+        # They run locally via `make test` and are tracked in test-map.md.
+        # -x: explicit CI fail-fast (pyproject addopts no longer carries a
+        # global -x — CI opts in on the command line).
+        # --timeout=300: pytest-timeout was INSTALLED (see Install step
+        # rationale re PR #165 deadlock regressions) but never armed
+        # globally — a hung test still burned the whole workflow timeout.
+        # 300s is a per-test backstop (the entire CI suite finishes in a
+        # few minutes under -n auto; slow suites are --ignore'd); tighter
+        # per-test @pytest.mark.timeout marks still override it. Command
+        # line only, NOT pyproject addopts: local devs don't necessarily
+        # have pytest-timeout installed, and an addopts flag from a missing
+        # plugin makes bare `pytest` die with "unrecognized arguments".
+        # --durations: print the slowest tests at the end of the log so the
+        # suite's hot spots are measured in THIS coordinate system (4-core
+        # runner + coverage), not inferred from a developer host. Cheap:
+        # xdist reports per-test wall time it already has.
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --durations=40 --durations-min=1.0
+
+
+
+  python-coverage:
+    # ADVISORY coverage leg (owner decision, 2026-09-19). Same tree and
+    # flags as python-tests-run above, plus --cov: it uploads the
+    # coverage-py3.13 artifact that coverage-delta.yml turns into the PR
+    # comment, and it goes red on --cov-fail-under — visibly, but it backs
+    # NO required check: it is deliberately absent from the python-tests
+    # gate's needs: and ledgered in tests/ops/test_ci_aggregate_gate_contract
+    # (UNWATCHED_PATH_GATED_JOBS). Why a second job rather than --cov on the
+    # required leg: the tracer made every xdist worker's collection ~4x
+    # slower on this runner (12x in the dev container) and execution +50%,
+    # and that sat on the required leg's critical path. The setup steps are
+    # a verbatim copy of python-tests-run on purpose — every guard that reads
+    # ci.yml (pinned versions, path filter, dep parity) keeps seeing them.
+    name: Python Coverage (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python_changed == 'true'
+    # Least-privilege token (CodeQL: workflow-missing-permissions, same
+    # class as the Go split jobs): tests + coverage-artifact upload need
+    # nothing beyond repo read.
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        python: ["3.13"]
+      fail-fast: false
+    # Fail-closed signal for the #908 mtail compile gate (guard against silent
+    # disarmament): this job INSTALLS mtail below, so if mtail is missing at pytest
+    # time the Install step regressed — test_mtail_present_when_required then FAILS
+    # instead of letting the gated compile tests silently skip. Jobs that
+    # legitimately run pytest without mtail (validate.yaml) don't set this.
+    env:
+      VIBE_REQUIRE_MTAIL: "1"
+      # Same fail-closed pattern for docker-gated tests (amtool routing
+      # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
+      # so if docker is missing at pytest time the runner image regressed —
+      # the guard test then FAILS instead of letting docker-gated tests
+      # silently skip. No-op until the consumer test lands (nothing reads
+      # this env var on this branch yet — verified by grep).
+      VIBE_REQUIRE_DOCKER: "1"
+      # Same fail-closed pattern for the ADR-021/ADR-028 Vector VRL behaviour
+      # gate: this job installs Vector below, and `vector test` over
+      # helm/vector/tests/projection_tests.yaml is the ONLY place the shipped
+      # VRL is executed rather than string-matched (tenant fail-closed routing,
+      # the ADR-028 §D3 PII drop, the #1293 origin-spoof truth table). Those
+      # tests are `skipif`-gated on the binary, so a broken Install step would
+      # turn the whole behaviour gate into a green no-op.
+      VIBE_REQUIRE_VECTOR: "1"
+      # Same again for helm: many test files gate on `shutil.which("helm")`, and
+      # every rendered-manifest assertion in them (values.schema.json rejection,
+      # netpol consumer set, egress allowlist, the VRL render tests) skips
+      # silently without it. setup-helm failing open would hide all of them.
+      VIBE_REQUIRE_HELM: "1"
+      # Same fail-closed pattern for the #1347 generated-CI-artifact gate
+      # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
+      # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
+      # thing here that reads it the way GitHub does — it is what catches the
+      # shipped-broken `apply` block. This job installs actionlint below; a
+      # regressed install step must fail rather than skip those combinations.
+      VIBE_REQUIRE_ACTIONLINT: "1"
+      # Same again for the GitLab half of that gate: check-jsonschema validates
+      # the generated .gitlab-ci.yml against the vendored GitLab schema and is
+      # installed by this job's pip step. Without it the `--ci gitlab` and
+      # `--ci both` legs would silently skip.
+      VIBE_REQUIRE_CHECK_JSONSCHEMA: "1"
+      # And for the portal's own CI/CD wizard preview, which is a SECOND
+      # hand-written copy of that workflow (tools/portal/src/**). Validating it
+      # means loading the ES module with node — ubuntu-latest ships node, so a
+      # missing binary means the runner image regressed, not that the check is
+      # optional.
+      VIBE_REQUIRE_NODE: "1"
+      # git / bash / tar back the two tests that EXECUTE a generated CI step
+      # instead of reading it — tests/ops/test_generated_ci_artifacts.py's
+      # baseline-step and blast-radius-step tests. They are the only
+      # executing evidence in a file that is otherwise all text pins, and a
+      # text pin proves a body was not edited, not that it works.
+      # ubuntu-latest ships all three tools, so the same reasoning as
+      # VIBE_REQUIRE_NODE applies: absent means the image regressed, not that
+      # the evidence became optional.
+      VIBE_REQUIRE_SHELL_TOOLS: "1"
+      # tests/ops/test_prepush_hook_wiring.py drives the real installer
+      # (`scripts/ops/install_prepush_hook.sh`) plus a real `git push
+      # --dry-run`. It is the only thing in the repo checking that the pre-push
+      # guards RECEIVE a refspec — the half with no coverage while both of them
+      # sat inert for four and a half months (#1664).
+      # `require_preflight_pass.sh` had 23 tests that invoke it, and every one
+      # hand-feeds the stdin production never delivers; `protect_main_push.sh`
+      # had none at all. pre-commit is still required here: since #1689 the
+      # guards are NOT pre-commit hooks, and the tests drive `pre-commit install
+      # --hook-type pre-push` to prove BOTH install orders stay faithful —
+      # including the `-f` case, which deletes the shim without saying so.
+      # pre-commit comes from this job's pip step below; without this var a
+      # regressed install turns the whole file into skips, which is the failure
+      # mode it exists to detect.
+      VIBE_REQUIRE_PRE_COMMIT: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # tests/lint/test_check_image_pin_capability.py resolves the pinned
+          # `tools/v*` tag's tree (`git show <tag>:...`) to assert what a
+          # released image actually contains. The default fetch-depth: 1
+          # shallow clone has no tags, and the gate is fail-closed by design —
+          # it RAISES rather than silently passing — so those tests error out
+          # instead of quietly degrading. Same reason the `lint` job above
+          # takes the full history.
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Helm chart invariant tests (tests/shared/test_helm_*.py) are gated
+      # on `helm` being on PATH (shutil.which); without it they SILENTLY
+      # SKIP in CI — the whole #539/#566 chart-test suite (NetworkPolicy
+      # lockdown, VRL demux rules, buffer guards, egress allowlist, etc.)
+      # would provide zero CI coverage. setup-helm makes them real gates.
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
+      # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
+      # TestVectorValidateAndTest: `vector validate` + `vector test` proving
+      # fail-closed tenant isolation, topology strip, parse-error→0:0) is gated
+      # on `vector` being on PATH (shutil.which); without it those tests
+      # SILENTLY SKIP and the security-critical fan-out behavior gets zero CI
+      # coverage.
+      # Pinned + checksum-verified, mirroring the promtool install above.
+      #
+      # Download-cache for the 2 pinned tarballs this job curls every run
+      # (Vector ~50 MB is the single largest CI download; see the Lint job's
+      # hadolint step for the pattern rationale). Versioned filenames +
+      # always-on SHA-256 verification: a poisoned entry fails the job, an
+      # old binary is never silently used. Keep the versions in the key in
+      # sync with VECTOR_VERSION / MTAIL_VERSION below — a stale key
+      # exact-hits the old entry and the new versioned files never get saved
+      # into it, so the job re-downloads every run until the key is fixed
+      # (correctness unaffected; only the cache benefit is lost). Both
+      # installs here are HARD steps, so a download flake fails the job and
+      # the post-save never captures a partial entry.
+      - name: Cache pinned binary downloads (Vector / mtail / actionlint)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-ci-downloads
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-mtail-3.0.8-actionlint-1.7.12
+
+      # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
+      # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
+      # dev-container pin (.devcontainer/install-vector.sh). VRL is a versioned
+      # language — 0.55 already rejects error-coalescing that earlier releases
+      # accepted — so validating the shipped VRL with a DIFFERENT vector than
+      # runs it means the gate can pass on syntax/semantics production will not
+      # honour. All four pins are bound by tests/shared/test_vector_pin_parity.py;
+      # bump them together (version + SHA-256 + the cache key above).
+      - name: Install Vector
+        run: |
+          VECTOR_VERSION=0.57.0
+          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" -o "$DL/vector-${VECTOR_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/vector-${VECTOR_VERSION}.tgz" "$VECTOR_SHA256"
+          tar xzf "$DL/vector-${VECTOR_VERSION}.tgz" -C /tmp
+          sudo cp /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/
+          vector --version
+
+      # mtail CLI — same rationale as the Vector / Helm installs above. The #908
+      # mtail-compile gate (tests/shared/test_federation_audit_mtail.py) compiles
+      # helm/federation-gateway/files/federation-audit.mtail under the same mtail
+      # VERSION the audit-sidecar deploys (3.0.8; see ⚠️ below — same version,
+      # different binary since #1337) — a syntax / type regression in the
+      # program would otherwise surface only as a sidecar CrashLoop at deploy, not
+      # in CI. Gated on `mtail` on PATH (shutil.which) → without this install the
+      # gate SILENTLY SKIPS. Pinned + checksum-verified.
+      # ⚠️ This is the upstream PREBUILT release binary, and since #1337 the
+      # sidecar image no longer uses it — that image compiles the same v3.0.8
+      # source from its pinned commit with a current Go toolchain (the prebuilt
+      # one is linked against Go 1.21.1 and carried 20 fixable stdlib CVEs). The
+      # two are the same mtail VERSION, which is all this gate needs: it type-
+      # checks the .mtail program, and the language is fixed by the version, not
+      # by the toolchain. ⛔ So do NOT re-sync this SHA-256 with the Dockerfile —
+      # the Dockerfile no longer has one (it pins a commit instead).
+      - name: Install mtail
+        run: |
+          MTAIL_VERSION=3.0.8
+          # sha256 of mtail_3.0.8_linux_amd64.tar.gz (upstream release
+          # checksums.txt). See the ⚠️ above before "fixing" this to match
+          # audit-sidecar/Dockerfile — they pin different things on purpose.
+          MTAIL_SHA256=123c2ee5f48c3eff12ebccee38befd2233d715da736000ccde49e3d5607724e4
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/mtail-${MTAIL_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/google/mtail/releases/download/v${MTAIL_VERSION}/mtail_${MTAIL_VERSION}_linux_amd64.tar.gz" -o "$DL/mtail-${MTAIL_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/mtail-${MTAIL_VERSION}.tgz" "$MTAIL_SHA256"
+          tar xzf "$DL/mtail-${MTAIL_VERSION}.tgz" -C /tmp mtail
+          sudo install -m0755 /tmp/mtail /usr/local/bin/mtail
+          mtail --version 2>&1 | head -n1 || true
+          command -v mtail
+
+      # actionlint CLI — the #1347 gate (tests/ops/test_generated_ci_artifacts.py)
+      # runs it over the GitHub Actions workflow `da-tools init` generates for
+      # CUSTOMER repos, and over the portal wizard's preview copy of it. Those
+      # artifacts live in NO workflow directory, so the repo's existing
+      # actionlint pre-commit hook cannot see them: its `files:` pattern is
+      # `^\.github/workflows/` (.pre-commit-config.yaml, no override) and the
+      # generated files only exist inside a pytest tmpdir. Gated on `actionlint`
+      # on PATH (shutil.which) → without this install the gate SILENTLY SKIPS.
+      #
+      # ⛔ ACTIONLINT_VERSION must equal the `rev:` of the rhysd/actionlint hook
+      # in .pre-commit-config.yaml. Two different actionlint versions mean the
+      # repo's own workflows and the workflows we SHIP to customers are judged
+      # by different rule sets — bound by
+      # tests/shared/test_actionlint_pin_parity.py (bump both + the SHA-256 +
+      # the cache key above together).
+      - name: Install actionlint
+        run: |
+          ACTIONLINT_VERSION=1.7.12
+          # sha256 of actionlint_1.7.12_linux_amd64.tar.gz, from the upstream
+          # release checksums file:
+          # https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o "$DL/actionlint-${ACTIONLINT_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" "$ACTIONLINT_SHA256"
+          tar xzf "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" -C /tmp actionlint
+          sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+          command -v actionlint
+
+      - name: Cache pip packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-py${{ matrix.python }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-py${{ matrix.python }}-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        # pytest-timeout: per-test wall-clock timeout to fast-fail
+        # hangs (e.g. PR #165 deadlock-regression tests assert
+        # _batch_cat_blobs returns; without pytest-timeout the test
+        # would hang for the full CI workflow timeout if regressed)
+        # pytest-xdist: parallelize across runner vCPUs. ubuntu-latest
+        # has 4 vCPUs; local benchmark on 16-core showed 3.95x at -n
+        # auto (160s -> 40s) and 2.51x at -n 4 (160s -> 63s). CI uses
+        # -n auto which resolves to 4 here.
+        # pathspec: check_iac_vibe_rules.py (Container SAST L1, #448/TRK-311)
+        # uses it for .dockerignore baseline matching; its unit tests import
+        # the module, so the dep must be explicit here (not relied on
+        # transitively).
+        # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
+        # without it tests/dx/test_waveform_compile.py importorskips and the
+        # governance-gate negative tests silently drop out of CI.
+        # check-jsonschema: ships the vendored GitLab CI schema that
+        # tests/ops/test_generated_ci_artifacts.py validates the generated
+        # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
+        # it via shutil.which — VIBE_REQUIRE_CHECK_JSONSCHEMA above makes a
+        # missing CLI fail instead of skipping.
+        # pre-commit: since #1689 it is NOT the runner for the pre-push guards
+        # (a hook it runs is handed one refspec). tests/ops/test_prepush_hook_wiring.py
+        # and tests/dx/test_preflight_marker.py still need it installed, to
+        # drive `pre-commit install --hook-type pre-push` and prove the two
+        # install orders — and the `-f` disarm — behave. The Lint job already
+        # installs it, but this job did not, and the wiring assertions live
+        # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
+        # rather than a silent skip.
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit -c requirements/ci-constraints.txt
+
+      # There is deliberately NO separate collect-only step before the real
+      # run: it collected the same tree a second time (~30s of the job's
+      # critical path) and a collection error reddens the real run just the
+      # same. The extra `scripts/tools/` root it used to pass collected
+      # nothing (no test_*.py lives there).
+
       - name: Run pytest with coverage
         # Coverage source is defined in pyproject.toml [tool.coverage.run]
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
