@@ -136,7 +136,10 @@ def main():
         description='Auto-generate MkDocs nav from docs/ front matter'
     )
     parser.add_argument('--check', action='store_true',
-                        help='CI mode: exit 1 if docs missing from nav')
+                        help='CI mode: exit 1 if docs are missing from nav. '
+                             'The reverse direction is NOT gated: nav entries '
+                             'whose file no longer exists are printed but keep '
+                             'exit 0 (asymmetry recorded in #1884)')
     parser.add_argument('--repo-root', default='.',
                         help='Repository root directory')
     args = parser.parse_args()

@@ -114,6 +114,31 @@ def test_check_does_not_fail_on_extra_entries_today(tmp_path):
     )
 
 
+def test_the_check_help_admits_the_gap_it_does_not_cover(tmp_path):
+    """⛔ `--check` 的 `--help` 必須自己說出「另一個方向沒被守」。
+
+    上一格釘的是**行為**，這一格釘的是**介面上的說法**。兩者分開是因為它們會各自
+    腐爛：`help='CI mode: exit 1 if docs missing from nav'` 這種寫法沒有說謊，但
+    讀者拿著「我刪了一份文件、忘了改 nav」這個場景去讀它，學不到自己沒被保護——
+    而這正是 #1884 驗收條件 2 要求寫明的那件事。
+
+    ⚠️ 斷言錨在 `#1884` 這個**穩定 token** 而不是句子，措辭可以改。若有人把 `extra`
+    改成觸發 rc 1，這個 caveat 就該連同 token 一起刪掉，這一格會紅並把他帶到上一格。
+
+    ⚠️ 切片必須收在下一個選項的標題處：argparse 會把長 help 折行，只找「`#1884`
+    有沒有出現在整段 --help」會讓它掛在任何一個選項底下都算過。
+    """
+    out = _run(tmp_path, "--help").stdout   # argparse 在碰 --repo-root 之前就印完退出
+    assert "--check" in out and "--repo-root" in out, (
+        f"前置條件：--help 必須同時列出這兩個選項才切得出區塊\n{out}"
+    )
+    block = out[out.index("  --check"):out.index("  --repo-root")]
+    assert "#1884" in block, (
+        "`--check` 的 help 沒有指出 `extra` 方向不觸發 rc 1。"
+        f"\n--check 區塊:\n{block}"
+    )
+
+
 # ===========================================================================
 # 第二層：內容驗證（#1884）
 #
