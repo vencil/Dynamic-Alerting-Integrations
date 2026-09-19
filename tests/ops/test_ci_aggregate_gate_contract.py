@@ -666,23 +666,24 @@ def _strength_3_rows(leg_count: int, q: int) -> set[tuple[int, ...]]:
     if leg_count <= q + 1:
         return {row[:leg_count] for row in base}
     extra = leg_count - (q + 1)
-    candidates = sorted(row + tail for row in base
-                        for tail in itertools.product(range(q), repeat=extra))
-    uncovered = {(pos, vals)
-                 for pos in itertools.combinations(range(leg_count), 3)
+    positions = list(itertools.combinations(range(leg_count), 3))
+    # Each candidate's (positions, values) triples, computed once — the
+    # first cut recomputed them per greedy step and cost 10 s on CI for
+    # the 7-leg control alone.
+    candidates = [(row + tail,
+                   frozenset((pos, tuple((row + tail)[i] for i in pos))
+                             for pos in positions))
+                  for row in base
+                  for tail in itertools.product(range(q), repeat=extra)]
+    uncovered = {(pos, vals) for pos in positions
                  for vals in itertools.product(range(q), repeat=3)}
     chosen: set[tuple[int, ...]] = set()
     while uncovered:
-        best, best_gain = None, 0
-        for row in candidates:
-            gain = sum((pos, tuple(row[i] for i in pos)) in uncovered
-                       for pos in itertools.combinations(range(leg_count), 3))
-            if gain > best_gain:
-                best, best_gain = row, gain
-        assert best is not None, "greedy covering stalled"
+        best, best_cover = max(candidates,
+                               key=lambda c: (len(c[1] & uncovered), c[0]))
+        assert best_cover & uncovered, "greedy covering stalled"
         chosen.add(best)
-        uncovered -= {(pos, tuple(best[i] for i in pos))
-                      for pos in itertools.combinations(range(leg_count), 3)}
+        uncovered -= best_cover
     return chosen
 
 
