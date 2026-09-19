@@ -796,7 +796,7 @@ generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構（只讀；nav 
 	@python3 ./scripts/tools/dx/generate_nav.py
 
 .PHONY: generate-rule-pack-readme
-generate-rule-pack-readme: ## 從 Rule Pack YAML 產生（寫入）rule-packs/README.md（dry-run 用 --check）
+generate-rule-pack-readme: ## 從 Rule Pack YAML 重新產生並寫入 rule-packs/README.md（本目標固定 --update）。dry-run 是不帶旗標直接跑腳本；drift 偵測走 validate_all.py 的 --check，不經由本目標
 	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
 .PHONY: byo-rulepack-table
