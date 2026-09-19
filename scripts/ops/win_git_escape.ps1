@@ -139,6 +139,9 @@ try {
             if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
             Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan
             & python @preflight_args
+            # ⛔ 傳出工具的 rc（#1472），且 ⛔ 只在這個 case 裡傳：放到 switch
+            # 之後會連 `ci-status` 一起傳，而 `gh pr checks` 的 rc 8 是 pending。
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
     }
 } finally {

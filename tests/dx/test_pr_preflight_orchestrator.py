@@ -358,25 +358,32 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py", "--check-pr-title", "feat: x")
         assert pp.main() == 0
 
-    def test_all_pass_returns_zero(self, monkeypatch, tmp_path, cli_argv):
+    @pytest.mark.parametrize(
+        "kwargs, want_rc",
+        [({}, 0),
+         ({"warn_check": "Behind main"}, 0),
+         ({"fail_check": "Conflict"}, 1)],
+        ids=["all-pass", "warn-only", "fail"],
+    )
+    def test_exit_code_follows_the_report_not_a_flag(
+        self, monkeypatch, tmp_path, cli_argv, kwargs, want_rc
+    ):
+        """#1472 — FAIL ⇒ 1 無條件；WARN ⇒ 0。⛔ 三格都不帶旗標。"""
+        self._stub_repo_root_and_marker(monkeypatch, tmp_path)
+        self._stub_all_checks(monkeypatch, **kwargs)
+        cli_argv("pr_preflight.py")
+        assert pp.main() == want_rc
+
+    def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
+        """⛔ `--ci` 已刪（#1472）：加回來不會讓上面三格轉紅。"""
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
         cli_argv("pr_preflight.py", "--ci")
-        assert pp.main() == 0
-
-    def test_failure_with_ci_flag_returns_one(self, monkeypatch, tmp_path, cli_argv):
-        self._stub_repo_root_and_marker(monkeypatch, tmp_path)
-        self._stub_all_checks(monkeypatch, fail_check="Conflict")
-        cli_argv("pr_preflight.py", "--ci")
-        assert pp.main() == 1
-
-    def test_failure_without_ci_flag_returns_zero(self, monkeypatch, tmp_path, cli_argv):
-        # Without --ci, even a FAIL exits 0 (interactive mode shows summary
-        # but doesn't gate).
-        self._stub_repo_root_and_marker(monkeypatch, tmp_path)
-        self._stub_all_checks(monkeypatch, fail_check="Conflict")
-        cli_argv("pr_preflight.py")
-        assert pp.main() == 0
+        with pytest.raises(SystemExit) as exc:
+            pp.main()
+        assert exc.value.code == 2
+        # ⛔ 訊息要指名票號，否則 argparse 的通用錯誤同樣是 rc 2。
+        assert "1472" in capsys.readouterr().err
 
     @pytest.mark.parametrize(
         "flags, want_run_precommit",
@@ -404,7 +411,7 @@ class TestMainOrchestrator:
 
         monkeypatch.setattr(pp, "check_local_hooks", _recording_check)
 
-        cli_argv("pr_preflight.py", *flags, "--ci")
+        cli_argv("pr_preflight.py", *flags)
         assert pp.main() == 1
         assert seen == {"run_precommit": want_run_precommit}
         out = capsys.readouterr().out
