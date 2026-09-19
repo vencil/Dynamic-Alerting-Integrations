@@ -25,6 +25,7 @@ front matter 怎麼被解析、tags 怎麼被分到 section。每一格都先斷
 宣稱的狀態，再問結論——否則「乾淨 ⇒ 沒報任何東西」在一支掃描面歸零的實作上也是綠的。
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -321,8 +322,25 @@ def test_unknown_or_empty_tags_fall_back_to_the_reference_section(tags):
     assert gn.classify_section(tags) == "參考"
 
 
+def _section_block(report: str, heading: str) -> str:
+    """報告裡 `  {heading}:` 底下、**到下一個 section 標題為止**的那一段。
+
+    ⛔ 不可以用 `report[report.index(heading):]`：那會一路延伸到輸出結尾，於是
+    「兩個標題都還在、但文件全被塞進後面那個 section」也會通過。實測過那個假報告
+    （`快速入門:` 空著、兩份文件都在 `核心架構:` 底下），未加邊界的版本全綠。
+    """
+    heads = [m.start() for m in re.finditer(r"^  \S+:$", report, re.M)]
+    start = report.index(f"  {heading}:")
+    after = [h for h in heads if h > start]
+    return report[start:after[0]] if after else report[start:]
+
+
 def test_missing_docs_are_grouped_under_their_section_heading(tmp_path):
-    """端到端：missing 的文件依 tags 被列在各自的 section 標題底下。"""
+    """端到端：missing 的文件依 tags 被列在各自的 section 標題底下。
+
+    ⚠️ 斷言**雙向**：每份文件要在自己的 section 區塊裡，而且**不在**另一個區塊裡。
+    只驗前半的話，一支把兩份都歸到同一個 section 的實作照樣綠。
+    """
     repo = _tree(
         tmp_path,
         docs={
@@ -333,7 +351,10 @@ def test_missing_docs_are_grouped_under_their_section_heading(tmp_path):
     )
     out = _report(repo)
     assert "Missing from nav: 2" in out, f"前置條件：兩份都該是 missing\n{out}"
-    arch_at = out.index("核心架構:")
-    start_at = out.index("快速入門:")
-    assert "- Arch Doc: docs/arch.md" in out[arch_at:], f"arch 應在核心架構底下\n{out}"
-    assert "- Start Doc: docs/start.md" in out[start_at:], f"start 應在快速入門底下\n{out}"
+
+    arch_block = _section_block(out, "核心架構")
+    start_block = _section_block(out, "快速入門")
+    assert "- Arch Doc: docs/arch.md" in arch_block, f"arch 應在核心架構底下\n{out}"
+    assert "- Start Doc: docs/start.md" in start_block, f"start 應在快速入門底下\n{out}"
+    assert "- Start Doc" not in arch_block, f"start 不該出現在核心架構區塊\n{out}"
+    assert "- Arch Doc" not in start_block, f"arch 不該出現在快速入門區塊\n{out}"
