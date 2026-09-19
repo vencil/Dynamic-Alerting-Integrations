@@ -650,7 +650,7 @@ bash scripts/session-guards/git_check_lock.sh --clean
 | `make fuse-locks` | 列出 `.git/*.lock` 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態 | `make fuse-locks` |
 | `make fuse-commit MSG=_msg.txt FILES="a b"` | 前項 `fuse_plumbing_commit.py --auto` 的 Make 封裝 | `make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"` |
 | `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）— 讓 Windows 側 `--no-verify` 的 commit 仍有 commit-msg gate | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
-| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`；**狀態感知**：透過 `gh pr view <branch>` 判斷 PR 狀態，OPEN PR 時 `require_preflight_pass.sh` 才擋，WIP 允許 push 觸發 CI smoke | `make pr-preflight`（pre-push hook 自動 consume marker）|
+| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | `make pr-preflight`（pre-push hook 自動 consume marker）|
 
 **什麼時候用哪一條**（決策助記）：
 
@@ -669,8 +669,10 @@ git commit 失敗，錯誤訊息是 ...
 │   └─ 自家 `scripts/hooks/commit-msg`（session-init 已自動 install）跑 `.commitlintrc.yaml` 的 type/scope 驗證
 │
 └─ pre-push hook 說 "preflight marker missing"，但 branch 是 WIP 還沒開 PR
-    └─ v2.8.0 後：`require_preflight_pass.sh` 用 `gh pr view <branch>` 判 PR 狀態；
-       OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發 CI smoke
+    └─ v2.8.0 後：`require_preflight_pass.sh` 用 `gh pr list --head <branch> --state open`
+       判 PR 狀態（⛔ 不是 `gh pr view`）；OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發
+       CI smoke。⚠️ `gh` 不在 PATH 或查詢失敗時反而**一律要 marker**，所以容器裡看到
+       "marker missing" 是預期的，先跑 `make pr-preflight-quick`
 ```
 
 > **為什麼 plumbing 路徑可以繞 phantom lock**：git porcelain (`git commit`) 一定會 acquire `.git/index.lock`；plumbing 直接操作 object database + refs — `hash-object` 寫 blob 到 `.git/objects/`（新檔，無 lock 爭用），`write-tree` / `commit-tree` 寫 tree & commit 物件（同理），最後只 `echo <sha> > .git/refs/heads/<branch>`（單檔 atomic write）。完全不觸發 `.git/index.lock`。
@@ -971,7 +973,8 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 
 #### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
 
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它關掉整條 pre-push（含擋直推 main 那道，那道沒有旗標），不是你剛證明無關的那一道。repo 內仍有教人用它的地方，行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487)。
+⛔ 上面這個 A/B 對**三道 pre-push 守衛不適用**：它們沒有 pre-commit hook id，失效方向是**假綠**（兩邊都 0 個 `error:` ⇒ 判成 pre-existing drift ⇒ 叫你繞過）。改跑 `bash scripts/ops/prepush_dispatch.sh`：argv 是 remote 名與 URL，stdin 是 `<local_ref> <local_sha> <remote_ref> <remote_sha>`——⛔ **沒餵 stdin 就是 rc=0 全綠**。
 
 ```bash
 # 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
@@ -1019,7 +1022,8 @@ Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
 
 #### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
 
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它關掉整條 pre-push（含擋直推 main 那道，那道沒有旗標），不是你剛證明無關的那一道。repo 內仍有教人用它的地方，行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487)。
+⛔ 上面這個 A/B 對**三道 pre-push 守衛不適用**：它們沒有 pre-commit hook id，失效方向是**假綠**（兩邊都 0 個 `error:` ⇒ 判成 pre-existing drift ⇒ 叫你繞過）。改跑 `bash scripts/ops/prepush_dispatch.sh`：argv 是 remote 名與 URL，stdin 是 `<local_ref> <local_sha> <remote_ref> <remote_sha>`——⛔ **沒餵 stdin 就是 rc=0 全綠**。
 
 ```bash
 # 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
