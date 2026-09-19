@@ -1537,14 +1537,24 @@ class TestTheHookFiresOnEverythingTheGateReads:
             % proc.stderr.decode("utf-8", "replace")[-2000:])
         return json.loads(out.read_text(encoding="utf-8"))
 
-    def test_the_measurement_itself_is_not_empty(self, tmp_path):
+    @pytest.fixture(scope="class")
+    def measured(self, tmp_path_factory):
+        """One audit run shared by the three tests below.
+
+        The measurement is a pure function of the checkout (the driver only
+        reads), and each run walks the whole tree — measured at ~5s per run
+        on a quiet host, 3× per file before this fixture existed. Class
+        scope keeps the three assertions independent while paying once.
+        """
+        return self._measure(tmp_path_factory.mktemp("audit"))
+
+    def test_the_measurement_itself_is_not_empty(self, measured):
         """⛔ Positive control. A broken driver reports nothing to cover.
 
         Without this, deleting the audit hook, resolving paths wrongly, or
         having `runpy` fail early all look identical to "the pattern already
         covers everything".
         """
-        measured = self._measure(tmp_path)
         opened, modules = measured["opened"], measured["modules"]
         assert len(opened) >= 100, (
             "only %d files recorded — the driver, not the tree, is the "
@@ -1588,10 +1598,9 @@ class TestTheHookFiresOnEverythingTheGateReads:
             "inputs come from only %d directories: %s"
             % (len(directories), sorted(directories)))
 
-    def test_every_file_the_gate_opens_can_trigger_it(self, tmp_path):
+    def test_every_file_the_gate_opens_can_trigger_it(self, measured):
         """⛔ Must-fire: the pattern has to cover the measured input set."""
         pattern = self._hook_pattern()
-        measured = self._measure(tmp_path)
         uncovered = sorted(p for p in measured["opened"]
                            if not pattern.search(p))
         assert uncovered == [], (
@@ -1601,7 +1610,7 @@ class TestTheHookFiresOnEverythingTheGateReads:
             "stop reading them; those reads are what the gate is for.\n"
             "%s" % uncovered)
 
-    def test_editing_the_gate_itself_can_trigger_it(self, tmp_path):
+    def test_editing_the_gate_itself_can_trigger_it(self, measured):
         """⛔ Editing the reader changes what the gate decides.
 
         Without this, the commit that edits the reader never runs it once
@@ -1627,7 +1636,7 @@ class TestTheHookFiresOnEverythingTheGateReads:
         them here, where the guard is designed rather than satisfied, is not.
         """
         pattern = self._hook_pattern()
-        modules = self._measure(tmp_path)["modules"]
+        modules = measured["modules"]
         uncovered = sorted(p for p in modules if not pattern.search(p))
         assert uncovered == [], (
             "the gate imports these, so editing them changes what it decides "

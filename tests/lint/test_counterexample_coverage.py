@@ -39,6 +39,8 @@ import re
 import sys
 from pathlib import Path
 
+from _tree import repo_files
+
 import pytest
 import yaml
 
@@ -275,18 +277,22 @@ def test_generated_surface_faces_are_all_derived(doc, faces):
     marker_re = re.compile(
         r"#\s*>>>\s*" + re.escape(registry_lib._MARKER_STEM) + r"([\w-]+)")
     in_tree = set()
-    skip = {".git", "node_modules", "site", "dist", ".venv", "__pycache__"}
     # ⛔ Not just `*.yaml`. A marker in a `.yml`, a Helm `.tpl`, a fenced block
     # in a `.md` or a `.json` was invisible, so "every generated block IN THE
     # TREE" meant "every one in a file with a single spelling of one suffix".
-    for suffix in ("*.yaml", "*.yml", "*.tpl", "*.md", "*.json"):
-        for path in REPO_ROOT.rglob(suffix):
-            if skip & set(path.parts):
-                continue
-            try:
-                in_tree |= set(marker_re.findall(path.read_text(encoding="utf-8")))
-            except (OSError, UnicodeDecodeError):
-                continue
+    #
+    # "IN THE TREE" is `git ls-files`, not `rglob` (tests/_tree.py): the old
+    # walk visited node_modules, site/ and — unlisted in its skip set —
+    # `.claude/worktrees`, whole copies of this repository whose markers
+    # were counted as if they were the tree's (7.9s quiet, 748s under a
+    # 16-worker run; a marker planted under a worktree copy was found).
+    for path in repo_files(".yaml", ".yml", ".tpl", ".md", ".json"):
+        if "dist" in path.parts:
+            continue
+        try:
+            in_tree |= set(marker_re.findall(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
     assert in_tree, "found no generated-block markers at all — scan is broken"
 
     spec_ids = {s["id"] for s in registry_lib.surface_specs(doc)}

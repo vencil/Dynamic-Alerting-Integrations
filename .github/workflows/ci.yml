@@ -1444,7 +1444,11 @@ jobs:
         # line only, NOT pyproject addopts: local devs don't necessarily
         # have pytest-timeout installed, and an addopts flag from a missing
         # plugin makes bare `pytest` die with "unrecognized arguments".
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75
+        # --durations: print the slowest tests at the end of the log so the
+        # suite's hot spots are measured in THIS coordinate system (4-core
+        # runner + coverage), not inferred from a developer host. Cheap:
+        # xdist reports per-test wall time it already has.
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75 --durations=40 --durations-min=1.0
 
       - name: Upload coverage artifact
         if: always()
