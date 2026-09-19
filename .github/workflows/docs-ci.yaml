@@ -412,16 +412,20 @@ jobs:
           # detail on every PR (observed on PRs #17 and #18).
           fetch-depth: 0
 
-      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
+      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # Shell-guarded, not a step `if:`: tests/ops/test_ci_path_filter_coverage.py
+        # A plain `run:`, not a step `if:`: tests/ops/test_ci_path_filter_coverage.py
         # refuses step conditions on computed values inside a path-gated job.
-        # GITHUB_BASE_REF is empty on push / schedule runs, so this is a no-op there.
         run: |
-          if [ -n "${GITHUB_BASE_REF}" ]; then
-            git fetch --no-tags origin "${GITHUB_BASE_REF}"
-          fi
+          # ⛔ Unconditional, and defaulted: the cap now resolves its base
+          # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
+          # which falls back to origin/main off a PR run instead of to HEAD.
+          # The old `if [ -n "$GITHUB_BASE_REF" ]` guard was correct only while
+          # "no base ref" meant "compare against HEAD, always green"; on a push
+          # to main it would now leave origin/main unfetched and the cap would
+          # exit 2 — fail-closed, but red for the wrong reason.
+          git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
       - name: Setup Python
         uses: actions/setup-python@v6

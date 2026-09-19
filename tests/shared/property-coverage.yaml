@@ -134,8 +134,6 @@ modules:
       main: "CLI entry point; covered by CLI integration tests"
       lint_entry_caps: "Section growth per new entry; boundary / retro / no-base / deletion-credit cases are pinned in tests/dx/test_generate_changelog.py (TestSectionGrowthCap)"
       _section_size: "Two-value accessor over section_lines + iter_entries; covered by the cap tests"
-      default_cap_base: "Env + git ref probe; three branches pinned in TestCapBase"
-      _ref_exists: "Side-effecting (git subprocess)"
       _git_show: "Side-effecting (git subprocess); real-repo test in TestCapBase"
 
   scripts/tools/dx/axe_lite_static.py:

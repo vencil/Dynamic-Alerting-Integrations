@@ -39,6 +39,17 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# ⛔ ONE base resolver for the whole repo. This file used to carry a second
+# one (`default_cap_base` + `_ref_exists`), and the two disagreed in the
+# direction nothing can notice: off a PR run the local one answered "HEAD",
+# so the growth cap below measured the working tree against a commit that
+# ALREADY CONTAINED the entry — 0 growth, green forever — while every other
+# diff-aware lint fell back to `origin/main` and died loudly when that ref
+# was missing. One repo, two base resolutions, one fail-closed and one
+# fail-open: #1894 and #1903 both went green under `make pr-preflight` and
+# turned three CI jobs red on that single asymmetry.
+sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'lint'))
+from _lint_helpers import DiffBaseMissingError, resolve_diff_base  # noqa: E402
 # ⛔ One ruler. `agent_output_metrics` is the tool that MEASURED the changelog
 # (entry definition, cap); the lint below must count with the same functions
 # or "over the cap" here and "over the cap" there will drift apart.
@@ -457,37 +468,6 @@ def lint_entry_caps(
     ]
 
 
-def _ref_exists(ref: str) -> bool:
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0
-
-
-def default_cap_base(env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Which commit "new" is measured against.
-
-    On a PR run GitHub sets ``GITHUB_BASE_REF`` (e.g. ``main``) and the merge
-    ref's HEAD already CONTAINS the new entries, so HEAD would see nothing
-    new; the answer is ``origin/<base>``. ⛔ If that ref is not fetched the
-    answer is None, NOT HEAD: falling back to HEAD on a PR is a cap that
-    silently does not exist, and a green run would look identical. The
-    caller turns None into a caller error naming the fetch. Off a PR run
-    it is HEAD, which is what the pre-commit hook wants: staged file vs
-    last commit.
-    """
-    env = os.environ if env is None else env
-    base_ref = env.get("GITHUB_BASE_REF", "").strip()
-    if base_ref:
-        candidate = f"origin/{base_ref}"
-        return candidate if _ref_exists(candidate) else None
-    return "HEAD"
-
-
 def _git_show(ref: str, path: str) -> Optional[str]:
     """Contents of ``path`` at ``ref``; None when git cannot produce it
     (not a repo, ref unknown, file absent at that ref)."""
@@ -560,8 +540,9 @@ def main() -> int:
     parser.add_argument(
         "--base",
         metavar="REF",
-        help="Git ref that decides which entries are new (default: "
-             "origin/$GITHUB_BASE_REF on a PR run, else HEAD)",
+        help="Git ref that decides which entries are new (default: the "
+             "repo's shared diff base — $LINT_DIFF_BASE, else "
+             "origin/$GITHUB_BASE_REF on a PR run, else origin/main)",
     )
     args = parser.parse_args()
 
@@ -590,13 +571,16 @@ def main() -> int:
             if args.cap == 0:
                 print(f"notice: --cap 0, the new-entry cap is off for {target}")
             if args.cap > 0:
-                base = args.base or default_cap_base()
-                if base is None:
-                    ref = os.environ.get("GITHUB_BASE_REF", "").strip()
-                    msg = (f"ERROR: GITHUB_BASE_REF={ref} is set but origin/{ref} "
-                           f"is not fetched, so the new-entry cap has no base; run "
-                           f"`git fetch --no-tags origin {ref}` (checkout "
-                           f"fetch-depth: 0 alone does not guarantee that ref)")
+                try:
+                    base = args.base or resolve_diff_base()
+                except DiffBaseMissingError as exc:
+                    # ⛔ rc 2, never a fallback to HEAD: a cap judged against
+                    # a commit that already contains the entry is a cap that
+                    # silently does not exist, and its green run is
+                    # indistinguishable from a real one. "cannot measure"
+                    # and "measured, nothing wrong" must stay separable.
+                    msg = (f"ERROR: the [{CAP_SECTION}] growth cap has no "
+                           f"base.\n{exc}")
                     # Both streams on purpose: validate_all's runner shows
                     # stdout only, the hook shows both.
                     print(msg)
