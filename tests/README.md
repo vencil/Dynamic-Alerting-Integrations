@@ -90,6 +90,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 ## 共用 fixture / helper
 
 - **Python**：所有 factory 在 `tests/factories.py`（`write_yaml`、`make_tenant_yaml`、`PipelineBuilder` 等，全部有 docstring）。新測試**不要**自己寫 helper，先看 factories.py。
+- **要掃「整個 repo」的測試用 `tests/_tree.py::repo_files(".md", "_defaults.yaml", …)`**（`git ls-files` 加 cache），⛔ 不要 `REPO_ROOT.rglob()` 再用 skip set 過濾——那會走進 node_modules 與 `.claude/worktrees`（整份 repo 的副本），慢一個數量級而且會把副本裡的檔案當成本樹的。
 - **E2E**：`tests/e2e/fixtures/` 含：
   - `diagnostic-matchers.ts` — `toBeVisibleWithDiagnostics()`，失敗時 dump 所有可見 testid
   - `axe-helper.ts` — WCAG 2.1 AA 檢查（`checkA11y` / `formatA11yViolations` / `waitForPageReady`）

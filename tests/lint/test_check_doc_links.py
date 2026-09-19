@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
+from _tree import repo_files
+
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'lint')
 sys.path.insert(0, _TOOLS_DIR)
 
@@ -584,11 +586,11 @@ class TestNoInvisibleCharsInLinkAnchors:
         import re
         import unicodedata
         root = self._repo_root()
-        skip = {".git", "node_modules", "site", ".pytest_cache"}
         found, scanned = [], 0
-        for path in sorted(root.rglob("*.md")):
-            if skip & set(path.relative_to(root).parts):
-                continue
+        # `git ls-files` rather than `rglob` + a skip set (tests/_tree.py):
+        # the skip set never knew about `.claude/worktrees`, so every `.md`
+        # in every worktree copy of the repository was scanned too.
+        for path in sorted(repo_files(".md")):
             try:
                 lines = path.read_text(encoding="utf-8").split("\n")
             except OSError:

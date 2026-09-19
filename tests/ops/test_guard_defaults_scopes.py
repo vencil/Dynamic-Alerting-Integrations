@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _tree import repo_files
+
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "scripts" / "ops"))
 
@@ -36,14 +38,14 @@ _LEGACY_ONLY_ROOT = "components/threshold-exporter/config/conf.d"
 
 
 def _discover_defaults() -> list[str]:
-    """探索式，非列舉：任何新增的 `_defaults.yaml` 自動納入。"""
-    out = []
-    for p in _REPO.rglob("_defaults.yaml"):
-        rel = p.relative_to(_REPO).as_posix()
-        if rel.startswith(".git/"):
-            continue
-        out.append(rel)
-    return sorted(out)
+    """探索式，非列舉：任何新增的 `_defaults.yaml` 自動納入。
+
+    走 `git ls-files`（tests/_tree.py）而不是 `rglob`：後者會走進
+    node_modules 與 `.claude/worktrees` 底下整份 repo 的副本，把副本裡的
+    `_defaults.yaml` 也當成本樹的（且原本的 skip 只認 `.git/`）。
+    """
+    return sorted(p.relative_to(_REPO).as_posix()
+                  for p in repo_files("_defaults.yaml"))
 
 
 class TestRootResolution:
