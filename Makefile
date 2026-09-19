@@ -807,7 +807,7 @@ generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md（預�
 	@python3 ./scripts/tools/dx/generate_alert_reference.py $(ARGS)
 
 .PHONY: generate-nav
-generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構（只讀；nav 依報告手動更新）
+generate-nav: ## 印一份 MkDocs nav 草稿（只讀、rc 恆 0；漏收文件的閘門在 mkdocs.yml 的 validation.nav.*，不在這支工具）
 	@python3 ./scripts/tools/dx/generate_nav.py
 
 .PHONY: generate-rule-pack-readme
