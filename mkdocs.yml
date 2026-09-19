@@ -26,6 +26,10 @@ exclude_docs: |
 # puts it next to the nav it talks about, where a reader editing the nav can
 # see it, instead of in a Python constant that MkDocs cannot read.
 #
+# ⚠️ `overrides/` is the theme's `custom_dir`, but it lives INSIDE docs_dir, so a
+# `.md` dropped there is treated as a doc page like any other — measured: a probe
+# file under it fails the gate without this line. Same for `assets/`.
+#
 # ⚠️ `internal/` is NOT a uniform exemption. `internal/test-coverage-matrix.md`
 # is deliberately IN the nav (under 場景) and stays there — `not_in_nav` only
 # suppresses the "exists but is not in the nav" complaint for files that are
@@ -35,6 +39,8 @@ not_in_nav: |
   internal/
   includes/
   tags.md
+  overrides/
+  assets/
   *.en.md
 
 # Link validation (mkdocs >= 1.6 native).
