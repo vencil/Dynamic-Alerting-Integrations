@@ -1394,13 +1394,11 @@ jobs:
         # rather than a silent skip.
         run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit -c requirements/ci-constraints.txt
 
-      - name: Collect tests
-        # CI skips 3 slow/benchmark test suites for speed:
-        #   test_property.py     — Hypothesis property-based tests (@slow)
-        #   test_benchmark.py    — Performance baselines (@benchmark @slow)
-        #   test_pipeline_integration.py — End-to-end pipeline test
-        # These run locally via `make test` and are tracked in test-map.md.
-        run: pytest tests/ scripts/tools/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short -q --co -q
+      # There is deliberately NO separate collect-only step before the real
+      # run: it collected the same tree a second time (~30s of the job's
+      # critical path) and a collection error reddens the real run just the
+      # same. The extra `scripts/tools/` root it used to pass collected
+      # nothing (no test_*.py lives there).
 
       # tests/ops/*.sh are BASH tests — pytest does not collect them, and nothing
       # else did either, so they had never run in CI since being written. That
@@ -1430,6 +1428,11 @@ jobs:
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
         # -n auto: parallel execution via pytest-xdist (see Install step).
+        # --ignore: CI skips 3 slow/benchmark suites for speed —
+        #   test_property.py     — Hypothesis property-based tests (@slow)
+        #   test_benchmark.py    — Performance baselines (@benchmark @slow)
+        #   test_pipeline_integration.py — End-to-end pipeline test
+        # They run locally via `make test` and are tracked in test-map.md.
         # -x: explicit CI fail-fast (pyproject addopts no longer carries a
         # global -x — CI opts in on the command line).
         # --timeout=300: pytest-timeout was INSTALLED (see Install step

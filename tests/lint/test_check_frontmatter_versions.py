@@ -570,7 +570,15 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
         assert "not a directory" in err
         assert "no markdown files found" not in err
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores mode bits")
+    # `os.geteuid` does not exist on Windows; evaluated at class-body time it
+    # turned every host `pytest tests/` into a collection error (no test in
+    # the tree ran, not just this one). The premise of the skip is "this
+    # platform/user does not enforce mode bits" — true for root on POSIX and
+    # for Windows as a whole (`chmod(0)` there leaves the directory readable),
+    # so both cases skip for the same reason.
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0,
+        reason="mode bits are not enforced here (root / Windows)")
     def test_an_unreadable_docs_dir_is_named_as_such(
             self, tmp_path, monkeypatch, capsys):
         docs = tmp_path / "docs"
