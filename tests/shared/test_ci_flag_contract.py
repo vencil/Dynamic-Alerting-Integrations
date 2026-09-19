@@ -84,13 +84,15 @@ SCOPE — HONEST BOUNDARIES
 5. **No tool source is modified.**  A --ci found to no-op is a REAL BUG
    (fail-open); it is listed in ``KNOWN_CI_NOOP`` and xfail(strict=True),
    never fixed here.
-6. **Scope is ops/ only** — 76 further da-tools declare a ``--ci`` flag
-   (dx ×7, lint ×69) and are NOT covered here (W6b blind-review F1; same
-   ops-only line as the --json / dry-run / bilingual-help siblings).  The
-   customer-CI-pipeline consumption this contract protects is the ops
-   surface; dx/lint are developer-side.  Note ``dx/pr_preflight.py``'s
-   ``--ci`` IS genuine fail-on-finding semantics — extending scope there
-   is a separate decision, not an accident of omission.
+6. **Scope is ops/ only** — tools under dx/ and lint/ also declare ``--ci``
+   and are NOT covered here (W6b blind-review F1; same ops-only line as the
+   --json / dry-run / bilingual-help siblings).  The customer-CI-pipeline
+   consumption this contract protects is the ops surface; dx/lint are
+   developer-side.  ⛔ No per-directory counts here: they drifted before
+   anyone noticed (dx said 7 / lint said 69; AST says 5 / 82), and nothing
+   recomputes them.  ``dx/pr_preflight.py`` used to be named here as the
+   one dx tool with genuine fail-on-finding ``--ci``; it now fails on
+   findings unconditionally and the flag is gone (#1472).
 
 FIRST-RUN RESULT (2026-07-18)
 -----------------------------

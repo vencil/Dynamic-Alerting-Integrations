@@ -1567,6 +1567,15 @@ def main() -> int:
         help="Base ref for trailer-scan range (default: origin/main). "
              "Pair with `actions/checkout@v4 fetch-depth: 0` in CI.",
     )
+    # ⛔ `parser.error`（rc 2）而不是 return：`main()` 的 return 值不會讓
+    # `sys.exit(main())` 以外的呼叫端知道出了什麼事，而這條路的讀者是「照舊指令
+    # 打了 --ci」的人——他要的是一句話說明旗標去哪了，不是 argparse 的通用
+    # unrecognized arguments。
+    if "--ci" in sys.argv[1:]:
+        parser.error(
+            "--ci 已移除（#1472）：有 FAIL 就回 rc 1 現在是無條件的，"
+            "拿掉這個旗標重跑即可"
+        )
     args = parser.parse_args()
 
     # cd to repo root

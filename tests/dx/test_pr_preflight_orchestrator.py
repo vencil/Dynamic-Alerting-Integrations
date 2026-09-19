@@ -378,7 +378,7 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py")
         assert pp.main() == want_rc
 
-    def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv):
+    def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
         """⛔ `--ci` 已刪（#1472）。它若被悄悄加回來，上面三格仍會綠——
         argparse 收下一個不影響結果的旗標，正是本次要消滅的東西。"""
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
@@ -387,6 +387,9 @@ class TestMainOrchestrator:
         with pytest.raises(SystemExit) as exc:
             pp.main()
         assert exc.value.code == 2
+        # ⛔ 訊息要指名票號：argparse 的通用 "unrecognized arguments" 也會給 rc 2，
+        # 所以少了這一格，「旗標去哪了」這句話可以被無聲拿掉而測試照樣綠（實測）。
+        assert "1472" in capsys.readouterr().err
 
     @pytest.mark.parametrize(
         "flags, want_run_precommit",

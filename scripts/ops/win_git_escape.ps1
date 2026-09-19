@@ -141,6 +141,13 @@ try {
             & python @preflight_args
         }
     }
+
+    # ⛔ 把最後一個外部程式的 rc 傳出去（#1472）。原本這個 switch 跑完就結束，
+    # 於是 `-File` 呼叫一律回 0、session 內 `$?` 是 True，`… && gh pr create`
+    # 會在 preflight 判 BLOCKED 之後照樣往下走。`.bat` 側同一層已經修掉；
+    # 工具那側的 rc 只要有任何一層 wrapper 吃掉就等於沒修。
+    # $LASTEXITCODE 只在跑過外部程式後才有值，所以先判有沒有值。
+    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
 }
