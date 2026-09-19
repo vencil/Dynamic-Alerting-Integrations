@@ -139,15 +139,14 @@ try {
             if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
             Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan
             & python @preflight_args
+            # ⛔ 把工具的 rc 傳出去（#1472）。少了這行，`-File` 呼叫一律回 0、
+            # session 內 `$?` 是 True，`… && gh pr create` 會在 preflight 判
+            # BLOCKED 之後照樣往下走。⛔ 這行刻意留在這個 case 裡而不是 switch
+            # 之後：放外面會連 `ci-status` 一起傳，而 `gh pr checks` 用 rc 8
+            # 表示「checks pending」，那會把「還在跑」變成 wrapper 的失敗。
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
     }
-
-    # ⛔ 把最後一個外部程式的 rc 傳出去（#1472）。原本這個 switch 跑完就結束，
-    # 於是 `-File` 呼叫一律回 0、session 內 `$?` 是 True，`… && gh pr create`
-    # 會在 preflight 判 BLOCKED 之後照樣往下走。`.bat` 側同一層已經修掉；
-    # 工具那側的 rc 只要有任何一層 wrapper 吃掉就等於沒修。
-    # $LASTEXITCODE 只在跑過外部程式後才有值，所以先判有沒有值。
-    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
 }

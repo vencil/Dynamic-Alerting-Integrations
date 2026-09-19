@@ -88,9 +88,9 @@ SCOPE — HONEST BOUNDARIES
    and are NOT covered here (W6b blind-review F1; same ops-only line as the
    --json / dry-run / bilingual-help siblings).  The customer-CI-pipeline
    consumption this contract protects is the ops surface; dx/lint are
-   developer-side.  ⛔ No per-directory counts here: they drifted before
-   anyone noticed (dx said 7 / lint said 69; AST says 5 / 82), and nothing
-   recomputes them.  ``dx/pr_preflight.py`` used to be named here as the
+   developer-side.  ⛔ No per-directory counts here: the ones that used to be
+   stated drifted before anyone noticed, and nothing recomputes them.
+   ``dx/pr_preflight.py`` used to be named here as the
    one dx tool with genuine fail-on-finding ``--ci``; it now fails on
    findings unconditionally and the flag is gone (#1472).
 

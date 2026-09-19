@@ -22,8 +22,11 @@ Also asserts that the two escape-hatch files both define `:done` and
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -109,57 +112,74 @@ def test_defines_done_and_done_err(bat_path: pathlib.Path) -> None:
     assert "done_err" in labels, f"{bat_path.name} missing :done_err label"
 
 
-def _executable_lines(lines: list[str], label: str) -> list[str]:
-    """Lines of a `:label` block with `REM` / `::` comments dropped.
+def _wrapper_rc(tmp_path: pathlib.Path, wrapper: str, tool_rc: int) -> int:
+    """Run `<wrapper> pr-preflight` against a stub pr_preflight.py; return its rc.
 
-    ⛔ Comments must go before any assertion runs: commenting the guard out is
-    the cheapest way to regress it, and a substring scan over raw lines reads
-    `REM ... goto :done_err` as compliance (measured: that mutant kept this
-    file green while the wrapper returned 0).
+    ⛔ Behavioural, not a syntax scan (#1472). The first version of this check
+    matched `goto :done_err` / `exit $LASTEXITCODE` as text, and a blind review
+    walked through it five ways — `@REM` comment-out, an unreachable `goto`, a
+    condition that can never hold, the PowerShell guard parked inside
+    `if ($false)`, and the same text moved into the `<# #>` header. Every one of
+    them kept the scan green while the wrapper returned 0. Running the thing is
+    the only predicate that covers a form nobody enumerated.
+
+    Both wrappers resolve the repo root from their own location, so a temp tree
+    holding `scripts/ops/<wrapper>` + a stub `scripts/tools/dx/pr_preflight.py`
+    is a complete fixture.
     """
-    start = next(i for i, ln in enumerate(lines) if ln.strip() == f":{label}")
-    block: list[str] = []
-    for ln in lines[start + 1:]:
-        if re.match(r"^:[A-Za-z_]", ln):        # next label ends the block
-            break
-        if re.match(r"^\s*(?:REM\b|::)", ln, re.IGNORECASE):
-            continue
-        block.append(ln)
-    return block
+    (tmp_path / "scripts" / "ops").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "scripts" / "tools" / "dx").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / wrapper, tmp_path / "scripts" / "ops" / wrapper)
+    (tmp_path / "scripts" / "tools" / "dx" / "pr_preflight.py").write_text(
+        f"import sys\nprint('stub report')\nsys.exit({tool_rc})\n", encoding="utf-8"
+    )
+    target = tmp_path / "scripts" / "ops" / wrapper
+    if wrapper.endswith(".bat"):
+        cmd = ["cmd", "/c", str(target), "pr-preflight"]
+    else:
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+               "-File", str(target), "pr-preflight"]
+    return subprocess.run(cmd, cwd=tmp_path, capture_output=True, timeout=120).returncode
 
 
-def test_pr_preflight_handler_propagates_the_tools_rc() -> None:
-    """#1472 — `:do_pr_preflight` must not end in a bare `goto :done`.
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
+@pytest.mark.parametrize("wrapper", ["win_git_escape.bat", "win_git_escape.ps1"])
+def test_wrapper_pr_preflight_propagates_a_failing_rc(tmp_path, wrapper) -> None:
+    """#1472 — a BLOCKED report must not reach the caller as success.
 
-    The handler runs pr_preflight.py, which returns 1 when the report is
-    BLOCKED. Falling through to `:done` turns that into `exit /b 0`, so a
-    caller chaining on this wrapper reads a blocked branch as ready.
+    Both wrappers used to end their pr-preflight handler without looking at the
+    tool's rc, so `<wrapper> pr-preflight && gh pr create` ran the second half
+    on a blocked branch.
     """
-    block = _executable_lines(
-        _read_normalized(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat"),
-        "do_pr_preflight",
-    )
-    assert any("pr_preflight.py" in ln for ln in block), "block no longer runs the tool"
-    assert any(re.search(r"\bgoto\s+:done_err", ln, re.IGNORECASE) for ln in block), (
-        ":do_pr_preflight swallows a non-zero rc from pr_preflight.py (#1472)"
+    assert _wrapper_rc(tmp_path, wrapper, tool_rc=1) != 0, (
+        f"{wrapper} swallows a non-zero rc from pr_preflight.py (#1472)"
     )
 
 
-def test_ps1_wrapper_propagates_the_tools_rc() -> None:
-    """#1472 — the PowerShell wrapper is the same layer as the .bat one.
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
+@pytest.mark.parametrize("wrapper", ["win_git_escape.bat", "win_git_escape.ps1"])
+def test_wrapper_pr_preflight_stays_zero_when_the_tool_passes(tmp_path, wrapper) -> None:
+    """The must-ring control for the test above: a passing tool stays rc 0.
 
-    `dev-rules.md` lists both wrappers in one sentence, so fixing rc in only
-    one of them leaves a caller chaining on the other reading BLOCKED as
-    success (measured before the fix: `-File … pr-preflight` returned 0 while
-    the report said BLOCKED).
+    Without it, `exit 1` on every path would satisfy the propagation check.
+    """
+    assert _wrapper_rc(tmp_path, wrapper, tool_rc=0) == 0, (
+        f"{wrapper} reports failure for a passing preflight"
+    )
+
+
+def test_ps1_pr_preflight_case_runs_the_tool() -> None:
+    """Cross-platform smoke: the behavioural checks above only run on Windows.
+
+    ⛔ This asserts the wrapper still invokes the tool, nothing about rc — the
+    rc predicate is behavioural on purpose (see `_wrapper_rc`).
     """
     src = (REPO_ROOT / "scripts" / "ops" / "win_git_escape.ps1").read_text(encoding="utf-8")
     body = "\n".join(
         ln for ln in src.splitlines() if not re.match(r"^\s*#", ln)
     )
-    assert "pr_preflight.py" in body, "wrapper no longer runs the tool"
-    assert re.search(r"\$LASTEXITCODE\b[^\n]*\n?[^\n]*exit\s+\$LASTEXITCODE", body), (
-        "win_git_escape.ps1 swallows a non-zero rc from pr_preflight.py (#1472)"
+    assert "pr_preflight.py" in body, (
+        "win_git_escape.ps1 no longer runs pr_preflight.py"
     )
 
 
