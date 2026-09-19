@@ -8,10 +8,10 @@ name: Component Docker Build (PR smoke)
 # only surfaces at tag push — the worst possible moment. v2.8.0 release hit 2
 # such dormant bugs in 30 min (#472 portal Dockerfile moved-file COPY, #473
 # exporter pkg/ COPY missing). This workflow runs `docker build` against the
-# 7 self-built Dockerfiles on every PR that touches their build inputs, so
+# self-built Dockerfiles on every PR that touches their build inputs, so
 # build breakage fails at the introducing PR, not at release.
 #
-# ⚠️ Two of the seven ship inside Helm charts and are never published, so the
+# ⚠️ Two of them ship inside Helm charts and are never published, so the
 # tag-time release build does NOT cover them at all (#1337). Their remaining
 # build coverage is NOT symmetric, so do not write it as one sentence:
 #   * vector-projection-gate — this workflow, the nightly scan and
@@ -35,14 +35,14 @@ name: Component Docker Build (PR smoke)
 # here only if the project decides PR-time CVE-blocking is wanted.
 #
 # ⛔ CORRECTION (#1337): this block used to add "release.yaml's own image CVE
-# scan is likewise treated as informational (#448)". That is FALSE — all five
-# release jobs set `exit-code: 1` with no `continue-on-error`, so a fixable
+# scan is likewise treated as informational (#448)". That is FALSE — every
+# release job sets `exit-code: 1` with no `continue-on-error`, so a fixable
 # HIGH/CRITICAL fails the release job. What is true, and is the likely origin of
 # the confusion, is that the scan runs POST-PUSH: the image is already in the
 # registry by then, so what it blocks is the release job going green, not the
-# publication of that image. (And in 4 of the 5 jobs it is the last step, so
-# nothing further is prevented either; only release-da-tools has signing / SBOM /
-# archive / GitHub-Release steps after it.)
+# publication of that image. (And in every job but release-da-tools it is the
+# last step, so nothing further is prevented either; only release-da-tools has
+# signing / SBOM / archive / GitHub-Release steps after it.)
 
 on:
   pull_request:

@@ -107,12 +107,12 @@ jobs:
               # control for that job — yet a PR editing ONLY the verifier
               # matches no `validate` path, and a path-skipped required check
               # reports `skipped`, which satisfies branch protection. Not yet
-              # burned, and for a stronger reason than luck: the file has
-              # exactly one commit (91bae528, #849), which PREDATES `go-lint`
-              # entering this workflow (ae0cd4fc, #912) — at that point only
-              # ci.yml referenced it. It has never been edited since Go Lint
-              # started running it. The reachability is what matters; the next
-              # edit has nothing protecting it. File-level on purpose: the only
+              # burned, and for a stronger reason than luck: as of #1368 the
+              # file's only commit was 91bae528 (#849), which PREDATES
+              # `go-lint` entering this workflow (ae0cd4fc, #912) — at that
+              # point only ci.yml referenced it, and it had not been edited
+              # since Go Lint started running it. The reachability is what
+              # matters; the next edit has nothing protecting it. File-level on purpose: the only
               # other scripts/ops/ file a validate step reads is the floor probe
               # below, and `scripts/ops/**` would pull
               # three required checks into every host-side escape-hatch edit.
