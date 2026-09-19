@@ -31,9 +31,7 @@ lang: zh
 
 --8<-- "docs/includes/docker-usage-pattern.md"
 
-> 後續範例省略此前綴，僅顯示 `da-tools <command>` 形式。**`da-tools` 不是可以裝進 `$PATH` 的
-> 執行檔**——它只是映像裡的一個進入點，所以直接照抄 `da-tools ...` 會得到
-> `bash: da-tools: command not found`。取得映像的完整方式（含 air-gapped `docker load`）見
+> 取得映像的完整方式（含 air-gapped `docker load`）見
 > [Migration Toolkit 安裝指南](../migration-toolkit-installation.md)。
 
 ⚠️ **有一件事不是掛載造成的，換掛法也不會好**：§2.3 那類 `generate-routes ... -o .output/xxx.yaml
@@ -325,6 +323,7 @@ metadata:
   name: dynamic-alerting
   namespace: argocd
 spec:
+  project: default
   source:
     repoURL: https://github.com/your-org/your-repo.git
     targetRevision: main
@@ -470,7 +469,15 @@ git push origin feature/lower-connections
 ## 6. 多團隊 Sharded 模式
 
 大型組織中，不同團隊可能各自維護自己的 `conf.d/` 目錄。合併多個來源用的是
-`assemble_config_dir.py`：
+`assemble_config_dir.py`。
+
+⛔ **這一節目前只有本專案的維護者做得到。** 與本頁其他命令不同，`assemble_config_dir.py`
+**沒有對應的 `da-tools` 子命令**，也沒有被打包進 `ghcr.io/vencil/da-tools` 映像——下面那行需要
+一份本專案的原始碼 checkout，而本頁開頭的「前置條件」並沒有要求你有。若你需要這個能力，請開一張
+issue；在那之前，可行的替代是在你自己的 CI 裡把各團隊的 `conf.d/` 複製到同一個目錄再跑
+`da-tools validate-config`。⚠️ **失去的不是下面那個整棵樹的風險**：跨檔重複租戶 `validate-config` 照樣會報（實測 rc 1、`tenant_uniqueness` FAIL）。失去的是**同檔名跨來源**的偵測——而複製那一步會**靜默覆寫**其中一份，兩隊各給一份 `db-a.yaml` 時合併目錄只剩一個檔、`validate-config` 回 0。
+
+本專案原始碼 checkout 裡的命令長這樣：
 
 ```bash
 # 合併多團隊的 conf.d/ 到統一輸出
@@ -483,12 +490,6 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 搭配 CI pipeline，各團隊只修改自己的 conf.d/，合併階段自動偵測衝突（如同一 tenant 出現在多個來源）。⛔ **偵測到就拒絕組裝**：同一個租戶 id 被兩個檔宣告時 exporter 會拒絕**整棵** config-dir，所以這一步非零退出、**不寫本輪的產物**，由你決定哪一個檔擁有那個租戶（[#1794](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1794)）。
 
 ⚠️ **這支工具不會清空 `--output`。** 它只複製進去，所以在 CI 裡反覆寫同一個目錄時，上一輪的載體會留著——**exporter 也會讀它們**。後果有兩種：來源端下架的租戶不會從產物消失（工具會列出這些殘留並把它們算進租戶唯一性的判定，但仍然組裝並回 0）；而拒絕的那一輪雖然不寫新東西，上一輪那份**完整、可 apply 的產物仍在原地**。建議每輪先清空輸出目錄，或把它視為只增不減。
-
-⛔ **這一節目前只有本專案的維護者做得到。** 與本頁其他命令不同，`assemble_config_dir.py`
-**沒有對應的 `da-tools` 子命令**，也沒有被打包進 `ghcr.io/vencil/da-tools` 映像——上面那行需要
-一份本專案的原始碼 checkout，而本頁開頭的「前置條件」並沒有要求你有。若你需要這個能力，請開一張
-issue；在那之前，可行的替代是在你自己的 CI 裡把各團隊的 `conf.d/` 複製到同一個目錄再跑
-`da-tools validate-config`。⚠️ **失去的不是上面那個整棵樹的風險**：跨檔重複租戶 `validate-config` 照樣會報（實測 rc 1、`tenant_uniqueness` FAIL）。失去的是**同檔名跨來源**的偵測——而複製那一步會**靜默覆寫**其中一份，兩隊各給一份 `db-a.yaml` 時合併目錄只剩一個檔、`validate-config` 回 0。
 
 ## 7. 故障排查
 

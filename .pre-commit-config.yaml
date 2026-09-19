@@ -1075,6 +1075,21 @@ repos:
         files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
         additional_dependencies: ['pyyaml', 'jsonschema']
 
+      # Third sibling of the two above, and separate for the same reason: it
+      # answers a different question (does an embedded k8s object satisfy the
+      # real CRD?) and must not be maskable by an unrelated schema failure.
+      # ⛔ The vendored schemas are inputs — re-vendoring can turn a documented
+      # example red, and without them here that commit never runs this gate.
+      # No network: the generator that fetches upstream CRDs is `make
+      # crd-schemas`, deliberately NOT a hook.
+      - id: md-yaml-crd-check
+        name: Markdown embedded k8s objects ↔ real CRD schema
+        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
+        additional_dependencies: ['pyyaml', 'jsonschema']
+
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
         entry: bash -c 'cd tests/e2e && npx playwright test'
