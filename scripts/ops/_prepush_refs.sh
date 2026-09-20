@@ -101,24 +101,24 @@
 #       so a warning would be byte-for-byte the same picture as the bug this
 #       file exists to remove.
 #
-# ⚠️ KNOWN RESIDUAL — the env channel carries ONE ref; a push can carry N.
-#   hook_impl._pre_push_ns returns on the first pushable line it finds, so
-#   under pre-commit a guard is shown one of N refs. Measured, with both
-#   branches already present on the remote:
+# ⚠️ KNOWN RESIDUAL — the env channel carries at most ONE ref; a push carries N.
+#   hook_impl._pre_push_ns returns on the first PUSHABLE row (it skips rows
+#   whose local sha is all-zero, i.e. deletions), so under pre-commit a guard
+#   is shown one of N refs. Measured, with both branches already on the remote:
 #       git push origin main aaa-first
 #         native stdin   -> 2 rows (aaa-first, main)
 #         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
 #         result         -> main was updated by that same command
-#   ⛔ Which ref survives is not the order you typed: `git push origin main
-#   aaa-first` and the explicit-refspec spelling feed byte-identical rows, so
-#   writing `main` first does not protect it.
-#   ⚠️ The order itself is git's implementation detail, not a protocol
-#   guarantee. Measured on git 2.51.1 (Linux) and 2.55.0.windows.5: rows that
-#   UPDATE an existing remote ref come before rows that CREATE one, and names
-#   sort within a group. So a branch's FIRST push leaves main in row 1 — not
-#   hidden — and every push after that hides it (#1852). Both cases are pinned
-#   in the test named below; a git that reorders goes red there instead of
-#   quietly rewriting how far this residual reaches.
+#   ⛔ AT MOST one: when every row is a deletion, _pre_push_ns returns None and
+#   pre-commit runs NO hook at all (measured; must-ring control in the same
+#   test: an ordinary push does run them).
+#   ⛔ Which row that is is not yours to choose, and there is no naming
+#   convention that keeps main safe. Measured answers differ per push shape —
+#   updates outrank creates, names order the updates, the creates follow the
+#   command line — so any rule of the form "branches named X are safe" is false
+#   for some push. ⚠️ It is git's implementation detail, not a protocol
+#   guarantee: do not build an argument on it. The shapes are pinned in the
+#   test named below; the measurements live in #1852.
 #   A guard built on this helper does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py

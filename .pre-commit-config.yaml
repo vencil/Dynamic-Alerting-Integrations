@@ -11,15 +11,15 @@
 #
 # They had to leave: pre-commit reads git's pre-push stdin itself and hands a
 # hook exactly ONE ref (hook_impl._pre_push_ns returns on the first pushable
-# line), so a push carrying several refs showed the guards only the first row.
-# Measured with this repo's own guards on git 2.55.0 / pre-commit 4.6.0:
-# `git push origin aaa main` printed "Guard: block direct push to main ...
-# Passed" and main really moved on the remote, while `git push origin main`
-# alone was blocked. ⛔ Which row that is was never the pusher's to choose —
-# both spellings of that push feed byte-identical rows — and it is a branch's
-# SECOND push onward that hides main, not its first: rows updating an existing
-# remote ref come before rows creating one (#1852, pinned in
-# tests/ops/test_prepush_hook_wiring.py).
+# line), so a push carrying several refs showed the guards only one row —
+# and none at all when every row is a deletion. Measured with this repo's own
+# guards on git 2.55.0 / pre-commit 4.6.0: `git push origin aaa main` printed
+# "Guard: block direct push to main ... Passed" and main really moved on the
+# remote, while `git push origin main` alone was blocked. ⛔ Which row a guard
+# got was never the pusher's to choose and no branch-naming convention keeps
+# main safe: the answer differs per push shape (#1852). The shapes are pinned
+# in tests/ops/test_prepush_hook_wiring.py; the measurements live on that
+# issue.
 #
 # ⛔ Do not add them back here, and do not "simplify" the install line back to
 # `pre-commit install --hook-type pre-push`: that reintroduces the one-ref
@@ -71,8 +71,9 @@ repos:
       # now run by scripts/ops/prepush_dispatch.sh, installed by
       # scripts/ops/install_prepush_hook.sh. See this file's header for the
       # measurement; the short version is that a hook run by pre-commit is shown
-      # exactly one refspec, so a push carrying `feat/x` and `main` together
-      # hid `main` from the guard that exists to block it.
+      # at most one refspec, so a push carrying `feat/x` and `main` together
+      # could hide `main` from the guard that exists to block it — which row a
+      # guard gets differs per push shape (#1852).
       #
       # ⛔ Adding a `stages: [pre-push]` entry here does not just duplicate the
       # dispatcher — the copy that pre-commit runs is the BLIND one.
