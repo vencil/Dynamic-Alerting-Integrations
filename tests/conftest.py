@@ -36,24 +36,6 @@ if _DA_TOOLS_DIR not in sys.path:
 from factories import populate_routing_dir  # noqa: E402
 
 
-# ── PyYAML: parse with libyaml for the whole test process ───────────
-#
-# `yaml.safe_load` resolves `SafeLoader` on the module at call time, so
-# rebinding it here routes every one of the suite's ~400 `safe_load` sites
-# (and the tools it imports in-process) through the C parser without
-# touching them. Same document model and error classes; only a few parser
-# message wordings differ, and nothing in tests/ asserts on those (grep
-# for "expected <block end>" / "could not find expected" / "found character"
-# returns no assertion). Measured: tracked corpus parses identically under
-# both loaders 11.7x faster; tests/lint end-to-end ~7%. Subprocess-spawned
-# tools are NOT covered by this — they get it through `_lib_io.SAFE_LOADER`.
-# `tests/shared/test_yaml_loader_is_libyaml.py` pins both halves.
-import yaml as _yaml  # noqa: E402
-
-if getattr(_yaml, "__with_libyaml__", False):
-    _yaml.SafeLoader = _yaml.CSafeLoader
-
-
 # ── Hypothesis: repo-wide settings profile ───────────────────────────
 #
 # Repo default: NO per-example deadline. A deadline is an OPT-IN tripwire

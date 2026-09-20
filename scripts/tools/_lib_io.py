@@ -57,6 +57,18 @@ class YamlFileError(yaml.YAMLError):
 # parser messages differs ("did not find expected" vs "expected … but got").
 # Measured on the tracked corpus: 422 files parse to identical objects, 11.7x
 # faster; rule-pack-heavy tools halve their wall time (#1910 line, PR-7).
+#
+# ⛔ OPT-IN, per tool. `load_yaml_file()` below deliberately stays on
+# `yaml.safe_load` (the pure parser): the two parsers differ on MALFORMED
+# input — libyaml accepts a trailing tab the pure parser rejects, and parses
+# nesting the pure parser dies on with RecursionError — and tools that read
+# operator files have made the pure parser's limits part of their contract
+# (`deprecate_rule` names "本工具讀不了（pure parser 限制）" as a distinct
+# verdict, `validate_config` / `_grar_parse` route RecursionError as
+# "unreadable file, exit 1"). Switch a tool here only when it reads
+# repository-tracked YAML and no test pins its behaviour on a bad file.
+# `tests/shared/test_yaml_loader_is_libyaml.py` pins both the opt-in and the
+# boundary.
 SAFE_LOADER = (yaml.CSafeLoader if getattr(yaml, "__with_libyaml__", False)
                else yaml.SafeLoader)
 
@@ -114,7 +126,7 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     try:
         stream = io.StringIO(raw.decode("utf-8"))
         stream.name = str(path)
-        data = safe_load(stream)
+        data = yaml.safe_load(stream)   # deliberately the pure parser: see safe_load()
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return data if data is not None else default
