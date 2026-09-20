@@ -307,11 +307,13 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 	@echo "=== Windows Escape Hatch: hook-gate + commit + push ==="
 	@echo "  MSG=$(MSG)  FILES=$(FILES)  SKIP=$(SKIP)  SKIP_HOOKS=$(SKIP_HOOKS)"
 	@# --- [1/3] Sandbox hook gate -----------------------------------------
-	@# Windows-side git uses --no-verify internally (trap #36: pre-commit
+	@# The Windows-side COMMIT uses --no-verify internally (trap #36: pre-commit
 	@# hooks hardcode Linux python path). We close that gap HERE by running
 	@# pre-commit in the Cowork VM against the FILES list, which has no FUSE
 	@# staleness and a complete Python+pyyaml env. SKIP_HOOKS=1 bypasses for
 	@# emergencies (e.g. runner crash); use sparingly.
+	@# ⛔ [3/3] push is NOT in that picture any more (#1487): it dropped
+	@# --no-verify, so the pre-push guards do run on the Windows side.
 	@if [ -z "$(FILES)" ]; then \
 		echo "--- [1/3] Hook gate SKIPPED (FILES empty) ---"; \
 	elif [ "$(SKIP_HOOKS)" = "1" ]; then \
