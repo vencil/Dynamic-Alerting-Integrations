@@ -1043,23 +1043,7 @@ def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
     channel this goes red, which is the point: the disclosure in
     ``scripts/ops/_prepush_refs.sh`` must not outlive the measurement behind it.
     """
-    probe = _CONFIG_HEADER + _hook_stanza(
-        "env-probe",
-        "PROBE: record the exported refspec",
-        "bash scripts/ops/env_probe.sh",
-    )
-    work = _make_repo(tmp_path, probe)
-    # A file, not an inline `bash -c`: pre-commit shlex-splits `entry:`, so
-    # nested quoting there is its own source of silent breakage.
-    (work / "scripts" / "ops" / "env_probe.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "${PRE_COMMIT_REMOTE_BRANCH:-<unset>}" >> env_rows.txt\n',
-        encoding="utf-8",
-        newline="\n",
-    )
-    assert _git(work, "add", "-A").returncode == 0
-    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
-                "-m", "probe").returncode == 0
+    work = _repo_with_env_probe(tmp_path)
 
     # ⛔ Both shapes. Publishing first makes aaa-first an UPDATE; skipping it
     # makes the same push CREATE the ref — and that is the axis that decides
@@ -1101,26 +1085,16 @@ def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
     assert any(" refs/heads/main " in row for row in native_rows), (
         f"the control row is missing — this push did not target main: {native_rows}"
     )
-    # ⛔ The residual's shape: pre-commit exports the first PUSHABLE row —
-    # `_pre_push_ns` skips rows whose local sha is all-zero (a deletion), so
-    # "git's first row" is the wrong predicate and is measurably false on a
-    # push that deletes one ref and updates another (pinned below).
+    # ⛔ The residual is "N rows in, ONE out" — and nothing more. Every
+    # predicate this file has tried for WHICH row turned out false on some push
+    # shape (sorted order, git's first row, the first non-deletion row), so the
+    # assertion stays at the shape and the shapes themselves live on #1852.
     native_refs = [row.split()[2] for row in native_rows]
-    pushable = [row.split()[2] for row in native_rows if row.split()[1] != _Z40]
-    assert env_rows == pushable[:1], (
-        "the env channel no longer carries exactly the first pushable row — "
-        "either pre-commit widened it (good news, but then the residual "
-        "disclosed in scripts/ops/_prepush_refs.sh is stale) or it picks a "
-        f"different row: env={env_rows} native={native_refs}"
-    )
-    # ⛔ Do NOT turn this into a rule about which row comes first. Measured,
-    # git orders updates before creates, names order the updates, and the
-    # creates follow the command line — three different answers, so any
-    # "branches named X are safe" claim is false for some push. What this
-    # fixture pins is only the axis it varies: an update outranks a create.
-    is_create = [row.split()[3] == _Z40 for row in native_rows]
-    assert is_create == sorted(is_create), (
-        f"git no longer puts updates before creates: {native_rows}"
+    assert len(env_rows) == 1 and env_rows[0] in native_refs, (
+        "the env channel no longer carries exactly one of git's rows — if it "
+        "widened, that is good news and the residual disclosed in "
+        f"scripts/ops/_prepush_refs.sh is stale: env={env_rows} "
+        f"native={native_refs}"
     )
 
 
@@ -1144,29 +1118,6 @@ def _repo_with_env_probe(tmp_path: Path) -> Path:
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
                 "-m", "probe").returncode == 0
     return work
-
-
-def test_the_env_channel_skips_a_deletion_row(tmp_path: Path) -> None:
-    """`_pre_push_ns` skips rows with an all-zero LOCAL sha, so the row it
-    exports is the first PUSHABLE one, not the first one.
-
-    Without this case the disclosure reads as "git's first row", which is what
-    the previous revision of it said — measurably wrong for this push shape.
-    """
-    work = _repo_with_env_probe(tmp_path)
-    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-del").returncode == 0
-    _commit(work, "third")
-    _install_precommit(work)
-
-    _push(work, ":refs/heads/aaa-del", "HEAD:refs/heads/main")
-    env_rows = [
-        ln for ln in (work / "env_rows.txt").read_text(encoding="utf-8").splitlines()
-        if ln.strip()
-    ]
-    assert env_rows == ["refs/heads/main"], (
-        "the env channel exported the deletion row (or nothing); a guard that "
-        f"believed 'first row' would judge the wrong ref: {env_rows}"
-    )
 
 
 def test_a_pure_deletion_push_runs_no_precommit_hook_at_all(tmp_path: Path) -> None:

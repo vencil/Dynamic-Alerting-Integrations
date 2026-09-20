@@ -112,13 +112,9 @@
 #   ⛔ AT MOST one: when every row is a deletion, _pre_push_ns returns None and
 #   pre-commit runs NO hook at all (measured; must-ring control in the same
 #   test: an ordinary push does run them).
-#   ⛔ Which row that is is not yours to choose, and there is no naming
-#   convention that keeps main safe. Measured answers differ per push shape —
-#   updates outrank creates, names order the updates, the creates follow the
-#   command line — so any rule of the form "branches named X are safe" is false
-#   for some push. ⚠️ It is git's implementation detail, not a protocol
-#   guarantee: do not build an argument on it. The shapes are pinned in the
-#   test named below; the measurements live in #1852.
+#   ⛔ WHICH row is git's, not yours — writing `main` first does not protect
+#   it, and the answer differs per push shape (#1852 has the measurements).
+#   Nothing in this repo may depend on it: the guards read stdin instead.
 #   A guard built on this helper does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py
