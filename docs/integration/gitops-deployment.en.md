@@ -130,6 +130,18 @@ repo's own tests), say so explicitly:
 ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
 ```
 
+⚠️ **The refusal is PER-CHECKOUT, not per-repo.** It is written here
+because the message's remedy — "point the target at your own tree" — reads
+as covering more than it does: spelling out the path to the *same* sample
+tree inside a second checkout or worktree of this repo gets a green light.
+The sample tree's location is derived from the script's own `__file__`, so
+it guards the tree the running script lives in. ⛔ This is a **known
+boundary, not an oversight**: the defect it exists for is "ran with the
+built-in default", and that default always lands inside this checkout;
+reaching the other one means typing its full path by hand. Converging repo
+identity through `git` instead would be worse — a customer tree may have no
+`git`, and without it that check would **pass silently**.
+
 Use in CI pipeline:
 
 ```yaml
@@ -147,7 +159,7 @@ the offending files wherever there are any to name:
 |---|---|
 | One tenant id declared in two files | The exporter hard-rejects the ENTIRE directory, so **every** tenant there loses alerting |
 | A file name that cannot be a ConfigMap key | A key must match `[-._a-zA-Z0-9]+` and be neither `.` nor `..` (k8s `IsConfigMapKey`). `db b.yaml` or `db-a (copy).yaml` can **never** become a key — rename them |
-| A produced ConfigMap that is not your tree | Once built, this step **reads its own artifact back**: the key set and every value's length must equal the carriers it selected. A `,`, a `"` or an `=` in the path makes kubectl mangle the `--from-file` argument before it ever opens a file (it splits on CSV first, then on `key=path`) — one tenant short, or one key nobody declared. ⚠️ This row catches the half where the argument is mangled **and kubectl still succeeds**; when kubectl refuses instead, its message blames "key names or file paths" and **names neither**, and this step can only forward it |
+| A produced ConfigMap that is not your tree | Once built, this step **reads back the manifest it is about to write** (nothing has landed yet): the key set and every value's length must equal the carriers it selected. ⚠️ **Two** different causes land here: (1) the **argument layer** — a `,`, a `"` or an `=` in the path makes kubectl mangle the `--from-file` argument before it ever opens a file (it splits on CSV first, then on `key=path`) — one tenant short, or one key nobody declared; the remedy is a path holding none of those characters. (2) The **content layer** — the key set is right and only a **length** differs, which has nothing to do with the path: the value did not survive kubectl's YAML emitter and this loader byte for byte (**the one measured character is U+0085 NEL**, normalised to a plain newline on the way back and so one byte shorter; ⚠️ U+2028 / U+2029 were measured in the same run and came back unchanged — this is not "any exotic character"). Moving the tree reproduces that failure exactly — compare the manifest's value with the file instead. ⚠️ This row catches the half where the argument is mangled **and kubectl still succeeds**; when kubectl refuses instead, its message blames "key names or file paths" and **names neither**, and this step can only forward it |
 | Carriers totalling more than 1 MiB | k8s `ValidateConfigMap` bounds the sum of the `data` values; over it, `kubectl apply` fails on the whole OBJECT and names no file. Measured on the **values in the produced manifest**, not predicted from file sizes |
 | No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR`. ⚠️ This row has **no file to name** — "there are none" is the finding |
 

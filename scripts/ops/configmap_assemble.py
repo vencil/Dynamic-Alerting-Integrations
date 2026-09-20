@@ -50,11 +50,14 @@
 
 ⛔ **這支擋的是「產物不合法」，一律在寫出產物之前；它不是內容政策。**
 檔名能不能當 key 由 `configmap_key_problem`（轉寫自 `IsConfigMapKey`）在
-呼叫 kubectl 之前回答——那一面**必須**先問，因為非法檔名的代價是整個租戶
-無聲消失。
+呼叫 kubectl 之前回答。⚠️ **那一層是訊息品質，不是守衛**——實測真 kubectl
+會自己點名 `db b.yaml` 這類名字並印出 regex，拿掉它也不會讓任何缺陷靜默
+通過（rc 仍非零、產物仍不寫）。它買到的是「一次列出全部」與「`=`／`,`／
+`"` 這三類 kubectl 自己點不出名字的情況」，逐格量測寫在該函式的 docstring。
 
-⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成產出之後回頭讀自己的
-產物：`measure_artifact` 把 manifest 的 key 集合與長度，和我方 `carriers`
+⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成**讀回即將寫出的那份
+manifest**（`kubectl` 的 stdout，`_write_atomically` 還沒發生）：
+`measure_artifact` 把 manifest 的 key 集合與長度，和我方 `carriers`
 的意圖對帳，總位元組也在**已 parse 的產物**上量。round 3 的量測是這樣長
 的——`--from-file` 的值先過 pflag `readAsCSV` 才輪到 `ParseFileSource`，
 所以只轉寫最內層的守衛對路徑裡的 `,` 與 `"` 完全看不見；再補一層就再冒一
@@ -167,12 +170,26 @@ def _name_bytes(name: str) -> bytes:
 def configmap_key_problem(name: str) -> str | None:
     """Why `name` cannot be a ConfigMap key, or `None` if it can.
 
-    ⛔ This is a legality question, not a taste question. A file called
-    `db b.yaml` or `db-a (copy).yaml` can NEVER become a key, whatever the
-    producer does — so the only honest answers are "rename it" or "leave it
-    out on purpose". Dropping it silently is how a tenant disappears with a
-    green light (#1603's shape), and handing it to `kubectl` produces an
-    error that never names the file.
+    ⛔ **MESSAGE QUALITY, not a guard.** The sentence that used to stand
+    here — "handing it to `kubectl` produces an error that never names the
+    file" — was FALSE, and it was the premise for keeping this function.
+    Measured, `--from-file=<name>=<path>` against a real kubectl v1.31.0:
+    `db b.yaml`, `db-a (copy).yaml` and `..hidden.yaml` are each NAMED by
+    kubectl, regex included (`"db b.yaml" is not a valid key name for a
+    ConfigMap: … '[-._a-zA-Z0-9]+'`); but `db=a.yaml` gets `key names or
+    file paths cannot contain '='` (names nothing), `db,a.yaml` gets
+    `error reading db: no such file or directory` (names a source that
+    never existed) and `db"a.yaml` a raw pflag CSV parse error — those
+    three are split by `readAsCSV` / `ParseFileSource` before
+    `IsConfigMapKey` ever runs.
+
+    ⛔ So what this buys is narrow and none of it is "a defect would pass
+    silently": all offending names at once (kubectl stops at the first),
+    a refusal before the subprocess, and the only by-name answer for `=`,
+    `,` and `"`. Without it kubectl still exits non-zero and
+    `_write_atomically` is never reached. DROPPING the file instead of
+    refusing would be the silent one (#1603's shape) — hence "rename it"
+    or "leave it out on purpose", never "skip it".
 
     ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
     POSIX; Python hands it back with the undecodable ones smuggled in as
@@ -269,8 +286,13 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     asked for, or a value whose length is not the file's.
 
     ⚠️ It does NOT compare the value BYTES, only their count: that would
-    assert a YAML round-trip through kubectl's emitter and this loader is the
-    identity, which has never been measured here against a real kubectl.
+    assert a YAML round-trip through kubectl's emitter and this loader is
+    the identity — and it is NOT. Measured against kubectl v1.31.0, a value
+    holding U+0085 (NEL) comes back one byte shorter: the loader normalises
+    it to a plain newline. ⚠️ U+2028 / U+2029 were measured in the same run
+    and came back UNCHANGED, so the rule is not "exotic characters" — it is
+    one measured character. A length mismatch therefore has a second cause
+    with nothing to do with the path; `main` names both.
     """
     try:
         doc = _lib_io.safe_load(manifest)
@@ -279,17 +301,34 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     if not isinstance(doc, dict):
         return ["kubectl's output is not a YAML mapping"], {}
 
+    # ⛔ The SAME "could not measure" arm covers `data` / `binaryData` that
+    # came back as a scalar or a list: `.items()` on those raised an
+    # `AttributeError` traceback, which is this function saying nothing at
+    # all in the one case it exists to speak about.
+    data = doc.get("data") or {}
+    binary = doc.get("binaryData") or {}
+    if not isinstance(data, dict) or not isinstance(binary, dict):
+        return ["kubectl's output is not a ConfigMap mapping (`data` and "
+                "`binaryData` must each be a mapping of key to value)"], {}
+
     got: dict[str, int | None] = {}
-    for key, value in (doc.get("data") or {}).items():
+    for key, value in data.items():
         got[str(key)] = (len(value.encode("utf-8"))
                          if isinstance(value, str) else None)
-    for key, value in (doc.get("binaryData") or {}).items():
+    for key, value in binary.items():
         try:
             got[str(key)] = len(base64.b64decode(value, validate=True))
         except (ValueError, TypeError):
             got[str(key)] = None
 
-    want = {p.name: p.stat().st_size for p in carriers}
+    # ⚠️ Same arm again: a carrier can vanish between kubectl reading it and
+    # this `stat()`. That is "could not measure", not a crash.
+    try:
+        want = {p.name: p.stat().st_size for p in carriers}
+    except OSError as exc:
+        return [f"a carrier disappeared from --config-dir while the manifest "
+                f"was being built, so this check could not measure it: "
+                f"{exc}"], {}
     problems = []
     for name in sorted(set(want) - set(got)):
         problems.append(f"{name!r} is in {want[name]} bytes on disk but is "
@@ -383,6 +422,14 @@ def main(argv: list[str] | None = None) -> int:
             f"`{args.name}` with the samples.\n"
             f"       -> point the target at your own tree: "
             f"`make configmap-assemble CONFDIR=/path/to/your/conf.d`\n"
+            f"       ⚠️ SCOPE, so this line is not read as more than it is: "
+            f"the refusal is PER-CHECKOUT. `{SAMPLE_CONFIG_DIR}` is derived "
+            f"from THIS script's own location, so a second checkout or "
+            f"worktree of this repo holds a sample tree that this run will "
+            f"NOT refuse — spelling that path out here is therefore a way "
+            f"past this block, and a known boundary rather than an "
+            f"oversight (the defect class is 'ran with the built-in "
+            f"default', and that default always lands in this checkout).\n"
             f"       -> or, if assembling the samples really is the intent "
             f"(docs, demo, this repo's own tests): "
             f"`{ALLOW_SAMPLE_ENV}=1 make configmap-assemble`",
@@ -517,24 +564,44 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {line}", file=sys.stderr)
         return EXIT_VIOLATION
 
-    # ⛔ Read back what we just produced. Everything above this line is an
-    # intention; this is the only place the artifact itself answers.
+    # ⛔ Read back the manifest we are ABOUT to write (`_write_atomically` is
+    # further down, and never runs if this disagrees). Everything above this
+    # line is an intention; this is the only place the artifact answers.
     disagreements, measured = measure_artifact(proc.stdout, carriers)
     if disagreements:
         print(
             f"ERROR: the manifest `kubectl` produced does not match the "
             f"{len(carriers)} carrier(s) in {config_dir}. Nothing was "
-            f"written. This is the argument list being mangled on its way "
-            f"in (a `,`, a `\"` or an `=` in the path is enough — kubectl "
-            f"splits the value before it ever looks at a file), and applying "
-            f"it would deploy a ConfigMap that is not this tree:",
+            f"written — applying it would deploy a ConfigMap that is not "
+            f"this tree:",
             file=sys.stderr,
         )
         for line in disagreements:
             print(f"  {line}", file=sys.stderr)
-        print(f"       -> point --config-dir at a path holding none of "
-              f"those characters, or copy the tree somewhere plainer.",
-              file=sys.stderr)
+        # ⛔ TWO causes, not one. This message used to assert the first and
+        # offer only its remedy; a value holding U+0085 under a path with
+        # none of those characters lands here too, and "move the tree"
+        # reproduces the failure exactly (measured against kubectl v1.31.0:
+        # 34 bytes on disk, 33 in the manifest).
+        print(
+            f"       Two different things land here:\n"
+            f"       1) ARGUMENT layer — a `,`, a `\"` or an `=` in "
+            f"--config-dir is enough: kubectl splits the --from-file value "
+            f"(pflag CSV, then `key=path`) before it ever opens a file, so "
+            f"a key goes missing or one nobody asked for appears.\n"
+            f"       -> point --config-dir at a path holding none of those "
+            f"characters, or copy the tree somewhere plainer.\n"
+            f"       2) CONTENT layer — the key set is right and only a "
+            f"LENGTH differs. Then the path is innocent and moving the tree "
+            f"changes nothing: the value did not survive kubectl's YAML "
+            f"emitter and this loader byte for byte. The one measured case "
+            f"is U+0085 (NEL), normalised to a plain newline on the way "
+            f"back; ⚠️ U+2028 and U+2029 were measured too and came back "
+            f"unchanged, so do not read this as 'any exotic character'.\n"
+            f"       -> diff the manifest's value against the file itself, "
+            f"not the path: `kubectl create configmap ... --dry-run=client "
+            f"-o yaml` and compare that key's value with the carrier.",
+            file=sys.stderr)
         return EXIT_VIOLATION
 
     # The size rule, asked of the artifact rather than predicted from the

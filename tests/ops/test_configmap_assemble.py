@@ -184,9 +184,17 @@ def _recipe_lines() -> list[str]:
     # ⚠️ The rule line is the one carrying the recipe, not merely the first
     # line spelled `configmap-assemble:` — a target-specific variable
     # assignment is spelled exactly the same way and may sit above it.
-    start = next(i for i, ln in enumerate(lines)
-                 if ln.startswith(TARGET + ":")
-                 and i + 1 < len(lines) and lines[i + 1].startswith("\t"))
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.startswith(TARGET + ":")
+                  and i + 1 < len(lines) and lines[i + 1].startswith("\t")),
+                 None)
+    assert start is not None, (
+        f"no rule line for `{TARGET}` with a recipe under it was found in "
+        f"{MAKEFILE}. make's rule is positional: the recipe's first line "
+        f"must come IMMEDIATELY after the rule line — a blank line in "
+        f"between is invisible to make but ends the lookup here. (Without "
+        f"this message the lookup raised a bare StopIteration and said "
+        f"nothing at all.)")
     body = []
     for ln in lines[start + 1:]:
         if ln.startswith("\t"):
@@ -253,15 +261,35 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
       the shell, so a function call written there RUNS).
     * **two sources, both make's** — the recipe make STORED (unexpanded,
       from `--print-data-base`) normalises to exactly what `make -n` prints.
-      ⛔ This replaced an assertion that the expansion equals one literal
-      command line, which forbade a SECOND command — the sister target
-      `sharded-assemble` opens with `@mkdir -p .build`, so that assertion
-      answered "is there a second command" when the question is "did
-      anything get expanded".
+      ⛔ The reason given for deleting the literal-expansion assertion was
+      WRONG and it is back below: the sister target `sharded-assemble` does
+      open with `@mkdir -p .build`, but `make -n configmap-assemble` never
+      prints the sister's recipe, so that assertion could not see it. It was
+      restored after measuring that removing it let a SHELL-layer producer
+      (`@echo "shipping: $$(ls "$$CONFDIR"/*.yaml)"` — #1792 in its original
+      shape) live through the whole class, because the two properties above
+      are both satisfied by it: `$$` is a literal dollar to make, so nothing
+      is expanded and nothing holds a stray `$`.
 
     …plus the two things without which neither speaks for the whole target:
     no prerequisites, and no target-specific variable (`SHELL := <wrapper>`
-    was the third walk-through).
+    was the third walk-through), and `.PHONY` (below).
+
+    ⛔ **KNOWN SCOPE, measured, deliberately NOT closed.** Everything here
+    covers THIS target's recipe text, its direct prerequisites and its
+    target-specific variables — nothing else. Blind review walked through
+    four channels that all live outside that scope and all stayed green:
+    a global `.EXTRA_PREREQS` (GNU make states it does not enter the
+    automatic variables, so `$^` / `$|` cannot see it), a GLOBAL (not
+    target-specific) `SHELL :=` — `Makefile:4` already holds one — a global
+    `.SHELLFLAGS`, and a silent second `::` rule whose recipe expands to
+    nothing so `make -n` prints no extra line.
+
+    ⛔ That is a DISCLOSURE, not a to-do. Three versions of "enumerate the
+    channels" have been walked through (four strings, two strings, this
+    scope), so a fourth predicate is forbidden. A Makefile-WIDE edit is
+    outside what any target-scoped assertion can see; review of the
+    `Makefile` globals is what covers it.
     """
 
     def test_the_recipe_calls_the_script(self):
@@ -318,7 +346,58 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         assert stored == _make("-n", TARGET).splitlines(), (
             "make expanded something in this recipe: the line it printed is "
             "not the line it stored. A make-level producer is exactly this "
-            "difference, wherever it is written — including in a comment.")
+            "difference, wherever it is written — including in a comment. "
+            "⚠️ SCOPE: this reconciliation reads THIS target's recipe only; "
+            "a global `SHELL` / `.SHELLFLAGS` / `.EXTRA_PREREQS`, or a "
+            "second `::` rule with an empty recipe, is invisible to it — "
+            "see the class docstring, that is a known boundary.")
+
+    @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
+                        reason="needs GNU make to expand the recipe")
+    def test_the_expansion_is_exactly_the_script_call_and_nothing_else(self):
+        """⛔ RESTORED (it had been deleted, and deleting it was the defect).
+
+        The shell layer: the expansion is exactly ONE command and it is the
+        script call, so there is no second command in which a glob, a
+        `kubectl` or a `basename` could live. The two properties above do
+        NOT cover that — `@echo "shipping: $$(ls "$$CONFDIR"/*.yaml)"` is a
+        literal dollar to make, so nothing is expanded, nothing holds a
+        stray `$`, and the stored recipe reconciles with `make -n`. That is
+        #1792 in its original shape, and only this arm kills it.
+
+        Division of labour with `_recipe_lines`: the false red that got this
+        deleted was a text-extraction bug (the old boundary was "up to the
+        next target name", so inserting a target made every arm here fire on
+        a NEIGHBOUR's recipe). `_recipe_lines` fixed that on its own. This
+        arm is a PIN — it spells the command out — so adding a flag to the
+        script call is meant to red it; the fix is then to update the pin.
+
+        ⚠️ `make -n` strips the `@` / `-` prefixes, so "can the gate fail the
+        target" is NOT answerable here — `TestTheGateCanActuallyFailTheTarget`
+        runs the real thing for that.
+        """
+        r = subprocess.run(["make", "-n", TARGET], cwd=REPO,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        # Join the `\`-continuations make prints verbatim, then drop the
+        # comment lines (they are the recipe's own prose; the arms above are
+        # what keep them inert).
+        text = r.stdout.replace("\\\n", " ")
+        commands = [" ".join(ln.split()) for ln in text.splitlines()
+                    if ln.strip() and not ln.lstrip().startswith("#")]
+        assert commands == [
+            'python3 ./scripts/ops/configmap_assemble.py '
+            '--config-dir "$CONFDIR" --output .build/threshold-config.yaml'
+        ], (
+            "the expansion is no longer exactly the script call. Either a "
+            "second command appeared — that is where a glob, a `kubectl` or "
+            "a `basename` moves back into the recipe, and the arms above "
+            "cannot see it because a shell-level `$$(…)` is a literal "
+            "dollar to make — or the script call itself changed. ⚠️ The "
+            "second case is a legitimate edit and this arm is a PIN, so "
+            "update the expected line here in the same commit; do NOT "
+            "loosen it into a substring check.\n" + r.stdout)
 
     @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
                         reason="needs GNU make to answer for its own rule")
@@ -334,6 +413,16 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         entirely. Asked of make's rule database, not of the Makefile text,
         and asked as "no target-specific variable at all" rather than as a
         list of the dangerous ones.
+
+        ⛔ The `.PHONY` line is the third thing in the same block, and it
+        was missing: `configmap-assemble` produces no file called
+        `configmap-assemble`, so a file of that name in the working
+        directory made make answer `'configmap-assemble' is up to date.`
+        with rc 0 — the WHOLE gate skipped, silently, leaving the previous
+        `.build/threshold-config.yaml` in place for the `kubectl apply`
+        step the docs teach next. Measured: without the declaration
+        `make configmap-assemble` was rc 2 (the sample-tree refusal) and
+        rc 0 after `touch configmap-assemble`; with it, rc 2 both ways.
         """
         block = _make_rule_block()
         prereqs = [ln.split(":=", 1)[1].strip() for ln in block
@@ -346,6 +435,11 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         assert not overrides, (
             "a target-specific variable on this target changes how the "
             f"recipe runs without changing its text:\n" + "\n".join(overrides))
+        assert any(ln.startswith("#  Phony target") for ln in block), (
+            f"{TARGET} is not declared `.PHONY`, so a file of that name in "
+            f"the working directory makes make consider the target up to "
+            f"date and skip the entire gate with rc 0 — add "
+            f"`.PHONY: {TARGET}`:\n" + "\n".join(block[:8]))
 
     def test_the_recipe_writes_the_scripts_documented_default(self):
         """The two must not drift: the docs and the `--help` promise
@@ -497,6 +591,40 @@ class TestTheSampleTreeBlockCannotBeWalkedAround:
             SAMPLE_TREE.relative_to(REPO).as_posix()), d
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
         assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_a_second_checkout_of_this_very_tree_is_let_through(
+            self, tmp_path, kubectl_shim):
+        """⛔ The DISCLOSED boundary as an assertion, not only as prose
+        (D-05g: an exemption's reachability has to be written down as one).
+
+        `SAMPLE_CONFIG_DIR` is derived from this script's `__file__`, so the
+        block is PER-CHECKOUT: a byte-identical copy of this repo's sample
+        tree in a second clone or worktree builds with rc 0. The arm above
+        makes a different claim about a different tree ("merely ends in the
+        same components"); this one is the SAME tenants, same bytes, other
+        checkout.
+
+        ⚠️ A disclosure, NOT a hole to close: the defect class is "ran with
+        the built-in `CONFDIR` default", which always resolves inside the
+        running checkout, so reaching this state means typing the other
+        path by hand. Converging repo identity through `git` would SILENTLY
+        pass where there is no `git`. The refusal message says so, which
+        this arm also pins.
+        """
+        other = (tmp_path / "second-checkout"
+                 / SAMPLE_TREE.relative_to(REPO))
+        shutil.copytree(SAMPLE_TREE, other)
+        assert (other / "db-a.yaml").read_bytes() == (
+            SAMPLE_TREE / "db-a.yaml").read_bytes(), "the fixture lost its point"
+        r = _run(other, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "SAMPLE" not in r.stderr, r.stderr
+        # …and the refusal the operator DOES see names this boundary, so the
+        # remedy it offers ("point the target at your own tree") cannot be
+        # read as covering a checkout it does not cover.
+        blocked = _run(SAMPLE_TREE, _out(tmp_path))
+        assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+        assert "PER-CHECKOUT" in blocked.stderr, blocked.stderr
 
 
 class TestNeverTreatsCannotMeasureAsClean:
@@ -749,9 +877,26 @@ class TestSelectionFollowsTheExportersOwnPredicate:
 # ── #1796: names that cannot be keys, and argv that is not re-parsed ─
 
 class TestFileNamesThatCannotBeConfigMapKeys:
-    """⛔ Refuse BY NAME. The two wrong answers are both worse: dropping the
-    file loses a tenant behind a green light, and handing it to `kubectl`
-    produces a message that never says which file."""
+    """⛔ Refuse BY NAME — but as MESSAGE QUALITY, not as a guard.
+
+    The sentence that stood here ("handing it to `kubectl` produces a
+    message that never says which file") was FALSE, and it was the premise
+    for keeping this whole family. Real kubectl v1.31.0 names `db b.yaml`
+    itself, regex and all, and removing `configmap_key_problem` entirely
+    leaves rc 1 with no artifact written — nothing passes silently.
+
+    What this layer does buy is measured and small: it lists ALL the
+    offending names (kubectl stops at the first), and it is the only
+    by-name answer for `=`, `,` and `"`, which pflag's CSV split and
+    `ParseFileSource` mangle before `IsConfigMapKey` ever runs — those
+    three produce `key names or file paths cannot contain '='`,
+    `error reading db: no such file or directory`, and a raw flag parse
+    error respectively. The per-character measurements are in
+    `configmap_key_problem`'s own docstring.
+
+    ⛔ The one thing that WOULD be silent is dropping the file instead of
+    refusing: that loses a tenant behind a green light (#1603's shape).
+    """
 
     @pytest.mark.parametrize("name,fragment", [
         ("db b.yaml", "' '"),
@@ -1280,7 +1425,18 @@ class TestTheArtifactAppearsWholeOrNotAtAll:
                            "primary coverage precisely because CI has none")
 def test_end_to_end_with_a_real_kubectl(tmp_path):
     """Supplementary: the shim asserts the argv contract, this asserts that
-    a real kubectl accepts it and emits a ConfigMap carrying those keys."""
+    a real kubectl accepts it and emits a ConfigMap carrying those keys.
+
+    ⛔ It also carries the one thing `from_file_source_problem` used to
+    hold, now that that transcription is gone: a `--config-dir` spelled
+    with an `=` must still end the run non-zero with NO artifact. The cost
+    recorded when that guard was withdrawn is that WE no longer name the
+    path — kubectl's own refusal says `key names or file paths cannot
+    contain '='` and names neither — but "it fails and writes nothing" was
+    left with nothing holding it at all. Asserted here rather than in a
+    guard of its own: only a real kubectl can answer it, which is why this
+    is the arm it hangs on.
+    """
     import yaml  # noqa: PLC0415
     d = _tree(tmp_path, ["db-a.yaml", "DB-U.YAML"], tenant_of={"DB-U.YAML": "db-u"})
     out = _out(tmp_path)
@@ -1288,3 +1444,9 @@ def test_end_to_end_with_a_real_kubectl(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load(out.read_text(encoding="utf-8"))
     assert set(doc["data"]) == {"_defaults.yaml", "db-a.yaml", "DB-U.YAML"}
+
+    weird = _tree(tmp_path / "env=prod", ["db-a.yaml"])
+    weird_out = tmp_path / "eq-build" / "threshold-config.yaml"
+    r2 = _run(weird, weird_out)
+    assert r2.returncode != 0, r2.stdout + r2.stderr
+    assert not weird_out.exists(), "an artifact was written from a mangled run"

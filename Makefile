@@ -597,6 +597,7 @@ export CONFDIR
 # something narrower than the operator reads it as (#1794).
 SHARDED_OUTDIR := .build/config-dir
 
+.PHONY: configmap-assemble
 configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d）
 	@# ⛔ Selection AND quoting live in the script; the shell never touches a
 	@# file name here. There used to be three independent enumerations of

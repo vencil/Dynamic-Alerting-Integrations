@@ -117,6 +117,8 @@ make configmap-assemble CONFDIR=/path/to/your/conf.d
 ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
 ```
 
+⚠️ **這道擋的射程是 per-checkout，不是 per-repo**——寫在這裡是因為拒絕訊息給的補救是「指向你自己的樹」，而照字面去指**另一個 checkout／worktree 裡同一棵範例樹**就是綠燈。範例樹的位置由 script 自己的 `__file__` 推導，所以它守的是「跑這一份 script 的這一棵樹」。⛔ 這是**已知邊界不是疏漏**：它要擋的缺陷是「照內建預設值跑」，而預設值一定落在本 checkout；要碰到另一個 checkout 的那棵樹，得自己把完整路徑打出來。改用 `git` 收斂 repo identity 的代價更壞——客戶樹上未必有 `git`，而缺 `git` 時那道判定會**靜默放行**。
+
 在 CI pipeline 中使用：
 
 ```yaml
@@ -133,7 +135,7 @@ steps:
 |---|---|
 | 同一個租戶 id 出現在兩個檔 | exporter 對整棵 dir 是 hard reject，**每一個**租戶都會失去告警 |
 | 檔名不能當 ConfigMap key | key 必須匹配 `[-._a-zA-Z0-9]+` 且不是 `.` / `..`（k8s `IsConfigMapKey`）。`db b.yaml`、`db-a (copy).yaml` 這種**永遠**不可能成為合法 key，只能改名 |
-| 產出的 ConfigMap 與你的樹對不上 | 組完之後這一步會**回頭讀自己的產物**：manifest 裡的 key 集合與每個值的長度，必須等於選中的那批載體。路徑裡的 `,`、`"`、`=` 都會讓 kubectl 在讀檔之前就把 `--from-file` 的引數切壞（它先過 CSV 再過 `key=path` 兩層切割）⇒ 少一個租戶、或多一個沒人宣告的 key。⚠️ 這一列抓的是**引數被弄壞而 kubectl 仍然成功**的那一半；被弄壞到 kubectl 自己拒絕時，它的訊息會說「key names or file paths」而**誰也不點名**，這一步只能原樣轉述 |
+| 產出的 ConfigMap 與你的樹對不上 | 組完之後這一步會**讀回它即將寫出的那份 manifest**（還沒落地）：裡面的 key 集合與每個值的長度，必須等於選中的那批載體。⚠️ 落到這一列的成因有**兩類**：⑴ **引數層**——路徑裡的 `,`、`"`、`=` 會讓 kubectl 在讀檔之前就把 `--from-file` 的引數切壞（先過 CSV 再過 `key=path` 兩層切割）⇒ 少一個租戶、或多一個沒人宣告的 key，解法是換一條不含那些字元的路徑；⑵ **內容層**——key 集合正確、只有**長度**對不上，那與路徑無關：值沒能逐位元組通過 kubectl 的 YAML emitter 與這一步的 loader（**唯一實測到的字元是 U+0085 NEL**，回程被正規化成一般換行而少一個位元組；⚠️ 同一次也量了 U+2028 / U+2029，兩者原樣往返——這不是「奇怪字元都會」），此時搬樹重跑會得到一模一樣的錯，要比對的是 manifest 裡那個 key 的值與檔案內容。⚠️ 本列抓的是**引數被弄壞而 kubectl 仍然成功**的那一半；被弄壞到 kubectl 自己拒絕時，它的訊息會說「key names or file paths」而**誰也不點名**，這一步只能原樣轉述 |
 | 載體總位元組超過 1 MiB | k8s `ValidateConfigMap` 對 `data` 的總和設上限，超過時 `kubectl apply` 是對**整個物件**失敗、不提任何檔。量的是**產出的 manifest 裡的值**，不是檔案大小的預測 |
 | 目錄裡沒有任何載體 | 「組出零個租戶」與「平台真的沒有租戶」無法區分，通常是 `CONFDIR` 指錯。⚠️ 這一列**沒有檔可以點名**——它就是「一個都沒有」 |
 
