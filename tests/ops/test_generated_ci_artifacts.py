@@ -7039,9 +7039,15 @@ def test_a_spaced_offset_survives_shell_tokenisation(
 ) -> None:
     """⛔ No generated shell line may split the offset into two arguments.
 
-    A line is graded by tokenising it the way the shell does and looking for a
-    token that is exactly the offset's FIRST word: that is what a split leaves
-    behind, and it cannot occur when the path is quoted.
+    A line is graded by tokenising it the way the shell does and demanding that
+    every token MENTIONING the offset mentions the whole of it. A split leaves a
+    token carrying only the first word — and it can carry a prefix too
+    (`${{ github.workspace }}/alerting`), which is why the criterion is
+    "mentions the first word without the whole offset" rather than "equals the
+    first word". ⛔ That weaker form is what this test shipped with first, and
+    the docker-mount mutant walked straight through it: `-v GHEXPR/alerting` is
+    not equal to `alerting`, so the split went unreported. Found by running the
+    mutant, not by reading the assertion.
     """
     target = generated_spaced[deploy]
     first_word = _SPACED_SUBDIR.split()[0]
@@ -7060,9 +7066,13 @@ def test_a_spaced_offset_survives_shell_tokenisation(
                 tokens = shlex.split(probe)
             except ValueError as exc:                        # pragma: no cover
                 pytest.fail(f"{rel}: cannot tokenise {probe!r}: {exc}")
-            assert first_word not in tokens, (
+            severed = [
+                t for t in tokens
+                if first_word in t and _SPACED_SUBDIR not in t
+            ]
+            assert not severed, (
                 f"{rel} (--deploy {deploy}): the shell splits\n  {line}\n"
-                f"into {tokens}, leaving {first_word!r} as its own argument. "
+                f"into {tokens}, severing {severed} from the rest of the path. "
                 "The offset-derived path needs quoting at this site."
             )
 
