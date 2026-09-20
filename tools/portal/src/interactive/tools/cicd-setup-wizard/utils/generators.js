@@ -32,6 +32,15 @@ purpose: |
 // the literal, so changing it here alone goes red.
 const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
 
+// The argocd CLI image the deploy=argocd apply job runs in. ⛔ A second copy of
+// a pin the CLI leg also carries (`ARGOCD_CLI_IMAGE` in
+// scripts/tools/ops/init_project.py), so it is held the same way the da-tools
+// image is: tests/ops/test_generated_ci_artifacts.py compares the two legs'
+// rendered `container:` blocks, not this literal against a transcription. It is
+// needed at all because `ubuntu-latest` ships no `argocd` binary — the job
+// exited 127 before the image was pinned.
+const CICD_ARGOCD_CLI_IMAGE = 'quay.io/argoproj/argocd:v3.5.0';
+
 // Empty / whitespace-only falls back rather than emitting `docker run  init`,
 // because the field this reads is a free-text input the customer can clear.
 function cicdDaToolsImage(config) {
@@ -226,6 +235,29 @@ function cicdGenerateFileTree(config) {
   return ['your-repo/', ..._cicdTreeLines(root, '')].join('\n');
 }
 
+// The trees this workflow watches, and the ONE place the wizard states them.
+// ⛔ Derived from the deploy method, not a fixed list: the CLI leg computes the
+// same set in `_ci_trigger_trees` (scripts/tools/ops/init_project.py), because
+// both directions of a wrong filter are silent (issue 1473) — a filter naming a
+// tree nothing writes can never match, while a tree a job READS that is absent
+// from the filter means editing it starts no run and the pull request goes green
+// having validated nothing.
+//
+// ⚠️ The CLI has a fourth case this wizard cannot reach: `--config-source git`
+// adds `kustomize/**` for any deploy method. The wizard offers no GitOps Native
+// toggle, so there is nothing to render for it — and the drift gate compares
+// against a CLI run made with the wizard's own settings, so the absence cannot
+// quietly become a disagreement.
+function _cicdTriggerTrees(config) {
+  const trees = ['conf.d'];
+  if (config.deploy === 'kustomize') trees.push('kustomize');
+  // issue 1454 B — helm's apply step reads environments/prod/values.yaml, so an
+  // edit there must start this pipeline.
+  if (config.deploy === 'helm') trees.push('environments');
+  trees.push('rule-packs');
+  return trees.sort();
+}
+
 // ⛔ `apply` must NOT declare `needs: generate` (#1356). `generate` is
 // pull_request-only and `apply` is workflow_dispatch-only; GitHub skips every
 // job that needs a SKIPPED job, so the two together left `apply` with zero
@@ -235,6 +267,32 @@ function cicdGenerateFileTree(config) {
 // #1351), so a fix to one that is not applied to the other deepens the split.
 // Both are held by the reachability assertion in
 // tests/ops/test_generated_ci_artifacts.py.
+//
+// ⛔ WHAT THIS FUNCTION IS. Not "a sample pipeline" — the wizard labels the
+// block with the exact filename `.github/workflows/dynamic-alerting.yaml` and
+// says nowhere that it is illustrative, so every line here is a claim about the
+// file `da-tools init` writes. #1351 measured what that claim was worth: the
+// preview watched one tree where the artifact watches three, and its nine
+// job × deploy step lists ALL differed from the artifact's — the preview
+// under-reported the CI the customer actually gets (no blast-radius PR comment,
+// no custom-rule lint, no kustomize dry-run, no Prometheus reload) and showed
+// `argocd app sync --force` where the artifact runs `--prune --timeout 300`,
+// two flags whose semantics do not overlap.
+//
+// So: the trigger paths, the job set, the per-job step-name sequence and the
+// deploy commands' flags are now the artifact's, and
+// tests/ops/test_generated_ci_artifacts.py compares them against a real
+// `run_init()` run rather than against a transcription kept here.
+//
+// ⚠️ ONE declared difference remains, and it is a product decision rather than
+// drift (#1351's `env:` row): the artifact declares DA_TOOLS_IMAGE / CONFIG_DIR
+// / MONITORING_NS in a workflow-level `env:` block and refers to them as
+// GitHub expressions, while this preview inlines the values — the image from
+// the wizard's own field, the config directory and namespace at the CLI's
+// defaults, which is also what the wizard's `da-tools init` command line asks
+// for. The workflow `name:` is the other face of that same row. Both are held
+// by the skeleton gate, which pins the difference to exactly `{env}` rather
+// than letting a new one ride in beside it.
 function cicdGenerateGitHubActionsPreview(config) {
   const image = cicdDaToolsImage(config);
   // ⚠️ Emitted only when the reference can actually be repointed, because this
@@ -250,23 +308,22 @@ function cicdGenerateGitHubActionsPreview(config) {
   const pinNote = cicdImageIsMutable(image)
     ? `# ${image} can be repointed at different code without this file changing - :latest moves by design, any other tag at its registry's discretion. Pin a digest if this pipeline has to be reproducible.\n`
     : '';
+  const paths = `[${_cicdTriggerTrees(config).map((t) => `'${t}/**'`).join(', ')}]`;
   return `name: Dynamic Alerting CI/CD
 on:
   pull_request:
-    paths: ['conf.d/**']
+    paths: ${paths}
   # No branches: filter. on.push.branches takes literals only, so any value
   # here guesses the customer's default branch and is wrong for master/trunk
   # repos. Omitting it is correct everywhere and only adds runs - a push to
   # the default branch is still a push. Same reasoning as the CLI generator.
   push:
-    paths: ['conf.d/**']
+    paths: ${paths}
   workflow_dispatch:
 
-# Least-privilege. This preview's generate job writes .output/ and nothing
-# else, so read is all it needs. The CLI generator (da-tools init) additionally
-# posts a sticky PR comment and therefore also declares pull-requests: write —
-# the difference is real, not drift, and granting a write scope this sample
-# never uses would be teaching the wrong default.
+# Least-privilege at the workflow level; the one job that writes back to the
+# pull request raises its own scope below. A job-level block REPLACES this one
+# rather than merging, which is why that job restates contents: read.
 # (No backticks in this block — it lives inside a JS template literal.)
 permissions:
   contents: read
@@ -276,56 +333,154 @@ ${pinNote}jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate config
+      - name: Validate config (schema + routing + policy)
         run: |
+          # docker -v CREATES a missing host path instead of failing, so a
+          # wrong config directory mounts an EMPTY one, validate-config parses
+          # zero files and exits 0. Refuse instead of passing silently.
+          if [ ! -d "conf.d" ]; then
+            echo "::error::conf.d does not exist in this commit. Refusing to validate, because mounting a path that is not there yields a PASS that checked nothing."
+            exit 1
+          fi
           docker run --rm \\
-            -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
+            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
             ${image} \\
             validate-config --config-dir /data/conf.d
+      - name: Lint custom rules (if any)
+        run: |
+          if [ -d "rule-packs/custom" ]; then
+            docker run --rm \\
+              -v "\${{ github.workspace }}/rule-packs/custom:/data/rules:ro" \\
+              ${image} \\
+              lint /data/rules --ci
+          fi
 
   generate:
     needs: validate
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Load-bearing, not boilerplate: the blast-radius comment is this job's
+    # only output, and GITHUB_TOKEN defaults to read-only on repositories
+    # created after 2023-02. The scope sits on this job alone so that apply,
+    # which carries the production environment, never inherits it.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The blast radius is computed against the pull request's base
+          # commit, which a shallow clone does not contain.
+          fetch-depth: 0
       - name: Prepare output directory
         run: mkdir -p .output
-      - name: Generate routes
+      - name: Generate Alertmanager routes
         run: |
           # Validate only (#1423 / #1650): --validate returns before -o is
           # used, and the tool now refuses the two together.
           docker run --rm \\
-            -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
+            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
             ${image} \\
             generate-routes --config-dir /data/conf.d --validate
-      - name: Compute blast radius
+      - name: Resolve base config snapshot
+        if: github.event_name == 'pull_request'
+        env:
+          # Through env, not interpolated into the script, so the expression
+          # cannot become shell syntax.
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
+          : "\${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"
+          mkdir -p .output/base/conf.d
+          if ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this clone, so there is nothing to compare against. Either the checkout was narrowed (this workflow sets fetch-depth: 0) or the base ref was rewritten."
+            exit 1
+          fi
+          # ls-tree reads the ENTRY; git cat-file -t would resolve what it
+          # points at, and for a submodule that object is absent here - which
+          # would be misreported as "no config directory yet".
+          git ls-tree "$BASE_SHA" -- conf.d > "$RUNNER_TEMP"/entry.txt
+          kind=$(cut -d' ' -f2 "$RUNNER_TEMP"/entry.txt)
+          if [ -z "$kind" ]; then kind=missing; fi
+          if [ "$kind" = tree ]; then
+            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git read-tree "$BASE_SHA:conf.d"
+            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git checkout-index -a -f --prefix=.output/base/conf.d/
+          elif [ "$kind" = missing ]; then
+            echo "::notice::conf.d does not exist at $BASE_SHA; treating this as the first import, so every tenant is reported as added"
+          else
+            echo "::error::conf.d at $BASE_SHA is a $kind, not a directory, so no baseline can be built from it. Reporting that as a first import would hide the fault."
+            exit 1
+          fi
+      - name: Config diff (blast radius)
+        run: |
+          # config-diff signals findings through its exit code, so both 0 (no
+          # change) and 1 (changes) are ordinary outcomes here; 2 and above
+          # mean the run did not complete.
+          # ⚠️ It compares TENANT files only and skips every name starting
+          # with _, so a change to conf.d/_defaults.yaml - inherited by every
+          # tenant - reports "no changes". Review those by hand.
+          set +e
           docker run --rm \\
-            -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
+            -v "\${{ github.workspace }}/.output/base/conf.d:/data/conf.d.base:ro" \\
+            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
             ${image} \\
-            config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md
+            config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
+              --format markdown > .output/blast-radius.md
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::config-diff exited $rc (expected 0 or 1) — image pull, mount, or malformed config"
+            exit "$rc"
+          fi
+          if [ ! -s .output/blast-radius.md ]; then
+            echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"
+            exit 1
+          fi
+      - name: Post PR comment with blast radius
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: .output/blast-radius.md
+          header: dynamic-alerting-blast-radius
 
   apply:
     needs: [validate]
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest${config.deploy === 'argocd' ? `
+    # ubuntu-latest carries helm, kubectl and kustomize - and no argocd, so
+    # this job runs in the CLI's own image. --user root because a container
+    # job's steps touch runner-owned mounts.
+    container:
+      image: ${CICD_ARGOCD_CLI_IMAGE}
+      options: --user root` : ''}
     environment: production
-    steps:
-      - uses: actions/checkout@v4${config.deploy === 'kustomize' ? `
-      - name: Apply Kustomize
+    steps:${config.deploy === 'kustomize' ? `
+      - uses: actions/checkout@v4
+      - name: Build ConfigMaps via Kustomize
         run: |
-          kustomize build kustomize/overlays/prod > /tmp/manifests.yaml
+          # --load-restrictor: conf.d files are symlinked into kustomize/base/,
+          # and the default restrictor refuses a symlink pointing outside it.
+          kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml
+      - name: Apply to cluster (dry-run first)
+        run: |
           kubectl apply --dry-run=server -f /tmp/manifests.yaml
-          kubectl apply -f /tmp/manifests.yaml` : config.deploy === 'helm' ? `
-      - name: Helm upgrade
+          echo "--- Dry-run passed. Applying... ---"
+          kubectl apply -f /tmp/manifests.yaml
+      - name: Reload Prometheus
+        run: |
+          kubectl rollout restart deployment/prometheus -n monitoring` : config.deploy === 'helm' ? `
+      - uses: actions/checkout@v4
+      - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter \\
-            -f environments/prod/values.yaml \\
-            -n monitoring --wait` : `
+            -f "environments/prod/values.yaml" \\
+            -n monitoring \\
+            --wait --timeout 5m` : `
+      # No checkout: argocd app sync talks to the server, so this job reads
+      # nothing out of the repository.
       - name: Trigger ArgoCD sync
-        run: argocd app sync dynamic-alerting --force`}`;
+        run: |
+          argocd app sync dynamic-alerting --prune --timeout 300`}`;
 }
 
-export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, CICD_ARGOCD_CLI_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

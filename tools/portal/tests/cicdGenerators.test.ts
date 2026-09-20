@@ -178,8 +178,12 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
     // to the same shape. `.output/` is still written — by the runner, through
     // the blast-radius shell redirect — never by a container.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    const step = yaml.slice(yaml.indexOf('- name: Generate routes'),
-      yaml.indexOf('- name: Compute blast radius'));
+    // Step names come from the artifact now (#1351 後續待辦: the preview's
+    // nine job × deploy step lists all differed from what `init` writes), so
+    // these are the artifact's names, not the preview's old shorter ones.
+    const step = yaml.slice(yaml.indexOf('- name: Generate Alertmanager routes'),
+      yaml.indexOf('- name: Resolve base config snapshot'));
+    expect(step).not.toBe('');
     expect(step).toContain('generate-routes --config-dir /data/conf.d --validate');
     expect(step).not.toMatch(/generate-routes[^\n]* -o /);
     expect(step).not.toContain('/data/output');
@@ -199,8 +203,15 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
       .map((b) => b.slice(0, b.indexOf('\n\n') === -1 ? undefined : b.indexOf('\n\n')));
     expect(blocks.length).toBeGreaterThan(0);
     for (const b of blocks) {
-      const mounts = b.match(/-v (?:\$\{\{ github\.workspace \}\}|\S)[^ \\\n]*/g) ?? [];
-      const writable = mounts.filter((m) => !m.endsWith(':ro'));
+      // ⛔ The optional quote is load-bearing, not tidying. The preview now
+      // quotes every `-v` argument (the artifact does, for the
+      // directory-with-spaces reason #1454 C hit), and without `"?` here every
+      // mount matched as the 3-character string `-v "${{` — which ends in
+      // neither `:ro` nor anything else, so all of them counted as WRITABLE and
+      // this check reported a failure about mounts that are read-only. A reader
+      // that misreads every line is not a stricter check.
+      const mounts = b.match(/-v "?(?:\$\{\{ github\.workspace \}\}|\S)[^ \\\n]*/g) ?? [];
+      const writable = mounts.filter((m) => !m.replace(/"$/, '').endsWith(':ro'));
       if (writable.length === 0) continue;
       expect(b, `writable mount without --user: ${writable.join(', ')}`).toContain('--user $(id -u):$(id -g)');
       expect(b.indexOf('--user')).toBeLessThan(b.indexOf('ghcr.io/vencil/da-tools'));
@@ -214,7 +225,7 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
     // tidying: the command still works, so nothing goes red until something
     // writes there.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    const mounts = yaml.match(/-v \$\{\{ github\.workspace \}\}\/conf\.d:[^ \\]*/g) ?? [];
+    const mounts = yaml.match(/-v "?\$\{\{ github\.workspace \}\}\/conf\.d:[^ \\"]*/g) ?? [];
     expect(mounts.length).toBeGreaterThan(0);
     for (const m of mounts) {
       expect(m).toMatch(/:ro$/);
@@ -323,11 +334,32 @@ describe('cicdGenerateGitHubActionsPreview', () => {
     expect(out).toMatch(/^name: Dynamic Alerting CI\/CD/);
   });
 
-  it('declares pull_request and push triggers on conf.d/**', () => {
-    const out = cicdGenerateGitHubActionsPreview(baseConfig());
-    expect(out).toContain('pull_request:');
-    expect(out).toContain('push:');
-    expect(out).toContain("paths: ['conf.d/**']");
+  it('watches the trees the chosen deploy method actually reads (#1351/#1473)', () => {
+    // ⛔ Was `paths: ['conf.d/**']` for every deploy method. That is what the
+    // preview said while `da-tools init` wrote three trees — a customer reading
+    // it concluded that editing a rule pack starts nothing. The per-deploy set
+    // is the point, so this asserts the DIFFERENCE between the methods rather
+    // than a single string: helm's apply step reads
+    // environments/prod/values.yaml, kustomize's builds kustomize/overlays/prod,
+    // and argocd reads no repository path at all.
+    // The two legs are held equal by
+    // tests/ops/test_generated_ci_artifacts.py, which compares this output
+    // against a real `run_init()` run; this one keeps the wizard's own side
+    // honest when node-less environments skip that comparison.
+    const paths = (deploy: 'kustomize' | 'helm' | 'argocd') => {
+      const out = cicdGenerateGitHubActionsPreview(baseConfig({ deploy }));
+      expect(out).toContain('pull_request:');
+      expect(out).toContain('push:');
+      const lines = out.split('\n').filter((l) => l.trim().startsWith('paths:'));
+      // Both events, one rendered list: a single `paths:` line would mean the
+      // push leg lost its filter and now runs on every push.
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toBe(lines[1]);
+      return lines[0].trim();
+    };
+    expect(paths('kustomize')).toBe("paths: ['conf.d/**', 'kustomize/**', 'rule-packs/**']");
+    expect(paths('helm')).toBe("paths: ['conf.d/**', 'environments/**', 'rule-packs/**']");
+    expect(paths('argocd')).toBe("paths: ['conf.d/**', 'rule-packs/**']");
   });
 
   it('declares a validate job on ubuntu-latest', () => {
