@@ -791,7 +791,7 @@ PR #39 寫了 1 個 `_p39_commit.ps1`。PR #40 寫了 5 個 `_p40_*.bat|.ps1`。
 |---------|-------|------|
 | 檔案 Read/Edit/Write | Claude 的檔案 tool（走 FUSE mount） | 雙向可見、原子寫入 |
 | `git status` / `git add` / `git commit` / `git push` | `win_git_escape.bat` → Windows 原生 git | git index lock 寫在 Windows NTFS，不走 FUSE metadata |
-| Hook-gated commit（pre-commit + stage + commit-file + push） | `make win-commit MSG=... FILES=... [SKIP=...]` | 分層：sandbox 跑 hook-gate，Windows 跑 git；Windows 端 `--no-verify` 是內部實作（陷阱 #36） |
+| Hook-gated commit（pre-commit + stage + commit-file + push） | `make win-commit MSG=... FILES=... [SKIP=...]` | 分層：sandbox 跑 hook-gate，Windows 跑 git；Windows 端 commit 內部帶 `--no-verify`（陷阱 #36），push 不帶（#1487） |
 | `gh pr create` / `gh run list` | `win_git_escape.ps1` → Windows 原生 gh | gh CLI 不在 Cowork VM 內 |
 | 預期 > 60s 的命令（`gh pr checks`、大型 `git push`、pre-push 全量 hook） | `win_async_exec.ps1` → fire-and-forget + poll log | 避開 MCP RPC 60s timeout（陷阱 #47） |
 | 剛被 Windows 側修改的檔案需 sandbox 側讀 | `win_read_fresh.ps1` → Win32 ReadAllBytes → 新 inode | 繞過 FUSE dentry cache（陷阱 #44） |
@@ -944,7 +944,7 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`
 2. **[2/3] Windows stage + commit** — `cmd /c win_git_escape.bat add $(FILES)` 後接 `commit-file $(MSG)`（內部 `--no-verify`，因 Windows 端 hook 本來就無法執行；add + commit 合併為同一階段、同一 label，不拆 `[2/3a]` / `[2/3b]`）
-3. **[3/3] Windows push** — `cmd /c win_git_escape.bat push`（內部 `--no-verify` 避開陷阱 #36 的 pre-push hook）
+3. **[3/3] Windows push** — `cmd /c win_git_escape.bat push`（**不帶** `--no-verify`；#1487 起改為逐格繞過 mkdocs strict 與 preflight marker，擋直推 main 那道照跑）
 
 必填：`MSG=<message-file>`（UTF-8 without BOM）
 選填：
@@ -957,9 +957,10 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 | 層 | 執行位置 | --no-verify？ | 原因 |
 |----|---------|--------------|------|
 | Sandbox hook-gate | Cowork VM（ext4） | ❌ 不繞過 | 環境完整，hooks 真的有執行 |
-| Windows git | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 hook |
+| Windows commit | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 pre-commit 產的 hook |
+| Windows push | Windows（NTFS） | ⚠️ 逐格繞過三道中的兩道（#1487） | hook 真的被呼叫（守衛自 #1689 起是純 bash，Windows 跑得動），但 wrapper 設了 `MKDOCS_STRICT_BYPASS=1` / `GIT_PREFLIGHT_BYPASS=1`，那兩道讀到就自行退出 ⇒ 實際在判的是擋直推 main 那道，也是唯一沒有旗標的那道 |
 
-換句話說：**hooks 不是被 `--no-verify` 繞過的，而是移到 sandbox 側跑**。Windows 側的 `--no-verify` 是內部實作細節，不是設計漏洞。
+換句話說：**pre-commit stage 的 hooks 不是被 `--no-verify` 繞過的，而是移到 sandbox 側跑**；pre-push 這條路則是 hook 真的被呼叫，而三道裡有兩道被逐格關掉——買到的是「擋直推 main 這道不再跟著一起被關」，不是「三道都在判」。
 
 其他設計選擇：
 - Message 一律走檔案（`commit-file` 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）

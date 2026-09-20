@@ -332,3 +332,283 @@ def test_bat_files_have_no_utf8_bom(bat_path: pathlib.Path) -> None:
         f"Remove the BOM — cmd.exe cannot parse the BOM bytes as a command "
         f"prefix and will fail on the first line."
     )
+
+
+# ---------------------------------------------------------------------------
+# #1487 — `push` must leave the pre-push guards on the path.
+#
+# `--no-verify` is all-or-nothing: it also disarms protect_main_push.sh, the
+# one guard with no flag of its own (dev-rules #12). The wrapper now bypasses
+# the other two by name instead. ⛔ The predicate here is "did the hook run and
+# what did the wrapper do with its verdict" — a syntax scan answers neither.
+#
+# ⛔ `main` is a parameter, not decoration: the guard this buys back only ever
+# judges main, so a push path that treats main specially is exactly the shape
+# that must not slip through. Measured: routing main to its own label with
+# `--no-verify` left every check here green until this became a parameter.
+# ---------------------------------------------------------------------------
+
+_PUSH_BRANCHES = ("feat/escape-hatch", "main")
+
+
+def _git(work: pathlib.Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=work, check=True, capture_output=True, timeout=60)
+
+
+def _wrapper_repo(
+    tmp_path: pathlib.Path, branch: str, ops_files: tuple[str, ...] = ("win_git_escape.bat",)
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """A repo with the wrapper (and optionally the guards) beside it, plus a bare remote."""
+    work = tmp_path / "work"
+    (work / "scripts" / "ops").mkdir(parents=True, exist_ok=True)
+    for name in ops_files:
+        shutil.copy2(REPO_ROOT / "scripts" / "ops" / name, work / "scripts" / "ops" / name)
+    bare = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", str(bare)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    _git(work, "init", "-q")
+    _git(work, "config", "user.email", "fixture@example.invalid")
+    _git(work, "config", "user.name", "fixture")
+    # ⛔ Pin hooksPath: a global core.hooksPath would otherwise point git at a
+    # directory this fixture never writes, and the hook would "not run" for a
+    # reason that has nothing to do with the wrapper.
+    _git(work, "config", "core.hooksPath", str(work / ".git" / "hooks"))
+    _git(work, "checkout", "-q", "-b", branch)
+    (work / "a.txt").write_text("fixture\n", encoding="utf-8")
+    _git(work, "add", "a.txt")
+    _git(work, "commit", "-q", "-m", "test: fixture commit")
+    _git(work, "remote", "add", "origin", str(bare))
+    return work, bare
+
+
+def _push_through_wrapper(
+    tmp_path: pathlib.Path, hook_rc: int, branch: str, explicit_args: bool
+) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
+    """Push a real commit via `win_git_escape.bat push` against a stub pre-push hook.
+
+    The stub records the two per-guard bypass flags it was handed and exits
+    `hook_rc`, so one fixture answers both questions: whether git ran the hook
+    at all, and whether a rejecting hook reaches the caller. Returns the
+    wrapper's process and the recorded environment ({} when the hook never ran).
+    """
+    work, _bare = _wrapper_repo(tmp_path, branch)
+
+    log = tmp_path / "hook-ran.txt"
+    sh_log = str(log).replace("\\", "/")
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f'echo "MKDOCS_STRICT_BYPASS=${{MKDOCS_STRICT_BYPASS:-unset}}" > "{sh_log}"\n'
+        f'echo "GIT_PREFLIGHT_BYPASS=${{GIT_PREFLIGHT_BYPASS:-unset}}" >> "{sh_log}"\n'
+        f"exit {hook_rc}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    hook.chmod(0o755)
+
+    # ⛔ Both shapes. `make win-commit` runs `win_git_escape.bat push` with NO
+    # arguments, so the remote/branch auto-detect branch is the ONE the
+    # production caller takes — and a bypass parked there is invisible to a
+    # fixture that always passes them (measured).
+    argv = ["push", "origin", branch] if explicit_args else ["push"]
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), *argv],
+        cwd=work,
+        capture_output=True,
+        timeout=180,
+        # ⛔ The wrapper writes %TEMP%\vibe-git-out.txt / -err.txt at a FIXED
+        # path, so a suite run on a Windows host would otherwise overwrite the
+        # output an operator is reading from their own escape-hatch run.
+        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},
+    )
+    recorded: dict[str, str] = {}
+    if log.exists():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                name, _, value = line.partition("=")
+                recorded[name] = value.rstrip("\r")
+    return proc, recorded
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("branch", _PUSH_BRANCHES)
+@pytest.mark.parametrize("explicit_args", [True, False], ids=["argv", "auto-detect"])
+def test_push_runs_the_pre_push_hook_and_names_the_two_bypasses(
+    tmp_path, branch, explicit_args
+) -> None:
+    """#1487 — the guards must still see the push, and be bypassed by name.
+
+    Also the must-ring control for the rc test below: an accepting hook has to
+    come back as success, or `exit /b 1` everywhere would satisfy it.
+    """
+    proc, recorded = _push_through_wrapper(
+        tmp_path, hook_rc=0, branch=branch, explicit_args=explicit_args
+    )
+    assert recorded, (
+        f"the pre-push hook never ran for {branch} — `push` is skipping hooks "
+        "again (#1487):\n" + proc.stdout.decode("utf-8", "replace")
+    )
+    # ⛔ Exact values, not `"NAME=1" in text`: the guards compare with
+    # `[ "${NAME:-0}" = "1" ]`, so `1 ` (a quote-less `set` with a trailing
+    # space) reads as unset to them while a substring check stays green.
+    assert recorded.get("MKDOCS_STRICT_BYPASS") == "1", recorded
+    assert recorded.get("GIT_PREFLIGHT_BYPASS") == "1", recorded
+    assert proc.returncode == 0, (
+        "an accepted push is reported as failure:\n"
+        + proc.stdout.decode("utf-8", "replace")
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("branch", _PUSH_BRANCHES)
+@pytest.mark.parametrize("explicit_args", [True, False], ids=["argv", "auto-detect"])
+def test_push_propagates_a_rejecting_pre_push_guard(
+    tmp_path, branch, explicit_args
+) -> None:
+    """A guard that says no must reach the caller — `goto :done` is `exit /b 0`."""
+    proc, recorded = _push_through_wrapper(
+        tmp_path, hook_rc=1, branch=branch, explicit_args=explicit_args
+    )
+    assert recorded, f"fixture did not exercise the hook at all for {branch}"
+    assert proc.returncode != 0, (
+        f"win_git_escape.bat push swallows a rejecting pre-push guard ({branch}):\n"
+        + proc.stdout.decode("utf-8", "replace")
+    )
+
+
+_COMMENT_RE = re.compile(r"^\s*(?:REM\b|::)", re.I)
+# A git invocation, however the interpreter is named: `"%GIT_CMD%" push`,
+# `%Git_Cmd% push`, `git push`, `git.exe -c x=y push`. ⛔ Case-insensitive:
+# cmd.exe variable names are, so `%Git_Cmd%` and `%GIT_CMD%` are one thing.
+_PUSH_SITE_RE = re.compile(r'(?:%\w+%|\bgit(?:\.exe)?\b)"?\s+(?:-c\s+\S+\s+)*push\b', re.I)
+# Tokens that turn a guard off wholesale. Neither has a legitimate use in this
+# wrapper, so the predicate is "absent from everything cmd.exe executes" —
+# not "absent from the line I happened to match".
+_HOOK_DISABLING_TOKENS = ("--no-verify", "core.hookspath")
+
+
+def _executable_lines(lines: list[str]) -> list[str]:
+    """What cmd.exe actually runs: comments dropped, `^` continuations joined.
+
+    ⛔ Both normalisations are load-bearing, and both were found by walking the
+    previous version of this check: commenting out a `goto :done_err` left it
+    green while the rc was swallowed, and moving `--no-verify` onto a
+    continuation line hid it from a per-line scan.
+    """
+    out: list[str] = []
+    pending: str | None = None
+    for raw in lines:
+        if _COMMENT_RE.match(raw):
+            continue
+        pending = raw if pending is None else f"{pending} {raw.strip()}"
+        if pending.rstrip().endswith("^"):
+            pending = pending.rstrip()[:-1]
+            continue
+        out.append(pending)
+        pending = None
+    if pending is not None:
+        out.append(pending)
+    return out
+
+
+def test_the_wrapper_never_turns_a_pre_push_guard_off() -> None:
+    """Cross-platform net — the behavioural predicates above are Windows-only.
+
+    ⛔ And they are the ONLY ones that run them: every CI runner in this repo is
+    ubuntu, so on a PR this test is the whole net. ⚠️ It reads source, so it can
+    only answer "is the off-switch written down"; whether the guards actually
+    run is `_push_through_wrapper`'s question, and a bypass assembled at runtime
+    would still need that test to be seen.
+    """
+    lines = _read_normalized(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat")
+    body = _executable_lines(lines)
+    lowered = "\n".join(body).lower()
+    for token in _HOOK_DISABLING_TOKENS:
+        assert token not in lowered, (
+            f"`{token}` is back in executable text: it turns off every pre-push "
+            "guard, including the direct-push-to-main gate that has no flag of "
+            f"its own (#1487):\n"
+            + "\n".join(ln for ln in body if token in ln.lower())
+        )
+    sites = [(i, ln) for i, ln in enumerate(body) if _PUSH_SITE_RE.search(ln)]
+    assert sites, "no `git push` call site found — the scan lost its subject"
+    for i, ln in sites:
+        # The failure branch must reach :done_err — `goto :done` is `exit /b 0`,
+        # which is how a rejecting guard used to be reported as success (#1472).
+        end = next(
+            (j for j in range(i + 1, len(body)) if body[j].strip().lower() == "goto :done"),
+            len(body),
+        )
+        assert any("goto :done_err" in l.lower() for l in body[i:end]), (
+            f"this push has no failure path to :done_err:\n" + "\n".join(body[i:end])
+        )
+    for flag in ('set "mkdocs_strict_bypass=1"', 'set "git_preflight_bypass=1"'):
+        assert flag in lowered, f"{flag} is no longer set before the push"
+
+
+# ---------------------------------------------------------------------------
+# The composition, once: wrapper → git → shipped installer → real guards.
+#
+# The stub-hook tests above answer "does git run the hook and does its verdict
+# reach the caller". They deliberately return the same verdict for every
+# branch, so they cannot show that main is what gets refused — which is the
+# whole point of dropping --no-verify. This one installs the real thing.
+# ---------------------------------------------------------------------------
+
+# ⛔ Git's own bash, by path. `bash` on PATH here is WSL, and WSL git cannot
+# read a Windows-path worktree — the installer then reports "not inside a git
+# work tree" while you plainly are (measured).
+_GIT_BASH = pathlib.Path(r"C:\Program Files\Git\bin\bash.exe")
+
+_GUARD_FILES = (
+    "win_git_escape.bat",
+    "install_prepush_hook.sh",
+    "prepush_dispatch.sh",
+    "protect_main_push.sh",
+    "require_preflight_pass.sh",
+    "pre_push_mkdocs_strict.sh",
+    "_prepush_refs.sh",
+)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.skipif(not _GIT_BASH.exists(), reason="Git for Windows bash not installed")
+@pytest.mark.parametrize(
+    ("branch", "blocked"), [("feat/escape-hatch", False), ("main", True)]
+)
+def test_the_shipped_guards_refuse_only_a_direct_main_push(tmp_path, branch, blocked) -> None:
+    """#1487 — the whole point: main is refused, everything else still goes.
+
+    The feature-branch leg is the must-ring control; without it, a wrapper that
+    failed every push would satisfy the main leg.
+    """
+    work, _bare = _wrapper_repo(tmp_path, branch, ops_files=_GUARD_FILES)
+    install = subprocess.run(
+        [str(_GIT_BASH), "scripts/ops/install_prepush_hook.sh"],
+        cwd=work,
+        capture_output=True,
+        timeout=120,
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    assert (work / ".git" / "hooks" / "pre-push").exists(), "installer wrote no hook"
+
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), "push"],
+        cwd=work,
+        capture_output=True,
+        timeout=300,
+        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},
+    )
+    out = proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")
+    if blocked:
+        assert proc.returncode != 0, f"a direct push to {branch} was allowed:\n{out}"
+        # ASCII slice of the guard's banner — the CJK around it travels through
+        # cmd's codepage, this does not.
+        assert "dev-rules #12" in out, f"blocked, but not by that guard:\n{out}"
+    else:
+        assert proc.returncode == 0, f"{branch} was refused:\n{out}"
+        assert "dev-rules #12" not in out, f"the main guard fired on {branch}:\n{out}"

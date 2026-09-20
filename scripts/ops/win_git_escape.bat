@@ -257,8 +257,15 @@ if "%BRANCH%"=="" (
     for /f "tokens=*" %%b in ('"%GIT_CMD%" branch --show-current 2^>nul') do set "BRANCH=%%b"
 )
 echo Pushing %BRANCH% to %REMOTE%...
-REM --no-verify: pre-push hook has hardcoded Linux python path (Trap #36)
-"%GIT_CMD%" push --no-verify "%REMOTE%" "%BRANCH%" >"%OUT%" 2>"%ERR%"
+REM No --no-verify here (#1487). It is all-or-nothing, and the one guard
+REM it would also disarm -- the direct-push-to-main gate, dev-rules #12 --
+REM is the only one with no flag of its own. Bypass the other two by name
+REM instead. Trap #36 no longer applies: since #1689 the pre-push guards
+REM are plain bash, not a pre-commit-generated hook with a Linux python
+REM path. Scoped by the setlocal at the top of this file.
+set "MKDOCS_STRICT_BYPASS=1"
+set "GIT_PREFLIGHT_BYPASS=1"
+"%GIT_CMD%" push "%REMOTE%" "%BRANCH%" >"%OUT%" 2>"%ERR%"
 if %ERRORLEVEL% EQU 0 (
     echo OK: pushed
     type "%OUT%"
@@ -266,6 +273,9 @@ if %ERRORLEVEL% EQU 0 (
 ) else (
     echo FAILED:
     type "%ERR%"
+    REM A rejecting guard must reach the caller (#1472 shape): a bare
+    REM `goto :done` is `exit /b 0`.
+    goto :done_err
 )
 goto :done
 

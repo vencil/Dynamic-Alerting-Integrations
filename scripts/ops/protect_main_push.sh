@@ -92,7 +92,7 @@ while read -r remote_ref local_sha; do
             echo "║  3. gh pr create (或 win_git_escape.ps1 pr-create)      " >&2
             echo "║  4. 取得 owner 同意後 merge                              " >&2
             echo "║                                                          " >&2
-            echo "║  緊急 hotfix？加 --no-verify 並事後補 PR review          " >&2
+            echo "║  ⛔ 本守衛沒有繞過旗標，緊急 hotfix 也走上面四步         " >&2
             echo "╚══════════════════════════════════════════════════════════╝" >&2
             echo "" >&2
             exit 1
