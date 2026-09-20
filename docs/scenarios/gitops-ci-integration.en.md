@@ -435,7 +435,7 @@ repos:
         name: Validate Dynamic Alerting config
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          validate-config --config-dir /src/conf.d
+          validate-config --config-dir "/src/conf.d"
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
@@ -444,13 +444,13 @@ repos:
         name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir /src/conf.d --validate
+          generate-routes --config-dir "/src/conf.d" --validate
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
 ```
 
-⚠️ **`language: docker_image` and the `/src`-relative paths go together — do not split them.** pre-commit splits `entry` with `shlex` and then execs it **without a shell**, so the `language: system` + `docker run -v ${PWD}/conf.d:...` form hands docker the literal string `${PWD}` and fails on every commit that touches `conf.d/`. `docker_image` makes pre-commit build the `docker run` itself and mount your work tree at `/src` (`-v <cwd>:/src:rw,Z --workdir /src`) — which is why `--config-dir` must be `/src`-relative.
+⚠️ **`language: docker_image` and the `/src`-relative paths go together — do not split them.** pre-commit splits `entry` with `shlex` and then execs it **without a shell**, so the `language: system` + `docker run -v ${PWD}/conf.d:...` form hands docker the literal string `${PWD}` and fails on every commit that touches `conf.d/`. `docker_image` makes pre-commit build the `docker run` itself and mount your work tree at `/src` (`-v <cwd>:/src:rw,Z --workdir /src`) — which is why `--config-dir` must be `/src`-relative. ⚠️ That path is **quoted**, and the quotes are not decoration: `shlex` splits an unquoted space into two arguments, so an install location with a space in it (`-o "alerting app/"`) would hand `--config-dir` nothing but `/src/alerting`.
 
 Trade-off, stated: that mount is the **whole repo, read-write** — wider than the read-only `conf.d` mount the hand-written form asked for. It is pre-commit's own mechanism, and a hook that cannot run protects nothing.
 

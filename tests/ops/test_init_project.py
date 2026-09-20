@@ -37,6 +37,38 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 # 所以片語集中在這裡，並由 `test_the_summary_phrases_still_exist_in_the_tool`
 # 直接對產品碼求證：改文案 ⇒ **一條**紅、訊息就是「片語搬家了，改這裡」。
 _PENDING_MARKERS = ('Not done yet', 'NOT wired')
+# issue 1454 C turned the subdirectory CONTENTS step from "here is your
+# homework" into "here is the check": the generated content now carries the
+# offset, so the step reports the paths that DO NOT — which should be none.
+# Both markers are needed, and the pair is the point: asserting only the ✅
+# would pass on a step that cannot see a problem, and asserting only the list
+# would pass on a step that reports everything twice.
+_CONTENTS_OK_MARKER = 'Nothing left for you to prefix'
+_CONTENTS_PENDING_MARKER = 'Not done yet'
+
+
+def _summary_text(output_dir, config, created):
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ip._print_summary(created, str(output_dir), config)
+    return buf.getvalue()
+
+
+def _deoffset_in_file(path, offset):
+    """Strip `<offset>/` out of one generated file, in place.
+
+    ⛔ The detector half of every issue-1454-C test goes through here rather
+    than through a mutated generator, and that is deliberate: it proves the
+    summary step can still SEE a root-relative path, independently of whoever
+    wrote it. A test that only checks the happy path cannot tell "the content is
+    offset" from "the check went blind".
+    """
+    text = path.read_text(encoding='utf-8')
+    path.write_text(text.replace(f'{offset}/', ''), encoding='utf-8',
+                    newline='\n')
+
 _AUTOVALIDATE_MARKER = 'will automatically validate'
 _DRYRUN_WIRED_MARKERS = ('IS loaded', 'prefix')
 
@@ -3707,16 +3739,62 @@ class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
             ip._print_summary(created, str(target), config)
         return buf.getvalue()
 
-    def test_the_subdir_summary_names_the_paths_that_still_do_not_match(self):
+    def test_the_subdir_contents_already_carry_the_offset(self):
+        """⛔ issue 1454 C：這條原本斷言「每個值都出現在補救清單裡」。
+
+        產出內容現在**自己就吃了 offset**，所以正確的斷言反過來：每一個會被
+        GitLab／GitHub 從 repo 根解析的值都必須已經帶著 `alerting/`，而那一步
+        的文案要說「沒有需要你補的」。
+
+        ⚠️ 只驗這個方向是不夠的——它在「檢查瞎了」時同樣會綠。反方向由下面
+        `test_a_path_that_lost_its_offset_is_still_reported` 守。
+        """
+        from pathlib import Path as _P
         with tempfile.TemporaryDirectory() as tmpdir:
-            out = self._summary(tmpdir)
-        # 每一個真的會被 GitLab/GitHub 從 repo 根解析的值都要被點名，
-        # 而且要成對出現（現值 → 該變成什麼）。
-        for value in ('conf.d/**', 'kustomize/**', 'rule-packs/**',
-                      'conf.d/**/*', 'rule-packs/custom/**/*'):
-            assert f'{value}  →  alerting/{value}' in out, (
-                f'子目錄結尾訊息沒有點名 {value!r} —— 客戶照做之後這個 filter '
-                f'仍然比對 repo 根，什麼都不會匹配。\n{out}')
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            config = dict(self._CONFIG)
+            created = ip.run_init(config, str(sub))
+            out = _summary_text(sub, config, created)
+            for rel in (ip._GH_WORKFLOW_REL, ip._GL_PIPELINE_REL):
+                values = ip._root_relative_ci_paths(sub / rel, 'alerting')
+                assert values, f'{rel} 抽不到任何 repo 相對路徑——抽取器瞎了'
+                bad = [v for v in values if not v.startswith('alerting/')]
+                assert not bad, (
+                    f'{rel} 裡這些路徑還是以 repo 根為基準：{bad}\n{out}')
+            pc = ip._precommit_root_relative_paths(
+                sub / '.pre-commit-config.da.yaml')
+            assert pc, 'pre-commit 產物抽不到任何路徑——那正是舊清單漏掉的那一格'
+            assert all(v.startswith('alerting/') for v in pc), pc
+        assert _CONTENTS_OK_MARKER in out, out
+        assert '  →  ' not in out, (
+            f'還有路徑被列為待補前綴，但內容應該已經吃了 offset\n{out}')
+
+    def test_a_path_that_lost_its_offset_is_still_reported(self):
+        """⛔ 反方向：檢查必須仍然看得見 root-relative 的路徑。
+
+        做法是把寫出來的 workflow 在磁碟上「去 offset」，而不是去改產生器——
+        這樣驗的是「那一步看得見問題」，與誰寫出那個路徑無關。少了這條，
+        `_tree_prefixes` 只認 offset 形式也會全綠，而那正是 issue 1454 C 的
+        失效形狀往上挪一層。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            config = dict(self._CONFIG)
+            created = ip.run_init(config, str(sub))
+            _deoffset_in_file(sub / ip._GH_WORKFLOW_REL, 'alerting')
+            out = _summary_text(sub, config, created)
+        assert _CONTENTS_PENDING_MARKER in out, (
+            f'把 workflow 的路徑改回 repo 根之後，那一步沒有回報\n{out}')
+        assert _CONTENTS_OK_MARKER not in out, (
+            f'同一次執行同時說「沒有待補」又列出待補項\n{out}')
+        assert 'conf.d/**  →  alerting/conf.d/**' in out, out
 
     def test_only_the_selected_platform_is_listed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3758,7 +3836,10 @@ class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
             with contextlib.redirect_stdout(buf):
                 ip._print_summary(created, str(sub), config)
             out = buf.getvalue()
-        assert 'Not done yet' in out, out
+        # ⛔ 前置改成 ✅ 標記（issue 1454 C）：這一步現在的正常輸出是
+        # 「沒有待補」，而不是「還沒完」。仍然是反空洞斷言——它保證那一步
+        # 真的跑了，否則下面那句 not-in 是恆真的。
+        assert _CONTENTS_OK_MARKER in out, out
         assert 'stale-tree/**/*' not in out, (
             '`--ci github` 的結尾訊息列出了上一次執行留下的 GitLab pipeline '
             f'裡的 path filter——這一次既沒產生它也沒要求接線它。\n{out}')
@@ -3792,17 +3873,23 @@ class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
             with contextlib.redirect_stdout(buf):
                 ip._print_summary(created, str(sub), config)
             out = buf.getvalue()
-        assert 'Not done yet' in out, out
+        assert _CONTENTS_OK_MARKER in out, out
         assert 'stale-gh-tree/**' not in out, (
             '`--ci gitlab` 的結尾訊息列出了上一次執行留下的 GitHub workflow '
             f'裡的 path filter。\n{out}')
 
     def test_an_install_at_the_repo_root_says_nothing_of_the_kind(self):
-        """反空洞：根目錄安裝沒有這個問題，這一段不該出現。"""
+        """反空洞：根目錄安裝沒有這個問題，這一整段都不該出現。
+
+        ⛔ issue 1454 C 之後 `  →  ` 在子目錄也不出現了，所以那一句自己已經
+        不再分辨兩種情境——✅ 那一行才是子目錄專屬的，一併釘住它的缺席。
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             out = self._summary(tmpdir, out_sub='')
         assert 'Not done yet' not in out, out
         assert '  →  ' not in out, out
+        assert _CONTENTS_OK_MARKER not in out, (
+            f'根目錄安裝印出了子目錄專屬的那一行\n{out}')
 
     def test_the_listed_values_are_read_from_the_file_not_hardcoded(self):
         """⛔ 清單必須由**剛寫出來的檔案**推導。
@@ -4750,15 +4837,39 @@ class TestTheSummaryDoesNotContradictItself:
 
         子目錄 + 已接線這一格必須真的印出「還沒完」，否則上面那條測不到東西。
         """
+        # ⛔ issue 1454 C 換掉了這一格的反空洞來源，而那個改變本身是對的：
+        # 子目錄 + 已接線 + 內容已吃 offset ⇒ 真的沒有待辦了，所以那一格現在
+        # **應該**印「will automatically validate」。原本用 `Not done yet` 當
+        # 反空洞會永遠紅，而把它改成「什麼都不斷言」等於刪掉這道守衛。
+        # 改指仍然真的會 pending 的那一格：`--ci github` 寫進子目錄——GitHub
+        # 沒有 include 機制，workflow 一定要被搬到 repo 根，那一步永遠是待辦。
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary_in_subdir(
+                tmpdir, 'github', 'kustomize', root_body=self._WIRED_ROOT)
+        assert _PENDING_MARKERS[1] in out, (
+            f'子目錄的 GitHub 擺放步驟沒有印出來（找 {_PENDING_MARKERS[1]!r}），'
+            f'上面那條斷言因此是恆真的。若這是刻意改寫文案，改本檔頂端的 '
+            f'_PENDING_MARKERS。\n{out}')
+        assert _AUTOVALIDATE_MARKER not in out, out
+
+    def test_a_fully_wired_gitlab_subdir_now_legitimately_says_it_validates(
+            self, monkeypatch):
+        """⛔ issue 1454 C 的一個正向後果，釘住以免被當成迴歸改掉。
+
+        子目錄 + 根 include 已接好 + 產出內容已吃 offset ⇒ 這次執行真的什麼都
+        不缺，所以結尾說「會自動驗證」是**正確的**。在 C 之前這句是假的（內容
+        還以 repo 根為基準、一個 job 都不會被建立），而 `subdir_work_pending`
+        就是為那件事存在的。
+        """
         monkeypatch.setattr(ip, '_LANG', 'en')
         with tempfile.TemporaryDirectory() as tmpdir:
             out = self._summary_in_subdir(
                 tmpdir, 'gitlab', 'kustomize', root_body=self._WIRED_ROOT)
-        assert _PENDING_MARKERS[0] in out, (
-            f'子目錄的路徑前綴步驟沒有印出來（找 {_PENDING_MARKERS[0]!r}），'
-            f'上面那條斷言因此是恆真的。若這是刻意改寫文案，改本檔頂端的 '
-            f'_PENDING_MARKERS。\n{out}')
-        assert _AUTOVALIDATE_MARKER not in out, out
+        assert _CONTENTS_OK_MARKER in out, out
+        assert _PENDING_MARKERS[0] not in out, out
+        assert _AUTOVALIDATE_MARKER in out, (
+            f'所有前置都齊了，結尾卻沒有說會自動驗證\n{out}')
 
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
@@ -4985,14 +5096,29 @@ class TestRoundEightFindings:
             sub.mkdir()
             config = dict(self._CFG, deploy=deploy)
             created = ip.run_init(config, str(sub))
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                ip._print_summary(created, str(sub), config)
-            out = buf.getvalue()
-        needle = ('kustomize/overlays/prod' if deploy == 'kustomize'
-                  else 'environments/prod/values.yaml')
-        assert f'{needle}  →  alerting/{needle}' in out, (
-            f'{deploy}: 子目錄報告沒有點名 apply 階段用的 {needle}\n{out}')
+            out = _summary_text(sub, config, created)
+            needle = ('kustomize/overlays/prod' if deploy == 'kustomize'
+                      else 'environments/prod/values.yaml')
+            # ⛔ issue 1454 C 反轉了方向：apply 階段的路徑現在**自己**吃了
+            # offset，所以要驗的是它已經是 `alerting/<needle>`、而且那一步說
+            # 沒有待補。收集器仍然必須看得見它（它在 `script:`／`run:` body
+            # 裡，沒有任何 key 指出它是路徑）——反方向由下面把它去 offset
+            # 再報一次守。斷言全部留在 with 區塊內：tempdir 出了區塊就被刪，
+            # 而下半段還要再讀寫那個檔。
+            values = ip._root_relative_ci_paths(
+                sub / ip._GH_WORKFLOW_REL, 'alerting')
+            assert f'alerting/{needle}' in values, (
+                f'{deploy}: 收集器看不見 apply 階段的 {needle}（抽到 '
+                f'{values}）——它在 shell body 裡，沒有 key 指出它是路徑')
+            assert _CONTENTS_OK_MARKER in out, out
+            assert f'{needle}  →  ' not in out, out
+
+            _deoffset_in_file(sub / ip._GH_WORKFLOW_REL, 'alerting')
+            out2 = _summary_text(sub, config, created)
+            assert f'{needle}  →  alerting/{needle}' in out2, (
+                f'{deploy}: 把 apply 階段的路徑改回 repo 根之後，那一步沒有'
+                f'點名它——客戶會在 job 終於會跑之後，死在一個從沒被提到的'
+                f'路徑上\n{out2}')
 
     def test_the_report_does_not_quote_prose_out_of_shell_comments(self):
         """反向釘：`run: |` 區塊的字串值裡包含該步驟的 shell **註解**，而那些
@@ -5055,8 +5181,17 @@ class TestRoundEightMutationSurvivors:
     }
 
     def _subdir_report(self, tmpdir, deploy='kustomize'):
-        import contextlib
-        import io
+        return self._subdir_run(tmpdir, deploy)[3]
+
+    def _subdir_run(self, tmpdir, deploy='kustomize'):
+        """Run init into a subdirectory and hand back the whole context.
+
+        ⛔ issue 1454 C needs more than the text: its assertions read the
+        written artifact, then de-offset it and re-run the summary, so the
+        output directory and the `created` list have to outlive the first
+        report. `_subdir_report` stays as the text-only front door for the
+        tests that only need that.
+        """
         from pathlib import Path as _P
         repo = _P(tmpdir) / 'repo'
         (repo / '.git').mkdir(parents=True)
@@ -5064,10 +5199,7 @@ class TestRoundEightMutationSurvivors:
         sub.mkdir()
         config = dict(self._CFG, deploy=deploy)
         created = ip.run_init(config, str(sub))
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            ip._print_summary(created, str(sub), config)
-        return buf.getvalue()
+        return sub, config, created, _summary_text(sub, config, created)
 
     def test_config_dir_is_in_the_prefix_report(self):
         """⛔ 從 `_ROOT_RELATIVE_CI_KEYS` 拿掉 `'CONFIG_DIR'` 而全綠。
@@ -5076,19 +5208,36 @@ class TestRoundEightMutationSurvivors:
         路徑：沒加前綴的話 docker 會**建出**一個空目錄，`validate-config`
         解析 0 個檔案然後 PASS——正是這一步的文案承諾要防止的結局。
         """
+        # ⛔ issue 1454 C 反轉了方向：`CONFIG_DIR` 現在產出就是
+        # `alerting/conf.d`。它仍然是唯一一個會被 `docker -v` 掛載的值，所以
+        # 兩個方向都要守：產出帶著 offset，且去掉之後那一步看得見。
         with tempfile.TemporaryDirectory() as tmpdir:
-            out = self._subdir_report(tmpdir)
-        assert 'conf.d  →  alerting/conf.d' in out, (
-            'CONFIG_DIR 沒有出現在前綴清單裡——那是唯一一個會被 docker 掛載'
-            f'的值\n{out}')
+            sub, config, created, out = self._subdir_run(tmpdir)
+            gh = yaml.safe_load(
+                (sub / ip._GH_WORKFLOW_REL).read_text(encoding='utf-8'))
+            assert gh['env']['CONFIG_DIR'] == 'alerting/conf.d', (
+                f"CONFIG_DIR 是 {gh['env']['CONFIG_DIR']!r}，沒吃到 offset——"
+                'docker 會建出一個空目錄，validate-config 解析 0 個檔然後 PASS')
+            assert _CONTENTS_OK_MARKER in out, out
+            _deoffset_in_file(sub / ip._GH_WORKFLOW_REL, 'alerting')
+            out2 = _summary_text(sub, config, created)
+        assert 'conf.d  →  alerting/conf.d' in out2, (
+            'CONFIG_DIR 被改回 repo 根之後沒有出現在清單裡——那是唯一一個會被'
+            f' docker 掛載的值\n{out2}')
 
     def test_each_listed_path_appears_once_and_in_a_stable_order(self):
         """⛔ 去重與排序各自存活：去重拿掉之後每個 GitHub glob 印兩次，
         排序拿掉之後順序變成文件順序。兩者都不會遺失路徑，但客戶是照著這份
         清單逐條改的。
         """
+        # ⛔ issue 1454 C：正常路徑下這份清單是空的，所以去重與排序改在
+        # 「把產出去 offset」之後的清單上量——那是唯一還會列出東西的情境，也是
+        # 客戶真的會逐條照著改的那一份。
         with tempfile.TemporaryDirectory() as tmpdir:
-            out = self._subdir_report(tmpdir)
+            sub, config, created, _ = self._subdir_run(tmpdir)
+            _deoffset_in_file(sub / ip._GH_WORKFLOW_REL, 'alerting')
+            _deoffset_in_file(sub / ip._GL_PIPELINE_REL, 'alerting')
+            out = _summary_text(sub, config, created)
         blocks = out.split('Not done yet')[-1]
         listed = [ln.split('  →  ')[0].strip()
                   for ln in blocks.splitlines() if '  →  ' in ln]
@@ -5115,8 +5264,14 @@ class TestRoundEightMutationSurvivors:
         ('kustomize', 'kubectl / kustomize', 'KUBECONFIG',
          ('conf.d/ 已連結進 kustomize/base/',
           'conf.d/ linked into kustomize/base/')),
+        # ⛔ Reworded by issue 1454 B: the file IS generated now, so "this tool
+        # does not generate it" became false while the prerequisite stayed real
+        # — it ships with `thresholdConfig.tenants` EMPTY. The pin follows the
+        # sentence rather than the other way round, and the zh/en halves are
+        # still graded separately (that is what this test exists for).
         ('helm', 'helm', 'KUBECONFIG',
-         ('environments/prod/values.yaml —— 本工具不會產生它',
+         ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
+          'thresholdConfig.tenants filled in in '
           'environments/prod/values.yaml')),
         ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
          ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
@@ -5175,7 +5330,8 @@ class TestRoundEightMutationSurvivors:
         others = {
             ('conf.d/ 已連結進 kustomize/base/',
              'conf.d/ linked into kustomize/base/')[idx],
-            ('environments/prod/values.yaml —— 本工具不會產生它',
+            ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
+             'thresholdConfig.tenants filled in in '
              'environments/prod/values.yaml')[idx],
             ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
              "an ArgoCD Application named 'dynamic-alerting'")[idx],

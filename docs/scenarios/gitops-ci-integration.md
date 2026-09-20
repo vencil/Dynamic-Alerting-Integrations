@@ -410,7 +410,7 @@ repos:
         name: Validate Dynamic Alerting config
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          validate-config --config-dir /src/conf.d
+          validate-config --config-dir "/src/conf.d"
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
@@ -419,13 +419,13 @@ repos:
         name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir /src/conf.d --validate
+          generate-routes --config-dir "/src/conf.d" --validate
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
 ```
 
-⚠️ **`language: docker_image` 與 `/src` 開頭的路徑是綁在一起的，不要拆開改。** pre-commit 用 `shlex` 切開 `entry` 之後**不經 shell** 直接 exec，所以寫成 `language: system` + `docker run -v ${PWD}/conf.d:...` 的形式會把字面字串 `${PWD}` 交給 docker，每一個動到 `conf.d/` 的 commit 都失敗。`docker_image` 讓 pre-commit 自己組 `docker run`，並把你的工作樹掛在 `/src`（`-v <cwd>:/src:rw,Z --workdir /src`）——所以 `--config-dir` 必須是 `/src` 相對路徑。
+⚠️ **`language: docker_image` 與 `/src` 開頭的路徑是綁在一起的，不要拆開改。** pre-commit 用 `shlex` 切開 `entry` 之後**不經 shell** 直接 exec，所以寫成 `language: system` + `docker run -v ${PWD}/conf.d:...` 的形式會把字面字串 `${PWD}` 交給 docker，每一個動到 `conf.d/` 的 commit 都失敗。`docker_image` 讓 pre-commit 自己組 `docker run`，並把你的工作樹掛在 `/src`（`-v <cwd>:/src:rw,Z --workdir /src`）——所以 `--config-dir` 必須是 `/src` 相對路徑。⚠️ 那個路徑**加了引號**，而引號不是裝飾：`shlex` 會把未加引號的空白切成兩個參數，所以 `-o "alerting app/"` 這種含空白的安裝位置在沒有引號時會讓 `--config-dir` 只收到 `/src/alerting`。
 
 代價講明白：那個掛載是**整個 repo 可讀寫**，比手寫的唯讀 `conf.d` 掛載寬。這是 pre-commit 自己的機制，而跑不起來的 hook 保護不了任何東西。
 
