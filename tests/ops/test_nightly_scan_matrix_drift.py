@@ -495,7 +495,7 @@ _A_DIGEST = "sha256:" + "0123456789abcdef" * 4  # 64 hex chars; SHAPE is the sub
 
 
 def _delivered_pins_from_generator() -> tuple[str, ...]:
-    """The four customer-delivered pins, read from the generator that owns them.
+    """The customer-delivered pins, read from the generator that owns them.
 
     Keeps the positive samples honest across a legitimate bump, and keeps this
     file from becoming a third place a ref is spelled out.

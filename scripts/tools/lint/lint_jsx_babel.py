@@ -146,16 +146,18 @@ def _run_static_checks(filepath: str, source: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # Soft cap: the size at which decomposition starts paying off. Picked from
-# observing where tenant-manager.jsx became hard to audit. Of the 43 .jsx
-# files the lint scans (39 registered tools + 4 sub-components), only
-# tenant-manager.jsx (1691 lines) sits above 1500; the next-largest is
-# operator-setup-wizard.jsx at 1252. So 1500 picks today's single outlier
-# without flagging anyone else.
+# observing where tenant-manager.jsx became hard to audit — the file whose
+# three latent bugs PR #150 paid for.
+# ⚠️ The file-size distribution that justified this number is deliberately NOT
+# restated here. The constants themselves are pinned by TestThresholdConstants
+# (#152), but no assertion relates them to the sizes of the files actually
+# scanned, so a snapshot written here would go stale with nothing to notice.
+# Re-derive it from the scanned set when the caps come up for review.
 LINE_COUNT_WARN = 1500
 
-# Hard cap: tenant-manager.jsx at 1691 already had 3 latent bugs; 2500 gives
-# ~50% headroom over today's worst offender so it doesn't insta-fail current
-# reality, but blocks the next such offender from landing.
+# Hard cap: headroom over the soft cap so it does not insta-fail current
+# reality, while still blocking the next file that grows the way
+# tenant-manager.jsx did before it was decomposed.
 LINE_COUNT_FAIL = 2500
 
 

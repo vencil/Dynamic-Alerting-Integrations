@@ -300,8 +300,11 @@ class MdYamlDriftChecker:
         Deliberately a SEPARATE check from the schema pass below, and wired as
         its own hook, because the two differ on every axis that matters:
 
-        * Coverage — this rule speaks for ALL fenced yaml blocks (472 today);
-          the schema pass only speaks for the ~38 that look like tenant config.
+        * Coverage — this rule speaks for every fenced yaml block in docs/
+          that is not exempted by an explicit ignore marker; the schema pass
+          speaks only for the subset that reads as tenant config. Both totals
+          are printed by the run itself (scanned / exempted / config units),
+          so neither is restated here.
         * Concern — this one asks "is the fence honestly labelled?", the other
           asks "does this config match the contract?". Bundling them lets one
           mislabelled directory-tree diagram block an unrelated schema fix.
