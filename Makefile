@@ -826,6 +826,14 @@ platform-data: ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Me
 rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
 	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
 
+.PHONY: crd-schemas
+crd-schemas: ## 從釘住版本的上游 CRD 重生 docs/schemas/crd/（需網路；不在 pre-commit 上）
+	@python3 ./scripts/tools/dx/generate_crd_schemas.py
+
+.PHONY: crd-schemas-check
+crd-schemas-check: ## 只比對上游 CRD 是否已在同一個 ref 上改動過（需網路）
+	@python3 ./scripts/tools/dx/generate_crd_schemas.py --check
+
 .PHONY: rulepack-configmaps-check
 rulepack-configmaps-check: ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
 	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py --check

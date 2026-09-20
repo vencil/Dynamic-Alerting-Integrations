@@ -29,3 +29,30 @@
 > these docs describe as arriving "from the next image onward" — or as of a
 > named later version, e.g. "from v2.10.0" — requires changing that tag
 > (`latest` currently resolves to the same image).
+> ⛔ **Every other example omits the prefix above and writes only
+> `da-tools <command>`.** Copying that form straight into a terminal gets you
+> `bash: da-tools: command not found` (rc 127) — `da-tools` is not an executable
+> you can put on `$PATH`, and no `install` step makes one appear. To make those
+> examples literally copy-pasteable, define a function of the same name in your
+> shell first:
+> ```bash
+> # bash: paste into ~/.bashrc, or run once in the current shell
+> da-tools() {
+>   local tty=()
+>   [ -t 0 ] && [ -t 1 ] && tty=(-t)
+>   docker run --rm -i "${tty[@]}" --network=host \
+>     --user "$(id -u):$(id -g)" \
+>     -v "$(pwd):/workspace" -w /workspace \
+>     ghcr.io/vencil/da-tools:v2.9.0 "$@"
+> }
+> ```
+> ⛔ **A hyphen in a function name is a bash extension**: `/bin/sh` (dash)
+> answers `Syntax error: Bad function name` with exit code 2 (measured). In a
+> `#!/bin/sh` script use another name (e.g. `datools`) or write the full
+> `docker run` out.
+> ⛔ **Do not wire this into CI.** A function lives only in the shell that
+> defined it, and a CI `script:` is a different process — in CI use the full
+> `docker run`, or make the image the job's container.
+> ⚠️ It mounts `$(pwd)`, so run it **from your repository root** for the
+> relative paths in the examples (`--config-dir conf.d/`) to line up — same
+> reason as the paragraph above.

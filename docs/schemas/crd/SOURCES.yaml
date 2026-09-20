@@ -1,0 +1,68 @@
+# docs/schemas/crd/SOURCES.yaml — 文件內嵌 CRD 物件的 schema 來源（SSOT 宣告）
+#
+# 這裡宣告的是「上游 CRD 在哪、釘在哪個版本、我們要它的哪幾個 kind」。
+# 實際的 JSON Schema 由 `make crd-schemas` 從這份宣告產生，產物與產生當下的
+# 來源雜湊記在同目錄的 GENERATED.json。
+#
+# ⛔ 為什麼是「上游 CRD」而不是 datreeio/CRDs-catalog：catalog 是衍生品，
+# 且實測有缺口——`monitoring.coreos.com/alertmanagerconfig_v1beta1.json` 回 404，
+# 而那正是本 repo 文件用的版本（6 個區塊）。同一批物件也被
+# prometheus-operator 的 `example/prometheus-operator-crd/` 精簡變體漏掉，
+# 只有 `-crd-full` 有 v1beta1。⇒ 來源一律取上游、且取完整變體。
+#
+# ⛔ url 一律釘版本，不得用 main / latest：那兩者不可重現，而這些 schema 是
+# 閘門的判準，判準會無聲飄移就等於沒有判準。
+#
+# 新增 kind 的時機由閘門告訴你：`--check crd` 對查不到 schema 的 CRD 物件是
+# FAIL（fail-closed），訊息會指名要往這裡補哪一個 (group, kind, version)。
+sources:
+  - id: argo-cd
+    url: https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.0/manifests/crds/application-crd.yaml
+    ref: v3.5.0
+    kinds:
+      - {group: argoproj.io, kind: Application, version: v1alpha1}
+
+  - id: prometheus-operator-alertmanagerconfig
+    # ⛔ 必須是 -crd-full：精簡變體只有 v1alpha1。
+    url: https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_alertmanagerconfigs.yaml
+    ref: v0.86.0
+    kinds:
+      - {group: monitoring.coreos.com, kind: AlertmanagerConfig, version: v1beta1}
+
+  - id: prometheus-operator-servicemonitor
+    url: https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_servicemonitors.yaml
+    ref: v0.86.0
+    kinds:
+      - {group: monitoring.coreos.com, kind: ServiceMonitor, version: v1}
+
+  - id: prometheus-operator-prometheusrule
+    url: https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_prometheusrules.yaml
+    ref: v0.86.0
+    kinds:
+      - {group: monitoring.coreos.com, kind: PrometheusRule, version: v1}
+
+  - id: flux-source-controller
+    url: https://raw.githubusercontent.com/fluxcd/source-controller/v1.7.0/config/crd/bases/source.toolkit.fluxcd.io_gitrepositories.yaml
+    ref: v1.7.0
+    kinds:
+      - {group: source.toolkit.fluxcd.io, kind: GitRepository, version: v1}
+
+  - id: flux-kustomize-controller
+    url: https://raw.githubusercontent.com/fluxcd/kustomize-controller/v1.7.0/config/crd/bases/kustomize.toolkit.fluxcd.io_kustomizations.yaml
+    ref: v1.7.0
+    kinds:
+      - {group: kustomize.toolkit.fluxcd.io, kind: Kustomization, version: v1}
+
+  - id: external-secrets
+    url: https://raw.githubusercontent.com/external-secrets/external-secrets/v0.20.1/deploy/crds/bundle.yaml
+    ref: v0.20.1
+    kinds:
+      - {group: external-secrets.io, kind: ExternalSecret, version: v1beta1}
+      - {group: external-secrets.io, kind: SecretStore, version: v1beta1}
+
+  - id: cert-manager
+    url: https://github.com/cert-manager/cert-manager/releases/download/v1.19.1/cert-manager.crds.yaml
+    ref: v1.19.1
+    kinds:
+      - {group: cert-manager.io, kind: Certificate, version: v1}
+      - {group: cert-manager.io, kind: ClusterIssuer, version: v1}
