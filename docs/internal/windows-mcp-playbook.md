@@ -958,9 +958,9 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 |----|---------|--------------|------|
 | Sandbox hook-gate | Cowork VM（ext4） | ❌ 不繞過 | 環境完整，hooks 真的有執行 |
 | Windows commit | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 pre-commit 產的 hook |
-| Windows push | Windows（NTFS） | ❌ 不繞過（#1487） | 三道 pre-push 守衛自 #1689 起是純 bash，Windows 跑得動；改用逐格旗標讓擋直推 main 那道留在路徑上 |
+| Windows push | Windows（NTFS） | ⚠️ 逐格繞過三道中的兩道（#1487） | hook 真的被呼叫（守衛自 #1689 起是純 bash，Windows 跑得動），但 wrapper 設了 `MKDOCS_STRICT_BYPASS=1` / `GIT_PREFLIGHT_BYPASS=1`，那兩道讀到就自行退出 ⇒ 實際在判的是擋直推 main 那道，也是唯一沒有旗標的那道 |
 
-換句話說：**pre-commit stage 的 hooks 不是被 `--no-verify` 繞過的，而是移到 sandbox 側跑**；pre-push 那三道則是直接在 Windows 側跑。
+換句話說：**pre-commit stage 的 hooks 不是被 `--no-verify` 繞過的，而是移到 sandbox 側跑**；pre-push 這條路則是 hook 真的被呼叫，而三道裡有兩道被逐格關掉——買到的是「擋直推 main 這道不再跟著一起被關」，不是「三道都在判」。
 
 其他設計選擇：
 - Message 一律走檔案（`commit-file` 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）

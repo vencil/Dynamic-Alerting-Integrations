@@ -313,7 +313,10 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 	@# staleness and a complete Python+pyyaml env. SKIP_HOOKS=1 bypasses for
 	@# emergencies (e.g. runner crash); use sparingly.
 	@# ⛔ [3/3] push is NOT in that picture any more (#1487): it dropped
-	@# --no-verify, so the pre-push guards do run on the Windows side.
+	@# --no-verify, so git runs the pre-push hook on the Windows side. Two of
+	@# the three guards still stand down there — the wrapper sets
+	@# MKDOCS_STRICT_BYPASS=1 and GIT_PREFLIGHT_BYPASS=1 by name — so the one
+	@# actually judging is the direct-push-to-main gate, the one with no flag.
 	@if [ -z "$(FILES)" ]; then \
 		echo "--- [1/3] Hook gate SKIPPED (FILES empty) ---"; \
 	elif [ "$(SKIP_HOOKS)" = "1" ]; then \
