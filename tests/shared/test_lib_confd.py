@@ -146,7 +146,21 @@ def test_escaping_is_identity_on_anything_displayable(tmp_path: pathlib.Path):
     assert printable_name("db a (copy).yaml") == "db a (copy).yaml"
     assert "\x1b" not in printable_name("db-\x1b[2J.yaml")
     assert "\n" not in printable_name("db-\n.yaml")
+    # ⛔ …and the escape itself is escaped, or the mapping is not injective:
+    # a file whose name really holds ESC and a file whose name holds the
+    # four characters `\x1b` printed IDENTICALLY, in the one message whose
+    # job is to tell the operator which file to go and look at.
+    assert printable_name("db-\x1b.yaml") != printable_name("db-\\x1b.yaml")
 
+    # ⚠️ The half below needs a filesystem this name can actually be
+    # written to. Under a non-UTF-8 locale (`LC_ALL=C`) the assertions
+    # above still hold and are the point of this test; `write_text` raises
+    # `UnicodeEncodeError` before any of it is measured, which reads as
+    # "the escaping broke" rather than "this host cannot hold the fixture".
+    try:
+        os.fsencode("租戶-a.yaml")
+    except UnicodeEncodeError:  # pragma: no cover - depends on the locale
+        pytest.skip("this locale's filesystem encoding cannot hold the name")
     root = tmp_path / "conf.d"
     (root / "sub").mkdir(parents=True)
     (root / "sub" / "租戶-a.yaml").write_text("tenants: {}\n", encoding="utf-8")

@@ -147,8 +147,8 @@ the offending files wherever there are any to name:
 |---|---|
 | One tenant id declared in two files | The exporter hard-rejects the ENTIRE directory, so **every** tenant there loses alerting |
 | A file name that cannot be a ConfigMap key | A key must match `[-._a-zA-Z0-9]+` and be neither `.` nor `..` (k8s `IsConfigMapKey`). `db b.yaml` or `db-a (copy).yaml` can **never** become a key — rename them |
-| An `=` anywhere in the `CONFDIR` path | kubectl splits `--from-file=key=path` on `=`, so a second one fails the whole command. `env=prod/` and a Jenkins matrix `axis=value/` are ordinary directory names, and kubectl's own message blames "key names or file paths" while naming neither |
-| Carriers totalling more than 1 MiB | k8s `ValidateConfigMap` bounds the sum of the `data` values; over it, `kubectl apply` fails on the whole OBJECT and names no file |
+| A produced ConfigMap that is not your tree | Once built, this step **reads its own artifact back**: the key set and every value's length must equal the carriers it selected. A `,`, a `"` or an `=` in the path makes kubectl mangle the `--from-file` argument before it ever opens a file (it splits on CSV first, then on `key=path`) — one tenant short, or one key nobody declared. ⚠️ This row catches the half where the argument is mangled **and kubectl still succeeds**; when kubectl refuses instead, its message blames "key names or file paths" and **names neither**, and this step can only forward it |
+| Carriers totalling more than 1 MiB | k8s `ValidateConfigMap` bounds the sum of the `data` values; over it, `kubectl apply` fails on the whole OBJECT and names no file. Measured on the **values in the produced manifest**, not predicted from file sizes |
 | No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR`. ⚠️ This row has **no file to name** — "there are none" is the finding |
 
 ⛔ **Which exit code you see depends on which layer you call.** The script
@@ -162,8 +162,8 @@ when you need it (the same convention as Method C on this page):
 ```bash
 python3 scripts/ops/configmap_assemble.py \
   --config-dir tenants/conf.d --output .build/threshold-config.yaml
-# rc 1 = config violation (duplicate tenant / file name / `=` in path /
-#        over 1 MiB / no carrier)
+# rc 1 = config violation (duplicate tenant / file name / artifact does
+#        not match the tree / over 1 MiB / no carrier)
 # rc 2 = caller or tooling error (--config-dir missing, kubectl absent or
 #        timed out)
 ```
@@ -191,6 +191,15 @@ python3 scripts/ops/configmap_assemble.py \
   **untouched** (half a file is worse than an old one). ⛔ So the
   `kubectl apply` step must run only after assemble **succeeds** — a pipeline
   that is not fail-fast will push the **stale** config.
+- **⚠️ That 1 MiB is not the ceiling you hit first**: `kubectl apply -f`
+  (client-side, the command this section shows) stores the ENTIRE object in
+  the `kubectl.kubernetes.io/last-applied-configuration` annotation, and k8s
+  caps an object's annotations at **256 KiB** — a quarter of the `data`
+  limit, and checked before it. Over that, `kubectl apply` answers
+  `metadata.annotations: Too long` and **names no file**. Assemble prints a
+  `WARN` (it does not refuse) once the artifact is that large; the two ways
+  out are `kubectl apply --server-side -f`, which stores no such annotation,
+  and splitting the tenants (`make sharded-assemble`).
 
 ### Method B: Helm values overlay
 

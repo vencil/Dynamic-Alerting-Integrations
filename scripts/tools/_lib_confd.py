@@ -650,13 +650,20 @@ def printable_name(name: str) -> str:
     ⛔ Escapes by the PROPERTY `str.isprintable()`, not by a list of
     dangerous characters: the list would be an enumeration of the escapes
     someone thought of, and the next terminal feature would not be on it.
-    ⚠️ Identity on every printable name, CJK and emoji included, so the
-    substring assertions callers make on these messages are unaffected —
-    only a name that could not be displayed faithfully changes.
+    ⚠️ Identity on every printable name that holds no backslash, CJK and
+    emoji included, so the substring assertions callers make on these
+    messages are unaffected.
+
+    ⛔ The backslash is escaped too, and that is not decoration: without it
+    the mapping is not injective, so `a\\x1bb.yaml` (a real ESC) and
+    `a\\\\x1bb.yaml` (four literal characters) print the SAME and the
+    operator cannot tell which file to go looking for — in the one function
+    whose reason to exist is that a file name is attacker-controllable.
     """
-    if name.isprintable():
+    if name.isprintable() and "\\" not in name:
         return name
-    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in name)
+    return "".join(c if (c.isprintable() and c != "\\") else repr(c)[1:-1]
+                   for c in name)
 
 
 def _running_tool() -> str:
@@ -673,11 +680,19 @@ def _running_tool() -> str:
     return name[:-3] if name.endswith(".py") else (name or "conf.d reader")
 
 
+#: How many entries a per-file warning from this plane names before it says
+#: "(+N more)". ⛔ Named rather than spelled twice: a second reader writing
+#: to the same stderr (`configmap_assemble`'s unreadable-carrier WARN) has to
+#: truncate at the SAME count, or the operator cannot tell from the output
+#: whether a list is complete without knowing which reader wrote which line.
+WARN_LIMIT = 5
+
+
 def nested_yaml_warning(
     config_dir: str | os.PathLike[str],
     *,
     tool: str | None = None,
-    limit: int = 5,
+    limit: int = WARN_LIMIT,
 ) -> str | None:
     """Return a message when a flat read of `config_dir` would mislead.
 

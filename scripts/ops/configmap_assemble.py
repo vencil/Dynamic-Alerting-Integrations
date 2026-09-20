@@ -38,17 +38,27 @@
 - **#1797 範例樹**：`CONFDIR` 的預設值指向本 repo 自帶的開發範例樹
   （`db-a` / `db-b`）。照文件的 CI 片段跑會把示範租戶 apply 上生產，所以
   這支對那棵樹**硬擋**，要明示 `ALLOW_SAMPLE_CONFDIR=1` 才放行。
+  ⚠️ **這道擋是 per-checkout 不是 per-repo**，這是**揭露不是疏漏**：
+  `SAMPLE_CONFIG_DIR` 由 `__file__` 推導，所以它守的是「跑這一份 script 的
+  這一棵樹」。另一個 checkout／worktree 的同一份範例樹要**明示打出那條路徑**
+  才碰得到，而那已經不是「照預設值跑」這個缺陷類別了。改用 git 收斂 repo
+  identity 的代價更壞：客戶樹上未必有 `git`，而缺 `git` 時那道判定會**靜默
+  放行**——一個只在測得到的地方才成立的守衛。
 
 ⛔ 不自己重寫 kubectl 的 YAML 產生器：`kubectl` 本來就是這條 recipe 的既有
 依賴，第二份產生器只會與它漂移。
 
 ⛔ **這支擋的是「產物不合法」，一律在寫出產物之前；它不是內容政策。**
-上面三軸之後，同一個問題的其餘幾面各自有述詞（每一面都是從別人的權威
-轉寫的，不是本檔發明的品味）：檔名能不能當 key（`configmap_key_problem`
-← `IsConfigMapKey`）、`--from-file=` 的來源字串 kubectl 解不解得開
-（`from_file_source_problem` ← `ParseFileSource`；`env=prod/` 這種目錄名
-以前會讓 kubectl 拒絕整條命令而誰也不點名）、`data` 的總位元組會不會超過
-API server 的上限（← `ValidateConfigMap`）。
+檔名能不能當 key 由 `configmap_key_problem`（轉寫自 `IsConfigMapKey`）在
+呼叫 kubectl 之前回答——那一面**必須**先問，因為非法檔名的代價是整個租戶
+無聲消失。
+
+⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成產出之後回頭讀自己的
+產物：`measure_artifact` 把 manifest 的 key 集合與長度，和我方 `carriers`
+的意圖對帳，總位元組也在**已 parse 的產物**上量。round 3 的量測是這樣長
+的——`--from-file` 的值先過 pflag `readAsCSV` 才輪到 `ParseFileSource`，
+所以只轉寫最內層的守衛對路徑裡的 `,` 與 `"` 完全看不見；再補一層就再冒一
+層。對帳問的是「產物是不是這棵樹」，kubectl 換 parser 也不影響。
 
 ⚠️ **量得到與量不到的界線**：`--config-dir` 底下**讀不到**的 config-named
 entry（斷鏈 symlink、同名目錄）不會讓這支紅，但一定**逐個具名**在 stderr
@@ -63,6 +73,7 @@ recipe 這一側能做的（不讓 **shell** 再解析一次）已經做了—�
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import subprocess
@@ -70,17 +81,22 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 _THIS_DIR = Path(__file__).resolve().parent
 _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
+import _lib_io  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
     EXIT_CALLER_ERROR,
 )
 from _lib_confd import (  # noqa: E402
+    WARN_LIMIT as _WARN_LIMIT,
     has_yaml_extension,
     is_hidden_name,
+    printable_name,
     unusable_config_entries,
     unusable_reason,
     warn_nested,
@@ -137,6 +153,17 @@ _MAX_KEY_BYTES = 253  # DNS1123SubdomainMaxLength
 _MAX_CONFIGMAP_BYTES = 1024 * 1024
 
 
+def _name_bytes(name: str) -> bytes:
+    """The bytes the API server will count for `name`, never raising."""
+    try:
+        return os.fsencode(name)
+    except UnicodeEncodeError:
+        # A synthesised name under a non-UTF-8 locale. UTF-8 is what the
+        # API server counts, and `surrogatepass` keeps a lone surrogate
+        # (what `fsdecode` hands back for an undecodable byte) countable.
+        return name.encode("utf-8", "surrogatepass")
+
+
 def configmap_key_problem(name: str) -> str | None:
     """Why `name` cannot be a ConfigMap key, or `None` if it can.
 
@@ -154,8 +181,15 @@ def configmap_key_problem(name: str) -> str | None:
     to produce. `os.fsencode` reverses the same escape, so the count is the
     byte count the API server will apply, for every name the filesystem can
     hand us.
+
+    ⛔ …and it raises the same `UnicodeEncodeError` on a name that did NOT
+    come from the filesystem, once the locale's filesystem encoding is not
+    UTF-8: `os.fsencode` then encodes with `ascii`. No production path
+    reaches that (names come from `iterdir`, so they carry the escape
+    `fsencode` reverses), but a function whose whole job is "refuse by name
+    instead of raising" may not have an input class it raises on.
     """
-    if len(os.fsencode(name)) > _MAX_KEY_BYTES:
+    if len(_name_bytes(name)) > _MAX_KEY_BYTES:
         return f"longer than {_MAX_KEY_BYTES} bytes"
     if not _CONFIGMAP_KEY_RE.match(name):
         bad = sorted({c for c in name if not _CONFIGMAP_KEY_RE.match(c)})
@@ -168,43 +202,24 @@ def configmap_key_problem(name: str) -> str | None:
     return None
 
 
-# ── `--from-file` source legality (#1796, second half) ───────────────
+# ── what the ARTIFACT has to say back (#1796, second half) ───────────
 #
-# ⛔ NOT from memory. Transcribed from the authority,
-# k8s.io/kubectl `pkg/generate/generate.go`:
+# ⛔ REMOVED here: `from_file_source_problem`, which transcribed kubectl's
+# `ParseFileSource` and counted `=`. It was one layer short — `--from-file`
+# is a pflag `StringSliceVar`, so `readAsCSV` splits the value first and a
+# path holding `,` or `"` became fabricated sources with the transcription
+# silent. **The cost of removing it**: a `--config-dir` holding `=` is no
+# longer named by US; kubectl still refuses and the run still fails, but its
+# message blames "key names or file paths" and names neither.
+# `measure_artifact` below asks the question no parser change can move.
 #
-#   func ParseFileSource(source string) (keyName, filePath string, err error) {
-#       numSeparators := strings.Count(source, "=")
-#       switch {
-#       case numSeparators == 0:              return path.Base(source), source, nil
-#       case numSeparators == 1 && HasPrefix(source, "="): ... "key name ... missing"
-#       case numSeparators == 1 && HasSuffix(source, "="): ... "file path ... missing"
-#       case numSeparators > 1:
-#           return "", "", errors.New("key names or file paths cannot contain '='")
-#       ...
-#
-# We always emit the `key=path` form, and `_CONFIGMAP_KEY_RE` already denies
-# `=` in the key — so the only way to reach `numSeparators > 1` is an `=` in
-# the PATH, i.e. in `--config-dir`. `env=prod/` and a Jenkins matrix axis
-# directory (`axis=value/`) are both ordinary directory names.
-_MAX_FROM_FILE_SEPARATORS = 1
-
-
-def from_file_source_problem(source: str) -> str | None:
-    """Why `kubectl` cannot parse `--from-file=<source>`, or `None` if it can.
-
-    ⛔ Asked about the string we are ABOUT TO BUILD, not about the file name
-    alone. kubectl's own refusal for this case says "key names or file paths
-    cannot contain '='" and names neither, so an operator whose `CONFDIR`
-    holds `env=prod/` reads it as an accusation against their file names and
-    goes looking in the wrong place.
-    """
-    extra = source.count("=") - _MAX_FROM_FILE_SEPARATORS
-    if extra > 0:
-        return (f"holds {extra + _MAX_FROM_FILE_SEPARATORS} '=' characters; "
-                f"kubectl splits `--from-file=key=path` on '=' and refuses "
-                f"more than one")
-    return None
+# ⛔ `kubectl apply -f` — the client-side apply the deployment doc teaches —
+# stores the ENTIRE object in the `last-applied-configuration` ANNOTATION,
+# and `ValidateObjectMeta` (run first, before the `data` rule) caps an
+# object's annotations at `TotalAnnotationSizeLimitB`, a QUARTER of the data
+# ceiling. Under it a 400 KB tree passes every check here and dies at apply
+# on `metadata.annotations: Too long`, naming no file.
+_ANNOTATION_TOTAL_LIMIT = 256 * 1024
 
 
 def _carriers(config_dir: Path) -> tuple[list[Path], list[Path]]:
@@ -237,6 +252,60 @@ def _carriers(config_dir: Path) -> tuple[list[Path], list[Path]]:
         and has_yaml_extension(p.name)
     ]
     return carriers, unusable_config_entries(entries)
+
+
+def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], dict[str, int]]:
+    """Reconcile the manifest kubectl produced against the tree we asked for.
+
+    Returns `(disagreements, bytes_per_key)`. A disagreement is a sentence
+    naming one key; `bytes_per_key` is what the API server will SUM, read off
+    the artifact rather than predicted from the tree.
+
+    ⛔ Two independent sources, neither a model of kubectl's argument parser:
+    what we meant (`carriers`, from `iterdir`) and what kubectl emitted (this
+    YAML). Every way the argument can be mangled on the way in — the pflag
+    CSV split on `,` and `"`, `ParseFileSource`'s split on `=`, whatever the
+    next release adds — ends in the same place: a missing key, a key nobody
+    asked for, or a value whose length is not the file's.
+
+    ⚠️ It does NOT compare the value BYTES, only their count: that would
+    assert a YAML round-trip through kubectl's emitter and this loader is the
+    identity, which has never been measured here against a real kubectl.
+    """
+    try:
+        doc = _lib_io.safe_load(manifest)
+    except yaml.YAMLError as exc:
+        return [f"kubectl's output is not parseable YAML: {exc}"], {}
+    if not isinstance(doc, dict):
+        return ["kubectl's output is not a YAML mapping"], {}
+
+    got: dict[str, int | None] = {}
+    for key, value in (doc.get("data") or {}).items():
+        got[str(key)] = (len(value.encode("utf-8"))
+                         if isinstance(value, str) else None)
+    for key, value in (doc.get("binaryData") or {}).items():
+        try:
+            got[str(key)] = len(base64.b64decode(value, validate=True))
+        except (ValueError, TypeError):
+            got[str(key)] = None
+
+    want = {p.name: p.stat().st_size for p in carriers}
+    problems = []
+    for name in sorted(set(want) - set(got)):
+        problems.append(f"{name!r} is in {want[name]} bytes on disk but is "
+                        f"ABSENT from the manifest — that tenant has no "
+                        f"alerting")
+    for name in sorted(set(got) - set(want)):
+        problems.append(f"{name!r} is in the manifest but is not a carrier "
+                        f"in --config-dir")
+    for name in sorted(set(got) & set(want)):
+        if got[name] is None:
+            problems.append(f"{name!r} came back in a form this check cannot "
+                            f"measure, so it was not verified")
+        elif got[name] != want[name]:
+            problems.append(f"{name!r} carries {got[name]} bytes in the "
+                            f"manifest but holds {want[name]} on disk")
+    return problems, {k: v for k, v in got.items() if v is not None}
 
 
 def _forward(verdict: tu.Verdict) -> None:
@@ -304,10 +373,13 @@ def main(argv: list[str] | None = None) -> int:
             f"ERROR: refusing to assemble the repo's DEVELOPMENT SAMPLE tree: "
             f"{resolved}\n"
             f"       (at or below {SAMPLE_CONFIG_DIR})\n"
-            f"       That is the built-in `CONFDIR` default. Its tenants "
-            f"(`db-a` / `db-b`) are reference templates — they ship in "
-            f"neither the chart nor the image, and they are almost certainly "
-            f"not yours. `kubectl apply` of this artifact REPLACES the live "
+            f"       That tree is this repo's demonstration material and the "
+            f"built-in `CONFDIR` default. Its tenants are reference "
+            f"templates — they ship in neither the chart nor the image, and "
+            f"they are almost certainly not yours. (Naming them here would "
+            f"be wrong for the subdirectories: `examples/` declares another "
+            f"set entirely.) `kubectl apply` of this artifact REPLACES the "
+            f"live "
             f"`{args.name}` with the samples.\n"
             f"       -> point the target at your own tree: "
             f"`make configmap-assemble CONFDIR=/path/to/your/conf.d`\n"
@@ -328,11 +400,19 @@ def main(argv: list[str] | None = None) -> int:
     # nothing ever read), but staying silent is the failure this file is
     # named after: the count in the success line would simply be one lower
     # than the tree, with nothing saying which tenant went missing.
-    for p in unusable:
-        print(f"WARN: {p.name!r} in {config_dir} {unusable_reason(p)} — it "
-              f"carries a config name but NOTHING was read from it, so it is "
-              f"absent from the ConfigMap and its tenants have no alerting.",
-              file=sys.stderr)
+    # ⚠️ Bounded, and at the SAME 5 as `_lib_confd`'s nested warning, which
+    # the run above just printed to this same stderr: one plane may not
+    # carry two truncation policies, or the operator has to know which
+    # reader wrote which line to know whether a list is complete.
+    for p in unusable[:_WARN_LIMIT]:
+        print(f"WARN: {printable_name(p.name)!r} in {config_dir} "
+              f"{unusable_reason(p)} — it carries a config name but NOTHING "
+              f"was read from it, so it is absent from the ConfigMap and its "
+              f"tenants have no alerting.", file=sys.stderr)
+    if len(unusable) > _WARN_LIMIT:
+        print(f"WARN: (+{len(unusable) - _WARN_LIMIT} more unreadable "
+              f"config-named entries in {config_dir}; this list is capped "
+              f"at {_WARN_LIMIT})", file=sys.stderr)
 
     if not carriers:
         print(
@@ -366,51 +446,7 @@ def main(argv: list[str] | None = None) -> int:
               "from the ConfigMap behind a green light.", file=sys.stderr)
         return EXIT_VIOLATION
 
-    # #1796, the other half: the file name was checked, the SOURCE STRING we
-    # build out of it was not. `--from-file=` takes `key=path`, so an `=`
-    # anywhere in `--config-dir` makes kubectl refuse the whole command with
-    # a message that blames "key names or file paths" and names neither.
-    # `env=prod/` and a Jenkins matrix axis directory are ordinary names.
     sources = [(f"{p.name}={p}", p) for p in carriers]
-    unparseable = [(src, p, why) for src, p in sources
-                   if (why := from_file_source_problem(src)) is not None]
-    if unparseable:
-        print(
-            f"ERROR: {len(unparseable)} --from-file argument(s) cannot be "
-            f"parsed by kubectl. The offending character is in the PATH, not "
-            f"in the file names — rename the directory, or point "
-            f"--config-dir at a copy whose path holds no '=':",
-            file=sys.stderr,
-        )
-        for _src, p, why in unparseable:
-            print(f"  {str(p)!r}: {why}", file=sys.stderr)
-        return EXIT_VIOLATION
-
-    # A ConfigMap the API server will reject for size is not an artifact, and
-    # that rejection lands one step later — at `kubectl apply`, on a whole
-    # object, naming no file. ⚠️ Summed over the FILE BYTES because that is
-    # the quantity `ValidateConfigMap` bounds; anything kubectl decides to
-    # carry as `binaryData` is base64'd and therefore larger on the wire, so
-    # this bound can only under-report, never false-red.
-    sizes = [(p, p.stat().st_size) for p in carriers]
-    total = sum(n for _p, n in sizes)
-    if total > _MAX_CONFIGMAP_BYTES:
-        print(
-            f"ERROR: the {len(carriers)} carrier(s) total {total} bytes. k8s "
-            f"`ValidateConfigMap` sums the `data` values and rejects anything "
-            f"over {_MAX_CONFIGMAP_BYTES} bytes, so `kubectl apply` of this "
-            f"artifact fails on the OBJECT and names no file — refuse here, "
-            f"where the files can be named. Largest:",
-            file=sys.stderr,
-        )
-        for p, n in sorted(sizes, key=lambda kv: -kv[1])[:5]:
-            print(f"  {p.name!r}: {n} bytes", file=sys.stderr)
-        print(f"       -> split the tenants across more than one ConfigMap "
-              f"(`make sharded-assemble`), or shrink the carriers.\n"
-              f"       ⚠️ This is a LOWER bound on what the cluster will "
-              f"refuse: the serialized request carries the manifest, not "
-              f"just these bytes.", file=sys.stderr)
-        return EXIT_VIOLATION
 
     # ⛔ Ask the question about the ARTIFACT, not about the tree. The ConfigMap
     # key plane is flat, so only `carriers` can ever reach the exporter through
@@ -480,6 +516,67 @@ def main(argv: list[str] | None = None) -> int:
         for line in (proc.stderr or "(no stderr)").rstrip().splitlines():
             print(f"  {line}", file=sys.stderr)
         return EXIT_VIOLATION
+
+    # ⛔ Read back what we just produced. Everything above this line is an
+    # intention; this is the only place the artifact itself answers.
+    disagreements, measured = measure_artifact(proc.stdout, carriers)
+    if disagreements:
+        print(
+            f"ERROR: the manifest `kubectl` produced does not match the "
+            f"{len(carriers)} carrier(s) in {config_dir}. Nothing was "
+            f"written. This is the argument list being mangled on its way "
+            f"in (a `,`, a `\"` or an `=` in the path is enough — kubectl "
+            f"splits the value before it ever looks at a file), and applying "
+            f"it would deploy a ConfigMap that is not this tree:",
+            file=sys.stderr,
+        )
+        for line in disagreements:
+            print(f"  {line}", file=sys.stderr)
+        print(f"       -> point --config-dir at a path holding none of "
+              f"those characters, or copy the tree somewhere plainer.",
+              file=sys.stderr)
+        return EXIT_VIOLATION
+
+    # The size rule, asked of the artifact rather than predicted from the
+    # tree: `kubectl create --dry-run=client` does not apply it, so without
+    # this the refusal lands at `kubectl apply`, on the whole object, naming
+    # no file.
+    total = sum(measured.values())
+    if total > _MAX_CONFIGMAP_BYTES:
+        print(
+            f"ERROR: the manifest's values total {total} bytes. k8s "
+            f"`ValidateConfigMap` sums them and rejects anything over "
+            f"{_MAX_CONFIGMAP_BYTES} bytes, so `kubectl apply` of this "
+            f"artifact fails on the OBJECT and names no file — refuse here, "
+            f"where the files can be named. Largest:",
+            file=sys.stderr,
+        )
+        for name, n in sorted(measured.items(), key=lambda kv: -kv[1])[:5]:
+            print(f"  {name!r}: {n} bytes", file=sys.stderr)
+        print(f"       -> split the tenants across more than one ConfigMap "
+              f"(`make sharded-assemble`), or shrink the carriers.",
+              file=sys.stderr)
+        return EXIT_VIOLATION
+
+    # ⚠️ WARN, not a refusal: this ceiling belongs to ONE of the two apply
+    # modes, and blocking would stop a `--server-side` deploy that the API
+    # server accepts.
+    manifest_bytes = len(proc.stdout.encode("utf-8"))
+    if manifest_bytes > _ANNOTATION_TOTAL_LIMIT:
+        print(
+            f"WARN: this manifest is {manifest_bytes} bytes, over the "
+            f"{_ANNOTATION_TOTAL_LIMIT}-byte cap k8s puts on an object's "
+            f"ANNOTATIONS — a quarter of the {_MAX_CONFIGMAP_BYTES}-byte "
+            f"data limit, and checked first. A client-side `kubectl apply "
+            f"-f` stores the whole object in `last-applied-configuration`, "
+            f"so it answers `metadata.annotations: Too long` and names no "
+            f"file.\n"
+            f"       -> `kubectl apply --server-side -f` stores no such "
+            f"annotation; or split the tenants (`make sharded-assemble`).\n"
+            f"       ⚠️ Measured on this YAML; the annotation holds the same "
+            f"object as JSON — the same order of magnitude, not equal.",
+            file=sys.stderr,
+        )
 
     output = Path(args.output)
     try:

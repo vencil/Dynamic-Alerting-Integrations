@@ -57,10 +57,17 @@ import _lib_tenant_uniqueness as tu  # noqa: E402
 _TENANT = "tenants:\n  {t}:\n    mysql_connections: 50\n"
 _DEFAULTS = "defaults:\n  mysql_connections: 100\n"
 
-# A shim that records exactly what argv it was handed and prints a plausible
-# manifest. `KUBECTL_SHIM_FAIL` turns it into a failing kubectl.
+# A shim that records exactly what argv it was handed and BUILDS the manifest
+# those arguments describe. `KUBECTL_SHIM_FAIL` turns it into a failing
+# kubectl; `KUBECTL_SHIM_DROP` / `KUBECTL_SHIM_ADD` / `KUBECTL_SHIM_TRUNCATE`
+# make it produce an artifact that disagrees with its own arguments, which is
+# what `measure_artifact` exists to catch.
+#
+# ⛔ It has to build a real manifest now, not a stub: the script reads its own
+# output back and reconciles it. A stub would make every arm here red, and a
+# shim that cannot be made to LIE would leave the reconciliation untested.
 _SHIM = """#!{python}
-import json, os, sys
+import base64, json, os, sys
 dump = os.environ.get("KUBECTL_SHIM_ARGV")
 if dump:
     with open(dump, "w", encoding="utf-8") as fh:
@@ -69,7 +76,35 @@ fail = os.environ.get("KUBECTL_SHIM_FAIL")
 if fail:
     sys.stderr.write(fail + "\\n")
     sys.exit(3)
-sys.stdout.write("apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: stub\\n")
+data, binary = {{}}, {{}}
+for arg in sys.argv[1:]:
+    if not arg.startswith("--from-file="):
+        continue
+    key, path = arg[len("--from-file="):].split("=", 1)
+    raw = open(path, "rb").read()
+    if key == os.environ.get("KUBECTL_SHIM_TRUNCATE"):
+        raw = raw[:-1]
+    if key == os.environ.get("KUBECTL_SHIM_DROP"):
+        continue
+    try:
+        data[key] = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        binary[key] = base64.b64encode(raw).decode("ascii")
+extra = os.environ.get("KUBECTL_SHIM_ADD")
+if extra:
+    data[extra] = "tenants: {{}}\\n"
+doc = {{"apiVersion": "v1", "kind": "ConfigMap",
+       "metadata": {{"name": sys.argv[3], "namespace": "monitoring"}}}}
+if data:
+    doc["data"] = data
+if binary:
+    doc["binaryData"] = binary
+try:
+    import yaml
+    out = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True)
+except ImportError:
+    out = json.dumps(doc)          # JSON is YAML; the reader is the same
+sys.stdout.write(out)
 """
 
 
@@ -132,83 +167,185 @@ def _import_script(probe: str):
 
 # ── the recipe: it must not have grown a selection of its own ────────
 
+TARGET = "configmap-assemble"
+
+
+def _recipe_lines() -> list[str]:
+    """The recipe lines of `configmap-assemble`, read with make's own rule.
+
+    ⛔ NOT "everything up to the next target name". That boundary made this
+    file's assertions fire on a NEIGHBOUR's recipe the moment a target was
+    inserted between the two named ones, and the remedy the failure message
+    offers is wrong when applied there. make's rule is positional: a recipe
+    is the run of TAB-prefixed lines under the rule line, and it ends at the
+    first line that is neither TAB-prefixed nor blank.
+    """
+    lines = MAKEFILE.read_text(encoding="utf-8").splitlines()
+    # ⚠️ The rule line is the one carrying the recipe, not merely the first
+    # line spelled `configmap-assemble:` — a target-specific variable
+    # assignment is spelled exactly the same way and may sit above it.
+    start = next(i for i, ln in enumerate(lines)
+                 if ln.startswith(TARGET + ":")
+                 and i + 1 < len(lines) and lines[i + 1].startswith("\t"))
+    body = []
+    for ln in lines[start + 1:]:
+        if ln.startswith("\t"):
+            body.append(ln)
+        elif ln.strip() == "":
+            continue
+        else:
+            break
+    return body
+
+
 def _recipe_body() -> str:
-    text = MAKEFILE.read_text(encoding="utf-8")
-    start = text.index("\nconfigmap-assemble:")
-    end = text.index("\nsharded-assemble:", start)
-    return text[start:end]
+    return "\n".join(_recipe_lines())
+
+
+def _make(*args: str) -> str:
+    r = subprocess.run(["make", *args], cwd=REPO, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace",
+                       timeout=300)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r.stdout
+
+
+def _make_rule_block() -> list[str]:
+    """What make itself says about this target: `--print-data-base`.
+
+    The paragraph holds the rule line (target + prerequisites), any
+    target-specific variable assignments, the automatic variables make
+    computed, and the recipe AS STORED — unexpanded, `$$` and `@` intact.
+
+    ⚠️ The rule line is not always the paragraph's first: a target-specific
+    variable makes make open the block with `# makefile (from …)`. Matched
+    on "a line anywhere in here", so the lookup does not turn a
+    target-specific variable into "no rule found".
+    """
+    for para in _make("--print-data-base", "-n", TARGET).split("\n\n"):
+        lines = para.splitlines()
+        if (any(ln.startswith(TARGET + ":") for ln in lines)
+                and any(ln.startswith("#  recipe to execute") for ln in lines)):
+            return lines
+    raise AssertionError(f"make --print-data-base printed no rule for {TARGET}")
 
 
 class TestTheRecipeIsInertToMakeAndToTheShell:
-    """The successor to the old `TestRecipeSelection`, and to the four-string
-    blocklist that replaced it.
+    """The successor to the old `TestRecipeSelection`, to the four-string
+    blocklist that replaced it, and to the two-string blocklist that replaced
+    THAT.
 
-    ⛔ That blocklist (`$(shell`, `*.yaml`, `*.yml`, `basename`) was an
-    ENUMERATION OF SPELLINGS, and blind review walked through it: rebuilding
-    the producer out of `$(foreach …)` + `$(wildcard …)` + `$(notdir …)`
-    brought #1792 and #1796 both back with all 43 tests green. Adding those
-    three words would have been the second version of the same mistake.
+    ⛔ Both blocklists were ENUMERATIONS OF SPELLINGS and blind review walked
+    through both: first `$(foreach …)` + `$(wildcard …)` + `$(notdir …)` past
+    the four strings, then `@#$D` — make's SINGLE-CHARACTER variable
+    reference, which contains neither `$(` nor `${` — past the two, creating
+    a file during `make -n` with every test green. A third list would have
+    been the third version of the same mistake.
 
-    The two properties below are DERIVED instead, from the two layers that
-    can each touch a file name here, and between them nothing is enumerated:
+    What is asked here instead is one property and one reconciliation,
+    neither of which enumerates anything:
 
-    * make — the recipe needs no make expansion at all, so `$(`/`${` may not
-      appear in it. Every make-level producer needs one, whatever it spells
-      itself. ⛔ Comment lines are INSIDE this, not excluded from it: make
-      expands a recipe line before `#` ever reaches the shell, so a function
-      call in a comment RUNS. (Blind review measured that too: a `@#` line
-      holding `$(shell touch …)` created the file during `make -n`, and the
-      old test excluded `@#` lines by construction.)
-    * the shell — the expansion is exactly ONE command and it is the script
-      call, so there is no second command in which a glob, a `kubectl` or a
-      `basename` could live.
+    * **source side (no make needed)** — with the `$$` escapes removed, a
+      recipe line holds no `$`. That is make's grammar, not a list: `$$` is
+      the only way to write a literal dollar in a recipe, so every other `$`
+      is make about to expand something — `$(`, `${` and `$D` alike,
+      comments included (make expands a recipe comment before `#` reaches
+      the shell, so a function call written there RUNS).
+    * **two sources, both make's** — the recipe make STORED (unexpanded,
+      from `--print-data-base`) normalises to exactly what `make -n` prints.
+      ⛔ This replaced an assertion that the expansion equals one literal
+      command line, which forbade a SECOND command — the sister target
+      `sharded-assemble` opens with `@mkdir -p .build`, so that assertion
+      answered "is there a second command" when the question is "did
+      anything get expanded".
+
+    …plus the two things without which neither speaks for the whole target:
+    no prerequisites, and no target-specific variable (`SHELL := <wrapper>`
+    was the third walk-through).
     """
 
     def test_the_recipe_calls_the_script(self):
         """必響對照組: without this both properties below are vacuous — an
-        empty recipe has no `$(` and no extra command either."""
+        empty recipe has no `$` and matches its own expansion."""
         body = _recipe_body()
         assert "scripts/ops/configmap_assemble.py" in body, body
         assert "--config-dir" in body, body
 
-    def test_the_recipe_needs_no_make_expansion_not_even_in_a_comment(self):
-        """make layer. `$(CONFDIR)` used to be here; it is `"$$CONFDIR"` now
-        (a SHELL variable read from the environment), which leaves this
-        recipe with nothing for make to expand — so any `$(` is either a
-        producer or a comment that is about to run."""
-        body = _recipe_body()
-        offenders = [ln for ln in body.splitlines()
-                     if ln.startswith("\t") and ("$(" in ln or "${" in ln)]
+    def test_no_recipe_line_holds_a_dollar_make_would_expand(self):
+        """Source side, and the only arm here that needs no `make` binary —
+        deliberately, because the class it guards (a producer moving back
+        into the recipe) does not stop existing on a host without make."""
+        offenders = [ln for ln in _recipe_lines()
+                     if "$" in ln.replace("$$", "")]
         assert not offenders, (
-            "a make expansion in this recipe (comments included — make "
-            "expands them before `#` reaches the shell, so they RUN). If a "
-            "make variable is genuinely needed, `export` it and read it as "
-            f"`$$NAME`:\n" + "\n".join(offenders))
+            "make will expand something in this recipe. `$$` is the literal "
+            "dollar; anything else — `$(shell …)`, `${VAR}`, or the "
+            "single-character `$D` — is an expansion, and a comment line is "
+            "no exception (make expands it before `#` reaches the shell, so "
+            "it RUNS). If a make variable is genuinely needed, `export` it "
+            "and read it as `$$NAME`:\n" + "\n".join(offenders))
+
+    @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
+                        reason="needs GNU make to answer for its own recipe")
+    def test_make_reads_the_same_recipe_lines_this_file_does(self):
+        """必響對照組 for the text extraction above: the property is only
+        worth anything if the lines it ran on are the lines make will run.
+        Pins this file's parse against make's."""
+        block = _make_rule_block()
+        at = next(i for i, ln in enumerate(block)
+                  if ln.startswith("#  recipe to execute"))
+        assert block[at + 1:] == _recipe_lines()
 
     @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
                         reason="needs GNU make to expand the recipe")
-    def test_the_expansion_is_exactly_the_script_call_and_nothing_else(self):
-        """shell layer, asked of make's OWN expansion rather than of the
-        source text: whatever the recipe is written as, this is what runs.
+    def test_the_expansion_is_the_recipe_with_nothing_expanded(self):
+        """Two sources, both make's own: what it stored vs what it will run.
+
+        The normalisation is make's documented recipe-line handling and
+        nothing else — one leading TAB, then the `@`/`-`/`+` prefixes, then
+        `$$` -> `$`. Anything make actually expanded shows up as a line that
+        no longer matches its source.
 
         ⚠️ `make -n` strips the `@` / `-` prefixes, so "can the gate fail the
         target" is NOT answerable here — `TestTheGateCanActuallyFailTheTarget`
         runs the real thing for that.
         """
-        r = subprocess.run(["make", "-n", "configmap-assemble"], cwd=REPO,
-                           capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=300)
-        assert r.returncode == 0, r.stdout + r.stderr
-        # Join the `\`-continuations make prints verbatim, then drop the
-        # comment lines (they are the recipe's own prose; the test above is
-        # what keeps them inert).
-        text = r.stdout.replace("\\\n", " ")
-        commands = [" ".join(ln.split()) for ln in text.splitlines()
-                    if ln.strip() and not ln.lstrip().startswith("#")]
-        assert commands == [
-            'python3 ./scripts/ops/configmap_assemble.py '
-            '--config-dir "$CONFDIR" --output .build/threshold-config.yaml'
-        ], r.stdout
+        block = _make_rule_block()
+        at = next(i for i, ln in enumerate(block)
+                  if ln.startswith("#  recipe to execute"))
+        stored = [ln[1:].lstrip("@-+").replace("$$", "$")
+                  for ln in block[at + 1:]]
+        assert stored == _make("-n", TARGET).splitlines(), (
+            "make expanded something in this recipe: the line it printed is "
+            "not the line it stored. A make-level producer is exactly this "
+            "difference, wherever it is written — including in a comment.")
+
+    @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
+                        reason="needs GNU make to answer for its own rule")
+    def test_nothing_else_reaches_into_this_target(self):
+        """The reconciliation above only speaks for the lines make printed
+        for THIS target, and only if the shell running them is the ordinary
+        one.
+
+        Both halves were walk-throughs: a PREREQUISITE target's recipe runs
+        first and its comments expand too (blind review put `$(shell touch
+        …)` in one and the canary appeared), and `configmap-assemble: SHELL
+        := <wrapper>` hands the same command text to something else
+        entirely. Asked of make's rule database, not of the Makefile text,
+        and asked as "no target-specific variable at all" rather than as a
+        list of the dangerous ones.
+        """
+        block = _make_rule_block()
+        prereqs = [ln.split(":=", 1)[1].strip() for ln in block
+                   if ln.startswith("# ^ :=") or ln.startswith("# | :=")]
+        assert prereqs and not any(prereqs), (
+            f"{TARGET} has grown prerequisites; their recipes run (and "
+            f"expand) before this one: {prereqs}")
+        overrides = [ln for ln in block
+                     if ln.startswith(TARGET + ":") and "=" in ln.split(":", 1)[1]]
+        assert not overrides, (
+            "a target-specific variable on this target changes how the "
+            f"recipe runs without changing its text:\n" + "\n".join(overrides))
 
     def test_the_recipe_writes_the_scripts_documented_default(self):
         """The two must not drift: the docs and the `--help` promise
@@ -485,7 +622,13 @@ class TestNeverTreatsCannotMeasureAsClean:
 
         class _Kubectl:
             returncode = 0
-            stdout = "apiVersion: v1\nkind: ConfigMap\n"
+            # The script reads this back and reconciles it with the tree, so
+            # the fake has to answer for the fixture, not with a stub.
+            stdout = ("apiVersion: v1\nkind: ConfigMap\ndata:\n"
+                      + "".join(
+                          f"  {p.name}: "
+                          f"{json.dumps(p.read_text(encoding='utf-8'))}\n"
+                          for p in sorted(d.iterdir())))
             stderr = ""
 
         def _fake_run(cmd, *a, **k):
@@ -707,37 +850,98 @@ class TestFileNamesThatCannotBeConfigMapKeys:
         assert not _out(tmp_path).exists()
 
 
-class TestTheFromFileSourceKubectlHasToParse:
-    """#1796's other half: the FILE NAME was checked, the source string built
-    out of it was not."""
+class TestTheArtifactIsReconciledAgainstTheTree:
+    """The successor to `TestTheFromFileSourceKubectlHasToParse`, and the
+    reason that class is gone.
 
-    def test_an_equals_sign_in_the_config_dir_is_named(self, tmp_path,
-                                                       kubectl_shim):
-        """`env=prod/`, and a Jenkins matrix axis directory (`axis=value/`),
-        are ordinary directory names. `--from-file=key=path` then carries two
-        `=`, which `ParseFileSource` refuses with "key names or file paths
-        cannot contain '='" — an accusation against the FILE NAMES, which are
-        innocent, so the operator goes looking in the wrong place."""
-        d = _tree(tmp_path / "env=prod", ["db-a.yaml"])
-        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+    ⛔ That guard transcribed `ParseFileSource` and counted `=` in the source
+    string. Blind review found the layer ABOVE it: `--from-file` is a pflag
+    `StringSliceVar`, so the value is split by `readAsCSV` first, and a path
+    holding `,` or `"` was fabricated into two sources while the guard said
+    nothing. Transcribing CSV as well buys one layer and leaves the next.
+
+    ⛔ **The cost of removing it**, recorded here because it is a real loss:
+    `--config-dir .../env=prod/conf.d` is no longer named by us. kubectl
+    still refuses (the run fails, its message is forwarded), but that
+    message blames "key names or file paths" and names neither.
+
+    What replaces it asks the artifact instead of the parser: the keys and
+    the value lengths in the manifest kubectl just produced must be the
+    carriers this run selected. Every mangling of the argument list lands
+    there, whichever layer did it.
+    """
+
+    def test_a_key_the_manifest_lost_is_named_and_nothing_is_written(
+            self, tmp_path, kubectl_shim):
+        """The silent half of a mangled argument: the artifact builds, rc is
+        0, and one tenant is simply not in it."""
+        d = _tree(tmp_path, ["db-a.yaml", "db-b.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_DROP": "db-b.yaml"})
         assert r.returncode == 1, r.stdout + r.stderr
-        assert "env=prod" in r.stderr, r.stderr
-        assert "--from-file" in r.stderr, r.stderr
+        assert "db-b.yaml" in r.stderr, r.stderr
+        assert "ABSENT" in r.stderr, r.stderr
         assert not _out(tmp_path).exists()
 
-    def test_the_transcription_matches_parsefilesource(self):
-        """Pinned against kubectl's rule (count the `=`), not against the two
-        directory names above."""
-        mod = _import_script("cma_source_probe")
-        assert mod.from_file_source_problem("db-a.yaml=/srv/db-a.yaml") is None
-        assert mod.from_file_source_problem("db-a.yaml=/s=v/db-a.yaml") is not None
+    def test_a_key_nobody_asked_for_is_named(self, tmp_path, kubectl_shim):
+        """The other direction: a fabricated source (what `readAsCSV` does
+        with a `,` in the path) puts a key in the ConfigMap that no file in
+        the tree declares."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_ADD": "db-ghost.yaml"})
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "db-ghost.yaml" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
 
-    def test_an_ordinary_path_still_builds(self, tmp_path, kubectl_shim):
-        """必響對照組: without this the refusal above is satisfied by a check
-        that rejects every `--from-file` argument."""
-        d = _tree(tmp_path / "env-prod", ["db-a.yaml"])
+    def test_a_value_that_is_not_the_file_is_named(self, tmp_path, kubectl_shim):
+        """The key can be right and the bytes still wrong — a fabricated
+        source whose basename collides. Lengths are compared, so a value
+        that is not what is on disk is caught by the same arm."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_TRUNCATE": "db-a.yaml"})
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "db-a.yaml" in r.stderr, r.stderr
+        assert "bytes" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
+
+    def test_an_honest_manifest_passes(self, tmp_path, kubectl_shim):
+        """必響對照組: without this the three above are satisfied by a check
+        that refuses every manifest. The fixture carries a directory name
+        with a space and parens — the reconciliation must not be a second
+        opinion about what a path may look like."""
+        d = _tree(tmp_path, ["db-a.yaml", "DB-U.YAML"],
+                  tenant_of={"DB-U.YAML": "db-u"}, at="my confs (v2)/conf.d")
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
         assert r.returncode == 0, r.stdout + r.stderr
+        assert _out(tmp_path).exists()
+
+    def test_the_reconciliation_is_against_the_tree_not_a_shape(self):
+        """Pinned at the function, so the property is visible without a
+        subprocess: what it compares is the carrier set and the byte
+        lengths, not a spelling."""
+        mod = _import_script("cma_reconcile_probe")
+        manifest = ("apiVersion: v1\nkind: ConfigMap\n"
+                    "data:\n  ghost.yaml: x\n")
+        problems, measured = mod.measure_artifact(manifest, [])
+        assert problems and "ghost.yaml" in problems[0], problems
+        assert measured == {"ghost.yaml": 1}
+        # "could not measure" is not "measured clean", here too.
+        assert mod.measure_artifact("{", [])[0], "unparseable output passed"
+        assert mod.measure_artifact("- a list\n", [])[0], "non-mapping passed"
+        # A manifest with no `data` at all and nothing expected is not a
+        # disagreement — the empty-dir arm owns that question.
+        assert mod.measure_artifact("kind: ConfigMap\n", []) == ([], {})
+        # ⚠️ `binaryData` is measured DECODED, because that is what
+        # `ValidateConfigMap` sums. Asserted here rather than through the
+        # shim because nothing in the tested path reaches it: a carrier
+        # kubectl would carry as binary is not parseable YAML, so
+        # `tenant_uniqueness` refuses the tree one step earlier.
+        binary = "kind: ConfigMap\nbinaryData:\n  b.yaml: AAECAwQ=\n"
+        assert mod.measure_artifact(binary, [])[1] == {"b.yaml": 5}
+        bad = "kind: ConfigMap\nbinaryData:\n  b.yaml: not-base64!!\n"
+        assert mod.measure_artifact(bad, [])[0], "unmeasurable value passed"
 
 
 class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
@@ -764,6 +968,27 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
         # …and they really are absent from the artifact, which is why being
         # silent about them was the defect.
         assert _keys(_argv_of(dump)) == {"_defaults.yaml", "db-a.yaml"}
+
+    def test_a_long_list_is_capped_and_says_that_it_is(self, tmp_path,
+                                                       kubectl_shim):
+        """⛔ Same stderr, same truncation. `_lib_confd`'s nested warning caps
+        its list at `WARN_LIMIT` and says `(+N more)`; this reader printed to
+        the same plane without a cap, so an operator reading five names could
+        not tell from the output whether five was all there was — the answer
+        depended on which reader wrote the line.
+
+        The count is imported, not spelled again: two literals would drift.
+        """
+        from _lib_confd import WARN_LIMIT  # noqa: PLC0415
+
+        d = _tree(tmp_path, ["db-a.yaml"])
+        for i in range(WARN_LIMIT + 1):
+            (d / f"db-dir{i}.yaml").mkdir()
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+        named = [ln for ln in r.stderr.splitlines() if "db-dir" in ln]
+        assert len(named) == WARN_LIMIT, r.stderr
+        assert "(+1 more" in r.stderr, r.stderr
 
     def test_a_clean_tree_says_nothing(self, tmp_path, kubectl_shim):
         """必響對照組: without this the WARN above could be unconditional."""
@@ -794,6 +1019,42 @@ class TestAnArtifactTooLargeToBeAConfigMap:
         assert str(limit) in r.stderr, r.stderr
         assert "db-a.yaml" in r.stderr, r.stderr
         assert not _out(tmp_path).exists()
+
+    def test_the_client_side_apply_ceiling_is_said_out_loud(
+            self, tmp_path, kubectl_shim):
+        """⛔ The limit that bites FIRST, at a quarter of the one above.
+
+        `ValidateConfigMap` calls `ValidateObjectMeta` on its first line, and
+        a client-side `kubectl apply -f` — what the deployment doc teaches —
+        puts the whole object into the `last-applied-configuration`
+        ANNOTATION, capped at 256 KB. So a 400 KB tree passed every check
+        here and died at apply on `metadata.annotations: Too long`, naming
+        no file: the exact shape this gate exists to delete, inside the gate.
+
+        ⚠️ A WARN, not a refusal, and that is the judgement being pinned:
+        `kubectl apply --server-side` stores no such annotation, so refusing
+        would stop a deploy the API server accepts.
+        """
+        mod = _import_script("cma_annotation_probe")
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "db-a.yaml").write_text(
+            _TENANT.format(t="db-a") + "#" * (mod._ANNOTATION_TOTAL_LIMIT + 10),
+            encoding="utf-8")
+        assert sum(p.stat().st_size for p in d.iterdir()) < mod._MAX_CONFIGMAP_BYTES
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "annotations" in r.stderr.lower(), r.stderr
+        assert "--server-side" in r.stderr, r.stderr
+        assert _out(tmp_path).exists(), "a WARN must not stop the build"
+
+    def test_a_small_tree_hears_nothing_about_annotations(
+            self, tmp_path, kubectl_shim):
+        """必響對照組: without this the WARN above could be unconditional."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "annotation" not in r.stderr.lower(), r.stderr
 
     def test_the_limit_is_the_k8s_one_and_a_tree_under_it_still_builds(
             self, tmp_path, kubectl_shim):
