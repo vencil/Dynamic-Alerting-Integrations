@@ -6746,6 +6746,219 @@ def test_the_fill_in_instruction_actually_produces_the_shape_the_chart_reads(
 
 
 # ============================================================
+# ── 5d. The subdirectory axis: --ci × --deploy × -o <subdir> (#1454 C) ──
+# ============================================================
+#
+# ⛔ The axis the ticket asks for, and it exists because the previous state was
+# "the tool WARNS": `-o alerting/` wrote content that still named `conf.d/**`,
+# `CONFIG_DIR: conf.d`, `/src/conf.d` and the apply stage's own paths, all of
+# which both platforms resolve from the repository root. A customer who
+# prefixed exactly what the summary printed got CI running and a commit-time
+# hook that stayed `Skipped` forever, because that artifact was not on the list.
+#
+# ⛔ Graded the same way section 5b grades the root install: by matching the
+# generated FILTER against the paths that really exist, not by comparing path
+# strings. The offset only counts if a real file under `alerting/` matches.
+
+_SUBDIR = "alerting"
+
+
+@pytest.fixture(scope="module")
+def generated_subdir(tmp_path_factory) -> dict[tuple[str, str], Path]:
+    """`run_init` into `<repo>/alerting` once per combination.
+
+    ⛔ A real `.git` above the output directory, because that is what
+    `_enclosing_repo_root` keys on and therefore what makes the offset
+    non-empty. A bare tmp dir would exercise the root-install path and the whole
+    section would be vacuous.
+    """
+    out: dict[tuple[str, str], Path] = {}
+    for ci, deploy in MATRIX:
+        repo = tmp_path_factory.mktemp(f"subdir-{ci}-{deploy}")
+        (repo / ".git").mkdir()
+        target = repo / _SUBDIR
+        target.mkdir()
+        ip.run_init(
+            {
+                "ci": ci,
+                "deploy": deploy,
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
+            },
+            str(target),
+        )
+        out[(ci, deploy)] = target
+    return out
+
+
+def _real_repo_paths(target: Path) -> list[str]:
+    """Every file this run wrote, as the repository root sees it."""
+    repo_root = target.parent
+    return sorted(
+        f.relative_to(repo_root).as_posix()
+        for f in target.rglob("*") if f.is_file()
+    )
+
+
+def _watchable(paths: list[str]) -> list[str]:
+    """The written files a trigger filter is supposed to see.
+
+    The CI files themselves and the `.da-init.yaml` marker are deliberately
+    excluded: no generated filter claims to watch them, so demanding a match
+    would be asserting a promise nobody made.
+    """
+    skip = (
+        f"{_SUBDIR}/{_GH_WORKFLOW.as_posix()}",
+        f"{_SUBDIR}/{_GL_PIPELINE.as_posix()}",
+        f"{_SUBDIR}/.gitlab-ci.yml",
+        f"{_SUBDIR}/.pre-commit-config.da.yaml",
+        f"{_SUBDIR}/.da-init.yaml",
+    )
+    return [p for p in paths if p not in skip and not p.endswith("README.md")]
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_github_filter_matches_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ issue 1454 C on the GitHub leg, as behaviour.
+
+    `on.paths` is matched against repository-root-relative changed-file paths.
+    Before the fix this filter said `conf.d/**` while the files were at
+    `alerting/conf.d/…`, so no job was ever created and the pull request was
+    green having validated nothing — issue 1357's outcome reached by obeying
+    this tool's own remedy.
+    """
+    target = generated_subdir[(ci, deploy)]
+    workflow = yaml.safe_load(
+        (target / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    filters = _gh_trigger_paths(workflow)
+    assert filters, "the generated workflow declares no `paths:` filter"
+    real = _watchable(_real_repo_paths(target))
+    assert real, "no watchable file was written — this assertion would be vacuous"
+    unmatched = [
+        f for f in real if not any(_gha_path_matches(p, f) for p in filters)
+    ]
+    assert not unmatched, (
+        f"--ci {ci} --deploy {deploy} into {_SUBDIR}/: `on.paths` ({filters}) "
+        f"matches none of {unmatched}, which this run actually wrote. No job is "
+        "created for an edit to those files."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GL_COMBOS)
+def test_the_gitlab_changes_match_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ issue 1454 C on the GitLab leg. GitLab's docs say it of both keys this
+    pipeline gates on: "Paths are relative to the project directory
+    (`$CI_PROJECT_DIR`)". A miss creates no job, and a merge request with no
+    jobs is green.
+    """
+    target = generated_subdir[(ci, deploy)]
+    pipeline = yaml.safe_load(
+        (target / _GL_PIPELINE).read_text(encoding="utf-8"))
+    changes = _gl_change_paths(pipeline)
+    assert changes, "the generated pipeline declares no `changes:` at all"
+    real = _watchable(_real_repo_paths(target))
+    assert real, "no watchable file was written — this assertion would be vacuous"
+    unmatched = [
+        f for f in real
+        if not any(_gitlab_changes_matches(c, f) for c in changes)
+    ]
+    assert not unmatched, (
+        f"--ci {ci} --deploy {deploy} into {_SUBDIR}/: no `changes:` entry "
+        f"({changes}) matches {unmatched}, which this run actually wrote."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_precommit_hook_matches_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ THE artifact the old subdirectory remedy forgot.
+
+    `files:` is a regex matched against repository-root-relative paths, so
+    `^conf\\.d/` matched nothing under `alerting/` — and because this file was
+    not in the printed list, a customer who followed the remedy exactly got CI
+    running and a hook that reported `Skipped` at rc 0 on every commit. Graded
+    against a tenant file that really exists.
+
+    ⚠️ The `--config-dir` half is checked for its /src prefix only. Proving the
+    container really finds the directory needs a `docker run`, and there is no
+    registry egress here; `ip._PRECOMMIT_REPO_MOUNT` records where pre-commit's
+    own docker language mounts the repo.
+    """
+    target = generated_subdir[(ci, deploy)]
+    doc = yaml.safe_load(
+        (target / ".pre-commit-config.da.yaml").read_text(encoding="utf-8"))
+    tenant_files = [
+        f for f in _real_repo_paths(target)
+        if f.startswith(f"{_SUBDIR}/conf.d/") and f.endswith(".yaml")
+    ]
+    assert tenant_files, "no tenant config was written under the subdirectory"
+    hooks = [h for entry in doc["repos"] for h in entry["hooks"]]
+    assert hooks, "the generated pre-commit snippet declares no hook"
+    for hook in hooks:
+        regex = hook["files"]
+        unmatched = [f for f in tenant_files if not re.search(regex, f)]
+        assert not unmatched, (
+            f"hook {hook['id']!r} filters on {regex!r}, which matches none of "
+            f"{unmatched} — the files this run wrote. pre-commit would report "
+            "`Skipped` at rc 0 on every commit that touches them."
+        )
+        tokens = hook["entry"].split()
+        idx = tokens.index("--config-dir")
+        config_dir = tokens[idx + 1]
+        assert config_dir == (
+            f"{ip._PRECOMMIT_REPO_MOUNT}/{_SUBDIR}/conf.d"), (
+            f"hook {hook['id']!r} points `--config-dir` at {config_dir!r}; "
+            f"pre-commit mounts the repository root at "
+            f"{ip._PRECOMMIT_REPO_MOUNT!r}, so the config directory of a "
+            f"{_SUBDIR}/ install is "
+            f"{ip._PRECOMMIT_REPO_MOUNT}/{_SUBDIR}/conf.d."
+        )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_no_generated_path_is_left_root_relative_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ The catch-all, so a NEW site cannot arrive un-offset unnoticed.
+
+    Derived from `ip._root_relative_ci_paths` / `ip._precommit_root_relative_
+    paths` — the generator's own extractors, the ones the summary step reports
+    from — rather than from a list of sites written here. A future filter, mount
+    or apply path that forgets `_offset_path` shows up here whatever it is
+    called.
+    """
+    target = generated_subdir[(ci, deploy)]
+    faces: list[tuple[str, list[str]]] = []
+    if ci in _EMITS_GITHUB:
+        faces.append((_GH_WORKFLOW.as_posix(), ip._root_relative_ci_paths(
+            target / _GH_WORKFLOW, _SUBDIR)))
+    if ci in _EMITS_GITLAB:
+        faces.append((_GL_PIPELINE.as_posix(), ip._root_relative_ci_paths(
+            target / _GL_PIPELINE, _SUBDIR)))
+    faces.append((".pre-commit-config.da.yaml",
+                  ip._precommit_root_relative_paths(
+                      target / ".pre-commit-config.da.yaml")))
+    for name, values in faces:
+        assert values, (
+            f"{name}: the extractor found no repo-relative path, so this "
+            "assertion would be vacuous. Check the extractor before relaxing "
+            "anything here."
+        )
+        stale = [v for v in values if not v.startswith(f"{_SUBDIR}/")]
+        assert not stale, (
+            f"--ci {ci} --deploy {deploy}: {name} still names {stale} relative "
+            f"to the repository root, but this run wrote into {_SUBDIR}/."
+        )
+
+
+# ============================================================
 # ── 6. ONE image pin across BOTH customer-CI generators (#1351) ──
 # ============================================================
 #
