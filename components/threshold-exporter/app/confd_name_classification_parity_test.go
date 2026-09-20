@@ -3,8 +3,8 @@ package main
 // confd_name_classification_parity_test.go — the threshold-exporter half of
 // the cross-language conf.d name-classification pin (#1537, the #1911 family).
 //
-// One conf.d tree is read by four independent enumerators with four
-// hand-written name rules. The exporter is the ORACLE of that group: what it
+// One conf.d tree is read by several independent enumerators, each with a
+// hand-written name rule. The exporter is the ORACLE of that group: what it
 // classifies is what /metrics serves, so when the write plane and the Python
 // tools disagreed with it, they were the ones describing a configuration
 // nobody was running. Measured before this pin existed: a root-level

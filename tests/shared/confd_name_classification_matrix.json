@@ -1,8 +1,10 @@
 {
   "_comment": [
     "Cross-language classification matrix for conf.d ENTRY NAMES (#1537, the",
-    "#1911 family). One conf.d tree is read by four independent enumerators,",
-    "each with its own hand-written name rule:",
+    "#1911 family). One conf.d tree is read by several independent enumerators,",
+    "each with its own hand-written name rule. The ones that shaped this table",
+    "are listed below; the full set of consumers is whatever",
+    "`git grep -l confd_name_classification_matrix` names today:",
     "",
     "  Go     components/threshold-exporter/app/config_hierarchy.go",
     "         (scanDirHierarchical) - the production hot-reload scanner; what",
@@ -31,7 +33,7 @@
     "which makes their agreement transitive rather than claimed.",
     "",
     "THE ROWS ARE NAMES CARRYING ORTHOGONAL PROPERTIES, not an expected file",
-    "list. A single expected-list column would be a lie here, because the four",
+    "list. A single expected-list column would be a lie here, because the",
     "enumerators do not have the same scope: _lib_confd recurses and keeps `_`",
     "files, _lib_io is flat and takes skip_reserved as a parameter, tenant-api",
     "is per-name and drops both prefixes, and the exporter routes `_defaults.*`",
@@ -90,7 +92,7 @@
       "hidden": false,
       "defaults_file": false,
       "stem": "db-b",
-      "why": "Both spellings ship; the .yml branch is a separate code path in every one of the four readers."
+      "why": "Both spellings ship; the .yml branch is a separate code path in every reader."
     },
     {
       "name": "tenant_123.yaml",
