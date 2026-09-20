@@ -11,13 +11,15 @@
 #
 # They had to leave: pre-commit reads git's pre-push stdin itself and hands a
 # hook exactly ONE ref (hook_impl._pre_push_ns returns on the first pushable
-# line), so a push carrying several refs showed the guards only the first one
-# in sort order. Measured with this repo's own guards on git 2.55.0 /
-# pre-commit 4.6.0: `git push origin aaa main` printed
-# "Guard: block direct push to main ... Passed" and main really moved on the
-# remote, while `git push origin main` alone was blocked. Every branch prefix
-# dev-rules #12 asks for — feat/ fix/ chore/ — sorts before `main`, so the
-# exposed case was the normal one.
+# line), so a push carrying several refs showed the guards only the first row.
+# Measured with this repo's own guards on git 2.55.0 / pre-commit 4.6.0:
+# `git push origin aaa main` printed "Guard: block direct push to main ...
+# Passed" and main really moved on the remote, while `git push origin main`
+# alone was blocked. ⛔ Which row that is was never the pusher's to choose —
+# both spellings of that push feed byte-identical rows — and it is a branch's
+# SECOND push onward that hides main, not its first: rows updating an existing
+# remote ref come before rows creating one (#1852, pinned in
+# tests/ops/test_prepush_hook_wiring.py).
 #
 # ⛔ Do not add them back here, and do not "simplify" the install line back to
 # `pre-commit install --hook-type pre-push`: that reintroduces the one-ref

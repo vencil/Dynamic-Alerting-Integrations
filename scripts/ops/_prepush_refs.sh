@@ -109,8 +109,16 @@
 #         native stdin   -> 2 rows (aaa-first, main)
 #         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
 #         result         -> main was updated by that same command
-#   ⛔ Which ref survives is LEXICOGRAPHIC, not the order you typed — writing
-#   `main` first does not protect it.
+#   ⛔ Which ref survives is not the order you typed: `git push origin main
+#   aaa-first` and the explicit-refspec spelling feed byte-identical rows, so
+#   writing `main` first does not protect it.
+#   ⚠️ The order itself is git's implementation detail, not a protocol
+#   guarantee. Measured on git 2.51.1 (Linux) and 2.55.0.windows.5: rows that
+#   UPDATE an existing remote ref come before rows that CREATE one, and names
+#   sort within a group. So a branch's FIRST push leaves main in row 1 — not
+#   hidden — and every push after that hides it (#1852). Both cases are pinned
+#   in the test named below; a git that reorders goes red there instead of
+#   quietly rewriting how far this residual reaches.
 #   A guard built on this helper does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py
