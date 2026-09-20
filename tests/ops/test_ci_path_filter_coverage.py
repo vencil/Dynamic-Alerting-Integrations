@@ -2032,6 +2032,9 @@ SCANNED_WORKFLOWS = {"ci.yml", "docs-ci.yaml", "validate.yaml"}
 # same way. A leg leaving this set must be a decision, not an accident.
 GATED_LEGS = {
     ("ci.yml", "python-tests-run"),
+    # Advisory coverage leg: same `python_changed` gate as the run leg, backs
+    # no required check (ledgered in test_ci_aggregate_gate_contract).
+    ("ci.yml", "python-coverage"),
     ("ci.yml", "portal-tests-run"),
     ("ci.yml", "go-tests-threshold-exporter"),
     ("ci.yml", "go-tests-tenant-api"),
