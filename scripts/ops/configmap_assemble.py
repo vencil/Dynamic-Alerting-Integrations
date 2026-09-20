@@ -41,6 +41,24 @@
 
 ⛔ 不自己重寫 kubectl 的 YAML 產生器：`kubectl` 本來就是這條 recipe 的既有
 依賴，第二份產生器只會與它漂移。
+
+⛔ **這支擋的是「產物不合法」，一律在寫出產物之前；它不是內容政策。**
+上面三軸之後，同一個問題的其餘幾面各自有述詞（每一面都是從別人的權威
+轉寫的，不是本檔發明的品味）：檔名能不能當 key（`configmap_key_problem`
+← `IsConfigMapKey`）、`--from-file=` 的來源字串 kubectl 解不解得開
+（`from_file_source_problem` ← `ParseFileSource`；`env=prod/` 這種目錄名
+以前會讓 kubectl 拒絕整條命令而誰也不點名）、`data` 的總位元組會不會超過
+API server 的上限（← `ValidateConfigMap`）。
+
+⚠️ **量得到與量不到的界線**：`--config-dir` 底下**讀不到**的 config-named
+entry（斷鏈 symlink、同名目錄）不會讓這支紅，但一定**逐個具名**在 stderr
+——沉默地丟掉它，等於這支自己的 docstring 在講的那件事。
+
+⚠️ **make 那一層還有一段不屬於本檔射程的展開**：`make configmap-assemble
+CONFDIR=...` 的值由 make 自己遞迴展開，所以值裡的 `$(shell …)` 會在
+export 之前就執行。那是 GNU make 對命令列變數的定義，makefile 內無法關掉；
+recipe 這一側能做的（不讓 **shell** 再解析一次）已經做了——recipe 讀的是
+`"$$CONFDIR"` 這個 shell 變數，不是被貼進命令文字的值。
 """
 from __future__ import annotations
 
@@ -60,7 +78,13 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION,
     EXIT_CALLER_ERROR,
 )
-from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    has_yaml_extension,
+    is_hidden_name,
+    unusable_config_entries,
+    unusable_reason,
+    warn_nested,
+)
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
 #: ⛔ Derived, never spelled out: this file is `<repo>/scripts/ops/<name>.py`.
@@ -98,9 +122,19 @@ _KUBECTL_TIMEOUT_S = 120
 #
 # `hasChDirPrefix` is the shared helper `IsValidPathSegmentName` also uses; it
 # rejects `.`, `..` and any name starting with `..`. Go's `len()` counts
-# BYTES, hence the UTF-8 encode below rather than `len(name)`.
-_CONFIGMAP_KEY_RE = re.compile(r"^[-._a-zA-Z0-9]+$")
+# BYTES, hence the encode below rather than `len(name)`.
+#
+# ⛔ `\Z`, not `$`: Python's `$` also matches just BEFORE a trailing newline,
+# so `db-a.yaml\n` would have been accepted as a key. Go's `regexp` `$`
+# (without `(?m)`) means end-of-text, which is `\Z` here — transcribing `$`
+# to `$` copied the character and lost the meaning.
+_CONFIGMAP_KEY_RE = re.compile(r"\A[-._a-zA-Z0-9]+\Z")
 _MAX_KEY_BYTES = 253  # DNS1123SubdomainMaxLength
+
+#: What a ConfigMap's `data` may total, transcribed from k8s core validation
+#: (`ValidateConfigMap`: `totalSize > core.MaxSecretSize` -> "may not exceed
+#: 1048576 bytes"). ⛔ Summed over the VALUES, not over the manifest.
+_MAX_CONFIGMAP_BYTES = 1024 * 1024
 
 
 def configmap_key_problem(name: str) -> str | None:
@@ -112,8 +146,16 @@ def configmap_key_problem(name: str) -> str | None:
     out on purpose". Dropping it silently is how a tenant disappears with a
     green light (#1603's shape), and handing it to `kubectl` produces an
     error that never names the file.
+
+    ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
+    POSIX; Python hands it back with the undecodable ones smuggled in as
+    lone surrogates, and `.encode("utf-8")` then raises `UnicodeEncodeError`
+    — a codec traceback in place of the by-name refusal this function exists
+    to produce. `os.fsencode` reverses the same escape, so the count is the
+    byte count the API server will apply, for every name the filesystem can
+    hand us.
     """
-    if len(name.encode("utf-8")) > _MAX_KEY_BYTES:
+    if len(os.fsencode(name)) > _MAX_KEY_BYTES:
         return f"longer than {_MAX_KEY_BYTES} bytes"
     if not _CONFIGMAP_KEY_RE.match(name):
         bad = sorted({c for c in name if not _CONFIGMAP_KEY_RE.match(c)})
@@ -126,8 +168,48 @@ def configmap_key_problem(name: str) -> str | None:
     return None
 
 
-def _carriers(config_dir: Path) -> list[Path]:
-    """The one enumeration: what the exporter reads at THIS level.
+# ── `--from-file` source legality (#1796, second half) ───────────────
+#
+# ⛔ NOT from memory. Transcribed from the authority,
+# k8s.io/kubectl `pkg/generate/generate.go`:
+#
+#   func ParseFileSource(source string) (keyName, filePath string, err error) {
+#       numSeparators := strings.Count(source, "=")
+#       switch {
+#       case numSeparators == 0:              return path.Base(source), source, nil
+#       case numSeparators == 1 && HasPrefix(source, "="): ... "key name ... missing"
+#       case numSeparators == 1 && HasSuffix(source, "="): ... "file path ... missing"
+#       case numSeparators > 1:
+#           return "", "", errors.New("key names or file paths cannot contain '='")
+#       ...
+#
+# We always emit the `key=path` form, and `_CONFIGMAP_KEY_RE` already denies
+# `=` in the key — so the only way to reach `numSeparators > 1` is an `=` in
+# the PATH, i.e. in `--config-dir`. `env=prod/` and a Jenkins matrix axis
+# directory (`axis=value/`) are both ordinary directory names.
+_MAX_FROM_FILE_SEPARATORS = 1
+
+
+def from_file_source_problem(source: str) -> str | None:
+    """Why `kubectl` cannot parse `--from-file=<source>`, or `None` if it can.
+
+    ⛔ Asked about the string we are ABOUT TO BUILD, not about the file name
+    alone. kubectl's own refusal for this case says "key names or file paths
+    cannot contain '='" and names neither, so an operator whose `CONFDIR`
+    holds `env=prod/` reads it as an accusation against their file names and
+    goes looking in the wrong place.
+    """
+    extra = source.count("=") - _MAX_FROM_FILE_SEPARATORS
+    if extra > 0:
+        return (f"holds {extra + _MAX_FROM_FILE_SEPARATORS} '=' characters; "
+                f"kubectl splits `--from-file=key=path` on '=' and refuses "
+                f"more than one")
+    return None
+
+
+def _carriers(config_dir: Path) -> tuple[list[Path], list[Path]]:
+    """The one enumeration: what the exporter reads at THIS level, plus the
+    config-NAMED entries at this level that cannot be read at all.
 
     ⛔ Flat (`iterdir`, no recursion) because the ConfigMap key plane cannot
     express a subdirectory — `warn_nested` says that out loud.
@@ -137,12 +219,24 @@ def _carriers(config_dir: Path) -> list[Path]:
     exporter skips `.`-prefixed entries (`config_hierarchy.go`), and counting
     them made the empty-dir guard below pass for a `--config-dir` pointed at
     a repo root — the exact mis-pointing that guard exists for.
+
+    ⛔ The second list exists because `is_file()` is a SILENT filter: a
+    dangling symlink and a directory called `db-x.yaml/` both carry a config
+    name and neither is a file, so both used to leave the run with rc 0 and
+    one tenant fewer than the tree declares — the exact "a tenant disappears
+    with a green light" this module's own docstring names. The classification
+    is `_lib_confd.unusable_config_entries` / `unusable_reason`, the pair the
+    operator-plane readers already phrase this finding with; a second wording
+    here would put two answers to "what happened to db-x.yaml" in front of
+    the same person.
     """
-    return sorted(
-        p for p in config_dir.iterdir()
+    entries = sorted(config_dir.iterdir())
+    carriers = [
+        p for p in entries
         if p.is_file() and not is_hidden_name(p.name)
         and has_yaml_extension(p.name)
-    )
+    ]
+    return carriers, unusable_config_entries(entries)
 
 
 def _forward(verdict: tu.Verdict) -> None:
@@ -194,11 +288,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # #1797. `resolve()` on BOTH sides so a symlink, a `./` prefix or a `..`
     # detour cannot walk around it.
-    if (config_dir.resolve() == SAMPLE_CONFIG_DIR.resolve()
+    #
+    # ⛔ SUBTREE, not equality. The question is "is this the repo's sample
+    # material", and `examples/` — same tree, same demo tenants, one level
+    # down — answered it `no` under equality and assembled seven reference
+    # files with rc 0. Path equality is a spelling of the question, not the
+    # question. `in .parents` is exact containment on the RESOLVED path, so a
+    # sibling tree outside the repo that merely ends in the same components
+    # (`…/threshold-exporter/config/conf.d`) is untouched.
+    resolved = config_dir.resolve()
+    sample = SAMPLE_CONFIG_DIR.resolve()
+    if ((resolved == sample or sample in resolved.parents)
             and os.environ.get(ALLOW_SAMPLE_ENV) != "1"):
         print(
             f"ERROR: refusing to assemble the repo's DEVELOPMENT SAMPLE tree: "
-            f"{SAMPLE_CONFIG_DIR}\n"
+            f"{resolved}\n"
+            f"       (at or below {SAMPLE_CONFIG_DIR})\n"
             f"       That is the built-in `CONFDIR` default. Its tenants "
             f"(`db-a` / `db-b`) are reference templates — they ship in "
             f"neither the chart nor the image, and they are almost certainly "
@@ -217,7 +322,18 @@ def main(argv: list[str] | None = None) -> int:
     # `_lib_confd`'s contract is that a flat reader says so out loud.
     warn_nested(config_dir, tool="configmap_assemble")
 
-    carriers = _carriers(config_dir)
+    carriers, unusable = _carriers(config_dir)
+    # ⚠️ Non-blocking, and named one by one. Blocking would be the wrong
+    # trade (a tree that deploys today would stop deploying over an entry
+    # nothing ever read), but staying silent is the failure this file is
+    # named after: the count in the success line would simply be one lower
+    # than the tree, with nothing saying which tenant went missing.
+    for p in unusable:
+        print(f"WARN: {p.name!r} in {config_dir} {unusable_reason(p)} — it "
+              f"carries a config name but NOTHING was read from it, so it is "
+              f"absent from the ConfigMap and its tenants have no alerting.",
+              file=sys.stderr)
+
     if not carriers:
         print(
             f"ERROR: {config_dir} contains no config carrier — the ConfigMap "
@@ -250,6 +366,52 @@ def main(argv: list[str] | None = None) -> int:
               "from the ConfigMap behind a green light.", file=sys.stderr)
         return EXIT_VIOLATION
 
+    # #1796, the other half: the file name was checked, the SOURCE STRING we
+    # build out of it was not. `--from-file=` takes `key=path`, so an `=`
+    # anywhere in `--config-dir` makes kubectl refuse the whole command with
+    # a message that blames "key names or file paths" and names neither.
+    # `env=prod/` and a Jenkins matrix axis directory are ordinary names.
+    sources = [(f"{p.name}={p}", p) for p in carriers]
+    unparseable = [(src, p, why) for src, p in sources
+                   if (why := from_file_source_problem(src)) is not None]
+    if unparseable:
+        print(
+            f"ERROR: {len(unparseable)} --from-file argument(s) cannot be "
+            f"parsed by kubectl. The offending character is in the PATH, not "
+            f"in the file names — rename the directory, or point "
+            f"--config-dir at a copy whose path holds no '=':",
+            file=sys.stderr,
+        )
+        for _src, p, why in unparseable:
+            print(f"  {str(p)!r}: {why}", file=sys.stderr)
+        return EXIT_VIOLATION
+
+    # A ConfigMap the API server will reject for size is not an artifact, and
+    # that rejection lands one step later — at `kubectl apply`, on a whole
+    # object, naming no file. ⚠️ Summed over the FILE BYTES because that is
+    # the quantity `ValidateConfigMap` bounds; anything kubectl decides to
+    # carry as `binaryData` is base64'd and therefore larger on the wire, so
+    # this bound can only under-report, never false-red.
+    sizes = [(p, p.stat().st_size) for p in carriers]
+    total = sum(n for _p, n in sizes)
+    if total > _MAX_CONFIGMAP_BYTES:
+        print(
+            f"ERROR: the {len(carriers)} carrier(s) total {total} bytes. k8s "
+            f"`ValidateConfigMap` sums the `data` values and rejects anything "
+            f"over {_MAX_CONFIGMAP_BYTES} bytes, so `kubectl apply` of this "
+            f"artifact fails on the OBJECT and names no file — refuse here, "
+            f"where the files can be named. Largest:",
+            file=sys.stderr,
+        )
+        for p, n in sorted(sizes, key=lambda kv: -kv[1])[:5]:
+            print(f"  {p.name!r}: {n} bytes", file=sys.stderr)
+        print(f"       -> split the tenants across more than one ConfigMap "
+              f"(`make sharded-assemble`), or shrink the carriers.\n"
+              f"       ⚠️ This is a LOWER bound on what the cluster will "
+              f"refuse: the serialized request carries the manifest, not "
+              f"just these bytes.", file=sys.stderr)
+        return EXIT_VIOLATION
+
     # ⛔ Ask the question about the ARTIFACT, not about the tree. The ConfigMap
     # key plane is flat, so only `carriers` can ever reach the exporter through
     # this path; validating the whole tree blocked deployable artifacts (a
@@ -279,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     # argument (which silently stripped the extension off the key).
     cmd = [
         "kubectl", "create", "configmap", args.name,
-        *[f"--from-file={p.name}={p}" for p in carriers],
+        *[f"--from-file={src}" for src, _p in sources],
         "-n", args.namespace, "--dry-run=client", "-o", "yaml",
     ]
     try:
@@ -295,9 +457,21 @@ def main(argv: list[str] | None = None) -> int:
               "has it.", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except subprocess.TimeoutExpired:
+        # ⛔ Say what is ON DISK, not what we wish were. Nothing was written,
+        # so a PREVIOUS run's `{args.output}` is still sitting there intact —
+        # deliberately (see `_write_atomically`: a half file is worse than an
+        # old one). The docs make assemble and `kubectl apply` two steps, so
+        # an operator told the artifact was "not left behind" runs the second
+        # step anyway and ships the OLD config believing it is this one.
+        left = (f"{args.output} was NOT touched: it still holds a PREVIOUS "
+                f"run's manifest, which may be stale"
+                if Path(args.output).exists()
+                else f"no {args.output} was written")
         print(f"ERROR: `kubectl create configmap` did not finish within "
-              f"{_KUBECTL_TIMEOUT_S}s — refusing to leave a half-built or "
-              f"stale {args.output} behind.", file=sys.stderr)
+              f"{_KUBECTL_TIMEOUT_S}s — nothing was written, so {left}.\n"
+              f"       -> do NOT `kubectl apply` that file on the strength "
+              f"of this run; re-run this step until it succeeds.",
+              file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if proc.returncode != 0:

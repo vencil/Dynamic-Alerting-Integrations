@@ -117,9 +117,11 @@ make configmap-assemble CONFDIR=/path/to/your/conf.d
 `components/threshold-exporter/config/conf.d` — **this repo's development
 sample tree**. Its `db-a` / `db-b` tenants are reference templates that ship
 in neither the released chart nor the image, so they are almost certainly not
-yours. Running without `CONFDIR=` is **hard-refused** (rc 1), because
+yours. Running without `CONFDIR=` is **hard-refused**, because
 `kubectl apply` of the resulting artifact would **replace** the live
-`threshold-config` with the samples.
+`threshold-config` with the samples. Subdirectories of that tree (`examples/`
+and the like) are refused too — the same demonstration tenants do not become
+yours by being one level down.
 
 When assembling that sample tree really is the intent (docs, demos, this
 repo's own tests), say so explicitly:
@@ -138,28 +140,57 @@ steps:
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
 
-The step refuses **before** writing the artifact in three cases, each rc 1 and
-each naming the offending files one by one:
+The step refuses **before** writing the artifact in the cases below, naming
+the offending files wherever there are any to name:
 
 | Refused | Why this is not a warning |
 |---|---|
 | One tenant id declared in two files | The exporter hard-rejects the ENTIRE directory, so **every** tenant there loses alerting |
 | A file name that cannot be a ConfigMap key | A key must match `[-._a-zA-Z0-9]+` and be neither `.` nor `..` (k8s `IsConfigMapKey`). `db b.yaml` or `db-a (copy).yaml` can **never** become a key — rename them |
-| No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR` |
+| An `=` anywhere in the `CONFDIR` path | kubectl splits `--from-file=key=path` on `=`, so a second one fails the whole command. `env=prod/` and a Jenkins matrix `axis=value/` are ordinary directory names, and kubectl's own message blames "key names or file paths" while naming neither |
+| Carriers totalling more than 1 MiB | k8s `ValidateConfigMap` bounds the sum of the `data` values; over it, `kubectl apply` fails on the whole OBJECT and names no file |
+| No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR`. ⚠️ This row has **no file to name** — "there are none" is the finding |
 
-⚠️ Two more things this page did not previously state:
+⛔ **Which exit code you see depends on which layer you call.** The script
+itself follows this repo's convention — `1 = config violation`,
+`2 = caller or tooling error` (`kubectl` missing from `PATH`, say). But
+**`make` exits 2 for any failed recipe**, so that distinction **collapses
+entirely at the make layer**: CI **cannot** use the rc of
+`make configmap-assemble` to tell the two apart. Call the script directly
+when you need it (the same convention as Method C on this page):
+
+```bash
+python3 scripts/ops/configmap_assemble.py \
+  --config-dir tenants/conf.d --output .build/threshold-config.yaml
+# rc 1 = config violation (duplicate tenant / file name / `=` in path /
+#        over 1 MiB / no carrier)
+# rc 2 = caller or tooling error (--config-dir missing, kubectl absent or
+#        timed out)
+```
+
+⚠️ More things this page did not previously state:
 
 - **The assembly is FLAT**: only files at the **top level** of `CONFDIR` enter
   the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
   under `examples/` or any hierarchical subdirectory (`region-eu/` and the
-  like) do **not** ship. Those files are listed one by one in a `WARN` on
-  stderr, but the exporter reads the tree recursively in-cluster
+  like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
+  the rest as `(+N more)`** — run a recursive reader (`validate_config`) for
+  the full list. The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
+- **A carrier nothing can be read from is named, not blocked**: a dangling
+  symlink or a directory carrying a config name (`db-x.yaml/`) at the top
+  level cannot enter the ConfigMap, and each one gets its own `WARN` on
+  stderr. ⛔ That is not noise — that tenant has no alerting in-cluster.
 - **Extension casing now matches the exporter**: carriers such as
   `DB-A.YAML` or `db-b.YML` **do** enter the ConfigMap. ⚠️ Knock-on effect: if
   you hold both `db-a.yaml` and `DB-A.YAML` and they declare the same tenant,
   this step now refuses (it used to drop the uppercase one silently and print
   a green light).
+- **A failure here does not remove an older artifact**: if
+  `.build/threshold-config.yaml` is left over from a previous run it survives
+  **untouched** (half a file is worse than an old one). ⛔ So the
+  `kubectl apply` step must run only after assemble **succeeds** — a pipeline
+  that is not fail-fast will push the **stale** config.
 
 ### Method B: Helm values overlay
 

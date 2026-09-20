@@ -586,12 +586,18 @@ baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: 
 # script HARD-REFUSES this default unless `ALLOW_SAMPLE_CONFDIR=1` says the
 # samples really are the intent (#1797).
 CONFDIR := components/threshold-exporter/config/conf.d
+# ⛔ Exported so the recipe can read it as a SHELL variable (`"$$CONFDIR"`)
+# instead of having make paste its VALUE into the command text. A pasted
+# value is text the shell then parses: `CONFDIR='/srv/`id`/conf.d'` ran the
+# command substitution. A command-line `CONFDIR=...` is exported by make
+# anyway; this line is what covers the default above.
+export CONFDIR
 # One value for both sharded targets: the dry run has to be able to ask
 # about the same directory the real run writes into, or its green means
 # something narrower than the operator reads it as (#1794).
 SHARDED_OUTDIR := .build/config-dir
 
-configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync）
+configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d）
 	@# ⛔ Selection AND quoting live in the script; the shell never touches a
 	@# file name here. There used to be three independent enumerations of
 	@# "which files ship" (the script's own, plus two make-level `shell`
@@ -600,12 +606,14 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 	@# every platform (#1792), and make pasted their unquoted output back
 	@# into the recipe for the shell to re-parse, so a name holding a space
 	@# lost its extension and one holding `(` killed the recipe (#1796).
-	@# ⚠️ Write NO make function call in these comment lines: make expands
-	@# them before `#` ever reaches the shell, so the comment would RUN.
 	@# The script calls `kubectl` with an argv list (`shell=False`), gates
 	@# the sample tree (#1797), and is its own line so it can fail the target.
+	@# This recipe therefore needs NO make expansion at all, including in
+	@# these comments -- make expands a recipe comment before `#` ever
+	@# reaches the shell, so a function call written here would RUN.
+	@# `TestTheRecipeIsInertToMakeAndToTheShell` is what holds both halves.
 	@python3 ./scripts/ops/configmap_assemble.py \
-		--config-dir "$(CONFDIR)" --output .build/threshold-config.yaml
+		--config-dir "$$CONFDIR" --output .build/threshold-config.yaml
 
 sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
 	@mkdir -p .build

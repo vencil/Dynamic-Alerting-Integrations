@@ -109,7 +109,7 @@ make configmap-assemble CONFDIR=/path/to/your/conf.d
 # 產出: .build/threshold-config.yaml（threshold-exporter 用的 tenant 配置）
 ```
 
-⛔ **`CONFDIR` 一定要明示。** 它的內建預設值是 `components/threshold-exporter/config/conf.d`——**本 repo 自帶的開發範例樹**，裡面的 `db-a` / `db-b` 是參考範本，既不包含在發布的 chart 也不在 image 裡，幾乎不可能是你的租戶。不帶 `CONFDIR=` 直接跑會被**硬擋**（rc 1），因為照著組出來的產物 `kubectl apply` 上去會把線上的 `threshold-config` **換成示範內容**。
+⛔ **`CONFDIR` 一定要明示。** 它的內建預設值是 `components/threshold-exporter/config/conf.d`——**本 repo 自帶的開發範例樹**，裡面的 `db-a` / `db-b` 是參考範本，既不包含在發布的 chart 也不在 image 裡，幾乎不可能是你的租戶。不帶 `CONFDIR=` 直接跑會被**硬擋**，因為照著組出來的產物 `kubectl apply` 上去會把線上的 `threshold-config` **換成示範內容**。那棵樹**底下的子目錄**（`examples/` 之類）一樣擋——同一批示範租戶，換個路徑不會變成你的。
 
 真的要組那棵範例樹時（寫文件、跑 demo、本 repo 自己的測試），明示放行：
 
@@ -127,18 +127,31 @@ steps:
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
 
-這一步會在寫出產物**之前**擋下三類問題，各自 rc 1 並逐檔點名：
+這一步會在寫出產物**之前**擋下下列問題，並盡可能具名到檔：
 
 | 擋什麼 | 為什麼不是警告 |
 |---|---|
 | 同一個租戶 id 出現在兩個檔 | exporter 對整棵 dir 是 hard reject，**每一個**租戶都會失去告警 |
 | 檔名不能當 ConfigMap key | key 必須匹配 `[-._a-zA-Z0-9]+` 且不是 `.` / `..`（k8s `IsConfigMapKey`）。`db b.yaml`、`db-a (copy).yaml` 這種**永遠**不可能成為合法 key，只能改名 |
-| 目錄裡沒有任何載體 | 「組出零個租戶」與「平台真的沒有租戶」無法區分，通常是 `CONFDIR` 指錯 |
+| `CONFDIR` 路徑裡有 `=` | `--from-file=key=path` 由 kubectl 以 `=` 切開，多一個就整條命令失敗。`env=prod/`、Jenkins matrix 的 `axis=value/` 都是正常目錄名，而 kubectl 自己的訊息會說「key names or file paths」、誰也不點名 |
+| 載體總位元組超過 1 MiB | k8s `ValidateConfigMap` 對 `data` 的總和設上限，超過時 `kubectl apply` 是對**整個物件**失敗、不提任何檔 |
+| 目錄裡沒有任何載體 | 「組出零個租戶」與「平台真的沒有租戶」無法區分，通常是 `CONFDIR` 指錯。⚠️ 這一列**沒有檔可以點名**——它就是「一個都沒有」 |
 
-⚠️ 另外兩件文件以前沒說的事：
+⛔ **退出碼要看你呼叫的是哪一層。** script 本身依 repo 慣例回 `1 = 設定違規` / `2 = 呼叫端或工具錯誤`（例如 `kubectl` 不在 PATH）。但 **`make` 對任何 recipe 失敗一律 exit 2**，所以經由 `make configmap-assemble` 跑時這個區分**在 make 這一層整個塌掉**——CI **不能**靠 `make` 的 rc 分辨這兩類。要那個區分就直接呼叫 script（與本頁方式 C 同一個慣例）：
 
-- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——那些檔會被逐檔印在 stderr 的 `WARN` 裡，但 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+```bash
+python3 scripts/ops/configmap_assemble.py \
+  --config-dir tenants/conf.d --output .build/threshold-config.yaml
+# rc 1 = 設定違規（重複租戶 / 檔名 / 路徑含 = / 超過 1 MiB / 沒有載體）
+# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席或逾時）
+```
+
+⚠️ 幾件文件以前沒說的事：
+
+- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（要完整清單請跑遞迴讀取器，例如 `validate_config`），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+- **讀不到的載體會具名但不擋**：`CONFDIR` 頂層若有**斷鏈 symlink** 或**取了 config 名字的目錄**（`db-x.yaml/`），它們進不了 ConfigMap，stderr 會逐個 `WARN` 點名。⛔ 那不是警告性的雜訊——那個租戶在叢集上沒有告警。
 - **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
+- **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
 
 ### Method B: Helm values overlay
 

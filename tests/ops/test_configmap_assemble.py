@@ -26,6 +26,8 @@ element, byte for byte, which a real `kubectl` would silently absorb.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -137,38 +139,76 @@ def _recipe_body() -> str:
     return text[start:end]
 
 
-class TestTheRecipeDelegatesSelection:
-    """The successor to the old `TestRecipeSelection`.
+class TestTheRecipeIsInertToMakeAndToTheShell:
+    """The successor to the old `TestRecipeSelection`, and to the four-string
+    blocklist that replaced it.
 
-    That class kept a live copy of the recipe's glob loop and ran it, so the
-    recipe could not narrow without an assertion noticing. The loop is gone;
-    the risk it guarded is not. Selection can be reintroduced into the recipe
-    at any time — one `$(shell …)` is all it takes — and then #1792 and #1796
-    are both back with every test below still green, because they only ever
-    exercise the script. So assert the shape of the recipe itself.
+    ⛔ That blocklist (`$(shell`, `*.yaml`, `*.yml`, `basename`) was an
+    ENUMERATION OF SPELLINGS, and blind review walked through it: rebuilding
+    the producer out of `$(foreach …)` + `$(wildcard …)` + `$(notdir …)`
+    brought #1792 and #1796 both back with all 43 tests green. Adding those
+    three words would have been the second version of the same mistake.
+
+    The two properties below are DERIVED instead, from the two layers that
+    can each touch a file name here, and between them nothing is enumerated:
+
+    * make — the recipe needs no make expansion at all, so `$(`/`${` may not
+      appear in it. Every make-level producer needs one, whatever it spells
+      itself. ⛔ Comment lines are INSIDE this, not excluded from it: make
+      expands a recipe line before `#` ever reaches the shell, so a function
+      call in a comment RUNS. (Blind review measured that too: a `@#` line
+      holding `$(shell touch …)` created the file during `make -n`, and the
+      old test excluded `@#` lines by construction.)
+    * the shell — the expansion is exactly ONE command and it is the script
+      call, so there is no second command in which a glob, a `kubectl` or a
+      `basename` could live.
     """
 
     def test_the_recipe_calls_the_script(self):
-        """必響對照組: without this the three refusals below are vacuous —
-        an empty recipe satisfies all of them."""
+        """必響對照組: without this both properties below are vacuous — an
+        empty recipe has no `$(` and no extra command either."""
         body = _recipe_body()
         assert "scripts/ops/configmap_assemble.py" in body, body
         assert "--config-dir" in body, body
 
-    @pytest.mark.parametrize("forbidden", ["$(shell", "*.yaml", "*.yml",
-                                           "basename"])
-    def test_no_file_selection_came_back_to_the_recipe(self, forbidden):
-        """Each is its own way for the shell to touch file names again:
-        `$(shell …)` pastes unquoted output back for a second parse (#1796),
-        the two globs are case-sensitive (#1792), `basename` is what ate the
-        extension off a key."""
+    def test_the_recipe_needs_no_make_expansion_not_even_in_a_comment(self):
+        """make layer. `$(CONFDIR)` used to be here; it is `"$$CONFDIR"` now
+        (a SHELL variable read from the environment), which leaves this
+        recipe with nothing for make to expand — so any `$(` is either a
+        producer or a comment that is about to run."""
         body = _recipe_body()
-        # Only the recipe lines, not the `##` help text or the rationale
-        # comments that NAME these forms in order to explain them.
-        lines = [ln for ln in body.splitlines()
-                 if ln.startswith("\t") and not ln.lstrip().startswith("@#")]
-        assert lines, "no recipe lines found — the extraction is broken"
-        assert not [ln for ln in lines if forbidden in ln], lines
+        offenders = [ln for ln in body.splitlines()
+                     if ln.startswith("\t") and ("$(" in ln or "${" in ln)]
+        assert not offenders, (
+            "a make expansion in this recipe (comments included — make "
+            "expands them before `#` reaches the shell, so they RUN). If a "
+            "make variable is genuinely needed, `export` it and read it as "
+            f"`$$NAME`:\n" + "\n".join(offenders))
+
+    @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
+                        reason="needs GNU make to expand the recipe")
+    def test_the_expansion_is_exactly_the_script_call_and_nothing_else(self):
+        """shell layer, asked of make's OWN expansion rather than of the
+        source text: whatever the recipe is written as, this is what runs.
+
+        ⚠️ `make -n` strips the `@` / `-` prefixes, so "can the gate fail the
+        target" is NOT answerable here — `TestTheGateCanActuallyFailTheTarget`
+        runs the real thing for that.
+        """
+        r = subprocess.run(["make", "-n", "configmap-assemble"], cwd=REPO,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        # Join the `\`-continuations make prints verbatim, then drop the
+        # comment lines (they are the recipe's own prose; the test above is
+        # what keeps them inert).
+        text = r.stdout.replace("\\\n", " ")
+        commands = [" ".join(ln.split()) for ln in text.splitlines()
+                    if ln.strip() and not ln.lstrip().startswith("#")]
+        assert commands == [
+            'python3 ./scripts/ops/configmap_assemble.py '
+            '--config-dir "$CONFDIR" --output .build/threshold-config.yaml'
+        ], r.stdout
 
     def test_the_recipe_writes_the_scripts_documented_default(self):
         """The two must not drift: the docs and the `--help` promise
@@ -292,6 +332,32 @@ class TestTheSampleTreeBlockCannotBeWalkedAround:
         """必響對照組: the block must key on THAT directory, not on "a tree
         that happens to hold a tenant called db-a"."""
         d = _tree(tmp_path, ["db-a.yaml", "db-b.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_a_subdirectory_of_the_sample_tree_is_refused(self, tmp_path):
+        """⛔ The question is "is this the repo's sample material", and path
+        EQUALITY is only one spelling of it. `examples/` sits inside that
+        very tree, holds the same demonstration tenants, and assembled seven
+        of them with rc 0 — a `kubectl apply` away from replacing a live
+        ConfigMap with reference templates, which is exactly what #1797 is."""
+        sub = SAMPLE_TREE / "examples"
+        assert sub.is_dir(), f"{sub} is the fixture; it must exist in-repo"
+        r = _run(sub, _out(tmp_path))
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "SAMPLE" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
+
+    def test_a_tree_outside_the_repo_ending_in_the_same_names_is_not(
+            self, tmp_path, kubectl_shim):
+        """誤紅對照組 for the widening above: containment is on the RESOLVED
+        path, so a customer whose own tree happens to end in the same
+        components must still build. Without this arm the block could be
+        satisfied by matching on the path's tail."""
+        mirror = tmp_path / "components" / "threshold-exporter" / "config"
+        d = _tree(mirror, ["db-a.yaml"], at="conf.d")
+        assert d.as_posix().endswith(
+            SAMPLE_TREE.relative_to(REPO).as_posix()), d
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
         assert r.returncode == 0, r.stdout + r.stderr
 
@@ -599,6 +665,152 @@ class TestFileNamesThatCannotBeConfigMapKeys:
         assert mod.configmap_key_problem("a" * 253) is None
         assert mod.configmap_key_problem("a" * 254) is not None
 
+    def test_the_bound_is_bytes_not_characters(self):
+        """⛔ The byte-vs-character axis had NOTHING on it: blind review
+        replaced `len(name.encode(...))` with `len(name)` and all 44 tests
+        stayed green, because every fixture was ASCII where the two agree.
+        Go's `len()` counts bytes, so a name the API server refuses at 257
+        bytes is only 131 characters long."""
+        mod = _import_script("cma_key_bytes_probe")
+        multibyte = "å" * 126 + ".yaml"
+        assert len(multibyte) == 131 and len(multibyte.encode("utf-8")) == 257
+        why = mod.configmap_key_problem(multibyte)
+        assert why is not None and "bytes" in why, why
+
+    def test_the_end_anchor_is_end_of_text_not_end_of_line(self):
+        """Python's `$` also matches just BEFORE a trailing newline, so
+        transcribing Go's `$` as `$` copied the character and lost the
+        meaning: `db-a.yaml\\n` was accepted as a key."""
+        mod = _import_script("cma_key_anchor_probe")
+        assert mod.configmap_key_problem("db-a.yaml\n") is not None
+
+    def test_a_name_the_filesystem_can_hold_but_utf8_cannot(self, tmp_path,
+                                                            kubectl_shim):
+        """⛔ The refusal has to REACH the operator. The byte-length check ran
+        first and encoded the name to UTF-8, so a file whose name is not
+        valid UTF-8 — ordinary on POSIX, where a name is bytes — ended the
+        run in a `UnicodeEncodeError` traceback instead of the by-name
+        refusal this whole class is about. `os.fsencode` counts the same
+        bytes without raising."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        try:
+            with open(os.path.join(os.fsencode(str(d)), b"db-\xff.yaml"),
+                      "wb") as fh:
+                fh.write(b"tenants: {}\n")
+        except (OSError, ValueError):  # pragma: no cover - exotic filesystem
+            pytest.skip("this filesystem will not hold a non-UTF-8 name")
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "Traceback" not in r.stderr, r.stderr
+        assert "UnicodeEncodeError" not in r.stderr, r.stderr
+        assert "udcff" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
+
+
+class TestTheFromFileSourceKubectlHasToParse:
+    """#1796's other half: the FILE NAME was checked, the source string built
+    out of it was not."""
+
+    def test_an_equals_sign_in_the_config_dir_is_named(self, tmp_path,
+                                                       kubectl_shim):
+        """`env=prod/`, and a Jenkins matrix axis directory (`axis=value/`),
+        are ordinary directory names. `--from-file=key=path` then carries two
+        `=`, which `ParseFileSource` refuses with "key names or file paths
+        cannot contain '='" — an accusation against the FILE NAMES, which are
+        innocent, so the operator goes looking in the wrong place."""
+        d = _tree(tmp_path / "env=prod", ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "env=prod" in r.stderr, r.stderr
+        assert "--from-file" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
+
+    def test_the_transcription_matches_parsefilesource(self):
+        """Pinned against kubectl's rule (count the `=`), not against the two
+        directory names above."""
+        mod = _import_script("cma_source_probe")
+        assert mod.from_file_source_problem("db-a.yaml=/srv/db-a.yaml") is None
+        assert mod.from_file_source_problem("db-a.yaml=/s=v/db-a.yaml") is not None
+
+    def test_an_ordinary_path_still_builds(self, tmp_path, kubectl_shim):
+        """必響對照組: without this the refusal above is satisfied by a check
+        that rejects every `--from-file` argument."""
+        d = _tree(tmp_path / "env-prod", ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+
+class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
+    """`is_file()` is a SILENT filter, and this module's own docstring calls
+    dropping a carrier silently "how a tenant disappears with a green light"."""
+
+    def test_a_broken_symlink_and_a_config_named_directory_are_named(
+            self, tmp_path, kubectl_shim):
+        d = _tree(tmp_path, ["db-a.yaml"])
+        try:
+            (d / "db-gone.yaml").symlink_to(tmp_path / "nowhere.yaml")
+        except (OSError, NotImplementedError):  # pragma: no cover
+            pytest.skip("this filesystem/user cannot create symlinks")
+        (d / "db-dir.yaml").mkdir()
+        dump = tmp_path / "argv.json"
+        r = _run(d, _out(tmp_path), shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_ARGV": str(dump)})
+        # Non-blocking on purpose: a tree that deploys today must keep
+        # deploying. What may not happen is silence.
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "db-gone.yaml" in r.stderr, r.stderr
+        assert "db-dir.yaml" in r.stderr, r.stderr
+        assert "broken symlink" in r.stderr, r.stderr
+        # …and they really are absent from the artifact, which is why being
+        # silent about them was the defect.
+        assert _keys(_argv_of(dump)) == {"_defaults.yaml", "db-a.yaml"}
+
+    def test_a_clean_tree_says_nothing(self, tmp_path, kubectl_shim):
+        """必響對照組: without this the WARN above could be unconditional."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "WARN" not in r.stderr, r.stderr
+
+
+class TestAnArtifactTooLargeToBeAConfigMap:
+    """The green light this gate could still hand out: `kubectl create
+    --dry-run=client` does not apply the size rule, so the refusal landed at
+    `kubectl apply`, on the whole object, naming no file."""
+
+    def test_carriers_over_the_data_limit_are_refused_and_the_largest_named(
+            self, tmp_path, kubectl_shim):
+        mod = _import_script("cma_size_probe")
+        limit = mod._MAX_CONFIGMAP_BYTES
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+        body = _TENANT.format(t="db-a") + "#" * (limit // 2)
+        for n in ("db-a.yaml", "db-b.yaml", "db-c.yaml"):
+            (d / n).write_text(body.replace("db-a", Path(n).stem),
+                               encoding="utf-8")
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert str(limit) in r.stderr, r.stderr
+        assert "db-a.yaml" in r.stderr, r.stderr
+        assert not _out(tmp_path).exists()
+
+    def test_the_limit_is_the_k8s_one_and_a_tree_under_it_still_builds(
+            self, tmp_path, kubectl_shim):
+        """必響對照組 + the pin: 1 MiB is `core.MaxSecretSize`, the bound
+        `ValidateConfigMap` applies to the SUM of the `data` values. A tree
+        just under it must build, or the gate is a tenant-count policy."""
+        mod = _import_script("cma_size_probe2")
+        limit = mod._MAX_CONFIGMAP_BYTES
+        assert limit == 1024 * 1024
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "db-a.yaml").write_text(
+            _TENANT.format(t="db-a") + "#" * (limit - 200), encoding="utf-8")
+        assert sum(p.stat().st_size for p in d.iterdir()) < limit
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 0, r.stdout + r.stderr
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim")
 class TestArgvReachesKubectlUnparsed:
@@ -683,10 +895,13 @@ class TestKubectlIsAHardPrerequisite:
         assert "something kubectl said" in r.stderr, r.stderr
         assert not _out(tmp_path).exists()
 
-    def test_a_stale_artifact_is_not_left_looking_fresh(self, tmp_path, kubectl_shim):
-        """The artifact must not be truncated or half-written by a failure:
-        a previous run's file has to survive INTACT, so `kubectl apply` of it
-        deploys a real (if old) manifest rather than a fragment."""
+    def test_a_previous_artifact_survives_a_failure_intact(self, tmp_path,
+                                                           kubectl_shim):
+        """⛔ Renamed from `test_a_stale_artifact_is_not_left_looking_fresh`,
+        which said the opposite of what it asserts. Leaving the old file IS
+        the intent (`_write_atomically`: a fragment `kubectl apply` would
+        consume is worse than an old manifest). What must not happen is the
+        RUN claiming the file is gone — see the timeout arm below."""
         d = _tree(tmp_path, ["db-a.yaml"])
         out = _out(tmp_path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -695,6 +910,108 @@ class TestKubectlIsAHardPrerequisite:
                  env_extra={"KUBECTL_SHIM_FAIL": "boom"})
         assert r.returncode == 1, r.stdout + r.stderr
         assert out.read_text(encoding="utf-8") == "apiVersion: v1\n# previous run\n"
+
+    def test_the_timeout_arm_passes_its_own_bound_and_says_what_is_on_disk(
+            self, tmp_path, monkeypatch):
+        """Two things the shim cannot reach.
+
+        ⛔ The bound: blind review deleted `timeout=` from the `kubectl` call
+        and all 44 tests stayed green — an unbounded wait on a customer-run
+        target is the silent wedge `_KUBECTL_TIMEOUT_S` exists against, and
+        nothing was holding it.
+
+        ⛔ The wording: the message said it was "refusing to leave a
+        half-built or stale <output> behind" while deliberately leaving the
+        previous one there. The docs make assemble and `kubectl apply` two
+        steps, so an operator who believes there is no artifact runs the
+        second step anyway and ships the OLD config.
+        """
+        mod = _import_script("cma_kubectl_timeout_probe")
+        d = _tree(tmp_path, ["db-a.yaml"])
+        out = _out(tmp_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("apiVersion: v1\n# previous run\n", encoding="utf-8")
+        assert mod._KUBECTL_TIMEOUT_S > 0, "the wedge guard must be bounded"
+
+        validator = json.dumps([{"check": "tenant_uniqueness",
+                                 "status": "pass", "details": []}])
+
+        def _dispatch(cmd, *a, **k):
+            if cmd[0] != "kubectl":
+                return type("_R", (), {"returncode": 0, "stdout": validator,
+                                       "stderr": ""})()
+            assert k.get("timeout") == mod._KUBECTL_TIMEOUT_S, (
+                "the kubectl call must pass its own bound, not rely on a "
+                "default that does not exist")
+            raise subprocess.TimeoutExpired(cmd="kubectl", timeout=k["timeout"])
+
+        monkeypatch.setattr(subprocess, "run", _dispatch)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = mod.main(["--config-dir", str(d), "--output", str(out)])
+        assert rc == 2
+        assert out.read_text(encoding="utf-8") == "apiVersion: v1\n# previous run\n"
+        said = err.getvalue()
+        assert "NOT touched" in said, said
+        assert "stale" in said, said
+
+
+class TestTheArtifactAppearsWholeOrNotAtAll:
+    """`_write_atomically` had nothing on it: blind review replaced the whole
+    function with `output.write_text(text)` and all 44 tests stayed green,
+    because every arm that looks at the output either succeeds or fails
+    BEFORE the write. A direct write truncates first, so a crash mid-write
+    leaves a fragment `kubectl apply` would consume."""
+
+    def test_the_destination_still_holds_the_old_file_when_the_swap_happens(
+            self, tmp_path, monkeypatch):
+        mod = _import_script("cma_atomic_probe")
+        out = tmp_path / "build" / "threshold-config.yaml"
+        out.parent.mkdir(parents=True)
+        out.write_text("OLD", encoding="utf-8")
+
+        seen: dict[str, object] = {}
+        real_replace = os.replace
+
+        def _spy(src, dst):
+            p = Path(dst)
+            # The whole point: at the instant the destination changes, the
+            # NEW content already exists complete somewhere else, and the
+            # destination still holds the OLD one — never a prefix of either.
+            seen["dst_before"] = p.read_text(encoding="utf-8") if p.exists() else None
+            seen["src_text"] = Path(src).read_text(encoding="utf-8")
+            seen["same_dir"] = Path(src).parent == p.parent
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(mod.os, "replace", _spy)
+        mod._write_atomically(out, "NEW" * 1000)
+
+        assert seen, "nothing was swapped into place — the write was direct"
+        assert seen["dst_before"] == "OLD"
+        assert seen["src_text"] == "NEW" * 1000
+        # A rename is only atomic within one filesystem, so the temp file has
+        # to be a sibling of the destination, not in $TMPDIR.
+        assert seen["same_dir"] is True
+        assert out.read_text(encoding="utf-8") == "NEW" * 1000
+
+    def test_a_failure_during_the_write_leaves_the_old_file_and_no_debris(
+            self, tmp_path, monkeypatch):
+        """必響對照組 for the spy above, and the reason it matters: the arm
+        that a direct write gets wrong."""
+        mod = _import_script("cma_atomic_probe2")
+        out = tmp_path / "build" / "threshold-config.yaml"
+        out.parent.mkdir(parents=True)
+        out.write_text("OLD", encoding="utf-8")
+
+        def _boom(src, dst):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(mod.os, "replace", _boom)
+        with pytest.raises(OSError):
+            mod._write_atomically(out, "NEW")
+        assert out.read_text(encoding="utf-8") == "OLD"
+        assert sorted(p.name for p in out.parent.iterdir()) == [out.name], (
+            "a temp file was left behind")
 
 
 @pytest.mark.skipif(shutil.which("kubectl") is None,

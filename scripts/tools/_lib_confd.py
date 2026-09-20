@@ -65,6 +65,7 @@ __all__ = [
     "resolve_defaults_file",
     "nested_yaml_files",
     "nested_yaml_warning",
+    "printable_name",
     "reset_warned_for_test",
     "unusable_config_entries",
     "TenantCarriers",
@@ -635,6 +636,29 @@ def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:
     ]
 
 
+def printable_name(name: str) -> str:
+    """`name` with every non-printable character escaped, nothing else.
+
+    ⛔ A file name is attacker-controllable in exactly the trees these
+    warnings are about (a shared config repo, a checkout from somewhere
+    else), and every caller of this module writes it to a TERMINAL. A name
+    holding `\\x1b[2J` clears the operator's screen, so the warning that
+    exists to make a loss audible can erase the output around it. Measured
+    on `configmap_assemble`: `cat -v` showed `^[[2J^[[H` reaching stderr
+    verbatim.
+
+    ⛔ Escapes by the PROPERTY `str.isprintable()`, not by a list of
+    dangerous characters: the list would be an enumeration of the escapes
+    someone thought of, and the next terminal feature would not be on it.
+    ⚠️ Identity on every printable name, CJK and emoji included, so the
+    substring assertions callers make on these messages are unaffected —
+    only a name that could not be displayed faithfully changes.
+    """
+    if name.isprintable():
+        return name
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in name)
+
+
 def _running_tool() -> str:
     """Best guess at the command the operator actually typed.
 
@@ -671,7 +695,8 @@ def nested_yaml_warning(
     if not missed:
         return None
     root = Path(config_dir)
-    shown = [p.relative_to(root).as_posix() for p in missed[:limit]]
+    shown = [printable_name(p.relative_to(root).as_posix())
+             for p in missed[:limit]]
     more = f" (+{len(missed) - limit} more)" if len(missed) > limit else ""
     # ⛔ Self-contained on purpose (#1714): this sentence used to end with a
     # ticket number that belongs to an unrelated topic, so an operator who
