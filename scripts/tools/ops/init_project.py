@@ -573,10 +573,17 @@ def _critical_prefill_note(critical: dict) -> str:
 
     ⛔ Nor does it name the ConfigMap wiring, which an earlier draft also did
     ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
-    That mechanism only exists for `--deploy kustomize`: `--deploy helm` and
-    `--deploy argocd` generate no `kustomize/` tree at all (measured — the
-    output is `.da-init.yaml`, the CI files, `.pre-commit-config.da.yaml` and
-    `conf.d/`, nothing else). ⚠️ "the CI files" is deliberately not a count:
+    That mechanism only exists for `--deploy kustomize`: with the default
+    `--config-source configmap`, `--deploy helm` and `--deploy argocd` generate
+    no `kustomize/` tree at all (measured — the output is `.da-init.yaml`, the
+    CI files, `.pre-commit-config.da.yaml` and `conf.d/`, nothing else).
+    ⚠️ That `--config-source` qualifier is load-bearing rather than hedging, and
+    it was missing here: GitOps Native Mode (`--config-source git` with a
+    `--git-repo`) writes `kustomize/overlays/gitops/` under EVERY `--deploy`
+    value (measured — `run_init` step 3b), so the unqualified sentence is false
+    for exactly those customers. Issue 1473 was filed on the unqualified
+    reading and its fix had to measure the qualified one.
+    ⚠️ "the CI files" is deliberately not a count:
     `--ci gitlab`/`both` also writes the repo-root `.gitlab-ci.yml` shell
     (#1357), so the old wording "two CI files" went stale the moment that
     landed, and `_gen_tenant_yaml` never receives `deploy`,
@@ -865,6 +872,87 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
 # CI/CD Pipeline Generators (GitHub Actions / GitLab CI)
 # ============================================================
 
+# ── Which trees the CI triggers must watch (SSOT for BOTH legs) ──────────
+#
+# ⛔ Derived per invocation, never one hard-coded list shared by the three
+# `--deploy` values. That sharing is issue 1473, and it failed in BOTH
+# directions at once:
+#   * `kustomize/**` was listed under `--deploy helm` / `--deploy argocd`,
+#     which (with the default `--config-source`) write no `kustomize/` tree —
+#     a filter entry that can never match. Pure noise to the reader, and it
+#     made helm mode look kustomize-related.
+#   * `environments/**` was listed on NEITHER leg, while the helm apply step
+#     reads `-f environments/prod/values.yaml`. A customer editing the one
+#     file that carries their non-threshold deploy config matched no filter,
+#     so ZERO jobs were created and the PR/MR went green having validated
+#     nothing — issue 1357's failure shape, moved onto the helm trigger.
+#
+# ⚠️ `kustomize` is NOT "kustomize mode only", and measuring that is what
+# corrected the ticket: GitOps Native Mode (`--config-source git` with a
+# `--git-repo`) writes `kustomize/overlays/gitops/{kustomization,
+# git-sync-patch}.yaml` for EVERY `--deploy` value (`run_init` step 3b).
+# Dropping the entry on `deploy_method` alone would have swapped a dead entry
+# for a MISSING one — the same defect in the other direction, aimed at exactly
+# the customers who took the GitOps path.
+#
+# Membership is "this run writes the tree, or a generated job reads it", never
+# "it is one of ours":
+#   conf.d       written always; every validate job reads it.
+#   rule-packs   never written — the custom-rule governance lint reads
+#                `rule-packs/custom/`, which is tenant-authored.
+#   kustomize    written by `--deploy kustomize` (base + overlays, and the
+#                apply step builds `kustomize/overlays/prod`), and by GitOps
+#                Native Mode under any `--deploy`.
+#   environments never written — that gap is issue 1454 B — but the helm apply
+#                step reads `environments/prod/values.yaml`. Being READ is
+#                enough: the trigger has to see the file whether or not this
+#                tool created it, which is what the ticket asks for in so many
+#                words. ⛔ Deliberately NOT added for argocd: that branch's
+#                whole body is `argocd app sync`, which talks to the server
+#                and has no checkout step at all, so it reads no repository
+#                path. Adding it there would re-create the dead entry this
+#                function exists to remove.
+def _ci_trigger_trees(
+    deploy_method: str,
+    config_source: str = 'configmap',
+    git_repo: str = '',
+) -> tuple[str, ...]:
+    """Top-level trees this invocation's CI triggers must watch.
+
+    Defaults match the CLI's own (`--config-source configmap`, no
+    `--git-repo`), so a caller that passes only `deploy_method` gets the
+    non-GitOps answer rather than a silently wider one.
+    """
+    trees = {'conf.d', 'rule-packs'}
+    if deploy_method == 'kustomize':
+        trees.add('kustomize')
+    if deploy_method == 'helm':
+        trees.add('environments')
+    if config_source == 'git' and git_repo:
+        trees.add('kustomize')
+    return tuple(sorted(trees))
+
+
+def _ci_trigger_paths_block(
+    trees: tuple[str, ...], suffix: str, indent: str, quote: str = '',
+) -> str:
+    """Render one YAML list of trigger globs, at its FINAL indentation.
+
+    ⛔ The indentation is an argument, not the literal indentation of a
+    template. Substitution inside a `textwrap.dedent` block is the issue 1347
+    trap twice over: a placeholder at column 0 resets the common prefix and
+    un-indents the whole document, while a placeholder carrying the right
+    indent for its FIRST line only leaves every later list item at column 0.
+    Building the whole block at its final indent — and putting the placeholder
+    at the template's own margin — removes both, and the tests parse the
+    RESULT rather than trusting any literal.
+    """
+    return textwrap.indent(
+        '\n'.join(f'- {quote}{tree}{suffix}{quote}' for tree in trees),
+        indent,
+    )
+
+
 def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
     """Build GitHub Actions apply stage, as a COLUMN-0 block.
 
@@ -982,8 +1070,26 @@ def _gen_github_actions(
     namespace: str,
     da_tools_image: str,
     deploy_method: str,
+    *,
+    config_source: str = 'configmap',
+    git_repo: str = '',
 ) -> str:
-    """Generate GitHub Actions workflow for Dynamic Alerting CI/CD."""
+    """Generate GitHub Actions workflow for Dynamic Alerting CI/CD.
+
+    `config_source` / `git_repo` are keyword-only and default to the CLI's own
+    defaults: they reach the `on.paths` filter through `_ci_trigger_trees`, and
+    a caller that omits them gets the non-GitOps tree set rather than a
+    silently wider one.
+    """
+    # ⛔ Six spaces, and the arithmetic is stated rather than counted by eye:
+    # this template's common margin is 4, so `on:` lands at column 0 after
+    # `dedent`, `pull_request:` at 2, `paths:` at 4 and its list items at 6.
+    # The `{trigger_paths}` placeholder sits at the template's OWN margin (see
+    # `_ci_trigger_paths_block` for why it cannot sit at column 0).
+    trigger_paths = _ci_trigger_paths_block(
+        _ci_trigger_trees(deploy_method, config_source, git_repo),
+        suffix='/**', indent=' ' * 6, quote="'",
+    )
     # ⛔ Indent the apply block IN CODE, not by hand-matching two templates.
     #
     # This is the #1347 bug, and the reason the fix looks over-engineered for
@@ -1027,9 +1133,7 @@ def _gen_github_actions(
     on:
       pull_request:
         paths:
-          - 'conf.d/**'
-          - 'kustomize/**'
-          - 'rule-packs/**'
+    {trigger_paths}
       # ⛔ No `branches:` filter, deliberately. `on.push.branches` takes literals
       # only — no expressions — so any value we write here is a guess about the
       # customer's default branch, and `main` is wrong for every `master` /
@@ -1042,16 +1146,23 @@ def _gen_github_actions(
       # `docker run validate-config` with no credentials, already narrowed by
       # the paths filter below. The GitLab leg gets portability from
       # `$CI_DEFAULT_BRANCH`; this is the GitHub equivalent.
-      # ⛔ Same three trees as the pull_request leg. It used to list `conf.d/**`
-      # alone, so a direct push touching only `rule-packs/custom/**` ran nothing
-      # — and the custom-rule governance lint inside `validate` is scoped to
-      # exactly that tree. A repo that permits direct pushes got no lint at all
-      # on tenant-authored PromQL pushed that way.
+      # ⛔ The SAME trees as the pull_request leg — one rendered list
+      # substituted twice, so the two cannot drift apart by editing one. It used
+      # to list `conf.d/**` alone, so a direct push touching only
+      # `rule-packs/custom/**` ran nothing — and the custom-rule governance lint
+      # inside `validate` is scoped to exactly that tree. A repo that permits
+      # direct pushes got no lint at all on tenant-authored PromQL pushed that
+      # way.
+      # ⛔ WHICH trees depends on this invocation's `--deploy` and
+      # `--config-source`, and both directions of getting that wrong are
+      # silent (issue 1473): a filter naming a tree nothing here writes and no
+      # job reads can never match, while a tree a job DOES read — helm's
+      # `environments/prod/values.yaml` — that is absent from the filter means
+      # editing it creates no job at all and the pull request goes green having
+      # validated nothing.
       push:
         paths:
-          - 'conf.d/**'
-          - 'kustomize/**'
-          - 'rule-packs/**'
+    {trigger_paths}
       workflow_dispatch:
 
     # Least-privilege, and `pull-requests: write` is LOAD-BEARING, not
@@ -1257,13 +1368,15 @@ def _gen_github_actions(
             run: |
               # config-diff signals findings through its exit code, so a bare
               # call cannot work: "changed" is exit 1, and this job runs on
-              # every pull request that touches conf.d/, kustomize/ or
-              # rule-packs/ — so both 0 and 1 are ordinary outcomes here.
+              # every pull request that touches ANY tree in this workflow's
+              # `on.pull_request.paths` above (not conf.d/ alone) — so both 0
+              # and 1 are ordinary outcomes here.
               #   0 = no config change  -> the report says so in words, and the
               #       comment below is refreshed with it. Not skipped: this job
-              #       also runs for kustomize/ and rule-packs/ edits, and
-              #       skipping would leave the PREVIOUS run's report standing
-              #       as though it were still current.
+              #       also runs for edits to the other watched trees, which do
+              #       not touch tenant config at all, and skipping would leave
+              #       the PREVIOUS run's report standing as though it were
+              #       still current.
               #       ⚠️ READ THIS BEFORE TRUSTING A "no changes" COMMENT.
               #       config-diff compares TENANT files only — it skips every
               #       file whose name starts with `_`, which includes
@@ -1342,6 +1455,10 @@ def _gen_github_actions(
         da_tools_image=da_tools_image,
         namespace=namespace,
         apply_stage=apply_stage,
+        # Substituted TWICE (pull_request and push). One value, so
+        # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` holds
+        # structurally rather than by two lists happening to agree.
+        trigger_paths=trigger_paths,
         # ⛔ Declared only where something reads it. The argocd branch runs
         # `argocd app sync` and never names a namespace, so emitting
         # MONITORING_NS there would ship the customer a knob that does nothing —
@@ -1699,10 +1816,12 @@ def _root_relative_ci_paths(path: Path) -> list[str]:
 
     ⛔ Derived from the file we just wrote, never a hand-kept list. The
     generated pipelines are authored for an install AT the repository root:
-    their path filters and `CONFIG_DIR` name `conf.d/**`, `rule-packs/**`,
-    `kustomize/**`. Written into `-o alerting/` and then wired up exactly as
-    this tool instructs, every one of those resolves against the repository
-    root and matches nothing — no job is ever created, so the repo goes
+    their path filters and `CONFIG_DIR` name repo-root trees — `conf.d/**`
+    plus whatever else this invocation's `--deploy` / `--config-source` puts in
+    the filter (`_ci_trigger_trees`); enumerating them here would be a fourth
+    hand-kept copy of a list that is now derived. Written into `-o alerting/`
+    and then wired up exactly as this tool instructs, every one of those
+    resolves against the repository root and matches nothing — no job is ever created, so the repo goes
     permanently green having validated nothing. That is #1357's outcome
     reached by obeying our own remedy, which is why the remedy has to say it.
 
@@ -1975,10 +2094,27 @@ def _gen_gitlab_ci(
     namespace: str,
     da_tools_image: str,
     deploy_method: str,
+    *,
+    config_source: str = 'configmap',
+    git_repo: str = '',
 ) -> str:
-    """Generate GitLab CI pipeline for Dynamic Alerting CI/CD."""
+    """Generate GitLab CI pipeline for Dynamic Alerting CI/CD.
+
+    `config_source` / `git_repo` are keyword-only and default to the CLI's own
+    defaults — same contract as `_gen_github_actions`, and the same
+    `_ci_trigger_trees` call, so the two legs cannot name different trees.
+    """
     apply_stage = _build_gitlab_apply_stage(deploy_method, namespace)
     apply_image_var, apply_image_ref = _gitlab_apply_image(deploy_method)
+    # ⛔ Eight spaces: this template's common margin is 4, so `validate-config:`
+    # lands at column 0 after `dedent`, `rules:` at 2, `- changes:` at 4 and its
+    # list items at 8. ⛔ `/**/*`, not `/**` — GitLab's `rules:changes` takes
+    # glob patterns matched against file paths, and `conf.d/**` matches no FILE.
+    # The spelling differs per platform; the tree set does not.
+    trigger_changes = _ci_trigger_paths_block(
+        _ci_trigger_trees(deploy_method, config_source, git_repo),
+        suffix='/**/*', indent=' ' * 8,
+    )
 
     return textwrap.dedent("""\
     # Dynamic Alerting CI/CD Pipeline (GitLab CI)
@@ -2016,9 +2152,16 @@ def _gen_gitlab_ci(
         # three da-tools jobs were emitted as a bare scalar and did not.)
         entrypoint: [""]
       rules:
+        # ⛔ The same tree set as the GitHub leg's `on.paths`, rendered from the
+        # one SSOT (`_ci_trigger_trees`) in GitLab's own `**/*` spelling. The
+        # two legs used to be hand-written and had drifted: GitHub listed
+        # `kustomize/**` under every `--deploy`, this leg listed it under none,
+        # and NEITHER listed `environments/**` while the helm apply stage below
+        # reads `environments/prod/values.yaml` (issue 1473). An edit that
+        # matches nothing here creates no job, and a merge request with no jobs
+        # is green — so a missing entry is invisible, not loud.
         - changes:
-            - conf.d/**/*
-            - rule-packs/**/*
+    {trigger_changes}
       script:
         - da-tools validate-config --config-dir $CONFIG_DIR
 
@@ -2083,6 +2226,7 @@ def _gen_gitlab_ci(
     """).format(
         da_tools_image=da_tools_image,
         namespace=namespace,
+        trigger_changes=trigger_changes,
         apply_image_var=apply_image_var,
         apply_image_ref=apply_image_ref,
         # Same rule as the GitHub leg: declare the knob only where a script
@@ -2642,14 +2786,20 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     if ci in ('github', 'both'):
         _write_file(
             str(out / _GH_WORKFLOW_REL),
-            _gen_github_actions(namespace, da_tools_image, deploy),
+            _gen_github_actions(
+                namespace, da_tools_image, deploy,
+                config_source=config_source, git_repo=git_repo,
+            ),
             created,
         )
 
     if ci in ('gitlab', 'both'):
         _write_file(
             str(out / _GL_PIPELINE_REL),
-            _gen_gitlab_ci(namespace, da_tools_image, deploy),
+            _gen_gitlab_ci(
+                namespace, da_tools_image, deploy,
+                config_source=config_source, git_repo=git_repo,
+            ),
             created,
         )
         # #1357 — the pipeline above is inert on its own. Give GitLab the one
