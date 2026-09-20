@@ -209,6 +209,24 @@ def _one(pattern: str, text: str, what: str) -> str:
     return matches[0]
 
 
+def _same(pattern: str, text: str, what: str) -> str:
+    """Every match identical, at least one — the ci.yml-side twin of `_one`.
+
+    Since #1910 ci.yml installs this toolchain in TWO jobs (the required
+    `python-tests-run` and the advisory `python-coverage`), the install steps
+    copied verbatim so every guard that reads ci.yml keeps seeing them. The
+    pin is still one value: two copies that agree are one pin spelled twice,
+    and a copy that disagrees is exactly the drift this reports.
+    """
+    matches = re.findall(pattern, text, re.MULTILINE)
+    assert matches, f"expected at least one {what} match for /{pattern}/, found none"
+    assert len(set(matches)) == 1, (
+        f"{what}: {len(matches)} matches in ci.yml disagree — the two jobs' "
+        f"copies drifted apart: {matches}"
+    )
+    return matches[0]
+
+
 def _recipe_digest(dockerfile: Path) -> str:
     """sha256 over the Dockerfile's instruction lines (comments/blanks stripped)."""
     lines = [ln.rstrip() for ln in dockerfile.read_text(encoding="utf-8").splitlines()]
@@ -269,7 +287,7 @@ def test_mtail_version_pin_parity(repo_root: Path) -> None:
     df = (repo_root / _DOCKERFILE).read_text(encoding="utf-8")
     ci = (repo_root / _CI_YML).read_text(encoding="utf-8")
     df_version = _one(r"^ARG MTAIL_VERSION=(\S+)", df, "Dockerfile MTAIL_VERSION")
-    ci_version = _one(r"^\s*MTAIL_VERSION=(\S+)", ci, "ci.yml MTAIL_VERSION")
+    ci_version = _same(r"^\s*MTAIL_VERSION=(\S+)", ci, "ci.yml MTAIL_VERSION")
     assert df_version == ci_version, (
         f"mtail version skew: {_DOCKERFILE} pins {df_version!r} but {_CI_YML} "
         f"installs {ci_version!r}. The compile gate would validate the .mtail "

@@ -977,7 +977,27 @@ def test_gate_discovery_did_not_refuse() -> None:
 # coverage-delta step that merely `needs:` a leg is path-gated by inheritance
 # and backs no required check) — a guard with no legitimate exit turns into a
 # guard people delete.
-UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {}
+UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {
+    # The coverage leg is ADVISORY by owner decision (2026-09-19): it runs the
+    # same tree as `python-tests-run` plus `--cov`, uploads `coverage-py3.13`
+    # for coverage-delta.yml, and fails on `--cov-fail-under` — visibly, as a
+    # red non-required job — but backs no required check. Measured reason:
+    # under the tracer every worker's collection was ~4x slower on the runner
+    # (12x in the dev container) and execution +50%, and that cost sat on the
+    # required leg's critical path. Skipping with the same `python_changed`
+    # gate as the run leg cannot mislead a required check because no check
+    # reads its result.
+    "python-coverage": (
+        "ADVISORY coverage leg (owner decision, PR #1910): same tree and flags "
+        "as python-tests-run plus --cov; uploads coverage-py3.13 for "
+        "coverage-delta.yml and reddens on --cov-fail-under, but backs no "
+        "required check — it is deliberately absent from the python-tests "
+        "gate's needs:. Cannot be modelled as a leg because a gate weighing it "
+        "would make the required check block on coverage, which is the shape "
+        "the owner rejected; its skip cannot mislead because nothing reads its "
+        "result. Closing this row means either promoting it into the gate "
+        "(a policy reversal) or deleting the job."),
+}
 
 
 def _unwatched_ledger_problems(ledger, unwatched: set[str],

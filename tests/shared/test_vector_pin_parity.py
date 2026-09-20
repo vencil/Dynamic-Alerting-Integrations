@@ -46,8 +46,26 @@ def _one(pattern: str, text: str, what: str) -> str:
     return matches[0]
 
 
+def _same(pattern: str, text: str, what: str) -> str:
+    """Every match identical, at least one — the ci.yml-side twin of `_one`.
+
+    Since #1910 ci.yml installs this toolchain in TWO jobs (the required
+    `python-tests-run` and the advisory `python-coverage`), the install steps
+    copied verbatim so every guard that reads ci.yml keeps seeing them. The
+    pin is still one value: two copies that agree are one pin spelled twice,
+    and a copy that disagrees is exactly the drift this reports.
+    """
+    matches = re.findall(pattern, text, re.MULTILINE)
+    assert matches, f"expected at least one {what} match for /{pattern}/, found none"
+    assert len(set(matches)) == 1, (
+        f"{what}: {len(matches)} matches in ci.yml disagree — the two jobs' "
+        f"copies drifted apart: {matches}"
+    )
+    return matches[0]
+
+
 def _ci_version() -> str:
-    return _one(r"""^\s*VECTOR_VERSION=["']?([^\s"'#]+)""",
+    return _same(r"""^\s*VECTOR_VERSION=["']?([^\s"'#]+)""",
                 _CI_YML.read_text(encoding="utf-8"), "ci.yml VECTOR_VERSION")
 
 
@@ -74,7 +92,7 @@ def test_devcontainer_pin_matches_ci() -> None:
     )
 
     dc_sha = _one(r"^VECTOR_SHA256=([0-9a-f]{64})", dc, "install-vector.sh VECTOR_SHA256")
-    ci_sha = _one(r"^\s*VECTOR_SHA256=([0-9a-f]{64})", _CI_YML.read_text(encoding="utf-8"),
+    ci_sha = _same(r"^\s*VECTOR_SHA256=([0-9a-f]{64})", _CI_YML.read_text(encoding="utf-8"),
                   "ci.yml VECTOR_SHA256")
     assert dc_sha == ci_sha, (
         f"vector amd64 SHA-256 skew: install-vector.sh pins {dc_sha} but ci.yml pins "
@@ -180,7 +198,7 @@ def test_download_cache_key_carries_the_pinned_version() -> None:
     """ci.yml's own comment warns a stale cache key silently loses the cache benefit.
     Bind the key to the pin so a version bump cannot forget it."""
     ci = _CI_YML.read_text(encoding="utf-8")
-    key = _one(r"^\s*key:\s*(\$\{\{ runner\.os \}\}-vibe-dl-pytests-vector-\S+)", ci,
+    key = _same(r"^\s*key:\s*(\$\{\{ runner\.os \}\}-vibe-dl-pytests-vector-\S+)", ci,
                "ci.yml vector download-cache key")
     assert f"-vector-{_ci_version()}-" in key, (
         f"download-cache key {key!r} does not carry the pinned vector version "
