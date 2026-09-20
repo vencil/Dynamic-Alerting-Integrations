@@ -3,8 +3,8 @@ package confd
 // name_classification_parity_test.go — the tenant-api half of the
 // cross-language conf.d name-classification pin (#1537, the #1911 family).
 //
-// One conf.d tree is read by four independent enumerators with four
-// hand-written name rules. Measured before this pin existed: a root-level
+// One conf.d tree is read by several independent enumerators, each with a
+// hand-written name rule. Measured before this pin existed: a root-level
 // `upper.YAML` was read and served by the exporter, was invisible to both
 // Python readers, and was REJECTED here — so GET /tenants returned 1 of 2
 // tenant files and, worse, the federation orphan detector built its
@@ -18,7 +18,7 @@ package confd
 // matrix instead, which makes their agreement transitive rather than claimed.
 //
 // The rows are NAMES carrying orthogonal properties, not an expected file
-// list — the four readers do not share a scope. This half asserts only the
+// list — the readers do not share a scope. This half asserts only the
 // projection this package implements:
 //
 //	TenantIDFromFile ok == yaml_extension AND NOT reserved_prefix AND NOT hidden
@@ -104,8 +104,8 @@ func loadNameMatrix(t *testing.T) []nameRow {
 // A bare count is not enough: twenty all-lowercase rows would satisfy it while
 // removing every case this pin exists for, so the floor demands the
 // load-bearing SHAPES too. It also re-derives every property column from the
-// name, because a hand-added row with a wrong expectation would teach all four
-// readers the wrong rule at once.
+// name, because a hand-added row with a wrong expectation would teach every
+// reader the wrong rule at once.
 func TestNameMatrixStillCarriesTheShapesItExistsFor(t *testing.T) {
 	t.Parallel()
 	rows := loadNameMatrix(t)

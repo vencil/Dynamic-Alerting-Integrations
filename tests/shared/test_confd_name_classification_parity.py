@@ -1,6 +1,6 @@
 """Python half of the cross-language conf.d name-classification pin (#1537).
 
-One conf.d tree, four independent enumerators, four hand-written name rules —
+One conf.d tree, several independent enumerators, each with a hand-written name rule —
 the #1911 defect class, this time with the file EXTENSION as the divergence
 axis. Measured before this pin existed: a root-level ``upper.YAML`` was read
 and served by the exporter, was invisible to BOTH Python readers (not yielded,
@@ -20,11 +20,11 @@ dependency map. Their halves of this pin live beside the code they measure.
 
 What every side asserts instead is
 ``tests/shared/confd_name_classification_matrix.json`` — spelled out here
-because this module really does read it — which makes the four readers'
+because this module really does read it — which makes the readers'
 agreement transitive rather than claimed.
 
 The rows are NAMES carrying orthogonal boolean properties, never an expected
-file list: the four enumerators do not share a scope (one recurses, one is
+file list: the enumerators do not share a scope (one recurses, one is
 flat with the reserved filter as a parameter, one is per-name, one routes
 ``_defaults.*`` into the inheritance chain), so a single expected-list column
 would be a lie. Each consumer asserts only the projection it implements. The
