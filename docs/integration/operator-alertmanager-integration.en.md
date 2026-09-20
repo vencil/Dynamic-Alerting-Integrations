@@ -54,9 +54,8 @@ receivers:
   - name: db-a-slack
     slackConfigs:
       - apiURL:
-          secret:
-            name: da-db-a-slack        # K8s Secret name
-            key: webhook-url           # Key within Secret
+          name: da-db-a-slack        # K8s Secret name
+          key: webhook-url           # Key within Secret
         channel: "#alerts-db-a"
         title: '{{ template "slack.default.title" . }}'
         text: '{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary "Alert triggered" }}'
@@ -70,9 +69,8 @@ receivers:
   - name: db-a-pagerduty
     pagerdutyConfigs:
       - routingKey:
-          secret:
-            name: da-db-a-pagerduty
-            key: routing-key
+          name: da-db-a-pagerduty
+          key: routing-key
         description: '{{ template "pagerduty.default.description" . }}'
         severity: '{{ if eq .CommonLabels.severity "critical" }}critical{{ else }}warning{{ end }}'
         sendResolved: true
@@ -89,9 +87,8 @@ receivers:
         smarthost: "smtp.example.com:587"
         authUsername: "da-alerts-db-a"
         authPassword:
-          secret:
-            name: da-db-a-email
-            key: smtp-password
+          name: da-db-a-email
+          key: smtp-password
         requireTLS: true
         sendResolved: true
 ```
@@ -106,9 +103,8 @@ receivers:
         httpConfig:
           authorization:
             credentials:
-              secret:
-                name: da-db-a-teams
-                key: webhook-url
+              name: da-db-a-teams
+              key: webhook-url
         sendResolved: true
 ```
 
@@ -119,9 +115,8 @@ receivers:
   - name: db-a-opsgenie
     opsgenieConfigs:
       - apiKey:
-          secret:
-            name: da-db-a-opsgenie
-            key: api-key
+          name: da-db-a-opsgenie
+          key: api-key
         message: '{{ .CommonAnnotations.summary | default "DA Alert" }}'
         priority: '{{ if eq .CommonLabels.severity "critical" }}P1{{ else }}P3{{ end }}'
         tags: "dynamic-alerting,db-a"
@@ -138,9 +133,8 @@ receivers:
         httpConfig:
           authorization:
             credentials:
-              secret:
-                name: da-db-a-webhook
-                key: auth-token
+              name: da-db-a-webhook
+              key: auth-token
         sendResolved: true
 ```
 
@@ -261,9 +255,8 @@ spec:
     - name: db-a-slack
       slackConfigs:
         - apiURL:
-            secret:
-              name: da-db-a-slack
-              key: webhook-url
+            name: da-db-a-slack
+            key: webhook-url
           channel: "#alerts-db-a"
           sendResolved: true
   inhibitRules:

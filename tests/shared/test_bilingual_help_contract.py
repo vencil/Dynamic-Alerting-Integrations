@@ -170,6 +170,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "gen_recipe_status_json.py": _R_DX,
     "generate_alert_reference.py": _R_DX,
     "generate_changelog.py": _R_DX,
+    "generate_crd_schemas.py": _R_DX,
     "generate_nav.py": _R_DX,
     "generate_platform_data.py": _R_DX,
     "generate_rule_pack_readme.py": _R_DX,
@@ -540,8 +541,17 @@ def test_allowlists_shrink_only_count_pin():
     # customer; that directory is English-only across the board.
     # pin 149: bumped from 148 for agent_output_metrics.py (agent-harness
     # plan PR-A): a dx measurement CLI for maintainers, never customer-facing.
-    assert len(ENGLISH_ONLY) <= 149, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=149). Adding an "
+    # pin 150: bumped from 149 for generate_crd_schemas.py (#1353), which
+    # re-vendors the upstream CRD schemas that `check_md_yaml_drift.py
+    # --check crd` validates documentation against. Same class as the sibling
+    # generate_* tools already here: a dx CLI invoked by `make crd-schemas`,
+    # never by a customer, whose whole output is file paths and a drift
+    # verdict. ⛔ A deliberate choice, not a default — its consumer is a
+    # scripts/tools/lint/ gate, and that directory is English-only across the
+    # board, so wiring detect_cli_lang() here would make the generator speak a
+    # language the thing it feeds never does.
+    assert len(ENGLISH_ONLY) <= 150, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=150). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

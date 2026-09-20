@@ -109,6 +109,7 @@ lang: en
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
+| `generate_crd_schemas.py` | vendor the CRD JSON Schemas that the doc gate validates against. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
 | `generate_nav.py` | 從 docs/ 的 front matter 產生一份 MkDocs nav 草稿 |
 | `generate_platform_data.py` | 共用平台資料產生器 |

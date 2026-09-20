@@ -45,9 +45,8 @@ spec:
     - name: db-a-pagerduty
       pagerdutyConfigs:
         - routingKey:
-            secret:
-              name: da-db-a-pagerduty
-              key: routing-key
+            name: da-db-a-pagerduty
+            key: routing-key
 ```
 
 ### 影子路由（觀察用）
