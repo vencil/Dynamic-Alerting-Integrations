@@ -352,7 +352,7 @@ _PUSH_BRANCHES = ("feat/escape-hatch", "main")
 
 
 def _push_through_wrapper(
-    tmp_path: pathlib.Path, hook_rc: int, branch: str
+    tmp_path: pathlib.Path, hook_rc: int, branch: str, explicit_args: bool
 ) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
     """Push a real commit via `win_git_escape.bat push` against a stub pre-push hook.
 
@@ -406,15 +406,13 @@ def _push_through_wrapper(
     )
     hook.chmod(0o755)
 
+    # ⛔ Both shapes. `make win-commit` runs `win_git_escape.bat push` with NO
+    # arguments, so the remote/branch auto-detect branch is the ONE the
+    # production caller takes — and a bypass parked there is invisible to a
+    # fixture that always passes them (measured).
+    argv = ["push", "origin", branch] if explicit_args else ["push"]
     proc = subprocess.run(
-        [
-            "cmd",
-            "/c",
-            str(work / "scripts" / "ops" / "win_git_escape.bat"),
-            "push",
-            "origin",
-            branch,
-        ],
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), *argv],
         cwd=work,
         capture_output=True,
         timeout=180,
@@ -434,13 +432,18 @@ def _push_through_wrapper(
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
 @pytest.mark.parametrize("branch", _PUSH_BRANCHES)
-def test_push_runs_the_pre_push_hook_and_names_the_two_bypasses(tmp_path, branch) -> None:
+@pytest.mark.parametrize("explicit_args", [True, False], ids=["argv", "auto-detect"])
+def test_push_runs_the_pre_push_hook_and_names_the_two_bypasses(
+    tmp_path, branch, explicit_args
+) -> None:
     """#1487 — the guards must still see the push, and be bypassed by name.
 
     Also the must-ring control for the rc test below: an accepting hook has to
     come back as success, or `exit /b 1` everywhere would satisfy it.
     """
-    proc, recorded = _push_through_wrapper(tmp_path, hook_rc=0, branch=branch)
+    proc, recorded = _push_through_wrapper(
+        tmp_path, hook_rc=0, branch=branch, explicit_args=explicit_args
+    )
     assert recorded, (
         f"the pre-push hook never ran for {branch} — `push` is skipping hooks "
         "again (#1487):\n" + proc.stdout.decode("utf-8", "replace")
@@ -458,9 +461,14 @@ def test_push_runs_the_pre_push_hook_and_names_the_two_bypasses(tmp_path, branch
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
 @pytest.mark.parametrize("branch", _PUSH_BRANCHES)
-def test_push_propagates_a_rejecting_pre_push_guard(tmp_path, branch) -> None:
+@pytest.mark.parametrize("explicit_args", [True, False], ids=["argv", "auto-detect"])
+def test_push_propagates_a_rejecting_pre_push_guard(
+    tmp_path, branch, explicit_args
+) -> None:
     """A guard that says no must reach the caller — `goto :done` is `exit /b 0`."""
-    proc, recorded = _push_through_wrapper(tmp_path, hook_rc=1, branch=branch)
+    proc, recorded = _push_through_wrapper(
+        tmp_path, hook_rc=1, branch=branch, explicit_args=explicit_args
+    )
     assert recorded, f"fixture did not exercise the hook at all for {branch}"
     assert proc.returncode != 0, (
         f"win_git_escape.bat push swallows a rejecting pre-push guard ({branch}):\n"
@@ -468,45 +476,71 @@ def test_push_propagates_a_rejecting_pre_push_guard(tmp_path, branch) -> None:
     )
 
 
-def _push_call_sites(lines: list[str]) -> list[tuple[int, str]]:
-    """Every `git push` invocation in the wrapper, wherever it lives.
+_COMMENT_RE = re.compile(r"^\s*(?:REM\b|::)", re.I)
+# A git invocation, however the interpreter is named: `"%GIT_CMD%" push`,
+# `%Git_Cmd% push`, `git push`, `git.exe -c x=y push`. ⛔ Case-insensitive:
+# cmd.exe variable names are, so `%Git_Cmd%` and `%GIT_CMD%` are one thing.
+_PUSH_SITE_RE = re.compile(r'(?:%\w+%|\bgit(?:\.exe)?\b)"?\s+(?:-c\s+\S+\s+)*push\b', re.I)
+# Tokens that turn a guard off wholesale. Neither has a legitimate use in this
+# wrapper, so the predicate is "absent from everything cmd.exe executes" —
+# not "absent from the line I happened to match".
+_HOOK_DISABLING_TOKENS = ("--no-verify", "core.hookspath")
 
-    ⛔ Not the `:do_push` block: this file dispatches one label per subcommand,
-    so a second push path is one `goto` away — and a window-scoped scan cannot
-    see it (measured; that mutation survived every check in this file).
+
+def _executable_lines(lines: list[str]) -> list[str]:
+    """What cmd.exe actually runs: comments dropped, `^` continuations joined.
+
+    ⛔ Both normalisations are load-bearing, and both were found by walking the
+    previous version of this check: commenting out a `goto :done_err` left it
+    green while the rc was swallowed, and moving `--no-verify` onto a
+    continuation line hid it from a per-line scan.
     """
-    return [
-        (i, ln)
-        for i, ln in enumerate(lines)
-        if re.search(r'%GIT_CMD%"?\s+push\b', ln) and not ln.strip().upper().startswith("REM ")
-    ]
+    out: list[str] = []
+    pending: str | None = None
+    for raw in lines:
+        if _COMMENT_RE.match(raw):
+            continue
+        pending = raw if pending is None else f"{pending} {raw.strip()}"
+        if pending.rstrip().endswith("^"):
+            pending = pending.rstrip()[:-1]
+            continue
+        out.append(pending)
+        pending = None
+    if pending is not None:
+        out.append(pending)
+    return out
 
 
-def test_no_push_call_site_turns_off_every_pre_push_guard() -> None:
-    """Cross-platform smoke — the predicates above are Windows-only.
+def test_the_wrapper_never_turns_a_pre_push_guard_off() -> None:
+    """Cross-platform net — the behavioural predicates above are Windows-only.
 
     ⛔ And they are the ONLY ones that run them: every CI runner in this repo is
-    ubuntu, so on a PR this test is the whole net. It asserts the invocation
-    shape; whether the guards actually run is behavioural (`_push_through_wrapper`).
+    ubuntu, so on a PR this test is the whole net. ⚠️ It reads source, so it can
+    only answer "is the off-switch written down"; whether the guards actually
+    run is `_push_through_wrapper`'s question, and a bypass assembled at runtime
+    would still need that test to be seen.
     """
     lines = _read_normalized(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat")
-    sites = _push_call_sites(lines)
+    body = _executable_lines(lines)
+    lowered = "\n".join(body).lower()
+    for token in _HOOK_DISABLING_TOKENS:
+        assert token not in lowered, (
+            f"`{token}` is back in executable text: it turns off every pre-push "
+            "guard, including the direct-push-to-main gate that has no flag of "
+            f"its own (#1487):\n"
+            + "\n".join(ln for ln in body if token in ln.lower())
+        )
+    sites = [(i, ln) for i, ln in enumerate(body) if _PUSH_SITE_RE.search(ln)]
     assert sites, "no `git push` call site found — the scan lost its subject"
     for i, ln in sites:
-        assert "--no-verify" not in ln, (
-            "a push call site turns off every pre-push guard, including the "
-            f"direct-push-to-main gate that has no flag of its own (#1487):\n{ln}"
-        )
         # The failure branch must reach :done_err — `goto :done` is `exit /b 0`,
         # which is how a rejecting guard used to be reported as success (#1472).
         end = next(
-            (j for j in range(i + 1, len(lines)) if lines[j].strip() == "goto :done"),
-            len(lines),
+            (j for j in range(i + 1, len(body)) if body[j].strip().lower() == "goto :done"),
+            len(body),
         )
-        assert any("goto :done_err" in l for l in lines[i:end]), (
-            f"the push at line {i + 1} has no failure path to :done_err:\n"
-            + "\n".join(lines[i:end])
+        assert any("goto :done_err" in l.lower() for l in body[i:end]), (
+            f"this push has no failure path to :done_err:\n" + "\n".join(body[i:end])
         )
-    joined = "\n".join(lines)
-    for flag in ('set "MKDOCS_STRICT_BYPASS=1"', 'set "GIT_PREFLIGHT_BYPASS=1"'):
-        assert flag in joined, f"{flag} is no longer set before the push"
+    for flag in ('set "mkdocs_strict_bypass=1"', 'set "git_preflight_bypass=1"'):
+        assert flag in lowered, f"{flag} is no longer set before the push"
