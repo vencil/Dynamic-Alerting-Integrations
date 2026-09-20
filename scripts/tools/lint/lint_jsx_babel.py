@@ -196,8 +196,11 @@ def _compute_exit_code(
     soft-cap violations after PR-2d Phase 3 / S#72) WITHOUT being
     blocked by the standing `style={{}}` baseline warnings — those get a
     separate cleanup track. ⚠️ That baseline is not restated as a number
-    here: nothing asserts it, and the count written here had already
-    drifted from what the rule below matches. Backward compat: `--strict` alone
+    here: nothing asserts it, and the count that used to sit here had
+    already drifted. To obtain it, run `_RE_STYLE_DOUBLE_CURLY` (defined
+    above) over `JSX_DIRS` — the static pass itself does not run at all
+    without Node, so an exit code of 0 from this script is not a
+    measurement. Backward compat: `--strict` alone
     still activates both (for any caller that already invoked it).
     """
     if not ci:

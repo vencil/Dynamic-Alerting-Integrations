@@ -516,8 +516,7 @@ class MdYamlDriftChecker:
         `_routing_enforced:` body is validated by nothing — measured: a receiver
         with a flat `receiver_type`, a `webhook_url` and an invented key passed
         clean, and it is the same defect class as the tenant-side one this gate
-        was built to catch. (How many documented units carry such a body is not
-        restated here — `--check schema` prints the corpus size on every run.)
+        was built to catch.
 
         Validating the whole routing block against `definitions.routing` would
         be wrong (`_routing_enforced` legitimately carries `enabled:` and

@@ -2111,8 +2111,8 @@ _TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output"})
 
 # Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
 # waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
-# promtool: the expression evaluates to '' for the other six images, so it is a
-# no-op there. The other two buckets scan images we do not build and have no
+# promtool: the expression evaluates to '' for every other image in that
+# matrix, so it is a no-op there. The other two buckets scan images we do not build and have no
 # waiver story at all — an entry appearing in either is a finding, not config.
 _TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
     "scan": frozenset({"trivyignores"}),

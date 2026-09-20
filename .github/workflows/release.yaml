@@ -741,12 +741,12 @@ jobs:
           ignore-unfixed: true
           # Bundled-promtool (Prometheus) binary CVEs only — recipe-preview ships no
           # first-party Go. ⛔ WHICH ids are waived, on what evidence and until when is
-          # deliberately NOT summarised here: the register is per-ID, each entry
-          # carrying its own expiry and a named OpenVEX justification, and a prose
-          # summary of it has no assertion behind it. Evidence + governance:
-          # .trivyignore.yaml + promtool.openvex.json in components/recipe-preview/.
-          # Gate stays HARD (exit-code 1) — only those evidence-backed, expiring
-          # entries are waived.
+          # deliberately NOT summarised here — read the register. A prose summary of
+          # it has nothing asserting it, and the one that used to sit here had gone
+          # stale against a register that was rewritten under it. Evidence +
+          # governance: .trivyignore.yaml + promtool.openvex.json in
+          # components/recipe-preview/. Gate stays HARD (exit-code 1) — only the
+          # register's entries are waived.
           trivyignores: components/recipe-preview/.trivyignore.yaml
 
   # ----------------------------------------------------------------
