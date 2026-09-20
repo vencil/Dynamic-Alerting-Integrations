@@ -258,11 +258,16 @@ WHAT THIS GUARD DOES **NOT** BUY
   ask for one.** The GitHub sibling is protected by ``needs: [validate]`` (see
   the #1356 reasoning below — losing that edge deploys an unvalidated config).
   The GitLab job declares no ``needs:`` at all, and stage ordering only orders
-  jobs THAT EXIST: ``validate-config`` carries ``rules: - changes: [conf.d/**,
-  rule-packs/**]``, so a push to the default branch touching only
-  ``kustomize/overlays/prod/`` creates a pipeline whose ONLY job is ``apply`` —
-  a manual production deploy of the very file just changed, with nothing having
-  validated anything. The trigger-scope guard added here constrains WHO can
+  jobs THAT EXIST: ``validate-config`` is ``changes:``-gated on this
+  invocation's watched trees (``ip._ci_trigger_trees``), so a push to the
+  default branch touching only a file OUTSIDE them — a ``README.md``, a chart
+  the customer keeps beside their config — creates a pipeline whose ONLY job is
+  ``apply``: a manual production deploy with nothing having validated anything.
+  ⚠️ The example here used to be ``kustomize/overlays/prod/``, and issue 1473's
+  fix retired it: that tree is now in the watched set under ``--deploy
+  kustomize``, so the old example would read as still-live while naming a path
+  that DOES create ``validate-config``. The property is unchanged; only the
+  witness moved. The trigger-scope guard added here constrains WHO can
   press the button and from which branch; it does not give the button a
   prerequisite. Adding one is a change to the customer's deploy flow (a
   ``needs:`` on a job that may not be created fails pipeline creation outright,
@@ -272,7 +277,10 @@ WHAT THIS GUARD DOES **NOT** BUY
   writes.** Both the GitHub and GitLab helm branches run ``helm upgrade
   --install ... -f environments/prod/values.yaml``, and no code path creates
   ``environments/``. The customer's first apply dies on ``no such file or
-  directory``. Related and equally undisclosed until now: **no branch
+  directory``. ⚠️ Still open, and issue 1473 did NOT close it: that fix put
+  ``environments/**`` into both trigger faces so an edit to the file is seen,
+  which is a separate property from the file existing (issue 1454 B). Section
+  5b grades the trigger; nothing here asserts the values file is usable. Related and equally undisclosed until now: **no branch
   establishes cluster credentials at all** — there is no kubeconfig, no
   ``secrets.*`` reference, no cloud-auth action anywhere in the generated
   artifacts. Both validators pass regardless, because neither claim is about
@@ -771,19 +779,34 @@ _EXPECTED_GL_JOB_STAGES = {
     "apply": "apply",
 }
 
-_EXPECTED_GL_JOB_RULES = {
-    "validate-config": [{"changes": ["conf.d/**/*", "rule-packs/**/*"]}],
+def _expected_gl_job_rules(deploy: str) -> dict:
+    """The `rules:` every non-deploy GitLab job must carry, per `--deploy`.
+
+    ⛔ `validate-config` watches the SAME trees as the GitHub leg's `on.paths`
+    (`_CLI_TRIGGER_TREES`), in GitLab's own `**/*` spelling — `conf.d/**`
+    matches no FILE under `rules:changes`. The two legs used to be hand-written
+    and had drifted: GitHub named `kustomize/**` under every `--deploy`, this
+    leg named it under none, and neither named `environments/**` while the helm
+    apply stage reads it (issue 1473). Deriving both from one table is what
+    makes the asymmetry unable to come back.
+    """
+    return {
+    "validate-config": [
+        {"changes": [f"{tree}/**/*" for tree in _CLI_TRIGGER_TREES[deploy]]}
+    ],
     # ⛔ `exists:` is a FILE glob, not a directory. The bare
     # `rule-packs/custom/` form is resolved by GitLab with a bsearch over the
     # sorted worktree paths — a binary search against a non-monotonic
     # predicate — so whether it matched depended on the surrounding tree, and
     # a miss ANDs with `changes:` to make the job simply not exist. No error,
     # no red, just a missing governance gate.
+    # Job-scoped and deliberately NOT derived from the table above: this gate
+    # is about one subtree, not about "did the deploy surface change".
     "lint-custom-rules": [
         {"changes": ["rule-packs/custom/**/*"],
          "exists": ["rule-packs/custom/**/*"]}
     ],
-}
+    }
 
 
 @pytest.mark.parametrize("ci,deploy", GH_COMBOS)
@@ -965,24 +988,58 @@ def _runs_under(name: str, event: str, jobs: dict, label: str,
 # produced #1347.
 # The two legs legitimately differ (the preview is a simplified sample), so this
 # is passed per-leg rather than shared — but BOTH are pinned, which is the point.
-_CLI_GH_TRIGGERS = {
-    "pull_request": {"paths": ["conf.d/**", "kustomize/**", "rule-packs/**"]},
-    # ⛔ NO `branches:` key. `on.push.branches` takes literals only, so any
-    # value there is a guess at the customer's default branch — `main` is
-    # simply wrong for a `master`/`trunk` repo, and that leg then never
-    # fires. Pinning the ABSENCE is the contract: it says "we deliberately
-    # do not guess", where pinning `["main"]` would have cemented the bug
-    # and made the eventual fix red a test.
-    #
-    # ⛔ The SAME three trees as `pull_request`. This used to be `conf.d/**`
-    # alone, so a direct push touching only `rule-packs/custom/**` ran
-    # nothing — and the custom-rule governance lint inside `validate` is
-    # scoped to exactly that tree. Held equal by
-    # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` below, so the
-    # two cannot drift apart again by editing one of them.
-    "push": {"paths": ["conf.d/**", "kustomize/**", "rule-packs/**"]},
-    "workflow_dispatch": None,
+# ⛔ Per `--deploy`, because one shared list is issue 1473. The three values
+# do not touch the same trees, and a list written once for all of them was
+# wrong for two of them in BOTH directions at the same time: it named
+# `kustomize/**` where no `kustomize/` tree is written, and named
+# `environments/**` nowhere although the helm apply step reads
+# `environments/prod/values.yaml`.
+#
+# ⛔ Spelled out here rather than read from `ip._ci_trigger_trees`. Calling the
+# generator's own derivation would assert that it equals itself — this table is
+# the independent statement of what each mode SHOULD watch, and the behavioural
+# guards in section 5b grade the same artifact a third way (against the file
+# tree that was actually written). Three faces, no shared source of error.
+#
+# ⚠️ These are the sets for the CLI's DEFAULT `--config-source configmap`. GitOps
+# Native Mode widens `kustomize` back in under every `--deploy` (it writes
+# `kustomize/overlays/gitops/`) and is pinned by its own test below, not here —
+# the fixture this table grades does not pass `--config-source`.
+_CLI_TRIGGER_TREES: dict[str, tuple[str, ...]] = {
+    # base + overlays are written, and the apply step builds overlays/prod.
+    "kustomize": ("conf.d", "kustomize", "rule-packs"),
+    # `environments/` is never WRITTEN (issue 1454 B) — the apply step reads
+    # `-f environments/prod/values.yaml`, and being read is what the filter has
+    # to answer for.
+    "helm": ("conf.d", "environments", "rule-packs"),
+    # `argocd app sync` talks to the server and the job has no checkout, so
+    # this mode reads no repository path beyond the two shared trees. Adding
+    # `environments` here would be issue 1473's dead entry, re-created.
+    "argocd": ("conf.d", "rule-packs"),
 }
+
+
+def _cli_gh_triggers(deploy: str) -> dict:
+    """The `on:` block the CLI artifact must carry for one `--deploy`."""
+    paths = [f"{tree}/**" for tree in _CLI_TRIGGER_TREES[deploy]]
+    return {
+        "pull_request": {"paths": paths},
+        # ⛔ NO `branches:` key. `on.push.branches` takes literals only, so
+        # any value there is a guess at the customer's default branch — `main`
+        # is simply wrong for a `master`/`trunk` repo, and that leg then never
+        # fires. Pinning the ABSENCE is the contract: it says "we deliberately
+        # do not guess", where pinning `["main"]` would have cemented the bug
+        # and made the eventual fix red a test.
+        #
+        # ⛔ The SAME trees as `pull_request` — the same list object, so this
+        # cannot drift by editing one side. It used to be `conf.d/**` alone, so
+        # a direct push touching only `rule-packs/custom/**` ran nothing — and
+        # the custom-rule governance lint inside `validate` is scoped to exactly
+        # that tree. Also held on the artifact by
+        # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` below.
+        "push": {"paths": paths},
+        "workflow_dispatch": None,
+    }
 # Pinned WITH versions: a name-only pin accepted `actions/checkout@v1`.
 # The argocd apply stage deliberately has no checkout (`argocd app sync`
 # talks to the server), so the count is deploy-dependent — derived here
@@ -1260,8 +1317,8 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
                 )
 
         # (c) ⛔ The hook's `files:` decides whether it runs AT ALL, and this PR
-        # pinned that property on both CI legs (`_CLI_GH_TRIGGERS`,
-        # `_EXPECTED_GL_JOB_RULES`) with the argument that a filter matching
+        # pinned that property on both CI legs (`_cli_gh_triggers`,
+        # `_expected_gl_job_rules`) with the argument that a filter matching
         # nothing "leaves validate and generate dead on every PR". The third
         # generated artifact has the identical property and got a substring
         # check instead: measured, rewriting `^conf\.d/` to `^NOPEconf\.d/`
@@ -2796,7 +2853,7 @@ def _assert_github_deploy_contract(
     }
 
     # ⛔ Floor. `_NEEDS` is consumed by a loop, which is the shape in this file
-    # that retires SILENTLY — the same one `_EXPECTED_GL_JOB_RULES` got a floor
+    # that retires SILENTLY — the same one `_expected_gl_job_rules` got a floor
     # for, in this same file, and this dict was missed. Measured: `_NEEDS = {}`
     # left 84 passed even with `permissions: {}` on `validate`, i.e. the entire
     # demand half of the rule disappears without a red run.
@@ -3100,7 +3157,7 @@ def test_github_permissions_grant_what_the_steps_actually_need(
         # `generate` job, where the ceiling rule justifies it from that job's
         # own sticky-comment step — see the note beside that check.
         {"contents": "read"},
-        _CLI_GH_TRIGGERS,
+        _cli_gh_triggers(deploy),
         _cli_gh_uses(deploy),
         expects_lint=True,
     )
@@ -3204,9 +3261,11 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # job later. Deriving it from `_EXPECTED_GL_JOBS` means the floor tracks
     # the pipeline: every non-deploy job must have its gate pinned, whatever
     # that set becomes.
+    expected_gl_job_rules = _expected_gl_job_rules(deploy)
     _non_deploy = _EXPECTED_GL_JOBS - {"apply"}
-    assert set(_EXPECTED_GL_JOB_RULES) == _non_deploy, (
-        f"_EXPECTED_GL_JOB_RULES pins {sorted(_EXPECTED_GL_JOB_RULES)} but the "
+    assert set(expected_gl_job_rules) == _non_deploy, (
+        f"_expected_gl_job_rules({deploy!r}) pins "
+        f"{sorted(expected_gl_job_rules)} but the "
         f"non-deploy jobs are {sorted(_non_deploy)} — emptying or shrinking it "
         "makes the loop below a no-op that still reports green. A `when: never` "
         "on validate-config is caught by nothing else."
@@ -3215,9 +3274,9 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
         "_EXPECTED_GL_JOBS contains no non-deploy job, so the loop below "
         "describes nothing."
     )
-    assert set(_EXPECTED_GL_JOB_RULES) <= _EXPECTED_GL_JOBS, (
-        "_EXPECTED_GL_JOB_RULES names jobs that are not in _EXPECTED_GL_JOBS: "
-        f"{sorted(set(_EXPECTED_GL_JOB_RULES) - _EXPECTED_GL_JOBS)}"
+    assert set(expected_gl_job_rules) <= _EXPECTED_GL_JOBS, (
+        "_expected_gl_job_rules names jobs that are not in _EXPECTED_GL_JOBS: "
+        f"{sorted(set(expected_gl_job_rules) - _EXPECTED_GL_JOBS)}"
     )
     # ⛔ Same rule as the GitHub leg's `continue-on-error` ban, with NO
     # exemptions — the two legs must reach the same verdict on the same input.
@@ -3310,7 +3369,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
             "exemption here makes the two legs disagree about the same input."
         )
 
-    for jname, expected_rules in _EXPECTED_GL_JOB_RULES.items():
+    for jname, expected_rules in expected_gl_job_rules.items():
         assert jobs[jname].get("rules") == expected_rules, (
             f"job {jname!r} rules are {jobs[jname].get('rules')!r}, expected "
             f"{expected_rules!r}. These are the gates that decide whether the "
@@ -5154,7 +5213,7 @@ def _resolve_step_env(step: dict, wf_env: dict, job_env: dict, *,
             "the assertion."
         )
     else:
-        # Pinning the ABSENCE, the same way `_CLI_GH_TRIGGERS` pins the missing
+        # Pinning the ABSENCE, the same way `_cli_gh_triggers` pins the missing
         # `branches:` key. The blast-radius step draws CONFIG_DIR and
         # DA_TOOLS_IMAGE from the workflow scope and binds nothing itself;
         # saying so here means a step that STARTS binding something cannot slip
@@ -5651,7 +5710,7 @@ def test_the_apply_pins_cover_every_deploy_method() -> None:
 
     Both tables are consumed by `[deploy]` lookup, so a deploy method that is
     missing from them would simply never be graded — the silent-retirement
-    shape this file has been bitten by before (`_EXPECTED_GL_JOB_RULES`,
+    shape this file has been bitten by before (`_expected_gl_job_rules`,
     `_NEEDS`). Keying the floor off `DEPLOY_CHOICES` means adding a deploy
     method to the CLI forces a decision about its apply body.
     """
@@ -6049,6 +6108,340 @@ class TestGitHubLegDefectsFoundInRoundSeven:
         assert on['push']['paths'] == on['pull_request']['paths'], (
             f"{deploy}: push 與 pull_request 的 paths 不一致——"
             f"push={on['push']['paths']} pr={on['pull_request']['paths']}")
+
+
+# ============================================================
+# ── 5b. Do the trigger filters match what the artifact touches? (#1473) ──
+# ============================================================
+#
+# ⛔ The criterion is "would editing this file create a job", never "does the
+# `paths:` list look right". Issue 1473 shipped both halves of getting that
+# wrong at once, and a list comparison written from the same wrong list sees
+# neither half:
+#   * a DEAD entry — `kustomize/**` under `--deploy helm` / `--deploy argocd`,
+#     which (at the default `--config-source`) write no `kustomize/` tree. It
+#     can never match, and it makes helm mode read as kustomize-related.
+#   * a MISSING entry — `environments/**` on NEITHER leg, while the helm apply
+#     step reads `-f environments/prod/values.yaml`. A customer editing that
+#     one file matched nothing, so ZERO jobs were created and the pull request
+#     / merge request went green having validated nothing — issue 1357's
+#     failure shape, moved onto the helm trigger.
+#
+# Both directions are graded below, and from the ARTIFACT plus the file tree
+# `run_init` actually wrote — not from `ip._ci_trigger_trees`, which would be
+# the derivation asserting that it equals itself.
+
+
+def _gha_path_matches(pattern: str, target: str) -> bool:
+    """GitHub Actions path-filter semantics: `**` spans `/`, `*` does not.
+
+    ⚠️ A second copy of this translator lives in
+    tests/ops/test_nightly_scan_matrix_drift.py, and that is deliberate: that
+    one grades THIS platform's own workflows, this one grades the customer
+    artifact, and importing four lines across two otherwise-unrelated test
+    modules couples them for no gain. Both are stricter than minimatch in the
+    same direction — `**` here does not collapse to zero directories — and that
+    direction can only produce a false "not covered" (a nuisance red), never a
+    false "covered" (the dangerous one).
+    """
+    rx = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
+    return re.fullmatch(rx.replace("\x00", ".*"), target) is not None
+
+
+def _gitlab_changes_matches(pattern: str, target: str) -> bool:
+    """GitLab `rules:changes` semantics, for the glob subset these files use.
+
+    GitLab matches with `File.fnmatch?(pattern, path, File::FNM_PATHNAME |
+    File::FNM_DOTMATCH | File::FNM_EXTGLOB)`, where a `**/` SEGMENT collapses to
+    zero-or-more directories — which is why `conf.d/**/*` matches
+    `conf.d/db-a.yaml` and not only `conf.d/a/b.yaml`. That collapse is the
+    whole reason the two legs spell the same tree differently, so modelling it
+    is not optional here.
+
+    ⚠️ Modelled, not exhaustive: character classes and `EXTGLOB` alternation are
+    not implemented. Nothing this generator emits uses either, and if that
+    changes the failure direction is a reported unmatched path rather than a
+    silent pass — the assertions below report what did not match.
+    """
+    rx = (re.escape(pattern)
+          .replace(r"\*\*/", "\x00")
+          .replace(r"\*\*", "\x01")
+          .replace(r"\*", "[^/]*"))
+    rx = rx.replace("\x00", "(?:[^/]+/)*").replace("\x01", ".*")
+    return re.fullmatch(rx, target) is not None
+
+
+def _gh_trigger_paths(workflow: dict) -> list[str]:
+    """Every `paths:` entry across the workflow's events, flattened."""
+    on = workflow.get("on") or workflow[True]
+    out: list[str] = []
+    for cfg in on.values():
+        if isinstance(cfg, dict):
+            out.extend(cfg.get("paths") or [])
+    return out
+
+
+def _gl_change_paths(pipeline: dict) -> list[str]:
+    """Every `rules: - changes:` entry across the pipeline's jobs, flattened."""
+    out: list[str] = []
+    for job in _gitlab_jobs(pipeline).values():
+        for entry in job.get("rules") or []:
+            if not isinstance(entry, dict):
+                continue
+            changes = entry.get("changes")
+            if isinstance(changes, dict):      # long form {paths:, compare_to:}
+                changes = changes.get("paths")
+            out.extend(changes or [])
+    return out
+
+
+def _paths_the_artifact_names(ci_file: Path) -> list[str]:
+    """Concrete (glob-free) repo-root paths a generated CI file names.
+
+    Read through `ip._root_relative_ci_paths` — the generator's OWN extractor,
+    the one the subdirectory remediation summary is derived from — so this guard
+    cannot disagree with the tool about what counts as a path. Globbed entries
+    are the trigger face itself and are dropped here; what is left is what some
+    job or variable actually names: `CONFIG_DIR: conf.d`, `kustomize build
+    kustomize/overlays/prod`, `helm … -f environments/prod/values.yaml`,
+    `da-tools lint rule-packs/custom/`.
+    """
+    entries = ip._root_relative_ci_paths(ci_file)
+    concrete = [e.rstrip("/") for e in entries if "*" not in e]
+    return sorted(dict.fromkeys(c for c in concrete if c))
+
+
+def _probes_for(named: str) -> tuple[str, ...]:
+    """The changed-file paths that would have to match for `named` to be seen.
+
+    ⛔ Two probes, and no attempt to guess file-vs-directory from the spelling.
+    `conf.d` is a directory and `environments/prod/values.yaml` is a file; a
+    suffix heuristic would have to decide, and getting it wrong would silently
+    weaken the guard. Requiring EITHER probe to match covers both shapes, and
+    it is not the weaker reading where it counts: if the tree is absent from
+    the filter, neither probe matches.
+    """
+    return (named, f"{named}/da-trigger-probe.yaml")
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_github_filter_matches_every_path_the_workflow_reads(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1473 ②, as behaviour: a read path outside `on.paths` is invisible.
+
+    The generated `apply` step reads `environments/prod/values.yaml` in helm
+    mode, and the filter named no `environments/**` — so the customer's edit to
+    the ONE file carrying their non-threshold deploy config created no job at
+    all and the pull request was green. Graded by matching the filter against
+    the paths the artifact itself names, so a future deploy branch that starts
+    reading a new tree reds here instead of shipping an inert trigger.
+    """
+    path = generated[(ci, deploy)] / _GH_WORKFLOW
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    filters = _gh_trigger_paths(workflow)
+    assert filters, "the generated workflow declares no `paths:` filter at all"
+
+    named = _paths_the_artifact_names(path)
+    assert named, (
+        "no concrete repo path extracted from the workflow — this assertion "
+        "would be vacuous. `ip._root_relative_ci_paths` is the extractor; check "
+        "it before relaxing anything here."
+    )
+    unmatched = [
+        n for n in named
+        if not any(_gha_path_matches(f, probe)
+                   for probe in _probes_for(n) for f in filters)
+    ]
+    assert not unmatched, (
+        f"--deploy {deploy}: the workflow READS {unmatched} but `on.paths` "
+        f"({filters}) matches none of them. Editing one of those files creates "
+        "no job, so the pull request is green having validated nothing — issue "
+        "1473 ②, which is issue 1357's failure shape on the trigger."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_no_github_filter_entry_watches_a_tree_that_is_never_there(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1473 ①, as behaviour: every entry must have something to match.
+
+    `kustomize/**` shipped under all three `--deploy` values while helm and
+    argocd write no `kustomize/` tree — an entry that can never fire, and one
+    that told a helm reader their mode was kustomize-related. An entry earns its
+    place by the tree being WRITTEN by this run or NAMED by a job; nothing else
+    counts, which is also why the fix could not just delete it (GitOps Native
+    Mode writes `kustomize/overlays/gitops/` under every `--deploy` — pinned
+    separately below).
+    """
+    root = generated[(ci, deploy)]
+    path = root / _GH_WORKFLOW
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    written = {
+        f.relative_to(root).as_posix().split("/")[0]
+        for f in root.rglob("*") if f.is_file()
+    }
+    named = {n.split("/")[0] for n in _paths_the_artifact_names(path)}
+    dead = sorted(
+        {e for e in _gh_trigger_paths(workflow)
+         if e.split("/")[0] not in written | named}
+    )
+    assert not dead, (
+        f"--deploy {deploy}: `on.paths` lists {dead}, whose top-level tree is "
+        f"neither written by this run ({sorted(written)}) nor named by any job "
+        f"({sorted(named)}). A filter entry that can never match is issue "
+        "1473 ①: pure noise, and it misleads the reader about what this mode "
+        "deploys with."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GL_COMBOS)
+def test_the_gitlab_changes_match_every_path_the_pipeline_reads(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1473 ②, on the other leg — and here a miss is even quieter.
+
+    GitLab creates no job when nothing matches, and a merge request with no
+    jobs is green. The helm apply stage reads `environments/prod/values.yaml`
+    and no `changes:` entry named it.
+    """
+    path = generated[(ci, deploy)] / _GL_PIPELINE
+    pipeline = yaml.safe_load(path.read_text(encoding="utf-8"))
+    changes = _gl_change_paths(pipeline)
+    assert changes, "the generated pipeline declares no `changes:` at all"
+
+    named = _paths_the_artifact_names(path)
+    assert named, (
+        "no concrete repo path extracted from the pipeline — this assertion "
+        "would be vacuous."
+    )
+    unmatched = [
+        n for n in named
+        if not any(_gitlab_changes_matches(c, probe)
+                   for probe in _probes_for(n) for c in changes)
+    ]
+    assert not unmatched, (
+        f"--deploy {deploy}: the pipeline READS {unmatched} but no `changes:` "
+        f"entry ({changes}) matches them. GitLab then creates no job, and a "
+        "merge request with no jobs is green."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GL_COMBOS)
+def test_no_gitlab_changes_entry_watches_a_tree_that_is_never_there(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1473 ①, on the other leg. Same justification rule as GitHub."""
+    root = generated[(ci, deploy)]
+    path = root / _GL_PIPELINE
+    pipeline = yaml.safe_load(path.read_text(encoding="utf-8"))
+    written = {
+        f.relative_to(root).as_posix().split("/")[0]
+        for f in root.rglob("*") if f.is_file()
+    }
+    named = {n.split("/")[0] for n in _paths_the_artifact_names(path)}
+    dead = sorted(
+        {e for e in _gl_change_paths(pipeline)
+         if e.split("/")[0] not in written | named}
+    )
+    assert not dead, (
+        f"--deploy {deploy}: `changes:` lists {dead}, whose top-level tree is "
+        f"neither written by this run ({sorted(written)}) nor named by any job "
+        f"({sorted(named)})."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_gitops_native_mode_keeps_the_kustomize_overlay_in_both_filters(
+    tmp_path, ci, deploy
+) -> None:
+    """⛔ The correction issue 1473 did not have, measured rather than reasoned.
+
+    The ticket says `--deploy helm` / `--deploy argocd` write no `kustomize/`
+    tree and concludes `kustomize/**` is dead there. That holds only at the
+    default `--config-source`: GitOps Native Mode (`--config-source git` with a
+    `--git-repo`) writes `kustomize/overlays/gitops/{kustomization,
+    git-sync-patch}.yaml` for EVERY `--deploy` (`run_init` step 3b). Dropping
+    the entry on `deploy_method` alone would have swapped issue 1473's dead
+    entry for a MISSING one, aimed at exactly the customers who took the GitOps
+    path — the same defect, other direction.
+
+    So this asserts the BEHAVIOUR on the files that mode really writes, not the
+    presence of a string.
+    """
+    target = tmp_path / f"gitops-{ci}-{deploy}"
+    target.mkdir()
+    created = ip.run_init(
+        {
+            "ci": ci,
+            "deploy": deploy,
+            "rule_packs": ["mariadb"],
+            "tenants": ["db-a"],
+            "namespace": "monitoring",
+            "da_tools_image": ip.DA_TOOLS_IMAGE,
+            "config_source": "git",
+            "git_repo": "https://gitops.invalid/tenant-config.git",
+        },
+        str(target),
+    )
+    overlay = sorted(
+        Path(f).relative_to(target).as_posix() for f in created
+        if "kustomize/overlays/gitops/" in Path(f).as_posix()
+    )
+    assert overlay, (
+        "GitOps Native Mode wrote no `kustomize/overlays/gitops/` file, so this "
+        "assertion describes nothing. If step 3b moved, re-derive it — do not "
+        "delete the test."
+    )
+
+    if ci in _EMITS_GITHUB:
+        workflow = yaml.safe_load(
+            (target / _GH_WORKFLOW).read_text(encoding="utf-8"))
+        filters = _gh_trigger_paths(workflow)
+        missed = [o for o in overlay
+                  if not any(_gha_path_matches(f, o) for f in filters)]
+        assert not missed, (
+            f"--deploy {deploy} --config-source git: `on.paths` ({filters}) "
+            f"does not match the git-sync overlay this run wrote ({missed}). A "
+            "customer editing their own sync patch would trigger nothing."
+        )
+    if ci in _EMITS_GITLAB:
+        pipeline = yaml.safe_load(
+            (target / _GL_PIPELINE).read_text(encoding="utf-8"))
+        changes = _gl_change_paths(pipeline)
+        missed = [o for o in overlay
+                  if not any(_gitlab_changes_matches(c, o) for c in changes)]
+        assert not missed, (
+            f"--deploy {deploy} --config-source git: no `changes:` entry "
+            f"({changes}) matches the git-sync overlay this run wrote "
+            f"({missed})."
+        )
+
+
+def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:
+    """⛔ Anti-vacuity floor, keyed off the parser rather than off the pin.
+
+    `_CLI_TRIGGER_TREES` is consumed by `[deploy]` lookup, so a fourth deploy
+    method would raise rather than silently skip — but the GitLab pin is built
+    from the same table, and a table that drifted out of step with the CLI is
+    the silent-retirement shape this file keeps meeting. Keying the floor off
+    `DEPLOY_CHOICES` forces a decision about a new mode's trigger trees.
+    """
+    assert set(_CLI_TRIGGER_TREES) == set(DEPLOY_CHOICES), (
+        f"_CLI_TRIGGER_TREES pins {sorted(_CLI_TRIGGER_TREES)} but the CLI "
+        f"offers {sorted(DEPLOY_CHOICES)}."
+    )
+    for deploy, trees in _CLI_TRIGGER_TREES.items():
+        assert trees == tuple(sorted(trees)), (
+            f"{deploy}: trees must be pinned in sorted order, because the "
+            f"generator emits them sorted — got {trees}."
+        )
+        assert set(trees) <= set(ip._GENERATED_TREES), (
+            f"{deploy}: {sorted(set(trees) - set(ip._GENERATED_TREES))} is not "
+            "in `ip._GENERATED_TREES`, so the subdirectory remediation summary "
+            "cannot recognise it inside a shell body and would omit it."
+        )
 
 
 # ============================================================
