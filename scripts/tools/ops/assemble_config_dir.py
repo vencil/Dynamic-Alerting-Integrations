@@ -361,7 +361,21 @@ def validate_merged(output_dir: Path) -> List[str]:
     # validated, because failing the deploy over a carrier the exporter
     # skips blocks a tree that is in fact fine. The nested-config guard
     # (#1911) rides along inside the helper, where the scan is.
-    for f in list_visible_config_entries(output_dir):
+    visible = list_visible_config_entries(output_dir)
+    # A config-NAMED entry the exporter cannot read (a directory called
+    # `stale.yaml`, a dangling symlink) is a fact about the artifact, not a
+    # reason to crash: `open()` on it raises outside `yaml.YAMLError`. Same
+    # predicate `discover_yamls` applies to the sources, and the same
+    # non-fatal wording — the exporter WARNs and serves the rest of the tree,
+    # so this face must not turn that into a traceback or an ERROR.
+    unusable = set(unusable_config_entries(visible))
+    for p in sorted(unusable):
+        issues.append(
+            f"{WARN_PREFIX}{p.name} {unusable_reason(p)} — not validated, "
+            f"the exporter cannot read it either")
+    for f in visible:
+        if f in unusable:
+            continue
         try:
             with open(f, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)

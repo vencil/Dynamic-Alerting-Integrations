@@ -330,6 +330,31 @@ class TestValidateMerged:
         assert [i for i in issues if carrier in i and "parse error" in i], issues
         assert not [i for i in issues if "notes.txt" in i], issues
 
+    @pytest.mark.parametrize("shape", ["directory", "dangling-symlink"])
+    def test_an_unreadable_config_named_entry_is_a_warn_not_a_crash(
+            self, config_dir, shape):
+        """A YAML-named entry the exporter cannot read (a directory called
+        `stale.yaml`, a symlink to nowhere) must be NAMED as a WARN, not
+        opened: `open()` on it raises `IsADirectoryError` /
+        `FileNotFoundError`, which the parse-error handler does not catch.
+        The production change that reddens this: validating `visible`
+        without the `unusable_config_entries` split. Control: the good file
+        next to it is still validated clean and the result has no ERROR.
+        """
+        if shape == "directory":
+            os.mkdir(os.path.join(config_dir, "stale.yaml"))
+        else:
+            os.symlink(os.path.join(config_dir, "nowhere.yaml"),
+                       os.path.join(config_dir, "stale.yaml"))
+        _write_file(os.path.join(config_dir, "good.yaml"),
+                     "tenants:\n  t-a:\n    x: '1'")
+        issues = validate_merged(Path(config_dir))
+        named = [i for i in issues if "stale.yaml" in i]
+        assert len(named) == 1 and named[0].startswith("WARN: "), issues
+        assert "not validated" in named[0], named[0]
+        assert not has_errors(issues), issues
+        assert not [i for i in issues if "good.yaml" in i], issues
+
 
 # ============================================================
 # build_manifest
