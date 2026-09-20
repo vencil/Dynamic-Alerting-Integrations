@@ -14,6 +14,7 @@ pytest style：使用 plain assert + conftest fixtures。
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -328,6 +329,31 @@ class TestValidateMerged:
         issues = validate_merged(Path(config_dir))
         assert [i for i in issues if carrier in i and "parse error" in i], issues
         assert not [i for i in issues if "notes.txt" in i], issues
+
+    @pytest.mark.parametrize("shape", ["directory", "dangling-symlink"])
+    def test_an_unreadable_config_named_entry_is_a_warn_not_a_crash(
+            self, config_dir, shape):
+        """A YAML-named entry the exporter cannot read (a directory called
+        `stale.yaml`, a symlink to nowhere) must be NAMED as a WARN, not
+        opened: `open()` on it raises `IsADirectoryError` /
+        `FileNotFoundError`, which the parse-error handler does not catch.
+        The production change that reddens this: validating `visible`
+        without the `unusable_config_entries` split. Control: the good file
+        next to it is still validated clean and the result has no ERROR.
+        """
+        if shape == "directory":
+            os.mkdir(os.path.join(config_dir, "stale.yaml"))
+        else:
+            os.symlink(os.path.join(config_dir, "nowhere.yaml"),
+                       os.path.join(config_dir, "stale.yaml"))
+        _write_file(os.path.join(config_dir, "good.yaml"),
+                     "tenants:\n  t-a:\n    x: '1'")
+        issues = validate_merged(Path(config_dir))
+        named = [i for i in issues if "stale.yaml" in i]
+        assert len(named) == 1 and named[0].startswith("WARN: "), issues
+        assert "not validated" in named[0], named[0]
+        assert not has_errors(issues), issues
+        assert not [i for i in issues if "good.yaml" in i], issues
 
 
 # ============================================================
@@ -1310,14 +1336,20 @@ class TestAnUnreadableSubtreeUnderOutputIsNotClean:
 
 
 class TestTheArtifactTotalUsesOnePredicate:
-    """`count + len(residue)` added two different carrier predicates: `count`
-    is what was copied (hidden entries included, because `discover_yamls` does
-    not skip them — #1827), while `residue` mirrors the exporter, which does
-    skip them. Measured: the JSON claimed 3 where the exporter reads 2.
+    """Every face answers the exporter's carrier question with ONE predicate.
+
+    `artifact_file_count` is re-derived from the directory through
+    `iter_config_files` rather than summed as `count + len(residue)` — the
+    sum once added two different predicates and claimed 3 where the exporter
+    reads 2. Since #1827 `discover_yamls` applies the same `.`-prefix skip
+    (`is_hidden_name`), so `file_count` (what was copied), `residue` and
+    `artifact_file_count` all leave the hidden carrier out, and the artifact
+    itself does not contain it. The re-derivation stays: a carrier already in
+    `--output` is still counted by the walk, not by this run's copy.
     """
 
-    def test_a_hidden_carrier_is_not_counted_as_readable(self, config_dir,
-                                                         capsys, cli_argv):
+    def test_a_hidden_carrier_is_on_no_face_but_is_named(self, config_dir,
+                                                          capsys, cli_argv):
         s = Path(config_dir) / "src"
         out = Path(config_dir) / "out"
         s.mkdir()
@@ -1328,11 +1360,218 @@ class TestTheArtifactTotalUsesOnePredicate:
         cli_argv("assemble", "--sources", str(s), "--output", str(out),
                  "--json")
         assert main() == 0
-        payload = json.loads(capsys.readouterr().out)
-        assert payload["file_count"] == 2          # what was copied
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["file_count"] == 1          # a.yaml only was copied
         assert payload["residue"] == ["old.yaml"]
-        # a.yaml + old.yaml — the hidden one is not read by the exporter
+        # a.yaml + old.yaml — the hidden one is neither copied nor read
         assert payload["artifact_file_count"] == 2
+        assert not (out / ".hidden.yaml").exists()
+        assert ".hidden.yaml" in captured.err
+
+
+class TestHiddenCarriersAreNotAssembled:
+    """#1827 (conf.d family #1911): a `.`-prefixed carrier is what the
+    exporter's walker skips, so this tool must not copy it, count it or
+    record it — and must SAY which one it left out.
+
+    Measured before the fix (issue body): sources `_defaults.yaml` +
+    `.db-c.yaml` → "Assembled 2 file(s)", manifest `file_count 2`, exporter
+    reads 1; tenant `db-c` had no alerts at rc 0 with nothing printed.
+
+    The production change that reddens every arm below: removing the
+    `is_hidden_name` filter (and its WARN line) from `discover_yamls`.
+    """
+
+    def _sources(self, config_dir, carrier_name):
+        s = Path(config_dir) / "src"
+        s.mkdir(parents=True, exist_ok=True)
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 5\n")
+        _write_file(s / carrier_name, _TENANT_DOC.format(t="db-c", v=1))
+        return s
+
+    def test_assemble_with_manifest_leaves_the_hidden_carrier_out(
+            self, config_dir, capsys, cli_argv):
+        s = self._sources(config_dir, ".db-c.yaml")
+        out = Path(config_dir) / "out"
+        mani = Path(config_dir) / "m.json"
+        cli_argv("assemble", "--sources", str(s), "--output", str(out),
+                 "--manifest", str(mani))
+        assert main() == 0
+        captured = capsys.readouterr()
+        # the artifact: not there
+        assert sorted(p.name for p in out.iterdir()) == ["_defaults.yaml"]
+        # the manifest: not recorded, not counted
+        manifest = json.loads(mani.read_text(encoding="utf-8"))
+        assert manifest["file_count"] == 1
+        assert sorted(manifest["files"]) == ["_defaults.yaml"]
+        # the human face: the count is the exporter's count
+        assert "Assembled 1 file(s)" in captured.out
+        # loud and precise: the skipped carrier is named, on stderr
+        warn = [ln for ln in captured.err.splitlines() if ".db-c.yaml" in ln]
+        assert len(warn) == 1, captured.err
+        assert "skipped" in warn[0] and "exporter" in warn[0], warn[0]
+        # ⛔ an operator message stands on its own — no ticket pointer
+        # (the same rule `warn_nested` is pinned to)
+        assert re.search(r"#\d+", warn[0]) is None, warn[0]
+
+    def test_assemble_json_face_counts_only_what_the_exporter_reads(
+            self, config_dir, capsys, cli_argv):
+        s = self._sources(config_dir, ".db-c.yaml")
+        out = Path(config_dir) / "out"
+        cli_argv("assemble", "--sources", str(s), "--output", str(out),
+                 "--json")
+        assert main() == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["status"] == "ok"
+        assert payload["file_count"] == 1
+        assert not (out / ".db-c.yaml").exists()
+        # stderr, not stdout: the JSON document stays parseable and the
+        # operator still learns which carrier was left out
+        assert ".db-c.yaml" in captured.err
+        assert ".db-c.yaml" not in captured.out
+
+    def test_check_mode_reports_the_same_answer(self, config_dir, capsys,
+                                                cli_argv):
+        """`--check` is the CI entry point (`make sharded-check`): it must not
+        promise 2 files that the assembly then ships as 1."""
+        s = self._sources(config_dir, ".db-c.yaml")
+        cli_argv("assemble", "--sources", str(s), "--check")
+        assert main() == 0
+        captured = capsys.readouterr()
+        assert "1 file(s) ready" in captured.out
+        assert ".db-c.yaml" not in captured.out
+        assert ".db-c.yaml" in captured.err
+
+    def test_check_json_mode_reports_the_same_answer(self, config_dir, capsys,
+                                                     cli_argv):
+        s = self._sources(config_dir, ".db-c.yaml")
+        cli_argv("assemble", "--sources", str(s), "--check", "--json")
+        assert main() == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["file_count"] == 1
+        assert payload["files"] == ["_defaults.yaml"]
+        assert ".db-c.yaml" in captured.err
+
+    def test_a_hidden_only_source_is_an_empty_source(self, config_dir, capsys,
+                                                     cli_argv):
+        """The zero-carrier refusal must see the hidden carrier the way the
+        exporter does — as nothing — or a source holding only `.db-c.yaml`
+        assembles a tree the exporter reads as "no tenants" at rc 0."""
+        s = Path(config_dir) / "src"
+        s.mkdir()
+        _write_file(s / ".db-c.yaml", _TENANT_DOC.format(t="db-c", v=1))
+        cli_argv("assemble", "--sources", str(s), "--check")
+        assert main() == 1
+        err = capsys.readouterr().err
+        assert "no config carrier found" in err
+        assert ".db-c.yaml" in err
+
+    def test_the_same_carrier_unhidden_is_copied_and_counted(
+            self, config_dir, capsys, cli_argv):
+        """MUST-FIRE CONTROL — the arms above are not satisfied by a filter
+        that drops every tenant carrier: `db-c.yaml` (same body, no dot) is
+        copied, counted, recorded, and NOT warned about."""
+        s = self._sources(config_dir, "db-c.yaml")
+        out = Path(config_dir) / "out"
+        mani = Path(config_dir) / "m.json"
+        cli_argv("assemble", "--sources", str(s), "--output", str(out),
+                 "--manifest", str(mani))
+        assert main() == 0
+        captured = capsys.readouterr()
+        assert sorted(p.name for p in out.iterdir()) == [
+            "_defaults.yaml", "db-c.yaml"]
+        manifest = json.loads(mani.read_text(encoding="utf-8"))
+        assert manifest["file_count"] == 2
+        assert sorted(manifest["files"]) == ["_defaults.yaml", "db-c.yaml"]
+        assert "Assembled 2 file(s)" in captured.out
+        assert "db-c.yaml" not in captured.err, captured.err
+
+    def test_discover_yamls_itself_excludes_and_names(self, config_dir, capsys):
+        """Unit face of the same contract, on the function the fix lives in."""
+        s = self._sources(config_dir, ".db-c.yaml")
+        found = discover_yamls(s)
+        assert [p.name for p in found] == ["_defaults.yaml"]
+        assert ".db-c.yaml" in capsys.readouterr().err
+
+
+class TestValidateReadsWhatTheExporterReads:
+    """#1827, second scan site: `--validate` enumerates the ARTIFACT, and it
+    did so with its own `iterdir()` + extension test — no hidden skip. Blind
+    review reproduced it: a broken `.stale.yaml` pre-placed in `--output`
+    made `--validate` answer `ERROR: .stale.yaml parse error`, rc 2, refusing
+    a deploy over a file the exporter never reads.
+
+    Both sites now go through `list_visible_config_entries`. The production
+    change that reddens the arms below: `validate_merged` listing the
+    directory itself again instead of calling that helper.
+    """
+
+    # ⚠️ A body `validate_merged` rejects (top level is a list, an ERROR)
+    # that the EARLIER gate still reads. A YAML parse error would do for the
+    # hidden arm, but on the unhidden control `tenant_uniqueness` refuses the
+    # unreadable leftover first (measured: rc 2, "could not measure") and
+    # `--validate` never runs — the control would pass without exercising
+    # the site under test.
+    _BROKEN = "- not\n- a mapping\n"
+    _ISSUE = "stale.yaml top-level is not a mapping"
+
+    def _run(self, config_dir, stale_name, cli_argv):
+        s = Path(config_dir) / "src"
+        out = Path(config_dir) / "out"
+        s.mkdir()
+        out.mkdir()
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 5\n")
+        _write_file(out / stale_name, self._BROKEN)
+        cli_argv("assemble", "--sources", str(s), "--output", str(out),
+                 "--validate")
+        return main()
+
+    def test_a_hidden_broken_file_in_output_does_not_fail_validation(
+            self, config_dir, capsys, cli_argv):
+        rc = self._run(config_dir, ".stale.yaml", cli_argv)
+        captured = capsys.readouterr()
+        assert rc == 0, captured.err
+        assert "not a mapping" not in captured.out
+        assert ".stale.yaml" not in captured.out
+        # named, not silently skipped — and without a ticket pointer
+        warn = [ln for ln in captured.err.splitlines() if ".stale.yaml" in ln]
+        assert len(warn) == 1, captured.err
+        assert "skipped" in warn[0] and "exporter" in warn[0], warn[0]
+        assert re.search(r"#\d+", warn[0]) is None, warn[0]
+
+    def test_the_same_file_unhidden_still_fails_validation(
+            self, config_dir, capsys, cli_argv):
+        """MUST-FIRE CONTROL — `--validate` still has teeth on a carrier the
+        exporter WILL read: same body, no dot, rc 2 and named in the issues."""
+        rc = self._run(config_dir, "stale.yaml", cli_argv)
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert f"ERROR: {self._ISSUE}" in captured.out
+        assert "skipped" not in captured.err, captured.err
+
+    def test_validate_merged_itself_skips_and_names(self, config_dir, capsys):
+        """Unit face: the function the second scan lives in."""
+        out = Path(config_dir) / "out"
+        out.mkdir()
+        _write_file(out / "ok.yaml", _TENANT_DOC.format(t="ok", v=1))
+        _write_file(out / ".stale.yaml", self._BROKEN)
+        issues = validate_merged(out)
+        assert issues == []
+        assert ".stale.yaml" in capsys.readouterr().err
+
+    def test_validate_merged_itself_still_rejects_the_unhidden_file(
+            self, config_dir, capsys):
+        """Unit control: same body, no dot — the ERROR is there."""
+        out = Path(config_dir) / "out"
+        out.mkdir()
+        _write_file(out / "ok.yaml", _TENANT_DOC.format(t="ok", v=1))
+        _write_file(out / "stale.yaml", self._BROKEN)
+        issues = validate_merged(out)
+        assert issues == [f"ERROR: {self._ISSUE}"]
+        assert "skipped" not in capsys.readouterr().err
 
 
 class TestManifestOnlyNamesTheMissingFlag:
