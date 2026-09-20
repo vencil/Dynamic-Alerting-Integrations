@@ -6149,26 +6149,116 @@ def _gha_path_matches(pattern: str, target: str) -> bool:
 
 
 def _gitlab_changes_matches(pattern: str, target: str) -> bool:
-    """GitLab `rules:changes` semantics, for the glob subset these files use.
+    """GitLab `rules:changes` semantics, modelled against Ruby's own fnmatch.
 
     GitLab matches with `File.fnmatch?(pattern, path, File::FNM_PATHNAME |
-    File::FNM_DOTMATCH | File::FNM_EXTGLOB)`, where a `**/` SEGMENT collapses to
-    zero-or-more directories — which is why `conf.d/**/*` matches
-    `conf.d/db-a.yaml` and not only `conf.d/a/b.yaml`. That collapse is the
-    whole reason the two legs spell the same tree differently, so modelling it
-    is not optional here.
+    File::FNM_DOTMATCH | File::FNM_EXTGLOB)`. Under `FNM_PATHNAME` only a `**/`
+    SEGMENT recurses; a `**` NOT followed by `/` is two ordinary `*`s and cannot
+    cross `/`. Both halves are measured against the real interpreter, not read
+    off the docs — `_GITLAB_FNMATCH_CASES` below is that table, and
+    `test_the_gitlab_glob_model_agrees_with_rubys_own_fnmatch` re-derives it
+    from `ruby` when one is installed.
+
+    ⛔ An earlier version mapped the bare `**` to `.*`, which made this helper
+    call `environments/**` a MATCH for `environments/prod/values.yaml` while
+    Ruby calls it a miss. That is a false "covered" — the one direction that
+    lets the issue-1473 ② guard pass green on exactly the regression it exists
+    to catch, because the helm apply step's values path is the path it grades.
+    Found by CodeRabbit on PR 1916 and confirmed against `ruby 3.3.6`.
+
+    ⛔ NOT symmetric with `_gha_path_matches`, and aligning them would
+    re-introduce the bug: GitHub's filter syntax says `**` matches any
+    character INCLUDING `/`, so `.*` is right there and wrong here. The two
+    platforms spell the same tree differently for this reason.
 
     ⚠️ Modelled, not exhaustive: character classes and `EXTGLOB` alternation are
-    not implemented. Nothing this generator emits uses either, and if that
-    changes the failure direction is a reported unmatched path rather than a
-    silent pass — the assertions below report what did not match.
+    not implemented. Nothing this generator emits uses either, and the pinned
+    table is what keeps this model from drifting away from Ruby again.
     """
     rx = (re.escape(pattern)
           .replace(r"\*\*/", "\x00")
-          .replace(r"\*\*", "\x01")
           .replace(r"\*", "[^/]*"))
-    rx = rx.replace("\x00", "(?:[^/]+/)*").replace("\x01", ".*")
-    return re.fullmatch(rx, target) is not None
+    return re.fullmatch(rx.replace("\x00", "(?:[^/]+/)*"), target) is not None
+
+
+# ⛔ Measured with `ruby -e 'File.fnmatch(p, t, File::FNM_PATHNAME |
+# File::FNM_DOTMATCH | File::FNM_EXTGLOB)'` on ruby 3.3.6 — the three flags
+# GitLab passes. Two rows carry the whole point and neither is decoration:
+#   * `conf.d/**` vs `conf.d/db-a.yaml` is TRUE. The bare form is not inert, so
+#     "`/**` matches nothing" is the wrong reason to prefer `/**/*`;
+#   * `conf.d/**` vs `conf.d/nested/x.yaml` is FALSE, and that IS the reason —
+#     the bare form does not recurse, so a nested tenant file is invisible.
+# The `environments/**` row is the one that caught the `.*` model.
+_GITLAB_FNMATCH_CASES = (
+    ("conf.d/**", "conf.d/db-a.yaml", True),
+    ("conf.d/**", "conf.d/nested/x.yaml", False),
+    ("conf.d/**/*", "conf.d/db-a.yaml", True),
+    ("conf.d/**/*", "conf.d/nested/x.yaml", True),
+    ("environments/**", "environments/prod/values.yaml", False),
+    ("environments/**/*", "environments/prod/values.yaml", True),
+    ("rule-packs/custom/**/*", "rule-packs/custom/deep/r.yaml", True),
+)
+
+
+def test_the_gitlab_glob_model_agrees_with_the_pinned_fnmatch_table() -> None:
+    """⛔ The guard's own guard. `_gitlab_changes_matches` decides whether the
+    issue-1473 ② assertions can see a miss at all, and it is a hand-written
+    translator — so it gets pinned like any other derivation in this file.
+    Loosening the bare `**` back to `.*` reds the `environments/**` row here
+    before it can quietly re-green the assertions that consume it.
+    """
+    wrong = [
+        (pattern, target, expected, _gitlab_changes_matches(pattern, target))
+        for pattern, target, expected in _GITLAB_FNMATCH_CASES
+        if _gitlab_changes_matches(pattern, target) is not expected
+    ]
+    assert not wrong, (
+        "`_gitlab_changes_matches` disagrees with the measured Ruby table "
+        f"(pattern, target, expected, got): {wrong}"
+    )
+
+
+def test_the_gitlab_glob_model_agrees_with_rubys_own_fnmatch() -> None:
+    """⛔ And the TABLE's guard — re-derived from the real interpreter.
+
+    A pinned table is a transcription, and a wrong transcription is exactly how
+    the `.*` model survived: it was written from the documentation. When `ruby`
+    is on the host the expectations above are recomputed rather than trusted.
+
+    ⚠️ `skipif` when no `ruby` — nothing in this repo's CI installs one, so the
+    table remains the enforced contract and this is the cross-check that keeps
+    it honest on hosts that can run it.
+    """
+    if not shutil.which("ruby"):
+        pytest.skip("no ruby on this host; the pinned table is the contract")
+    script = (
+        "flags = File::FNM_PATHNAME | File::FNM_DOTMATCH | File::FNM_EXTGLOB\n"
+        "ARGF.each_line do |line|\n"
+        "  p, t = line.chomp.split(\"\\t\", 2)\n"
+        "  puts File.fnmatch(p, t, flags) ? \"true\" : \"false\"\n"
+        "end\n"
+    )
+    stdin = "".join(f"{p}\t{t}\n" for p, t, _ in _GITLAB_FNMATCH_CASES)
+    proc = subprocess.run(
+        ["ruby", "-e", script], input=stdin, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"ruby exited {proc.returncode}: {proc.stderr}")
+    got = [ln == "true" for ln in proc.stdout.split()]
+    assert len(got) == len(_GITLAB_FNMATCH_CASES), (
+        f"ruby answered {len(got)} of {len(_GITLAB_FNMATCH_CASES)} cases: "
+        f"{proc.stdout!r}"
+    )
+    mismatched = [
+        (p, t, expected, actual)
+        for (p, t, expected), actual in zip(_GITLAB_FNMATCH_CASES, got)
+        if expected is not actual
+    ]
+    assert not mismatched, (
+        "the pinned table disagrees with this host's ruby "
+        f"(pattern, target, pinned, ruby): {mismatched}"
+    )
 
 
 def _gh_trigger_paths(workflow: dict) -> list[str]:
