@@ -109,8 +109,23 @@ GitOps sync requires converting the `conf.d/` directory into a K8s ConfigMap.
 ### Method A: Makefile target (threshold-config)
 
 ```bash
-make configmap-assemble
+make configmap-assemble CONFDIR=/path/to/your/conf.d
 # Output: .build/threshold-config.yaml (tenant config for threshold-exporter)
+```
+
+⛔ **`CONFDIR` must be set explicitly.** Its built-in default is
+`components/threshold-exporter/config/conf.d` — **this repo's development
+sample tree**. Its `db-a` / `db-b` tenants are reference templates that ship
+in neither the released chart nor the image, so they are almost certainly not
+yours. Running without `CONFDIR=` is **hard-refused** (rc 1), because
+`kubectl apply` of the resulting artifact would **replace** the live
+`threshold-config` with the samples.
+
+When assembling that sample tree really is the intent (docs, demos, this
+repo's own tests), say so explicitly:
+
+```bash
+ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
 ```
 
 Use in CI pipeline:
@@ -118,9 +133,33 @@ Use in CI pipeline:
 ```yaml
 # ArgoCD pre-sync hook or Flux Kustomization postBuild
 steps:
-  - run: make configmap-assemble
+  # ⛔ CONFDIR points at your own config repo's conf.d/, not the sample tree
+  - run: make configmap-assemble CONFDIR=tenants/conf.d
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
+
+The step refuses **before** writing the artifact in three cases, each rc 1 and
+each naming the offending files one by one:
+
+| Refused | Why this is not a warning |
+|---|---|
+| One tenant id declared in two files | The exporter hard-rejects the ENTIRE directory, so **every** tenant there loses alerting |
+| A file name that cannot be a ConfigMap key | A key must match `[-._a-zA-Z0-9]+` and be neither `.` nor `..` (k8s `IsConfigMapKey`). `db b.yaml` or `db-a (copy).yaml` can **never** become a key — rename them |
+| No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR` |
+
+⚠️ Two more things this page did not previously state:
+
+- **The assembly is FLAT**: only files at the **top level** of `CONFDIR` enter
+  the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
+  under `examples/` or any hierarchical subdirectory (`region-eu/` and the
+  like) do **not** ship. Those files are listed one by one in a `WARN` on
+  stderr, but the exporter reads the tree recursively in-cluster
+  (ADR-016/017), so the two views disagree.
+- **Extension casing now matches the exporter**: carriers such as
+  `DB-A.YAML` or `db-b.YML` **do** enter the ConfigMap. ⚠️ Knock-on effect: if
+  you hold both `db-a.yaml` and `DB-A.YAML` and they declare the same tenant,
+  this step now refuses (it used to drop the uppercase one silently and print
+  a green light).
 
 ### Method B: Helm values overlay
 

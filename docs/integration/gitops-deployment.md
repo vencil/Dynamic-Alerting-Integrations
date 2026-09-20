@@ -105,8 +105,16 @@ GitOps sync 需要將 `conf.d/` 目錄轉為 K8s ConfigMap。
 ### 方式 A：Makefile target（threshold-config）
 
 ```bash
-make configmap-assemble
+make configmap-assemble CONFDIR=/path/to/your/conf.d
 # 產出: .build/threshold-config.yaml（threshold-exporter 用的 tenant 配置）
+```
+
+⛔ **`CONFDIR` 一定要明示。** 它的內建預設值是 `components/threshold-exporter/config/conf.d`——**本 repo 自帶的開發範例樹**，裡面的 `db-a` / `db-b` 是參考範本，既不包含在發布的 chart 也不在 image 裡，幾乎不可能是你的租戶。不帶 `CONFDIR=` 直接跑會被**硬擋**（rc 1），因為照著組出來的產物 `kubectl apply` 上去會把線上的 `threshold-config` **換成示範內容**。
+
+真的要組那棵範例樹時（寫文件、跑 demo、本 repo 自己的測試），明示放行：
+
+```bash
+ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
 ```
 
 在 CI pipeline 中使用：
@@ -114,9 +122,23 @@ make configmap-assemble
 ```yaml
 # ArgoCD pre-sync hook 或 Flux Kustomization postBuild
 steps:
-  - run: make configmap-assemble
+  # ⛔ CONFDIR 指向你自己 config repo 的 conf.d/，不是預設那棵範例樹
+  - run: make configmap-assemble CONFDIR=tenants/conf.d
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
+
+這一步會在寫出產物**之前**擋下三類問題，各自 rc 1 並逐檔點名：
+
+| 擋什麼 | 為什麼不是警告 |
+|---|---|
+| 同一個租戶 id 出現在兩個檔 | exporter 對整棵 dir 是 hard reject，**每一個**租戶都會失去告警 |
+| 檔名不能當 ConfigMap key | key 必須匹配 `[-._a-zA-Z0-9]+` 且不是 `.` / `..`（k8s `IsConfigMapKey`）。`db b.yaml`、`db-a (copy).yaml` 這種**永遠**不可能成為合法 key，只能改名 |
+| 目錄裡沒有任何載體 | 「組出零個租戶」與「平台真的沒有租戶」無法區分，通常是 `CONFDIR` 指錯 |
+
+⚠️ 另外兩件文件以前沒說的事：
+
+- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——那些檔會被逐檔印在 stderr 的 `WARN` 裡，但 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+- **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
 
 ### Method B: Helm values overlay
 
