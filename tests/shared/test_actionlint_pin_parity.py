@@ -52,6 +52,24 @@ def _one(pattern: str, text: str, what: str) -> str:
     return matches[0]
 
 
+def _same(pattern: str, text: str, what: str) -> str:
+    """Every match identical, at least one — the ci.yml-side twin of `_one`.
+
+    Since #1910 ci.yml installs this toolchain in TWO jobs (the required
+    `python-tests-run` and the advisory `python-coverage`), the install steps
+    copied verbatim so every guard that reads ci.yml keeps seeing them. The
+    pin is still one value: two copies that agree are one pin spelled twice,
+    and a copy that disagrees is exactly the drift this reports.
+    """
+    matches = re.findall(pattern, text, re.MULTILINE)
+    assert matches, f"expected at least one {what} match for /{pattern}/, found none"
+    assert len(set(matches)) == 1, (
+        f"{what}: {len(matches)} matches in ci.yml disagree — the two jobs' "
+        f"copies drifted apart: {matches}"
+    )
+    return matches[0]
+
+
 def _hook_entry() -> dict:
     """The rhysd/actionlint repo entry, read via YAML parse (not grep).
 
@@ -69,7 +87,7 @@ def _hook_entry() -> dict:
 
 
 def _ci_version() -> str:
-    return _one(r"""^\s*ACTIONLINT_VERSION=["']?([^\s"'#]+)""",
+    return _same(r"""^\s*ACTIONLINT_VERSION=["']?([^\s"'#]+)""",
                 _CI_YML.read_text(encoding="utf-8"), "ci.yml ACTIONLINT_VERSION")
 
 
@@ -260,7 +278,7 @@ def test_ci_install_pins_a_sha256() -> None:
     """The install must be checksum-verified, like the Vector / mtail siblings."""
     ci = _CI_YML.read_text(encoding="utf-8")
     # _one() already proves there is exactly one 64-hex ACTIONLINT_SHA256.
-    _one(r"^\s*ACTIONLINT_SHA256=([0-9a-f]{64})", ci, "ci.yml ACTIONLINT_SHA256")
+    _same(r"^\s*ACTIONLINT_SHA256=([0-9a-f]{64})", ci, "ci.yml ACTIONLINT_SHA256")
     # ⛔ Anchored to the start of a line, like the three checks above it. This
     # one was a whole-file substring test, and the file it searches is full of
     # prose: measured, replacing the real `bash scripts/ops/_verify_download.sh
@@ -269,7 +287,7 @@ def test_ci_install_pins_a_sha256() -> None:
     # class as the prose-satisfies-a-behaviour-check bug fixed in the sibling
     # guard — a class fixed in one file has to be swept in the others, and this
     # is the sweep.
-    _one(
+    _same(
         r"""^\s*bash\s+scripts/ops/_verify_download\.sh\s+"\$DL/actionlint-\$\{ACTIONLINT_VERSION\}\.tgz\"""",
         ci,
         "ci.yml actionlint checksum-verification command",
@@ -280,7 +298,7 @@ def test_download_cache_key_carries_the_pinned_version() -> None:
     """A stale cache key exact-hits the old entry and the new tarball never gets
     cached (ci.yml says so in its own comment about the Vector/mtail pins)."""
     ci = _CI_YML.read_text(encoding="utf-8")
-    key = _one(r"^\s*key:\s*(\$\{\{ runner\.os \}\}-vibe-dl-pytests-\S+)", ci,
+    key = _same(r"^\s*key:\s*(\$\{\{ runner\.os \}\}-vibe-dl-pytests-\S+)", ci,
                "ci.yml python-tests download-cache key")
     assert f"-actionlint-{_ci_version()}" in key, (
         f"download-cache key {key!r} does not carry the pinned actionlint "

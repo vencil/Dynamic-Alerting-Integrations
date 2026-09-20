@@ -1752,8 +1752,10 @@ jobs:
         #   test_benchmark.py    — Performance baselines (@benchmark @slow)
         #   test_pipeline_integration.py — End-to-end pipeline test
         # They run locally via `make test` and are tracked in test-map.md.
-        # -x: explicit CI fail-fast (pyproject addopts no longer carries a
-        # global -x — CI opts in on the command line).
+        # No -x here: a coverage report over a run that stopped at the first
+        # failure is not a coverage report (measured on #1910: the first run
+        # stopped at 2 failures and uploaded nothing). The required leg keeps
+        # its fail-fast; this job always finishes the tree.
         # --timeout=300: pytest-timeout was INSTALLED (see Install step
         # rationale re PR #165 deadlock regressions) but never armed
         # globally — a hung test still burned the whole workflow timeout.
@@ -1767,7 +1769,7 @@ jobs:
         # suite's hot spots are measured in THIS coordinate system (4-core
         # runner + coverage), not inferred from a developer host. Cheap:
         # xdist reports per-test wall time it already has.
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75 --durations=40 --durations-min=1.0
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75 --durations=40 --durations-min=1.0
 
       - name: Upload coverage artifact
         if: always()
