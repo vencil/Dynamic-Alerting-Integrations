@@ -85,7 +85,7 @@ def load_all_configs(config_dir):
     """載入 conf.d 下所有設定檔案。"""
     configs = {}
     base = Path(config_dir)
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(base, tool="offboard_tenant")
     entries = sorted(base.iterdir())

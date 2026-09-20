@@ -369,7 +369,7 @@ def _parse_config_files(config_dir: str) -> dict:
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #1339: this reader is FLAT while threshold-exporter walks the same
+    # #1911: this reader is FLAT while threshold-exporter walks the same
     # tree recursively (ADR-016/017). Routing for a hierarchical conf.d is
     # not implemented — but it used to fail SILENTLY ("No tenants found",
     # zero routes), which reads like "this config needs no routing" rather

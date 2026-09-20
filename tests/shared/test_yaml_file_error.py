@@ -1,6 +1,6 @@
 """A conf.d file whose CONTENT is not UTF-8 must name itself, not traceback (#1654).
 
-The content axis of the #1339 family. #1634 fixed the file-NAME axis; this
+The content axis of the #1911 family. #1634 fixed the file-NAME axis; this
 is the independent one: a pure-ASCII ``alpha.yaml`` with one ``\\xff`` byte
 in a comment. ``_lib_io.load_yaml_file`` opened the file in text mode, so
 that byte raised ``UnicodeDecodeError`` — a ``ValueError``, not a

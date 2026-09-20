@@ -440,7 +440,7 @@ class TestCheckLocal:
 # the entry name and accepts BOTH `.yaml` and `.yml`.
 #
 # ⚠️ SCOPE. These pin the extension-SPELLING axis only. The other three axes
-# are NOT covered, and none of them has an open ticket standing behind it, so
+# are NOT covered, and none of them has an open ticket of its own behind it, so
 # the disclosure has to carry itself:
 #   * Recursion: `check_local` is flat by construction (`base.iterdir()`).
 #     That is `test_confd_enumeration_contract.py`'s axis; nested carriers do
@@ -456,7 +456,9 @@ class TestCheckLocal:
 #     ⛔ Closing it DELETES tenants that count today, so it is a separate
 #     behaviour change; the fixtures below therefore contain no dot-prefixed
 #     name at all, rather than pinning today's answer for them.
-#     ⚠️ #1339 (the family ticket) is closed, so nothing is tracking this.
+#     ⚠️ #1911 (the conf.d family ticket) is open, but it names the class —
+#     one tree, several enumerators — not this reader's hidden-axis answer,
+#     so nothing is tracking this specifically.
 #   * Entries `is_file()` drops (a directory named `notes.yml/`, a broken
 #     symlink) are still silently skipped rather than named. ⚠️ #1607 is
 #     closed (state_reason=COMPLETED) — its closing comment verifies `operator_generate`

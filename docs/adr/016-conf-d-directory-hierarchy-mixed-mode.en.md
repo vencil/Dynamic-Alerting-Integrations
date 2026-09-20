@@ -111,7 +111,7 @@ Directory Scanner's design philosophy is "filesystem as source of truth."
 - **CI/CD**: `migrate-conf-d --dry-run` can be added to PR checks
 - **Documentation**: `docs/scenarios/multi-domain-conf-layout.md` added
 
-### ⛔ Support boundary: only threshold-exporter fully implements the hierarchy (#1339, added 2026-08-04)
+### ⛔ Support boundary: only threshold-exporter fully implements the hierarchy (PR #1343, added 2026-08-04; conf.d family ticket #1911)
 
 The "recursive scan" this ADR decided landed in **threshold-exporter** only
 (`pkg/config/hierarchy.go`, `filepath.WalkDir`). **The Python tool suite never
@@ -120,7 +120,7 @@ followed.** Measured by AST: **11 tools enumerated a tenant config dir flat whil
 saw the tenant while `validate_config.py` reported `Result: PASS` / exit 0 having
 scanned **0 tenants**. Not a refusal: a green light for a directory it never read.
 
-State after the #1339 fix:
+State after the PR #1343 fix:
 
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|

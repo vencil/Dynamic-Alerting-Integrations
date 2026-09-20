@@ -116,7 +116,7 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 - **CI/CD**：`migrate-conf-d --dry-run` 可納入 PR check
 - **文件**：新增 `docs/scenarios/multi-domain-conf-layout.md`
 
-### ⛔ 支援面邊界：階層布局只有 threshold-exporter 完整實作（#1339，2026-08-04 補記）
+### ⛔ 支援面邊界：階層布局只有 threshold-exporter 完整實作（PR #1343，2026-08-04 補記；conf.d 家族票 #1911）
 
 本 ADR 的「遞迴掃描」只落在 **threshold-exporter**（`pkg/config/hierarchy.go` 的
 `filepath.WalkDir`）。**Python 工具鏈當年沒有跟上**：以 AST 量測，**11 支工具平面
@@ -124,7 +124,7 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 `validate_config.py` 卻回報 `Result: PASS` / exit 0 而掃到 **0 個租戶**。那不是擋下來，
 是**對一個從未讀過的目錄發綠燈**。
 
-現況（#1339 修正後）：
+現況（PR #1343 修正後）：
 
 | 面 | 階層 `conf.d/` |
 |:--|:--|

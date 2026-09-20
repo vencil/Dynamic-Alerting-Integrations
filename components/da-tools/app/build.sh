@@ -177,7 +177,7 @@ TOOL_FILES=(
     # EXIT_VIOLATION / EXIT_CALLER_ERROR). Imported by ops/dx/lint tools
     # + _lib_godispatch. Stdlib-only; safe to bundle.
     _lib_exitcodes.py
-    # #1339 — single answer to "what is in a conf.d/" (iter_config_files /
+    # #1911 (conf.d family) — single answer to "what is in a conf.d/" (iter_config_files /
     # nested_yaml_warning). Imported by validate_config, _grar_parse and
     # every other tool that enumerates a tenant config dir; without it the
     # flat-layout image ImportErrors on startup. Stdlib-only; safe to bundle.

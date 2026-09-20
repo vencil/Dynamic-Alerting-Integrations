@@ -659,7 +659,7 @@ class TestFlatScanSaysSoOutLoud:
     manifest of a nested tree hashes only the top level — two trees that
     differ ONLY below the root compare equal and this tool answers "no
     drift". `warn_nested` does not change WHAT is hashed; it names what the
-    scan could not see (`_lib_confd`, #1339).
+    scan could not see (`_lib_confd`, #1911).
 
     ⚠️ Deliberately NOT covered here: making the scan recursive. That is a
     selection change and belongs to its own blast radius.

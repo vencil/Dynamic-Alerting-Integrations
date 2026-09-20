@@ -344,7 +344,7 @@ def _unusable_consequence(bad: Path) -> str:
 def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     """Validate that every YAML file in config_dir loads into a usable shape.
 
-    Recursive since #1339: ADR-016 allows a hierarchical conf.d/ and the
+    Recursive since PR #1343 (conf.d family #1911): ADR-016 allows a hierarchical conf.d/ and the
     exporter walks it, so a flat scan here reported `PASS` while never
     reading the tenants it was asked about.
 
@@ -732,7 +732,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                         f"profile={p_name}: contains unknown reserved key \"{key}\"")
 
     # ── Tenant _profile reference validation ──
-    # Recursive since #1339 (see check_yaml_syntax). `_`/`.`-prefixed files
+    # Recursive since PR #1343 (see check_yaml_syntax; conf.d family #1911). `_`/`.`-prefixed files
     # are level defaults / meta, not tenant files — skipped at every depth.
     for fpath_p in iter_config_files(config_dir):
         fname = fpath_p.name

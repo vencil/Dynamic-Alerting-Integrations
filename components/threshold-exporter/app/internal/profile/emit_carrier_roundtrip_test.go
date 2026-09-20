@@ -171,7 +171,7 @@ func TestEmit_TwoTenantsCollidingOnOneCarrierNameSayWhoWasDisplaced(t *testing.T
 			"  ⛔ a warning that merely mentions %q does not count: the round-trip "+
 			"warning says that whether or not the collision was reported.\n"+
 			"  a proposal that drops one of two tenants' thresholds while the report "+
-			"says it was emitted is exactly the #1339 shape.\n"+
+			"says it was emitted is exactly the #1911 shape.\n"+
 			"  emitted: %v\n  warnings: %v",
 			first, second, second, displacedRule, first,
 			sortedCarrierKeys(out.Files), out.Warnings)

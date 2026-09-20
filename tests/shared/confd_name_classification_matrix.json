@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Cross-language classification matrix for conf.d ENTRY NAMES (#1537, the",
-    "#1339 family). One conf.d tree is read by four independent enumerators,",
+    "#1911 family). One conf.d tree is read by four independent enumerators,",
     "each with its own hand-written name rule:",
     "",
     "  Go     components/threshold-exporter/app/config_hierarchy.go",

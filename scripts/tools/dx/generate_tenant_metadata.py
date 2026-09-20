@@ -268,7 +268,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     tenant_configs = {}
 
     # Load all tenant YAML files
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="generate_tenant_metadata")
     entries = sorted(config_dir.iterdir())

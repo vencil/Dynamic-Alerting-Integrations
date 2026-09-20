@@ -178,7 +178,7 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
         )
 
     results = []
-    # #1339: second scan site — the guard must live where the scan does,
+    # #1911: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(source_dir, tool="migrate_to_operator")
     # ⛔ BOTH spellings (#1604). This tool's conf.d reader takes

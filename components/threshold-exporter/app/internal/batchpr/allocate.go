@@ -121,7 +121,7 @@ func AllocateFiles(plan *Plan, files map[string][]byte) (map[int]map[string][]by
 // (`tests/shared/confd_name_classification_matrix.json`) by
 // confd_name_classification_parity_test.go, the write-plane half of the
 // cross-language pin the exporter and tenant-api already carry (#1605, the
-// #1339 family). The files routed here are PROPOSED CONF.D CARRIERS, so every
+// #1911 family). The files routed here are PROPOSED CONF.D CARRIERS, so every
 // branch has to answer the way the exporter's walker would answer for the same
 // name — a carrier it merges must reach a PR, and one it never reads must
 // reach none. Measured before that pin existed: eleven of the matrix's

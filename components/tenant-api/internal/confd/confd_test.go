@@ -64,7 +64,7 @@ func TestIsAddressableTenantIDRejectsSeparators(t *testing.T) {
 		// measured: deleting that clause turned nothing red until these rows
 		// existed. They are rejected to keep this predicate's accept set
 		// identical to handler.ValidateTenantID's, which has always refused
-		// them (#1339 family: two planes, one namespace).
+		// them (#1911 family: two planes, one namespace).
 		{"a..b", false},
 		{"..a", false},
 		{"/abs", false},

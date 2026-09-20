@@ -85,7 +85,7 @@ def _is_hidden(name: str) -> bool:
     Python reader already does `not f.startswith(".")`. Listing specific
     names here instead (`.git`, `__pycache__`, ...) would make this
     module's answer differ from the oracle it exists to mirror — which is
-    the very divergence #1339 is about.
+    the very divergence #1911 is about.
     """
     return name.startswith(".")
 
@@ -104,7 +104,7 @@ def _is_config(name: str) -> bool:
     invisible to every Python reader: measured, `iter_config_files` did not
     yield `upper.YAML` AND `unusable_config_paths` did not name it either,
     so nothing in the report so much as mentioned a file the exporter was
-    acting on. That is #1339's shape with the *extension* as the divergence
+    acting on. That is #1911's shape with the *extension* as the divergence
     axis instead of directory depth, and it is the one parity claim in this
     module that was, until now, written down nowhere.
 
@@ -295,7 +295,7 @@ def resolve_defaults_file(
 
     ⛔ ONE implementation, deliberately. Three tools grew a private copy of
     this while #1588 was being fixed, which is the same "one rule, many
-    hand-copies" shape #1339 is made of — reproduced inside the fix for it.
+    hand-copies" shape #1911 is made of — reproduced inside the fix for it.
 
     ⚠️ This read is FLAT and therefore calls `warn_nested` itself: on a
     hierarchical conf.d the exporter also merges `sub/_defaults.yaml`,
@@ -463,7 +463,7 @@ def unusable_config_entries(
     skip rule is mirrored from. Without it this function and
     `unusable_config_paths` returned two different answers for one tree — a
     directory named `.hidden.yaml/` was in this list and not in that one —
-    which is the "one question, two answers" shape #1339 is made of,
+    which is the "one question, two answers" shape #1911 is made of,
     reproduced between two functions written for the same question. Blind
     review measured it. Downstream it was a false finding too: every reader
     skips `.`-prefixed entries whatever their shape, so naming one reports a
@@ -602,7 +602,7 @@ def unusable_config_paths(
         # callback existed — a conf.d with one chmod-000 sub-directory
         # holding a tenant file made `check_yaml_syntax` report
         # `status: pass` / `1 files parsed successfully` /
-        # `unusable_files: []`. That is the #1339 shape ("a green light for
+        # `unusable_files: []`. That is the #1911 shape ("a green light for
         # a directory it never read") one level further down, inside the
         # very list that exists to make such things audible.
         if err.filename is not None:

@@ -144,7 +144,8 @@ tenants:
 > this document against a flat directory.
 >
 > ✅ **`validate_config.py` was made recursive in
-> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)** — it
+> [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)** (conf.d family ticket
+> [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)) — it
 > used to report `PASS / exit 0` on a hierarchical directory while scanning **0
 > tenants** (not a refusal: a green light for a directory it never read). The tools
 > that are still flat are **no longer silent**: when they detect config files in

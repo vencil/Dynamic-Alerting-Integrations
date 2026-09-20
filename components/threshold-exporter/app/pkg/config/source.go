@@ -285,7 +285,7 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
 		// ⛔ DELIBERATELY NOT `internal/confdname.IsDefaults`, even though
-		// collapsing copies is the point of the #1339 family. That predicate
+		// collapsing copies is the point of the #1911 family. That predicate
 		// uses `strings.EqualFold`; the walker this scanner must reproduce uses
 		// `strings.ToLower(name) == "_defaults.yaml"`. Measured in Go:
 		//

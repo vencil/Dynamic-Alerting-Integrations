@@ -226,7 +226,7 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string, sv ScheduledVal
 // ⛔ THE ARMS MIRROR EACH RESOLVER'S ENTRY CONDITION, NOT ITS KEY NAMING.
 // A prefix is only safe to bypass on when the resolver ALSO keys off that
 // prefix; where it keys off a declared set instead, this asks the set. Getting
-// that wrong is #1339's shape one directory down — two mechanisms enumerating
+// that wrong is #1911's shape one directory down — two mechanisms enumerating
 // one key space with different predicates — and it is what put a reader-less
 // key into a tenant map with nothing reporting it.
 //

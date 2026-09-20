@@ -182,7 +182,7 @@ jobs:
           # That is the #1419 defect class with no command failing: a confident
           # report about a question the tool never asked.
           # ⚠️ This lives in the WORKFLOW, not in `config_diff.py`, because the
-          # step runs a pinned published image. `_lib_confd.warn_nested` (#1339)
+          # step runs a pinned published image. `_lib_confd.warn_nested` (PR #1343; conf.d family #1911)
           # already prints this warning in repo source, but no released
           # `tools/v*` tag contains it (added in 7413b57e, after tools/v2.9.0),
           # so the fix cannot reach CI through the image until a release. Bump

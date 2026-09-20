@@ -13,7 +13,7 @@ trees whose contents are byte-identical and differ only in the extension:
     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes    <- after
 
 ⚠️ SCOPE. These pin the extension-SPELLING axis only. The module's other
-divergences are not covered here, and no open ticket covers them EITHER —
+divergences are not covered here, and no open ticket names them specifically EITHER —
 read the per-axis notes below rather than the ticket numbers:
 
   * Recursion: this reader is flat (`config_dir.iterdir()`) and says so out
@@ -24,11 +24,13 @@ read the per-axis notes below rather than the ticket numbers:
     skips them (`config_hierarchy.go:181,190`). Pre-existing and unchanged
     here; closing it DELETES tenants that appear today, so it is a separate
     behaviour change.
-    ⚠️ #1339 (the family ticket) is closed. #1589 IS open on the hidden
-    axis, but its subject is the exporter's `pkg/config` enumerator and the
-    path-vs-basename distinction — it does not cover a Python reader
-    counting `.hidden.yaml` as a tenant, so this disclosure still has to
-    carry itself.
+    ⚠️ #1911 (the conf.d family ticket) is open, but it names the class —
+    one tree, several enumerators — not this reader's hidden-axis answer.
+    #1589 (the exporter's `pkg/config` enumerator, path-vs-basename) is
+    closed; #1827 IS open on the hidden axis, but its subject is
+    `assemble_config_dir` assembling `.`-prefixed carriers — it does not
+    cover a Python reader counting `.hidden.yaml` as a tenant, so this
+    disclosure still has to carry itself.
   * Entries `is_file()` drops are named on stderr here — that half of #1607
     IS wired up in this module, unlike `gitops_check`.
 """

@@ -34,7 +34,7 @@ package main
 // the hierarchical walker, which reads the same file for its `tenants:`
 // declarations only, still registers them. Measured: `cfg.Tenants` empty,
 // `hierarchy.tenantSources` = [t-bad]. Two enumerators over one tree is
-// the defect CLASS (#1339); recursion closed one instance of it, not the
+// the defect CLASS (#1911); recursion closed one instance of it, not the
 // class, which is why this gauge stays armed and why #1568 exists.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load on divergence)

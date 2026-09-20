@@ -118,7 +118,7 @@ def test_routing_parser_stays_flat(tmp_path: pathlib.Path):
         parsed = _parse_config_files(str(root))
     assert parsed["all_tenants"] == ["acme"], (
         "the flat routing parser started reading subdirectories")
-    # …and it says so, which is the #1339 contract this must not break.
+    # …and it says so, which is the #1911 contract this must not break.
     assert "team-a/deep.yaml" in err.getvalue()
 
 
@@ -456,7 +456,7 @@ def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
 def test_an_untraversable_directory_says_the_report_is_incomplete(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
 ):
-    """`pass` on a tree half of which was never opened is the #1339 shape."""
+    """`pass` on a tree half of which was never opened is the #1911 shape."""
     root = tmp_path / "conf.d"
     locked = root / "locked"
     locked.mkdir(parents=True)
@@ -643,7 +643,7 @@ def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
     `.github/workflows/validate.yaml` runs `generate-routes --validate
     --strict` as a REQUIRED check, and GitHub Actions does not fail a step
     for stderr output — so an unreadable conf.d turned that gate GREEN with
-    zero routes. That is the exact shape (#1339 / #1448) this whole change
+    zero routes. That is the exact shape (#1911 / #1448) this whole change
     set exists to remove: a green light for a directory nothing read.
     """
     root = tmp_path / "conf.d"

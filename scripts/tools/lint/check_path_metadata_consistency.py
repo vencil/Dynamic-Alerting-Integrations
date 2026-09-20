@@ -92,7 +92,7 @@ def iter_tenant_files(config_dir: Path,
     ⛔ `entries` exists so `main` can walk the tree ONCE and still get this
     selection from the one place that defines it. Inlining the three
     conditions at the call site instead — which the first version of the
-    #1607 fix did — is the "one rule, several hand-copies" shape #1339 is
+    #1607 fix did — is the "one rule, several hand-copies" shape #1911 is
     about, reproduced inside its own fix. Same reason `defaults_files_in`
     and `unusable_config_entries` take already-listed input.
     """

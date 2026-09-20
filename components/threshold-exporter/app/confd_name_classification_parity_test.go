@@ -1,7 +1,7 @@
 package main
 
 // confd_name_classification_parity_test.go — the threshold-exporter half of
-// the cross-language conf.d name-classification pin (#1537, the #1339 family).
+// the cross-language conf.d name-classification pin (#1537, the #1911 family).
 //
 // One conf.d tree is read by four independent enumerators with four
 // hand-written name rules. The exporter is the ORACLE of that group: what it
@@ -87,7 +87,7 @@ func loadConfdNameMatrix(t *testing.T) []confdNameRow {
 	if len(doc.Rows) < minConfdMatrixRows {
 		t.Fatalf("matrix shrank to %d rows (floor %d) — this scanner would still be "+
 			"compared against a table, and the comparison would prove nothing: the "+
-			"empty-set silence #1339 and #1537 are both about",
+			"empty-set silence #1911 and #1537 are both about",
 			len(doc.Rows), minConfdMatrixRows)
 	}
 	return doc.Rows

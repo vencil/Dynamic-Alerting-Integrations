@@ -15,7 +15,7 @@ unconditionally) and its bytes must not change; the fix is
 ``scripts/tools/{ops,dx,lint}`` whose source contains ``"--config-dir"`` — the
 same predicate as the shell sweep the issue was scoped with. A hardcoded list
 would silently stop covering the repo the day tool #27 lands, which is the exact
-failure mode #1339's family of defects is made of (one rule, many hand-copies).
+failure mode the #1911 family of defects is made of (one rule, many hand-copies).
 
 ⛔ "COULD NOT MEASURE" AND "MEASURED CLEAN" ARE DIFFERENT ANSWERS and this file
 keeps them apart. A tool that never produced an observation is ``pytest.skip``ed

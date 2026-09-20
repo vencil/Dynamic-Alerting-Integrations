@@ -51,7 +51,7 @@ BUILD_EXEMPT = frozenset({
     "_lib_compat.py",
     # #452 Track A — canonical 0/1/2 exit-code constants. Library, not CLI.
     "_lib_exitcodes.py",
-    # #1339 — single answer to "what is in a conf.d/": the recursive read
+    # #1911 (conf.d family) — single answer to "what is in a conf.d/": the recursive read
     # plus the guard a flat reader calls so a hierarchical tree can never
     # look empty. Library, not CLI.
     "_lib_confd.py",
