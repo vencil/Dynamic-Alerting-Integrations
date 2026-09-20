@@ -18,7 +18,6 @@ import stat
 import sys
 from pathlib import Path
 
-import yaml
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -26,6 +25,8 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+
+from _lib_io import safe_load as yaml_safe_load  # noqa: E402  (libyaml when available)
 from _atomic_write import atomic_write_text  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
@@ -233,7 +234,7 @@ def count_rules_in_yaml(filepath: Path) -> tuple:
 
     Returns (recording_count, alert_count).
     """
-    data = yaml.safe_load(filepath.read_text(encoding="utf-8"))
+    data = yaml_safe_load(filepath.read_text(encoding="utf-8"))
     rec = alert = 0
     if data and "groups" in data:
         for g in data["groups"]:
@@ -250,11 +251,11 @@ def count_rules_in_configmap(filepath: Path) -> tuple:
 
     Returns (recording_count, alert_count).
     """
-    data = yaml.safe_load(filepath.read_text(encoding="utf-8"))
+    data = yaml_safe_load(filepath.read_text(encoding="utf-8"))
     rec = alert = 0
     if data and data.get("kind") == "ConfigMap":
         for _key, inner_yaml in data.get("data", {}).items():
-            inner = yaml.safe_load(inner_yaml)
+            inner = yaml_safe_load(inner_yaml)
             if inner and "groups" in inner:
                 for g in inner["groups"]:
                     for r in g.get("rules", []):
