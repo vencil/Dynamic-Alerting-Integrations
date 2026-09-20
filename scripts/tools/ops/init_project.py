@@ -2108,9 +2108,15 @@ def _gen_gitlab_ci(
     apply_image_var, apply_image_ref = _gitlab_apply_image(deploy_method)
     # ⛔ Eight spaces: this template's common margin is 4, so `validate-config:`
     # lands at column 0 after `dedent`, `rules:` at 2, `- changes:` at 4 and its
-    # list items at 8. ⛔ `/**/*`, not `/**` — GitLab's `rules:changes` takes
-    # glob patterns matched against file paths, and `conf.d/**` matches no FILE.
-    # The spelling differs per platform; the tree set does not.
+    # list items at 8. ⛔ `/**/*`, not `/**`, and the reason is recursion rather
+    # than emptiness: GitLab matches `rules:changes` with Ruby's `File.fnmatch?`
+    # under `FNM_PATHNAME`, where only a `**/` segment recurses. Measured on
+    # ruby 3.3.6 with GitLab's three flags: `conf.d/**` DOES match
+    # `conf.d/db-a.yaml` (so the bare form is not inert — an earlier version of
+    # this comment claimed it matched no file, which is wrong), but it does NOT
+    # match `conf.d/nested/x.yaml`. A tenant tree with any subdirectory would
+    # therefore be half-watched. The spelling differs per platform — GitHub's
+    # `**` crosses `/` and GitLab's does not — while the tree set does not.
     trigger_changes = _ci_trigger_paths_block(
         _ci_trigger_trees(deploy_method, config_source, git_repo),
         suffix='/**/*', indent=' ' * 8,
