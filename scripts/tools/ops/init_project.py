@@ -824,39 +824,7 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     """).format(tenant=tenant, declared_note=declared_note,
                 critical_note=critical_note)
 
-    tenant_config: dict = {}
-
-    # Add a few example overrides from the first rule pack. Reads the BASE tier
-    # only — before #1218 this slice ran over a mapping that still held the
-    # `_critical` keys, so `--rule-packs mariadb` spent one of its three
-    # illustrative lines on `mysql_connections_critical` for whichever pack
-    # happened to be first, and on nothing for every other pack.
-    if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
-        pack_defaults = _catalog_defaults([rule_packs[0]])
-        for k in list(pack_defaults)[:3]:
-            tenant_config[k] = str(pack_defaults[k])
-
-    # The critical tier, for EVERY selected pack — not just the first. This is
-    # the section the keys had to move to (#1218): `resolveCriticalRows`
-    # iterates tenant overrides, so a `<base>_critical` anywhere else produces
-    # no critical row. Seeded with a value rather than commented out because
-    # that is what the platform's number is FOR, and it is the same position
-    # `scaffold_tenant` takes (its prompt offers the registry value as the
-    # Enter-default, and `generate_profile` writes the `_critical` twins while
-    # deliberately dropping the flat declared keys). The customer edits or
-    # deletes them in review — they are in the customer's own file, which is
-    # exactly the tier boundary `defaults:` violated.
-    for k, v in critical.items():
-        tenant_config[k] = str(v)
-
-    # Add routing stub
-    tenant_config['_routing'] = {
-        'receiver': {
-            'type': 'webhook',
-            'url': f'https://webhook.{tenant}.example.com/alerts',
-        },
-    }
-
+    tenant_config = _tenant_override_rows(tenant, rule_packs)
     config = {'tenants': {tenant: tenant_config}}
     body = yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -867,6 +835,156 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     # "listed at the end of this file" is a fact about this string, not a hope.
     return append_tenant_declared_stub(header + body, declared_keys, lang='en')
 
+
+def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
+    """The override mapping `conf.d/<tenant>.yaml` carries for this run.
+
+    ⛔ Factored out of `_gen_tenant_yaml` because a SECOND artifact now names
+    the same keys. Under `--deploy helm` the chart renders its ConfigMap from
+    `thresholdConfig.tenants` and nothing feeds `conf.d/` to it, so
+    `_gen_helm_values` has to tell the customer which keys to carry across.
+    One derivation, two readers: two hand-kept copies of a key list is the
+    shape this module keeps deleting (issue 1454 B).
+
+    Add a few example overrides from the first rule pack. Reads the BASE tier
+    only — before #1218 this slice ran over a mapping that still held the
+    `_critical` keys, so `--rule-packs mariadb` spent one of its three
+    illustrative lines on `mysql_connections_critical` for whichever pack
+    happened to be first, and on nothing for every other pack.
+
+    The critical tier goes in for EVERY selected pack — not just the first.
+    This is the section the keys had to move to (#1218):
+    `resolveCriticalRows` iterates tenant overrides, so a `<base>_critical`
+    anywhere else produces no critical row. Seeded with a value rather than
+    commented out because that is what the platform's number is FOR, and it is
+    the same position `scaffold_tenant` takes (its prompt offers the registry
+    value as the Enter-default, and `generate_profile` writes the `_critical`
+    twins while deliberately dropping the flat declared keys). The customer
+    edits or deletes them in review — they are in the customer's own file,
+    which is exactly the tier boundary `defaults:` violated.
+    """
+    rows: dict = {}
+    if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
+        pack_defaults = _catalog_defaults([rule_packs[0]])
+        for k in list(pack_defaults)[:3]:
+            rows[k] = str(pack_defaults[k])
+    for k, v in _catalog_critical(rule_packs).items():
+        rows[k] = str(v)
+    rows['_routing'] = {
+        'receiver': {
+            'type': 'webhook',
+            'url': f'https://webhook.{tenant}.example.com/alerts',
+        },
+    }
+    return rows
+
+
+def _gen_helm_values(tenants: list[str], rule_packs: list[str]) -> str:
+    """Generate `environments/prod/values.yaml` — the file the helm apply reads.
+
+    ⛔ The file exists because the generated apply step already named it:
+    `helm upgrade --install … -f environments/prod/values.yaml`, with no code
+    path creating it, so the customer's first manual deploy died on `no such
+    file or directory` (issue 1454 B).
+
+    ⛔ It carries `thresholdConfig.tenants` and NOTHING ELSE, and the two
+    absences are the design:
+
+      * no `defaults:` — the chart already ships the platform's calibrated
+        numbers and a copy here deep-merges OVER them, so a later upstream
+        recalibration is silently reverted. The platform hit exactly that
+        (mysql_cpu 80→30, #944) and left the warning standing in its own
+        `environments/local/threshold-exporter.yaml`. Shipping a second copy
+        to every customer would industrialise that trap.
+      * no VALUES copied out of `conf.d/` — that would be two live copies of
+        every threshold with nothing comparing them. The keys are named in
+        comments so the customer knows exactly what to carry across and from
+        which file; the numbers stay in one place until they choose otherwise.
+
+    ⚠️ Stated rather than papered over: until the customer fills this in, a
+    `helm upgrade` deploys the chart's defaults with NO tenant overrides. That
+    is a real gap, and it is the honest one — the alternative silently ships a
+    divergent second copy. The summary step says so in words.
+
+    ⛔ NOT verified by rendering: no `helm` in this repo's test environment, so
+    nothing here proves the chart accepts this file. What IS asserted is the
+    property a render would have caught — every key set here exists in
+    `helm/threshold-exporter/values.yaml` — and even that reads the chart in
+    THIS repo while the customer's apply pulls `oci://ghcr.io/vencil/charts/
+    threshold-exporter` with no `--version`, i.e. whatever `latest` is. The
+    two can diverge and nothing here would see it.
+    """
+    # Derived, never a second list: the same call `conf.d/<tenant>.yaml` is
+    # written from, so the keys named below cannot drift away from the keys
+    # that file actually carries.
+    example_tenant = tenants[0] if tenants else 'db-a'
+    example_keys = [
+        k for k in _tenant_override_rows(example_tenant, rule_packs)
+        if k != '_routing'
+    ]
+    skeleton_lines: list[str] = []
+    for tenant in tenants:
+        skeleton_lines.append(f'  #   {tenant}:')
+        for key in example_keys:
+            skeleton_lines.append(
+                f'  #     {key}: "<the value from conf.d/{tenant}.yaml>"')
+        # `_routing` is part of the tenant's config too, so in helm mode it
+        # reaches the cluster only through this file — naming it here is the
+        # difference between "my alerts route somewhere" and silence.
+        skeleton_lines.append('  #     _routing:')
+        skeleton_lines.append('  #       receiver:')
+        skeleton_lines.append('  #         type: webhook')
+        skeleton_lines.append(
+            f'  #         url: https://webhook.{tenant}.example.com/alerts')
+    skeleton = '\n'.join(skeleton_lines)
+
+    # ⛔ The `{skeleton}` placeholder sits at the template's OWN margin, so
+    # `skeleton` must carry its own indentation for EVERY line including the
+    # first: an `.lstrip()` here left line one at column 0 while its siblings
+    # kept two spaces, and the block stopped being a child of `tenants:`. Same
+    # arithmetic as `_ci_trigger_paths_block`, and the tests parse the
+    # UNCOMMENTED result rather than trusting this sentence.
+    return textwrap.dedent("""\
+    # environments/prod/values.yaml — Helm values for threshold-exporter
+    # Generated by: da-tools init
+    #
+    # ⛔ READ THIS BEFORE EDITING conf.d/ AND EXPECTING THE DEPLOY TO CHANGE.
+    # With `--deploy helm`, THIS FILE — not `conf.d/` — is what reaches the
+    # cluster. The chart renders the `threshold-config` ConfigMap from its own
+    # `thresholdConfig` values (one `<tenant>.yaml` entry per key of
+    # `thresholdConfig.tenants`), and the generated apply step passes only
+    # `-f environments/prod/values.yaml`. Nothing feeds `conf.d/` to the chart,
+    # so a tenant override that lives ONLY in `conf.d/<tenant>.yaml` is
+    # validated by CI and never deployed.
+    #
+    # `conf.d/` is still what `da-tools validate-config`, the custom-rule lint
+    # and the blast-radius diff read, so it is not dead — it is the reviewed
+    # source of truth, and this file is the deploy face. Keeping the two in
+    # step is yours to do: this tool deliberately does NOT copy values between
+    # them, because two live copies with nothing comparing them is a
+    # silent-drift trap.
+    #
+    # ⛔ No `thresholdConfig.defaults:` here, deliberately. The chart already
+    # ships the platform's calibrated defaults; a copy in this file
+    # deep-merges OVER them, so a later upstream recalibration is silently
+    # reverted for you. Override a default only when you mean to, and re-check
+    # it on every chart upgrade.
+    #
+    # ⛔ No credentials here, ever. No kubeconfig, no tokens, no webhook
+    # secrets — wire receiver credentials through the chart's Secret reference.
+    #
+    # TO FILL IN: delete the `{{}}` after `tenants:`, then uncomment the block
+    # below by deleting `# ` — the hash AND the single space after it — from
+    # each line. The remaining indentation is already correct: a tenant lands
+    # at 4 spaces (under `tenants:`) and its keys at 6.
+    # The keys listed are the ones your `conf.d/<tenant>.yaml` already
+    # carries; copy across the values you want deployed. Until you do,
+    # `helm upgrade` deploys the chart's defaults with NO tenant overrides.
+
+    thresholdConfig:
+      tenants: {{}}
+    {skeleton}
+    """).format(skeleton=skeleton)
 
 # ============================================================
 # CI/CD Pipeline Generators (GitHub Actions / GitLab CI)
@@ -1636,6 +1754,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
 # that lies; naming them once removes that whole class.
 _GH_WORKFLOW_REL = Path('.github') / 'workflows' / 'dynamic-alerting.yaml'
 _GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
+
+# ⛔ Named here rather than spelled in three places, for the same reason the CI
+# paths are: BOTH apply stages already hard-code this path in their `helm
+# upgrade -f` line, `_preview_files` has to promise it, and `run_init` has to
+# write it. Issue 1454 B was the gap between the first of those and the other
+# two. `--deploy helm` only.
+_HELM_VALUES_REL = Path('environments') / 'prod' / 'values.yaml'
 
 # ⛔ #1357. GitLab auto-loads exactly ONE path per project — the repository
 # root `.gitlab-ci.yml`. Everything else, including our
@@ -2718,6 +2843,11 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
         # `--dry-run` exists to settle.
         if _gitlab_root_shell_is_needed(output_dir):
             _add(out / _GL_ROOT_SHELL_REL)
+    if deploy == 'helm':
+        # issue 1454 B. Conditional on `--deploy helm` because it is the helm
+        # apply step that reads it; kustomize mounts conf.d/ through its
+        # configMapGenerator and argocd reads no repository path at all.
+        _add(out / _HELM_VALUES_REL)
     if deploy == 'kustomize':
         _add(out / 'kustomize' / 'base' / 'kustomization.yaml')
         _add(out / 'kustomize' / 'base' / 'README.md')
@@ -2822,6 +2952,17 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             )
 
     # ── 3. Kustomize overlays ──────────────────────────────
+    # ── 2b. environments/prod/values.yaml (--deploy helm) ──
+    # issue 1454 B: both apply stages already passed `-f
+    # environments/prod/values.yaml` and no code path created it, so the
+    # customer's first manual deploy died on `no such file or directory`.
+    if deploy == 'helm':
+        _write_file(
+            str(out / _HELM_VALUES_REL),
+            _gen_helm_values(tenants, rule_packs),
+            created,
+        )
+
     if deploy == 'kustomize':
         kust_base = out / 'kustomize' / 'base'
         _write_file(
@@ -3015,10 +3156,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
         'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
                       'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
                       'conf.d/ linked into kustomize/base/ (the step above)'),
+        # ⛔ Reworded by issue 1454 B, and the distinction is the whole point:
+        # the file IS generated now, but it ships with `thresholdConfig.tenants`
+        # EMPTY. "The tool does not create it" became false while the
+        # prerequisite stayed real, and a sentence that goes stale in the safe
+        # direction is the one nobody re-reads.
         'helm': ('helm', 'KUBECONFIG',
-                 'environments/prod/values.yaml —— 本工具不會產生它',
-                 'environments/prod/values.yaml, which this tool does not '
-                 'generate'),
+                 'environments/prod/values.yaml 的 thresholdConfig.tenants '
+                 '已填好——本工具產生骨架但不填任何租戶覆寫',
+                 'thresholdConfig.tenants filled in in '
+                 'environments/prod/values.yaml — this tool generates the '
+                 'skeleton but no tenant override'),
         'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
                    "一個名為 'dynamic-alerting' 的 ArgoCD Application"
                    '—— 本工具不會建立它',

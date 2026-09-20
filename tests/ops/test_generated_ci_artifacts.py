@@ -6535,6 +6535,217 @@ def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:
 
 
 # ============================================================
+# ── 5c. The helm values skeleton (#1454 B) ──
+# ============================================================
+#
+# ⛔ Both apply stages passed `-f environments/prod/values.yaml` while no code
+# path created it, so `--deploy helm`'s first manual deploy died on `no such
+# file or directory`. `init` now writes a skeleton, and the skeleton is where
+# the interesting failure modes live rather than in its existence:
+#   * it must not carry `thresholdConfig.defaults` — the chart already ships
+#     the platform's calibrated numbers and a values-file copy deep-merges OVER
+#     them, silently reverting a later recalibration. The platform hit that
+#     (mysql_cpu 80→30) and left the warning in its own
+#     `environments/local/threshold-exporter.yaml`;
+#   * its commented block is an INSTRUCTION ("delete `# ` from each line"), and
+#     an instruction nothing executes is prose. The test below executes it.
+#
+# ⛔ NOT a render: no `helm` in this environment, so nothing here proves the
+# chart accepts the file. The closest available property is asserted instead —
+# every key it sets exists in the chart's own `values.yaml` — and even that
+# reads the chart in THIS repo while the customer's apply pulls
+# `oci://ghcr.io/vencil/charts/threshold-exporter` with no `--version`. The two
+# can diverge and nothing here would see it.
+
+_HELM_VALUES = Path("environments") / "prod" / "values.yaml"
+_CHART_VALUES = _REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
+
+# Anything that would be a credential if it appeared in a values file the
+# customer commits. `init` supplies none by design (the summary names them as
+# the operator's own step), and a generator that started guessing one would be
+# writing a secret into version control.
+_CREDENTIAL_SHAPED = ("password", "token", "secret", "kubeconfig", "apikey",
+                      "api_key", "credential")
+
+
+def _uncomment_fill_in_block(text: str) -> str:
+    """Do exactly what the file's own TO FILL IN instruction says.
+
+    Delete the `{}` after `tenants:` and strip `# ` — hash plus ONE space —
+    from the commented skeleton lines. Nothing else: if the instruction needs
+    more than it says, that is the defect this reproduces.
+    """.format("{}")
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("thresholdConfig:") or stripped == "tenants: {}":
+            out.append(line.replace("tenants: {}", "tenants:"))
+        elif re.match(r"^\s*# {2,}\S", line):
+            out.append(re.sub(r"^(\s*)# ", r"\1", line, count=1))
+    return "\n".join(out)
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_helm_values_file_exists_for_helm_and_only_for_helm(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1454 B, and its scope. Written for `--deploy helm` because the
+    helm apply step is what reads it; `--deploy kustomize` mounts `conf.d/`
+    through its `configMapGenerator` and `--deploy argocd` reads no repository
+    path at all, so a values file there would be the dead artifact that issue
+    1473 ① is about, one level out from the trigger.
+    """
+    path = generated[(ci, deploy)] / _HELM_VALUES
+    if deploy == "helm":
+        assert path.is_file(), (
+            f"--deploy helm wrote no {_HELM_VALUES.as_posix()}, but both apply "
+            "stages pass it to `helm upgrade -f`. That is issue 1454 B."
+        )
+    else:
+        assert not path.exists(), (
+            f"--deploy {deploy} wrote {_HELM_VALUES.as_posix()}, which no job "
+            "in that mode reads."
+        )
+
+
+def test_the_helm_values_skeleton_asserts_no_platform_default(generated) -> None:
+    """⛔ The ABSENCE is the contract, so it is pinned like a presence.
+
+    A `thresholdConfig.defaults:` in this file deep-merges over the chart's
+    own, so the next upstream recalibration is silently reverted for every
+    customer who took the generated file. Adding one here would industrialise
+    the trap the platform already documented against itself.
+    """
+    text = (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    assert isinstance(doc, dict) and "thresholdConfig" in doc, (
+        f"the values file does not parse to a mapping with thresholdConfig: {doc!r}"
+    )
+    assert set(doc) == {"thresholdConfig"}, (
+        f"the values file sets top-level keys {sorted(doc)}; it is meant to "
+        "carry the tenant overrides and nothing else."
+    )
+    assert set(doc["thresholdConfig"]) == {"tenants"}, (
+        "the values file sets "
+        f"thresholdConfig.{sorted(doc['thresholdConfig'])}; only `tenants` "
+        "belongs here. `defaults:` in particular deep-merges OVER the chart's "
+        "calibrated values and silently reverts a later recalibration."
+    )
+    assert doc["thresholdConfig"]["tenants"] == {}, (
+        "the skeleton ships a non-empty `tenants:` "
+        f"({doc['thresholdConfig']['tenants']!r}). Copying conf.d values in "
+        "here creates two live copies of every threshold with nothing "
+        "comparing them; the keys are named in comments on purpose."
+    )
+    # ⛔ Scanned over the PARSED keys and values, never the raw text. The first
+    # version matched the file's own prose ("no kubeconfig, no tokens, no
+    # webhook secrets") and reported four leaks in a sentence that says the
+    # opposite — a guard matching a comment instead of the artifact, which is
+    # the shape this module documents against itself. Both the shipped mapping
+    # and the block the customer is told to uncomment are scanned, because the
+    # skeleton is what they will actually materialise.
+    def _tokens(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield str(key)
+                yield from _tokens(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from _tokens(item)
+        elif node is not None:
+            yield str(node)
+
+    filled = yaml.safe_load(_uncomment_fill_in_block(text)) or {}
+    scanned = " ".join(list(_tokens(doc)) + list(_tokens(filled))).lower()
+    leaked = [word for word in _CREDENTIAL_SHAPED if word in scanned]
+    assert not leaked, (
+        f"the values file's own keys/values carry {leaked} — this artifact is "
+        "committed to the customer's repository and must never hold a "
+        "credential, nor invite one by example."
+    )
+
+
+def test_every_key_the_helm_values_file_sets_exists_in_the_chart(generated) -> None:
+    """⛔ The dead-knob property (#1361's class) on the values face.
+
+    A values key the chart never reads is a setting the customer will edit and
+    watch do nothing. Graded against the chart's own `values.yaml` rather than
+    a list written here.
+
+    ⚠️ Boundary, stated: this reads the chart IN THIS REPO, while the generated
+    apply step pulls `oci://ghcr.io/vencil/charts/threshold-exporter` with no
+    `--version`. A published chart whose schema has moved on would not be seen
+    from here.
+    """
+    doc = yaml.safe_load(
+        (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8"))
+    chart = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8"))
+    assert isinstance(chart, dict) and "thresholdConfig" in chart, (
+        f"{_CHART_VALUES} does not look like the threshold-exporter chart's "
+        "values file; re-point this test rather than deleting it."
+    )
+    for key in doc:
+        assert key in chart, (
+            f"the values file sets top-level `{key}`, which the chart's "
+            f"values.yaml does not declare — the customer would edit a knob "
+            "nothing reads."
+        )
+    for key in doc["thresholdConfig"]:
+        assert key in chart["thresholdConfig"], (
+            f"the values file sets thresholdConfig.{key}, which the chart does "
+            "not declare."
+        )
+
+
+def test_the_fill_in_instruction_actually_produces_the_shape_the_chart_reads(
+    generated,
+) -> None:
+    """⛔ The instruction is executed here, not read.
+
+    The file tells the customer to delete the `{}` and strip `# ` from each
+    commented line. If the indentation is off by one level the result is a
+    sibling of `tenants:` instead of a child, `helm upgrade` accepts it, and
+    the tenant overrides silently never reach the ConfigMap — an off-by-two
+    that no YAML parser and no linter would report. Measured against the shape
+    the chart consumes: `range $tenant, $overrides := .Values
+    .thresholdConfig.tenants` (templates/configmap.yaml), i.e. a mapping of
+    tenant id to its override mapping.
+
+    ⛔ Also pins WHICH keys are named: the same ones `conf.d/<tenant>.yaml`
+    carries, from `ip._tenant_override_rows`. A skeleton naming keys the
+    sibling file does not have would send the customer looking for values that
+    are not there.
+    """
+    tenants = ["db-a"]
+    rule_packs = ["mariadb"]
+    text = (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8")
+    filled = yaml.safe_load(_uncomment_fill_in_block(text))
+    assert isinstance(filled, dict), (
+        f"following the file's own instruction does not parse: {filled!r}")
+    overrides = filled["thresholdConfig"]["tenants"]
+    assert set(overrides) == set(tenants), (
+        f"the skeleton names tenants {sorted(overrides)}, but this run was "
+        f"initialised with {tenants}."
+    )
+    expected_keys = set(ip._tenant_override_rows(tenants[0], rule_packs))
+    for tenant, rows in overrides.items():
+        assert isinstance(rows, dict), (
+            f"tenant {tenant!r} did not come out as a mapping: {rows!r} — the "
+            "commented block's indentation does not survive uncommenting."
+        )
+        assert set(rows) == expected_keys, (
+            f"the skeleton names {sorted(set(rows) ^ expected_keys)} "
+            f"differently from conf.d/{tenant}.yaml, which carries "
+            f"{sorted(expected_keys)}."
+        )
+        assert isinstance(rows.get("_routing"), dict), (
+            "`_routing` did not survive as a mapping. In helm mode routing "
+            "reaches the cluster only through this file, so a flattened "
+            "`_routing` is silent alerting."
+        )
+
+
+# ============================================================
 # ── 6. ONE image pin across BOTH customer-CI generators (#1351) ──
 # ============================================================
 #

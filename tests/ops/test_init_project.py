@@ -5115,8 +5115,14 @@ class TestRoundEightMutationSurvivors:
         ('kustomize', 'kubectl / kustomize', 'KUBECONFIG',
          ('conf.d/ 已連結進 kustomize/base/',
           'conf.d/ linked into kustomize/base/')),
+        # ⛔ Reworded by issue 1454 B: the file IS generated now, so "this tool
+        # does not generate it" became false while the prerequisite stayed real
+        # — it ships with `thresholdConfig.tenants` EMPTY. The pin follows the
+        # sentence rather than the other way round, and the zh/en halves are
+        # still graded separately (that is what this test exists for).
         ('helm', 'helm', 'KUBECONFIG',
-         ('environments/prod/values.yaml —— 本工具不會產生它',
+         ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
+          'thresholdConfig.tenants filled in in '
           'environments/prod/values.yaml')),
         ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
          ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
@@ -5175,7 +5181,8 @@ class TestRoundEightMutationSurvivors:
         others = {
             ('conf.d/ 已連結進 kustomize/base/',
              'conf.d/ linked into kustomize/base/')[idx],
-            ('environments/prod/values.yaml —— 本工具不會產生它',
+            ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
+             'thresholdConfig.tenants filled in in '
              'environments/prod/values.yaml')[idx],
             ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
              "an ArgoCD Application named 'dynamic-alerting'")[idx],

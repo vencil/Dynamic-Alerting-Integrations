@@ -170,6 +170,15 @@ function cicdGeneratedPaths(config) {
     // brownfield caveat in prose.
     paths.push('.gitlab-ci.yml');
   }
+  if (config.deploy === 'helm') {
+    // issue 1454 B. Both apply stages already passed `-f
+    // environments/prod/values.yaml` while no code path created it, so the
+    // customer's first manual deploy died on `no such file or directory`.
+    // `init` now writes a skeleton; helm only, because it is the helm apply
+    // step that reads it (kustomize mounts conf.d/ through its
+    // configMapGenerator, and argocd reads no repository path at all).
+    paths.push('environments/prod/values.yaml');
+  }
   if (config.deploy === 'kustomize') {
     paths.push('kustomize/base/kustomization.yaml');
     paths.push('kustomize/base/README.md');
