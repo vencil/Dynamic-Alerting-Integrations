@@ -41,6 +41,7 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
     has_yaml_extension,
+    is_hidden_name,
     iter_config_files,
     unusable_config_entries,
     unusable_config_paths,
@@ -91,6 +92,43 @@ def is_platform_file(name: str) -> bool:
 
 # ── Source discovery ─────────────────────────────────────────────────
 
+def list_visible_config_entries(dir_path: Path) -> List[Path]:
+    """Config-NAMED entries of `dir_path`, flat, minus the hidden ones —
+    each of which is named on stderr before it is left out.
+
+    ⛔ The ONE listing behind both scan sites of this tool, `discover_yamls`
+    (the sources) and `validate_merged` (the artifact). #1827 was fixed at
+    the first site and blind review found the second still validating a
+    `.`-prefixed carrier the exporter never reads — refusing a deploy (rc 2)
+    over a file that is not part of it. Two readers, one question, two
+    answers: the shape the conf.d family (#1911) is made of, reproduced
+    inside a single file. So the listing, the hidden skip and its wording
+    live here once; a third scan site calls this, it does not copy it.
+
+    `has_yaml_extension` and `is_hidden_name` are the exporter's own rules
+    (`config_hierarchy.go`), shared through `_lib_confd` with the sibling
+    producers. Hidden entries are NAMED, not silently dropped: excluding
+    without saying so would trade a visible error for a quiet loss.
+
+    `warn_nested` is called HERE, in the same scope as the `iterdir()`,
+    because `test_confd_enumeration_contract` requires the guard to live
+    where the flat scan lives. Callers must not call it again for the same
+    directory (it de-duplicates, but a second call reads as a second scan).
+
+    Returns only what is config-named and not hidden; whether each entry is
+    a readable regular file is the caller's question (`unusable_config_entries`).
+    """
+    # #1911: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    warn_nested(dir_path, tool="assemble_config_dir")
+    config_named = sorted(p for p in dir_path.iterdir()
+                          if has_yaml_extension(p.name))
+    for p in (q for q in config_named if is_hidden_name(q.name)):
+        print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
+              f"does not read it", file=sys.stderr)
+    return [p for p in config_named if not is_hidden_name(p.name)]
+
+
 def discover_yamls(source_dir: Path) -> List[Path]:
     """List every YAML carrier in a source directory (non-recursive).
 
@@ -102,20 +140,37 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     the same answer as an empty shard. Blast radius of widening: a `.yml`
     shard that used to be dropped is now merged (and can now collide by
     name with a same-named `.yml` in another shard, which `detect_conflicts`
-    reports as before). Hidden (`.`-prefixed) entries were never skipped
-    here and still are not — that is a separate axis, #1827. (It used to point
-    at #1630, which was already closed and whose body names only run_chaos_soak and
-    check_threshold_unit_sanity — measured; it never covered this tool.)
+    reports as before).
+
+    Hidden (`.`-prefixed) entries are EXCLUDED, by `_lib_confd.is_hidden_name`
+    — the exporter's own skip rule (`config_hierarchy.go`), the same predicate
+    the sibling producers apply — and each one is NAMED on stderr (#1911
+    family, #1827). Before that filter this tool copied `.db-c.yaml` into the
+    artifact and counted it in the manifest while the exporter never read it:
+    the tenant had no alerts at rc 0 with nothing printed. Excluding without
+    naming would trade that visible error for a quiet loss, so the entry is
+    listed, not dropped. (The earlier deferral here pointed at #1630, a closed
+    ticket that never covered this tool.)
+
+    ⚠️ A hidden DIRECTORY (`.draft/db-d.yaml`) is a different case: this scan
+    is flat, so it never sees inside it, and `warn_nested` does not name it
+    either — both by the same `_lib_confd._is_hidden`, which is also the
+    exporter's `SkipDir` rule. Not seen, not reported, on every side: that is
+    parity, not a gap, and it is guaranteed by that one predicate rather than
+    by two readers happening to agree.
 
     Raises FileNotFoundError if directory does not exist.
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(f"source directory not found: {source_dir}")
-    # #1911: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(source_dir, tool="assemble_config_dir")
-    named = sorted(p for p in source_dir.iterdir()
-                   if has_yaml_extension(p.name))
+    # ⛔ Same predicate as `iter_config_files` (which `carriers_already_in`
+    # and the residue question already use), not a second spelling of it:
+    # a hidden carrier the exporter will never read must not reach the copy,
+    # the count or the manifest. Named first, then excluded, so the operator
+    # learns WHICH tenant just lost its carrier instead of finding out from
+    # a missing alert. The listing (and the nested-config guard) is the
+    # shared one — `validate_merged` reads the artifact through it too.
+    named = list_visible_config_entries(source_dir)
 
     # ⛔ A config-NAMED entry that is not a readable file (a shard's broken
     # symlink, a directory called `subteam.yaml`) is a fact about the input,
@@ -299,13 +354,14 @@ def validate_merged(output_dir: Path) -> List[str]:
     Returns list of warning/error messages.
     """
     issues = []
-    # #1911: second scan site — the guard must live where the scan does,
-    # otherwise a hierarchical conf.d is silently empty on THIS path.
-    warn_nested(output_dir, tool="assemble_config_dir")
-    # #1603: same predicate as `discover_yamls` — a `.yml` file this tool
-    # now copies into the output must also be the one it validates.
-    for f in sorted(p for p in output_dir.iterdir()
-                    if has_yaml_extension(p.name)):
+    # ⛔ Second scan site, SAME listing as `discover_yamls` — not the same
+    # predicate re-typed. What this validates is what the exporter will read:
+    # a `.yml` this tool copies (#1603) is validated; a `.`-prefixed file
+    # already sitting in `--output` (#1827) is named on stderr and NOT
+    # validated, because failing the deploy over a carrier the exporter
+    # skips blocks a tree that is in fact fine. The nested-config guard
+    # (#1911) rides along inside the helper, where the scan is.
+    for f in list_visible_config_entries(output_dir):
         try:
             with open(f, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
@@ -613,10 +669,12 @@ def main() -> int:
         if residue:
             result["residue"] = sorted(residue)
             # ⛔ Re-derived from the directory, not `count + len(residue)`:
-            # those two are different predicates (`count` is what was copied,
-            # hidden entries included; `residue` mirrors the exporter, which
-            # skips them), so their sum overcounted what will be read. This
-            # runs after the copy, so it IS the artifact.
+            # a carrier already sitting in `--output` is counted by the walk
+            # (`iter_config_files`), not by this run's copy, so the sum would
+            # be two half-answers glued together. This runs after the copy, so
+            # it IS the artifact. (The sum once also mixed two predicates —
+            # `count` included hidden entries before #1827; it no longer does,
+            # and the re-derivation is what keeps that from mattering.)
             result["artifact_file_count"] = len(carriers_already_in(output_dir))
         if validation_issues:
             result["validation"] = validation_issues
