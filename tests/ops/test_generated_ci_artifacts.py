@@ -4142,7 +4142,7 @@ def _normalized_commands(text: str) -> list[str]:
 # anything INSIDE a branch could be rewritten freely.
 _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
+        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         'echo "--- Dry-run passed. Applying... ---"',
         "kubectl apply -f /tmp/manifests.yaml",
@@ -4152,7 +4152,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "helm": [
         "helm upgrade --install threshold-exporter "
         "oci://ghcr.io/vencil/charts/threshold-exporter "
-        "-f environments/prod/values.yaml -n ${{ env.MONITORING_NS }} "
+        '-f "environments/prod/values.yaml" -n ${{ env.MONITORING_NS }} '
         "--wait --timeout 5m",
     ],
     "argocd": [
@@ -4162,7 +4162,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
+        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
@@ -4170,7 +4170,7 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "helm": [
         "helm upgrade --install threshold-exporter "
         "oci://ghcr.io/vencil/charts/threshold-exporter "
-        "-f environments/prod/values.yaml -n $MONITORING_NS "
+        '-f "environments/prod/values.yaml" -n $MONITORING_NS '
         "--wait --timeout 5m",
     ],
     "argocd": [
@@ -4200,7 +4200,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     # and since #1650 the tool exits 2 on that combination, so the old line
     # would have turned every customer's PR red. `mkdir -p .output` stays:
     # the config-diff step below still redirects into it on the host.
-    'docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
+    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4225,7 +4225,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'exit 1',
     'fi',
     'set +e',
-    'docker run --rm -v ${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
+    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -6531,6 +6531,610 @@ def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:
             f"{deploy}: {sorted(set(trees) - set(ip._GENERATED_TREES))} is not "
             "in `ip._GENERATED_TREES`, so the subdirectory remediation summary "
             "cannot recognise it inside a shell body and would omit it."
+        )
+
+
+# ============================================================
+# ── 5c. The helm values skeleton (#1454 B) ──
+# ============================================================
+#
+# ⛔ Both apply stages passed `-f environments/prod/values.yaml` while no code
+# path created it, so `--deploy helm`'s first manual deploy died on `no such
+# file or directory`. `init` now writes a skeleton, and the skeleton is where
+# the interesting failure modes live rather than in its existence:
+#   * it must not carry `thresholdConfig.defaults` — the chart already ships
+#     the platform's calibrated numbers and a values-file copy deep-merges OVER
+#     them, silently reverting a later recalibration. The platform hit that
+#     (mysql_cpu 80→30) and left the warning in its own
+#     `environments/local/threshold-exporter.yaml`;
+#   * its commented block is an INSTRUCTION ("delete `# ` from each line"), and
+#     an instruction nothing executes is prose. The test below executes it.
+#
+# ⛔ NOT a render: no `helm` in this environment, so nothing here proves the
+# chart accepts the file. The closest available property is asserted instead —
+# every key it sets exists in the chart's own `values.yaml` — and even that
+# reads the chart in THIS repo while the customer's apply pulls
+# `oci://ghcr.io/vencil/charts/threshold-exporter` with no `--version`. The two
+# can diverge and nothing here would see it.
+
+_HELM_VALUES = Path("environments") / "prod" / "values.yaml"
+_CHART_VALUES = _REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
+
+# Anything that would be a credential if it appeared in a values file the
+# customer commits. `init` supplies none by design (the summary names them as
+# the operator's own step), and a generator that started guessing one would be
+# writing a secret into version control.
+_CREDENTIAL_SHAPED = ("password", "token", "secret", "kubeconfig", "apikey",
+                      "api_key", "credential")
+
+
+def _uncomment_fill_in_block(text: str) -> str:
+    """Do exactly what the file's own TO FILL IN instruction says.
+
+    Delete the `{}` after `tenants:` and strip `# ` — hash plus ONE space —
+    from the commented skeleton lines. Nothing else: if the instruction needs
+    more than it says, that is the defect this reproduces.
+    """.format("{}")
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("thresholdConfig:") or stripped == "tenants: {}":
+            out.append(line.replace("tenants: {}", "tenants:"))
+        elif re.match(r"^\s*# {2,}\S", line):
+            out.append(re.sub(r"^(\s*)# ", r"\1", line, count=1))
+    return "\n".join(out)
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_helm_values_file_exists_for_helm_and_only_for_helm(
+    generated, ci, deploy
+) -> None:
+    """⛔ issue 1454 B, and its scope. Written for `--deploy helm` because the
+    helm apply step is what reads it; `--deploy kustomize` mounts `conf.d/`
+    through its `configMapGenerator` and `--deploy argocd` reads no repository
+    path at all, so a values file there would be the dead artifact that issue
+    1473 ① is about, one level out from the trigger.
+    """
+    path = generated[(ci, deploy)] / _HELM_VALUES
+    if deploy == "helm":
+        assert path.is_file(), (
+            f"--deploy helm wrote no {_HELM_VALUES.as_posix()}, but both apply "
+            "stages pass it to `helm upgrade -f`. That is issue 1454 B."
+        )
+    else:
+        assert not path.exists(), (
+            f"--deploy {deploy} wrote {_HELM_VALUES.as_posix()}, which no job "
+            "in that mode reads."
+        )
+
+
+def test_the_helm_values_skeleton_asserts_no_platform_default(generated) -> None:
+    """⛔ The ABSENCE is the contract, so it is pinned like a presence.
+
+    A `thresholdConfig.defaults:` in this file deep-merges over the chart's
+    own, so the next upstream recalibration is silently reverted for every
+    customer who took the generated file. Adding one here would industrialise
+    the trap the platform already documented against itself.
+    """
+    text = (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    assert isinstance(doc, dict) and "thresholdConfig" in doc, (
+        f"the values file does not parse to a mapping with thresholdConfig: {doc!r}"
+    )
+    assert set(doc) == {"thresholdConfig"}, (
+        f"the values file sets top-level keys {sorted(doc)}; it is meant to "
+        "carry the tenant overrides and nothing else."
+    )
+    assert set(doc["thresholdConfig"]) == {"tenants"}, (
+        "the values file sets "
+        f"thresholdConfig.{sorted(doc['thresholdConfig'])}; only `tenants` "
+        "belongs here. `defaults:` in particular deep-merges OVER the chart's "
+        "calibrated values and silently reverts a later recalibration."
+    )
+    assert doc["thresholdConfig"]["tenants"] == {}, (
+        "the skeleton ships a non-empty `tenants:` "
+        f"({doc['thresholdConfig']['tenants']!r}). Copying conf.d values in "
+        "here creates two live copies of every threshold with nothing "
+        "comparing them; the keys are named in comments on purpose."
+    )
+    # ⛔ Scanned over the PARSED keys and values, never the raw text. The first
+    # version matched the file's own prose ("no kubeconfig, no tokens, no
+    # webhook secrets") and reported four leaks in a sentence that says the
+    # opposite — a guard matching a comment instead of the artifact, which is
+    # the shape this module documents against itself. Both the shipped mapping
+    # and the block the customer is told to uncomment are scanned, because the
+    # skeleton is what they will actually materialise.
+    def _tokens(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield str(key)
+                yield from _tokens(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from _tokens(item)
+        elif node is not None:
+            yield str(node)
+
+    filled = yaml.safe_load(_uncomment_fill_in_block(text)) or {}
+    scanned = " ".join(list(_tokens(doc)) + list(_tokens(filled))).lower()
+    leaked = [word for word in _CREDENTIAL_SHAPED if word in scanned]
+    assert not leaked, (
+        f"the values file's own keys/values carry {leaked} — this artifact is "
+        "committed to the customer's repository and must never hold a "
+        "credential, nor invite one by example."
+    )
+
+
+def test_every_key_the_helm_values_file_sets_exists_in_the_chart(generated) -> None:
+    """⛔ The dead-knob property (#1361's class) on the values face.
+
+    A values key the chart never reads is a setting the customer will edit and
+    watch do nothing. Graded against the chart's own `values.yaml` rather than
+    a list written here.
+
+    ⚠️ Boundary, stated: this reads the chart IN THIS REPO, while the generated
+    apply step pulls `oci://ghcr.io/vencil/charts/threshold-exporter` with no
+    `--version`. A published chart whose schema has moved on would not be seen
+    from here.
+    """
+    doc = yaml.safe_load(
+        (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8"))
+    chart = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8"))
+    assert isinstance(chart, dict) and "thresholdConfig" in chart, (
+        f"{_CHART_VALUES} does not look like the threshold-exporter chart's "
+        "values file; re-point this test rather than deleting it."
+    )
+    for key in doc:
+        assert key in chart, (
+            f"the values file sets top-level `{key}`, which the chart's "
+            f"values.yaml does not declare — the customer would edit a knob "
+            "nothing reads."
+        )
+    for key in doc["thresholdConfig"]:
+        assert key in chart["thresholdConfig"], (
+            f"the values file sets thresholdConfig.{key}, which the chart does "
+            "not declare."
+        )
+
+
+def test_the_fill_in_instruction_actually_produces_the_shape_the_chart_reads(
+    generated,
+) -> None:
+    """⛔ The instruction is executed here, not read.
+
+    The file tells the customer to delete the `{}` and strip `# ` from each
+    commented line. If the indentation is off by one level the result is a
+    sibling of `tenants:` instead of a child, `helm upgrade` accepts it, and
+    the tenant overrides silently never reach the ConfigMap — an off-by-two
+    that no YAML parser and no linter would report. Measured against the shape
+    the chart consumes: `range $tenant, $overrides := .Values
+    .thresholdConfig.tenants` (templates/configmap.yaml), i.e. a mapping of
+    tenant id to its override mapping.
+
+    ⛔ Also pins WHICH keys are named: the same ones `conf.d/<tenant>.yaml`
+    carries, from `ip._tenant_override_rows`. A skeleton naming keys the
+    sibling file does not have would send the customer looking for values that
+    are not there.
+    """
+    tenants = ["db-a"]
+    rule_packs = ["mariadb"]
+    text = (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8")
+    filled = yaml.safe_load(_uncomment_fill_in_block(text))
+    assert isinstance(filled, dict), (
+        f"following the file's own instruction does not parse: {filled!r}")
+    overrides = filled["thresholdConfig"]["tenants"]
+    assert set(overrides) == set(tenants), (
+        f"the skeleton names tenants {sorted(overrides)}, but this run was "
+        f"initialised with {tenants}."
+    )
+    expected_keys = set(ip._tenant_override_rows(tenants[0], rule_packs))
+    for tenant, rows in overrides.items():
+        assert isinstance(rows, dict), (
+            f"tenant {tenant!r} did not come out as a mapping: {rows!r} — the "
+            "commented block's indentation does not survive uncommenting."
+        )
+        assert set(rows) == expected_keys, (
+            f"the skeleton names {sorted(set(rows) ^ expected_keys)} "
+            f"differently from conf.d/{tenant}.yaml, which carries "
+            f"{sorted(expected_keys)}."
+        )
+        assert isinstance(rows.get("_routing"), dict), (
+            "`_routing` did not survive as a mapping. In helm mode routing "
+            "reaches the cluster only through this file, so a flattened "
+            "`_routing` is silent alerting."
+        )
+
+
+# ============================================================
+# ── 5d. The subdirectory axis: --ci × --deploy × -o <subdir> (#1454 C) ──
+# ============================================================
+#
+# ⛔ The axis the ticket asks for, and it exists because the previous state was
+# "the tool WARNS": `-o alerting/` wrote content that still named `conf.d/**`,
+# `CONFIG_DIR: conf.d`, `/src/conf.d` and the apply stage's own paths, all of
+# which both platforms resolve from the repository root. A customer who
+# prefixed exactly what the summary printed got CI running and a commit-time
+# hook that stayed `Skipped` forever, because that artifact was not on the list.
+#
+# ⛔ Graded the same way section 5b grades the root install: by matching the
+# generated FILTER against the paths that really exist, not by comparing path
+# strings. The offset only counts if a real file under `alerting/` matches.
+
+_SUBDIR = "alerting"
+
+
+@pytest.fixture(scope="module")
+def generated_subdir(tmp_path_factory) -> dict[tuple[str, str], Path]:
+    """`run_init` into `<repo>/alerting` once per combination.
+
+    ⛔ A real `.git` above the output directory, because that is what
+    `_enclosing_repo_root` keys on and therefore what makes the offset
+    non-empty. A bare tmp dir would exercise the root-install path and the whole
+    section would be vacuous.
+    """
+    out: dict[tuple[str, str], Path] = {}
+    for ci, deploy in MATRIX:
+        repo = tmp_path_factory.mktemp(f"subdir-{ci}-{deploy}")
+        (repo / ".git").mkdir()
+        target = repo / _SUBDIR
+        target.mkdir()
+        ip.run_init(
+            {
+                "ci": ci,
+                "deploy": deploy,
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
+            },
+            str(target),
+        )
+        out[(ci, deploy)] = target
+    return out
+
+
+def _real_repo_paths(target: Path) -> list[str]:
+    """Every file this run wrote, as the repository root sees it."""
+    repo_root = target.parent
+    return sorted(
+        f.relative_to(repo_root).as_posix()
+        for f in target.rglob("*") if f.is_file()
+    )
+
+
+def _watchable(paths: list[str]) -> list[str]:
+    """The written files a trigger filter is supposed to see.
+
+    The CI files themselves and the `.da-init.yaml` marker are deliberately
+    excluded: no generated filter claims to watch them, so demanding a match
+    would be asserting a promise nobody made.
+    """
+    skip = (
+        f"{_SUBDIR}/{_GH_WORKFLOW.as_posix()}",
+        f"{_SUBDIR}/{_GL_PIPELINE.as_posix()}",
+        f"{_SUBDIR}/.gitlab-ci.yml",
+        f"{_SUBDIR}/.pre-commit-config.da.yaml",
+        f"{_SUBDIR}/.da-init.yaml",
+    )
+    return [p for p in paths if p not in skip and not p.endswith("README.md")]
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_github_filter_matches_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ issue 1454 C on the GitHub leg, as behaviour.
+
+    `on.paths` is matched against repository-root-relative changed-file paths.
+    Before the fix this filter said `conf.d/**` while the files were at
+    `alerting/conf.d/…`, so no job was ever created and the pull request was
+    green having validated nothing — issue 1357's outcome reached by obeying
+    this tool's own remedy.
+    """
+    target = generated_subdir[(ci, deploy)]
+    workflow = yaml.safe_load(
+        (target / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    filters = _gh_trigger_paths(workflow)
+    assert filters, "the generated workflow declares no `paths:` filter"
+    real = _watchable(_real_repo_paths(target))
+    assert real, "no watchable file was written — this assertion would be vacuous"
+    unmatched = [
+        f for f in real if not any(_gha_path_matches(p, f) for p in filters)
+    ]
+    assert not unmatched, (
+        f"--ci {ci} --deploy {deploy} into {_SUBDIR}/: `on.paths` ({filters}) "
+        f"matches none of {unmatched}, which this run actually wrote. No job is "
+        "created for an edit to those files."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GL_COMBOS)
+def test_the_gitlab_changes_match_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ issue 1454 C on the GitLab leg. GitLab's docs say it of both keys this
+    pipeline gates on: "Paths are relative to the project directory
+    (`$CI_PROJECT_DIR`)". A miss creates no job, and a merge request with no
+    jobs is green.
+    """
+    target = generated_subdir[(ci, deploy)]
+    pipeline = yaml.safe_load(
+        (target / _GL_PIPELINE).read_text(encoding="utf-8"))
+    changes = _gl_change_paths(pipeline)
+    assert changes, "the generated pipeline declares no `changes:` at all"
+    real = _watchable(_real_repo_paths(target))
+    assert real, "no watchable file was written — this assertion would be vacuous"
+    unmatched = [
+        f for f in real
+        if not any(_gitlab_changes_matches(c, f) for c in changes)
+    ]
+    assert not unmatched, (
+        f"--ci {ci} --deploy {deploy} into {_SUBDIR}/: no `changes:` entry "
+        f"({changes}) matches {unmatched}, which this run actually wrote."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_precommit_hook_matches_the_real_files_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ THE artifact the old subdirectory remedy forgot.
+
+    `files:` is a regex matched against repository-root-relative paths, so
+    `^conf\\.d/` matched nothing under `alerting/` — and because this file was
+    not in the printed list, a customer who followed the remedy exactly got CI
+    running and a hook that reported `Skipped` at rc 0 on every commit. Graded
+    against a tenant file that really exists.
+
+    ⚠️ The `--config-dir` half is checked for its /src prefix only. Proving the
+    container really finds the directory needs a `docker run`, and there is no
+    registry egress here; `ip._PRECOMMIT_REPO_MOUNT` records where pre-commit's
+    own docker language mounts the repo.
+    """
+    target = generated_subdir[(ci, deploy)]
+    doc = yaml.safe_load(
+        (target / ".pre-commit-config.da.yaml").read_text(encoding="utf-8"))
+    tenant_files = [
+        f for f in _real_repo_paths(target)
+        if f.startswith(f"{_SUBDIR}/conf.d/") and f.endswith(".yaml")
+    ]
+    assert tenant_files, "no tenant config was written under the subdirectory"
+    hooks = [h for entry in doc["repos"] for h in entry["hooks"]]
+    assert hooks, "the generated pre-commit snippet declares no hook"
+    for hook in hooks:
+        regex = hook["files"]
+        unmatched = [f for f in tenant_files if not re.search(regex, f)]
+        assert not unmatched, (
+            f"hook {hook['id']!r} filters on {regex!r}, which matches none of "
+            f"{unmatched} — the files this run wrote. pre-commit would report "
+            "`Skipped` at rc 0 on every commit that touches them."
+        )
+        # ⛔ `shlex`, not `.split()`. pre-commit tokenises `entry` with shlex
+        # (`pre_commit/lang_base.py`), and the path is QUOTED so a directory
+        # with a space survives as one argument — a `.split()` here would read
+        # the quotes as part of the value and grade the wrong string.
+        tokens = shlex.split(hook["entry"])
+        idx = tokens.index("--config-dir")
+        config_dir = tokens[idx + 1]
+        assert config_dir == (
+            f"{ip._PRECOMMIT_REPO_MOUNT}/{_SUBDIR}/conf.d"), (
+            f"hook {hook['id']!r} points `--config-dir` at {config_dir!r}; "
+            f"pre-commit mounts the repository root at "
+            f"{ip._PRECOMMIT_REPO_MOUNT!r}, so the config directory of a "
+            f"{_SUBDIR}/ install is "
+            f"{ip._PRECOMMIT_REPO_MOUNT}/{_SUBDIR}/conf.d."
+        )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_no_generated_path_is_left_root_relative_under_a_subdirectory(
+    generated_subdir, ci, deploy
+) -> None:
+    """⛔ The catch-all, so a NEW site cannot arrive un-offset unnoticed.
+
+    Derived from `ip._root_relative_ci_paths` / `ip._precommit_root_relative_
+    paths` — the generator's own extractors, the ones the summary step reports
+    from — rather than from a list of sites written here. A future filter, mount
+    or apply path that forgets `_offset_path` shows up here whatever it is
+    called.
+    """
+    target = generated_subdir[(ci, deploy)]
+    faces: list[tuple[str, list[str]]] = []
+    if ci in _EMITS_GITHUB:
+        faces.append((_GH_WORKFLOW.as_posix(), ip._root_relative_ci_paths(
+            target / _GH_WORKFLOW, _SUBDIR)))
+    if ci in _EMITS_GITLAB:
+        faces.append((_GL_PIPELINE.as_posix(), ip._root_relative_ci_paths(
+            target / _GL_PIPELINE, _SUBDIR)))
+    faces.append((".pre-commit-config.da.yaml",
+                  ip._precommit_root_relative_paths(
+                      target / ".pre-commit-config.da.yaml")))
+    for name, values in faces:
+        assert values, (
+            f"{name}: the extractor found no repo-relative path, so this "
+            "assertion would be vacuous. Check the extractor before relaxing "
+            "anything here."
+        )
+        stale = [v for v in values if not v.startswith(f"{_SUBDIR}/")]
+        assert not stale, (
+            f"--ci {ci} --deploy {deploy}: {name} still names {stale} relative "
+            f"to the repository root, but this run wrote into {_SUBDIR}/."
+        )
+
+
+# ============================================================
+# ── 5e. An offset with a space in it (CodeRabbit on PR 1925) ──
+# ============================================================
+#
+# ⛔ `_offset_path` inserts the offset verbatim, and three different tokenizers
+# then read the result: the shell inside a GitHub `run:`, the shell inside a
+# GitLab `script:`, and `shlex` inside a pre-commit `entry`. An output directory
+# with a space — `-o "alerting app/"`, which `run_init` accepts — therefore used
+# to become TWO arguments, so `helm -f` got `alerting`, `kustomize build` got
+# `alerting`, and the pre-commit hook pointed `--config-dir` at `/src/alerting`.
+# Every one of those is a wrong path that the tool reports no error for.
+#
+# ⛔ Graded by re-tokenising the generated lines, not by looking for quotes:
+# "there is a `"` in the string" is satisfied by a quote in the wrong place.
+# ⚠️ Measured on the artifact only. Whether a real runner's shell agrees is not
+# checked here — there is no runner — but `shlex` implements POSIX word
+# splitting, which is the rule both `run:` and `script:` bodies are read under.
+
+_SPACED_SUBDIR = "alerting app"
+
+
+@pytest.fixture(scope="module")
+def generated_spaced(tmp_path_factory) -> dict[str, Path]:
+    """`run_init` into `<repo>/alerting app` once per `--deploy`."""
+    out: dict[str, Path] = {}
+    for deploy in DEPLOY_CHOICES:
+        repo = tmp_path_factory.mktemp(f"spaced-{deploy}")
+        (repo / ".git").mkdir()
+        target = repo / _SPACED_SUBDIR
+        target.mkdir()
+        ip.run_init(
+            {
+                "ci": "both",
+                "deploy": deploy,
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
+            },
+            str(target),
+        )
+        out[deploy] = target
+    return out
+
+
+def _shell_lines(doc) -> list[str]:
+    """Every command line out of every shell-bearing key, comments dropped."""
+    lines: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ("run", "script", "before_script", "after_script"):
+                    body = value if isinstance(value, list) else [value]
+                    for chunk in body:
+                        if isinstance(chunk, str):
+                            lines.extend(
+                                ln.strip() for ln in chunk.splitlines()
+                                if ln.strip()
+                                and not ln.strip().startswith("#")
+                            )
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    return lines
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_survives_shell_tokenisation(
+    generated_spaced, deploy
+) -> None:
+    """⛔ No generated shell line may split the offset into two arguments.
+
+    A line is graded by tokenising it the way the shell does and demanding that
+    every token MENTIONING the offset mentions the whole of it. A split leaves a
+    token carrying only the first word — and it can carry a prefix too
+    (`${{ github.workspace }}/alerting`), which is why the criterion is
+    "mentions the first word without the whole offset" rather than "equals the
+    first word". ⛔ That weaker form is what this test shipped with first, and
+    the docker-mount mutant walked straight through it: `-v GHEXPR/alerting` is
+    not equal to `alerting`, so the split went unreported. Found by running the
+    mutant, not by reading the assertion.
+    """
+    target = generated_spaced[deploy]
+    first_word = _SPACED_SUBDIR.split()[0]
+    for rel in (_GH_WORKFLOW, _GL_PIPELINE):
+        doc = yaml.safe_load((target / rel).read_text(encoding="utf-8"))
+        candidates = [ln for ln in _shell_lines(doc) if _SPACED_SUBDIR in ln]
+        assert candidates, (
+            f"{rel}: no shell line names {_SPACED_SUBDIR!r}, so this assertion "
+            "would be vacuous. Check the offset reached the artifact at all."
+        )
+        for line in candidates:
+            # `${{ ... }}` is GitHub template syntax, not shell; blank it out so
+            # shlex does not choke on the braces while still measuring the rest.
+            probe = re.sub(r"\$\{\{[^}]*\}\}", "GHEXPR", line).rstrip("\\").strip()
+            try:
+                tokens = shlex.split(probe)
+            except ValueError as exc:                        # pragma: no cover
+                pytest.fail(f"{rel}: cannot tokenise {probe!r}: {exc}")
+            severed = [
+                t for t in tokens
+                if first_word in t and _SPACED_SUBDIR not in t
+            ]
+            assert not severed, (
+                f"{rel} (--deploy {deploy}): the shell splits\n  {line}\n"
+                f"into {tokens}, severing {severed} from the rest of the path. "
+                "The offset-derived path needs quoting at this site."
+            )
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_survives_precommit_shlex(
+    generated_spaced, deploy
+) -> None:
+    """⛔ pre-commit tokenises `entry` with shlex and execs WITHOUT a shell.
+
+    So the quoting has to survive shlex specifically, and the value it yields
+    has to be the whole directory — this is the artifact whose filter the old
+    subdirectory remedy forgot entirely, so it gets its own assertion rather
+    than riding on the shell one.
+    """
+    target = generated_spaced[deploy]
+    doc = yaml.safe_load(
+        (target / ".pre-commit-config.da.yaml").read_text(encoding="utf-8"))
+    hooks = [h for entry in doc["repos"] for h in entry["hooks"]]
+    assert hooks, "the generated pre-commit snippet declares no hook"
+    want = f"{ip._PRECOMMIT_REPO_MOUNT}/{_SPACED_SUBDIR}/conf.d"
+    for hook in hooks:
+        tokens = shlex.split(hook["entry"])
+        idx = tokens.index("--config-dir")
+        assert tokens[idx + 1] == want, (
+            f"hook {hook['id']!r}: shlex reads `--config-dir` as "
+            f"{tokens[idx + 1]!r}, not {want!r}. An unquoted space here points "
+            "the hook at a directory that does not exist, and pre-commit "
+            "reports nothing."
+        )
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_stays_one_value_in_every_yaml_face(
+    generated_spaced, deploy
+) -> None:
+    """⚠️ The other half of the same question, and its answer is different.
+
+    The YAML faces — `on.paths`, `rules:changes`, `rules:exists`, `CONFIG_DIR`
+    — are read by GitHub and GitLab, not by a shell, so a space needs no
+    escaping there and quoting one would be cargo cult. Pinned so a future
+    "fix" does not add quotes that end up inside the matched value.
+    """
+    target = generated_spaced[deploy]
+    workflow = yaml.safe_load((target / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    pipeline = yaml.safe_load((target / _GL_PIPELINE).read_text(encoding="utf-8"))
+    values = (
+        _gh_trigger_paths(workflow)
+        + _gl_change_paths(pipeline)
+        + [workflow["env"]["CONFIG_DIR"], pipeline["variables"]["CONFIG_DIR"]]
+    )
+    assert values, "no YAML-face value carried the offset"
+    for value in values:
+        assert isinstance(value, str) and value.startswith(
+            f"{_SPACED_SUBDIR}/"), (
+            f"--deploy {deploy}: {value!r} did not come back as one scalar "
+            f"starting with {_SPACED_SUBDIR!r}/."
+        )
+        assert '"' not in value and "'" not in value, (
+            f"--deploy {deploy}: {value!r} carries a quote character. These "
+            "faces are matched literally, so a quote becomes part of the path "
+            "and the filter stops matching."
         )
 
 

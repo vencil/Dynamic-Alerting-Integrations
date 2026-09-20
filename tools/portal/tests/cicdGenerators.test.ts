@@ -283,10 +283,27 @@ describe('cicdGenerateFileTree', () => {
       ]);
   });
 
-  it.each(['helm', 'argocd'])('scaffolds NO deployment files for deploy=%s', (deploy) => {
+  it.each(['helm', 'argocd'])('scaffolds NO kustomize/ or argocd/ tree for deploy=%s', (deploy) => {
     const out = cicdGeneratedPaths(baseConfig({ deploy }));
     expect(out.filter(p => p.startsWith('kustomize/') || p.startsWith('argocd/'))).toEqual([]);
     expect(cicdGenerateFileTree(baseConfig({ deploy }))).not.toContain('argocd/');
+  });
+
+  // ⛔ Renamed from "scaffolds NO deployment files", which became false when
+  // issue 1454 B gave `--deploy helm` a values skeleton. The two trees it
+  // still promises nothing for are named in the title now, because "no
+  // deployment files" is the kind of claim that goes stale silently.
+  it('scaffolds the helm values skeleton for deploy=helm only', () => {
+    // Set equality per tenant-independent path, same discipline as the
+    // kustomize case above: an added path has to be justified against the CLI,
+    // and tests/ops/test_generated_ci_artifacts.py cross-checks both against
+    // the real run_init().
+    expect(cicdGeneratedPaths(baseConfig({ deploy: 'helm' })).filter(p => p.startsWith('environments/')))
+      .toEqual(['environments/prod/values.yaml']);
+    for (const deploy of ['kustomize', 'argocd']) {
+      expect(cicdGeneratedPaths(baseConfig({ deploy })).filter(p => p.startsWith('environments/')))
+        .toEqual([]);
+    }
   });
 
   it('draws a well-formed tree for multiple tenants', () => {

@@ -824,39 +824,7 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     """).format(tenant=tenant, declared_note=declared_note,
                 critical_note=critical_note)
 
-    tenant_config: dict = {}
-
-    # Add a few example overrides from the first rule pack. Reads the BASE tier
-    # only — before #1218 this slice ran over a mapping that still held the
-    # `_critical` keys, so `--rule-packs mariadb` spent one of its three
-    # illustrative lines on `mysql_connections_critical` for whichever pack
-    # happened to be first, and on nothing for every other pack.
-    if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
-        pack_defaults = _catalog_defaults([rule_packs[0]])
-        for k in list(pack_defaults)[:3]:
-            tenant_config[k] = str(pack_defaults[k])
-
-    # The critical tier, for EVERY selected pack — not just the first. This is
-    # the section the keys had to move to (#1218): `resolveCriticalRows`
-    # iterates tenant overrides, so a `<base>_critical` anywhere else produces
-    # no critical row. Seeded with a value rather than commented out because
-    # that is what the platform's number is FOR, and it is the same position
-    # `scaffold_tenant` takes (its prompt offers the registry value as the
-    # Enter-default, and `generate_profile` writes the `_critical` twins while
-    # deliberately dropping the flat declared keys). The customer edits or
-    # deletes them in review — they are in the customer's own file, which is
-    # exactly the tier boundary `defaults:` violated.
-    for k, v in critical.items():
-        tenant_config[k] = str(v)
-
-    # Add routing stub
-    tenant_config['_routing'] = {
-        'receiver': {
-            'type': 'webhook',
-            'url': f'https://webhook.{tenant}.example.com/alerts',
-        },
-    }
-
+    tenant_config = _tenant_override_rows(tenant, rule_packs)
     config = {'tenants': {tenant: tenant_config}}
     body = yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -868,9 +836,197 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     return append_tenant_declared_stub(header + body, declared_keys, lang='en')
 
 
+def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
+    """The override mapping `conf.d/<tenant>.yaml` carries for this run.
+
+    ⛔ Factored out of `_gen_tenant_yaml` because a SECOND artifact now names
+    the same keys. Under `--deploy helm` the chart renders its ConfigMap from
+    `thresholdConfig.tenants` and nothing feeds `conf.d/` to it, so
+    `_gen_helm_values` has to tell the customer which keys to carry across.
+    One derivation, two readers: two hand-kept copies of a key list is the
+    shape this module keeps deleting (issue 1454 B).
+
+    Add a few example overrides from the first rule pack. Reads the BASE tier
+    only — before #1218 this slice ran over a mapping that still held the
+    `_critical` keys, so `--rule-packs mariadb` spent one of its three
+    illustrative lines on `mysql_connections_critical` for whichever pack
+    happened to be first, and on nothing for every other pack.
+
+    The critical tier goes in for EVERY selected pack — not just the first.
+    This is the section the keys had to move to (#1218):
+    `resolveCriticalRows` iterates tenant overrides, so a `<base>_critical`
+    anywhere else produces no critical row. Seeded with a value rather than
+    commented out because that is what the platform's number is FOR, and it is
+    the same position `scaffold_tenant` takes (its prompt offers the registry
+    value as the Enter-default, and `generate_profile` writes the `_critical`
+    twins while deliberately dropping the flat declared keys). The customer
+    edits or deletes them in review — they are in the customer's own file,
+    which is exactly the tier boundary `defaults:` violated.
+    """
+    rows: dict = {}
+    if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
+        pack_defaults = _catalog_defaults([rule_packs[0]])
+        for k in list(pack_defaults)[:3]:
+            rows[k] = str(pack_defaults[k])
+    for k, v in _catalog_critical(rule_packs).items():
+        rows[k] = str(v)
+    rows['_routing'] = {
+        'receiver': {
+            'type': 'webhook',
+            'url': f'https://webhook.{tenant}.example.com/alerts',
+        },
+    }
+    return rows
+
+
+def _gen_helm_values(tenants: list[str], rule_packs: list[str]) -> str:
+    """Generate `environments/prod/values.yaml` — the file the helm apply reads.
+
+    ⛔ The file exists because the generated apply step already named it:
+    `helm upgrade --install … -f environments/prod/values.yaml`, with no code
+    path creating it, so the customer's first manual deploy died on `no such
+    file or directory` (issue 1454 B).
+
+    ⛔ It carries `thresholdConfig.tenants` and NOTHING ELSE, and the two
+    absences are the design:
+
+      * no `defaults:` — the chart already ships the platform's calibrated
+        numbers and a copy here deep-merges OVER them, so a later upstream
+        recalibration is silently reverted. The platform hit exactly that
+        (mysql_cpu 80→30, #944) and left the warning standing in its own
+        `environments/local/threshold-exporter.yaml`. Shipping a second copy
+        to every customer would industrialise that trap.
+      * no VALUES copied out of `conf.d/` — that would be two live copies of
+        every threshold with nothing comparing them. The keys are named in
+        comments so the customer knows exactly what to carry across and from
+        which file; the numbers stay in one place until they choose otherwise.
+
+    ⚠️ Stated rather than papered over: until the customer fills this in, a
+    `helm upgrade` deploys the chart's defaults with NO tenant overrides. That
+    is a real gap, and it is the honest one — the alternative silently ships a
+    divergent second copy. The summary step says so in words.
+
+    ⛔ NOT verified by rendering: no `helm` in this repo's test environment, so
+    nothing here proves the chart accepts this file. What IS asserted is the
+    property a render would have caught — every key set here exists in
+    `helm/threshold-exporter/values.yaml` — and even that reads the chart in
+    THIS repo while the customer's apply pulls `oci://ghcr.io/vencil/charts/
+    threshold-exporter` with no `--version`, i.e. whatever `latest` is. The
+    two can diverge and nothing here would see it.
+    """
+    # Derived, never a second list: the same call `conf.d/<tenant>.yaml` is
+    # written from, so the keys named below cannot drift away from the keys
+    # that file actually carries.
+    example_tenant = tenants[0] if tenants else 'db-a'
+    example_keys = [
+        k for k in _tenant_override_rows(example_tenant, rule_packs)
+        if k != '_routing'
+    ]
+    skeleton_lines: list[str] = []
+    for tenant in tenants:
+        skeleton_lines.append(f'  #   {tenant}:')
+        for key in example_keys:
+            skeleton_lines.append(
+                f'  #     {key}: "<the value from conf.d/{tenant}.yaml>"')
+        # `_routing` is part of the tenant's config too, so in helm mode it
+        # reaches the cluster only through this file — naming it here is the
+        # difference between "my alerts route somewhere" and silence.
+        skeleton_lines.append('  #     _routing:')
+        skeleton_lines.append('  #       receiver:')
+        skeleton_lines.append('  #         type: webhook')
+        skeleton_lines.append(
+            f'  #         url: https://webhook.{tenant}.example.com/alerts')
+    skeleton = '\n'.join(skeleton_lines)
+
+    # ⛔ The `{skeleton}` placeholder sits at the template's OWN margin, so
+    # `skeleton` must carry its own indentation for EVERY line including the
+    # first: an `.lstrip()` here left line one at column 0 while its siblings
+    # kept two spaces, and the block stopped being a child of `tenants:`. Same
+    # arithmetic as `_ci_trigger_paths_block`, and the tests parse the
+    # UNCOMMENTED result rather than trusting this sentence.
+    return textwrap.dedent("""\
+    # environments/prod/values.yaml — Helm values for threshold-exporter
+    # Generated by: da-tools init
+    #
+    # ⛔ READ THIS BEFORE EDITING conf.d/ AND EXPECTING THE DEPLOY TO CHANGE.
+    # With `--deploy helm`, THIS FILE — not `conf.d/` — is what reaches the
+    # cluster. The chart renders the `threshold-config` ConfigMap from its own
+    # `thresholdConfig` values (one `<tenant>.yaml` entry per key of
+    # `thresholdConfig.tenants`), and the generated apply step passes only
+    # `-f environments/prod/values.yaml`. Nothing feeds `conf.d/` to the chart,
+    # so a tenant override that lives ONLY in `conf.d/<tenant>.yaml` is
+    # validated by CI and never deployed.
+    #
+    # `conf.d/` is still what `da-tools validate-config`, the custom-rule lint
+    # and the blast-radius diff read, so it is not dead — it is the reviewed
+    # source of truth, and this file is the deploy face. Keeping the two in
+    # step is yours to do: this tool deliberately does NOT copy values between
+    # them, because two live copies with nothing comparing them is a
+    # silent-drift trap.
+    #
+    # ⛔ No `thresholdConfig.defaults:` here, deliberately. The chart already
+    # ships the platform's calibrated defaults; a copy in this file
+    # deep-merges OVER them, so a later upstream recalibration is silently
+    # reverted for you. Override a default only when you mean to, and re-check
+    # it on every chart upgrade.
+    #
+    # ⛔ No credentials here, ever. No kubeconfig, no tokens, no webhook
+    # secrets — wire receiver credentials through the chart's Secret reference.
+    #
+    # TO FILL IN: delete the `{{}}` after `tenants:`, then uncomment the block
+    # below by deleting `# ` — the hash AND the single space after it — from
+    # each line. The remaining indentation is already correct: a tenant lands
+    # at 4 spaces (under `tenants:`) and its keys at 6.
+    # The keys listed are the ones your `conf.d/<tenant>.yaml` already
+    # carries; copy across the values you want deployed. Until you do,
+    # `helm upgrade` deploys the chart's defaults with NO tenant overrides.
+
+    thresholdConfig:
+      tenants: {{}}
+    {skeleton}
+    """).format(skeleton=skeleton)
+
 # ============================================================
 # CI/CD Pipeline Generators (GitHub Actions / GitLab CI)
 # ============================================================
+
+# ── The subdirectory offset every generated PATH has to carry (issue 1454 C) ──
+#
+# ⛔ `-o alerting/` used to write content that still named `conf.d/**`,
+# `CONFIG_DIR: conf.d`, `/src/conf.d` and `kustomize/overlays/prod` — all of
+# which BOTH platforms resolve from the repository root, not from the file's own
+# directory. The tool warned and listed them, and a customer who prefixed
+# exactly what was printed still had a pre-commit hook that never ran (its
+# `files:` regex was not on the list). Warning is not fixing: the content is
+# parameterised now, and what remains of that step is a CHECK that nothing was
+# missed.
+#
+# ⚠️ The offset is the output directory relative to the ENCLOSING repository
+# root, and it is empty in the two cases that look different but behave the
+# same: output IS the repo root, and output is in no repo at all. Both mean
+# "repo-root-relative is already correct", which is why `_enclosing_repo_root`
+# answers `None` for both (see its own docstring).
+def _output_offset(output_dir: str) -> str:
+    """The prefix generated content needs so its paths resolve from the root.
+
+    Empty string when no prefix is needed — callers can then pass it through
+    `_offset_path` unconditionally instead of branching at every site, which is
+    what keeps a new site from quietly forgetting the offset.
+    """
+    repo_root = _enclosing_repo_root(output_dir)
+    if repo_root is None:
+        return ''
+    try:
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+    except (OSError, ValueError):
+        return ''
+    return '' if rel == Path('.') else rel.as_posix()
+
+
+def _offset_path(offset: str, path: str) -> str:
+    """Join `offset` onto a repo-root-relative path. No offset → unchanged."""
+    return f'{offset}/{path}' if offset else path
+
 
 # ── Which trees the CI triggers must watch (SSOT for BOTH legs) ──────────
 #
@@ -935,6 +1091,7 @@ def _ci_trigger_trees(
 
 def _ci_trigger_paths_block(
     trees: tuple[str, ...], suffix: str, indent: str, quote: str = '',
+    offset: str = '',
 ) -> str:
     """Render one YAML list of trigger globs, at its FINAL indentation.
 
@@ -948,12 +1105,17 @@ def _ci_trigger_paths_block(
     RESULT rather than trusting any literal.
     """
     return textwrap.indent(
-        '\n'.join(f'- {quote}{tree}{suffix}{quote}' for tree in trees),
+        '\n'.join(
+            f'- {quote}{_offset_path(offset, tree)}{suffix}{quote}'
+            for tree in trees
+        ),
         indent,
     )
 
 
-def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
+def _build_github_apply_stage(
+    deploy_method: str, namespace: str, offset: str = '',
+) -> str:
     """Build GitHub Actions apply stage, as a COLUMN-0 block.
 
     ⛔ Contract with _gen_github_actions: every branch below returns a block
@@ -996,7 +1158,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
               # --load-restrictor: conf.d files are symlinked into
               # kustomize/base/, and the default restrictor refuses a
               # symlink whose target sits outside that directory.
-              kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml
+              kustomize build --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
           - name: Apply to cluster (dry-run first)
             run: |
               kubectl apply --dry-run=server -f /tmp/manifests.yaml
@@ -1005,7 +1167,9 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
           - name: Reload Prometheus
             run: |
               kubectl rollout restart deployment/prometheus -n ${{{{ env.MONITORING_NS }}}}
-    """).format(namespace=namespace)
+    """).format(namespace=namespace,
+                kustomize_overlay=_offset_path(
+                    offset, 'kustomize/overlays/prod'))
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
@@ -1024,10 +1188,11 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
             run: |
               helm upgrade --install threshold-exporter \\
                 oci://ghcr.io/vencil/charts/threshold-exporter \\
-                -f environments/prod/values.yaml \\
+                -f "{helm_values}" \\
                 -n ${{{{ env.MONITORING_NS }}}} \\
                 --wait --timeout 5m
-    """).format(namespace=namespace)
+    """).format(namespace=namespace,
+                helm_values=_offset_path(offset, _HELM_VALUES_REL.as_posix()))
 
     else:  # argocd
         # ⛔ `container:`, not a bare `run:`. `ubuntu-latest` carries helm,
@@ -1073,6 +1238,7 @@ def _gen_github_actions(
     *,
     config_source: str = 'configmap',
     git_repo: str = '',
+    offset: str = '',
 ) -> str:
     """Generate GitHub Actions workflow for Dynamic Alerting CI/CD.
 
@@ -1080,6 +1246,15 @@ def _gen_github_actions(
     defaults: they reach the `on.paths` filter through `_ci_trigger_trees`, and
     a caller that omits them gets the non-GitOps tree set rather than a
     silently wider one.
+
+    `offset` is the subdirectory prefix every repo-root-relative path in the
+    OUTPUT needs (issue 1454 C): `on.paths`, `CONFIG_DIR`, the custom-rule
+    tree and the apply stage's own paths. Empty means the install is at the
+    repository root, which is the shape every path in this template is written
+    for. ⛔ Passed through `_offset_path` at every site rather than branched on
+    once, because the failure mode of the old code was a site nobody
+    remembered — and the remaining ones are graded from the artifact by
+    tests/ops/test_generated_ci_artifacts.py, not from this docstring.
     """
     # ⛔ Six spaces, and the arithmetic is stated rather than counted by eye:
     # this template's common margin is 4, so `on:` lands at column 0 after
@@ -1088,7 +1263,7 @@ def _gen_github_actions(
     # `_ci_trigger_paths_block` for why it cannot sit at column 0).
     trigger_paths = _ci_trigger_paths_block(
         _ci_trigger_trees(deploy_method, config_source, git_repo),
-        suffix='/**', indent=' ' * 6, quote="'",
+        suffix='/**', indent=' ' * 6, quote="'", offset=offset,
     )
     # ⛔ Indent the apply block IN CODE, not by hand-matching two templates.
     #
@@ -1115,7 +1290,7 @@ def _gen_github_actions(
     # margin (i.e. column 0 after dedent); the two spaces added here are the
     # ONLY thing placing `apply:` at the same level as `validate:`/`generate:`.
     apply_stage = textwrap.indent(
-        _build_github_apply_stage(deploy_method, namespace), '  ',
+        _build_github_apply_stage(deploy_method, namespace, offset), '  ',
     )
 
     return textwrap.dedent("""\
@@ -1201,7 +1376,7 @@ def _gen_github_actions(
 
     env:
       DA_TOOLS_IMAGE: {da_tools_image}
-      CONFIG_DIR: conf.d
+      CONFIG_DIR: {config_dir}
       {monitoring_ns_env}
 
     jobs:
@@ -1224,15 +1399,15 @@ def _gen_github_actions(
                 exit 1
               fi
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 validate-config --config-dir /data/conf.d
 
           - name: Lint custom rules (if any)
             run: |
-              if [ -d "rule-packs/custom" ]; then
+              if [ -d "{rule_packs_custom}" ]; then
                 docker run --rm \\
-                  -v ${{{{ github.workspace }}}}/rule-packs/custom:/data/rules:ro \\
+                  -v "${{{{ github.workspace }}}}/{rule_packs_custom}:/data/rules:ro" \\
                   ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                   lint /data/rules --ci
               fi
@@ -1282,7 +1457,7 @@ def _gen_github_actions(
               # `--user` override to fix; the config-diff step below writes
               # on the HOST via a shell redirect.
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 generate-routes --config-dir /data/conf.d --validate
 
@@ -1417,8 +1592,8 @@ def _gen_github_actions(
               # HOST redirect below lands it in .output/. A writable output
               # mount used to ride along here too, unused.
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro" \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
                   --format markdown > .output/blast-radius.md
@@ -1455,6 +1630,17 @@ def _gen_github_actions(
         da_tools_image=da_tools_image,
         namespace=namespace,
         apply_stage=apply_stage,
+        # ⛔ issue 1454 C. `CONFIG_DIR` is the ONE value the two docker mounts
+        # and the base-commit extraction all read, so offsetting it here moves
+        # `-v ${{ github.workspace }}/${{ env.CONFIG_DIR }}`, `git read-tree
+        # "$BASE_SHA:$config_dir"` and `--prefix=.output/base/"$config_dir"/`
+        # together — three sites, one substitution, no chance of two of them
+        # agreeing and the third not.
+        config_dir=_offset_path(offset, 'conf.d'),
+        # The custom-rule tree is named twice in one step (the `-d` guard and
+        # the mount) and they must agree, or the step mounts a path it just
+        # proved absent.
+        rule_packs_custom=_offset_path(offset, 'rule-packs/custom'),
         # Substituted TWICE (pull_request and push). One value, so
         # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` holds
         # structurally rather than by two lists happening to agree.
@@ -1478,7 +1664,9 @@ def _gen_github_actions(
     )
 
 
-def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
+def _build_gitlab_apply_stage(
+    deploy_method: str, namespace: str, offset: str = '',
+) -> str:
     """Build GitLab CI apply stage based on deployment method.
 
     The runner image is emitted as `$VAR`, never as a literal ref: the pin
@@ -1535,12 +1723,14 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
         # --load-restrictor: conf.d files are symlinked into kustomize/base/,
         # and the default restrictor refuses a symlink whose target sits
         # outside that directory.
-        - kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml
+        - kustomize build --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n $MONITORING_NS
     """).format(namespace=namespace, image_var=image_var,
-                  stage_no=stage_no)
+                  stage_no=stage_no,
+                  kustomize_overlay=_offset_path(
+                      offset, 'kustomize/overlays/prod'))
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
@@ -1581,11 +1771,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
         - |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter \\
-            -f environments/prod/values.yaml \\
+            -f "{helm_values}" \\
             -n $MONITORING_NS \\
             --wait --timeout 5m
     """).format(namespace=namespace, image_var=image_var,
-                  stage_no=stage_no)
+                  stage_no=stage_no,
+                  helm_values=_offset_path(
+                      offset, _HELM_VALUES_REL.as_posix()))
 
     else:  # argocd
         return textwrap.dedent("""\
@@ -1636,6 +1828,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
 # that lies; naming them once removes that whole class.
 _GH_WORKFLOW_REL = Path('.github') / 'workflows' / 'dynamic-alerting.yaml'
 _GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
+
+# ⛔ Named here rather than spelled in three places, for the same reason the CI
+# paths are: BOTH apply stages already hard-code this path in their `helm
+# upgrade -f` line, `_preview_files` has to promise it, and `run_init` has to
+# write it. Issue 1454 B was the gap between the first of those and the other
+# two. `--deploy helm` only.
+_HELM_VALUES_REL = Path('environments') / 'prod' / 'values.yaml'
 
 # ⛔ #1357. GitLab auto-loads exactly ONE path per project — the repository
 # root `.gitlab-ci.yml`. Everything else, including our
@@ -1798,7 +1997,23 @@ _GENERATED_TREES = ('conf.d', 'rule-packs', 'kustomize', 'environments')
 _ROOT_RELATIVE_CI_KEYS = ('paths', 'changes', 'exists', 'CONFIG_DIR')
 
 
-def _root_relative_ci_paths(path: Path) -> list[str]:
+def _tree_prefixes(offset: str) -> tuple[str, ...]:
+    """Prefixes that mark a bare token inside a shell body as a repo path.
+
+    ⛔ Both forms, deliberately: the offset-prefixed spelling (what a
+    subdirectory install now emits) AND the bare one. Recognising only the
+    offset form would make a leftover root-relative path invisible to the
+    extractor, and the summary's check would then report "nothing left to fix"
+    because it could not SEE the thing that is broken — the failure mode issue
+    1454 C exists to remove, reappearing one level up.
+    """
+    if not offset:
+        return _GENERATED_TREES
+    return _GENERATED_TREES + tuple(
+        _offset_path(offset, tree) for tree in _GENERATED_TREES)
+
+
+def _root_relative_ci_paths(path: Path, offset: str = '') -> list[str]:
     """Every repo-root-relative path a generated CI file resolves.
 
     TWO sources, because the structured keys are only half of it:
@@ -1875,7 +2090,8 @@ def _root_relative_ci_paths(path: Path) -> list[str]:
                                 if tok.startswith('#'):
                                     break
                                 tok = tok.strip(',;()`.')
-                                if tok.startswith(_GENERATED_TREES) and '/' in tok:
+                                if tok.startswith(_tree_prefixes(offset)) \
+                                        and '/' in tok:
                                     found.append(tok)
                 else:
                     _walk_scripts(value)
@@ -1885,6 +2101,62 @@ def _root_relative_ci_paths(path: Path) -> list[str]:
 
     _walk(doc)
     _walk_scripts(doc)
+    return sorted(dict.fromkeys(found))
+
+
+def _precommit_root_relative_paths(path: Path) -> list[str]:
+    """Repo-root-relative paths the generated pre-commit snippet resolves.
+
+    ⛔ This artifact exists in this function because it was MISSING from the
+    subdirectory summary (issue 1454 C, and the comment on that issue found
+    it). The old step enumerated "the CI files", so a customer who prefixed
+    every path it printed got working CI and a commit-time hook that stayed
+    `Skipped` forever at rc 0 — the same "green having validated nothing"
+    shape, one layer left of CI.
+
+    Two faces, and they resolve from different roots:
+      * `files:` is a regex matched against repository-root-relative paths, so
+        the anchored literal prefix is the repo path;
+      * `--config-dir` is /src-relative, because `language: docker_image` makes
+        pre-commit mount the repo root at `/src`
+        (`_PRECOMMIT_REPO_MOUNT`). Stripping that mount turns it back into a
+        repo path, which is the only form comparable with the other face.
+
+    ⚠️ The regex reader handles the one shape this generator emits — `^<literal
+    prefix>/` with `re.escape`-style backslashes — and returns nothing for
+    anything else rather than guessing. A future `files:` this cannot read is
+    reported as "no paths", so the caller sees nothing to fix; that is the
+    fail-open direction, and it is why the shape is also pinned by a test
+    against the generator's own output rather than left to this reader alone.
+    """
+    try:
+        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+    except (OSError, yaml.YAMLError):
+        return []
+    found: list[str] = []
+    for repo_entry in (doc or {}).get('repos') or []:
+        for hook in (repo_entry or {}).get('hooks') or []:
+            regex = str((hook or {}).get('files') or '')
+            # The LITERAL run after `^`, up to the first regex metacharacter.
+            # `\.` counts as a literal dot (that is how `conf.d` is spelled
+            # once `re.escape` has been through it), and a bare `.` ends the
+            # run. An earlier version stopped at the first `/` instead and
+            # reported `alerting` for `^alerting/conf\.d/...` — the offset
+            # itself, which is always prefixed and therefore always looked
+            # clean. A reader that cannot fail is not a check.
+            match = re.match(r'^\^((?:[^\\.*+?()\[\]{}|^$]|\\.)+)', regex)
+            if match:
+                literal = re.sub(r'\\(.)', r'\1', match.group(1))
+                if '/' in literal:
+                    found.append(literal.rstrip('/'))
+            entry = str((hook or {}).get('entry') or '')
+            tokens = entry.split()
+            for i, token in enumerate(tokens):
+                if token == '--config-dir' and i + 1 < len(tokens):
+                    value = tokens[i + 1]
+                    mount = f'{_PRECOMMIT_REPO_MOUNT}/'
+                    if value.startswith(mount):
+                        found.append(value[len(mount):])
     return sorted(dict.fromkeys(found))
 
 
@@ -2097,14 +2369,22 @@ def _gen_gitlab_ci(
     *,
     config_source: str = 'configmap',
     git_repo: str = '',
+    offset: str = '',
 ) -> str:
     """Generate GitLab CI pipeline for Dynamic Alerting CI/CD.
 
     `config_source` / `git_repo` are keyword-only and default to the CLI's own
     defaults — same contract as `_gen_github_actions`, and the same
     `_ci_trigger_trees` call, so the two legs cannot name different trees.
+
+    `offset` (issue 1454 C) prefixes every repo-root-relative path in the
+    output. GitLab's own docs say it of both keys this file gates on: "Paths
+    are relative to the project directory (`$CI_PROJECT_DIR`)" — for
+    `rules:changes` AND `rules:exists` — so a subdirectory install without the
+    prefix creates no job and the merge request is green having validated
+    nothing.
     """
-    apply_stage = _build_gitlab_apply_stage(deploy_method, namespace)
+    apply_stage = _build_gitlab_apply_stage(deploy_method, namespace, offset)
     apply_image_var, apply_image_ref = _gitlab_apply_image(deploy_method)
     # ⛔ Eight spaces: this template's common margin is 4, so `validate-config:`
     # lands at column 0 after `dedent`, `rules:` at 2, `- changes:` at 4 and its
@@ -2119,7 +2399,7 @@ def _gen_gitlab_ci(
     # `**` crosses `/` and GitLab's does not — while the tree set does not.
     trigger_changes = _ci_trigger_paths_block(
         _ci_trigger_trees(deploy_method, config_source, git_repo),
-        suffix='/**/*', indent=' ' * 8,
+        suffix='/**/*', indent=' ' * 8, offset=offset,
     )
 
     return textwrap.dedent("""\
@@ -2141,7 +2421,7 @@ def _gen_gitlab_ci(
       # Apply-stage runner image. Pinned to a version tag we verified resolves;
       # override it here (not in the job) to track your own cluster / Helm line.
       {apply_image_var}: {apply_image_ref}
-      CONFIG_DIR: conf.d
+      CONFIG_DIR: {config_dir}
       {monitoring_ns_var}
 
     # ── Stage 1: Validate ────────────────────────────────────
@@ -2189,9 +2469,9 @@ def _gen_gitlab_ci(
         # error, no red, just a governance gate that quietly is not there.
         # A pattern glob is matched with fnmatch over every path instead.
         - changes:
-            - rule-packs/custom/**/*
+            - {custom_rules_glob}
           exists:
-            - rule-packs/custom/**/*
+            - {custom_rules_glob}
       # ⛔ NO `allow_failure:`. `da-tools lint --ci` exits non-zero on ERROR
       # only (lint_custom_rules.py: `if args.ci and errors`), and its ERRORs are
       # the governance deny-list on tenant-authored raw PromQL — denied
@@ -2206,7 +2486,7 @@ def _gen_gitlab_ci(
       # Swallowing it here made one leg of a pair, and the customer's own repo,
       # weaker than the platform holds itself to.
       script:
-        - da-tools lint rule-packs/custom/ --ci
+        - da-tools lint "{rule_packs_custom}/" --ci
 
     # ── Blast-radius (config-diff) is NOT emitted on this platform yet ──
     #
@@ -2233,6 +2513,13 @@ def _gen_gitlab_ci(
         da_tools_image=da_tools_image,
         namespace=namespace,
         trigger_changes=trigger_changes,
+        # issue 1454 C — same three values as the GitHub leg, in GitLab's own
+        # spellings. `custom_rules_glob` is substituted TWICE (`changes:` and
+        # `exists:`): one value, because a miss on `exists:` is ANDed with
+        # `changes:` and makes the governance job simply not exist.
+        config_dir=_offset_path(offset, 'conf.d'),
+        rule_packs_custom=_offset_path(offset, 'rule-packs/custom'),
+        custom_rules_glob=_offset_path(offset, 'rule-packs/custom/**/*'),
         apply_image_var=apply_image_var,
         apply_image_ref=apply_image_ref,
         # Same rule as the GitHub leg: declare the knob only where a script
@@ -2420,7 +2707,15 @@ def _gen_kustomize_overlay(env_name: str, namespace: str) -> str:
     )
 
 
-def _gen_precommit_snippet(da_tools_image: str) -> str:
+# Where pre-commit mounts the repository for a `language: docker_image` hook.
+# Not a choice of ours: `pre_commit/languages/docker.py` builds the `docker run`
+# itself with `-v <cwd>:/src:rw,Z --workdir /src`, and its cwd is the repository
+# root. Named here so the generated `--config-dir` and this module's docstrings
+# spell it once.
+_PRECOMMIT_REPO_MOUNT = '/src'
+
+
+def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
     """Generate .pre-commit-config.yaml snippet.
 
     ⛔ Takes the image as an argument. It used to hardcode
@@ -2428,7 +2723,29 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
     `--da-tools-image registry.internal/da-tools:v2.9.0` still got a snippet
     pointing back at ghcr.io — silently ignoring the flag on the one artifact
     that runs on every developer's laptop (#1337 ④).
+
+    ⛔ `offset` (issue 1454 C). This was the artifact the subdirectory remedy
+    FORGOT: the summary listed the two CI files' paths and told the customer to
+    prefix "each of them", and this file was not among them — so someone who
+    obeyed the remedy exactly got CI running and a commit-time hook that stayed
+    `Skipped` forever, rc 0. Both halves need the prefix:
+      * `files:` is matched against repository-root-relative paths (pre-commit
+        runs at the repo root), so `^conf\.d/` matches nothing under
+        `alerting/`;
+      * `--config-dir` is /src-relative because `language: docker_image` makes
+        pre-commit mount the repo — its own cwd — at `/src`, so the config
+        directory inside the container is `/src/<offset>/conf.d`.
+    ⚠️ The `files:` half is measured (the regex against a real path); the
+    `/src` half is read off pre-commit's documented mount
+    (`pre_commit/languages/docker.py`), not from a container run — there is no
+    registry egress here to pull the image with.
     """
+    config_dir = _offset_path(offset, 'conf.d')
+    # Built from the same value the entry uses, so the two cannot disagree
+    # about where the config lives. `re.escape` leaves `/` alone and turns the
+    # dot of `conf.d` into `\.`, which is the escaping the original literal
+    # spelled by hand.
+    files_regex = rf"^{re.escape(config_dir)}/.*\.ya?ml$"
     return (
         "# Dynamic Alerting pre-commit hooks\n"
         "# Generated by: da-tools init\n"
@@ -2467,9 +2784,9 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
         "        name: Validate Dynamic Alerting config\n"
         "        entry: >-\n"
         f"          {da_tools_image}\n"
-        "          validate-config --config-dir /src/conf.d\n"
+        f'          validate-config --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}"\n'
         "        language: docker_image\n"
-        "        files: ^conf\\.d/.*\\.ya?ml$\n"
+        f"        files: {files_regex}\n"
         "        pass_filenames: false\n"
         "\n"
         "      - id: da-generate-routes\n"
@@ -2479,9 +2796,9 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
         # #1650: `--dry-run` is never read under `--validate` (the validate
         # path returns before the render step) and the tool now exits 2 on
         # that combination rather than ignoring half of it.
-        "          generate-routes --config-dir /src/conf.d --validate\n"
+        f'          generate-routes --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}" --validate\n'
         "        language: docker_image\n"
-        "        files: ^conf\\.d/.*\\.ya?ml$\n"
+        f"        files: {files_regex}\n"
         "        pass_filenames: false\n"
     )
 
@@ -2718,6 +3035,11 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
         # `--dry-run` exists to settle.
         if _gitlab_root_shell_is_needed(output_dir):
             _add(out / _GL_ROOT_SHELL_REL)
+    if deploy == 'helm':
+        # issue 1454 B. Conditional on `--deploy helm` because it is the helm
+        # apply step that reads it; kustomize mounts conf.d/ through its
+        # configMapGenerator and argocd reads no repository path at all.
+        _add(out / _HELM_VALUES_REL)
     if deploy == 'kustomize':
         _add(out / 'kustomize' / 'base' / 'kustomization.yaml')
         _add(out / 'kustomize' / 'base' / 'README.md')
@@ -2770,6 +3092,10 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     git_branch = config.get('git_branch', 'main')
     git_path = config.get('git_path', 'conf.d')
     git_period = config.get('git_period', 60)
+    # issue 1454 C. Computed ONCE per run and threaded into every generator
+    # that emits a repo-root-relative path. Empty for a root install, which is
+    # every path in those templates' native shape.
+    offset = _output_offset(output_dir)
 
     # ── 1. conf.d/ ─────────────────────────────────────────
     out = Path(output_dir)
@@ -2795,6 +3121,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             _gen_github_actions(
                 namespace, da_tools_image, deploy,
                 config_source=config_source, git_repo=git_repo,
+                offset=offset,
             ),
             created,
         )
@@ -2805,6 +3132,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             _gen_gitlab_ci(
                 namespace, da_tools_image, deploy,
                 config_source=config_source, git_repo=git_repo,
+                offset=offset,
             ),
             created,
         )
@@ -2822,6 +3150,17 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             )
 
     # ── 3. Kustomize overlays ──────────────────────────────
+    # ── 2b. environments/prod/values.yaml (--deploy helm) ──
+    # issue 1454 B: both apply stages already passed `-f
+    # environments/prod/values.yaml` and no code path created it, so the
+    # customer's first manual deploy died on `no such file or directory`.
+    if deploy == 'helm':
+        _write_file(
+            str(out / _HELM_VALUES_REL),
+            _gen_helm_values(tenants, rule_packs),
+            created,
+        )
+
     if deploy == 'kustomize':
         kust_base = out / 'kustomize' / 'base'
         _write_file(
@@ -2902,7 +3241,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 4. Pre-commit config ───────────────────────────────
     _write_file(
         str(out / '.pre-commit-config.da.yaml'),
-        _gen_precommit_snippet(da_tools_image),
+        _gen_precommit_snippet(da_tools_image, offset),
         created,
     )
 
@@ -3015,10 +3354,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
         'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
                       'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
                       'conf.d/ linked into kustomize/base/ (the step above)'),
+        # ⛔ Reworded by issue 1454 B, and the distinction is the whole point:
+        # the file IS generated now, but it ships with `thresholdConfig.tenants`
+        # EMPTY. "The tool does not create it" became false while the
+        # prerequisite stayed real, and a sentence that goes stale in the safe
+        # direction is the one nobody re-reads.
         'helm': ('helm', 'KUBECONFIG',
-                 'environments/prod/values.yaml —— 本工具不會產生它',
-                 'environments/prod/values.yaml, which this tool does not '
-                 'generate'),
+                 'environments/prod/values.yaml 的 thresholdConfig.tenants '
+                 '已填好——本工具產生骨架但不填任何租戶覆寫',
+                 'thresholdConfig.tenants filled in in '
+                 'environments/prod/values.yaml — this tool generates the '
+                 'skeleton but no tenant override'),
         'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
                    "一個名為 'dynamic-alerting' 的 ArgoCD Application"
                    '—— 本工具不會建立它',
@@ -3292,11 +3638,19 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     # That is #1357's outcome reached by obeying our own remedy, so the remedy
     # has to carry this half too.
     #
-    # ⚠️ Deliberately a statement of work remaining, not a paste-ready patch:
-    # rewriting a customer's path filters for them is the class of edit the
-    # `include:` work spent three rounds learning not to hand out blind.
-    # Parameterising the generated CONTENT on the subdirectory offset is a
-    # separate change (tracked), not something to half-do in a print().
+    # ⛔ issue 1454 C CHANGED WHAT THIS STEP IS. The contents are parameterised
+    # on the offset now, so the honest step is no longer "here is your
+    # homework" but "here is the check". It lists the paths that are STILL
+    # root-relative — which should be none — and says so in one line when the
+    # list is empty. Keeping the step rather than deleting it is the point: a
+    # future site that forgets `_offset_path` shows up here instead of shipping
+    # a filter that matches nothing, and `_tree_prefixes` recognises BOTH
+    # spellings precisely so a missed one stays visible.
+    #
+    # ⚠️ Still not a paste-ready patch for anything it does find: rewriting a
+    # customer's own edits is the class of change the `include:` work spent
+    # three rounds learning not to hand out blind. What this tool wrote, it
+    # now writes correctly; what it finds beyond that, it names.
     # ⛔ Whether this step PRINTED is the only honest input to the closing
     # line. `gl_needs_manual` answers "is the include still to be pasted",
     # which is a different question: on `--ci gitlab` into a subdirectory of
@@ -3310,16 +3664,50 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     subdir_work_pending = False
     if gl_in_subdir:
         rel = Path(output_dir).resolve().relative_to(repo_root)
+        offset = rel.as_posix()
         targets = []
         if ci_sel in ('github', 'both'):
             targets.append(_GH_WORKFLOW_REL)
         if ci_sel in ('gitlab', 'both'):
             targets.append(_GL_PIPELINE_REL)
+        # The generated artifacts are not the only ones carrying repo-root
+        # paths — `.pre-commit-config.da.yaml` was the one the old enumeration
+        # missed, and the whole reason that summary could be obeyed to the
+        # letter and still leave a hook permanently Skipped. It is derived here
+        # from its own file rather than re-listed, same as the CI pair.
+        precommit_paths = _precommit_root_relative_paths(
+            Path(output_dir) / '.pre-commit-config.da.yaml')
         listed = []
         for rel_path in targets:
-            values = _root_relative_ci_paths(Path(output_dir) / rel_path)
+            values = [
+                v for v in _root_relative_ci_paths(
+                    Path(output_dir) / rel_path, offset)
+                if not v.startswith(f'{offset}/')
+            ]
             if values:
                 listed.append(((rel / rel_path).as_posix(), values))
+        stale_precommit = [
+            v for v in precommit_paths if not v.startswith(f'{offset}/')
+        ]
+        if stale_precommit:
+            listed.append((
+                (rel / '.pre-commit-config.da.yaml').as_posix(),
+                stale_precommit,
+            ))
+        if not listed:
+            if is_zh:
+                print(f"  {step}. ✅ 產生出來的內容已經以 `{offset}/` 為基準"
+                      f"寫好了（path filter、`CONFIG_DIR`、docker mount、"
+                      f"apply 路徑、pre-commit 的 `files:` 與 `--config-dir`"
+                      f"），沒有需要你自己補前綴的路徑。")
+            else:
+                print(f"  {step}. ✅ The generated CONTENTS are already written "
+                      f"relative to `{offset}/` (path filters, `CONFIG_DIR`, "
+                      f"the docker mounts, the apply paths, and pre-commit's "
+                      f"`files:` / `--config-dir`). Nothing left for you to "
+                      f"prefix.")
+            print()
+            step += 1
         if listed:
             if is_zh:
                 print(f"  {step}. ⚠️ 還沒完：產生出來的 pipeline **內容**是以 "
