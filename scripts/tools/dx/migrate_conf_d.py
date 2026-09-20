@@ -83,7 +83,7 @@ def plan_migration(conf_d: Path) -> list[dict]:
     """
     actions = []
 
-    # #1339: flat read — a hierarchical conf.d must not look empty.
+    # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(conf_d, tool="migrate_conf_d")
     for fp in sorted(conf_d.iterdir()):
         if fp.is_dir():

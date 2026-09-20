@@ -38,7 +38,7 @@ def _collect_data(config_dir: str) -> dict:
     tenant_ids: set[str] = set()
     profile_refs: dict[str, str] = {}  # tenant → profile name
 
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="check_routing_profiles")
 

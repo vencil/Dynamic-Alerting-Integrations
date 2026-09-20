@@ -274,7 +274,7 @@ def tenant_is_queryable(tenant):
 
     ⛔ Filtering at ONE point, for all three change sources, is deliberate.
     Guarding only the `--git-diff` path would leave the two enumerators
-    answering differently about the same carrier -- which is the #1339 shape
+    answering differently about the same carrier -- which is the #1911 shape
     this whole chain exists to remove, and which this chain has already
     produced three times by fixing one path of a pair. The `--config-dir`
     half therefore changes behaviour too: crash becomes a named skip. That is
@@ -447,7 +447,7 @@ def _confd_entries(root: Path) -> list:
     the one call site that cannot use that function (it needs the ENTRIES,
     not the unusable ones).
     """
-    # ⛔ The #1339 guard lives HERE, not at the two call sites, and
+    # ⛔ The #1911 guard lives HERE, not at the two call sites, and
     # `test_confd_enumeration_contract` is what moved it: a flat scan and
     # the warning that a hierarchical conf.d is not empty must be in the
     # same scope, or a refactor can carry the scan away from its guard.
@@ -601,7 +601,7 @@ def changed_conf_files():
     #             ['conf.d/.hidden.yaml', 'conf.d/real.yaml']
     #
     # — i.e. "that carrier exists" and "its change does not", from the same
-    # process, about the same file. That is the #1339 shape produced inside
+    # process, about the same file. That is the #1911 shape produced inside
     # the change that exists to remove it, and blind review had already
     # caught the identical split one code path over (`--config-dir`); this
     # is the sibling path that fix did not reach.
@@ -618,7 +618,7 @@ def changed_conf_files():
     # This listing sees carriers that the diff parser above drops (it drops a
     # quoted or tab-padded header and says so). So the tool can answer "that
     # carrier changed" here while answering "it has no threshold change"
-    # there — the #1339 shape, in one process, about one file.
+    # there — the #1911 shape, in one process, about one file.
     #
     # Measured on both trees, one carrier per arm:
     #
@@ -1110,7 +1110,7 @@ def generate_markdown(report):
 def _exit_unreadable_conf(exc, args):
     """#1654: a conf.d file whose CONTENT cannot be read → rc 2, file named.
 
-    The content axis of #1339 (the name axis is #1634): a pure-ASCII
+    The content axis of #1911 (the name axis is #1634): a pure-ASCII
     ``db-a.yaml`` with one ``\\xff`` byte used to escape ``load_conf_files``
     as a ``UnicodeDecodeError`` traceback — rc 1, and 0 bytes of stdout under
     ``--json``. Not the shared ``exit_on_yaml_file_error`` wrapper, because

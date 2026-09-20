@@ -72,7 +72,7 @@ def _file_record(origin: str, reason: str) -> dict:
     ⛔ Two callers now build these — the malformed-YAML quarantine below and
     the unusable-entry report in `collect_instances` (#1607). A second hand
     written literal is how a consumer ends up switching on a key one of them
-    forgot, which is the #1339 shape reproduced inside its own fix.
+    forgot, which is the #1911 shape reproduced inside its own fix.
 
     ⚠️ NOT `_skip_record`, which this was first called: that name is already
     taken further down for one quarantined RECIPE (tenant + instance), a

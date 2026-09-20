@@ -75,7 +75,7 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     Decoding is STRICT UTF-8, exactly what the text-mode ``open`` did, so
     the accepted encodings are unchanged: this helper must not start
     serving (say) UTF-16 while ``validate_config``'s own reads and the
-    routes generator still refuse it — that would be #1339's "one input,
+    routes generator still refuse it — that would be #1911's "one input,
     two answers" inside the Python tool family (blind review). Whether the
     family should follow the exporter's parser on other encodings is a
     separate decision. The decoded text is parsed from a named stream so
@@ -138,7 +138,7 @@ def iter_yaml_files(
     the entry name before testing ``.yaml`` / ``.yml``, so it reads
     ``upper.YAML`` and merges it into the config it serves. An exact-suffix
     test here made that file invisible — not reported, simply absent — which
-    is #1339's divergence with the extension as the axis rather than
+    is #1911's divergence with the extension as the axis rather than
     directory depth. Nothing here greps the Go source (#1448 measured that a
     Python guard asserting things about Go source text goes red on
     legitimate Go refactors while stating the opposite of the truth); the
@@ -164,7 +164,7 @@ def iter_yaml_files(
     base = Path(config_dir)
     if not base.is_dir():
         return []
-    # #1339: flat read — a hierarchical conf.d must not look empty.
+    # #1911: flat read — a hierarchical conf.d must not look empty.
     # tool= omitted on purpose: this helper is reached from several
     # entry points, so the message should name the command the
     # operator ran, not this function.

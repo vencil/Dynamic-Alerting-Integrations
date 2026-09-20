@@ -1,7 +1,7 @@
 package batchpr
 
 // confd_name_classification_parity_test.go — the WRITE-PLANE half of the
-// cross-language conf.d name-classification pin (#1605, the #1339 family).
+// cross-language conf.d name-classification pin (#1605, the #1911 family).
 //
 // The two halves that already exist (threshold-exporter's
 // confd_name_classification_parity_test.go and tenant-api's
@@ -21,7 +21,7 @@ package batchpr
 // CARRIERS: the PR it picks is the PR that commits them into the tree the
 // exporter reads. So a carrier this allocator sends to the wrong PR — or drops
 // — is a carrier whose fate disagrees with what the exporter would do with the
-// very same name. That is the #1339 shape (one tree, several enumerators,
+// very same name. That is the #1911 shape (one tree, several enumerators,
 // different selection rules, silent divergence) on the WRITE side, where the
 // consequence is not a stale report but a threshold change that never reaches
 // production, or one committed into a file production ignores.
@@ -124,7 +124,7 @@ func loadConfdNameMatrix(t *testing.T) []confdNameRow {
 	if len(doc.Rows) < minConfdMatrixRows {
 		t.Fatalf("matrix shrank to %d rows (floor %d) — this allocator would still be "+
 			"compared against a table, and the comparison would prove nothing: the "+
-			"empty-set silence #1339 and #1537 are both about",
+			"empty-set silence #1911 and #1537 are both about",
 			len(doc.Rows), minConfdMatrixRows)
 	}
 	return doc.Rows

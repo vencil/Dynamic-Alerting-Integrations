@@ -797,8 +797,8 @@ def test_config_diff_declares_what_it_cannot_compare(tmp_path) -> None:
 
     ⚠️ The disclosure is emitted by the WORKFLOW rather than by
     `config_diff.py`, because the step runs a pinned published image and no
-    released `tools/v*` tag contains `_lib_confd.warn_nested` (#1339). Fixing repo
-    source would not reach CI.
+    released `tools/v*` tag contains `_lib_confd.warn_nested` (added in
+    PR #1343; conf.d family #1911). Fixing repo source would not reach CI.
     """
     repo = _base_repo(tmp_path)
     # ⛔ Flatten the BASE REF first, before anything the PR is supposed to own.

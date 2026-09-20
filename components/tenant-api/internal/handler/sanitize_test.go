@@ -106,7 +106,7 @@ func TestValidateTenantID_AcceptedIDsAreTenantFiles(t *testing.T) {
 // it was reaching for is asserted here instead: whatever this function accepts,
 // the predicate the write plane gates on must accept too, and vice versa. A
 // divergence in EITHER direction means the write-accepted id namespace and the
-// scanned-file namespace have come apart, which is the #1339 family shape.
+// scanned-file namespace have come apart, which is the #1911 family shape.
 func TestValidateTenantIDAgreesWithTheSharedPredicate(t *testing.T) {
 	corpus := []string{
 		"", "db-a", "Upper", "a/b", `a\b`, "..", "../x", "a/../b", "a..b", "...",

@@ -1801,7 +1801,7 @@ class TestUnwatchedHalvesFoundByMutation:
     def test_two_files_with_the_same_name_at_different_depths(self, tmp_path):
         """⛔ The relative-path label had no fixture.
 
-        Since #1339 the scan is recursive, so two levels can hold the same
+        Since PR #1343 (conf.d family #1911) the scan is recursive, so two levels can hold the same
         `_defaults.yaml`; a bare filename makes the report name the same
         thing twice and the reader cannot tell which one to open.
         """

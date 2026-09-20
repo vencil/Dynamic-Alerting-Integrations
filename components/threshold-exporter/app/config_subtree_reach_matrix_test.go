@@ -7,8 +7,9 @@ package main
 // reviewer happened to name, and round 5's own fix was still wrong in both
 // directions. The reason is structural: `keyBypassesTheDeclaredSurface` was
 // written by reading the resolvers and remembering what they key off, and a
-// remembered predicate drifts from the real one exactly the way #1339's two
-// scanners drifted. So this file stops enumerating cases and enumerates the
+// remembered predicate drifts from the real one exactly the way the two
+// conf.d scanners drifted (PR #1343; family #1911). So this file stops
+// enumerating cases and enumerates the
 // SPACE: every shape `applySubtreeDefaults` can write, crossed against the
 // promise the overlay makes about all of them.
 //

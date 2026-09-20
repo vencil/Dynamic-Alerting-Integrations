@@ -268,7 +268,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     tenant_configs = {}
 
     # Load all tenant YAML files
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="generate_tenant_metadata")
     entries = sorted(config_dir.iterdir())
@@ -289,7 +289,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     #     db-a.yml  -> 0 tenants, rc=0, stderr 0 bytes   <- before
     #     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes   <- after
     #
-    # The exporter (`config_hierarchy.go:195`) lowercases the entry name and
+    # The exporter (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry name and
     # accepts both spellings, so it was serving a tenant the portal could not
     # name. Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's set.
     for bad in unusable_config_entries(

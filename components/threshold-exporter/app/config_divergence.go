@@ -21,7 +21,7 @@ package main
 // from /metrics, and emitted ZERO signal — no ERROR, no WARN, no
 // parse_failure, nothing in the "Config loaded" stats line. ADR-016
 // §"目錄深度不影響 metric label"
-// (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md:115) promises the
+// (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md) promises the
 // opposite. This file made that audible; #1521 then made the flat scanner
 // recursive, so depth is no longer a cause.
 //
@@ -34,7 +34,7 @@ package main
 // the hierarchical walker, which reads the same file for its `tenants:`
 // declarations only, still registers them. Measured: `cfg.Tenants` empty,
 // `hierarchy.tenantSources` = [t-bad]. Two enumerators over one tree is
-// the defect CLASS (#1339); recursion closed one instance of it, not the
+// the defect CLASS (#1911); recursion closed one instance of it, not the
 // class, which is why this gauge stays armed and why #1568 exists.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load on divergence)

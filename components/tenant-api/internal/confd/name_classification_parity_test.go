@@ -1,7 +1,7 @@
 package confd
 
 // name_classification_parity_test.go — the tenant-api half of the
-// cross-language conf.d name-classification pin (#1537, the #1339 family).
+// cross-language conf.d name-classification pin (#1537, the #1911 family).
 //
 // One conf.d tree is read by four independent enumerators with four
 // hand-written name rules. Measured before this pin existed: a root-level
@@ -94,7 +94,7 @@ func loadNameMatrix(t *testing.T) []nameRow {
 	if len(doc.Rows) < minMatrixRows {
 		t.Fatalf("matrix shrank to %d rows (floor %d) — every consumer of this "+
 			"table would stay green while asserting almost nothing, which is the "+
-			"empty-set silence #1339 and #1537 are both about",
+			"empty-set silence #1911 and #1537 are both about",
 			len(doc.Rows), minMatrixRows)
 	}
 	return doc.Rows

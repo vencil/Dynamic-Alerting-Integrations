@@ -61,7 +61,7 @@ def _scan_config_dir(config_dir):
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_path, tool="config_history")
     # #1603: `glob("*.yaml")` here meant a `db-b.yml` carrier the exporter is

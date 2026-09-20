@@ -1,7 +1,7 @@
 """Python half of the cross-language conf.d name-classification pin (#1537).
 
 One conf.d tree, four independent enumerators, four hand-written name rules —
-the #1339 defect class, this time with the file EXTENSION as the divergence
+the #1911 defect class, this time with the file EXTENSION as the divergence
 axis. Measured before this pin existed: a root-level ``upper.YAML`` was read
 and served by the exporter, was invisible to BOTH Python readers (not yielded,
 and not named as unusable either — so no report mentioned it at all), and was
@@ -87,7 +87,7 @@ def test_matrix_still_carries_the_shapes_it_exists_for() -> None:
     assert len(ROWS) >= MIN_ROWS, (
         f"matrix shrank to {len(ROWS)} rows (floor {MIN_ROWS}) — every consumer "
         "of this table would stay green while asserting almost nothing, which "
-        "is the empty-set silence #1339 and #1537 are both about"
+        "is the empty-set silence #1911 and #1537 are both about"
     )
     names = [r["name"] for r in ROWS]
     assert len(names) == len(set(names)), f"duplicate row names: {names}"

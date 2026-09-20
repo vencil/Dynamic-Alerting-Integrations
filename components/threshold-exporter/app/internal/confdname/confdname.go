@@ -1,7 +1,7 @@
 // Package confdname holds the ONE copy of "what does this conf.d basename
 // mean" that the exporter's Go-side write plane is allowed to have.
 //
-// ⛔ WHY IT EXISTS. The #1339 family is one shape repeated: a single conf.d
+// ⛔ WHY IT EXISTS. The #1911 family is one shape repeated: a single conf.d
 // tree, several enumerators, each with its own hand-written name rules, quietly
 // disagreeing. #1605 measured the write plane's copy — `internal/batchpr`'s
 // allocator answered differently from the exporter's walker on eleven of the

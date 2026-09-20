@@ -112,7 +112,7 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     base = Path(config_dir)
     if not base.is_dir():
         return None
-    # #1339: flat read — a hierarchical conf.d must not look empty.
+    # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
     # #1469: the selection predicate is `_lib_confd`'s, not a fourth
     # hand-rolled copy. `iter_config_files` already applies `_is_config`
@@ -308,7 +308,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
 
     # Find tenant config
     tenant_overrides = {}
-    # #1339: flat read — a hierarchical conf.d must not look empty.
+    # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
     for entry in iter_config_files(base, recursive=False):
         fname = entry.name

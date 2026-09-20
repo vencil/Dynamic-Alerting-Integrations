@@ -557,7 +557,7 @@ def test_ls_tree_is_cwd_relative_while_diff_is_repo_root_relative(tmp_path):
 
 def test_both_change_sources_drop_an_unusable_name_the_same_way(
         tmp_path, prom_url):
-    """⛔ The anti-#1339 assertion: one carrier, one answer, two enumerators.
+    """⛔ The anti-#1911 assertion: one carrier, one answer, two enumerators.
 
     `--git-diff` and `--config-dir` reach tenant ids by different routes
     (git, and `os.listdir`). Guarding only the first would leave them

@@ -1,4 +1,4 @@
-"""Every conf.d reader must be recursive OR say it is not (#1339).
+"""Every conf.d reader must be recursive OR say it is not (PR #1343; conf.d family #1911).
 
 ADR-016 allows a hierarchical `conf.d/` and threshold-exporter walks it
 (`pkg/config/hierarchy.go`, `filepath.WalkDir`). The Python suite did not:

@@ -104,14 +104,14 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     name with a same-named `.yml` in another shard, which `detect_conflicts`
     reports as before). Hidden (`.`-prefixed) entries were never skipped
     here and still are not — that is a separate axis, #1827. (It used to point
-    at #1630, which is CLOSED and whose body names only run_chaos_soak and
+    at #1630, which was already closed and whose body names only run_chaos_soak and
     check_threshold_unit_sanity — measured; it never covered this tool.)
 
     Raises FileNotFoundError if directory does not exist.
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(f"source directory not found: {source_dir}")
-    # #1339: flat by design here — but a hierarchical conf.d must not
+    # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(source_dir, tool="assemble_config_dir")
     named = sorted(p for p in source_dir.iterdir()
@@ -299,7 +299,7 @@ def validate_merged(output_dir: Path) -> List[str]:
     Returns list of warning/error messages.
     """
     issues = []
-    # #1339: second scan site — the guard must live where the scan does,
+    # #1911: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(output_dir, tool="assemble_config_dir")
     # #1603: same predicate as `discover_yamls` — a `.yml` file this tool

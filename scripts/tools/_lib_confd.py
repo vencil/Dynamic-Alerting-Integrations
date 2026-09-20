@@ -81,11 +81,10 @@ def _is_hidden(name: str) -> bool:
     """Mirror of the exporter's skip rule — DERIVED, not an allowlist.
 
     `pkg/config/hierarchy.go` skips any entry whose name starts with `.`
-    (`SkipDir` for directories, plain skip for files), and every flat
-    Python reader already does `not f.startswith(".")`. Listing specific
+    (`SkipDir` for directories, plain skip for files). Listing specific
     names here instead (`.git`, `__pycache__`, ...) would make this
     module's answer differ from the oracle it exists to mirror — which is
-    the very divergence #1339 is about.
+    the very divergence #1911 is about.
     """
     return name.startswith(".")
 
@@ -104,7 +103,7 @@ def _is_config(name: str) -> bool:
     invisible to every Python reader: measured, `iter_config_files` did not
     yield `upper.YAML` AND `unusable_config_paths` did not name it either,
     so nothing in the report so much as mentioned a file the exporter was
-    acting on. That is #1339's shape with the *extension* as the divergence
+    acting on. That is #1911's shape with the *extension* as the divergence
     axis instead of directory depth, and it is the one parity claim in this
     module that was, until now, written down nowhere.
 
@@ -178,8 +177,8 @@ def has_yaml_extension(
 
     ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
     `custom_alerts/loader`, `generate_tenant_metadata` and
-    `check_path_metadata_consistency`; of the four named above only
-    `operator_generate` is still narrow, and the axis reaches call sites
+    `check_path_metadata_consistency` and `operator_generate`, and the
+    axis reaches call sites
     that list never had (it was drawn from one spelling of the narrowing —
     a keyword `suffixes=` — and missed the positional ones).
     ⛔ Do not quote a number or a name list from here — census the call
@@ -213,7 +212,8 @@ def is_defaults_name(name: str) -> bool:
     """The defaults CHAIN CARRIER — exactly `_defaults.yaml`/`.yml`, any casing.
 
     ⛔ EXACT, not a prefix, and the difference is load-bearing. The
-    oracle is `config_hierarchy.go:216`, which compares the lowercased name
+    oracle is `scanDirHierarchical` (`config_hierarchy.go`), which compares
+    the lowercased name
     against the two literals; this table's own contract says the same in
     words ("name lowercased is exactly ..."). And
     `conf.d/examples/_defaults-multidb.yaml` EXISTS in this repo, while the
@@ -295,7 +295,7 @@ def resolve_defaults_file(
 
     ⛔ ONE implementation, deliberately. Three tools grew a private copy of
     this while #1588 was being fixed, which is the same "one rule, many
-    hand-copies" shape #1339 is made of — reproduced inside the fix for it.
+    hand-copies" shape #1911 is made of — reproduced inside the fix for it.
 
     ⚠️ This read is FLAT and therefore calls `warn_nested` itself: on a
     hierarchical conf.d the exporter also merges `sub/_defaults.yaml`,
@@ -463,7 +463,7 @@ def unusable_config_entries(
     skip rule is mirrored from. Without it this function and
     `unusable_config_paths` returned two different answers for one tree — a
     directory named `.hidden.yaml/` was in this list and not in that one —
-    which is the "one question, two answers" shape #1339 is made of,
+    which is the "one question, two answers" shape #1911 is made of,
     reproduced between two functions written for the same question. Blind
     review measured it. Downstream it was a false finding too: every reader
     skips `.`-prefixed entries whatever their shape, so naming one reports a
@@ -602,7 +602,7 @@ def unusable_config_paths(
         # callback existed — a conf.d with one chmod-000 sub-directory
         # holding a tenant file made `check_yaml_syntax` report
         # `status: pass` / `1 files parsed successfully` /
-        # `unusable_files: []`. That is the #1339 shape ("a green light for
+        # `unusable_files: []`. That is the #1911 shape ("a green light for
         # a directory it never read") one level further down, inside the
         # very list that exists to make such things audible.
         if err.filename is not None:

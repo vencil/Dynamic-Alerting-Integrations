@@ -354,7 +354,7 @@ class TestScanFileOSError:
 #
 # `iter_tenant_files` and the "not checked" report in `main` both used to
 # pass `suffixes=(".yaml",)` while the exporter's scanner
-# (`config_hierarchy.go:195`) lowercases the entry name and accepts BOTH
+# (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry name and accepts BOTH
 # `.yaml` and `.yml`. Measured on a tree whose path says `staging/` while
 # `_metadata` says `prod`, contents byte-identical, extension the only
 # difference:
@@ -365,15 +365,18 @@ class TestScanFileOSError:
 # i.e. a lint calling a tree clean because it never opened it, at exit 0.
 #
 # ⚠️ SCOPE. These pin the extension-SPELLING axis only, and neither of the
-# other two divergences has an open ticket behind it:
+# other two divergences has a ticket of its own behind it:
 #   * Hidden names: dot-prefixed carriers reach `iter_tenant_files` (the
 #     module imports `is_reserved_name` but not `is_hidden_name`) while the
 #     exporter skips them. Pre-existing, unchanged here; closing it stops
 #     checking files that are checked today.
-#     ⚠️ #1339 (the family ticket) is closed. #1589 IS open on the hidden
-#     axis, but its subject is the exporter's `pkg/config` enumerator and
-#     the path-vs-basename distinction — not a Python reader scanning
-#     `.hidden.yaml`, so this disclosure still has to carry itself.
+#     ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
+#     several enumerators — not this reader's hidden-axis answer. The
+#     hidden-axis tickets filed so far are about other readers: #1589 is
+#     the exporter's `pkg/config` enumerator (path-vs-basename) and
+#     #1827 is `assemble_config_dir` assembling `.`-prefixed carriers —
+#     neither is a Python reader scanning `.hidden.yaml`, so this
+#     disclosure still has to carry itself.
 #   * Entries `is_file()` drops are named by `main` — that half of #1607 is
 #     wired up in this module.
 

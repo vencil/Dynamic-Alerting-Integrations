@@ -1058,7 +1058,8 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				// tenants named by patchFiles+removed rather than every file — ~1
 				// entry in the common single-file reload. It buys back the 99 KB and
 				// costs a SECOND SELECTION PREDICATE over the same tree, which is
-				// the defect shape this whole PR exists to close (#1339). Not worth
+				// the defect shape (the #1911 family) this whole PR exists to
+				// close. Not worth
 				// it for a transient 99 KB; recorded here so the next reader does
 				// not rediscover it as a finding.
 				//

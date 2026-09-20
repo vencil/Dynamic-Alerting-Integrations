@@ -99,7 +99,7 @@ func IsTenantConfigFile(name string) bool {
 // IsTenantConfigFile alone does NOT reject separators: measured, "a/b",
 // "a/../../b" and "/abs" all satisfy it (nothing in a name rule cares about
 // directories), so a second, weaker hand-written copy at a write site is the
-// exact shape this package exists to prevent (#1339 family, #1681).
+// exact shape this package exists to prevent (#1911 family, #1681).
 func IsAddressableTenantID(id string) bool {
 	// An empty-id guard and a filepath.Base guard both used to sit here; each
 	// was measured unkillable (the last line already answers the same way).

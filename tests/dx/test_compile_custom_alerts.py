@@ -1824,12 +1824,12 @@ def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
     ⚠️ THE NAME OVERSTATES WHAT THIS PINS: only the EXTENSION axis. There is a
     carrier the exporter does not serve that this reader does — a hidden one.
     `scanDirHierarchical` prunes `.`-prefixed dirs and skips `.`-prefixed files
-    (`config_hierarchy.go:181,190`); this reader reads both. Measured on the
+    (`config_hierarchy.go`); this reader reads both. Measured on the
     tree BEFORE #1603 widened anything: `.hidden.yaml` and `.draft/db.yaml`
     already produced tenants, so that divergence is pre-existing and #1603 only
     extends it to the second spelling. Closing it removes tenants that compile
-    today, which is its own behaviour change — the hidden-path axis of #1339,
-    filed separately. Do not read a green run here as "the two planes agree".
+    today, which is its own behaviour change — the hidden-path axis of the conf.d
+    family (#1911), filed separately. Do not read a green run here as "the two planes agree".
     """
     json_only = _RECIPE_BODY.replace("db-b:", "db-json-only:")
     assert "db-json-only:" in json_only, "the fixture rewrite missed — test is vacuous"

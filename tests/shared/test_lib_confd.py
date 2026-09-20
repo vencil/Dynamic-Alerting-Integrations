@@ -1,9 +1,10 @@
-"""Unit tests for `_lib_confd` — the single answer to "what is in a conf.d" (#1339)."""
+"""Unit tests for `_lib_confd` — the single answer to "what is in a conf.d" (PR #1343; conf.d family #1911)."""
 
 from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 
 import pytest
@@ -84,7 +85,7 @@ def test_warning_is_none_on_a_flat_dir(flat: pathlib.Path):
     """The guard must be silent when it has nothing to say.
 
     A warning that fires on every flat conf.d would be trained away in a
-    week, and every real deployment today is flat.
+    week.
     """
     assert nested_yaml_warning(flat, tool="unit-test") is None
 
@@ -102,6 +103,10 @@ def test_warning_names_the_skipped_files(hierarchical: pathlib.Path):
     # wrong topic. What to do has to be IN the message: the exporter
     # reads recursively, this tool did not, here is the way to reconcile.
     assert "#1339" not in msg
+    # …and not any other ticket either: #1911 (the conf.d family ticket)
+    # fixes what the number should be for maintainers, but an operator
+    # message stands on its own or it is a pointer again.
+    assert re.search(r"#\d+", msg) is None
     assert "recursively" in msg
     assert "top level only" in msg
 
@@ -120,10 +125,9 @@ def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
     """Skip rule is DERIVED from `startswith(".")`, not an allowlist of names.
 
     `pkg/config/hierarchy.go` skips any dot-prefixed entry — directories via
-    `fs.SkipDir`, files outright — and every flat Python reader already does
-    `not f.startswith(".")`. An enumerated allowlist (`.git`,
+    `fs.SkipDir`, files outright. An enumerated allowlist (`.git`,
     `__pycache__`, ...) would make this module disagree with the oracle it
-    exists to mirror, which is the whole defect #1339 is about.
+    exists to mirror, which is the whole defect #1911 is about.
     """
     root = tmp_path / "conf.d"
     (root / ".hidden").mkdir(parents=True)
@@ -577,7 +581,7 @@ def test_an_untraversable_subdir_is_named_not_silently_dropped(
 
         status: pass / "1 files parsed successfully" / unusable_files: []
 
-    which is ADR-016's own description of the #1339 defect ("a green light
+    which is ADR-016's own description of the #1911 defect ("a green light
     for a directory it never read") reproduced one level down, inside the
     list whose entire job is to make such things audible.
     """
@@ -684,7 +688,7 @@ def test_entries_agrees_with_paths_on_the_same_flat_tree(with_unusable):
     takes a listing the caller already made. Same question, so on the same
     flat tree they must return the same set — otherwise a reader that walks
     with its own `iterdir()` reports different unusable files than one going
-    through `iter_config_files`, which is the #1339 shape.
+    through `iter_config_files`, which is the #1911 shape.
     """
     # ⛔ The hidden entry is what makes this test bite. Without it the two
     # functions agreed by accident: `unusable_config_paths` skips hidden and
