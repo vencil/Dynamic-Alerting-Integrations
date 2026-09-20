@@ -515,9 +515,9 @@ class MdYamlDriftChecker:
         patternProperties schema, so a top-level `_routing_defaults:` /
         `_routing_enforced:` body is validated by nothing — measured: a receiver
         with a flat `receiver_type`, a `webhook_url` and an invented key passed
-        clean. That is 18 of the 52 documented units, the largest single group,
-        and it is the same defect class as the tenant-side one this gate was
-        built to catch.
+        clean, and it is the same defect class as the tenant-side one this gate
+        was built to catch. (How many documented units carry such a body is not
+        restated here — `--check schema` prints the corpus size on every run.)
 
         Validating the whole routing block against `definitions.routing` would
         be wrong (`_routing_enforced` legitimately carries `enabled:` and

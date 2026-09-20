@@ -192,10 +192,12 @@ def _compute_exit_code(
     bugs accumulate undetected — see PR #150 / S#67 / issue #152.
 
     Granular `--strict-*` flags added in PR #TBD (DX track): they let us
-    activate the line-count safety net immediately (codebase has 0
+    activate the line-count safety net immediately (codebase had 0
     soft-cap violations after PR-2d Phase 3 / S#72) WITHOUT being
-    blocked by 330 pre-existing `style={{}}` baseline warnings — those
-    get a separate cleanup track. Backward compat: `--strict` alone
+    blocked by the standing `style={{}}` baseline warnings — those get a
+    separate cleanup track. ⚠️ That baseline is not restated as a number
+    here: nothing asserts it, and the count written here had already
+    drifted from what the rule below matches. Backward compat: `--strict` alone
     still activates both (for any caller that already invoked it).
     """
     if not ci:

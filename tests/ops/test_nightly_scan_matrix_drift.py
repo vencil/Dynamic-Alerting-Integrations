@@ -2965,7 +2965,7 @@ def test_pr_build_triggers_on_every_matrix_entrys_dockerfile() -> None:
 
 
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (7 / 15 / 4) must track the matrix sizes.
+    """Each report call's hardcoded EXPECTED must track its own matrix size.
 
     Load-bearing beyond bookkeeping: EXPECTED is what turns "an image did not
     scan" into `missing = EXPECTED - present > 0`, and that is the ONLY thing
