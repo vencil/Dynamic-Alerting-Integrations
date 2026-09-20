@@ -1158,7 +1158,7 @@ def _build_github_apply_stage(
               # --load-restrictor: conf.d files are symlinked into
               # kustomize/base/, and the default restrictor refuses a
               # symlink whose target sits outside that directory.
-              kustomize build --load-restrictor LoadRestrictionsNone {kustomize_overlay} > /tmp/manifests.yaml
+              kustomize build --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
           - name: Apply to cluster (dry-run first)
             run: |
               kubectl apply --dry-run=server -f /tmp/manifests.yaml
@@ -1188,7 +1188,7 @@ def _build_github_apply_stage(
             run: |
               helm upgrade --install threshold-exporter \\
                 oci://ghcr.io/vencil/charts/threshold-exporter \\
-                -f {helm_values} \\
+                -f "{helm_values}" \\
                 -n ${{{{ env.MONITORING_NS }}}} \\
                 --wait --timeout 5m
     """).format(namespace=namespace,
@@ -1399,7 +1399,7 @@ def _gen_github_actions(
                 exit 1
               fi
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 validate-config --config-dir /data/conf.d
 
@@ -1407,7 +1407,7 @@ def _gen_github_actions(
             run: |
               if [ -d "{rule_packs_custom}" ]; then
                 docker run --rm \\
-                  -v ${{{{ github.workspace }}}}/{rule_packs_custom}:/data/rules:ro \\
+                  -v "${{{{ github.workspace }}}}/{rule_packs_custom}:/data/rules:ro" \\
                   ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                   lint /data/rules --ci
               fi
@@ -1457,7 +1457,7 @@ def _gen_github_actions(
               # `--user` override to fix; the config-diff step below writes
               # on the HOST via a shell redirect.
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 generate-routes --config-dir /data/conf.d --validate
 
@@ -1592,8 +1592,8 @@ def _gen_github_actions(
               # HOST redirect below lands it in .output/. A writable output
               # mount used to ride along here too, unused.
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro \\
-                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
+                -v "${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro" \\
+                -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
                   --format markdown > .output/blast-radius.md
@@ -1723,7 +1723,7 @@ def _build_gitlab_apply_stage(
         # --load-restrictor: conf.d files are symlinked into kustomize/base/,
         # and the default restrictor refuses a symlink whose target sits
         # outside that directory.
-        - kustomize build --load-restrictor LoadRestrictionsNone {kustomize_overlay} > /tmp/manifests.yaml
+        - kustomize build --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n $MONITORING_NS
@@ -1771,7 +1771,7 @@ def _build_gitlab_apply_stage(
         - |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter \\
-            -f {helm_values} \\
+            -f "{helm_values}" \\
             -n $MONITORING_NS \\
             --wait --timeout 5m
     """).format(namespace=namespace, image_var=image_var,
@@ -2486,7 +2486,7 @@ def _gen_gitlab_ci(
       # Swallowing it here made one leg of a pair, and the customer's own repo,
       # weaker than the platform holds itself to.
       script:
-        - da-tools lint {rule_packs_custom}/ --ci
+        - da-tools lint "{rule_packs_custom}/" --ci
 
     # ── Blast-radius (config-diff) is NOT emitted on this platform yet ──
     #
@@ -2784,7 +2784,7 @@ def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
         "        name: Validate Dynamic Alerting config\n"
         "        entry: >-\n"
         f"          {da_tools_image}\n"
-        f"          validate-config --config-dir {_PRECOMMIT_REPO_MOUNT}/{config_dir}\n"
+        f'          validate-config --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}"\n'
         "        language: docker_image\n"
         f"        files: {files_regex}\n"
         "        pass_filenames: false\n"
@@ -2796,7 +2796,7 @@ def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
         # #1650: `--dry-run` is never read under `--validate` (the validate
         # path returns before the render step) and the tool now exits 2 on
         # that combination rather than ignoring half of it.
-        f"          generate-routes --config-dir {_PRECOMMIT_REPO_MOUNT}/{config_dir} --validate\n"
+        f'          generate-routes --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}" --validate\n'
         "        language: docker_image\n"
         f"        files: {files_regex}\n"
         "        pass_filenames: false\n"

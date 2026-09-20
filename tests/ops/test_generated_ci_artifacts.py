@@ -4142,7 +4142,7 @@ def _normalized_commands(text: str) -> list[str]:
 # anything INSIDE a branch could be rewritten freely.
 _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
+        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         'echo "--- Dry-run passed. Applying... ---"',
         "kubectl apply -f /tmp/manifests.yaml",
@@ -4152,7 +4152,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "helm": [
         "helm upgrade --install threshold-exporter "
         "oci://ghcr.io/vencil/charts/threshold-exporter "
-        "-f environments/prod/values.yaml -n ${{ env.MONITORING_NS }} "
+        '-f "environments/prod/values.yaml" -n ${{ env.MONITORING_NS }} '
         "--wait --timeout 5m",
     ],
     "argocd": [
@@ -4162,7 +4162,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
+        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
@@ -4170,7 +4170,7 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "helm": [
         "helm upgrade --install threshold-exporter "
         "oci://ghcr.io/vencil/charts/threshold-exporter "
-        "-f environments/prod/values.yaml -n $MONITORING_NS "
+        '-f "environments/prod/values.yaml" -n $MONITORING_NS '
         "--wait --timeout 5m",
     ],
     "argocd": [
@@ -4200,7 +4200,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     # and since #1650 the tool exits 2 on that combination, so the old line
     # would have turned every customer's PR red. `mkdir -p .output` stays:
     # the config-diff step below still redirects into it on the host.
-    'docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
+    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4225,7 +4225,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'exit 1',
     'fi',
     'set +e',
-    'docker run --rm -v ${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
+    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -6909,7 +6909,11 @@ def test_the_precommit_hook_matches_the_real_files_under_a_subdirectory(
             f"{unmatched} — the files this run wrote. pre-commit would report "
             "`Skipped` at rc 0 on every commit that touches them."
         )
-        tokens = hook["entry"].split()
+        # ⛔ `shlex`, not `.split()`. pre-commit tokenises `entry` with shlex
+        # (`pre_commit/lang_base.py`), and the path is QUOTED so a directory
+        # with a space survives as one argument — a `.split()` here would read
+        # the quotes as part of the value and grade the wrong string.
+        tokens = shlex.split(hook["entry"])
         idx = tokens.index("--config-dir")
         config_dir = tokens[idx + 1]
         assert config_dir == (
@@ -6955,6 +6959,172 @@ def test_no_generated_path_is_left_root_relative_under_a_subdirectory(
         assert not stale, (
             f"--ci {ci} --deploy {deploy}: {name} still names {stale} relative "
             f"to the repository root, but this run wrote into {_SUBDIR}/."
+        )
+
+
+# ============================================================
+# ── 5e. An offset with a space in it (CodeRabbit on PR 1925) ──
+# ============================================================
+#
+# ⛔ `_offset_path` inserts the offset verbatim, and three different tokenizers
+# then read the result: the shell inside a GitHub `run:`, the shell inside a
+# GitLab `script:`, and `shlex` inside a pre-commit `entry`. An output directory
+# with a space — `-o "alerting app/"`, which `run_init` accepts — therefore used
+# to become TWO arguments, so `helm -f` got `alerting`, `kustomize build` got
+# `alerting`, and the pre-commit hook pointed `--config-dir` at `/src/alerting`.
+# Every one of those is a wrong path that the tool reports no error for.
+#
+# ⛔ Graded by re-tokenising the generated lines, not by looking for quotes:
+# "there is a `"` in the string" is satisfied by a quote in the wrong place.
+# ⚠️ Measured on the artifact only. Whether a real runner's shell agrees is not
+# checked here — there is no runner — but `shlex` implements POSIX word
+# splitting, which is the rule both `run:` and `script:` bodies are read under.
+
+_SPACED_SUBDIR = "alerting app"
+
+
+@pytest.fixture(scope="module")
+def generated_spaced(tmp_path_factory) -> dict[str, Path]:
+    """`run_init` into `<repo>/alerting app` once per `--deploy`."""
+    out: dict[str, Path] = {}
+    for deploy in DEPLOY_CHOICES:
+        repo = tmp_path_factory.mktemp(f"spaced-{deploy}")
+        (repo / ".git").mkdir()
+        target = repo / _SPACED_SUBDIR
+        target.mkdir()
+        ip.run_init(
+            {
+                "ci": "both",
+                "deploy": deploy,
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
+            },
+            str(target),
+        )
+        out[deploy] = target
+    return out
+
+
+def _shell_lines(doc) -> list[str]:
+    """Every command line out of every shell-bearing key, comments dropped."""
+    lines: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ("run", "script", "before_script", "after_script"):
+                    body = value if isinstance(value, list) else [value]
+                    for chunk in body:
+                        if isinstance(chunk, str):
+                            lines.extend(
+                                ln.strip() for ln in chunk.splitlines()
+                                if ln.strip()
+                                and not ln.strip().startswith("#")
+                            )
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    return lines
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_survives_shell_tokenisation(
+    generated_spaced, deploy
+) -> None:
+    """⛔ No generated shell line may split the offset into two arguments.
+
+    A line is graded by tokenising it the way the shell does and looking for a
+    token that is exactly the offset's FIRST word: that is what a split leaves
+    behind, and it cannot occur when the path is quoted.
+    """
+    target = generated_spaced[deploy]
+    first_word = _SPACED_SUBDIR.split()[0]
+    for rel in (_GH_WORKFLOW, _GL_PIPELINE):
+        doc = yaml.safe_load((target / rel).read_text(encoding="utf-8"))
+        candidates = [ln for ln in _shell_lines(doc) if _SPACED_SUBDIR in ln]
+        assert candidates, (
+            f"{rel}: no shell line names {_SPACED_SUBDIR!r}, so this assertion "
+            "would be vacuous. Check the offset reached the artifact at all."
+        )
+        for line in candidates:
+            # `${{ ... }}` is GitHub template syntax, not shell; blank it out so
+            # shlex does not choke on the braces while still measuring the rest.
+            probe = re.sub(r"\$\{\{[^}]*\}\}", "GHEXPR", line).rstrip("\\").strip()
+            try:
+                tokens = shlex.split(probe)
+            except ValueError as exc:                        # pragma: no cover
+                pytest.fail(f"{rel}: cannot tokenise {probe!r}: {exc}")
+            assert first_word not in tokens, (
+                f"{rel} (--deploy {deploy}): the shell splits\n  {line}\n"
+                f"into {tokens}, leaving {first_word!r} as its own argument. "
+                "The offset-derived path needs quoting at this site."
+            )
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_survives_precommit_shlex(
+    generated_spaced, deploy
+) -> None:
+    """⛔ pre-commit tokenises `entry` with shlex and execs WITHOUT a shell.
+
+    So the quoting has to survive shlex specifically, and the value it yields
+    has to be the whole directory — this is the artifact whose filter the old
+    subdirectory remedy forgot entirely, so it gets its own assertion rather
+    than riding on the shell one.
+    """
+    target = generated_spaced[deploy]
+    doc = yaml.safe_load(
+        (target / ".pre-commit-config.da.yaml").read_text(encoding="utf-8"))
+    hooks = [h for entry in doc["repos"] for h in entry["hooks"]]
+    assert hooks, "the generated pre-commit snippet declares no hook"
+    want = f"{ip._PRECOMMIT_REPO_MOUNT}/{_SPACED_SUBDIR}/conf.d"
+    for hook in hooks:
+        tokens = shlex.split(hook["entry"])
+        idx = tokens.index("--config-dir")
+        assert tokens[idx + 1] == want, (
+            f"hook {hook['id']!r}: shlex reads `--config-dir` as "
+            f"{tokens[idx + 1]!r}, not {want!r}. An unquoted space here points "
+            "the hook at a directory that does not exist, and pre-commit "
+            "reports nothing."
+        )
+
+
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_a_spaced_offset_stays_one_value_in_every_yaml_face(
+    generated_spaced, deploy
+) -> None:
+    """⚠️ The other half of the same question, and its answer is different.
+
+    The YAML faces — `on.paths`, `rules:changes`, `rules:exists`, `CONFIG_DIR`
+    — are read by GitHub and GitLab, not by a shell, so a space needs no
+    escaping there and quoting one would be cargo cult. Pinned so a future
+    "fix" does not add quotes that end up inside the matched value.
+    """
+    target = generated_spaced[deploy]
+    workflow = yaml.safe_load((target / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    pipeline = yaml.safe_load((target / _GL_PIPELINE).read_text(encoding="utf-8"))
+    values = (
+        _gh_trigger_paths(workflow)
+        + _gl_change_paths(pipeline)
+        + [workflow["env"]["CONFIG_DIR"], pipeline["variables"]["CONFIG_DIR"]]
+    )
+    assert values, "no YAML-face value carried the offset"
+    for value in values:
+        assert isinstance(value, str) and value.startswith(
+            f"{_SPACED_SUBDIR}/"), (
+            f"--deploy {deploy}: {value!r} did not come back as one scalar "
+            f"starting with {_SPACED_SUBDIR!r}/."
+        )
+        assert '"' not in value and "'" not in value, (
+            f"--deploy {deploy}: {value!r} carries a quote character. These "
+            "faces are matched literally, so a quote becomes part of the path "
+            "and the filter stops matching."
         )
 
 
