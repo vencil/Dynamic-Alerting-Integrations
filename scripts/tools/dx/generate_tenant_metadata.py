@@ -289,7 +289,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     #     db-a.yml  -> 0 tenants, rc=0, stderr 0 bytes   <- before
     #     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes   <- after
     #
-    # The exporter (`config_hierarchy.go:195`) lowercases the entry name and
+    # The exporter (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry name and
     # accepts both spellings, so it was serving a tenant the portal could not
     # name. Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's set.
     for bad in unusable_config_entries(

@@ -81,8 +81,7 @@ def _is_hidden(name: str) -> bool:
     """Mirror of the exporter's skip rule — DERIVED, not an allowlist.
 
     `pkg/config/hierarchy.go` skips any entry whose name starts with `.`
-    (`SkipDir` for directories, plain skip for files), and every flat
-    Python reader already does `not f.startswith(".")`. Listing specific
+    (`SkipDir` for directories, plain skip for files). Listing specific
     names here instead (`.git`, `__pycache__`, ...) would make this
     module's answer differ from the oracle it exists to mirror — which is
     the very divergence #1911 is about.
@@ -178,8 +177,8 @@ def has_yaml_extension(
 
     ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
     `custom_alerts/loader`, `generate_tenant_metadata` and
-    `check_path_metadata_consistency`; of the four named above only
-    `operator_generate` is still narrow, and the axis reaches call sites
+    `check_path_metadata_consistency` and `operator_generate`, and the
+    axis reaches call sites
     that list never had (it was drawn from one spelling of the narrowing —
     a keyword `suffixes=` — and missed the positional ones).
     ⛔ Do not quote a number or a name list from here — census the call
@@ -213,7 +212,8 @@ def is_defaults_name(name: str) -> bool:
     """The defaults CHAIN CARRIER — exactly `_defaults.yaml`/`.yml`, any casing.
 
     ⛔ EXACT, not a prefix, and the difference is load-bearing. The
-    oracle is `config_hierarchy.go:216`, which compares the lowercased name
+    oracle is `scanDirHierarchical` (`config_hierarchy.go`), which compares
+    the lowercased name
     against the two literals; this table's own contract says the same in
     words ("name lowercased is exactly ..."). And
     `conf.d/examples/_defaults-multidb.yaml` EXISTS in this repo, while the

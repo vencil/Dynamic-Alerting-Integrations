@@ -21,7 +21,7 @@ package main
 // from /metrics, and emitted ZERO signal — no ERROR, no WARN, no
 // parse_failure, nothing in the "Config loaded" stats line. ADR-016
 // §"目錄深度不影響 metric label"
-// (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md:115) promises the
+// (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md) promises the
 // opposite. This file made that audible; #1521 then made the flat scanner
 // recursive, so depth is no longer a cause.
 //

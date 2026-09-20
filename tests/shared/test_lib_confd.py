@@ -85,7 +85,7 @@ def test_warning_is_none_on_a_flat_dir(flat: pathlib.Path):
     """The guard must be silent when it has nothing to say.
 
     A warning that fires on every flat conf.d would be trained away in a
-    week, and every real deployment today is flat.
+    week.
     """
     assert nested_yaml_warning(flat, tool="unit-test") is None
 
@@ -125,8 +125,7 @@ def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
     """Skip rule is DERIVED from `startswith(".")`, not an allowlist of names.
 
     `pkg/config/hierarchy.go` skips any dot-prefixed entry — directories via
-    `fs.SkipDir`, files outright — and every flat Python reader already does
-    `not f.startswith(".")`. An enumerated allowlist (`.git`,
+    `fs.SkipDir`, files outright. An enumerated allowlist (`.git`,
     `__pycache__`, ...) would make this module disagree with the oracle it
     exists to mirror, which is the whole defect #1911 is about.
     """

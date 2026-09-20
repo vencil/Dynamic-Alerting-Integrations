@@ -3,7 +3,7 @@
 
 `build_tenant_metadata` feeds `generate_platform_data`, i.e. the portal's
 tenant list. Both of its selection sites used to pass `suffixes=(".yaml",)`
-while the exporter's scanner (`config_hierarchy.go:195`) lowercases the entry
+while the exporter's scanner (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry
 name and accepts BOTH `.yaml` and `.yml` — so a tenant declared in `db-a.yml`
 was served by the exporter and did not exist for the portal. Measured on two
 trees whose contents are byte-identical and differ only in the extension:
@@ -13,7 +13,7 @@ trees whose contents are byte-identical and differ only in the extension:
     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes    <- after
 
 ⚠️ SCOPE. These pin the extension-SPELLING axis only. The module's other
-divergences are not covered here, and no open ticket names them specifically EITHER —
+divergences are not covered here, and no ticket names them specifically EITHER —
 read the per-axis notes below rather than the ticket numbers:
 
   * Recursion: this reader is flat (`config_dir.iterdir()`) and says so out
@@ -21,15 +21,15 @@ read the per-axis notes below rather than the ticket numbers:
     `test_confd_enumeration_contract.py`'s axis.
   * Hidden names: dot-prefixed carriers reach the loop below (the module
     imports `is_reserved_name` but not `is_hidden_name`) while the exporter
-    skips them (`config_hierarchy.go:181,190`). Pre-existing and unchanged
+    skips them (`scanDirHierarchical`, `config_hierarchy.go`). Pre-existing and unchanged
     here; closing it DELETES tenants that appear today, so it is a separate
     behaviour change.
-    ⚠️ #1911 (the conf.d family ticket) is open, but it names the class —
-    one tree, several enumerators — not this reader's hidden-axis answer.
-    #1589 (the exporter's `pkg/config` enumerator, path-vs-basename) is
-    closed; #1827 IS open on the hidden axis, but its subject is
-    `assemble_config_dir` assembling `.`-prefixed carriers — it does not
-    cover a Python reader counting `.hidden.yaml` as a tenant, so this
+    ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
+    several enumerators — not this reader's hidden-axis answer. The
+    hidden-axis tickets filed so far are about other readers: #1589 is
+    the exporter's `pkg/config` enumerator (path-vs-basename) and #1827
+    is `assemble_config_dir` assembling `.`-prefixed carriers — neither
+    covers a Python reader counting `.hidden.yaml` as a tenant, so this
     disclosure still has to carry itself.
   * Entries `is_file()` drops are named on stderr here — that half of #1607
     IS wired up in this module, unlike `gitops_check`.
@@ -66,7 +66,7 @@ def _tenant(tid: str, *, domain: str, keys: int) -> str:
 #                        dropping it is its own convention, not a new one.
 #   `last_config_commit` per tenant, from `git rev-parse HEAD` with
 #                        `timeout=5` and a SILENT `""` fallback
-#                        (`generate_tenant_metadata.py:243`). Blind review
+#                        (`get_git_head_commit`). Blind review
 #                        injected that fallback on one of the four calls this
 #                        test makes: the equality broke and reported
 #                        "`.yaml` and `.yml` produce different portal tenant

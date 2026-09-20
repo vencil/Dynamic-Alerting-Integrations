@@ -436,32 +436,32 @@ class TestCheckLocal:
 # `pass` with `tenant_files: 0`, rc=0, stderr empty, on a tree the
 # exporter is serving tenants out of.
 #
-# The oracle is the exporter's scanner: `config_hierarchy.go:195` lowercases
+# The oracle is the exporter's scanner: `scanDirHierarchical` (`config_hierarchy.go`) lowercases
 # the entry name and accepts BOTH `.yaml` and `.yml`.
 #
 # ⚠️ SCOPE. These pin the extension-SPELLING axis only. The other three axes
-# are NOT covered, and none of them has an open ticket of its own behind it, so
+# are NOT covered, and none of them has a ticket of its own behind it, so
 # the disclosure has to carry itself:
 #   * Recursion: `check_local` is flat by construction (`base.iterdir()`).
 #     That is `test_confd_enumeration_contract.py`'s axis; nested carriers do
 #     get a `WARN` on stderr, so this one at least speaks.
 #   * Hidden names: this reader COUNTS `.hidden.yaml` as a tenant file while
-#     the exporter skips dot-prefixed entries (`config_hierarchy.go:181,190`).
+#     the exporter skips dot-prefixed entries (`scanDirHierarchical`, `config_hierarchy.go`).
 #     Measured on the tree before this change and unchanged by it, so it is
 #     pre-existing — but it is also the same shape as the bug fixed here: the
 #     shared predicates say `is_hidden_name(".secret.yaml") is True` and
 #     `config_stem(".secret.yaml") == ""` (this file carries no tenant id),
 #     while the loop two lines below counts it as tenant #2. This module
-#     imports three of the four name predicates and not `is_hidden_name`.
+#     does not import `is_hidden_name` at all.
 #     ⛔ Closing it DELETES tenants that count today, so it is a separate
 #     behaviour change; the fixtures below therefore contain no dot-prefixed
 #     name at all, rather than pinning today's answer for them.
-#     ⚠️ #1911 (the conf.d family ticket) is open, but it names the class —
-#     one tree, several enumerators — not this reader's hidden-axis answer,
-#     so nothing is tracking this specifically.
+#     ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
+#     several enumerators — not this reader's hidden-axis answer, so the
+#     disclosure has to carry itself.
 #   * Entries `is_file()` drops (a directory named `notes.yml/`, a broken
-#     symlink) are still silently skipped rather than named. ⚠️ #1607 is
-#     closed (state_reason=COMPLETED) — its closing comment verifies `operator_generate`
+#     symlink) are still silently skipped rather than named. ⚠️ #1607's
+#     closing comment verifies `operator_generate`
 #     and `custom_alerts/loader` on main and does not mention this tool, and
 #     measured here it still drops both shapes with rc=0 and an empty stderr.
 #     This reader is a residual of a ticket that reads as finished.

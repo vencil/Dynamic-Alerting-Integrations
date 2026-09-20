@@ -106,7 +106,7 @@ def iter_tenant_files(config_dir: Path,
     # the `.yml` spelling reports
     # `0 mismatch(es) across 0 tenant file(s)`, rc=0, stderr empty — a lint
     # calling a tree clean because it never opened it. The exporter
-    # (`config_hierarchy.go:195`) reads both spellings.
+    # (`scanDirHierarchical`, `config_hierarchy.go`) reads both spellings.
     listing = config_dir.rglob("*") if entries is None else entries
     for path in sorted(
         p for p in listing

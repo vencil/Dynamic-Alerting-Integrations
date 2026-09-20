@@ -539,7 +539,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # ⚠️ THE ASYMMETRY IS THE POINT, and this reader is the lenient
             # side. Go declares this field
             # `map[string]map[string]ScheduledValue`
-            # (`pkg/config/types.go:239`), so a sequence here is a
+            # (`ThresholdConfig.Tenants`, `pkg/config/types.go`), so a sequence here is a
             # `yaml.TypeError`, `parsePartialConfig` returns ok=false
             # (`flat_scanner.go`) and the **entire file is dropped** —
             # taking `defaults:` with it, which this loop has already

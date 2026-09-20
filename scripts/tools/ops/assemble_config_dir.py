@@ -104,7 +104,7 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     name with a same-named `.yml` in another shard, which `detect_conflicts`
     reports as before). Hidden (`.`-prefixed) entries were never skipped
     here and still are not — that is a separate axis, #1827. (It used to point
-    at #1630, which is CLOSED and whose body names only run_chaos_soak and
+    at #1630, which was already closed and whose body names only run_chaos_soak and
     check_threshold_unit_sanity — measured; it never covered this tool.)
 
     Raises FileNotFoundError if directory does not exist.
