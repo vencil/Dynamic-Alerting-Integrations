@@ -351,6 +351,40 @@ def test_bat_files_have_no_utf8_bom(bat_path: pathlib.Path) -> None:
 _PUSH_BRANCHES = ("feat/escape-hatch", "main")
 
 
+def _git(work: pathlib.Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=work, check=True, capture_output=True, timeout=60)
+
+
+def _wrapper_repo(
+    tmp_path: pathlib.Path, branch: str, ops_files: tuple[str, ...] = ("win_git_escape.bat",)
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """A repo with the wrapper (and optionally the guards) beside it, plus a bare remote."""
+    work = tmp_path / "work"
+    (work / "scripts" / "ops").mkdir(parents=True, exist_ok=True)
+    for name in ops_files:
+        shutil.copy2(REPO_ROOT / "scripts" / "ops" / name, work / "scripts" / "ops" / name)
+    bare = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", str(bare)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    _git(work, "init", "-q")
+    _git(work, "config", "user.email", "fixture@example.invalid")
+    _git(work, "config", "user.name", "fixture")
+    # ⛔ Pin hooksPath: a global core.hooksPath would otherwise point git at a
+    # directory this fixture never writes, and the hook would "not run" for a
+    # reason that has nothing to do with the wrapper.
+    _git(work, "config", "core.hooksPath", str(work / ".git" / "hooks"))
+    _git(work, "checkout", "-q", "-b", branch)
+    (work / "a.txt").write_text("fixture\n", encoding="utf-8")
+    _git(work, "add", "a.txt")
+    _git(work, "commit", "-q", "-m", "test: fixture commit")
+    _git(work, "remote", "add", "origin", str(bare))
+    return work, bare
+
+
 def _push_through_wrapper(
     tmp_path: pathlib.Path, hook_rc: int, branch: str, explicit_args: bool
 ) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
@@ -361,37 +395,7 @@ def _push_through_wrapper(
     at all, and whether a rejecting hook reaches the caller. Returns the
     wrapper's process and the recorded environment ({} when the hook never ran).
     """
-    work = tmp_path / "work"
-    (work / "scripts" / "ops").mkdir(parents=True)
-    shutil.copy2(
-        REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat",
-        work / "scripts" / "ops" / "win_git_escape.bat",
-    )
-    bare = tmp_path / "remote.git"
-    subprocess.run(
-        ["git", "init", "-q", "--bare", str(bare)],
-        check=True,
-        capture_output=True,
-        timeout=60,
-    )
-
-    def git(*args: str) -> None:
-        subprocess.run(
-            ["git", *args], cwd=work, check=True, capture_output=True, timeout=60
-        )
-
-    git("init", "-q")
-    git("config", "user.email", "fixture@example.invalid")
-    git("config", "user.name", "fixture")
-    # ⛔ Pin hooksPath: a global core.hooksPath would otherwise point git at a
-    # directory this fixture never writes, and the hook would "not run" for a
-    # reason that has nothing to do with the wrapper.
-    git("config", "core.hooksPath", str(work / ".git" / "hooks"))
-    git("checkout", "-q", "-b", branch)
-    (work / "a.txt").write_text("fixture\n", encoding="utf-8")
-    git("add", "a.txt")
-    git("commit", "-q", "-m", "test: fixture commit")
-    git("remote", "add", "origin", str(bare))
+    work, _bare = _wrapper_repo(tmp_path, branch)
 
     log = tmp_path / "hook-ran.txt"
     sh_log = str(log).replace("\\", "/")
@@ -544,3 +548,67 @@ def test_the_wrapper_never_turns_a_pre_push_guard_off() -> None:
         )
     for flag in ('set "mkdocs_strict_bypass=1"', 'set "git_preflight_bypass=1"'):
         assert flag in lowered, f"{flag} is no longer set before the push"
+
+
+# ---------------------------------------------------------------------------
+# The composition, once: wrapper → git → shipped installer → real guards.
+#
+# The stub-hook tests above answer "does git run the hook and does its verdict
+# reach the caller". They deliberately return the same verdict for every
+# branch, so they cannot show that main is what gets refused — which is the
+# whole point of dropping --no-verify. This one installs the real thing.
+# ---------------------------------------------------------------------------
+
+# ⛔ Git's own bash, by path. `bash` on PATH here is WSL, and WSL git cannot
+# read a Windows-path worktree — the installer then reports "not inside a git
+# work tree" while you plainly are (measured).
+_GIT_BASH = pathlib.Path(r"C:\Program Files\Git\bin\bash.exe")
+
+_GUARD_FILES = (
+    "win_git_escape.bat",
+    "install_prepush_hook.sh",
+    "prepush_dispatch.sh",
+    "protect_main_push.sh",
+    "require_preflight_pass.sh",
+    "pre_push_mkdocs_strict.sh",
+    "_prepush_refs.sh",
+)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.skipif(not _GIT_BASH.exists(), reason="Git for Windows bash not installed")
+@pytest.mark.parametrize(
+    ("branch", "blocked"), [("feat/escape-hatch", False), ("main", True)]
+)
+def test_the_shipped_guards_refuse_only_a_direct_main_push(tmp_path, branch, blocked) -> None:
+    """#1487 — the whole point: main is refused, everything else still goes.
+
+    The feature-branch leg is the must-ring control; without it, a wrapper that
+    failed every push would satisfy the main leg.
+    """
+    work, _bare = _wrapper_repo(tmp_path, branch, ops_files=_GUARD_FILES)
+    install = subprocess.run(
+        [str(_GIT_BASH), "scripts/ops/install_prepush_hook.sh"],
+        cwd=work,
+        capture_output=True,
+        timeout=120,
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    assert (work / ".git" / "hooks" / "pre-push").exists(), "installer wrote no hook"
+
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), "push"],
+        cwd=work,
+        capture_output=True,
+        timeout=300,
+        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},
+    )
+    out = proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")
+    if blocked:
+        assert proc.returncode != 0, f"a direct push to {branch} was allowed:\n{out}"
+        # ASCII slice of the guard's banner — the CJK around it travels through
+        # cmd's codepage, this does not.
+        assert "dev-rules #12" in out, f"blocked, but not by that guard:\n{out}"
+    else:
+        assert proc.returncode == 0, f"{branch} was refused:\n{out}"
+        assert "dev-rules #12" not in out, f"the main guard fired on {branch}:\n{out}"
