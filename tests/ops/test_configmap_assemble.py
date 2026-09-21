@@ -285,6 +285,15 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
     `.SHELLFLAGS`, and a silent second `::` rule whose recipe expands to
     nothing so `make -n` prints no extra line.
 
+    ⚠️ The fourth one costs one more edit than the sentence above used to
+    admit, and the edit is not optional: appending a `::` rule while this
+    target keeps its `:` rule is a make HARD ERROR (measured:
+    `*** target file 'configmap-assemble' has both : and :: entries.
+    Stop.`), so the walk-through has to rewrite THIS target's own rule line
+    to `::` as well. Measured with both rules `::` and a second one whose
+    recipe is `@$(EMPTY_VAR)`: this class stays green, 8 passed. The
+    channel is real; the one-line version of it was not buildable.
+
     ⛔ That is a DISCLOSURE, not a to-do. Three versions of "enumerate the
     channels" have been walked through (four strings, two strings, this
     scope), so a fourth predicate is forbidden. A Makefile-WIDE edit is
@@ -348,9 +357,10 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
             "not the line it stored. A make-level producer is exactly this "
             "difference, wherever it is written — including in a comment. "
             "⚠️ SCOPE: this reconciliation reads THIS target's recipe only; "
-            "a global `SHELL` / `.SHELLFLAGS` / `.EXTRA_PREREQS`, or a "
-            "second `::` rule with an empty recipe, is invisible to it — "
-            "see the class docstring, that is a known boundary.")
+            "a global `SHELL` / `.SHELLFLAGS` / `.EXTRA_PREREQS`, or this "
+            "target rewritten as `::` plus a second `::` rule with an "
+            "empty recipe, is invisible to it — see the class docstring, "
+            "that is a known boundary.")
 
     @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
                         reason="needs GNU make to expand the recipe")
@@ -371,6 +381,14 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         a NEIGHBOUR's recipe). `_recipe_lines` fixed that on its own. This
         arm is a PIN — it spells the command out — so adding a flag to the
         script call is meant to red it; the fix is then to update the pin.
+        ⚠️ Measured, that is not the only legitimate edit it reds: putting
+        `@mkdir -p .build` first, the way the sister target
+        `sharded-assemble` (`Makefile:620`) opens, also fails this arm and
+        this arm only. ⛔ The predicate is NOT loosened for it — that edit
+        is redundant here anyway, `_write_atomically` already does
+        `mkdir(parents=True, exist_ok=True)`
+        (`scripts/ops/configmap_assemble.py:365`) — but a reader who hits
+        that red should not have to rediscover which cell they are in.
 
         ⚠️ `make -n` strips the `@` / `-` prefixes, so "can the gate fail the
         target" is NOT answerable here — `TestTheGateCanActuallyFailTheTarget`
@@ -887,11 +905,16 @@ class TestFileNamesThatCannotBeConfigMapKeys:
 
     What this layer does buy is measured and small: it lists ALL the
     offending names (kubectl stops at the first), and it is the only
-    by-name answer for `=`, `,` and `"`, which pflag's CSV split and
-    `ParseFileSource` mangle before `IsConfigMapKey` ever runs — those
-    three produce `key names or file paths cannot contain '='`,
-    `error reading db: no such file or directory`, and a raw flag parse
-    error respectively. The per-character measurements are in
+    by-name answer for **`=` and `,`** — TWO classes, not three. All three
+    of `=`, `,` and `"` are mangled by pflag's CSV split and
+    `ParseFileSource` before `IsConfigMapKey` ever runs, but only the first
+    two lose the name with it: `=` gives `key names or file paths cannot
+    contain '='` (nothing named) and `,` gives `error reading db: no such
+    file or directory` (a fragment that is not a file), while `"` gives
+    `invalid argument "db\\"a.yaml=<path>" for "--from-file" flag: …` —
+    the file name is echoed back verbatim. ⚠️ The earlier version of this
+    sentence put `"` in the same bucket as the other two; that half had not
+    been measured. The per-class measurements are in
     `configmap_key_problem`'s own docstring.
 
     ⛔ The one thing that WOULD be silent is dropping the file instead of
@@ -1436,6 +1459,14 @@ def test_end_to_end_with_a_real_kubectl(tmp_path):
     left with nothing holding it at all. Asserted here rather than in a
     guard of its own: only a real kubectl can answer it, which is why this
     is the arm it hangs on.
+
+    ⛔ **And that is also its limit, stated rather than fixed.** The whole
+    function sits behind `shutil.which("kubectl")`, and no CI workflow
+    installs kubectl (`grep -rl kubectl .github/workflows/` names only
+    `image-ref-resolve.yaml` and `nightly-image-scan.yaml`, neither of
+    which runs these tests) ⇒ on CI this SKIPS, so the `=` coverage below
+    holds only on a host that happens to have kubectl. No mechanism is
+    added for it here: a green CI does not mean that cell ran.
     """
     import yaml  # noqa: PLC0415
     d = _tree(tmp_path, ["db-a.yaml", "DB-U.YAML"], tenant_of={"DB-U.YAML": "db-u"})

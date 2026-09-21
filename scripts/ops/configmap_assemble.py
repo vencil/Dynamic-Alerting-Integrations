@@ -52,8 +52,11 @@
 檔名能不能當 key 由 `configmap_key_problem`（轉寫自 `IsConfigMapKey`）在
 呼叫 kubectl 之前回答。⚠️ **那一層是訊息品質，不是守衛**——實測真 kubectl
 會自己點名 `db b.yaml` 這類名字並印出 regex，拿掉它也不會讓任何缺陷靜默
-通過（rc 仍非零、產物仍不寫）。它買到的是「一次列出全部」與「`=`／`,`／
-`"` 這三類 kubectl 自己點不出名字的情況」，逐格量測寫在該函式的 docstring。
+通過（rc 仍非零、產物仍不寫）。它買到的是「一次列出全部」（kubectl 只印第
+一個）與 `=`、`,` **兩**類——只有這兩類 kubectl 的訊息裡找不到那個檔名。
+⚠️ `"` **不算在內**（前一版把它併進去，那半沒有量過）：kubectl 把整個
+`--from-file` 引數連同檔名原樣回印在 flag 解析錯誤裡，名字是在的，我方只
+是改說那是不合法的 key。逐格量測寫在該函式的 docstring。
 
 ⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成**讀回即將寫出的那份
 manifest**（`kubectl` 的 stdout，`_write_atomically` 還沒發生）：
@@ -173,23 +176,40 @@ def configmap_key_problem(name: str) -> str | None:
     ⛔ **MESSAGE QUALITY, not a guard.** The sentence that used to stand
     here — "handing it to `kubectl` produces an error that never names the
     file" — was FALSE, and it was the premise for keeping this function.
-    Measured, `--from-file=<name>=<path>` against a real kubectl v1.31.0:
-    `db b.yaml`, `db-a (copy).yaml` and `..hidden.yaml` are each NAMED by
-    kubectl, regex included (`"db b.yaml" is not a valid key name for a
-    ConfigMap: … '[-._a-zA-Z0-9]+'`); but `db=a.yaml` gets `key names or
-    file paths cannot contain '='` (names nothing), `db,a.yaml` gets
-    `error reading db: no such file or directory` (names a source that
-    never existed) and `db"a.yaml` a raw pflag CSV parse error — those
-    three are split by `readAsCSV` / `ParseFileSource` before
-    `IsConfigMapKey` ever runs.
+    Re-measured per class, `--from-file="<name>=<abs path>" -n monitoring
+    --dry-run=client -o yaml` against a real kubectl v1.31.0 (sha256
+    `7c27adc6…2437`), every row rc 1:
+
+        db b.yaml          "db b.yaml" is not a valid key name for a
+                           ConfigMap: … regex … '[-._a-zA-Z0-9]+'   NAMED
+        db-a (copy).yaml   same shape                               NAMED
+        ..hidden.yaml      "..hidden.yaml" … must not start with '..'
+                                                                    NAMED
+        db=a.yaml          key names or file paths cannot contain '='
+                                                        names NOTHING
+        db,a.yaml          error reading db: no such file or directory
+                                     names `db`, a fragment that is not a
+                                     file; the real name never appears
+        db"a.yaml          invalid argument "db\"a.yaml=<path>" for
+                           "--from-file" flag: parse error on line 1,
+                           column 3: bare " in non-quoted-field
+                                     NAMED — the whole argument, file name
+                                     included, is echoed back verbatim
+        two bad names      only the FIRST is printed
 
     ⛔ So what this buys is narrow and none of it is "a defect would pass
-    silently": all offending names at once (kubectl stops at the first),
-    a refusal before the subprocess, and the only by-name answer for `=`,
-    `,` and `"`. Without it kubectl still exits non-zero and
-    `_write_atomically` is never reached. DROPPING the file instead of
-    refusing would be the silent one (#1603's shape) — hence "rename it"
-    or "leave it out on purpose", never "skip it".
+    silently": all offending names at once, a refusal before the
+    subprocess, and the only by-name answer for **`=` and `,`** — two
+    classes, not three. ⚠️ `"` is NOT one of them, however it reads in the
+    earlier prose: pflag echoes the argument, so the name is right there;
+    what this layer adds for `"` is only that the refusal says "illegal
+    ConfigMap key" instead of a CSV parse error at a column number. (All
+    three are split by `readAsCSV` / `ParseFileSource` before
+    `IsConfigMapKey` ever runs — that part held.) Without this function
+    kubectl still exits non-zero and `_write_atomically` is never reached.
+    DROPPING the file instead of refusing would be the silent one (#1603's
+    shape) — hence "rename it" or "leave it out on purpose", never
+    "skip it".
 
     ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
     POSIX; Python hands it back with the undecodable ones smuggled in as
@@ -293,6 +313,22 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     and came back UNCHANGED, so the rule is not "exotic characters" — it is
     one measured character. A length mismatch therefore has a second cause
     with nothing to do with the path; `main` names both.
+
+    ⛔ **NOT GUARDED HERE, and this is the cost of a withdrawal.** The round
+    before this one added two arms that turned `data`/`binaryData` coming
+    back as a non-mapping, and a carrier vanishing before the `stat()`
+    below, into sentences. Both are withdrawn: the counterfactual says they
+    changed neither of the two things that matter. Measured end to end, a
+    kubectl emitting `data: notamapping`, and a kubectl that deletes the
+    carrier it just read, each give **rc 1 with no artifact written** with
+    the arms AND without them — the only difference is a readable sentence
+    versus an `AttributeError` / `FileNotFoundError` traceback. Neither
+    input class can pass silently, so neither arm was a guard (D-01), and
+    nothing asserted either of them: reverting both left the whole test
+    file green (65 passed, 1 skipped). ⚠️ What that costs is real: those
+    two inputs now end in a traceback, which is "could not measure" wearing
+    rc 1, the same code a measured disagreement uses. It was already so
+    before that round, and it is so again.
     """
     try:
         doc = _lib_io.safe_load(manifest)
@@ -301,16 +337,8 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     if not isinstance(doc, dict):
         return ["kubectl's output is not a YAML mapping"], {}
 
-    # ⛔ The SAME "could not measure" arm covers `data` / `binaryData` that
-    # came back as a scalar or a list: `.items()` on those raised an
-    # `AttributeError` traceback, which is this function saying nothing at
-    # all in the one case it exists to speak about.
     data = doc.get("data") or {}
     binary = doc.get("binaryData") or {}
-    if not isinstance(data, dict) or not isinstance(binary, dict):
-        return ["kubectl's output is not a ConfigMap mapping (`data` and "
-                "`binaryData` must each be a mapping of key to value)"], {}
-
     got: dict[str, int | None] = {}
     for key, value in data.items():
         got[str(key)] = (len(value.encode("utf-8"))
@@ -321,14 +349,7 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
         except (ValueError, TypeError):
             got[str(key)] = None
 
-    # ⚠️ Same arm again: a carrier can vanish between kubectl reading it and
-    # this `stat()`. That is "could not measure", not a crash.
-    try:
-        want = {p.name: p.stat().st_size for p in carriers}
-    except OSError as exc:
-        return [f"a carrier disappeared from --config-dir while the manifest "
-                f"was being built, so this check could not measure it: "
-                f"{exc}"], {}
+    want = {p.name: p.stat().st_size for p in carriers}
     problems = []
     for name in sorted(set(want) - set(got)):
         problems.append(f"{name!r} is in {want[name]} bytes on disk but is "
@@ -475,8 +496,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_VIOLATION
 
-    # #1796. Name them one by one: the operator has to know WHICH file, and
-    # `kubectl`'s own refusal would not say.
+    # #1796. Name them one by one. ⚠️ NOT because kubectl stays silent — it
+    # names `db b.yaml` itself (measured; see `configmap_key_problem`). What
+    # it will not do is get past the FIRST offender, and for `=` and `,` its
+    # message holds no file name at all.
     illegal = [(p.name, why) for p in carriers
                if (why := configmap_key_problem(p.name)) is not None]
     if illegal:
