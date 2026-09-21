@@ -86,8 +86,8 @@ _HELP = {
         'en': 'Comma-separated Rule Packs (e.g., mariadb,redis,kubernetes)',
     },
     'deploy': {
-        'zh': '部署方式: kustomize, helm, argocd (預設: kustomize)',
-        'en': 'Deployment method: kustomize, helm, argocd (default: kustomize)',
+        'zh': '部署方式: kustomize, helm (預設: kustomize)',
+        'en': 'Deployment method: kustomize, helm (default: kustomize)',
     },
     'output_dir': {
         'zh': '輸出根目錄 (預設: 當前目錄)',
@@ -206,20 +206,19 @@ GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.9'
 # before its first script line.
 GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 
-# quay.io, NOT Docker Hub. `argoproj/argocd` on Docker Hub was last pushed
-# 2022-01-21 and carries no tag beyond v2.6.15, so a pipeline built on it runs
-# a CLI years out of step with the customer's Argo CD server. quay.io is the
-# registry Argo CD's own install manifests use.
-# ⓘ Argo CD's CI guidance is that the CLI should track the server, so two
-# alternatives are worth offering: download it from the customer's own server
-# (`https://$ARGOCD_SERVER/download/argocd-linux-amd64`), or enable auto-sync
-# and drop this stage entirely.
-# ⚠️ Named for the CLI, not for a platform: BOTH legs use it now. The
-# GitHub leg used to `run: argocd app sync` on a bare `ubuntu-latest`,
-# whose runner image ships helm / kubectl / kustomize / kind / minikube
-# and no `argocd` — so that job exited 127 on every dispatch while the
-# GitLab sibling had this pin all along.
-ARGOCD_CLI_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
+# ⛔ There is deliberately no ARGOCD_CLI_IMAGE any more. `--deploy argocd` was
+# retired (#1351): it scaffolded no ArgoCD Application while its apply stage
+# synced one, so the delivered pipeline could not work as generated, and the
+# only way to make it work was for us to decide the customer's ArgoCD
+# conventions (project, target namespace, syncPolicy, targetRevision) — which
+# is not ours to decide. Argo CD remains a supported ENVIRONMENT: point your own
+# Application at the tree `--deploy kustomize` writes (see
+# docs/scenarios/gitops-ci-integration.md §3.3).
+#
+# ⚠️ Retiring the pin is part of the point, not a side effect. quay's argocd
+# tags are release artifacts rather than re-pushed tags, so an upstream fix
+# never reached an existing customer without them re-running this tool — we
+# carried that maintenance for a stage that could not run.
 
 # registry.k8s.io/git-sync publishes ONLY exact patch tags (no `latest`, no
 # `v4`), so a consumer is forced to name a version. The previous pin, v4.4.0
@@ -254,27 +253,38 @@ DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest'
 _GITLAB_APPLY_IMAGES = {
     'kustomize': ('DA_KUBECTL_IMAGE', GITLAB_KUBECTL_IMAGE),
     'helm': ('DA_HELM_IMAGE', GITLAB_HELM_IMAGE),
-    'argocd': ('DA_ARGOCD_IMAGE', ARGOCD_CLI_IMAGE),
 }
 
 
 def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
     """(variable name, pinned ref) for the apply stage's runner image.
 
-    Mirrors _build_gitlab_apply_stage's branching *including its fallback*:
-    an unrecognised deploy method lands in the argocd branch there, so it has
-    to land there here too.
+    ⛔ NO FALLBACK, and that is the change #1351 bought. This used to end in
+    `.get(deploy_method, _GITLAB_APPLY_IMAGES['argocd'])`, mirroring the apply
+    builders' own `else:  # argocd` — so a deploy method added to the
+    interactive prompt but not to the builders shipped the argocd branch under
+    that method's name, silently. With argocd retired there is no branch left
+    that is plausible-by-default, so an unknown method is an error here and in
+    both builders.
 
-    ⚠️ The failure mode is a TOOL/COMMAND MISMATCH, not an undeclared variable.
-    Both the `variables:` entry and the job's `image:` read this one function,
-    so the name is always declared and always referenced — what diverging
-    fallbacks would produce is `argocd app sync` running inside the kubectl
-    image, i.e. a production deploy that starts and then dies on a missing
-    binary. `test_apply_image_matches_the_command_it_runs` is the guard, and it
-    has to re-derive the branch from the rendered script text; comparing the
-    two sides of this lookup to each other proves nothing.
+    ⚠️ The failure mode this prevents is a TOOL/COMMAND MISMATCH, not an
+    undeclared variable. Both the `variables:` entry and the job's `image:` read
+    this one function, so the name is always declared and always referenced —
+    what diverging fallbacks produced was one tool's command running inside
+    another tool's image, i.e. a production deploy that starts and then dies on
+    a missing binary. `test_apply_image_matches_the_command_it_runs` is the
+    guard, and it re-derives the branch from the rendered script text; comparing
+    the two sides of this lookup to each other proves nothing.
     """
-    return _GITLAB_APPLY_IMAGES.get(deploy_method, _GITLAB_APPLY_IMAGES['argocd'])
+    try:
+        return _GITLAB_APPLY_IMAGES[deploy_method]
+    except KeyError:
+        raise ValueError(
+            f'unknown --deploy method {deploy_method!r}: no apply image is '
+            f'pinned for it. Known: {sorted(_GITLAB_APPLY_IMAGES)}. Adding a '
+            f'deploy method means adding it HERE and in both '
+            f'_build_*_apply_stage — a fallback would ship one tool\'s '
+            f'command inside another tool\'s image.') from None
 
 
 # ============================================================
@@ -574,9 +584,9 @@ def _critical_prefill_note(critical: dict) -> str:
     ⛔ Nor does it name the ConfigMap wiring, which an earlier draft also did
     ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
     That mechanism only exists for `--deploy kustomize`: with the default
-    `--config-source configmap`, `--deploy helm` and `--deploy argocd` generate
-    no `kustomize/` tree at all (measured — the output is `.da-init.yaml`, the
-    CI files, `.pre-commit-config.da.yaml` and `conf.d/`, nothing else).
+    `--config-source configmap`, `--deploy helm` generates no `kustomize/` tree
+    at all (measured — the output is `.da-init.yaml`, the CI files,
+    `.pre-commit-config.da.yaml` and `conf.d/`, nothing else).
     ⚠️ That `--config-source` qualifier is load-bearing rather than hedging, and
     it was missing here: GitOps Native Mode (`--config-source git` with a
     `--git-repo`) writes `kustomize/overlays/gitops/` under EVERY `--deploy`
@@ -1033,7 +1043,8 @@ def _offset_path(offset: str, path: str) -> str:
 # ⛔ Derived per invocation, never one hard-coded list shared by the three
 # `--deploy` values. That sharing is issue 1473, and it failed in BOTH
 # directions at once:
-#   * `kustomize/**` was listed under `--deploy helm` / `--deploy argocd`,
+#   * `kustomize/**` was listed under `--deploy helm` / `--deploy argocd`
+#     (that second method is retired — #1351 — but the record is what it is),
 #     which (with the default `--config-source`) write no `kustomize/` tree —
 #     a filter entry that can never match. Pure noise to the reader, and it
 #     made helm mode look kustomize-related.
@@ -1063,11 +1074,14 @@ def _offset_path(offset: str, path: str) -> str:
 #                step reads `environments/prod/values.yaml`. Being READ is
 #                enough: the trigger has to see the file whether or not this
 #                tool created it, which is what the ticket asks for in so many
-#                words. ⛔ Deliberately NOT added for argocd: that branch's
-#                whole body is `argocd app sync`, which talks to the server
-#                and has no checkout step at all, so it reads no repository
-#                path. Adding it there would re-create the dead entry this
-#                function exists to remove.
+#                words.
+#
+# ⚠️ There used to be a third case here, and it is worth saying why it is gone
+# rather than letting the list look like it shrank by tidying: `--deploy argocd`
+# read no repository path at all (its whole body was `argocd app sync`, talking
+# to the server with no checkout), so this function deliberately added no tree
+# for it. That method is retired (#1351), so the case it carved out is gone with
+# it — not relaxed.
 def _ci_trigger_trees(
     deploy_method: str,
     config_source: str = 'configmap',
@@ -1134,9 +1148,10 @@ def _build_github_apply_stage(
     event under which both could run: the shipped ``apply`` had ZERO reachable
     paths. Listing ``validate`` alone is not a weakening — ``generate`` produces
     nothing ``apply`` consumes: it uploads no artifact, its only output is a
-    sticky PR comment, and the two branches that need a working tree check it
-    out themselves (the argocd branch needs none — ``argocd app sync`` talks to
-    the server, so it has no checkout step at all).
+    sticky PR comment, and both apply branches check out the working tree
+    themselves. (A third branch, ``--deploy argocd``, needed no checkout at all
+    because its body talked to the Argo CD server rather than the repository;
+    it is retired — #1351.)
     Enforced by the reachability assertion in
     tests/ops/test_generated_ci_artifacts.py.
     """
@@ -1194,41 +1209,17 @@ def _build_github_apply_stage(
     """).format(namespace=namespace,
                 helm_values=_offset_path(offset, _HELM_VALUES_REL.as_posix()))
 
-    else:  # argocd
-        # ⛔ `container:`, not a bare `run:`. `ubuntu-latest` carries helm,
-        # kubectl, kustomize, kind and minikube — and no `argocd`, so the
-        # shipped job exited 127 on every dispatch. The GitLab sibling pinned
-        # an image for exactly this reason; the two legs now share the pin.
-        # The job has no checkout step (`argocd app sync` talks to the server),
-        # so nothing here needs a toolchain the CLI image lacks.
-        # ⛔ `options: --user root`. The argocd image ends with `USER 999`, and
-        # a container job's steps still touch runner-owned mounts (the step
-        # script and `_runner_file_commands/*` under `_temp`) that are created
-        # by the runner user (uid 1001) — a uid mismatch there is the standard
-        # `EACCES` on container jobs, which is why GitHub's own container-job
-        # docs advise against a non-root `USER`. Cheap insurance on a job whose
-        # entire body is one `argocd app sync`.
-        # ⚠️ NOT verified against a live runner from here (no GitHub Actions in
-        # this environment); it is a documented failure mode, not a measured
-        # one. Root in a short-lived sync container is the conservative side.
-        return textwrap.dedent("""\
-
-      # ── Stage 3: Sync ArgoCD Application ──────────────────
-      # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (issue 1356).
-      apply:
-        needs: [validate]
-        runs-on: ubuntu-latest
-        container:
-          image: {argocd_image}
-          options: --user root
-        if: github.event_name == 'workflow_dispatch'
-        environment: production
-        steps:
-          - name: Trigger ArgoCD sync
-            run: |
-              argocd app sync dynamic-alerting --prune --timeout 300
-    """).format(argocd_image=ARGOCD_CLI_IMAGE)
+    else:
+        # ⛔ An unknown method is an ERROR, not a branch. This used to be
+        # `else:  # argocd`, so a deploy method added to the interactive prompt
+        # but not here shipped the argocd stage under that method's name —
+        # `_build_parser` and the prompt are two lists, and only one of them was
+        # ever checked against these builders. argocd itself is retired (#1351);
+        # what stays is the refusal to guess.
+        raise ValueError(
+            f'unknown --deploy method {deploy_method!r}: no GitHub apply stage '
+            f'is defined for it. Adding a deploy method means adding a branch '
+            f'here, in _build_gitlab_apply_stage, and in _GITLAB_APPLY_IMAGES.')
 
 
 def _gen_github_actions(
@@ -1645,22 +1636,14 @@ def _gen_github_actions(
         # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` holds
         # structurally rather than by two lists happening to agree.
         trigger_paths=trigger_paths,
-        # ⛔ Declared only where something reads it. The argocd branch runs
-        # `argocd app sync` and never names a namespace, so emitting
-        # MONITORING_NS there would ship the customer a knob that does nothing —
-        # the #1361 class, in `env:` rather than in `workflow_dispatch.inputs`.
-        # Held by the knob-reachability assertion in
-        # tests/ops/test_generated_ci_artifacts.py.
-        # ⚠️ A COMMENT, not an empty string, and the placeholder stays INDENTED
-        # in the template: a substitution at column 0 inside a textwrap.dedent
-        # block resets the common prefix and un-indents the whole document —
-        # which is #1347 itself. Measured while writing this: the column-0 form
-        # broke `test_github_workflow_parses_as_yaml`.
-        monitoring_ns_env=(
-            "# (no MONITORING_NS — the argocd branch never names a namespace)"
-            if deploy_method == "argocd"
-            else f"MONITORING_NS: {namespace}"
-        ),
+        # ⛔ Declared only where something reads it — the #1361 class, in `env:`
+        # rather than in `workflow_dispatch.inputs`. Both surviving apply
+        # branches name a namespace (`kubectl rollout restart -n`, `helm upgrade
+        # -n`), so this is now unconditional; the branch that declared nothing
+        # was argocd's, retired with it (#1351). Held by the knob-reachability
+        # assertion in tests/ops/test_generated_ci_artifacts.py, which is what
+        # would red if a future deploy method reads no namespace.
+        monitoring_ns_env=f"MONITORING_NS: {namespace}",
     )
 
 
@@ -1779,44 +1762,14 @@ def _build_gitlab_apply_stage(
                   helm_values=_offset_path(
                       offset, _HELM_VALUES_REL.as_posix()))
 
-    else:  # argocd
-        return textwrap.dedent("""\
-
-    # ── Stage {stage_no}: Sync ArgoCD Application ───────────────────
-    apply:
-      stage: apply
-      image:
-        name: ${image_var}
-        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
-        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
-        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
-        # arguments to the tool and the job dies before the first script line.
-        # Harmless for images that already start a shell.
-        entrypoint: [""]
-      environment:
-        name: production
-      rules:
-        # ⛔ The `if:` is load-bearing, not decoration. A `rules:` entry with no
-        # `if:` / `changes:` / `exists:` matches EVERY pipeline, so a bare
-        # `- when: manual` attaches this job — which holds `environment:
-        # production` and cluster-write credentials — to every push and every
-        # merge request, including one opened by any Developer-role contributor
-        # against code that was never merged and never passed validate. Pinning
-        # it to the default branch is what removes that.
-        #
-        # ⛔ NOT parity with the GitHub sibling, and it would be wrong to read it
-        # that way: `workflow_dispatch` gates the EVENT, not the ref. Whoever
-        # dispatches picks the branch in the Run-workflow dialog, so the GitHub
-        # `apply` is still dispatchable from an unmerged branch while this one is
-        # not. Closing that gap needs `github.ref` in the job's `if:`, which the
-        # reachability evaluator cannot parse today — tracked as a stated
-        # boundary rather than half-done here. Held by the trigger-scope
-        # assertion in tests/ops/test_generated_ci_artifacts.py.
-        - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-          when: manual
-      script:
-        - argocd app sync dynamic-alerting --prune --timeout 300
-    """).format(image_var=image_var, stage_no=stage_no)
+    else:
+        # ⛔ Same refusal as the GitHub sibling, and the two must stay in step:
+        # `_gitlab_apply_image` raises for the same input, so an unknown method
+        # cannot reach a rendered job through either door.
+        raise ValueError(
+            f'unknown --deploy method {deploy_method!r}: no GitLab apply stage '
+            f'is defined for it. Adding a deploy method means adding a branch '
+            f'here, in _build_github_apply_stage, and in _GITLAB_APPLY_IMAGES.')
 
 
 # ── Where each CI artifact lands (SSOT for run_init / _preview_files /
@@ -2523,15 +2476,13 @@ def _gen_gitlab_ci(
         apply_image_var=apply_image_var,
         apply_image_ref=apply_image_ref,
         # Same rule as the GitHub leg: declare the knob only where a script
-        # reads it. The argocd branch runs `argocd app sync` and never names a
-        # namespace. This leg shipped `MONITORING_NS` in all three branches
-        # while every script hardcoded `-n monitoring` — the #1361 class, live,
-        # on the generator whose sibling this PR had already fixed.
-        monitoring_ns_var=(
-            "# (no MONITORING_NS — the argocd branch never names a namespace)"
-            if deploy_method == "argocd"
-            else f"MONITORING_NS: {namespace}"
-        ),
+        # reads it. Both surviving branches read it (`kubectl rollout restart
+        # -n`, `helm upgrade -n`), so it is unconditional; the branch that read
+        # no namespace was argocd's, retired with it (#1351). This leg once
+        # shipped `MONITORING_NS` in all three branches while every script
+        # hardcoded `-n monitoring` — the #1361 class, live, on the generator
+        # whose sibling had already been fixed.
+        monitoring_ns_var=f"MONITORING_NS: {namespace}",
         apply_stage=apply_stage,
     )
 
@@ -3038,7 +2989,7 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
     if deploy == 'helm':
         # issue 1454 B. Conditional on `--deploy helm` because it is the helm
         # apply step that reads it; kustomize mounts conf.d/ through its
-        # configMapGenerator and argocd reads no repository path at all.
+        # configMapGenerator instead.
         _add(out / _HELM_VALUES_REL)
     if deploy == 'kustomize':
         _add(out / 'kustomize' / 'base' / 'kustomization.yaml')
@@ -3346,10 +3297,12 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     # one thing this tool must not invent.
     # ⛔ The third element exists because the first version of this step said
     # "or the first manual deploy fails on connection" — asserting credentials
-    # were the LAST thing missing. For `--deploy helm` the first failure is
-    # `open environments/prod/values.yaml: no such file` (this generator does
-    # not create it) and for `--deploy argocd` it is an Application this
-    # generator does not create, both BEFORE any connection is attempted.
+    # were the LAST thing missing. For `--deploy helm` the first failure was
+    # `open environments/prod/values.yaml: no such file` (a file this generator
+    # now writes as a skeleton, #1454 B), i.e. BEFORE any connection is
+    # attempted. `--deploy argocd` was the extreme case — the prerequisite was
+    # an ArgoCD Application this generator never created — and it is why that
+    # method is retired rather than patched (#1351).
     _apply_needs = {
         'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
                       'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
@@ -3365,11 +3318,6 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                  'thresholdConfig.tenants filled in in '
                  'environments/prod/values.yaml — this tool generates the '
                  'skeleton but no tenant override'),
-        'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
-                   "一個名為 'dynamic-alerting' 的 ArgoCD Application"
-                   '—— 本工具不會建立它',
-                   "an ArgoCD Application named 'dynamic-alerting', which "
-                   'this tool does not create'),
     }.get(config.get('deploy'),
           ('kubectl', 'KUBECONFIG', '目標叢集可連線', 'a reachable cluster'))
     if is_zh:
@@ -4094,12 +4042,17 @@ def _parser_choices(flag: str) -> list[str]:
     """The CLI's own `choices` for a flag, so the interactive path cannot drift.
 
     ⛔ These lists used to be a second, unbound copy. Nothing tied them to
-    `_build_parser()`, and both `_build_*_apply_stage` end in `else:  # argocd`
-    — so a deploy method added interactively-only would silently ship argocd
-    YAML and never appear in the validated `--ci` x `--deploy` matrix, while one
-    added to `--deploy` only would never be offered on the path this tool calls
-    its default. Reading the parser makes "validated the moment it is added to
-    the CLI" true instead of aspirational.
+    `_build_parser()`, so a deploy method added interactively-only never
+    appeared in the validated `--ci` x `--deploy` matrix, while one added to
+    `--deploy` only was never offered on the path this tool calls its default.
+    Reading the parser makes "validated the moment it is added to the CLI" true
+    instead of aspirational.
+
+    ⚠️ It used to be worse than a missing matrix cell: both `_build_*_apply_stage`
+    ended in `else:  # argocd`, so an interactively-added method shipped the
+    argocd stage under that method's name. Those builders now raise for an
+    unknown method (#1351), so the two failure modes are separate: this function
+    keeps the lists from drifting, and the builders refuse to guess.
     """
     for action in _build_parser()._actions:
         if flag in (action.option_strings or []):
@@ -4125,7 +4078,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=None, help=_h('ci'))
     parser.add_argument('--tenants', default=None, help=_h('tenants'))
     parser.add_argument('--rule-packs', default=None, help=_h('rule_packs'))
-    parser.add_argument('--deploy', choices=['kustomize', 'helm', 'argocd'],
+    parser.add_argument('--deploy', choices=['kustomize', 'helm'],
                         default=None, help=_h('deploy'))
     parser.add_argument('-o', '--output-dir', default='.', help=_h('output_dir'))
     parser.add_argument('--non-interactive', action='store_true',

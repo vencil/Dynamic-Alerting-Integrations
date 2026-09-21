@@ -272,7 +272,7 @@ For the full exit-code contract, see
 
 Manually triggered (`workflow_dispatch`), requires `production` environment approval. See §3 for deployment-specific steps.
 
-## 3. Four Deployment Modes
+## 3. Deployment Modes
 
 ### 3.1 Kustomize (Recommended for Getting Started)
 
@@ -333,14 +333,24 @@ helm upgrade --install threshold-exporter \
   -n monitoring --wait
 ```
 
-### 3.3 ArgoCD
+### 3.3 ArgoCD (your own Application, not a `--deploy` value)
 
 Best for: teams with existing ArgoCD GitOps workflows.
 
-**Concept**: ArgoCD Application points to your repo, auto-syncs on `conf.d/` changes.
+⛔ **`da-tools init` has no `--deploy argocd`.** It used to, and it scaffolded no
+ArgoCD Application while its apply stage ran
+`argocd app sync dynamic-alerting` — so the delivered pipeline could not work as
+generated, and the only way to make it work was for us to decide your ArgoCD
+conventions (project, target namespace, `syncPolicy`, `targetRevision`). That is
+not ours to decide, so the option was retired
+([#1351](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1351)).
+
+**How to do it**: generate the tree to be synced with `--deploy kustomize`, then
+point **your own** Application at it. A starting reference follows; fill in
+`repoURL` and your ArgoCD conventions:
 
 ```yaml
-# argocd/dynamic-alerting.yaml
+# You own this file — da-tools init does not generate it
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -351,6 +361,9 @@ spec:
   source:
     repoURL: https://github.com/your-org/your-repo.git
     targetRevision: main
+    # The overlay `--deploy kustomize` writes. ⚠️ The path printed here before
+    # did not exist in a `--deploy argocd` tree (that mode wrote no kustomize
+    # tree at all), so anyone copying it got a ComparisonError.
     path: kustomize/overlays/prod
   destination:
     server: https://kubernetes.default.svc
@@ -360,6 +373,10 @@ spec:
       prune: true
       selfHeal: true
 ```
+
+⚠️ With `syncPolicy.automated` above, **ArgoCD does the syncing** and no
+`argocd app sync` step is needed in CI — which is also why retiring that mode
+took no capability away.
 
 ### 3.4 GitOps Native Mode (git-sync sidecar)
 

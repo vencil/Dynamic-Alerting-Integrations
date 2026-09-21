@@ -93,8 +93,8 @@ const WIZARD_STEPS = [
     id: 'cicd',
     title: () => t('1. CI/CD 平台設定', '1. CI/CD Platform Setup'),
     desc: () => t(
-      '4 步互動精靈，選擇 GitHub Actions / GitLab CI、部署模式（Kustomize / Helm / ArgoCD）、Rule Packs，產出 da-tools init 命令 + workflow YAML。',
-      '4-step interactive wizard: pick GitHub Actions / GitLab CI, deployment mode (Kustomize / Helm / ArgoCD), Rule Packs; outputs da-tools init command + workflow YAML.'
+      '4 步互動精靈，選擇 GitHub Actions / GitLab CI、部署模式（Kustomize / Helm）、Rule Packs，產出 da-tools init 命令 + workflow YAML。',
+      '4-step interactive wizard: pick GitHub Actions / GitLab CI, deployment mode (Kustomize / Helm), Rule Packs; outputs da-tools init command + workflow YAML.'
     ),
     cta: () => t('開啟 CI/CD Setup Wizard', 'Open CI/CD Setup Wizard'),
     href: 'cicd-setup-wizard.html',

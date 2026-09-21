@@ -14,7 +14,7 @@ purpose: |
     CICD_STEPS              ordered step metadata
     CICD_RULE_PACKS         13 Rule Pack catalog
     CICD_CI_OPTIONS         GitHub Actions / GitLab CI / both
-    CICD_DEPLOY_OPTIONS     Kustomize / Helm / ArgoCD
+    CICD_DEPLOY_OPTIONS     Kustomize / Helm
 
   Closure deps: reads window.__t at consumer call time.
 ---
@@ -54,7 +54,6 @@ const CICD_CI_OPTIONS = [
 const CICD_DEPLOY_OPTIONS = [
   { id: 'kustomize', label: 'Kustomize', icon: '📦', desc: () => t('推薦入門：configMapGenerator 自動產生 ConfigMap', 'Recommended to start: configMapGenerator auto-creates ConfigMap.') },
   { id: 'helm', label: 'Helm', icon: '⛵', desc: () => t('使用 threshold-exporter Helm chart 管理', 'Managed via threshold-exporter Helm chart.') },
-  { id: 'argocd', label: 'ArgoCD', icon: '🔁', desc: () => t('GitOps 自動同步：ArgoCD Application 指向你的 repo', 'GitOps auto-sync: ArgoCD Application points to your repo.') },
 ];
 
 export { CICD_STEPS, CICD_RULE_PACKS, CICD_CI_OPTIONS, CICD_DEPLOY_OPTIONS };

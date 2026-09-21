@@ -451,7 +451,11 @@ _DELIVERED_PIN_SOURCE = "scripts/tools/ops/init_project.py"
 # one of those would shrink in lockstep with the thing it is guarding — the
 # exact triviality `test_the_three_selfbuilt_build_lists_agree` had to relocate
 # its own floor away from. Lowering this has to be a deliberate edit.
-_DELIVERED_PRODUCT_FLOOR = 5
+# ⚠️ 5 until #1351 retired `--deploy argocd`: the delivered set was
+# kubectl + helm + argocd + git-sync + the tool image. ⛔ This floor is the
+# anti-vacuity half of the coverage guard, so it moves only when a delivered
+# ref is deliberately removed — never to clear a red.
+_DELIVERED_PRODUCT_FLOOR = 4
 
 # Shape of a concrete image ref, applied to SCALARS of the generated YAML rather
 # than to key names — so it sees the ref wherever the generator happens to put
@@ -671,7 +675,11 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
 
     refs: set[str] = set()
     files = scalars = 0
-    for deploy in ("kustomize", "helm", "argocd"):
+    # ⚠️ Two deploy methods since #1351 retired `--deploy argocd` (and its
+    # `quay.io/argoproj/argocd` pin with it). ⛔ Hand-listed rather than read
+    # from the parser: this walk is the second opinion on the pin table, and
+    # a set derived from the same source it is checking proves nothing.
+    for deploy in ("kustomize", "helm"):
         with tempfile.TemporaryDirectory() as tmp:
             ip.run_init({
                 "ci": "both",
@@ -830,7 +838,7 @@ def test_every_ref_a_generated_customer_repo_carries_is_scanned() -> None:
     customer while both sides of that equality stay in perfect agreement. This is
     the same failure #1302 was: two sets derived from one blind source.
 
-    So this one runs `run_init` for all three deploy methods and reads the actual
+    So this one runs `run_init` for every deploy method and reads the actual
     files, exactly as the sibling guard in the init-project suite does for
     floating tags — that suite's docstring records why a hand-listed set of
     generators was the hole, not the scan.
@@ -840,8 +848,11 @@ def test_every_ref_a_generated_customer_repo_carries_is_scanned() -> None:
     # Anti-vacuity on the WALK, before anything about the refs: a generator that
     # stopped emitting, or a rglob that stopped matching, produces an empty ref
     # set that reads exactly like "nothing unscanned ships".
-    assert files >= 24, (
-        f"only {files} files generated across three deploy methods — run_init "
+    # ⚠️ 24 across three deploy methods; 16 across the two that remain (#1351).
+    # Measured at 23 today (two `--ci both --config-source git` trees), so this
+    # keeps its margin to the same shape it had before.
+    assert files >= 16, (
+        f"only {files} files generated across the deploy methods — run_init "
         "stopped emitting, or the walk broke. The ref assertions below would "
         "pass over nothing."
     )

@@ -1069,10 +1069,15 @@ class TestCriticalTierPlacement:
         three `--deploy` values do not generate that wiring at all.
 
         The first version said "this tool wires conf.d/ straight into the
-        threshold-config ConfigMap". True for `kustomize`; for `helm` and
-        `argocd` no `kustomize/` tree is produced (pinned below), so the tenant
-        of a helm-deployed install was told their `conf.d/` was the live
-        surface by a file that had no idea which install it was for.
+        threshold-config ConfigMap". True for `kustomize`; for `helm` no
+        `kustomize/` tree is produced (pinned below), so the tenant of a
+        helm-deployed install was told their `conf.d/` was the live surface by a
+        file that had no idea which install it was for.
+
+        ⚠️ `argocd` stays in the forbidden-mechanism list below even though
+        `--deploy argocd` is retired (#1351): the list is about words this header
+        must not use, and a retired mechanism is exactly the kind of word that
+        gets copied back in from an old draft.
 
         Pinned as an ABSENCE plus the fact that made it wrong, because the
         absence alone would pass on an empty header.
@@ -1313,8 +1318,7 @@ class TestCriticalTierPlacement:
         """
         from pathlib import Path
 
-        for method, expected in (('kustomize', True), ('helm', False),
-                                 ('argocd', False)):
+        for method, expected in (('kustomize', True), ('helm', False)):
             with tempfile.TemporaryDirectory() as tmpdir:
                 created = ip.run_init({
                     'ci': 'both', 'deploy': method, 'rule_packs': ['mariadb'],
@@ -1431,11 +1435,12 @@ class TestGenGithubActions:
         assert 'apply:' in yaml_str
         assert 'helm upgrade' in yaml_str
 
-    def test_argocd_apply_stage(self):
-        """ArgoCD deployment includes apply stage with argocd app sync."""
-        yaml_str = ip._gen_github_actions('monitoring', 'ghcr.io/vencil/da-tools:latest', 'argocd')
-        assert 'apply:' in yaml_str
-        assert 'argocd app sync' in yaml_str
+    # ⛔ `test_argocd_apply_stage` was removed here: `--deploy argocd` is retired
+    # (#1351). It asserted `'argocd app sync' in yaml_str` for a branch that no
+    # longer exists — a substring pin on a stage whose whole problem was that it
+    # synced an ArgoCD Application this tool never created. Its replacement is
+    # `test_an_unknown_deploy_method_is_refused_by_both_doors`: the value it used
+    # to render is now an error.
 
     def test_namespace_interpolation(self):
         """Custom namespace is interpolated into workflow."""
@@ -1526,11 +1531,8 @@ class TestGenGitlabCi:
         assert 'apply:' in yaml_str
         assert 'helm upgrade' in yaml_str
 
-    def test_argocd_apply_job(self):
-        """ArgoCD deployment includes argocd app sync."""
-        yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'argocd')
-        assert 'apply:' in yaml_str
-        assert 'argocd app sync' in yaml_str
+    # ⛔ `test_argocd_apply_job` removed with its GitHub sibling — same reason,
+    # same replacement.
 
     def test_da_tools_image_variable(self):
         """DA_TOOLS_IMAGE variable is set."""
@@ -1551,7 +1553,7 @@ class TestGenGitlabCi:
         (the apply job had it), so a substring test here could never have gone
         red.
         """
-        for deploy in ('kustomize', 'helm', 'argocd'):
+        for deploy in ('kustomize', 'helm'):
             pipe = yaml.safe_load(
                 ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
             )
@@ -2859,16 +2861,21 @@ class TestRunInit:
 # the CLI would shrink the matrix and every test would still pass, just with
 # fewer cases. Adding a fourth deploy method therefore reds that comparison
 # until this list is updated too — which is the point.
+# ⛔ HAND-WRITTEN on purpose: this is the anti-vacuity floor for the
+# parser-derived matrix in tests/ops/test_generated_ci_artifacts.py, and
+# `test_matrix_matches_the_independent_hand_written_floor` compares the two. A
+# `--deploy` choice dropped from the CLI would otherwise just parametrize fewer
+# cases — which pytest reports as a pass.
+# ⚠️ It went from nine rows to six when `--deploy argocd` was retired (#1351).
+# That is the floor DOING ITS JOB, not being lowered: the removal had to be
+# spelled here too, in a second file, before the suite went green again.
 CI_DEPLOY_COMBINATIONS = [
     ('github', 'kustomize'),
     ('github', 'helm'),
-    ('github', 'argocd'),
     ('gitlab', 'kustomize'),
     ('gitlab', 'helm'),
-    ('gitlab', 'argocd'),
     ('both', 'kustomize'),
     ('both', 'helm'),
-    ('both', 'argocd'),
 ]
 
 
@@ -2928,7 +2935,10 @@ class TestMarkerFileDetection:
         with tempfile.TemporaryDirectory() as tmpdir:
             original_config = {
                 'ci': 'gitlab',
-                'deploy': 'argocd',
+                # ⚠️ Was 'argocd' until #1351 retired it. The marker records
+                # whatever it was generated with, and nothing reads the field
+                # back — which is why retiring a method needed no migration.
+                'deploy': 'helm',
                 'rule_packs': ['postgresql', 'kafka', 'elasticsearch'],
                 'tenants': ['prod-db', 'staging-db'],
                 'namespace': 'infra',
@@ -2940,7 +2950,7 @@ class TestMarkerFileDetection:
                 marker = yaml.safe_load(f)
 
             assert marker['ci_platform'] == 'gitlab'
-            assert marker['deploy_method'] == 'argocd'
+            assert marker['deploy_method'] == 'helm'
             assert set(marker['rule_packs']) == {'postgresql', 'kafka', 'elasticsearch'}
             assert marker['tenants'] == ['prod-db', 'staging-db']
 
@@ -3383,7 +3393,12 @@ class TestCustomerDeliveredImagePins:
     def test_pin_table_entries_are_concrete(self):
         """Every pinned ref names a repository AND a non-floating tag."""
         refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()] + [ip.GIT_SYNC_IMAGE]
-        assert len(refs) >= 4, 'anti-vacuity: the pin table shrank unexpectedly'
+        # ⚠️ 4 before #1351 retired `--deploy argocd` and its
+        # `quay.io/argoproj/argocd` pin with it. ⛔ The floor tracks the pin
+        # table's real size — lowering it to clear a red is how the
+        # anti-vacuity check stops checking, so it moves only when a pin is
+        # deliberately removed, and the CHANGELOG says which.
+        assert len(refs) >= 3, 'anti-vacuity: the pin table shrank unexpectedly'
         for ref in refs:
             tag = self._tag_of(ref)
             assert tag is not None, (
@@ -3424,7 +3439,6 @@ class TestCustomerDeliveredImagePins:
     _IMAGE_IDENTITY = {
         'kustomize': ('k8s', 'kubectl'),
         'helm': ('helm',),
-        'argocd': ('argocd',),
     }
 
     # Repositories MEASURED to be unusable for a GitLab `script:` job, with the
@@ -3510,7 +3524,7 @@ class TestCustomerDeliveredImagePins:
         assert any(w in var.lower() for w in wanted), (
             f'{deploy!r} declares {var!r}, which does not name {wanted}')
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     def test_apply_stage_uses_a_declared_variable_not_a_literal(self, deploy):
         """The job must reference `$VAR` and `variables:` must declare that VAR.
 
@@ -3544,18 +3558,20 @@ class TestCustomerDeliveredImagePins:
     _SCRIPT_MARKER = {
         'kustomize': 'kustomize build',
         'helm': 'helm upgrade',
-        'argocd': 'argocd app sync',
     }
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd', 'not-a-real-method'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     def test_apply_image_matches_the_command_it_runs(self, deploy):
         """The runner image and the command must come from the SAME branch.
 
         `_build_gitlab_apply_stage` chooses the script, `_gitlab_apply_image`
-        chooses the image, and both treat an unrecognised deploy method as
-        argocd. If those two fallbacks ever diverge the job would run — say —
-        `argocd app sync` inside a kubectl image, which starts a production
-        deploy and then fails on a missing binary.
+        chooses the image. They used to share a FALLBACK — an unrecognised
+        deploy method landed in the argocd branch in both — and had those two
+        fallbacks ever diverged the job would have run one tool's command inside
+        another tool's image, i.e. a production deploy that starts and then
+        fails on a missing binary. Both now raise instead (#1351 retired argocd,
+        the only branch plausible enough to fall back to); the refusal is pinned
+        by `test_an_unknown_deploy_method_is_refused_by_both_doors`.
 
         ⛔ Asserting only "the variable is declared" does NOT catch that: both
         sides read the same lookup, so they agree by construction. The branch
@@ -3649,7 +3665,7 @@ class TestCustomerDeliveredImagePins:
         the list, not the scan, was the hole.
         """
         offenders, scanned = [], 0
-        for deploy in ('kustomize', 'helm', 'argocd'):
+        for deploy in ('kustomize', 'helm'):
             with tempfile.TemporaryDirectory() as tmpdir:
                 # config_source=git so the git-sync overlay is generated too.
                 ip.run_init({
@@ -3677,7 +3693,8 @@ class TestCustomerDeliveredImagePins:
                                             f'{os.path.relpath(path, tmpdir)}: {line.strip()}')
 
         # Floor from the walk itself, not from a list this test maintains.
-        assert scanned >= 24, (
+        # ⚠️ 24 when there were three deploy methods; two since #1351.
+        assert scanned >= 16, (
             f'anti-vacuity: only {scanned} generated files scanned across three '
             f'deploy methods — run_init stopped emitting, or the walk is broken')
         assert not offenders, (
@@ -3937,7 +3954,7 @@ class TestShippedStageNumbersMatchTheDeclaredStages:
     缺陷（同樣的 SSOT `_GL_STAGES` 已經在那裡了，只是這三個註解沒接上）。
     """
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     def test_no_stage_banner_numbers_past_the_declared_list(self, deploy):
         import re as _re
         body = ip._build_gitlab_apply_stage(deploy, 'monitoring')
@@ -3948,7 +3965,7 @@ class TestShippedStageNumbersMatchTheDeclaredStages:
             f'只宣告 {len(ip._GL_STAGES)} 個 stage {ip._GL_STAGES}——這行會出貨'
             f'到客戶 repo。\n{body}')
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     def test_the_number_is_derived_not_retyped(self, deploy):
         """反向釘：改動 `_GL_STAGES` 必須連帶改動印出來的編號。"""
         body_now = ip._build_gitlab_apply_stage(deploy, 'monitoring')
@@ -4000,7 +4017,6 @@ class TestTheApplyStageAdmitsItNeedsCredentials:
     @pytest.mark.parametrize('deploy,needle', [
         ('kustomize', 'KUBECONFIG'),
         ('helm', 'KUBECONFIG'),
-        ('argocd', 'ARGOCD_AUTH_TOKEN'),
     ])
     @pytest.mark.parametrize('lang', ['en', 'zh'])
     def test_the_summary_names_the_credential_the_apply_stage_needs(
@@ -4034,7 +4050,7 @@ class TestTheApplyStageAdmitsItNeedsCredentials:
 
     def test_the_generator_still_supplies_no_credential_of_its_own(self):
         """反向：說明歸說明，產生器不得開始猜 secret 名稱塞進 YAML。"""
-        for deploy in ('kustomize', 'helm', 'argocd'):
+        for deploy in ('kustomize', 'helm'):
             wf = ip._gen_github_actions(
                 'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
             gl = ip._gen_gitlab_ci(
@@ -4796,7 +4812,7 @@ class TestTheSummaryDoesNotContradictItself:
                    'dynamic-alerting.yml\n')
 
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     @pytest.mark.parametrize('wired', [False, True], ids=['unwired', 'wired'])
     def test_a_pending_step_forbids_promising_automatic_validation(
             self, ci, deploy, wired, monkeypatch):
@@ -4872,7 +4888,7 @@ class TestTheSummaryDoesNotContradictItself:
             f'所有前置都齊了，結尾卻沒有說會自動驗證\n{out}')
 
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     def test_step_numbers_are_consecutive(self, ci, deploy):
         """⛔ 少一個 `step += 1` 之後，41 個情境的結尾訊息出現重複編號
         （`7. GitLab wiring done…` 緊接著 `7. Commit and push…`），全綠。"""
@@ -4894,7 +4910,7 @@ class TestTheSummaryDoesNotContradictItself:
             f'產出清單印的是絕對路徑：{[s for s in shown if os.path.isabs(s)]}')
         assert len(shown) == len(created), (len(shown), len(created))
 
-    @pytest.mark.parametrize('deploy', ['helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['helm'])
     def test_a_step_never_points_at_a_tree_this_run_did_not_generate(
             self, deploy):
         """⛔ `deploy == 'kustomize'` 改成 `!= 'argocd'` 之後，`--deploy helm`
@@ -5137,7 +5153,7 @@ class TestRoundEightFindings:
             got = ip._root_relative_ci_paths(f)
         assert got == ['rule-packs/custom/'], got
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
     def test_no_bare_issue_ref_is_written_into_a_customer_repo(self, ci,
                                                                deploy):
@@ -5273,9 +5289,12 @@ class TestRoundEightMutationSurvivors:
          ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
           'thresholdConfig.tenants filled in in '
           'environments/prod/values.yaml')),
-        ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
-         ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
-          "an ArgoCD Application named 'dynamic-alerting'")),
+        # ⚠️ A third row for `--deploy argocd` sat here until #1351 retired that
+        # method; its prerequisite was "an ArgoCD Application named
+        # 'dynamic-alerting', which this tool does not create" — the sentence
+        # that made retiring it the right answer rather than filling the gap in.
+        # ⛔ That string stays in the NEGATIVE set below on purpose: a retired
+        # prerequisite is exactly what gets copied back in from an old draft.
     ])
     def test_the_credential_sentence_does_not_swap_its_two_halves(
             self, deploy, binary, secret, prereqs, lang, prereq_idx,
@@ -5333,6 +5352,8 @@ class TestRoundEightMutationSurvivors:
             ('environments/prod/values.yaml 的 thresholdConfig.tenants 已填好',
              'thresholdConfig.tenants filled in in '
              'environments/prod/values.yaml')[idx],
+            # The retired method's prerequisite (#1351) — no surviving row
+            # may name it.
             ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
              "an ArgoCD Application named 'dynamic-alerting'")[idx],
         } - {prereq}
@@ -5371,3 +5392,113 @@ class TestRoundEightMutationSurvivors:
         assert 'only then' not in closing[0].lower(), (
             '一個已經接好線的 repo 被告知還有步驟要做：\n' + '\n'.join(
                 out.splitlines()[-5:]))
+
+
+class TestTheRetiredDeployMethodStaysRetired:
+    """#1351: `--deploy argocd` was removed, and removal needs its own guards.
+
+    ⛔ Deleting a branch leaves no test behind — that is the whole problem. The
+    three things below are what stop it coming back halfway: the CLI refusing the
+    value, both apply builders refusing an unknown method instead of falling
+    through to a plausible-looking branch, and the image lookup refusing it too.
+
+    ⚠️ Why the refusals matter more than the deletion: the builders used to end
+    in `else:  # argocd`, so ANY unrecognised deploy method rendered the argocd
+    stage under that method's name. That is how a deploy method added to the
+    interactive prompt alone would have shipped — silently, with the wrong tool
+    in the wrong image. The retirement removed the only branch plausible enough
+    to be a fallback, so the fallback became an error; these pin that.
+    """
+
+    _RETIRED = 'argocd'
+
+    def test_the_cli_refuses_the_retired_value(self):
+        """argparse, through the real entrypoint — not `_parser_choices`.
+
+        ⛔ Asked of a subprocess on purpose: a customer's script calls the CLI,
+        and what they get has to be a hard, named failure rather than a run that
+        quietly falls back to the default deploy method. Exit code 2 is
+        argparse's usage error, distinct from this tool's own rc 1 (violations)
+        and rc 2-from-caller-error paths.
+        """
+        import subprocess
+        from pathlib import Path
+        proc = subprocess.run(
+            [sys.executable, str(Path(ip.__file__).resolve()),
+             '--ci', 'github', '--deploy', self._RETIRED,
+             '--tenants', 'db-a', '--rule-packs', 'mariadb',
+             '--non-interactive', '-o', tempfile.mkdtemp()],
+            capture_output=True, text=True, timeout=120)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        assert 'invalid choice' in combined and self._RETIRED in combined, combined
+        # ⛔ The message must name what IS accepted. "invalid choice" alone sends
+        # the reader to the docs; argparse lists the choices, and this asserts we
+        # have not replaced that with a custom message that drops them.
+        for surviving in ('kustomize', 'helm'):
+            assert surviving in combined, (surviving, combined)
+
+    def test_no_file_is_written_when_the_value_is_refused(self):
+        """A refused run must not leave half a scaffold behind."""
+        import subprocess
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmpdir:
+            proc = subprocess.run(
+                [sys.executable, str(Path(ip.__file__).resolve()),
+                 '--ci', 'github', '--deploy', self._RETIRED,
+                 '--tenants', 'db-a', '--rule-packs', 'mariadb',
+                 '--non-interactive', '-o', tmpdir],
+                capture_output=True, text=True, timeout=120)
+            assert proc.returncode == 2, proc.stderr
+            leftovers = sorted(p.name for p in Path(tmpdir).iterdir())
+            assert leftovers == [], leftovers
+
+    @pytest.mark.parametrize('method', ['argocd', 'flux', 'not-a-real-method', ''])
+    def test_an_unknown_deploy_method_is_refused_by_both_doors(self, method):
+        """Both apply builders AND the image lookup must raise.
+
+        ⛔ All three, because they are three doors into the same job: the stage
+        text, and the `image:` it runs in. A method that raised in one and
+        rendered in another is the tool/command mismatch the GitLab guard
+        (`test_apply_image_matches_the_command_it_runs`) exists to catch, one
+        level earlier.
+        """
+        with pytest.raises(ValueError, match='unknown --deploy method'):
+            ip._build_github_apply_stage(method, 'monitoring')
+        with pytest.raises(ValueError, match='unknown --deploy method'):
+            ip._build_gitlab_apply_stage(method, 'monitoring')
+        with pytest.raises(ValueError, match='unknown --deploy method'):
+            ip._gitlab_apply_image(method)
+
+    def test_the_refusal_names_the_methods_that_do_work(self):
+        """An error that does not say what to use instead is half an error."""
+        for call in (lambda: ip._build_github_apply_stage('argocd', 'monitoring'),
+                     lambda: ip._build_gitlab_apply_stage('argocd', 'monitoring'),
+                     lambda: ip._gitlab_apply_image('argocd')):
+            with pytest.raises(ValueError) as exc:
+                call()
+            message = str(exc.value)
+            assert 'argocd' in message, message
+            # The builders point at the places a new method has to be added; the
+            # image lookup lists the keys it knows. Either way the reader must
+            # end up somewhere actionable.
+            assert ('_GITLAB_APPLY_IMAGES' in message
+                    or 'kustomize' in message), message
+
+    def test_the_pin_it_carried_is_gone_from_the_generator(self):
+        """The `quay.io/argoproj/argocd` pin retired WITH the branch.
+
+        ⛔ Asserted as an absence on the module, not by grepping the file: the
+        constant is what `nightly-image-scan.yaml` scanned and what
+        `_GITLAB_APPLY_IMAGES` routed, so a re-introduced constant would quietly
+        re-open a maintenance obligation (quay's argocd tags are release
+        artifacts — an upstream fix never reaches an existing customer without
+        them re-running this tool).
+        """
+        assert not hasattr(ip, 'ARGOCD_CLI_IMAGE'), (
+            'ARGOCD_CLI_IMAGE is back. If a deploy method needs an argocd CLI '
+            'image again, that is a product decision (#1351 retired the mode '
+            'precisely because we could not supply the Application it synced) '
+            'and it needs the nightly delivered-scan entry restored with it.')
+        refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()]
+        assert not any('argoproj' in ref for ref in refs), refs
