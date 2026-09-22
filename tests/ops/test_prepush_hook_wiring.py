@@ -339,11 +339,13 @@ def test_the_shipped_install_recipe_actually_guards(tmp_path: Path) -> None:
 def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
     """#1689 itself: `git push origin <branch> main` must still reach the guard.
 
-    git feeds pre-push rows in sorted ref order and pre-commit's
-    ``_pre_push_ns`` returns on the first pushable one, so a branch sorting
-    before ``refs/heads/main`` used to hide main from the guard whose whole job
-    is to block it. Every prefix dev-rules #12 asks for — feat/ fix/ chore/ —
-    sorts before ``main``.
+    pre-commit's ``_pre_push_ns`` returns on the first pushable row, so a
+    co-pushed branch used to hide main from the guard whose whole job is to
+    block it. ⚠️ Which branch does the hiding is not the pusher's to choose and
+    is not a protocol guarantee — the measurement lives in
+    ``test_precommit_env_channel_carries_one_ref_while_git_carries_all``, which
+    covers both the first and a later push of the same branch (#1852). This
+    fixture publishes first, so it is the later-push shape.
 
     ⛔ The single-ref push below is the must-fire control, not decoration: it is
     the only thing separating "the multi-ref push was blocked" from "this
@@ -364,8 +366,8 @@ def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
         env_extra=_SIBLINGS_OFF,
     )
     assert multi.returncode != 0, (
-        "a push carrying a branch that sorts before main did not reach the "
-        f"guard — this is #1689:\n{multi_out}"
+        "a push carrying a co-pushed branch did not reach the guard — this is "
+        f"#1689:\n{multi_out}"
     )
     assert _BANNER in multi_out, multi_out
 
@@ -1025,8 +1027,11 @@ def test_preflight_gate_still_allows_a_push_carrying_its_marker(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "already_published", [True, False], ids=["second-push", "first-push"]
+)
 def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
-    tmp_path: Path,
+    tmp_path: Path, already_published: bool
 ) -> None:
     """The known residual, measured on both channels in one run.
 
@@ -1038,27 +1043,18 @@ def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
     channel this goes red, which is the point: the disclosure in
     ``scripts/ops/_prepush_refs.sh`` must not outlive the measurement behind it.
     """
-    probe = _CONFIG_HEADER + _hook_stanza(
-        "env-probe",
-        "PROBE: record the exported refspec",
-        "bash scripts/ops/env_probe.sh",
-    )
-    work = _make_repo(tmp_path, probe)
-    # A file, not an inline `bash -c`: pre-commit shlex-splits `entry:`, so
-    # nested quoting there is its own source of silent breakage.
-    (work / "scripts" / "ops" / "env_probe.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "${PRE_COMMIT_REMOTE_BRANCH:-<unset>}" >> env_rows.txt\n',
-        encoding="utf-8",
-        newline="\n",
-    )
-    assert _git(work, "add", "-A").returncode == 0
-    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
-                "-m", "probe").returncode == 0
+    work = _repo_with_env_probe(tmp_path)
 
-    # Publish a second branch so both refs are fast-forwards with a real
-    # remote sha — otherwise the two rows are not comparable.
-    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-first").returncode == 0
+    # ⛔ Both shapes. Publishing first makes aaa-first an UPDATE; skipping it
+    # makes the same push CREATE the ref — and that is the axis that decides
+    # which row git hands over first (#1852). A fixture that only publishes
+    # gives the same answer for either candidate rule, so it cannot tell them
+    # apart, and the disclosure built on it described the wrong half of the
+    # residual's reach.
+    if already_published:
+        assert _git(
+            work, "push", "-q", "origin", "HEAD:refs/heads/aaa-first"
+        ).returncode == 0
     _commit(work, "third")
 
     # Channel 1: git's own protocol, via a native hook.
@@ -1089,24 +1085,66 @@ def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
     assert any(" refs/heads/main " in row for row in native_rows), (
         f"the control row is missing — this push did not target main: {native_rows}"
     )
-    # ⛔ WHICH ref survives is lexicographic, not the order you typed. Measured:
-    # `git push origin main zzz` and `git push origin zzz main` produce
-    # byte-identical stdin (main, then zzz), so "name main first" is not a way
-    # to stay safe — a co-pushed branch sorting BEFORE refs/heads/main is what
-    # hides it. Pinned here because the disclosure would otherwise read as if
-    # the ordering were the pusher's to control.
+    # ⛔ The residual is "N rows in, ONE out" — and nothing more. Every
+    # predicate this file has tried for WHICH row turned out false on some push
+    # shape (sorted order, git's first row, the first non-deletion row), so the
+    # assertion stays at the shape and the shapes themselves live on #1852.
     native_refs = [row.split()[2] for row in native_rows]
-    assert native_refs == sorted(native_refs), (
-        f"git no longer feeds pre-push rows in sorted ref order: {native_refs}"
+    assert len(env_rows) == 1 and env_rows[0] in native_refs, (
+        "the env channel no longer carries exactly one of git's rows — if it "
+        "widened, that is good news and the residual disclosed in "
+        f"scripts/ops/_prepush_refs.sh is stale: env={env_rows} "
+        f"native={native_refs}"
     )
-    assert env_rows == [sorted(native_refs)[0]], (
-        "pre-commit exported a different ref than git's first row — the "
-        f"residual's shape changed: env={env_rows} native={native_refs}"
+
+
+_ENV_PROBE_CONFIG = _CONFIG_HEADER + _hook_stanza(
+    "env-probe",
+    "PROBE: record the exported refspec",
+    "bash scripts/ops/env_probe.sh",
+)
+
+
+def _repo_with_env_probe(tmp_path: Path) -> Path:
+    """A repo whose only pre-push hook records PRE_COMMIT_REMOTE_BRANCH."""
+    work = _make_repo(tmp_path, _ENV_PROBE_CONFIG)
+    (work / "scripts" / "ops" / "env_probe.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "${PRE_COMMIT_REMOTE_BRANCH:-<unset>}" >> env_rows.txt\n',
+        encoding="utf-8",
+        newline="\n",
     )
-    assert len(env_rows) == 1, (
-        "pre-commit's environment channel widened to carry more than one ref — "
-        f"got {env_rows}. That is good news, but the residual disclosed in "
-        "scripts/ops/_prepush_refs.sh is now stale: re-measure and rewrite it."
+    assert _git(work, "add", "-A").returncode == 0
+    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
+                "-m", "probe").returncode == 0
+    return work
+
+
+def test_a_pure_deletion_push_runs_no_precommit_hook_at_all(tmp_path: Path) -> None:
+    """The residual is not only "ONE of N" — it can be ZERO.
+
+    `_pre_push_ns` returns None when every row is a deletion, and hook_impl then
+    exits 0 without running a single hook. That is a strictly bigger hole than
+    the disclosed one, and nothing else in this file covers the pre-commit
+    channel for it (``test_deleting_main_is_still_judged`` exercises the native
+    dispatcher instead).
+    """
+    work = _repo_with_env_probe(tmp_path)
+    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-del").returncode == 0
+    _commit(work, "third")
+    _install_precommit(work)
+
+    _push(work, ":refs/heads/aaa-del")
+    assert not (work / "env_rows.txt").exists(), (
+        "good news: pre-commit now runs hooks for a deletion-only push, so the "
+        "ZERO case disclosed in scripts/ops/_prepush_refs.sh is stale"
+    )
+    # ⛔ Must-ring control: the same install, an ordinary push. Without it this
+    # test also passes when the probe never worked.
+    _push(work, "HEAD:refs/heads/main")
+    assert (work / "env_rows.txt").exists(), (
+        "CONTROL FAILED: the probe hook never ran even for an ordinary push, "
+        "so the assertion above proves nothing"
     )
 
 
