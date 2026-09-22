@@ -9,7 +9,7 @@ name: Nightly Image CVE Scan
 # The gap: a new base-image (Alpine/distroless/nginx) CVE landing between the last
 # PR and a tag push is discovered ONLY at release — blocking it (v2.9.0 hit 3
 # freshly-disclosed HIGHs at tag time; runbook §37). This is the missing third
-# dimension: scan the 7 self-built images (built from CURRENT main) PLUS
+# dimension: scan the self-built images (built from CURRENT main) PLUS
 # the third-party upstream images our charts/manifests pull (#902 L1-A) every night,
 # and file ONE deduped tracking issue when fixable HIGH/CRITICAL CVEs appear, so
 # they surface days early. NON-BLOCKING by construction — it gates nothing
@@ -25,7 +25,7 @@ name: Nightly Image CVE Scan
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
 # scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
-# real-build scan + Go CI / CodeQL govulncheck). The other 6 images build real, so
+# real-build scan + Go CI / CodeQL govulncheck). The other images build real, so
 # their full image surface is scanned.
 #
 # THREE buckets, three tracking issues, and the split is about WHO ACTS, not about
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false # scan every image so one build break doesn't mask the rest
       matrix:
-        # Same 7 build configs as component-docker-build.yaml (#474). "Keep in
+        # Same build configs as component-docker-build.yaml (#474). "Keep in
         # sync" is no longer prose: test_selfbuilt_matrix_covers_every_dockerfile
         # and test_the_three_selfbuilt_build_lists_agree (in the nightly-scan
         # matrix-drift module) pin this matrix against BOTH that workflow and
@@ -178,10 +178,12 @@ jobs:
           ignore-unfixed: true
           exit-code: 0
           # recipe-preview: apply the SAME evidence-backed waiver as the release gate
-          # so the #895 tracking issue reflects the governed posture (these 11 bundled-
-          # promtool CVEs are handled, not unhandled noise). NEW promtool CVEs or
-          # EXPIRED entries are NOT in the file → they still surface here (early warning
-          # preserved). Empty → no-op for the other 6 self-built images.
+          # so the #895 tracking issue reflects the governed posture — the bundled-
+          # promtool findings that register carries are handled, not unhandled noise.
+          # ⛔ WHICH ids are waived, on what evidence and until when is NOT restated
+          # here — read the register. NEW promtool CVEs or EXPIRED entries are NOT in
+          # the file → they still surface here (early warning preserved). Empty →
+          # no-op for every other self-built image.
           trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || '' }}
 
       # Shared fail-loud summarizer → emits frag-<name>.txt for the report job.
@@ -323,7 +325,7 @@ jobs:
         # These were in NO automated view of a registry before this job. Not by
         # decision — by three independent misses, each of which reads as
         # deliberate scoping until you check it against this question:
-        #   * Renovate: all three customManagers require `@sha256:` in the match,
+        #   * Renovate: all customManagers require `@sha256:` in the match,
         #     and none of their managerFilePatterns reaches `scripts/**`.
         #   * scan-thirdparty above: its matrix is pinned by SET EQUALITY to the
         #     helm/k8s extractor, which globs `helm/*/values*.yaml` + `k8s/**`.
@@ -391,7 +393,8 @@ jobs:
           # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
           # 100% of generated projects — measured across all 18 option
           # combinations, while no single project carries more than two of the
-          # four above and three combinations carry none. It is also the only one
+          # third-party apply/sync refs above and three combinations carry none.
+          # It is also the only one
           # that runs on developer workstations (`.pre-commit-config.da.yaml`
           # emits it as a `language: docker_image` entry), and the only one where
           # OUR lever reaches EXISTING customers, because the tag is mutable and
@@ -405,7 +408,7 @@ jobs:
             ref: "ghcr.io/vencil/da-tools:latest"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without
-      # creds. Two of the five refs are Docker Hub (alpine/k8s, alpine/helm).
+      # creds. Two of the refs are Docker Hub (alpine/k8s, alpine/helm).
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
         uses: docker/login-action@v3
@@ -495,12 +498,16 @@ jobs:
           # double-quoted bash argument, so a backtick or `$(` in it is COMMAND
           # SUBSTITUTION, not text (#1355 — tracked and fixed on its own branch;
           # this bucket's new prose below deliberately contains neither).
-          # Self-built (7) — keep this signal clean. ⚠️ It feeds the release.yaml
-          # Trivy gate for FIVE of the seven; the two chart-shipped ones
-          # (federation-audit-sidecar / vector-projection-gate) are never
+          # Self-built — keep this signal clean. ⛔ The live image count for each
+          # bucket is the EXPECTED argument in its own call below, pinned to that
+          # bucket's matrix by test_report_expected_counts_match_matrix_sizes; it
+          # is deliberately not restated in prose, because a prose copy carries no
+          # assertion. ⚠️ This bucket feeds the release.yaml Trivy gate for every
+          # image here EXCEPT the two chart-shipped ones
+          # (federation-audit-sidecar / vector-projection-gate), which are never
           # published, so no tag-time gate exists for them and this nightly bucket
           # plus the PR-time scan are their whole CVE signal (#1337).
-          # "We own these, so patch it" is honest for 5 of the 7 — but NOT blanket
+          # "We own these, so patch it" is honest for all but two — but NOT blanket
           # true, and the same wrong-advice failure the third-party sentence below
           # was rewritten for (#1243) applies here in miniature: TWO of these images
           # carry findings inside a BUNDLED upstream binary that no first-party
@@ -513,8 +520,8 @@ jobs:
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             7 "self-built component" \
-            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local \`go get google.golang.org/grpc@v1.82.1\` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. ⛔ DO NOT ASSUME THE RELEASE GATE WILL CATCH THIS. For the five published components release.yaml does scan with exit-code 1, but it runs POST-PUSH and in four of the five jobs it is the LAST step — by then the image, and for the exporter the Helm chart too, are already in the registry. So a red there means a red Actions run, not an artifact held back; only release-da-tools has steps after it (signing, SBOM, archives, the GitHub Release) that a finding actually prevents. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue. Treat this nightly bucket as the actionable signal, not a preview of something a tag push will stop (security-audit-runbook §37)." || rc=1
-          # Third-party (15) — informational. The remediation sentence is the part
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local \`go get google.golang.org/grpc@v1.82.1\` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. ⛔ DO NOT ASSUME THE RELEASE GATE WILL CATCH THIS. For the published components release.yaml does scan with exit-code 1, but it runs POST-PUSH — by then the image, and for the exporter the Helm chart too, are already in the registry. So a red there means a red Actions run, not an artifact held back; only release-da-tools has steps after its scan (signing, SBOM, archives, the GitHub Release) that a finding actually prevents. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue. Treat this nightly bucket as the actionable signal, not a preview of something a tag push will stop (security-audit-runbook §37)." || rc=1
+          # Third-party — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243
           # triaged all 14 and cleared 58 of 120) instead of a generic "bump the tag".
@@ -529,7 +536,7 @@ jobs:
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
             15 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
-          # Customer-delivered (4) — its own issue BECAUSE THE LEVER IS DIFFERENT.
+          # Customer-delivered — its own issue BECAUSE THE LEVER IS DIFFERENT.
           # The other two buckets end in an action we can merge; this one mostly
           # does not, because the ref is already frozen in someone else's repo.
           # Folding it into the third-party bucket would put "bump the pin we own"
@@ -551,7 +558,7 @@ jobs:
             nightly-cve-delivered \
             "🛡️ Nightly image scan — customer-delivered image CVEs on main" \
             5 "customer-delivered image" \
-            "the lever here is DIFFERENT from the other two buckets, and reaching for theirs wastes the triage: we do not deploy these. da-tools init writes them into the CUSTOMER's repo, where they are frozen at generation time — so bumping the constant changes what the NEXT generated project gets, and nothing else. Three separate actions, in this order. (1) BUMP THE PIN so new projects start clean. The pins are version TAGS, not digests, on purpose: the customer has no updater of ours to re-resolve a digest, and an unmaintained digest inhibits security updates — that is a decision, not an omission to fix here. (2) ASK WHETHER THE TAG IS MUTABLE BEFORE ASSUMING ANYONE MUST ACT. alpine/k8s and alpine/helm come from the same publisher whose alpine/git the third-party bucket documents as re-pushed weekly from a fresh apk add, so an upstream rebuild of the SAME tag reaches every existing customer on their next pipeline run with no release from us — verify that per image rather than assuming it, and note the other two do not behave that way (registry.k8s.io publishes only exact patch tags for git-sync, and quay's argocd tags are release artifacts). (3) FOR EXISTING CUSTOMERS, A BUMP IS NOT DELIVERY. It is a communication task: they re-run the init tool or edit the ref themselves. ⛔ HONEST SCOPE, and it is narrower than the other two buckets: this measures the five refs WE WOULD HAND OUT TODAY, not any customer's actual posture. The generated GitLab pipeline emits ONE of DA_KUBECTL_IMAGE / DA_HELM_IMAGE / DA_ARGOCD_IMAGE — whichever the chosen --deploy selects, never all three — as an OVERRIDABLE CI variable, plus DA_TOOLS_IMAGE which is overridable in the same block AND settable at generation time via --da-tools-image; we have no telemetry on which version a customer generated from or overrode to, and the git-sync ref only reaches them at all on the config_source=git path. A clean run here means OUR DEFAULT is clean; it does not mean anyone's pipeline is. ⛔ IT IS A UNION, NOT A CUSTOMER, and the distribution is uneven: measured across the full 18-combination option matrix by generating each tree and parsing it, a single generated project carries between ONE and THREE of these five. Only DA_TOOLS_IMAGE is in all 18 — the three third-party apply images are one-of-three by deploy method, and git-sync only exists on the config_source=git path. So a clean run means every ref we could hand out is clean; it is not a per-customer statement, and the count a given customer is exposed to is smaller than five. (Before the tool image was added, three combinations carried NONE of the watched refs at all.) ⚠️ Finally, do not read this bucket as replacing the offline pin guard in the init-project suite: that one checks floating-vs-concrete SHAPE and says so in its own docstring — it stays green on a perfectly concrete but two-year-stale tag. This bucket is the EXISTENCE-AND-CVE half — the half that needs a registry round-trip: it pulls each ref and scans it, so a ref that has been deleted or retagged away shows up as a degraded run, and a ref that grows a CRITICAL shows up as a finding. ⚠️ BUT DO NOT READ THE EXISTENCE HALF AS AN ALERT — measured, not assumed. The comment that notifies fires only when the missing count INCREASES, so a vanished ref notifies on the transition night and then never again while it stays gone; the issue title keeps saying "1 unscanned" and nothing re-raises it. And the same wire carries the most common transient failure on these runners: two of the five refs are Docker Hub, pulled anonymously, so a shared-IP rate limit produces byte-identical wording to a yank. The authoritative existence check is check_image_refs_resolve.py --scope delivered, and it lives in a PR-triggered workflow with no schedule, so nothing re-asserts existence nightly. Treat a degraded delivered run as "go look", not as "we will be told again". ⛔ CURRENCY IS NOT MEASURED BY ANYTHING, HERE OR ANYWHERE. Nothing in this repo compares these five pins against what the upstream has published since, so a two-year-old tag that still exists and whose findings are all unfixed (this scan passes ignore-unfixed) is green in this bucket AND green in the offline pin guard. Answering it needs a per-registry tag-enumeration call, which is not built and is not costed — quay.io and registry.k8s.io have not been checked for a usable list API. Until then, staleness is a human review item, not an alert." || rc=1
+            "the lever here is DIFFERENT from the other two buckets, and reaching for theirs wastes the triage: we do not deploy these. da-tools init writes them into the CUSTOMER's repo, where they are frozen at generation time — so bumping the constant changes what the NEXT generated project gets, and nothing else. Three separate actions, in this order. (1) BUMP THE PIN so new projects start clean. The pins are version TAGS, not digests, on purpose: the customer has no updater of ours to re-resolve a digest, and an unmaintained digest inhibits security updates — that is a decision, not an omission to fix here. (2) ASK WHETHER THE TAG IS MUTABLE BEFORE ASSUMING ANYONE MUST ACT. alpine/k8s and alpine/helm come from the same publisher whose alpine/git the third-party bucket documents as re-pushed weekly from a fresh apk add, so an upstream rebuild of the SAME tag reaches every existing customer on their next pipeline run with no release from us — verify that per image rather than assuming it, and note the other two do not behave that way (registry.k8s.io publishes only exact patch tags for git-sync, and quay's argocd tags are release artifacts). (3) FOR EXISTING CUSTOMERS, A BUMP IS NOT DELIVERY. It is a communication task: they re-run the init tool or edit the ref themselves. ⛔ HONEST SCOPE, and it is narrower than the other two buckets: this measures the refs WE WOULD HAND OUT TODAY, not any customer's actual posture. The generated GitLab pipeline emits ONE of DA_KUBECTL_IMAGE / DA_HELM_IMAGE / DA_ARGOCD_IMAGE — whichever the chosen --deploy selects, never all three — as an OVERRIDABLE CI variable, plus DA_TOOLS_IMAGE which is overridable in the same block AND settable at generation time via --da-tools-image; we have no telemetry on which version a customer generated from or overrode to, and the git-sync ref only reaches them at all on the config_source=git path. A clean run here means OUR DEFAULT is clean; it does not mean anyone's pipeline is. ⛔ IT IS A UNION, NOT A CUSTOMER, and the distribution is uneven: measured across the full 18-combination option matrix by generating each tree and parsing it, a single generated project carries between ONE and THREE of these refs. Only DA_TOOLS_IMAGE is in all 18 — the three third-party apply images are one-of-three by deploy method, and git-sync only exists on the config_source=git path. So a clean run means every ref we could hand out is clean; it is not a per-customer statement, and the count a given customer is exposed to is smaller than the full set. (Before the tool image was added, three combinations carried NONE of the watched refs at all.) ⚠️ Finally, do not read this bucket as replacing the offline pin guard in the init-project suite: that one checks floating-vs-concrete SHAPE and says so in its own docstring — it stays green on a perfectly concrete but two-year-stale tag. This bucket is the EXISTENCE-AND-CVE half — the half that needs a registry round-trip: it pulls each ref and scans it, so a ref that has been deleted or retagged away shows up as a degraded run, and a ref that grows a CRITICAL shows up as a finding. ⚠️ BUT DO NOT READ THE EXISTENCE HALF AS AN ALERT — measured, not assumed. The comment that notifies fires only when the missing count INCREASES, so a vanished ref notifies on the transition night and then never again while it stays gone; the issue title keeps saying "1 unscanned" and nothing re-raises it. And the same wire carries the most common transient failure on these runners: two of them are Docker Hub, pulled anonymously, so a shared-IP rate limit produces byte-identical wording to a yank. The authoritative existence check is check_image_refs_resolve.py --scope delivered, and it lives in a PR-triggered workflow with no schedule, so nothing re-asserts existence nightly. Treat a degraded delivered run as "go look", not as "we will be told again". ⛔ CURRENCY IS NOT MEASURED BY ANYTHING, HERE OR ANYWHERE. Nothing in this repo compares these pins against what the upstream has published since, so a two-year-old tag that still exists and whose findings are all unfixed (this scan passes ignore-unfixed) is green in this bucket AND green in the offline pin guard. Answering it needs a per-registry tag-enumeration call, which is not built and is not costed — quay.io and registry.k8s.io have not been checked for a usable list API. Until then, staleness is a human review item, not an alert." || rc=1
           exit $rc
 
       # A cron nobody watches degrades into background noise once it is red for
