@@ -105,18 +105,56 @@ GitOps sync 需要將 `conf.d/` 目錄轉為 K8s ConfigMap。
 ### 方式 A：Makefile target（threshold-config）
 
 ```bash
-make configmap-assemble
+make configmap-assemble CONFDIR=/path/to/your/conf.d
 # 產出: .build/threshold-config.yaml（threshold-exporter 用的 tenant 配置）
 ```
+
+⛔ **`CONFDIR` 一定要明示。** 它的內建預設值是 `components/threshold-exporter/config/conf.d`——**本 repo 自帶的開發範例樹**，裡面的 `db-a` / `db-b` 是參考範本，既不包含在發布的 chart 也不在 image 裡，幾乎不可能是你的租戶。不帶 `CONFDIR=` 直接跑會被**硬擋**，因為照著組出來的產物 `kubectl apply` 上去會把線上的 `threshold-config` **換成示範內容**。那棵樹**底下的子目錄**（`examples/` 之類）一樣擋——同一批示範租戶，換個路徑不會變成你的。
+
+真的要組那棵範例樹時（寫文件、跑 demo、本 repo 自己的測試），明示放行：
+
+```bash
+ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
+```
+
+⚠️ **這道擋的射程是 per-checkout，不是 per-repo**——寫在這裡是因為拒絕訊息給的補救是「指向你自己的樹」，而照字面去指**另一個 checkout／worktree 裡同一棵範例樹**就是綠燈。範例樹的位置由 script 自己的 `__file__` 推導，所以它守的是「跑這一份 script 的這一棵樹」。⛔ 這是**已知邊界不是疏漏**：它要擋的缺陷是「照內建預設值跑」，而預設值一定落在本 checkout；要碰到另一個 checkout 的那棵樹，得自己把完整路徑打出來。改用 `git` 收斂 repo identity 的代價更壞——客戶樹上未必有 `git`，而缺 `git` 時那道判定會**靜默放行**。
 
 在 CI pipeline 中使用：
 
 ```yaml
 # ArgoCD pre-sync hook 或 Flux Kustomization postBuild
 steps:
-  - run: make configmap-assemble
+  # ⛔ CONFDIR 指向你自己 config repo 的 conf.d/，不是預設那棵範例樹
+  - run: make configmap-assemble CONFDIR=tenants/conf.d
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
+
+這一步會在寫出產物**之前**擋下下列問題，並盡可能具名到檔：
+
+| 擋什麼 | 為什麼不是警告 |
+|---|---|
+| 同一個租戶 id 出現在兩個檔 | exporter 對整棵 dir 是 hard reject，**每一個**租戶都會失去告警 |
+| 檔名不能當 ConfigMap key | key 必須匹配 `[-._a-zA-Z0-9]+` 且不是 `.` / `..`（k8s `IsConfigMapKey`）。`db b.yaml`、`db-a (copy).yaml` 這種**永遠**不可能成為合法 key，只能改名 |
+| 產出的 ConfigMap 與你的樹對不上 | 組完之後這一步會**讀回它即將寫出的那份 manifest**（還沒落地）：裡面的 key 集合與每個值的長度，必須等於選中的那批載體。⚠️ 落到這一列的成因有**兩類**：⑴ **引數層**——路徑裡的 `,`、`"`、`=` 會讓 kubectl 在讀檔之前就把 `--from-file` 的引數切壞（先過 CSV 再過 `key=path` 兩層切割）⇒ 少一個租戶、或多一個沒人宣告的 key，解法是換一條不含那些字元的路徑；⑵ **內容層**——key 集合正確、只有**長度**對不上，那與路徑無關：值沒能逐位元組通過 kubectl 的 YAML emitter 與這一步的 loader（**唯一實測到的字元是 U+0085 NEL**，回程被正規化成一般換行而少一個位元組；⚠️ 同一次也量了 U+2028 / U+2029，兩者原樣往返——這不是「奇怪字元都會」），此時搬樹重跑會得到一模一樣的錯，要比對的是 manifest 裡那個 key 的值與檔案內容。⚠️ 本列抓的是**引數被弄壞而 kubectl 仍然成功**的那一半；被弄壞到 kubectl 自己拒絕時，它的訊息會說「key names or file paths」而**誰也不點名**，這一步只能原樣轉述 |
+| 載體總位元組超過 1 MiB | k8s `ValidateConfigMap` 對 `data` 的總和設上限，超過時 `kubectl apply` 是對**整個物件**失敗、不提任何檔。量的是**產出的 manifest 裡的值**，不是檔案大小的預測 |
+| 目錄裡沒有任何載體 | 「組出零個租戶」與「平台真的沒有租戶」無法區分，通常是 `CONFDIR` 指錯。⚠️ 這一列**沒有檔可以點名**——它就是「一個都沒有」 |
+
+⛔ **退出碼要看你呼叫的是哪一層。** script 本身依 repo 慣例回 `1 = 設定違規` / `2 = 呼叫端或工具錯誤`（例如 `kubectl` 不在 PATH）。但 **`make` 對任何 recipe 失敗一律 exit 2**，所以經由 `make configmap-assemble` 跑時這個區分**在 make 這一層整個塌掉**——CI **不能**靠 `make` 的 rc 分辨這兩類。要那個區分就直接呼叫 script（與本頁方式 C 同一個慣例）：
+
+```bash
+python3 scripts/ops/configmap_assemble.py \
+  --config-dir tenants/conf.d --output .build/threshold-config.yaml
+# rc 1 = 設定違規（重複租戶 / 檔名 / 產物與樹對不上 / 超過 1 MiB / 沒有載體）
+# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席或逾時）
+```
+
+⚠️ 幾件文件以前沒說的事：
+
+- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（要完整清單請跑遞迴讀取器，例如 `validate_config`），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+- **讀不到的載體會具名但不擋**：`CONFDIR` 頂層若有**斷鏈 symlink** 或**取了 config 名字的目錄**（`db-x.yaml/`），它們進不了 ConfigMap，stderr 會逐個 `WARN` 點名。⛔ 那不是警告性的雜訊——那個租戶在叢集上沒有告警。
+- **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
+- **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
+- **⚠️ 上面那個 1 MiB 不是你先撞到的天花板**：`kubectl apply -f`（client-side，也就是本節教的那條命令）會把**整個物件**寫進 `kubectl.kubernetes.io/last-applied-configuration` 這個 annotation，而 k8s 對一個物件的 annotation 總量上限是 **256 KiB**——`data` 上限的四分之一，而且驗證順序在前。超過時 `kubectl apply` 回的是 `metadata.annotations: Too long`，**不點名任何檔**。產物超過那個大小時 assemble 會印一則 `WARN`（不擋），兩條出路：改用 `kubectl apply --server-side -f`（不存那個 annotation），或把租戶拆開（`make sharded-assemble`）。
 
 ### Method B: Helm values overlay
 

@@ -109,18 +109,109 @@ GitOps sync requires converting the `conf.d/` directory into a K8s ConfigMap.
 ### Method A: Makefile target (threshold-config)
 
 ```bash
-make configmap-assemble
+make configmap-assemble CONFDIR=/path/to/your/conf.d
 # Output: .build/threshold-config.yaml (tenant config for threshold-exporter)
 ```
+
+⛔ **`CONFDIR` must be set explicitly.** Its built-in default is
+`components/threshold-exporter/config/conf.d` — **this repo's development
+sample tree**. Its `db-a` / `db-b` tenants are reference templates that ship
+in neither the released chart nor the image, so they are almost certainly not
+yours. Running without `CONFDIR=` is **hard-refused**, because
+`kubectl apply` of the resulting artifact would **replace** the live
+`threshold-config` with the samples. Subdirectories of that tree (`examples/`
+and the like) are refused too — the same demonstration tenants do not become
+yours by being one level down.
+
+When assembling that sample tree really is the intent (docs, demos, this
+repo's own tests), say so explicitly:
+
+```bash
+ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
+```
+
+⚠️ **The refusal is PER-CHECKOUT, not per-repo.** It is written here
+because the message's remedy — "point the target at your own tree" — reads
+as covering more than it does: spelling out the path to the *same* sample
+tree inside a second checkout or worktree of this repo gets a green light.
+The sample tree's location is derived from the script's own `__file__`, so
+it guards the tree the running script lives in. ⛔ This is a **known
+boundary, not an oversight**: the defect it exists for is "ran with the
+built-in default", and that default always lands inside this checkout;
+reaching the other one means typing its full path by hand. Converging repo
+identity through `git` instead would be worse — a customer tree may have no
+`git`, and without it that check would **pass silently**.
 
 Use in CI pipeline:
 
 ```yaml
 # ArgoCD pre-sync hook or Flux Kustomization postBuild
 steps:
-  - run: make configmap-assemble
+  # ⛔ CONFDIR points at your own config repo's conf.d/, not the sample tree
+  - run: make configmap-assemble CONFDIR=tenants/conf.d
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
+
+The step refuses **before** writing the artifact in the cases below, naming
+the offending files wherever there are any to name:
+
+| Refused | Why this is not a warning |
+|---|---|
+| One tenant id declared in two files | The exporter hard-rejects the ENTIRE directory, so **every** tenant there loses alerting |
+| A file name that cannot be a ConfigMap key | A key must match `[-._a-zA-Z0-9]+` and be neither `.` nor `..` (k8s `IsConfigMapKey`). `db b.yaml` or `db-a (copy).yaml` can **never** become a key — rename them |
+| A produced ConfigMap that is not your tree | Once built, this step **reads back the manifest it is about to write** (nothing has landed yet): the key set and every value's length must equal the carriers it selected. ⚠️ **Two** different causes land here: (1) the **argument layer** — a `,`, a `"` or an `=` in the path makes kubectl mangle the `--from-file` argument before it ever opens a file (it splits on CSV first, then on `key=path`) — one tenant short, or one key nobody declared; the remedy is a path holding none of those characters. (2) The **content layer** — the key set is right and only a **length** differs, which has nothing to do with the path: the value did not survive kubectl's YAML emitter and this loader byte for byte (**the one measured character is U+0085 NEL**, normalised to a plain newline on the way back and so one byte shorter; ⚠️ U+2028 / U+2029 were measured in the same run and came back unchanged — this is not "any exotic character"). Moving the tree reproduces that failure exactly — compare the manifest's value with the file instead. ⚠️ This row catches the half where the argument is mangled **and kubectl still succeeds**; when kubectl refuses instead, its message blames "key names or file paths" and **names neither**, and this step can only forward it |
+| Carriers totalling more than 1 MiB | k8s `ValidateConfigMap` bounds the sum of the `data` values; over it, `kubectl apply` fails on the whole OBJECT and names no file. Measured on the **values in the produced manifest**, not predicted from file sizes |
+| No config carrier in the directory | "Assembled zero tenants" is indistinguishable from "the platform has none"; usually a mis-pointed `CONFDIR`. ⚠️ This row has **no file to name** — "there are none" is the finding |
+
+⛔ **Which exit code you see depends on which layer you call.** The script
+itself follows this repo's convention — `1 = config violation`,
+`2 = caller or tooling error` (`kubectl` missing from `PATH`, say). But
+**`make` exits 2 for any failed recipe**, so that distinction **collapses
+entirely at the make layer**: CI **cannot** use the rc of
+`make configmap-assemble` to tell the two apart. Call the script directly
+when you need it (the same convention as Method C on this page):
+
+```bash
+python3 scripts/ops/configmap_assemble.py \
+  --config-dir tenants/conf.d --output .build/threshold-config.yaml
+# rc 1 = config violation (duplicate tenant / file name / artifact does
+#        not match the tree / over 1 MiB / no carrier)
+# rc 2 = caller or tooling error (--config-dir missing, kubectl absent or
+#        timed out)
+```
+
+⚠️ More things this page did not previously state:
+
+- **The assembly is FLAT**: only files at the **top level** of `CONFDIR` enter
+  the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
+  under `examples/` or any hierarchical subdirectory (`region-eu/` and the
+  like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
+  the rest as `(+N more)`** — run a recursive reader (`validate_config`) for
+  the full list. The exporter reads the tree recursively in-cluster
+  (ADR-016/017), so the two views disagree.
+- **A carrier nothing can be read from is named, not blocked**: a dangling
+  symlink or a directory carrying a config name (`db-x.yaml/`) at the top
+  level cannot enter the ConfigMap, and each one gets its own `WARN` on
+  stderr. ⛔ That is not noise — that tenant has no alerting in-cluster.
+- **Extension casing now matches the exporter**: carriers such as
+  `DB-A.YAML` or `db-b.YML` **do** enter the ConfigMap. ⚠️ Knock-on effect: if
+  you hold both `db-a.yaml` and `DB-A.YAML` and they declare the same tenant,
+  this step now refuses (it used to drop the uppercase one silently and print
+  a green light).
+- **A failure here does not remove an older artifact**: if
+  `.build/threshold-config.yaml` is left over from a previous run it survives
+  **untouched** (half a file is worse than an old one). ⛔ So the
+  `kubectl apply` step must run only after assemble **succeeds** — a pipeline
+  that is not fail-fast will push the **stale** config.
+- **⚠️ That 1 MiB is not the ceiling you hit first**: `kubectl apply -f`
+  (client-side, the command this section shows) stores the ENTIRE object in
+  the `kubectl.kubernetes.io/last-applied-configuration` annotation, and k8s
+  caps an object's annotations at **256 KiB** — a quarter of the `data`
+  limit, and checked before it. Over that, `kubectl apply` answers
+  `metadata.annotations: Too long` and **names no file**. Assemble prints a
+  `WARN` (it does not refuse) once the artifact is that large; the two ways
+  out are `kubectl apply --server-side -f`, which stores no such annotation,
+  and splitting the tenants (`make sharded-assemble`).
 
 ### Method B: Helm values overlay
 
