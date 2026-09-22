@@ -499,7 +499,7 @@ _A_DIGEST = "sha256:" + "0123456789abcdef" * 4  # 64 hex chars; SHAPE is the sub
 
 
 def _delivered_pins_from_generator() -> tuple[str, ...]:
-    """The four customer-delivered pins, read from the generator that owns them.
+    """The customer-delivered pins, read from the generator that owns them.
 
     Keeps the positive samples honest across a legitimate bump, and keeps this
     file from becoming a third place a ref is spelled out.
@@ -2122,8 +2122,8 @@ _TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output"})
 
 # Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
 # waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
-# promtool: the expression evaluates to '' for the other six images, so it is a
-# no-op there. The other two buckets scan images we do not build and have no
+# promtool: the expression evaluates to '' for every other image in that
+# matrix, so it is a no-op there. The other two buckets scan images we do not build and have no
 # waiver story at all — an entry appearing in either is a finding, not config.
 _TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
     "scan": frozenset({"trivyignores"}),
@@ -2976,7 +2976,7 @@ def test_pr_build_triggers_on_every_matrix_entrys_dockerfile() -> None:
 
 
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (7 / 15 / 4) must track the matrix sizes.
+    """Each report call's hardcoded EXPECTED must track its own matrix size.
 
     Load-bearing beyond bookkeeping: EXPECTED is what turns "an image did not
     scan" into `missing = EXPECTED - present > 0`, and that is the ONLY thing

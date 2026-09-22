@@ -146,16 +146,18 @@ def _run_static_checks(filepath: str, source: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # Soft cap: the size at which decomposition starts paying off. Picked from
-# observing where tenant-manager.jsx became hard to audit. Of the 43 .jsx
-# files the lint scans (39 registered tools + 4 sub-components), only
-# tenant-manager.jsx (1691 lines) sits above 1500; the next-largest is
-# operator-setup-wizard.jsx at 1252. So 1500 picks today's single outlier
-# without flagging anyone else.
+# observing where tenant-manager.jsx became hard to audit — the file whose
+# three latent bugs PR #150 paid for.
+# ⚠️ The file-size distribution that justified this number is deliberately NOT
+# restated here. The constants themselves are pinned by TestThresholdConstants
+# (#152), but no assertion relates them to the sizes of the files actually
+# scanned, so a snapshot written here would go stale with nothing to notice.
+# Re-derive it from the scanned set when the caps come up for review.
 LINE_COUNT_WARN = 1500
 
-# Hard cap: tenant-manager.jsx at 1691 already had 3 latent bugs; 2500 gives
-# ~50% headroom over today's worst offender so it doesn't insta-fail current
-# reality, but blocks the next such offender from landing.
+# Hard cap: headroom over the soft cap so it does not insta-fail current
+# reality, while still blocking the next file that grows the way
+# tenant-manager.jsx did before it was decomposed.
 LINE_COUNT_FAIL = 2500
 
 
@@ -190,10 +192,15 @@ def _compute_exit_code(
     bugs accumulate undetected — see PR #150 / S#67 / issue #152.
 
     Granular `--strict-*` flags added in PR #TBD (DX track): they let us
-    activate the line-count safety net immediately (codebase has 0
+    activate the line-count safety net immediately (codebase had 0
     soft-cap violations after PR-2d Phase 3 / S#72) WITHOUT being
-    blocked by 330 pre-existing `style={{}}` baseline warnings — those
-    get a separate cleanup track. Backward compat: `--strict` alone
+    blocked by the standing `style={{}}` baseline warnings — those get a
+    separate cleanup track. ⚠️ That baseline is not restated as a number
+    here: nothing asserts it, and the count that used to sit here had
+    already drifted. To obtain it, run `_RE_STYLE_DOUBLE_CURLY` (defined
+    above) over `JSX_DIRS` — the static pass itself does not run at all
+    without Node, so an exit code of 0 from this script is not a
+    measurement. Backward compat: `--strict` alone
     still activates both (for any caller that already invoked it).
     """
     if not ci:
