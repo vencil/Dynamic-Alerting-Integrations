@@ -136,5 +136,5 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 	if scan.conflict != nil {
 		return nil, nil, nil, nil, nil, scan.conflict
 	}
-	return scan.tenants, scan.defaults, scan.absHashes(), scan.absMtimes(), scan.graph, nil
+	return scan.tenants, scan.defaults, scan.absHashes(), scan.absMtimes(), scan.inheritanceGraph(), nil
 }

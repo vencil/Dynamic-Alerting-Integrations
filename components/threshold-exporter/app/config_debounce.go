@@ -338,7 +338,7 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 		tenants:  scan.tenants,
 		defaults: scan.defaults,
 		hashes:   scan.absHashes(),
-		graph:    scan.graph,
+		graph:    scan.inheritanceGraph(),
 		tree:     scan,
 	}, false, nil
 }

@@ -60,6 +60,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -87,6 +88,15 @@ type treeFile struct {
 	tenantIDs  []string // sorted; nil for `_`-prefixed, unparseable or tenant-less files
 	isDefaults bool     // basename folds to `_defaults.yaml` / `_defaults.yml`
 	reused     bool     // hash + tenantIDs came from prior (mtime fast-path)
+	// parsed records that THIS scan ran parseTenantDecls on the file's
+	// bytes. False when the declarations were carried from the prior — by
+	// the mtime fast-path, or because the file was read (too young for the
+	// guard, or stat mismatch) and hashed IDENTICAL to the prior. That second
+	// carry is load-bearing for cost: a tree whose files are younger than
+	// treeScanMtimeGuard is read on every tick, and re-parsing 1000 unchanged
+	// files each time is the parse cost the bench gate flagged. Declarations
+	// are a function of the bytes, and the hash is the bytes.
+	parsed bool
 	// parseFailed records that the tenant-declaration parse of this file's
 	// bytes failed. ⛔ A file in this state NEVER takes the mtime fast-path:
 	// reusing its prior would silence da_config_parse_failure_total after the
@@ -110,8 +120,48 @@ type treeScan struct {
 	// configuration, not a graph with one edge fewer.
 	tenants  map[string]string // tenantID → absPath
 	defaults map[string]bool   // absPath → true
-	graph    *InheritanceGraph
 	conflict *DuplicateTenantError
+
+	// graph is built on first use (inheritanceGraph), not by the walk: the
+	// flat plane's paths (IncrementalLoad, the flat branch of detectChange)
+	// never read it, and building it on every quiet tick was ~1 ms and ~2k
+	// allocs the bench gate charged to IncrementalLoad_1000_NoChange_MtimeGuard.
+	// tenants and defaults are immutable once the walk returns, so the lazy
+	// build is a pure function of the scan and sync.Once makes it safe for
+	// concurrent readers of a retained scan.
+	graphOnce sync.Once
+	graph     *InheritanceGraph
+}
+
+// inheritanceGraph returns the scan's inheritance graph, building it on the
+// first call. Nil when the scan has a conflict (no tenants were attributed).
+// Chains are cached per directory because tenants in one directory share a
+// chain; iteration is sorted so the graph's slices are stable across scans
+// (debounce batching relies on the order).
+func (s *treeScan) inheritanceGraph() *InheritanceGraph {
+	s.graphOnce.Do(func() {
+		if s.conflict != nil {
+			return
+		}
+		g := NewInheritanceGraph()
+		chainCache := make(map[string][]string)
+		tenantIDs := make([]string, 0, len(s.tenants))
+		for tid := range s.tenants {
+			tenantIDs = append(tenantIDs, tid)
+		}
+		sort.Strings(tenantIDs)
+		for _, tid := range tenantIDs {
+			dir := filepath.Dir(s.tenants[tid])
+			chain, cached := chainCache[dir]
+			if !cached {
+				chain = config.CollectDefaultsChain(dir, s.absRoot, s.defaults)
+				chainCache[dir] = chain
+			}
+			g.AddTenant(tid, chain)
+		}
+		s.graph = g
+	})
+	return s.graph
 }
 
 // scanDirTree walks root once and returns both the flat products (per-file
@@ -263,8 +313,18 @@ func walkDirTree(root string, prior *treeScan, metrics *configMetrics, logger *l
 			if pf == nil || pf.hash != f.hash {
 				f.data = data
 			}
-			if !strings.HasPrefix(e.name, "_") {
+			switch {
+			case strings.HasPrefix(e.name, "_"):
+				// Never parsed for tenants.
+			case pf != nil && pf.hash == f.hash && !pf.parseFailed:
+				// Same bytes as the prior: the declarations cannot differ, so
+				// carry them instead of parsing again. A prior that failed to
+				// parse is excluded on purpose — it must be re-parsed (and
+				// re-counted) every scan, see parseFailed.
+				f.tenantIDs = append([]string(nil), pf.tenantIDs...)
+			default:
 				f.tenantIDs, f.parseFailed = parseTenantDecls(e.abs, data, metrics, logger)
+				f.parsed = true
 			}
 		}
 
@@ -298,26 +358,7 @@ func walkDirTree(root string, prior *treeScan, metrics *configMetrics, logger *l
 		}
 	}
 	scan.tenants = tenants
-
-	// Inheritance graph. Chains are cached per directory because tenants in
-	// one directory share a chain; iteration is sorted so the graph's slices
-	// are stable across scans (debounce batching relies on the order).
-	scan.graph = NewInheritanceGraph()
-	chainCache := make(map[string][]string)
-	tenantIDs := make([]string, 0, len(tenants))
-	for tid := range tenants {
-		tenantIDs = append(tenantIDs, tid)
-	}
-	sort.Strings(tenantIDs)
-	for _, tid := range tenantIDs {
-		dir := filepath.Dir(tenants[tid])
-		chain, cached := chainCache[dir]
-		if !cached {
-			chain = config.CollectDefaultsChain(dir, absRoot, scan.defaults)
-			chainCache[dir] = chain
-		}
-		scan.graph.AddTenant(tid, chain)
-	}
+	// The inheritance graph is NOT built here — see inheritanceGraph.
 	return scan, nil
 }
 

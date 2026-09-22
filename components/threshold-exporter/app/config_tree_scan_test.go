@@ -137,9 +137,9 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 			t.Errorf("%s hash moved on the warm scan: %s → %s", k, first.files[k].hash, f.hash)
 		}
 	}
-	if !reflect.DeepEqual(second.graph.TenantDefaults, first.graph.TenantDefaults) {
+	if !reflect.DeepEqual(second.inheritanceGraph().TenantDefaults, first.inheritanceGraph().TenantDefaults) {
 		t.Errorf("inheritance graph moved across the fast-path:\n first %v\nsecond %v",
-			first.graph.TenantDefaults, second.graph.TenantDefaults)
+			first.inheritanceGraph().TenantDefaults, second.inheritanceGraph().TenantDefaults)
 	}
 	if !reflect.DeepEqual(second.defaults, first.defaults) {
 		t.Errorf("defaults set moved across the fast-path: %v → %v", first.defaults, second.defaults)
@@ -519,5 +519,68 @@ func TestBrokenFileIsReReadOnEveryTick(t *testing.T) {
 	}
 	if f := tree.files["t-alpha.yaml"]; f == nil || f.parseFailed {
 		t.Errorf("the retained scan marks the healthy t-alpha.yaml as parseFailed")
+	}
+}
+
+// TestScanDirTree_UnchangedYoungFileIsNotReparsed pins the cost rule the
+// bench gate flagged on PR #1935: a file read because it is younger than
+// the mtime guard, whose bytes hash identical to the prior, carries the
+// prior's declarations instead of parsing them again. Declarations are a
+// function of the bytes; re-parsing 1000 unchanged files on every tick was
+// the +945% allocs on IncrementalLoad_1000_NoChange.
+//
+// The production change that reddens the first arm: parsing whenever the
+// file is read. Controls: a changed file IS parsed; a prior that failed to
+// parse IS re-parsed (parseFailed carve-out, TestBrokenFileIsReReadOnEveryTick
+// covers the counter side).
+func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
+	t.Parallel()
+	root := twoTenantTree(t)
+	fresh, _ := freshMetrics(t)
+	first, err := scanDirTree(root, nil, fresh, nil)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	for k, f := range first.files {
+		if !strings.HasPrefix(filepath.Base(k), "_") && !f.parsed {
+			t.Errorf("cold scan must parse every tenant carrier; %s was not", k)
+		}
+	}
+
+	// t-alpha: same bytes, young mtime → read, hash equal → carried.
+	alphaPath := filepath.Join(root, "t-alpha.yaml")
+	now := time.Now()
+	if err := os.Chtimes(alphaPath, now, now); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	// t-beta: new bytes → read, hash moved → parsed.
+	betaPath := filepath.Join(root, "nested", "t-beta.yaml")
+	if err := os.WriteFile(betaPath, []byte("tenants:\n  t-beta: {}\n  t-gamma: {}\n"), 0o600); err != nil {
+		t.Fatalf("rewrite t-beta: %v", err)
+	}
+
+	second, err := scanDirTree(root, first, fresh, nil)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	alpha := second.files["t-alpha.yaml"]
+	if alpha.reused {
+		t.Fatalf("t-alpha is younger than the guard; it must have been read")
+	}
+	if alpha.parsed {
+		t.Errorf("t-alpha was read but its hash did not move: declarations must be carried, not re-parsed")
+	}
+	if got, want := alpha.tenantIDs, []string{"t-alpha"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("carried declarations = %v, want %v", got, want)
+	}
+	beta := second.files["nested/t-beta.yaml"]
+	if !beta.parsed {
+		t.Errorf("t-beta's bytes changed; it must be parsed")
+	}
+	if got, want := beta.tenantIDs, []string{"t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("parsed declarations = %v, want %v", got, want)
+	}
+	if got, want := treeScanTenantIDs(second), []string{"t-alpha", "t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("tenants = %v, want %v", got, want)
 	}
 }

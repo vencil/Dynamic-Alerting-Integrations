@@ -1363,7 +1363,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // merging in place so a partial install never leaves torn state visible
 // to the /effective read path.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
-	tenants, defaults, graph := scan.tenants, scan.defaults, scan.graph
+	tenants, defaults, graph := scan.tenants, scan.defaults, scan.inheritanceGraph()
 	if len(defaults) == 0 && len(tenants) == 0 {
 		// Empty tree or flat layout with no files we recognize. Don't
 		// flip hierarchicalMode — a later add-a-_defaults-file event will
