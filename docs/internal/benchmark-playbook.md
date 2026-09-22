@@ -998,7 +998,7 @@ python3 scripts/tools/dx/generate_tenant_fixture.py \
 cd /workspaces/vibe-k8s-lab/components/threshold-exporter/app
 BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_wrapper.sh \
   -run='^$' \
-  -bench='BenchmarkFullDirLoad_Hierarchical_1000|BenchmarkDiffAndReload_Hierarchical_1000_NoChange|BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged|BenchmarkScanDirHierarchical_1000|BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000' \
+  -bench='BenchmarkFullDirLoad_Hierarchical_1000|BenchmarkDiffAndReload_Hierarchical_1000_NoChange|BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged|BenchmarkScanDirTree_Hierarchical_1000_Cold|BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000' \
   -benchmem -count=3 -timeout=15m .
 cat /tmp/b1_out/bench.out.txt
 ```

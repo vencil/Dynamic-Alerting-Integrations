@@ -1,11 +1,12 @@
 // Hierarchical 1000-tenant baseline benchmarks (v2.8.0 B-1 Phase 1).
 //
-// These benchmarks measure the production hot path introduced by A-10
-// (PR #54): WatchLoop now uses `scanDirHierarchical`, which walks a
-// domain/region/env tree with `_defaults.yaml` at every level and tenant
-// YAML at leaves. The existing flat benchmarks in `config_bench_test.go`
-// measure the legacy `scanDirFileHashes` path, which is still used but
-// no longer the primary scanner.
+// These benchmarks measure the hierarchical production hot path: WatchLoop
+// → diffAndReload over a domain/region/env tree with `_defaults.yaml` at
+// every level and tenant YAML at leaves. Since #1568 one walker
+// (`scanDirTree`, config_tree_scan.go) serves both planes; the flat
+// benchmarks in `config_bench_test.go` drive the same walker over a flat
+// fixture. The historical `scanDirHierarchical` is a test-only projection
+// now (scan_wrappers_test.go) and no benchmark measures it.
 //
 // Scope clarifications (from v2.8.0-planning.md §4 B-1):
 //   - Phase 1 (this file): synthetic 1000-tenant fixture, infrastructure
@@ -278,15 +279,15 @@ func reportResourceMetrics(b *testing.B) {
 // Hierarchical Scaling Benchmarks (1000 / 2000 / 5000)
 // ---------------------------------------------------------------------------
 //
-// These mirror the flat-layout benchmarks in config_bench_test.go but use
-// scanDirHierarchical as the production hot path. Pair them off:
+// These mirror the flat-layout benchmarks in config_bench_test.go over a
+// hierarchical fixture. Pair them off:
 //
 //   Flat                                            Hierarchical
 //   ────                                            ────────────
 //   BenchmarkFullDirLoad_1000                       BenchmarkFullDirLoad_Hierarchical_{1000,2000,5000}
 //   BenchmarkIncrementalLoad_1000_NoChange          BenchmarkDiffAndReload_Hierarchical_{1000,2000,5000}_NoChange
 //   BenchmarkIncrementalLoad_1000_OneFileChanged    BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged
-//   BenchmarkScanDirFileHashes_1000                 BenchmarkScanDirHierarchical_{1000,2000,5000}
+//   BenchmarkScanDirTree_1000_Cold                  BenchmarkScanDirTree_Hierarchical_{1000,2000,5000}_Cold
 //
 // Plus the new B-8 blast-radius bench (see below).
 //
@@ -294,32 +295,19 @@ func reportResourceMetrics(b *testing.B) {
 // (linear vs super-linear) and inform the sharding decision empirically
 // — not via 10× extrapolation from a single 1000-tenant data point.
 
-// Note on IncrementalLoad vs diffAndReload (methodology finding from first
-// bench run):
-//   - IncrementalLoad (v2.6.0 path) uses scanDirFileHashes — flat, root-only.
-//     It DOES NOT see nested files under domain/region/env subdirs.
-//   - diffAndReload (post-A-10 path, PR #54) uses scanDirHierarchical and
-//     is what WatchLoop calls in production post-A-10. Updates
-//     m.hierarchy.hashes + m.hierarchy.mergedHashes.
-// All hierarchical benchmarks below use diffAndReload to measure the real
-// production hot path. The v2.6.0 IncrementalLoad path is left in place for
-// flat-mode callers and is already covered by the flat benchmarks in
-// config_bench_test.go (those use a flat fixture where the two paths
-// coincide).
+// Note on IncrementalLoad vs diffAndReload: both walk the tree through the
+// one shared scanDirTree (#1568; the flat walk has been recursive since
+// #1521), so the two differ in what they do AFTER the walk, not in what
+// they see. diffAndReload is what WatchLoop drives on a hierarchical tree
+// (it refreshes m.hierarchy); IncrementalLoad is the flat plane's tenant-
+// patch fast path, covered by the flat benchmarks in config_bench_test.go.
+// All hierarchical benchmarks below use diffAndReload.
 
 // ── Size-parameterized cores (called by the per-N wrappers below) ──────
 
-func benchScanDirHierarchicalAtSize(b *testing.B, n int) {
+func benchScanDirTreeHierarchicalAtSize(b *testing.B, n int) {
 	b.Helper()
-	dir := buildDirConfigHierarchical(b, n)
-	silenceLogs(b)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, _, _, _, err := scanDirHierarchical(dir, nil)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchScanDirTreeCold(b, buildDirConfigHierarchical(b, n))
 	b.StopTimer()
 	reportResourceMetrics(b)
 }
@@ -360,8 +348,8 @@ func benchDiffAndReloadHierarchicalNoChangeAtSize(b *testing.B, n int) {
 // ── 1000-tenant baseline (the "primary" data point published in the
 // playbook + CHANGELOG) ────────────────────────────────────────────────
 
-func BenchmarkScanDirHierarchical_1000(b *testing.B) {
-	benchScanDirHierarchicalAtSize(b, 1000)
+func BenchmarkScanDirTree_Hierarchical_1000_Cold(b *testing.B) {
+	benchScanDirTreeHierarchicalAtSize(b, 1000)
 }
 
 func BenchmarkFullDirLoad_Hierarchical_1000(b *testing.B) {
@@ -410,8 +398,8 @@ func BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged(b *testing.B) {
 
 // ── 2000-tenant scaling bench (sharding decision data point) ───────────
 
-func BenchmarkScanDirHierarchical_2000(b *testing.B) {
-	benchScanDirHierarchicalAtSize(b, 2000)
+func BenchmarkScanDirTree_Hierarchical_2000_Cold(b *testing.B) {
+	benchScanDirTreeHierarchicalAtSize(b, 2000)
 }
 
 func BenchmarkFullDirLoad_Hierarchical_2000(b *testing.B) {
@@ -424,8 +412,8 @@ func BenchmarkDiffAndReload_Hierarchical_2000_NoChange(b *testing.B) {
 
 // ── 5000-tenant scaling bench (sharding decision data point) ───────────
 
-func BenchmarkScanDirHierarchical_5000(b *testing.B) {
-	benchScanDirHierarchicalAtSize(b, 5000)
+func BenchmarkScanDirTree_Hierarchical_5000_Cold(b *testing.B) {
+	benchScanDirTreeHierarchicalAtSize(b, 5000)
 }
 
 func BenchmarkFullDirLoad_Hierarchical_5000(b *testing.B) {

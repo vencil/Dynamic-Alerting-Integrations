@@ -2,9 +2,9 @@ package main
 
 // scan_wrappers_test.go — the two historical conf.d walkers, reduced to
 // projections of scanDirTree and moved OUT of the production build (#1568
-// round 2). They are kept only because the tests and benchmarks written
-// against their signatures (~15 call sites for each) still describe
-// behaviour worth pinning:
+// round 2). They are kept only because the tests written against their
+// signatures still describe behaviour worth pinning (no benchmark measures
+// them any more — the ScanDirTree_* benches drive the walker itself):
 //
 //	scanDirFileHashes              flat plane:      root-relative keys, composite, byte cache
 //	scanDirHierarchicalWithMetrics hierarchy plane: absolute keys, typed duplicate error
