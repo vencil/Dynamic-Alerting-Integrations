@@ -1090,7 +1090,19 @@ _GH_JOB_EVENTS = {
 # NARROW. All three let more reach production; none of the others sees this one.
 _GH_JOB_NEEDS = {
     "validate": (),
-    "generate": ("validate",),
+    # ⛔ EMPTY ON PURPOSE (#1421 face 3), and this row is the one to read twice.
+    # It used to be `("validate",)`. The `if:` on this job carries no status
+    # function, so an implicit `success()` applied and ANY red in `validate` —
+    # including the custom-rule governance lint, which is scoped to the
+    # rule-packs tree and has no causal relationship to tenant-config blast
+    # radius — skipped this job entirely. One unrelated lint ERROR in that tree
+    # therefore took the blast-radius comment away from every config pull
+    # request in the customer's repository until somebody fixed it, and what
+    # reviewers saw in the meantime was the previous run's report, which looks
+    # current. This platform's own config-diff.yaml has no `needs:` either.
+    # ⚠️ So the narrow-edge risk this map was written for still applies to the
+    # row BELOW: `apply` is what reaches the cluster, and its edge must stay.
+    "generate": (),
     "apply": ("validate",),
 }
 
@@ -4234,6 +4246,32 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"',
     'exit 1',
     'fi',
+    # ⛔ The fallback report (#1421 face 1). Its whole purpose is to run when a
+    # step ABOVE has failed, which is why it re-creates `.output` and why its
+    # first branch is the only exit that leaves the real report in place: the
+    # diff step refuses to publish an empty file, so "that step succeeded AND
+    # the file is non-empty" is exactly the state where the report is this
+    # run's own work. Everything else overwrites it with a note naming which
+    # step failed — because the comment is edited in place, and leaving the
+    # previous run's report standing makes a stale answer look like a current
+    # one.
+    'if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then',
+    'exit 0',
+    'fi',
+    'mkdir -p .output',
+    '{',
+    'echo "## Blast radius: NOT COMPUTED"',
+    'echo',
+    'echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run\'s report. **Nothing here says the change is safe — it says nobody measured it.**"',
+    'echo',
+    'echo "| step | outcome |"',
+    'echo "| --- | --- |"',
+    'echo "| Generate Alertmanager routes | \\`${ROUTES_OUTCOME:-did not run}\\` |"',
+    'echo "| Resolve base config snapshot | \\`${SNAPSHOT_OUTCOME:-did not run}\\` |"',
+    'echo "| Config diff (blast radius) | \\`${DIFF_OUTCOME:-did not run}\\` |"',
+    'echo',
+    'echo "Open the failing step in this run\'s log: each failure path prints an \\`::error::\\` line naming the cause (base commit missing from the clone, a submodule or symlink where the config directory should be, \\`CONFIG_DIR\\` pointing at a path this commit does not have, or the tool exiting above 1)."',
+    '} > .output/blast-radius.md',
 ]
 
 # ⛔ Was the GitLab blast-radius script, pinned line by line. The job is gone
@@ -8242,3 +8280,263 @@ def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
         "we abandoned. Bump the snippet, or drop the version from the line if "
         "the passage is about behaviour rather than about a version."
     )
+
+
+# ============================================================
+# ── 12. The blast-radius comment as STATE, not as output (#1421) ──
+# ============================================================
+#
+# ⛔ One root cause wearing three faces. The comment is posted by
+# `marocchino/sticky-pull-request-comment@v2` under a fixed header, which EDITS
+# an existing comment in place. So the comment is not an output of a successful
+# run — it is a claim about the pull request that outlives whichever run wrote
+# it. Every path that fails to refresh it leaves the previous run's report
+# standing, timestamped when it was FIRST posted, with no notification (GitHub
+# sends none for an edit) and nothing in the body to say it is out of date.
+#
+# ⚠️ Stale is worse than absent, and that asymmetry is the whole design rule
+# here: an absent comment is visibly absent, while a stale one reads as the
+# answer. The run carries a red X, but the comment does not.
+#
+# The three faces, and what holds each now:
+#   1. the comment step was skipped on every failure path (implicit success())
+#      -> a fallback step writes an explicit "NOT COMPUTED" report and both
+#         steps run under `!cancelled()`; pinned below and EXECUTED below.
+#   2. no concurrency group -> two runs of the same job raced to overwrite one
+#      comment body, and the winner was whichever finished LAST, not whichever
+#      commit was newer -> per-job groups, pinned below.
+#   3. `generate` needed `validate`, whose custom-rule lint has no causal
+#      relationship to tenant config -> the edge is gone; `_GH_JOB_NEEDS` above
+#      pins its absence, and the note there says why.
+#
+# ⚠️ Face 2 with honesty about the comparison: this platform's own
+# config-diff.yaml declares no concurrency either, so "the platform does it
+# differently" was never the argument. The argument is the in-place edit.
+
+# Status functions that make a step reachable after an earlier failure. An `if:`
+# with none of these gets an implicit `success()`, which is exactly the defect.
+_FAILURE_REACHING_FUNCS = ("always()", "!cancelled()", "! cancelled()",
+                           "failure()")
+
+
+def _comment_step(workflow: dict) -> tuple[str, dict]:
+    """(job name, the step that posts the sticky comment)."""
+    for job_name, job in workflow["jobs"].items():
+        for step in job.get("steps") or []:
+            if "sticky-pull-request-comment" in str(step.get("uses", "")):
+                return job_name, step
+    raise AssertionError(
+        "no sticky-comment step in this workflow. If the blast-radius report "
+        "now reaches reviewers some other way, re-point this section at that "
+        "mechanism — do not delete it: the stale-comment failure belongs to "
+        "whatever publishes the report."
+    )
+
+
+def _assert_comment_survives_failure(workflow: dict, label: str) -> None:
+    job_name, comment = _comment_step(workflow)
+    steps = workflow["jobs"][job_name]["steps"]
+    cond = str(comment.get("if", ""))
+    assert any(fn in cond for fn in _FAILURE_REACHING_FUNCS), (
+        f"{label}: the sticky-comment step's condition is {cond!r}, which "
+        f"carries no status function — so it inherits an implicit success() and "
+        f"is SKIPPED whenever an earlier step in the job fails. The previous "
+        f"run's report then stays on the pull request looking current (#1421 "
+        f"face 1). Use one of {_FAILURE_REACHING_FUNCS}."
+    )
+    # ⛔ Reachability alone is not enough: the action refuses to publish a
+    # missing or empty file, so a comment step that survives a failure still
+    # posts nothing unless something guarantees a body.
+    writers = [
+        s for s in steps
+        if ".output/blast-radius.md" in str(s.get("run", ""))
+        and any(fn in str(s.get("if", "")) for fn in _FAILURE_REACHING_FUNCS)
+    ]
+    assert writers, (
+        f"{label}: nothing writes `.output/blast-radius.md` on a failure path, "
+        f"so the comment step — reachable or not — has no body to post and the "
+        f"stale comment survives anyway. The generated workflow carries a step "
+        f"that replaces the report with an explicit 'NOT COMPUTED' note."
+    )
+    hint = "\n".join(str(w.get("run", "")) for w in writers)
+    assert "NOT COMPUTED" in hint, (
+        f"{label}: the failure-path writer does not say the radius was not "
+        f"computed. A body that merely exists is the same trap one level in: "
+        f"the reader has to be told that nobody measured this change."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_blast_radius_comment_is_refreshed_on_every_path(
+    generated, ci, deploy,
+) -> None:
+    """`da-tools init`'s artifact never leaves a stale report standing."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_comment_survives_failure(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_comment_is_refreshed_on_every_path(
+    tmp_path, deploy,
+) -> None:
+    """And the copy-me YAML the wizard shows carries the same shape."""
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_comment_survives_failure(workflow, f"wizard preview ({deploy})")
+
+
+# GitHub's default job timeout is 6 hours. The ceiling here is not a
+# performance target — it is "a wedged job must fail while somebody is still
+# looking at the pull request".
+_TIMEOUT_CEILING_MINUTES = 60
+
+
+def _assert_jobs_are_bounded_and_serialised(workflow: dict, label: str) -> None:
+    for job_name, job in workflow["jobs"].items():
+        timeout = job.get("timeout-minutes")
+        assert isinstance(timeout, int), (
+            f"{label}: job `{job_name}` declares no `timeout-minutes`, so it "
+            f"inherits GitHub's 6-hour default — a hung `docker run` holds a "
+            f"runner for the rest of the day (#1421 face 2)."
+        )
+        assert 0 < timeout <= _TIMEOUT_CEILING_MINUTES, (
+            f"{label}: job `{job_name}` has timeout-minutes: {timeout}, which "
+            f"is not a bound anyone would notice. Keep it under "
+            f"{_TIMEOUT_CEILING_MINUTES}."
+        )
+        conc = job.get("concurrency")
+        assert isinstance(conc, dict) and conc.get("group"), (
+            f"{label}: job `{job_name}` declares no concurrency group. Two runs "
+            f"then race, and for the comment-posting job the winner is whichever "
+            f"finishes LAST rather than whichever commit is newer (#1421 face 2)."
+        )
+        group = str(conc["group"])
+        assert "${{" in group, (
+            f"{label}: job `{job_name}`'s concurrency group {group!r} is a "
+            f"constant, so every pull request in the repository serialises "
+            f"against every other one. Key it on the pull request or the ref."
+        )
+        # ⛔ Derived from `environment:`, not from the job's NAME. The job that
+        # talks to a cluster is the one carrying a deployment environment, and a
+        # future fourth job would be caught by the same rule.
+        reaches_cluster = "environment" in job
+        cancels = conc.get("cancel-in-progress")
+        if reaches_cluster:
+            assert cancels is False, (
+                f"{label}: job `{job_name}` carries `environment: "
+                f"{job['environment']}` and `cancel-in-progress: {cancels!r}`. "
+                f"Cancelling it interrupts `kubectl apply` / `helm upgrade` "
+                f"partway and leaves the cluster in a state no commit "
+                f"describes. Serialise it, never cancel it."
+            )
+        else:
+            assert cancels is True, (
+                f"{label}: job `{job_name}` has `cancel-in-progress: "
+                f"{cancels!r}`. Without cancellation the group only QUEUES the "
+                f"superseded run, which then finishes later and overwrites the "
+                f"newer run's sticky comment — the race this block exists to "
+                f"remove."
+            )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_every_generated_job_is_bounded_and_serialised(
+    generated, ci, deploy,
+) -> None:
+    """Timeouts and concurrency, with the apply job's semantics inverted."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_jobs_are_bounded_and_serialised(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_every_wizard_preview_job_is_bounded_and_serialised(
+    tmp_path, deploy,
+) -> None:
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_jobs_are_bounded_and_serialised(workflow, f"wizard preview ({deploy})")
+
+
+_FALLBACK_STEP = "Explain a blast radius that could not be computed"
+
+# ⛔ A marker that appears NOWHERE else, and the first spelling is why: the
+# stale report said "1 tenant changed (previous run)" and the check for its
+# survival looked for "previous run" — which the replacement body also contains
+# ("this comment replaces the previous run's report"), so three correct cells
+# reported the defect. Same shape as the residue predicates in section 10: the
+# predicate compared a string while the question was about which BODY is on the
+# pull request.
+_STALE_MARKER = "STALE-PAYLOAD-FROM-AN-EARLIER-RUN"
+_STALE = f"# Blast radius\n\n- 1 tenant changed ({_STALE_MARKER})\n"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash on PATH")
+@pytest.mark.parametrize("outcomes,pre_existing,want_stale_gone,want_in_body", [
+    # The only state that leaves the real report alone: the diff step succeeded
+    # and left a non-empty file.
+    (("success", "success", "success"), _STALE, False, "1 tenant changed"),
+    # ⭐ THE case #1421 is about: the snapshot step failed, so the diff step
+    # never ran, and the previous run's report is sitting on the pull request.
+    (("success", "failure", "skipped"), _STALE, True, "NOT COMPUTED"),
+    # The diff step ran and failed (rc >= 2, or an empty report it refused to
+    # publish). Its own file may even be there — it must still be replaced.
+    (("success", "success", "failure"), _STALE, True, "NOT COMPUTED"),
+    # Checkout died: nothing ran, `.output` does not exist, and the fallback has
+    # to create it or the comment step publishes nothing at all.
+    (("", "", ""), None, True, "did not run"),
+])
+def test_the_fallback_report_is_executed_not_just_pinned(
+    generated, tmp_path, outcomes, pre_existing, want_stale_gone, want_in_body,
+) -> None:
+    """Run the generated step body against each outcome the job can reach.
+
+    ⛔ Executed rather than read, for the reason this file's header gives about
+    the #1358 step: a shell body that LOOKS right is not evidence. Here the
+    branch that matters is the negative one — "leave the real report alone" —
+    and a fallback that overwrote a good report on every run would read exactly
+    the same in the diff.
+    """
+    step, _, _ = _extract_step(generated[("github", "kustomize")], _FALLBACK_STEP)
+    assert any(fn in str(step.get("if", "")) for fn in _FAILURE_REACHING_FUNCS)
+
+    work = tmp_path / "work"
+    work.mkdir()
+    if pre_existing is not None:
+        (work / ".output").mkdir()
+        (work / ".output" / "blast-radius.md").write_text(pre_existing, encoding="utf-8")
+
+    script = work / "step.sh"
+    script.write_text(str(step["run"]), encoding="utf-8")
+    routes, snapshot, diff = outcomes
+    proc = subprocess.run(
+        ["bash", "-e", str(script)], cwd=work, capture_output=True, text=True,
+        encoding="utf-8", timeout=60,
+        env={**os.environ, "ROUTES_OUTCOME": routes,
+             "SNAPSHOT_OUTCOME": snapshot, "DIFF_OUTCOME": diff},
+    )
+    assert proc.returncode == 0, (
+        f"the fallback step itself failed (rc={proc.returncode}); it runs on the "
+        f"failure paths, so it must not add a second failure:\n{proc.stderr}"
+    )
+    body = (work / ".output" / "blast-radius.md").read_text(encoding="utf-8")
+    assert want_in_body in body, f"{want_in_body!r} not in:\n{body}"
+    if want_stale_gone:
+        assert _STALE_MARKER not in body, (
+            "the previous run's report survived this path — which is the whole "
+            f"defect:\n{body}"
+        )
+        # The reader must be able to tell WHICH step failed, not just that
+        # something did.
+        for name, outcome in (("Generate Alertmanager routes", routes),
+                              ("Resolve base config snapshot", snapshot),
+                              ("Config diff (blast radius)", diff)):
+            assert name in body
+            assert (outcome or "did not run") in body
