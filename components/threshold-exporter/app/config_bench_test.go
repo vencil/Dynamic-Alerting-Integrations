@@ -280,14 +280,11 @@ func BenchmarkIncrementalLoad_100_OneFileChanged(b *testing.B) {
 	}
 }
 
-// BenchmarkScanDirFileHashes_100 benchmarks the cheap hash-scan phase.
-func BenchmarkScanDirFileHashes_100(b *testing.B) {
-	dir := buildDirConfig(b, 100)
-	silenceLogs(b)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, nil, nil, nil)
-	}
+// BenchmarkScanDirTree_100_Cold benchmarks the walker with no prior: every
+// file is read, hashed and its tenant declarations parsed — the shape of a
+// Load or of the first tick after a restart.
+func BenchmarkScanDirTree_100_Cold(b *testing.B) {
+	benchScanDirTreeCold(b, buildDirConfig(b, 100))
 }
 
 // backdateFiles sets all YAML files in dir to 10 seconds in the past,
@@ -303,17 +300,65 @@ func backdateFiles(b *testing.B, dir string) {
 	}
 }
 
-// BenchmarkScanDirFileHashes_100_MtimeGuard benchmarks the mtime-guarded scan
-// where all files have unchanged mtime+size, so SHA-256 is skipped entirely.
-func BenchmarkScanDirFileHashes_100_MtimeGuard(b *testing.B) {
+// BenchmarkScanDirTree_100_Warm benchmarks the walker fed the prior scan of
+// an unchanged, backdated tree: every file takes the mtime fast-path (stat
+// only — no read, no hash, no parse), the shape of a quiet watch tick.
+func BenchmarkScanDirTree_100_Warm(b *testing.B) {
 	dir := buildDirConfig(b, 100)
-	silenceLogs(b)
 	backdateFiles(b, dir)
-	// Initial scan to populate mtime cache
-	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil, nil)
+	benchScanDirTreeWarm(b, dir)
+}
+
+// benchScanDirTreeCold / benchScanDirTreeWarm drive scanDirTree the way the
+// manager does (its own metrics instance, the package logger). They replaced
+// the ScanDirFileHashes_* / ScanDirHierarchical_* benches when #1568 reduced
+// those walkers to test-only projections (scan_wrappers_test.go): a bench
+// on a projection measured code that does not ship. ⚠️ Cold includes the
+// tenant-declaration parse the walker now does for both planes, so its
+// numbers are NOT comparable with the retired ScanDirFileHashes_* series.
+func benchScanDirTreeCold(b *testing.B, dir string) {
+	b.Helper()
+	silenceLogs(b)
+	metrics := newConfigMetrics()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, hashes, mtimes, nil)
+		if _, err := scanDirTree(dir, nil, metrics, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// benchScanDirTreeWarm expects dir to already be backdated beyond
+// treeScanMtimeGuard (the caller's job) so the prior's stats match and
+// every file takes the fast-path. It checks that once before timing: a
+// "warm" bench that silently re-reads the tree would report the cold cost
+// under the warm name.
+func benchScanDirTreeWarm(b *testing.B, dir string) {
+	b.Helper()
+	silenceLogs(b)
+	metrics := newConfigMetrics()
+	prior, err := scanDirTree(dir, nil, metrics, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	probe, err := scanDirTree(dir, prior, metrics, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	reread := 0
+	for _, f := range probe.files {
+		if !f.reused {
+			reread++
+		}
+	}
+	if reread != 0 {
+		b.Fatalf("warm bench is not warm: %d/%d files were re-read (fixture not backdated past the mtime guard?)", reread, len(probe.files))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := scanDirTree(dir, prior, metrics, nil); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -396,25 +441,15 @@ func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 	}
 }
 
-func BenchmarkScanDirFileHashes_1000(b *testing.B) {
-	dir := buildDirConfig(b, 1000)
-	silenceLogs(b)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, nil, nil, nil)
-	}
+func BenchmarkScanDirTree_1000_Cold(b *testing.B) {
+	benchScanDirTreeCold(b, buildDirConfig(b, 1000))
 }
 
-// BenchmarkScanDirFileHashes_1000_MtimeGuard benchmarks mtime-guarded scan at 1000T.
-func BenchmarkScanDirFileHashes_1000_MtimeGuard(b *testing.B) {
+// BenchmarkScanDirTree_1000_Warm: the stat-only fast-path at 1000 tenants.
+func BenchmarkScanDirTree_1000_Warm(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
-	silenceLogs(b)
 	backdateFiles(b, dir)
-	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil, nil)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, hashes, mtimes, nil)
-	}
+	benchScanDirTreeWarm(b, dir)
 }
 
 func BenchmarkMergePartialConfigs_1000(b *testing.B) {

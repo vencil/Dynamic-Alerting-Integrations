@@ -8,7 +8,7 @@ package main
 //
 //   da_config_scan_duration_seconds        (Histogram)
 //     buckets 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s
-//     observed by scanDirHierarchical via prometheus.NewTimer(...).ObserveDuration()
+//     observed once per conf.d tree scan (scanDirTree, both planes; #1568)
 //
 //   da_config_reload_trigger_total         (CounterVec, labels=[reason])
 //     reason ∈ {source, defaults, new, delete, forced}
@@ -72,7 +72,7 @@ type configMetrics struct {
 	blastRadius        *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
 	reloadDuration     prometheus.Histogram     // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
 	debounceBatch      prometheus.Histogram     // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
-	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful scanDirHierarchical completion (e2e harness anchor T1; production stuck-detection)
+	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful conf.d tree scan completion (e2e harness anchor T1; production stuck-detection)
 	lastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
 	freeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
 	// #652: state-coded gauge for per-tenant cardinality cap-hit
@@ -96,7 +96,7 @@ type configMetrics struct {
 // Default metric instance used by the production server. Tests that want
 // isolation construct a fresh instance via newConfigMetrics() (or the
 // freshMetrics test helper) and inject it on the consumer via
-// ConfigManager.SetMetrics or scanDirHierarchicalWithMetrics — see #4a
+// ConfigManager.SetMetrics or scanDirTree's metrics parameter — see #4a
 // for the global-swap migration. setConfigMetrics was removed; reading
 // from the singleton via getConfigMetrics is the only legitimate
 // production access path.
@@ -111,7 +111,7 @@ func newConfigMetrics() *configMetrics {
 	return &configMetrics{
 		scanDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "da_config_scan_duration_seconds",
-			Help: "Duration of a hierarchical conf.d scan (v2.7.0, ADR-016). Observed once per scanDirHierarchical call.",
+			Help: "Duration of one conf.d tree scan (v2.7.0, ADR-016). Observed once per conf.d tree scan (both planes, every watch tick and load).",
 			// Buckets tuned for 1000-tenant scans on ext4 (p50 ~20ms, p99
 			// ~150ms in the benchmark) plus slack for FUSE/NFS mounts.
 			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
@@ -163,7 +163,7 @@ func newConfigMetrics() *configMetrics {
 		}),
 		lastScanComplete: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_last_scan_complete_unixtime_seconds",
-			Help: "Wall-clock unix seconds at the most recent successful scanDirHierarchical completion. Set by the scanner; read by the e2e harness as anchor T1 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-scanner detection. 0 means scanner has not yet completed a successful scan.",
+			Help: "Wall-clock unix seconds at the most recent successful conf.d tree scan completion (both planes; every watch tick and load). Set by the scanner; read by the e2e harness as anchor T1 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-scanner detection. 0 means scanner has not yet completed a successful scan.",
 		}),
 		lastReloadComplete: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_last_reload_complete_unixtime_seconds",
@@ -221,9 +221,9 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // The two consumers are: (1) ConfigManager, which holds its own
 // *configMetrics field and reaches it via m.getMetrics() — tests inject a
 // fresh instance via SetMetrics and assert against it without racing the
-// package-level singleton; (2) the top-level scanners (scanDirHierarchical,
-// flat_scanner), which receive a *configMetrics parameter that production
-// wiring fills from getConfigMetrics() and tests fill with freshMetrics.
+// package-level singleton; (2) the tree walker (scanDirTree) and the flat
+// parse helpers, which receive a *configMetrics parameter that production
+// wiring fills from m.getMetrics() and tests fill with freshMetrics.
 //
 // There are deliberately NO top-level singleton wrapper functions here.
 // An earlier revision kept a `func Name(...) { getConfigMetrics().Name() }`
@@ -236,8 +236,9 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called from scanDirHierarchical whenever yaml.Unmarshal
-// returns an error for a non-_-prefixed tenant file. file_basename
+// basename. Called from the tree scan (parseTenantDecls) whenever
+// yaml.Unmarshal returns an error for a non-_-prefixed tenant file, and
+// from the flat parse (parsePartialConfig) for the same file. file_basename
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
@@ -348,7 +349,8 @@ func (cm *configMetrics) ObserveDebounceBatch(n int) {
 }
 
 // SetLastScanComplete records the wall-clock unix seconds at successful
-// scanDirHierarchical completion (v2.8.0 B-1.P2-a). The e2e harness reads
+// conf.d tree scan completion (v2.8.0 B-1.P2-a; stamped by scanDirTree on
+// every clean scan, both planes, every tick). The e2e harness reads
 // this gauge as anchor T1 in the 5-anchor measurement model; production
 // uses `time() - <gauge>` for stuck-scanner alerting.
 //

@@ -228,7 +228,7 @@ tenants:
 // reload is triggered, every ConfigManager per-tenant map entry for that
 // tenant is cleared **in the same atomic swap** — not only the visible
 // `tenantSources` / `mergedHashes` maps but also the internal
-// `m.hierarchy.hashes` / `m.hierarchy.mtimes` lookups and the
+// `m.hierarchy.hashes` lookup, the retained scan (`m.flat.tree`) and the
 // `inheritanceGraph.TenantDefaults` chain entry.
 //
 // The test is behavior-lock; no product code changes are required — the
@@ -292,16 +292,20 @@ defaults:
 	}
 	m.triggerDebouncedReload(ReloadReasonDelete)
 
-	// Wait for the reload to land; deletion is observable when tenantSources
-	// no longer has tenant-b.
+	// Wait for the reload to land. The hierarchy fields are swapped in one
+	// lock window (installNewHierarchyState) and the retained scan only in
+	// the NEXT one (commitFlatFrom → commitConfig), so waiting on
+	// tenantSources alone can observe the gap between them and read a stale
+	// tree below. Wait on the LAST thing the reload writes.
 	ok := waitFor(t, 2*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
-		_, stillHere := m.hierarchy.tenantSources["tenant-b"]
-		return !stillHere
+		_, srcHere := m.hierarchy.tenantSources["tenant-b"]
+		_, treeHere := m.flat.tree.files["team-a/tenant-b.yaml"]
+		return !srcHere && !treeHere
 	})
 	if !ok {
-		t.Fatalf("tenant-b still in tenantSources after 2s reload wait")
+		t.Fatalf("tenant-b still in tenantSources or the retained scan after 2s reload wait")
 	}
 
 	// Post-delete invariants — atomic swap must clear tenant-b from EVERY
@@ -315,11 +319,16 @@ defaults:
 	if _, stillHere := m.hierarchy.mergedHashes["tenant-b"]; stillHere {
 		t.Errorf("mergedHashes still has tenant-b")
 	}
-	if _, stillHere := m.hierarchy.hashes["team-a/tenant-b.yaml"]; stillHere {
+	// The hierarchy plane keys by ABSOLUTE Clean path under the resolved
+	// root — the earlier relative-key lookup here could never be found and
+	// so never measured anything. The per-file stats now live only on the
+	// retained scan (flatScanState.tree, root-relative keys); the hierarchy
+	// plane's own mtimes map was write-only and is gone (#1568 round 2).
+	if _, stillHere := m.hierarchy.hashes[filepath.Join(absScanRoot(dir), "team-a", "tenant-b.yaml")]; stillHere {
 		t.Errorf("m.hierarchy.hashes still has team-a/tenant-b.yaml")
 	}
-	if _, stillHere := m.hierarchy.mtimes["team-a/tenant-b.yaml"]; stillHere {
-		t.Errorf("m.hierarchy.mtimes still has team-a/tenant-b.yaml")
+	if _, stillHere := m.flat.tree.files["team-a/tenant-b.yaml"]; stillHere {
+		t.Errorf("the retained scan still has team-a/tenant-b.yaml")
 	}
 	if m.hierarchy.graph == nil {
 		t.Errorf("inheritanceGraph became nil after delete")

@@ -466,7 +466,7 @@ function StepReview({ config, onChange }) {
                 : config.ci === 'both'
                   ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後只執行 Validate（沒有 Generate，見 issue 1358）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate only once the include is in place (no Generate — see issue 1358)')
                   : t('git commit → GitHub Actions 自動執行 Validate + Generate', 'git commit → GitHub Actions auto-runs Validate + Generate')}</li>
-              <li>{t('PR 審核通過後手動觸發 Apply（或 ArgoCD 自動同步）', 'After PR approval, manually trigger Apply (or ArgoCD auto-syncs)')}</li>
+              <li>{t('PR 審核通過後手動觸發 Apply', 'After PR approval, manually trigger Apply')}</li>
             </ol>
           </div>
         </>

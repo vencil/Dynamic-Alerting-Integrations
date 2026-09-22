@@ -104,7 +104,7 @@ on:
       bench_re:
         description: "Go -test.bench regex (RE2). The default is the four-benchmark calibration set this experiment shipped with — leave it alone to reproduce the historical sessions. Empty is REJECTED (rc=2): a run that measures nothing must not be green."
         required: false
-        default: '^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+        default: '^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirTree_1000_Cold|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
 
 permissions:
   contents: read
