@@ -273,7 +273,10 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
 
     …plus the two things without which neither speaks for the whole target:
     no prerequisites, and no target-specific variable (`SHELL := <wrapper>`
-    was the third walk-through), and `.PHONY` (below).
+    was the third walk-through).
+
+    ⚠️ `.PHONY` is NOT asserted in this class. It is asked of every target in
+    the Makefile by `tests/ops/test_makefile_phony.py` (#1929).
 
     ⛔ **KNOWN SCOPE, measured, deliberately NOT closed.** Everything here
     covers THIS target's recipe text, its direct prerequisites and its
@@ -432,15 +435,11 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         and asked as "no target-specific variable at all" rather than as a
         list of the dangerous ones.
 
-        ⛔ The `.PHONY` line is the third thing in the same block, and it
-        was missing: `configmap-assemble` produces no file called
-        `configmap-assemble`, so a file of that name in the working
-        directory made make answer `'configmap-assemble' is up to date.`
-        with rc 0 — the WHOLE gate skipped, silently, leaving the previous
-        `.build/threshold-config.yaml` in place for the `kubectl apply`
-        step the docs teach next. Measured: without the declaration
-        `make configmap-assemble` was rc 2 (the sample-tree refusal) and
-        rc 0 after `touch configmap-assemble`; with it, rc 2 both ways.
+        ⛔ `.PHONY` is NOT asserted here. Asserting it on this one target name
+        was an enumeration (`D-05`) and missed every other Makefile target
+        with the same hole; `tests/ops/test_makefile_phony.py` now asks it of
+        all of them (#1929). Not repeated here — two synonymous assertions
+        drift, and the narrower one goes stale first.
         """
         block = _make_rule_block()
         prereqs = [ln.split(":=", 1)[1].strip() for ln in block
@@ -453,11 +452,6 @@ class TestTheRecipeIsInertToMakeAndToTheShell:
         assert not overrides, (
             "a target-specific variable on this target changes how the "
             f"recipe runs without changing its text:\n" + "\n".join(overrides))
-        assert any(ln.startswith("#  Phony target") for ln in block), (
-            f"{TARGET} is not declared `.PHONY`, so a file of that name in "
-            f"the working directory makes make consider the target up to "
-            f"date and skip the entire gate with rc 0 — add "
-            f"`.PHONY: {TARGET}`:\n" + "\n".join(block[:8]))
 
     def test_the_recipe_writes_the_scripts_documented_default(self):
         """The two must not drift: the docs and the `--help` promise
