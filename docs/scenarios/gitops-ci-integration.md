@@ -17,7 +17,7 @@ lang: zh
 
 - **快速初始化**：`da-tools init` 一鍵產生所有整合檔案
 - **三階段 Pipeline**：Validate → Generate → Apply（GitHub Actions；GitLab 為 Validate → Apply 兩階段，見 §1）
-- **四種部署模式**：Kustomize、Helm、ArgoCD、GitOps Native（git-sync sidecar）
+- **部署模式**：`--deploy kustomize`、`--deploy helm`，加上兩種你自己接的路徑——ArgoCD（指向 kustomize 樹）與 GitOps Native（git-sync sidecar）
 - **兩大 CI 平台**：GitHub Actions、GitLab CI
 
 ## 前置條件
@@ -246,9 +246,9 @@ fi
 
 ### 2.4 Stage 3: Apply
 
-手動觸發（`workflow_dispatch`），需要 `production` environment 審批。三種部署路徑的具體操作見下方 §3。
+手動觸發（`workflow_dispatch`），需要 `production` environment 審批。各部署路徑的具體操作見下方 §3。
 
-## 3. 四種部署模式
+## 3. 部署模式
 
 ### 3.1 Kustomize（推薦入門）
 
@@ -309,14 +309,21 @@ helm upgrade --install threshold-exporter \
   -n monitoring --wait
 ```
 
-### 3.3 ArgoCD
+### 3.3 ArgoCD（你自己的 Application，不是 `--deploy` 的一個值）
 
 適合：已經使用 ArgoCD 做 GitOps 的團隊。
 
-**概念**：ArgoCD Application 指向你的 repo，偵測到 `conf.d/` 變更時自動 sync。
+⛔ **`da-tools init` 沒有 `--deploy argocd`。** 它曾經有，而它產不出任何 ArgoCD
+Application，卻在 apply 階段 `argocd app sync dynamic-alerting` ——交出去的
+pipeline 以出貨狀態不可能成功，而唯一能讓它成功的做法是由我們替你決定 ArgoCD
+的慣例（project、目標 namespace、`syncPolicy`、`targetRevision`）。那不是我們
+該決定的，所以該選項退役了（[#1351](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1351)）。
+
+**做法**：用 `--deploy kustomize` 產生要被 sync 的那棵樹，然後把**你自己的**
+Application 指向它。下面是一份起手參考，`repoURL` 與 ArgoCD 慣例請照你的環境填：
 
 ```yaml
-# argocd/dynamic-alerting.yaml
+# 這個檔案由你維護——da-tools init 不會產生它
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -327,6 +334,9 @@ spec:
   source:
     repoURL: https://github.com/your-org/your-repo.git
     targetRevision: main
+    # `--deploy kustomize` 產生的 overlay。⚠️ 先前這裡寫的路徑對
+    # `--deploy argocd` 的產出而言不存在（那個模式不產 kustomize 樹），
+    # 於是照抄的人會拿到一個 ComparisonError。
     path: kustomize/overlays/prod
   destination:
     server: https://kubernetes.default.svc
@@ -336,6 +346,9 @@ spec:
       prune: true
       selfHeal: true
 ```
+
+⚠️ 開了上面的 `syncPolicy.automated` 之後，**同步就由 ArgoCD 自己做**，CI 裡不需要
+再有一個 `argocd app sync` 步驟——那也是為什麼退役那個模式並沒有少掉任何能力。
 
 ### 3.4 GitOps Native Mode（git-sync sidecar）
 

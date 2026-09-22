@@ -276,9 +276,10 @@ describe('cicdGenerateFileTree', () => {
     expect(out).toContain('.gitlab-ci.yml');
   });
 
-  // ⛔ These two replace assertions that pinned the OPPOSITE — "emits
+  // ⛔ These replace assertions that pinned the OPPOSITE — "emits
   // kustomize/ when deploy=kustomize or argocd" and "emits argocd/ ONLY when
-  // deploy=argocd". Both were green and both were wrong: `da-tools init`
+  // deploy=argocd" (that deploy method is retired, #1351; the lesson is not).
+  // Both were green and both were wrong: `da-tools init`
   // scaffolds deployment files for deploy=kustomize only, so the wizard was
   // promising two directories that never arrive, and this suite was what kept
   // the promise load-bearing. Set equality (not toContain) so an added path
@@ -294,10 +295,26 @@ describe('cicdGenerateFileTree', () => {
       ]);
   });
 
-  it.each(['helm', 'argocd'])('scaffolds NO kustomize/ or argocd/ tree for deploy=%s', (deploy) => {
-    const out = cicdGeneratedPaths(baseConfig({ deploy }));
+  // ⚠️ Was `it.each(['helm', 'argocd'])`. `--deploy argocd` is retired (#1351)
+  // — it scaffolded no Application while its apply stage synced one — so the
+  // `argocd/` half of this assertion now has no deploy method that could
+  // reintroduce it. It is kept as a NEGATIVE on the surviving method because
+  // that tree is exactly what the wizard once promised and never delivered.
+  it('scaffolds NO kustomize/ or argocd/ tree for deploy=helm', () => {
+    const out = cicdGeneratedPaths(baseConfig({ deploy: 'helm' }));
     expect(out.filter(p => p.startsWith('kustomize/') || p.startsWith('argocd/'))).toEqual([]);
-    expect(cicdGenerateFileTree(baseConfig({ deploy }))).not.toContain('argocd/');
+    expect(cicdGenerateFileTree(baseConfig({ deploy: 'helm' }))).not.toContain('argocd/');
+  });
+
+  it('refuses a deploy method it has no apply block for', () => {
+    // ⛔ The apply block is a ternary chain. When its last arm stopped being
+    // argocd the natural spelling left `''` there, which renders a job with an
+    // EMPTY `steps:` — valid JavaScript, invalid workflow. The CLI leg's two
+    // builders raise for the same input; this pins the pair.
+    for (const deploy of ['argocd', 'flux', '', undefined]) {
+      expect(() => cicdGenerateGitHubActionsPreview(baseConfig({ deploy })))
+        .toThrow(/unknown deploy method/);
+    }
   });
 
   // ⛔ Renamed from "scaffolds NO deployment files", which became false when
@@ -311,10 +328,8 @@ describe('cicdGenerateFileTree', () => {
     // the real run_init().
     expect(cicdGeneratedPaths(baseConfig({ deploy: 'helm' })).filter(p => p.startsWith('environments/')))
       .toEqual(['environments/prod/values.yaml']);
-    for (const deploy of ['kustomize', 'argocd']) {
-      expect(cicdGeneratedPaths(baseConfig({ deploy })).filter(p => p.startsWith('environments/')))
-        .toEqual([]);
-    }
+    expect(cicdGeneratedPaths(baseConfig({ deploy: 'kustomize' })).filter(p => p.startsWith('environments/')))
+      .toEqual([]);
   });
 
   it('draws a well-formed tree for multiple tenants', () => {
@@ -340,13 +355,13 @@ describe('cicdGenerateGitHubActionsPreview', () => {
     // it concluded that editing a rule pack starts nothing. The per-deploy set
     // is the point, so this asserts the DIFFERENCE between the methods rather
     // than a single string: helm's apply step reads
-    // environments/prod/values.yaml, kustomize's builds kustomize/overlays/prod,
-    // and argocd reads no repository path at all.
+    // environments/prod/values.yaml and kustomize's builds
+    // kustomize/overlays/prod.
     // The two legs are held equal by
     // tests/ops/test_generated_ci_artifacts.py, which compares this output
     // against a real `run_init()` run; this one keeps the wizard's own side
     // honest when node-less environments skip that comparison.
-    const paths = (deploy: 'kustomize' | 'helm' | 'argocd') => {
+    const paths = (deploy: 'kustomize' | 'helm') => {
       const out = cicdGenerateGitHubActionsPreview(baseConfig({ deploy }));
       expect(out).toContain('pull_request:');
       expect(out).toContain('push:');
@@ -359,7 +374,6 @@ describe('cicdGenerateGitHubActionsPreview', () => {
     };
     expect(paths('kustomize')).toBe("paths: ['conf.d/**', 'kustomize/**', 'rule-packs/**']");
     expect(paths('helm')).toBe("paths: ['conf.d/**', 'environments/**', 'rule-packs/**']");
-    expect(paths('argocd')).toBe("paths: ['conf.d/**', 'rule-packs/**']");
   });
 
   it('declares a validate job on ubuntu-latest', () => {

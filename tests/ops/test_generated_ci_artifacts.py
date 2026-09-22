@@ -549,9 +549,14 @@ def test_matrix_matches_the_independent_hand_written_floor() -> None:
         f"{sorted(tuple(c) for c in CI_DEPLOY_COMBINATIONS)}. Update BOTH — one "
         f"of them is the anti-vacuity floor for the other."
     )
-    assert len(MATRIX) >= 9, f"only {len(MATRIX)} combinations — matrix collapsed"
-    assert len(GH_COMBOS) >= 6, f"only {len(GH_COMBOS)} GitHub-emitting combinations"
-    assert len(GL_COMBOS) >= 6, f"only {len(GL_COMBOS)} GitLab-emitting combinations"
+    # ⚠️ 9 / 6 / 6 before `--deploy argocd` was retired (#1351): 3 ci x 3 deploy,
+    # with 2 of the 3 ci values emitting each leg. Now 3 x 2. ⛔ These numbers are
+    # the "did the matrix collapse" tripwire, so they track the product of the
+    # two choice sets — lowering one to clear a red is how the tripwire gets
+    # disarmed, and the equality above is what forces the two-file edit first.
+    assert len(MATRIX) >= 6, f"only {len(MATRIX)} combinations — matrix collapsed"
+    assert len(GH_COMBOS) >= 4, f"only {len(GH_COMBOS)} GitHub-emitting combinations"
+    assert len(GL_COMBOS) >= 4, f"only {len(GL_COMBOS)} GitLab-emitting combinations"
 
 
 # ============================================================
@@ -1012,11 +1017,12 @@ _CLI_TRIGGER_TREES: dict[str, tuple[str, ...]] = {
     # `-f environments/prod/values.yaml`, and being read is what the filter has
     # to answer for.
     "helm": ("conf.d", "environments", "rule-packs"),
-    # `argocd app sync` talks to the server and the job has no checkout, so
-    # this mode reads no repository path beyond the two shared trees. Adding
-    # `environments` here would be issue 1473's dead entry, re-created.
-    "argocd": ("conf.d", "rule-packs"),
 }
+# ⚠️ There used to be a third key. `--deploy argocd` read no repository path at
+# all (`argocd app sync` talks to the server, no checkout), so its entry was the
+# two shared trees alone; that method is retired (#1351). ⛔ This table stays an
+# INDEPENDENT spelling of `ip._ci_trigger_trees` — deriving it from the
+# generator would make every assertion below compare the generator to itself.
 
 
 def _cli_gh_triggers(deploy: str) -> dict:
@@ -1041,12 +1047,14 @@ def _cli_gh_triggers(deploy: str) -> dict:
         "workflow_dispatch": None,
     }
 # Pinned WITH versions: a name-only pin accepted `actions/checkout@v1`.
-# The argocd apply stage deliberately has no checkout (`argocd app sync`
-# talks to the server), so the count is deploy-dependent — derived here
-# rather than listed per combination.
+# ⚠️ The count used to be deploy-dependent (the retired `--deploy argocd` stage
+# had no checkout, because `argocd app sync` talks to the server). It is the same
+# for both surviving methods, and the parameter stays so that a fourth deploy
+# method with a checkout-less apply stage has somewhere to say so instead of
+# being wedged into a bare constant.
 def _cli_gh_uses(deploy: str) -> list[str]:
-    checkouts = 2 if deploy == "argocd" else 3
-    return sorted(["actions/checkout@v4"] * checkouts
+    del deploy  # same for kustomize and helm; see the note above
+    return sorted(["actions/checkout@v4"] * 3
                   + ["marocchino/sticky-pull-request-comment@v2"])
 
 
@@ -4145,9 +4153,6 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
         '-f "environments/prod/values.yaml" -n ${{ env.MONITORING_NS }} '
         "--wait --timeout 5m",
     ],
-    "argocd": [
-        "argocd app sync dynamic-alerting --prune --timeout 300",
-    ],
 }
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
@@ -4162,9 +4167,6 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
         "oci://ghcr.io/vencil/charts/threshold-exporter "
         '-f "environments/prod/values.yaml" -n $MONITORING_NS '
         "--wait --timeout 5m",
-    ],
-    "argocd": [
-        "argocd app sync dynamic-alerting --prune --timeout 300",
     ],
 }
 
@@ -5986,7 +5988,7 @@ class TestGitHubLegDefectsFoundInRoundSeven:
         return yaml.safe_load(ip._gen_github_actions(
             'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy))
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', DEPLOY_CHOICES)
     def test_stage_one_refuses_a_config_dir_that_is_not_there(self, deploy):
         """⛔ `docker -v` 會**建立**不存在的 host 路徑而不是失敗。
 
@@ -6011,45 +6013,20 @@ class TestGitHubLegDefectsFoundInRoundSeven:
             f'它會綠著什麼都不驗。\n{body}')
         assert '::error::' in body and 'exit 1' in body, body
 
-    def test_the_argocd_apply_job_has_the_cli_it_invokes(self):
-        """⛔ `ubuntu-latest` 沒有 `argocd`。
+    # ⛔ A test was REMOVED here, and this note is the record:
+    # `test_the_argocd_apply_job_has_the_cli_it_invokes` pinned the fix from
+    # #1350 — `--deploy argocd`'s GitHub apply job had to carry
+    # `container: quay.io/argoproj/argocd:v3.5.0` with `options: --user root`,
+    # because `ubuntu-latest` ships no `argocd` and the job exited 127 on every
+    # dispatch. That method is retired (#1351), so the job it graded no longer
+    # exists and the pin it compared against is gone from the generator.
+    # ⚠️ This is a fix being withdrawn WITH the thing it fixed, not a guard
+    # being relaxed: #1350 stays closed, and nothing that still ships lost a
+    # check. What replaced it is the refusal in both `_build_*_apply_stage` —
+    # an unknown `--deploy` raises instead of falling through to a branch that
+    # looks plausible, which is the class of defect #1350 came from.
 
-        GitHub 的 runner-image manifest 列出 helm / kind / kubectl / kustomize /
-        minikube——沒有 argocd。原本的 job 既沒有安裝步驟也沒有映像，於是每一次
-        dispatch 都是 `argocd: command not found` / exit 127。GitLab 的同胞一直
-        都 pin 著映像（`$DA_ARGOCD_IMAGE`），這是腿間不對稱、不是範圍問題。
-        """
-        job = self._gh('argocd')['jobs']['apply']
-        assert job.get('container'), (
-            'argocd 的 GitHub apply job 沒有 container:——它呼叫一個 '
-            f'ubuntu-latest 上不存在的 binary。\n{job}')
-        assert job['container']['image'] == ip.ARGOCD_CLI_IMAGE, job['container']
-        # ⛔ 兩條腿共用同一個 pin：分成兩份就是下一次版本漂移。
-        assert ip._GITLAB_APPLY_IMAGES['argocd'][1] == ip.ARGOCD_CLI_IMAGE
-        # ⛔ 該映像以 `USER 999` 結尾，而 container job 的步驟仍要碰 runner
-        # 建立的掛載（步驟腳本、`_temp/_runner_file_commands/*`，uid 1001）
-        # ——uid 不合正是 container job 的標準 EACCES，GitHub 自己的
-        # container-job 文件因此建議不要用非 root 的 `USER`。
-        # ⚠️ 這是**產物性質的 pin**，不是執行期驗證：本 repo 沒有 GitHub
-        # runner 可跑，所以它擋的是「有人把這個選項悄悄拿掉」，不是「它真的
-        # 解決了 EACCES」。拿掉 `options` 之後整套原本全綠（實測 64 passed），
-        # 這條就是那個缺掉的控制項。
-        # ⛔ 問「解析出來的 user 是不是 root」，不是「字面有沒有 root」。
-        # `--user 0` / `--user 0:0` / `--user root:root` 都等價，而 `--user 0`
-        # 在 distroless / scratch base 上**更穩**（不需要映像內有可解析的
-        # `/etc/passwd` 條目）。先前的寫法是 `'root' in options`，把一個更好的
-        # 等價寫法判成「沒有以可寫入的使用者執行」，而錯誤訊息會被它自己印出
-        # 的 `--user 0` 打臉——這正是本 PR 反覆在修的「守衛讀拼法不讀值」，
-        # 而它是這一輪新加的。
-        _opts = str(job['container'].get('options', ''))
-        _m = re.search(r'--user[= ]([^\s]+)', _opts)
-        _user = (_m.group(1) if _m else '').split(':')[0]
-        assert _user in ('root', '0'), (
-            'argocd apply job 的 container 沒有以可寫入工作區的使用者執行'
-            f'——該映像預設 UID 999。解析到的 user={_user!r}\n'
-            f'{job["container"]}')
-
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', DEPLOY_CHOICES)
     def test_generate_routes_step_has_no_writable_mount_and_no_dead_output(self, deploy):
         """#1423：這一步以前掛 `/data/output` 可寫、傳
         `-o /data/output/alertmanager-routes.yaml --validate`——但 `--validate`
@@ -6085,7 +6062,7 @@ class TestGitHubLegDefectsFoundInRoundSeven:
                          if 'config-diff --old-dir' in str(s.get('run', '')))
         assert '> .output/blast-radius.md' in diff_body, diff_body
 
-    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('deploy', DEPLOY_CHOICES)
     def test_the_push_leg_watches_the_same_trees_as_the_pr_leg(self, deploy):
         """⛔ `push` 原本只看 `conf.d/**`，`pull_request` 看三棵樹。
 
@@ -7783,4 +7760,238 @@ def test_the_wizard_include_snippet_names_the_pipeline_the_cli_writes(
         f"GitLab auto-loads the repository-root pipeline and nothing else, so "
         f"a wrong `local:` here is a pipeline that silently never runs — the "
         f"#1357 failure, reintroduced through the wizard."
+    )
+
+
+# ============================================================
+# ── 10. The wizard's OPTION LIST vs the CLI's `choices` (#1351) ──
+# ============================================================
+#
+# ⛔ Nothing compared these two before, and retiring `--deploy argocd` is what
+# made that measurable: the flag had to be removed from the parser AND from
+# `CICD_DEPLOY_OPTIONS` in the wizard's fixtures, by hand, in two files, with no
+# mechanism tying them together. Had only one been done, the outcome is not a
+# crash — it is a wizard that walks a customer through choosing a deploy method,
+# renders a command for it, and hands them a `da-tools init` line the CLI
+# rejects with `invalid choice`. The reverse (a method the CLI accepts but the
+# wizard never offers) is quieter still: nobody finds it.
+#
+# ⚠️ This is the option LIST, not the generated YAML. Section 9 compares what the
+# two generators PRODUCE for a given method; this asks whether they agree on
+# which methods exist at all — the axis above every assertion in section 9,
+# because a method missing from both lists produces no cells and pytest reports
+# an empty parametrize as a pass.
+
+_PORTAL_WIZARD_FIXTURES = (
+    _REPO_ROOT
+    / "tools/portal/src/interactive/tools/cicd-setup-wizard/fixtures/wizard-defaults.js"
+)
+
+
+def _wizard_option_ids(tmp_path: Path, name: str) -> list[str]:
+    """The `id` of each option the wizard offers, read by EVALUATING the module.
+
+    ⛔ Evaluated, not regex-scraped. A regex over `{ id: '…' }` cannot tell an
+    option that ships from one inside a comment or a commented-out block, and
+    "the list shrank because the line is now a comment" is exactly the edit this
+    guard has to catch.
+
+    The module reads `window.__t` at import time (with a fallback), so the driver
+    shims a `window` before importing — the portal runs in a browser, and the
+    fallback is what makes the shim enough.
+    """
+    assert _PORTAL_WIZARD_FIXTURES.is_file(), f"missing {_PORTAL_WIZARD_FIXTURES}"
+    stripped = _FRONTMATTER_RE.sub(
+        lambda m: "\n" * m.group(0).count("\n"),
+        _PORTAL_WIZARD_FIXTURES.read_text(encoding="utf-8"),
+        count=1,
+    )
+    module = tmp_path / "wizard-defaults.mjs"
+    module.write_text(stripped, encoding="utf-8")
+    driver = (
+        "globalThis.window = globalThis.window || {};\n"
+        f"const m = await import({json.dumps(module.as_uri())});\n"
+        f"process.stdout.write(JSON.stringify(m.{name}.map((o) => o.id)));\n"
+    )
+    proc = _run([_NODE, "--input-type=module", "-e", driver])
+    assert proc.returncode == 0, (
+        f"could not evaluate {name} from the wizard fixtures:\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    ids = json.loads(proc.stdout)
+    assert isinstance(ids, list) and ids, f"{name} evaluated to {ids!r}"
+    return ids
+
+
+@_needs_node
+def test_the_wizard_offers_exactly_the_deploy_methods_the_cli_accepts(tmp_path) -> None:
+    """One list of deploy methods, two programs that must agree on it."""
+    cli = sorted(ip._parser_choices("--deploy"))
+    wizard = sorted(_wizard_option_ids(tmp_path, "CICD_DEPLOY_OPTIONS"))
+    assert wizard == cli, (
+        f"the wizard and the CLI disagree on which deploy methods exist:\n"
+        f"  CLI    (--deploy choices): {cli}\n"
+        f"  wizard (CICD_DEPLOY_OPTIONS): {wizard}\n"
+        f"  offered but not accepted: {sorted(set(wizard) - set(cli))}\n"
+        f"  accepted but not offered: {sorted(set(cli) - set(wizard))}\n"
+        f"⛔ The first list is a customer being walked through a choice whose "
+        f"`da-tools init` line the CLI then refuses with `invalid choice`; the "
+        f"second is a method nobody can reach from the UI. Retiring "
+        f"`--deploy argocd` (#1351) needed both files edited by hand, which is "
+        f"why this comparison exists."
+    )
+
+
+@_needs_node
+def test_the_wizard_offers_exactly_the_ci_platforms_the_cli_accepts(tmp_path) -> None:
+    """The same question on the other axis, and it is not redundant.
+
+    The two lists are independent literals: `--ci` could gain a platform while
+    `CICD_CI_OPTIONS` does not, and the deploy-method test above would stay
+    green. Asked here because the fix for one axis is not the fix for the other.
+    """
+    cli = sorted(ip._parser_choices("--ci"))
+    wizard = sorted(_wizard_option_ids(tmp_path, "CICD_CI_OPTIONS"))
+    assert wizard == cli, (
+        f"the wizard and the CLI disagree on which CI platforms exist:\n"
+        f"  CLI    (--ci choices): {cli}\n"
+        f"  wizard (CICD_CI_OPTIONS): {wizard}"
+    )
+
+
+# Fingerprints of the RETIRED MODE, not of Argo CD. Each one can only come from
+# the deleted `--deploy argocd` branch: the flag value, the marker field
+# `run_init` writes, the sync command that branch ran, the GitLab variable that
+# carried its image, and the registry path of the pin itself. ⛔ A bare `argocd`
+# is deliberately NOT in here — see this test's docstring for the sentence that
+# taught us the difference.
+_RETIRED_MODE_MARKERS = (
+    "--deploy argocd",
+    "deploy_method: argocd",
+    "argocd app sync",
+    "da_argocd_image",
+    "quay.io/argoproj",
+)
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_no_generated_file_mentions_the_retired_deploy_method(
+        generated, ci, deploy) -> None:
+    """#1351: the removal has to reach the ARTIFACTS, not just the flag.
+
+    ⛔ The `--deploy argocd` branch is gone from the parser, so no combination in
+    the matrix can select it — which means this test cannot fail by rendering the
+    retired stage. What it CAN catch is the residue: a comment, a next-steps
+    line, a pinned image or a `MONITORING_NS`-style special case that still names
+    argocd and now ships to a customer describing a mode they cannot choose.
+    Measured before the removal: the string appeared in the workflow of every
+    argocd combination and nowhere else, so a hit here is new residue.
+
+    ⛔ The predicate asks about the MODE, not the word — and the first version of
+    this test got that wrong, which is worth keeping on the record. Scanning for
+    `"argocd" in line.lower()` red three combinations on a sentence in the
+    generated `kustomize/base/README.md` that is both true and useful: "some
+    ArgoCD setups need `kustomize.buildOptions` configured cluster-side". Argo CD
+    remains a supported deployment ENVIRONMENT; what was retired is a
+    `--deploy` value. A guard that cannot tell those apart would push us to
+    delete a correct sentence to clear a red.
+
+    ⚠️ Scope: the files this tool WRITES. The docs still describe pointing your
+    own Application at the kustomize tree — that is prose we maintain, not an
+    artifact we generate.
+    """
+    root = generated[(ci, deploy)]
+    offenders = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        hits = [ln.strip() for ln in text.splitlines()
+                if any(m in ln.lower() for m in _RETIRED_MODE_MARKERS)]
+        if hits:
+            offenders[path.relative_to(root).as_posix()] = hits[:3]
+    assert not offenders, (
+        f"--ci {ci} --deploy {deploy} wrote file(s) naming the retired "
+        f"`--deploy argocd` mode: {offenders}\n"
+        f"A customer reading their own repo would find a deploy method this "
+        f"tool cannot produce. Remove the residue, or if a sentence is really "
+        f"about Argo CD as an ENVIRONMENT, put it in the docs — not in a "
+        f"generated file."
+    )
+
+
+# The portal describes the wizard in PROSE as well as offering it: a tool card in
+# `master-onboarding.jsx` enumerates the deploy modes the wizard lets you pick.
+# ⛔ That sentence went stale when `--deploy argocd` was retired and NOTHING saw
+# it — the option-list gate above reads the option data, the artifact gates read
+# generated files, and a hand-written "(Kustomize / Helm / ArgoCD)" is neither.
+# It was found by grep, which is the definition of a claim with no mechanism.
+#
+# ⚠️ HONEST SCOPE, because the alternative is a guard that looks wider than it is:
+# this sees an ENUMERATION — two or more mode names joined by `/` or `、` on one
+# line, where at least one of them is a real deploy method. A sentence that names
+# a single method ("…deploys with Helm…"), or one that describes them in running
+# prose without a separator, is invisible to it. It is the shape that rotted, not
+# every shape that could.
+_PORTAL_SRC = _REPO_ROOT / "tools/portal/src"
+
+# Mode names that may appear in such an enumeration. Anything here that is NOT a
+# current `--deploy` choice is what the test is looking for. ⛔ Includes retired
+# and never-supported names on purpose: the list is "words a reader would take as
+# an offered deploy mode", so a Flux row added to this list before Flux is
+# supported would red the same way argocd does.
+_DEPLOY_WORDS_IN_PROSE = ("kustomize", "helm", "argocd", "argo cd", "flux")
+
+_ENUMERATION_RE = re.compile(
+    r"[A-Za-z][A-Za-z ]{1,10}(?:\s*[/、]\s*[A-Za-z][A-Za-z ]{1,10}){1,3}")
+
+
+def test_no_portal_prose_offers_a_deploy_mode_the_cli_does_not(tmp_path) -> None:
+    """A tool card that lists a retired mode is a promise no code keeps."""
+    del tmp_path
+    assert _PORTAL_SRC.is_dir(), f"missing {_PORTAL_SRC}"
+    accepted = {c.lower() for c in ip._parser_choices("--deploy")}
+    assert accepted, "read no --deploy choices off the parser"
+
+    offenders: dict[str, list[str]] = {}
+    scanned = 0
+    for path in sorted(_PORTAL_SRC.rglob("*")):
+        if path.suffix not in (".js", ".jsx"):
+            continue
+        scanned += 1
+        for line in path.read_text(encoding="utf-8").splitlines():
+            for run in _ENUMERATION_RE.findall(line):
+                words = [w.strip().lower() for w in re.split(r"[/、]", run)]
+                named = [w for w in words if w in _DEPLOY_WORDS_IN_PROSE]
+                stale = [w for w in named if w not in accepted]
+                # ⛔ The discriminator, and it took two tries to find. "At least
+                # two mode names" is not enough: `GitOps（ArgoCD / Flux）` in
+                # architecture-quiz.jsx satisfies it and is about deployment
+                # ENVIRONMENTS, which is both true and none of this test's
+                # business — the first version red on it, which would have
+                # pressured someone to delete a correct sentence. An enumeration
+                # of OUR deploy modes contains at least one mode we actually
+                # offer; one made only of names we do not offer is about someone
+                # else's tooling.
+                # ⚠️ Cost of that line, stated rather than hidden: a stale
+                # enumeration naming ONLY unaccepted modes is invisible here.
+                if not stale or not any(w in accepted for w in named):
+                    continue
+                if stale:
+                    offenders.setdefault(
+                        path.relative_to(_REPO_ROOT).as_posix(), []
+                    ).append(f"{run.strip()}  (stale: {stale})")
+
+    assert scanned >= 10, (
+        f"only {scanned} portal source files scanned — the walk broke, and this "
+        f"test would pass over nothing"
+    )
+    assert not offenders, (
+        f"portal prose offers deploy mode(s) the CLI does not accept "
+        f"({sorted(accepted)}):\n"
+        + "\n".join(f"  {f}: {hits}" for f, hits in sorted(offenders.items()))
+        + "\n⛔ A customer reads this as a choice the wizard will give them, then "
+        "either never finds it or gets `invalid choice` from the command it "
+        "hands them. #1351 retired `--deploy argocd` and left exactly one of "
+        "these behind, which is why this test exists."
     )

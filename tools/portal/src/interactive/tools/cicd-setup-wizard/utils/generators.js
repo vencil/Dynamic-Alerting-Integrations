@@ -32,14 +32,12 @@ purpose: |
 // the literal, so changing it here alone goes red.
 const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
 
-// The argocd CLI image the deploy=argocd apply job runs in. ⛔ A second copy of
-// a pin the CLI leg also carries (`ARGOCD_CLI_IMAGE` in
-// scripts/tools/ops/init_project.py), so it is held the same way the da-tools
-// image is: tests/ops/test_generated_ci_artifacts.py compares the two legs'
-// rendered `container:` blocks, not this literal against a transcription. It is
-// needed at all because `ubuntu-latest` ships no `argocd` binary — the job
-// exited 127 before the image was pinned.
-const CICD_ARGOCD_CLI_IMAGE = 'quay.io/argoproj/argocd:v3.5.0';
+// ⛔ There is deliberately no argocd CLI image pin here any more, and none in
+// the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no
+// ArgoCD Application while its apply stage synced one, so what we handed a
+// customer could not run as generated — and the only way to make it run was for
+// us to pick their ArgoCD conventions. Argo CD remains a supported ENVIRONMENT;
+// point your own Application at what `--deploy kustomize` writes.
 
 // Empty / whitespace-only falls back rather than emitting `docker run  init`,
 // because the field this reads is a free-text input the customer can clear.
@@ -146,15 +144,15 @@ function cicdGenerateDockerCommand(config) {
 // equals this one. Keep it derived from what `da-tools init` WRITES, never
 // from what a deploy method conceptually needs.
 //
-// Prior to #1347 this function promised `kustomize/` AND `argocd/` for
-// deploy=argocd. `init_project.py` writes NEITHER: both the kustomize tree
-// (run_init step 3) and every other deploy artifact are gated on
-// `deploy == 'kustomize'`, so the argocd branch scaffolds no deployment files
-// at all. The shipped argocd apply stage nonetheless runs
-// `argocd app sync dynamic-alerting`, an Application this wizard told the user
-// they would receive. That product gap is out of scope here (see the
-// "explicitly NOT covered" section of the Python guard); what is fixed is the
-// wizard claiming files that never arrive.
+// ⚠️ Kept as a record rather than trimmed: prior to #1347 this function
+// promised `kustomize/` AND `argocd/` for deploy=argocd, while `init_project.py`
+// wrote NEITHER — the shipped argocd apply stage synced an Application the
+// wizard had told the user they would receive. #1347 fixed the wizard's claim;
+// the product gap under it was closed the other way in #1351, by retiring
+// `--deploy argocd` instead of inventing the Application. Both halves are gone
+// now, and the lesson this comment is here for is not: this list is a CLAIM
+// about another program's behaviour, so keep it derived from what
+// `da-tools init` WRITES, never from what a deploy method conceptually needs.
 function cicdGeneratedPaths(config) {
   const paths = ['conf.d/_defaults.yaml'];
   for (const tenant of config.tenants) {
@@ -185,7 +183,7 @@ function cicdGeneratedPaths(config) {
     // customer's first manual deploy died on `no such file or directory`.
     // `init` now writes a skeleton; helm only, because it is the helm apply
     // step that reads it (kustomize mounts conf.d/ through its
-    // configMapGenerator, and argocd reads no repository path at all).
+    // configMapGenerator instead).
     paths.push('environments/prod/values.yaml');
   }
   if (config.deploy === 'kustomize') {
@@ -243,8 +241,8 @@ function cicdGenerateFileTree(config) {
 // from the filter means editing it starts no run and the pull request goes green
 // having validated nothing.
 //
-// ⚠️ The CLI has a fourth case this wizard cannot reach: `--config-source git`
-// adds `kustomize/**` for any deploy method. The wizard offers no GitOps Native
+// ⚠️ The CLI has a case this wizard cannot reach: `--config-source git` adds
+// `kustomize/**` for any deploy method. The wizard offers no GitOps Native
 // toggle, so there is nothing to render for it — and the drift gate compares
 // against a CLI run made with the wizard's own settings, so the absence cannot
 // quietly become a disagreement.
@@ -277,7 +275,9 @@ function _cicdTriggerTrees(config) {
 // under-reported the CI the customer actually gets (no blast-radius PR comment,
 // no custom-rule lint, no kustomize dry-run, no Prometheus reload) and showed
 // `argocd app sync --force` where the artifact runs `--prune --timeout 300`,
-// two flags whose semantics do not overlap.
+// two flags whose semantics do not overlap. (That deploy method is retired —
+// #1351 — so this particular row can no longer recur; the shape it illustrates
+// can, on any pair of branches.)
 //
 // So: the trigger paths, the job set, the per-job step-name sequence and the
 // deploy commands' flags are now the artifact's, and
@@ -294,6 +294,15 @@ function _cicdTriggerTrees(config) {
 // by the skeleton gate, which pins the difference to exactly `{env}` rather
 // than letting a new one ride in beside it.
 function cicdGenerateGitHubActionsPreview(config) {
+  // ⛔ Refuse an unknown deploy method instead of rendering around it. The apply
+  // block is a ternary chain, and when its last arm stopped being argocd
+  // (retired, #1351) the natural spelling left `''` there — which emits a job
+  // with an EMPTY `steps:`, i.e. valid JavaScript and an invalid workflow. The
+  // CLI leg's two builders raise for the same input; this is that refusal on
+  // this side of the pair.
+  if (config.deploy !== 'kustomize' && config.deploy !== 'helm') {
+    throw new Error(`cicdGenerateGitHubActionsPreview: unknown deploy method ${JSON.stringify(config.deploy)} — expected 'kustomize' or 'helm'. A new deploy method needs an apply block here AND in scripts/tools/ops/init_project.py.`);
+  }
   const image = cicdDaToolsImage(config);
   // ⚠️ Emitted only when the reference can actually be repointed, because this
   // YAML is a file the customer pastes into their own repo: telling a reader
@@ -445,13 +454,7 @@ ${pinNote}jobs:
   apply:
     needs: [validate]
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest${config.deploy === 'argocd' ? `
-    # ubuntu-latest carries helm, kubectl and kustomize - and no argocd, so
-    # this job runs in the CLI's own image. --user root because a container
-    # job's steps touch runner-owned mounts.
-    container:
-      image: ${CICD_ARGOCD_CLI_IMAGE}
-      options: --user root` : ''}
+    runs-on: ubuntu-latest
     environment: production
     steps:${config.deploy === 'kustomize' ? `
       - uses: actions/checkout@v4
@@ -475,12 +478,7 @@ ${pinNote}jobs:
             oci://ghcr.io/vencil/charts/threshold-exporter \\
             -f "environments/prod/values.yaml" \\
             -n monitoring \\
-            --wait --timeout 5m` : `
-      # No checkout: argocd app sync talks to the server, so this job reads
-      # nothing out of the repository.
-      - name: Trigger ArgoCD sync
-        run: |
-          argocd app sync dynamic-alerting --prune --timeout 300`}`;
+            --wait --timeout 5m` : ''}`;
 }
 
-export { CICD_DEFAULT_DA_TOOLS_IMAGE, CICD_ARGOCD_CLI_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
