@@ -237,7 +237,7 @@ Key milestones in how performance evolved across versions — useful when assess
 | Cold full load (§1) | `FullDirLoad` (Go micro-bench) |
 | Steady-state reload, no change (§1) | `IncrementalLoad_NoChange` + mtime guard |
 | Single-file change reload (§1) | `IncrementalLoad_OneFileChanged` |
-| Directory scan hashing (§1) | `ScanDirFileHashes` + mtime guard |
+| Directory scan (§1) | `ScanDirTree_*_Cold` (read + hash + tenant-declaration parse) / `ScanDirTree_*_Warm` (mtime fast-path, stat-only) |
 | End-to-end alert fire (§2) | `make bench-e2e` (5-anchor harness, nightly `bench-record.yaml`) |
 | Soak drift (§4) | `run_chaos_soak.py` (dual-track GOGC=20 / GOGC=100) |
 | Regression gate | `bench-gate-pr.yaml` (Tier 1) |

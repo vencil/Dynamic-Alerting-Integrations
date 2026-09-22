@@ -186,7 +186,7 @@ jobs:
           # reason: this job has to know how many benchmarks there are to
           # compute the runtime budget below, and a second copy of the list
           # would be a number that silently goes stale.
-          BENCH_RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          BENCH_RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirTree_1000_Cold|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
           NBENCH=$(printf '%s' "$BENCH_RE" | tr '|' '\n' | grep -c 'Benchmark')
 
           # COMBINED budget. Each bound above is individually sane and their
