@@ -152,20 +152,26 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 // TestScanDirTree_YoungFileIsReadDespiteMatchingStat pins the other half
 // of the guard: a file inside the coarse-mtime window is re-read even when
 // its stat matches, because the stat cannot vouch for the bytes yet.
+//
+// ⛔ The young mtime is set BEFORE the first scan on purpose: the prior
+// then records exactly the stat the second scan sees, so a stat mismatch
+// cannot be what forces the read — only the guard term can. Touching the
+// file between the scans instead would make the test pass with the guard
+// deleted (measured: the mutant stayed green).
 func TestScanDirTree_YoungFileIsReadDespiteMatchingStat(t *testing.T) {
 	t.Parallel()
 	root := twoTenantTree(t)
 	fresh, _ := freshMetrics(t)
-	first, err := scanDirTree(root, nil, fresh, nil)
-	if err != nil {
-		t.Fatalf("first scan: %v", err)
-	}
-	// Same bytes, mtime now → younger than the guard.
 	alphaPath := filepath.Join(root, "t-alpha.yaml")
 	now := time.Now()
 	if err := os.Chtimes(alphaPath, now, now); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
+	first, err := scanDirTree(root, nil, fresh, nil)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	// Same bytes, same (young) stat → inside the guard window.
 	second, err := scanDirTree(root, first, fresh, nil)
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
