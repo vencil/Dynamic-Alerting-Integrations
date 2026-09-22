@@ -177,7 +177,7 @@ make setup && make verify && make test-alert
 |------|---------|------|
 | 已有 Prometheus Operator | Helm + `rules.mode=operator` | [Operator 整合](docs/integration/prometheus-operator-integration.md) |
 | 自管 Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
-| GitOps（ArgoCD / Flux） | Helm + Git repo | [GitOps 部署](docs/integration/gitops-deployment.md) |
+| GitOps（ArgoCD / Flux） | Helm + Git repo（⚠️ `make configmap-assemble` 須明示 `CONFDIR=<你的 conf.d>`；內建預設值是本 repo 的開發範例樹，會被硬擋） | [GitOps 部署](docs/integration/gitops-deployment.md) |
 | 不確定？ | 互動式決策矩陣 | [Decision Matrix](docs/getting-started/decision-matrix.md) |
 
 所有路徑均支援 [OCI Registry 安裝](components/threshold-exporter/README.md#6-部署)。
