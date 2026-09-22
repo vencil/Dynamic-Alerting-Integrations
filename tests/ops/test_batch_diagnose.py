@@ -516,9 +516,17 @@ class TestMainCLI:
 class TestDiscoverTenantsSpellingMatchesTheProducer:
     """#1603 — the ConfigMap keys ARE conf.d filenames, so match the producer.
 
-    `make configmap-assemble` globs `conf.d/` straight into `--from-file` and
-    now ships both spellings; a narrower set here would report a smaller
-    tenant set than what is deployed. Bounded on both sides below.
+    `scripts/ops/configmap_assemble.py` (what `make configmap-assemble` runs)
+    turns a conf.d into those keys with `_lib_confd.has_yaml_extension`, the
+    exporter's own case-insensitive predicate, so both spellings ship; a
+    narrower set here would report a smaller tenant set than what is
+    deployed. Bounded on both sides below.
+
+    ⚠️ The coupling is to that PREDICATE, not to how the producer is wired:
+    this docstring said "globs `conf.d/` straight into `--from-file`" long
+    after the glob was gone (#1792/#1796 moved selection into the script),
+    which is a reader of this file being told the wrong thing about why the
+    two sides have to agree.
     """
 
     def _discover(self, monkeypatch, keys):

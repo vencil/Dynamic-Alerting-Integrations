@@ -1529,9 +1529,12 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         #   `README.md`       not a config carrier at all
         #   `db-c.yml`        ⚠️ NOT a "must not be seen" neighbour any
         #                     more: #1603 widened this tool to the producer's
-        #                     set (`make configmap-assemble` globs `conf.d/`
-        #                     into `--from-file`, both spellings), so this is
-        #                     a real key of a real tenant. The two neighbours
+        #                     set, so this is a real key of a real tenant.
+        #                     (That producer, `make configmap-assemble`, no
+        #                     longer globs in the shell at all — #1792/#1796
+        #                     moved selection into `configmap_assemble.py`,
+        #                     which is case-INSENSITIVE, so the producer's
+        #                     set is now wider still.) The two neighbours
         #                     above still pin their filters.
         payload = _json.dumps(
             {"data": {fname: _TENANT_BODY,

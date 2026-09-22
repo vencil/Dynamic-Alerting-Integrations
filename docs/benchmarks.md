@@ -237,7 +237,7 @@ lang: zh
 | 冷啟動全量載入（§1） | `FullDirLoad`（Go micro-bench） |
 | 穩態 reload（無變更）（§1） | `IncrementalLoad_NoChange` + mtime guard |
 | 單檔變更 reload（§1） | `IncrementalLoad_OneFileChanged` |
-| 目錄掃描雜湊（§1） | `ScanDirFileHashes` + mtime guard |
+| 目錄掃描（§1） | `ScanDirTree_*_Cold`（全讀＋hash＋tenant 宣告 parse）／`ScanDirTree_*_Warm`（mtime fast-path，stat-only） |
 | 端到端告警 fire（§2） | `make bench-e2e`（5-anchor harness，nightly `bench-record.yaml`） |
 | Soak 漂移（§4） | `run_chaos_soak.py`（雙軌 GOGC=20 / GOGC=100） |
 | 回歸閘門 | `bench-gate-pr.yaml`（Tier 1） |

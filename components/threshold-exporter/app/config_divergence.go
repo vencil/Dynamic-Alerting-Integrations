@@ -6,36 +6,31 @@ package main
 //
 // WHAT THIS FILE GUARDS (the defect it was built for is CLOSED)
 //
-// conf.d/ is read by two independent scanners:
+// conf.d/ feeds two planes:
 //
-//	flat_scanner.go  scanDirFileHashes    filepath.WalkDir, recursive
-//	                 → fullDirLoad → mergePartialConfigs → m.config
-//	                 → GetConfig() → ThresholdCollector → /metrics
+//	scanDirTree → commitFlatFrom → mergePartialConfigs → m.config
+//	            → GetConfig() → ThresholdCollector → /metrics
+//	scanDirTree → m.hierarchy.tenantSources → Resolve() → /effective
 //
-//	config_hierarchy.go scanDirHierarchical  filepath.WalkDir, recursive
-//	                 → m.hierarchy.tenantSources → Resolve() → /effective
-//
-// They originally disagreed by construction: the flat one was
-// `os.ReadDir` + `if IsDir() { continue }`, so a tenant file one directory
-// down (`conf.d/db/hier-tenant.yaml`) resolved via /effective, was absent
-// from /metrics, and emitted ZERO signal — no ERROR, no WARN, no
-// parse_failure, nothing in the "Config loaded" stats line. ADR-016
-// §"目錄深度不影響 metric label"
-// (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md) promises the
-// opposite. This file made that audible; #1521 then made the flat scanner
-// recursive, so depth is no longer a cause.
+// They were once two independent walkers that disagreed by construction:
+// the flat one was `os.ReadDir` + `if IsDir() { continue }`, so a tenant
+// file one directory down resolved via /effective, was absent from
+// /metrics, and emitted ZERO signal. This file made that audible; #1521
+// made the flat scanner recursive, and #1568 replaced both walkers with
+// the one in config_tree_scan.go, so which files exist is no longer a
+// cause on either plane.
 //
 // ⛔ THE AUDIT IS NOT OBSOLETE, and the reason is not sentimental. The two
-// scanners still parse what they find SEPARATELY, so a file can be dropped
-// by one and kept by the other. The reachable cause today is a file whose
-// platform block fails the flat parse: `Defaults` is
+// planes still PARSE what the one walk found SEPARATELY —
+// `parsePartialConfig` (flat, full ThresholdConfig) versus
+// `parseTenantDecls` (hierarchy, `tenants:` keys only) — so a file can be
+// dropped by one and kept by the other. The reachable cause today is a
+// file whose platform block fails the flat parse: `Defaults` is
 // `map[string]float64`, so a `defaults:` entry of the wrong shape makes
 // `parsePartialConfig` discard the WHOLE file — tenants and all — while
-// the hierarchical walker, which reads the same file for its `tenants:`
-// declarations only, still registers them. Measured: `cfg.Tenants` empty,
-// `hierarchy.tenantSources` = [t-bad]. Two enumerators over one tree is
-// the defect CLASS (#1911); recursion closed one instance of it, not the
-// class, which is why this gauge stays armed and why #1568 exists.
+// the declaration parse, which reads the same bytes for its `tenants:`
+// keys only, still registers them. Measured: `cfg.Tenants` empty,
+// `hierarchy.tenantSources` = [t-bad]. That is why this gauge stays armed.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load on divergence)
 //
@@ -179,7 +174,7 @@ func formatDivergenceLog(
 // Called from commitConfig — the single site in this package that assigns
 // m.config — so every path that publishes a config is covered: Load (both
 // modes), fullDirLoad, IncrementalLoad, and the hierarchical hot-reload
-// path (diffAndReload → installNewHierarchyState → fullDirLoad).
+// path (diffAndReload → installNewHierarchyState → commitFlatFrom).
 //
 // ⛔ BOTH halves are passed in, and that is the whole point: they must come
 // from ONE lock window. An earlier revision took `cfg` as an argument but
@@ -200,7 +195,7 @@ func formatDivergenceLog(
 // more.
 //
 // ⛔ In particular it does NOT guarantee both halves come from the same
-// reload, and claiming that was wrong. `populateHierarchyState`
+// reload, and claiming that was wrong. `populateHierarchyStateFrom`
 // (config.go) installs tenantSources under its own Lock and releases it;
 // commitConfig acquires m.mu later, with a directory scan and a YAML parse
 // in between. With reloads unserialised, reload B's hierarchy can be in

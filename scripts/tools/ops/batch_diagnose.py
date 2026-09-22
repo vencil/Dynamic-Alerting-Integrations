@@ -84,11 +84,18 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     # `DB-A.YAML` -> [], i.e. every tenant in the report vanished and the
     # run still exited 0.
     #
-    # #1603: match the PRODUCER. `threshold-config` is built by the
-    # `configmap-assemble` recipe in `Makefile`, straight out of `conf.d/`,
-    # so its keys are conf.d filenames and it now ships both spellings.
-    # A narrower set here reproduces the original defect one hop downstream:
-    # a tenant set smaller than what is deployed.
+    # #1603: match the PRODUCER. `threshold-config` is built from a conf.d
+    # by `scripts/ops/configmap_assemble.py` (what `make configmap-assemble`
+    # runs), so its keys are conf.d filenames. A narrower set here
+    # reproduces the original defect one hop downstream: a tenant set
+    # smaller than what is deployed.
+    #
+    # ⛔ That producer selects with `_lib_confd.has_yaml_extension`, the
+    # exporter's own case-INSENSITIVE predicate (#1792), which is why the
+    # same predicate is used below — the coupling is to the PREDICATE, not
+    # to a mechanism. The recipe used to do the selecting itself with a
+    # shell glob; describing it that way here is how this comment went stale
+    # while the code stayed right, so it names the module, not the layer.
     data_keys = list(cm_data.get("data", {}).keys())
     tenants = []
     for key in data_keys:

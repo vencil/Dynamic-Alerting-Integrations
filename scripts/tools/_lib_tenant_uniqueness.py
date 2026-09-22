@@ -1,7 +1,7 @@
 """Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 
 Two tools build a flat set of carriers the exporter will read —
-``configmap_assemble_precheck`` (for ``make configmap-assemble``) and
+``configmap_assemble`` (for ``make configmap-assemble``) and
 ``assemble_config_dir`` (for ``make sharded-assemble``). Both have to ask
 the same question before they hand that set on, because the exporter's
 answer is all-or-nothing: a tenant id found in two files raises

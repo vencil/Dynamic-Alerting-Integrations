@@ -67,13 +67,13 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 
 #### Phase .b 1000+ tenant hierarchical baseline (B-1 Phase 1 + B-8, v2.8.0)
 
-新增於 PR #59，檔案 `components/threshold-exporter/app/config_hierarchy_bench_test.go`。覆蓋 post-A-10 production hot path：`WatchLoop → scanDirHierarchical → diffAndReload`。
+新增於 PR #59，檔案 `components/threshold-exporter/app/config_hierarchy_bench_test.go`。覆蓋 post-A-10 production hot path：`WatchLoop → diffAndReload → scanDirTree`（#1568 起兩平面共用一個 walker；`ScanDirTree_*` 系列改名自 `ScanDirHierarchical_*`，冷掃含 tenant 宣告 parse，數字與舊系列不可直接比較）。
 
 | Benchmark | Tier | 量測對象（Coverage Target） | Last Verified |
 |-----------|------|---------------------------|---------------|
-| `BenchmarkScanDirHierarchical_1000` | 2 | `scanDirHierarchical`：directory walk + per-file SHA-256 hash + parent graph build (1000 tenants) | v2.8.0 |
-| `BenchmarkScanDirHierarchical_2000` | 2 | 同上，2000 tenants（scaling characterization） | v2.8.0 |
-| `BenchmarkScanDirHierarchical_5000` | 2 | 同上，5000 tenants（scaling characterization） | v2.8.0 |
+| `BenchmarkScanDirTree_Hierarchical_1000_Cold` | 2 | `scanDirTree` 無 prior：directory walk + per-file SHA-256 hash + tenant 宣告 parse (1000 tenants) | v2.9.0+ |
+| `BenchmarkScanDirTree_Hierarchical_2000_Cold` | 2 | 同上，2000 tenants（scaling characterization） | v2.9.0+ |
+| `BenchmarkScanDirTree_Hierarchical_5000_Cold` | 2 | 同上，5000 tenants（scaling characterization） | v2.9.0+ |
 | `BenchmarkFullDirLoad_Hierarchical_1000` | 2 | `fullDirLoad`：cold-load YAML parse + L0/L1/L2/L3 hierarchical merge (1000 tenants) | v2.8.0 |
 | `BenchmarkFullDirLoad_Hierarchical_2000` | 2 | 同上，2000 tenants | v2.8.0 |
 | `BenchmarkFullDirLoad_Hierarchical_5000` | 2 | 同上，5000 tenants | v2.8.0 |
@@ -89,7 +89,7 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 
 - `buildDirConfigHierarchical(b, N)` — Pure Go fixture writer，鏡射 `generate_tenant_fixture.py` 結構（8 domains × 6 regions × 3 envs + L0/L1/L2/L3 `_defaults.yaml`）；`sync.Once` cached for read-only benchmarks，fresh-dir variant for mutating benchmarks
 - `reportResourceMetrics(b)` — `runtime.GC()` ×2 reap finalizers 後 emit `MB-heap-after-gc` / `MB-sys` / `goroutines` via `b.ReportMetric`
-- 共享驅動函式 `benchScanDirHierarchicalAtSize` / `benchFullDirLoadAtSize` / `benchDiffAndReloadHierarchicalAtSizeNoChange` / `benchBlastRadiusDefaultsChangeAtSize` — 由各 size variant 呼叫，DRY 化 1000/2000/5000 三組量測
+- 共享驅動函式 `benchScanDirTreeHierarchicalAtSize` / `benchFullDirLoadAtSize` / `benchDiffAndReloadHierarchicalAtSizeNoChange` / `benchBlastRadiusDefaultsChangeAtSize` — 由各 size variant 呼叫，DRY 化 1000/2000/5000 三組量測
 
 **執行方式**：完整 `bench_wrapper.sh` 重跑指令見 [Benchmark Playbook §重跑本 baseline 指令](benchmark-playbook.md#重跑本-baseline-指令)；快速跑全 Go bench 用 `make go-bench` 或 `make go-bench-clean`（後者經 `bench_wrapper.sh` 過濾 stdout）。
 

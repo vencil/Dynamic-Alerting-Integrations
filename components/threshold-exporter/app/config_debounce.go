@@ -4,8 +4,8 @@ package main
 // Debounced reload + hierarchical diff (v2.7.0, Phase 3)
 // ============================================================
 //
-// This file wires the hierarchical scanner (config_hierarchy.go) and the deep
-// merge + dual-hash engine (config_inheritance.go) into ConfigManager's
+// This file wires the single conf.d tree walk (config_tree_scan.go) and the
+// deep merge + dual-hash engine (config_inheritance.go) into ConfigManager's
 // WatchLoop via a burst-coalescing debounce window.
 //
 // Why a debounce:
@@ -27,12 +27,13 @@ package main
 // Interaction with the flat incremental path (v2.6.0, IncrementalLoad):
 //
 //   - When hierarchicalMode == false, diffAndReload delegates to
-//     IncrementalLoad so legacy flat conf.d/ layouts keep their existing
-//     semantics untouched.
+//     incrementalLoadFrom (fed the scan it already took) so legacy flat
+//     conf.d/ layouts keep their existing semantics untouched.
 //   - When hierarchicalMode == true, diffAndReload owns the reload pipeline
-//     end-to-end: scan → diff → per-tenant merged_hash → atomic swap of
-//     mergedHashes + inheritanceGraph, plus a fullDirLoad for the
-//     ThresholdConfig view consumed by the collector.
+//     end-to-end: ONE scan → diff → per-tenant merged_hash → atomic swap of
+//     mergedHashes + inheritanceGraph, then commitFlatFrom on the SAME scan
+//     for the ThresholdConfig view consumed by the collector (#1568: a
+//     reload tick walks the tree once).
 //
 // Trap #12 from §8.11.2 (Debounce timer leak): Close() stops the timer;
 // time.AfterFunc (vs. NewTimer + goroutine) avoids the receive-channel
@@ -235,24 +236,28 @@ func (m *ConfigManager) Close() {
 // v2.8.0 PR-3: extracted from the original 216-line diffAndReload to
 // give the snapshot/scan/classify/install seams readable names.
 type reloadPriorState struct {
-	mtimes           map[string]fileStat
 	hashes           map[string]string
 	mergedHashes     map[string]string
 	tenantSources    map[string]string
 	parsedDefaults   map[string]map[string]any // Issue #61: shadow-vs-cosmetic baseline
 	hierarchicalMode bool
+	// tree is the last commit's scan, the prior of this tick's walk
+	// (flatScanState.tree). It carries the mtimes the fast-path compares
+	// against AND the tenant declarations it must carry across.
+	tree *treeScan
 }
 
-// reloadScanState bundles the result of scanDirHierarchical when the
-// scan committed to the hierarchical path. When the scan resolves to
-// the flat path, scanAndCheckHierarchical returns fallback=true and
+// reloadScanState bundles the hierarchy projection of this tick's scan
+// when the scan committed to the hierarchical path, plus the scan itself
+// so the flat view is rebuilt from the same walk. When the scan resolves
+// to the flat path, scanAndCheckHierarchical returns fallback=true and
 // the caller short-circuits without populating this struct.
 type reloadScanState struct {
 	tenants  map[string]string
 	defaults map[string]bool
 	hashes   map[string]string
-	mtimes   map[string]fileStat
 	graph    *InheritanceGraph
+	tree     *treeScan
 }
 
 // reloadResult bundles classifyAndCount's output for installNewHierarchyState
@@ -276,36 +281,53 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return reloadPriorState{
-		mtimes:           m.hierarchy.mtimes,
 		hashes:           m.hierarchy.hashes,
 		mergedHashes:     m.hierarchy.mergedHashes,
 		tenantSources:    m.hierarchy.tenantSources,
 		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
 		hierarchicalMode: m.hierarchy.enabled,
+		tree:             m.flat.tree,
 	}
 }
 
-// scanAndCheckHierarchical runs scanDirHierarchical and decides the path:
+// scanAndCheckHierarchical walks the tree ONCE (scanDirTree with the
+// retained prior) and decides the path:
 //
 //	hierarchical → return scan, fallback=false; caller continues
-//	flat         → IncrementalLoad here, return fallback=true; caller short-circuits
+//	flat         → incrementalLoadFrom(this scan), return fallback=true; caller short-circuits
 //	error        → return fallback=true + err; caller propagates
 //
-// hierarchicalMode is sticky once activated: a config that introduces
-// `_defaults.yaml` flips the bit ON, and even if the file is later deleted
-// we keep using the hierarchical path because computeMergedHash with an
-// empty chain is well-defined.
+// A duplicate tenant is a scan error here, as the hierarchical wrapper
+// always reported it. hierarchicalMode is sticky once activated: a config
+// that introduces `_defaults.yaml` flips the bit ON, and even if the file
+// is later deleted we keep using the hierarchical path because
+// computeMergedHash with an empty chain is well-defined.
 func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
-	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchicalWithMetrics(m.path, prior.mtimes, m.getMetrics(), m.getLogger())
+	scan, scanErr := scanDirTree(m.path, prior.tree, m.getMetrics(), m.getLogger())
+	if scanErr == nil && scan.conflict != nil {
+		scanErr = scan.conflict
+	}
 	if scanErr != nil {
 		m.getLogger().Printf("ERROR: hierarchical scan failed: %v", scanErr)
 		return reloadScanState{}, true, scanErr
 	}
 
 	// If no _defaults.yaml was discovered AND we haven't activated
-	// hierarchical mode yet, stay on the flat path.
-	if !prior.hierarchicalMode && len(defaults) == 0 {
-		if ierr := m.IncrementalLoad(); ierr != nil {
+	// hierarchical mode yet, stay on the flat path — fed this scan, so the
+	// flat tick does not walk again. IncrementalLoad's own cold-start
+	// guard (no flat cache yet → full load) is kept here for the same
+	// reason it exists there.
+	if !prior.hierarchicalMode && len(scan.defaults) == 0 {
+		m.mu.RLock()
+		hasCache := len(m.flat.hashes) > 0
+		m.mu.RUnlock()
+		var ierr error
+		if hasCache {
+			ierr = m.incrementalLoadFrom(scan)
+		} else {
+			ierr = m.fullDirLoadFrom(scan)
+		}
+		if ierr != nil {
 			m.getLogger().Printf("ERROR: incremental load failed: %v", ierr)
 			return reloadScanState{}, true, ierr
 		}
@@ -313,11 +335,11 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	}
 
 	return reloadScanState{
-		tenants:  tenants,
-		defaults: defaults,
-		hashes:   hashes,
-		mtimes:   mtimes,
-		graph:    graph,
+		tenants:  scan.tenants,
+		defaults: scan.defaults,
+		hashes:   scan.absHashes(),
+		graph:    scan.inheritanceGraph(),
+		tree:     scan,
 	}, false, nil
 }
 
@@ -332,7 +354,7 @@ type reloadEmissionKey struct{ reason, scope, effect string }
 // rebuildParsedDefaults rebuilds the parsedDefaults cache for a reload tick
 // (Issue #61): it reuses the prior parse for any defaults file whose hash did
 // not move and re-parses the rest. Read/parse failures are log-and-skip (same
-// policy as populateHierarchyState cold start). Extracted from classifyAndCount.
+// policy as populateHierarchyStateFrom cold start). Extracted from classifyAndCount.
 func (m *ConfigManager) rebuildParsedDefaults(prior reloadPriorState, scan reloadScanState) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(scan.defaults))
 	for dp := range scan.defaults {
@@ -503,18 +525,35 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 	return res
 }
 
-// installNewHierarchyState rebuilds the ThresholdConfig view via
-// fullDirLoad (which acquires m.mu.Lock itself), then re-takes the lock
-// to atom-swap the hierarchy-only fields and stamps the last-reload
-// gauge. Splitting into two locks is intentional: fullDirLoad is slow
-// (I/O + YAML parse) and we don't want the debounce goroutine to gate
-// scrapes on it for hierarchy metadata updates.
+// installNewHierarchyState atom-swaps the hierarchy-only fields under
+// m.mu, then rebuilds and commits the ThresholdConfig view from the SAME
+// scan (commitFlatFrom, which takes m.mu itself), and stamps the
+// last-reload gauge. Two lock windows on purpose: the flat rebuild parses
+// YAML and we don't want the debounce goroutine to gate scrapes on it.
+//
+// ⛔ Hierarchy FIRST, then the flat commit — the reverse of the historical
+// order, for two reasons that both come from having one walk:
+//
+//   - installConfig hands the divergence audit the tenantSources standing
+//     in the commit's lock window. Committing the new config against the
+//     PREVIOUS tenantSources would report every tenant this tick deleted
+//     as divergent until the next commit.
+//   - commitFlatFrom materialises subtree defaults from the graph and the
+//     parsed defaults the manager holds; those must be this tick's, not
+//     the last one's, or a tenant added under a subtree would carry the
+//     root value for one reload.
+//
+// The only way the flat commit can fail after a successful scan — an
+// empty tree — is checked before anything is installed, so a failure
+// leaves BOTH planes on the previous state rather than one ahead of the
+// other.
 //
 // SetLastReloadComplete (v2.8.0 B-1.P2-a) is stamped strictly post
-// atomic-swap so the gauge cannot advance ahead of observable state.
+// commit so the gauge cannot advance ahead of observable state.
 func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result reloadResult) error {
-	if err := m.fullDirLoad(); err != nil {
-		m.getLogger().Printf("ERROR: fullDirLoad inside diffAndReload failed: %v", err)
+	if len(scan.tree.files) == 0 {
+		err := fmt.Errorf("no .yaml files found in %s", m.path)
+		m.getLogger().Printf("ERROR: flat rebuild inside diffAndReload refused: %v", err)
 		return err
 	}
 
@@ -522,11 +561,15 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.enabled = true
 	m.hierarchy.tenantSources = scan.tenants
 	m.hierarchy.hashes = scan.hashes
-	m.hierarchy.mtimes = scan.mtimes
 	m.hierarchy.mergedHashes = result.newMergedHashes
 	m.hierarchy.graph = scan.graph
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.mu.Unlock()
+
+	if err := m.commitFlatFrom(scan.tree); err != nil {
+		m.getLogger().Printf("ERROR: flat rebuild (commitFlatFrom) inside diffAndReload failed: %v", err)
+		return err
+	}
 
 	m.getMetrics().SetLastReloadComplete(time.Now())
 	return nil
@@ -542,17 +585,20 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 // v2.8.0 PR-3 decomposed the original 216-line implementation into
 // four named steps without changing semantics:
 //
-//  1. snapshotPriorState        — RLock-and-copy m.* hierarchy fields
-//  2. scanAndCheckHierarchical  — scanDirHierarchical, fall back to
-//     IncrementalLoad if neither hierarchical
-//     mode is active nor `_defaults.yaml`
-//     was found (sticky once flipped)
+//  1. snapshotPriorState        — RLock-and-copy m.* hierarchy fields +
+//     the retained *treeScan (the prior)
+//  2. scanAndCheckHierarchical  — ONE scanDirTree; fall back to
+//     incrementalLoadFrom on that same scan
+//     if neither hierarchical mode is active
+//     nor `_defaults.yaml` was found
+//     (sticky once flipped)
 //  3. classifyAndCount          — per-tenant dirty detection +
 //     Issue #61 effect classification
 //     (applied / shadowed / cosmetic) +
 //     blast-radius bucket emission
-//  4. installNewHierarchyState  — fullDirLoad + atomic swap +
-//     SetLastReloadComplete stamp
+//  4. installNewHierarchyState  — atomic swap of the hierarchy fields,
+//     then commitFlatFrom on the same scan,
+//     then the SetLastReloadComplete stamp
 //
 // Single-file mode short-circuits at the very top (no hierarchical
 // concept). Trap unchanged from v2.7.0: never hold m.mu across

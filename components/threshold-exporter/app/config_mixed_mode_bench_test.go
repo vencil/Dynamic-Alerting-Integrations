@@ -191,16 +191,8 @@ func writeMixedBenchFixtureContent(root string, flatTenants, hierTenants int) er
 // (directly comparable to *_Hierarchical_1000 series)
 // ─────────────────────────────────────────────────────────────────
 
-func BenchmarkScanDirHierarchical_MixedMode_500flat_500hier(b *testing.B) {
-	dir := buildDirConfigMixed(b, 500, 500)
-	silenceLogs(b)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, _, _, _, err := scanDirHierarchical(dir, nil)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
+func BenchmarkScanDirTree_MixedMode_500flat_500hier_Cold(b *testing.B) {
+	benchScanDirTreeCold(b, buildDirConfigMixed(b, 500, 500))
 	b.StopTimer()
 	reportResourceMetrics(b)
 }

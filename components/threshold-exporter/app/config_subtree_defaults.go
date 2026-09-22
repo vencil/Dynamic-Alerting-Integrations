@@ -77,16 +77,16 @@ func applySubtreeDefaults(
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
 		return 0, nil
 	}
-	// ⛔ ABSOLUTE, because the chain is. `scanDirHierarchical` stores every
-	// defaults path under `filepath.Abs(rootPath)` + `Clean`, while `m.path`
-	// is whatever `-config-dir` was given — frequently relative. Comparing a
-	// relative root against an absolute chain entry never matches, so EVERY
-	// defaults file looked like a subtree file, including the root's.
-	// Measured on the repo's own golden fixtures: three trees with no
-	// subdirectory at all had their ROOT defaults keys written into tenant
-	// maps and declared (`_metadata`, `alert_group`, `threshold`).
-	// Mirrors the hierarchical scanner's own derivation exactly, including
-	// its choice NOT to resolve symlinks, so the two cannot drift.
+	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
+	// path under the absolutised, cleaned AND symlink-resolved root
+	// (`absScanRoot`), while `m.path` is whatever `-config-dir` was given —
+	// frequently relative. Comparing a relative root against an absolute
+	// chain entry never matches, so EVERY defaults file looked like a
+	// subtree file, including the root's. Measured on the repo's own golden
+	// fixtures: three trees with no subdirectory at all had their ROOT
+	// defaults keys written into tenant maps and declared (`_metadata`,
+	// `alert_group`, `threshold`). The SAME derivation the walker uses, so
+	// the two cannot drift.
 	rootDir := absScanRoot(root)
 	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
 	// forced through. See the block above `unreachableKeys` for why writing

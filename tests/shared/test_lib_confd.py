@@ -16,6 +16,7 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     nested_yaml_files,
     nested_yaml_warning,
+    printable_name,
     reset_warned_for_test,
     unusable_config_entries,
     unusable_config_paths,
@@ -119,6 +120,51 @@ def test_warning_truncates_but_says_how_many(tmp_path: pathlib.Path):
     msg = nested_yaml_warning(root, tool="unit-test", limit=5)
     assert "9 config file(s)" in msg
     assert "+4 more" in msg, "a truncated list must still report the true total"
+
+
+def test_a_file_name_cannot_drive_the_operators_terminal(tmp_path: pathlib.Path):
+    """⛔ The names in this warning come from the tree being inspected, and
+    the warning goes to a terminal. A name holding `\\x1b[2J` cleared the
+    screen, so the message that exists to make a silent loss audible could
+    erase the output around it."""
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "db-\x1b[2J\x1b[Hevil.yaml").write_text(
+        "tenants: {}\n", encoding="utf-8")
+    msg = nested_yaml_warning(root, tool="unit-test")
+    assert "\x1b" not in msg, repr(msg)
+    assert "db-" in msg and "evil.yaml" in msg, msg
+
+
+def test_escaping_is_identity_on_anything_displayable(tmp_path: pathlib.Path):
+    """必響對照組: the rule is "escape what cannot be displayed", not
+    "escape what looks unusual" — a CJK or emoji name must survive byte for
+    byte, or every substring assertion callers make on these messages, and
+    every operator with a non-ASCII tree, pays for the guard above."""
+    assert printable_name("db-a.yaml") == "db-a.yaml"
+    assert printable_name("租戶-a.yaml") == "租戶-a.yaml"
+    assert printable_name("db a (copy).yaml") == "db a (copy).yaml"
+    assert "\x1b" not in printable_name("db-\x1b[2J.yaml")
+    assert "\n" not in printable_name("db-\n.yaml")
+    # ⛔ …and the escape itself is escaped, or the mapping is not injective:
+    # a file whose name really holds ESC and a file whose name holds the
+    # four characters `\x1b` printed IDENTICALLY, in the one message whose
+    # job is to tell the operator which file to go and look at.
+    assert printable_name("db-\x1b.yaml") != printable_name("db-\\x1b.yaml")
+
+    # ⚠️ The half below needs a filesystem this name can actually be
+    # written to. Under a non-UTF-8 locale (`LC_ALL=C`) the assertions
+    # above still hold and are the point of this test; `write_text` raises
+    # `UnicodeEncodeError` before any of it is measured, which reads as
+    # "the escaping broke" rather than "this host cannot hold the fixture".
+    try:
+        os.fsencode("租戶-a.yaml")
+    except UnicodeEncodeError:  # pragma: no cover - depends on the locale
+        pytest.skip("this locale's filesystem encoding cannot hold the name")
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "租戶-a.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    assert "租戶-a.yaml" in nested_yaml_warning(root, tool="unit-test")
 
 
 def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
