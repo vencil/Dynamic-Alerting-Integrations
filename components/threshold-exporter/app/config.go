@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,7 +18,7 @@ import (
 // ============================================================
 
 // flatScanState bundles the v2.1.0 incremental-reload caches used by the
-// flat-mode scanner (`scanDirFileHashes` + `IncrementalLoad`). Per-file
+// flat-mode pipeline (`scanDirTree` + `IncrementalLoad`). Per-file
 // SHA-256 + parsed partial config + mtime fast-path stat. nil maps when
 // the manager is in single-file mode or has not yet completed its first
 // directory scan.
@@ -27,14 +26,31 @@ type flatScanState struct {
 	hashes  map[string]string          // filename → SHA-256
 	configs map[string]ThresholdConfig // filename → parsed partial config
 	mtimes  map[string]fileStat        // filename → mtime+size for quick skip (v2.1.0)
+
+	// tree is the *treeScan the last COMMIT was built from, and the prior of
+	// the next scan (#1568). It is retained here, next to `hashes` and
+	// `configs`, and installed with them by installConfig. Correctness of
+	// the partial reuse in commitFlatFrom does not depend on that pairing —
+	// the reuse is gated on `hashes[k] == scan.files[k].hash`, so a prior
+	// from an older commit only costs a disk read per file whose bytes the
+	// walker did not cache. Keeping the three together is what makes the
+	// quiet tick stat-only: every unchanged file is a fast-path hit AND a
+	// partial-cache hit.
+	//
+	// ⛔ It is the scan itself, never a prior rebuilt from `hashes`+`mtimes`
+	// (the shape the flat wrapper in scan_wrappers_test.go still uses): a
+	// rebuilt prior carries no tenant declarations, so the mtime fast-path
+	// would drop every unchanged tenant from the hierarchy on every quiet
+	// tick.
+	tree *treeScan
 }
 
 // hierarchyState bundles the v2.7.0+ ADR-016/017 hierarchical-mode caches.
-// `enabled` is auto-detected on first load: if scanDirHierarchical finds
-// at least one `_defaults.yaml` at any depth AND the top-level scan path
-// is a directory, we keep hierarchical state populated alongside the flat
-// state. A reload always produces both views so a legacy flat caller
-// (fullDirLoad) stays correct.
+// `enabled` is auto-detected on first load: if the tree walk finds at
+// least one `_defaults.yaml` at any depth AND the top-level scan path is a
+// directory, we keep hierarchical state populated alongside the flat
+// state. A reload always produces both views from ONE walk (#1568), so
+// the two can no longer disagree about which files exist.
 //
 // When `enabled` is false, all maps/graph are nil and diffAndReload falls
 // back to IncrementalLoad (flat path).
@@ -51,7 +67,6 @@ type hierarchyState struct {
 	enabled        bool
 	tenantSources  map[string]string         // tenantID → absolute tenant file path
 	hashes         map[string]string         // absolute Clean path → 64-char SHA-256
-	mtimes         map[string]fileStat       // absolute Clean path → mtime+size
 	mergedHashes   map[string]string         // tenantID → 16-char merged_hash
 	graph          *InheritanceGraph         // defaults↔tenants dependency map
 	parsedDefaults map[string]map[string]any // absolute Clean path → parsed defaults dict
@@ -405,23 +420,23 @@ func (m *ConfigManager) installConfig(
 	return m.hierarchy.tenantSources, m.hierarchy.unreachableInherited, m.afterCommitUnlock
 }
 
-// runHierarchyScanReject runs populateHierarchyState with the
-// consistent error-policy used by Load + fullDirLoad:
+// rejectDuplicateTenant is the issue-#127 hard reject shared by every full
+// load: a tenant declared in two files is a misconfiguration, and the
+// caller propagates the typed error without committing any state. The
+// walker records the conflict on the scan instead of failing the walk, so
+// the flat products of a rejected tree are still available for diagnosis;
+// this is the one place that turns the record back into the error callers
+// unwrap with errors.As(&DuplicateTenantError{}).
 //
-//   - *DuplicateTenantError → hard reject; caller propagates without
-//     committing any state (issue #127, mixed-mode misconfig).
-//   - Other errors → log WARN, return nil (hierarchical mode is opt-in;
-//     a malformed branch shouldn't tear down a flat-only deploy).
-//
-// label appears in the log line so operators can tell which loader
-// triggered the warning.
-func (m *ConfigManager) runHierarchyScanReject(label string) error {
-	if err := m.populateHierarchyState(); err != nil {
-		var dupErr *DuplicateTenantError
-		if errors.As(err, &dupErr) {
-			return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", err)
-		}
-		m.getLogger().Printf("WARN: hierarchical scan during %s failed: %v", label, err)
+// Historically the hierarchical scan was a SECOND walk that could also
+// fail on its own (its non-duplicate errors were logged as
+// "WARN: hierarchical scan during <loader> failed" and ignored, because
+// hierarchical mode is opt-in). With one walk there is no second failure
+// to tolerate: a tree the flat plane cannot read is a hard error for the
+// load, as it always was.
+func rejectDuplicateTenant(scan *treeScan) error {
+	if scan.conflict != nil {
+		return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", scan.conflict)
 	}
 	return nil
 }
@@ -430,13 +445,14 @@ func (m *ConfigManager) runHierarchyScanReject(label string) error {
 //
 // Directory mode delegates to the single fullDirLoad path also used by the
 // watch loop and IncrementalLoad's cold-start fallback. Sharing it means the
-// initial commit uses the same composite-hash construction (scanDirFileHashes
+// initial commit uses the same composite-hash construction (scanDirTree
 // hash-of-hashes) that the first watch tick recomputes — so the first tick no
 // longer sees a phantom change against a differently-built byte composite — and
-// the flat cache is populated up front so the next IncrementalLoad can take the
-// mtime fast-path instead of a full rebuild. fullDirLoad already runs the same
-// ApplyProfiles + issue-#127 hierarchical-scan-reject + commitConfig sequence
-// this path used to inline (mergePartialConfigs initialises every map).
+// the flat cache plus the retained scan are populated up front so the next
+// tick can take the mtime fast-path instead of a full rebuild. fullDirLoad
+// already runs the same ApplyProfiles + issue-#127 duplicate-tenant reject +
+// commitConfig sequence this path used to inline (mergePartialConfigs
+// initialises every map).
 func (m *ConfigManager) Load() error {
 	if m.isDir {
 		return m.fullDirLoad()
@@ -502,17 +518,36 @@ func (m *ConfigManager) IncrementalLoad() error {
 		return m.fullDirLoad()
 	}
 
-	// Phase 1: scan per-file hashes with mtime guard (cheap — stat + skip unchanged)
+	// Phase 1: ONE walk with the mtime guard (cheap — stat + skip unchanged).
+	// The prior is the retained scan, never a rebuilt one (see flatScanState).
 	m.mu.RLock()
-	oldH := m.flat.hashes
-	oldM := m.flat.mtimes
-	prevHash := m.lastHash
+	tree := m.flat.tree
 	m.mu.RUnlock()
 
-	newHashes, compositeHash, newMtimes, dataCache, err := scanDirFileHashes(m.path, oldH, oldM, m.getLogger())
+	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
 	if err != nil {
 		return err
 	}
+	return m.incrementalLoadFrom(scan)
+}
+
+// incrementalLoadFrom is IncrementalLoad from phase 2 on, fed a scan the
+// caller already has. scanAndCheckHierarchical (config_debounce.go) calls
+// it with the scan it took to decide the path, so a flat-mode reload tick
+// walks the tree once instead of twice. The caller has already checked
+// that a flat cache exists.
+//
+// ⛔ EVERY KEY BELOW IS A ROOT-RELATIVE SLASH PATH (scan.relHashes()), never
+// the hierarchy plane's absolute keys: `anyNestedKey` and
+// `isNestedPlatformFile` read a separator as "below the root", so an
+// absolute key would make every file nested, redirect every reload into
+// fullDirLoadFrom, and say nothing — no error, no WARN.
+func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
+	m.mu.RLock()
+	prevHash := m.lastHash
+	m.mu.RUnlock()
+
+	newHashes, compositeHash, newMtimes, dataCache := scan.relHashes(), scan.composite, scan.relMtimes(), scan.dataCache()
 
 	// Quick check: composite hash unchanged → no work needed
 	unchanged := compositeHash == prevHash
@@ -560,9 +595,10 @@ func (m *ConfigManager) IncrementalLoad() error {
 	//
 	// ⚠️ Cost stated rather than hidden: nested trees lose the tenant-patch
 	// fast path entirely. Flat trees — every deployment that never nests — are
-	// unaffected, because no key contains a separator.
+	// unaffected, because no key contains a separator. The full load is fed
+	// THIS scan (its hierarchy products are already there), not a second walk.
 	if anyNestedKey(changed, added, removed) {
-		return m.fullDirLoad()
+		return m.fullDirLoadFrom(scan)
 	}
 
 	// Copy cache for mutation — deferred until after diff to avoid
@@ -785,10 +821,12 @@ func (m *ConfigManager) IncrementalLoad() error {
 	refreshRefused(&merged)
 	refreshTenantSources()
 
+	scan.releaseData()
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  newHashes,
 		configs: newConfigs,
 		mtimes:  newMtimes,
+		tree:    scan,
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
 }
@@ -881,7 +919,7 @@ func indexTenantDeclarations(newConfigs map[string]ThresholdConfig) tenantDeclar
 // for the answer where it is boring.
 //
 // ⛔ A `map[string][]string` COSTS A SLICE PER TENANT, and a tenant declared
-// in two files is invalid — `runHierarchyScanReject` refuses it on a full load
+// in two files is invalid — `rejectDuplicateTenant` refuses it on a full load
 // — so the slice is waste on essentially every entry. Measured at 1000 tenants:
 // the slice-per-tenant form added ~1005 allocs/op to every incremental reload
 // (16242 → 17247 on BenchmarkIncrementalLoad_1000_OneFileChanged); splitting
@@ -900,7 +938,7 @@ type tenantDeclarations struct {
 // `patchedTenants` — the tenants reintroduced by files reparsed THIS round.
 // That is "did it move in this reload", a different question again: a tenant
 // declared in two files at once (invalid, hard-rejected by
-// `runHierarchyScanReject` on a full load, but silently accepted by this fast
+// `rejectDuplicateTenant` on a full load, but silently accepted by this fast
 // path) vanished the moment either owning file was edited, because the other
 // file did not change and so was absent from `patchedTenants`.
 //
@@ -918,12 +956,26 @@ type tenantDeclarations struct {
 // edit silently dropped the first key back to the platform default, and took
 // the tenant's `_profile` with it.
 //
-// ⚠️ THE SINGLE-SOURCE CASE RETURNS THE PARSED MAP AS-IS, no copy: that is
-// what this loop did before any of the above, it is the overwhelmingly common
-// shape, and copying it was the quadratic cost above.
+// ⛔ EVERY BRANCH RETURNS A FRESH MAP, THE SINGLE-SOURCE ONE INCLUDED. It
+// used to hand back `newConfigs[only].Tenants[tenant]` — the parsed partial's
+// OWN map — and patchTenants hung that map in the merged config, where
+// ApplyProfiles and applySubtreeDefaults write into it in place. The cached
+// partial in `flat.configs` then carried the materialised profile value as
+// if the tenant had written it, and every later rebuild that reused the
+// partial (mergePartialConfigs on a `_profiles.yaml` edit, commitFlatFrom
+// on any full load) merged that stale value back in ahead of the profile —
+// a profile edit never reached a tenant that had once been served, with no
+// log. The map copy is O(keys of one tenant) per patched tenant; the
+// quadratic cost the note above describes was rescanning `newConfigs` per
+// tenant, not this.
 func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantDeclarations, tenant string) (map[string]ScheduledValue, bool) {
 	if only, single := declaredIn.single[tenant]; single {
-		return newConfigs[only].Tenants[tenant], true
+		src := newConfigs[only].Tenants[tenant]
+		overrides := make(map[string]ScheduledValue, len(src))
+		for k, v := range src {
+			overrides[k] = v
+		}
+		return overrides, true
 	}
 	sources := declaredIn.multi[tenant]
 	if len(sources) == 0 {
@@ -1136,32 +1188,82 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	return merged
 }
 
-// fullDirLoad performs a full directory load and initializes the per-file cache.
-// Used for the initial load and as fallback for IncrementalLoad.
+// fullDirLoad performs a full directory load: ONE walk of the tree, then
+// fullDirLoadFrom. Used for the initial load and as IncrementalLoad's
+// cold-start fallback. The prior is whatever the manager retained, so a
+// full load on a warm manager still takes the mtime fast-path and reuses
+// its parsed partials; on a cold manager every file is read and cached.
 func (m *ConfigManager) fullDirLoad() error {
-	// Compute per-file hashes (no mtime guard on first load)
-	perFileHashes, compositeHash, perFileMtimes, dataCache, err := scanDirFileHashes(m.path, nil, nil, m.getLogger())
+	m.mu.RLock()
+	tree := m.flat.tree
+	m.mu.RUnlock()
+
+	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
 	if err != nil {
 		return err
 	}
+	return m.fullDirLoadFrom(scan)
+}
 
-	if len(perFileHashes) == 0 {
+// fullDirLoadFrom is the full load built from a scan the caller already
+// has: reject a duplicate tenant (#127), install the hierarchy state the
+// scan describes, then build and commit the flat config against it. The
+// two planes come from the same walk, so the audit that runs at commit
+// compares two projections of one enumeration.
+//
+// Order matters and is the reverse of what it looks like: the hierarchy
+// state goes in FIRST because installConfig hands the audit the
+// tenantSources standing in the commit's lock window. Committing the new
+// config against the previous tenantSources would report every tenant the
+// operator just deleted as divergent (it is still in the old sources and
+// absent from the new config) until the next commit.
+func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
+	if err := rejectDuplicateTenant(scan); err != nil {
+		return err
+	}
+	if len(scan.files) == 0 {
+		return fmt.Errorf("no .yaml files found in %s", m.path)
+	}
+	m.populateHierarchyStateFrom(scan)
+	return m.commitFlatFrom(scan)
+}
+
+// commitFlatFrom builds the merged ThresholdConfig from a scan and commits
+// it together with the flat cache, applying the subtree defaults the
+// CURRENT hierarchy state (already installed by the caller) declares.
+//
+// A file carries bytes only when its hash moved against the prior, so for
+// a file without bytes the parsed partial from the previous commit is
+// reused when its hash is unchanged — the walker's prior IS the tree of
+// that previous commit (see flatScanState.tree), which is what makes the
+// reuse sound. A file that is unchanged but has no cached partial (it
+// failed to parse last time, or it is a nested platform file this plane
+// never caches) is re-read and re-judged, so its ERROR/WARN and its
+// parse-failure count fire again exactly as on a cold load.
+func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
+	if len(scan.files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
 	}
 
-	// Parse all files using cached bytes from scan (avoids double disk read).
-	fileConfigs := make(map[string]ThresholdConfig, len(perFileHashes))
-	var fileNames []string
-	for name := range perFileHashes {
-		fileNames = append(fileNames, name)
-	}
-	sort.Strings(fileNames)
+	m.mu.RLock()
+	priorHashes := m.flat.hashes
+	priorConfigs := m.flat.configs
+	m.mu.RUnlock()
 
-	for _, name := range fileNames {
+	fileConfigs := make(map[string]ThresholdConfig, len(scan.files))
+	for _, name := range scan.keys {
+		f := scan.files[name]
 		fullPath := filepath.Join(m.path, name)
-		data, ok := dataCache[name]
-		if !ok {
-			// Fallback: read from disk (shouldn't happen on first load)
+		data := f.data
+		if data == nil {
+			if priorHashes[name] == f.hash {
+				if partial, ok := priorConfigs[name]; ok {
+					fileConfigs[name] = partial
+					continue
+				}
+			}
+			// Unchanged-but-uncached, or a prior the walker did not have:
+			// read from disk and take the ordinary path below.
 			var rerr error
 			data, rerr = os.ReadFile(fullPath)
 			if rerr != nil {
@@ -1206,16 +1308,10 @@ func (m *ConfigManager) fullDirLoad() error {
 	merged := mergePartialConfigs(fileConfigs)
 	merged.ApplyProfiles()
 
-	// v2.8.x issue #127: same hierarchical-scan-before-commit reject
-	// as Load() — see runHierarchyScanReject.
-	if err := m.runHierarchyScanReject("fullDirLoad"); err != nil {
-		return err
-	}
-
-	// #1521 second half: the scan above just refreshed the inheritance graph,
-	// so each tenant's L1..Ln defaults can be materialised into its own map
-	// before the commit. Read under RLock because the scan published them
-	// under its own Lock and released it.
+	// #1521 second half: the caller just installed the inheritance graph this
+	// scan produced, so each tenant's L1..Ln defaults can be materialised into
+	// its own map before the commit. Read under RLock because the install
+	// published them under its own Lock and released it.
 	m.mu.RLock()
 	var tenantDefaults map[string][]string
 	if m.hierarchy.graph != nil {
@@ -1236,37 +1332,43 @@ func (m *ConfigManager) fullDirLoad() error {
 	m.hierarchy.unreachableInherited = unreachable
 	m.mu.Unlock()
 
-	m.commitConfig(&merged, compositeHash, &flatScanState{
-		hashes:  perFileHashes,
+	scan.releaseData()
+	m.commitConfig(&merged, scan.composite, &flatScanState{
+		hashes:  scan.relHashes(),
 		configs: fileConfigs,
-		mtimes:  perFileMtimes,
+		mtimes:  scan.relMtimes(),
+		tree:    scan,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }
 
-// populateHierarchyState runs scanDirHierarchical against m.path and
-// installs the resulting graph + per-tenant merged_hash onto the
-// ConfigManager. Safe to call after any fullDirLoad or IncrementalLoad.
+// populateHierarchyStateFrom installs the graph + per-tenant merged_hash
+// the scan describes onto the ConfigManager. Called by fullDirLoadFrom
+// before the flat commit; the debounced reload path installs its own,
+// incrementally classified, hierarchy state instead
+// (installNewHierarchyState).
 //
-// The function returns nil if no _defaults.yaml is anywhere in the tree
-// (flat mode — hierarchicalMode stays false; nothing to populate). A
-// non-nil error means the scan or merge pipeline hit a real failure; the
-// caller logs and leaves prior state untouched.
+// It is a no-op if the tree holds neither a _defaults.yaml nor a tenant
+// (flat mode — hierarchicalMode stays false; nothing to populate). The
+// scan cannot fail here: walk errors were returned by scanDirTree and a
+// duplicate tenant was rejected by the caller. Merge failures and
+// unreadable defaults files are logged and skipped per tenant / per file.
+//
+// Every merged_hash is recomputed from disk. This is the cold-start
+// semantics; the incremental reuse of unchanged tenants lives in
+// classifyTenant, on the debounced path, and is not duplicated here.
 //
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than
-// merging in place so a failed scan doesn't leave torn state visible to
-// the /effective read path.
-func (m *ConfigManager) populateHierarchyState() error {
-	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchicalWithMetrics(m.path, nil, m.getMetrics(), m.getLogger())
-	if err != nil {
-		return err
-	}
+// merging in place so a partial install never leaves torn state visible
+// to the /effective read path.
+func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
+	tenants, defaults, graph := scan.tenants, scan.defaults, scan.graph
 	if len(defaults) == 0 && len(tenants) == 0 {
 		// Empty tree or flat layout with no files we recognize. Don't
 		// flip hierarchicalMode — a later add-a-_defaults-file event will
 		// flip it via diffAndReload.
-		return nil
+		return
 	}
 
 	newMergedHashes := make(map[string]string, len(tenants))
@@ -1309,13 +1411,11 @@ func (m *ConfigManager) populateHierarchyState() error {
 		m.hierarchy.enabled = true
 	}
 	m.hierarchy.tenantSources = tenants
-	m.hierarchy.hashes = hashes
-	m.hierarchy.mtimes = mtimes
+	m.hierarchy.hashes = scan.absHashes()
 	m.hierarchy.mergedHashes = newMergedHashes
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
-	return nil
 }
 
 // logConfigStats logs config summary with cheap counts instead of calling
@@ -1441,18 +1541,26 @@ func (m *ConfigManager) tickOnce() {
 // depending on whether hierarchical mode has been activated for this
 // config root.
 //
-//   - Flat: scanDirFileHashes of top-level files, mtime-guard cheap
-//     stat, composite hash compare. Returns reason=source so the
-//     debounce path emits da_config_reload_trigger_total{reason="source"}.
-//   - Hierarchical: scanDirHierarchical (recursive, sees nested tenant
-//     files under <domain>/<region>/). Any file added/removed/changed
-//     constitutes a change. Returns reason=forced; diffAndReload will
-//     categorize the actual reason via its per-tenant hash compare.
+// Both paths are ONE walk (scanDirTree with the retained scan as the
+// prior, so an unchanged file costs a stat, not a read); they differ in
+// what they compare and in the reason they return:
+//
+//   - Flat: composite hash against the last commit's. Returns
+//     reason=source so the debounce path emits
+//     da_config_reload_trigger_total{reason="source"}.
+//   - Hierarchical: per-file hash against the installed hierarchy plane's
+//     (absolute keys); any file added/removed/changed constitutes a
+//     change, and a duplicate tenant is a scan error as it always was.
+//     Returns reason=forced; diffAndReload will categorize the actual
+//     reason via its per-tenant hash compare.
 //
 // O(N) compare for hierarchical mode is acceptable: at WatchInterval
 // cadence (30s default) with 1000 files it adds ~1k comparisons/30s —
-// negligible. Disk-read cost is in scanDirHierarchical itself; mtime-
-// guard optimization is reserved for Phase 3 (see config_hierarchy.go).
+// negligible.
+//
+// The scan is NOT retained here: the prior must stay the tree of the last
+// commit (see flatScanState.tree), and a tick that detects a change
+// commits nothing — the debounced reload walks again and commits that.
 //
 // v2.8.0 PR-3: extracted from WatchLoop so the dual-path lives in a
 // named seam. Single-file mode stays inline in WatchLoop because its
@@ -1462,25 +1570,24 @@ func (m *ConfigManager) tickOnce() {
 // changed=true call triggerDebouncedReload(reason).
 func (m *ConfigManager) detectChange() (bool, string, error) {
 	m.mu.RLock()
-	oldH := m.flat.hashes
-	oldM := m.flat.mtimes
+	tree := m.flat.tree
 	prevHash := m.lastHash
 	hierarchical := m.hierarchy.enabled
 	priorHierHashes := m.hierarchy.hashes
-	priorHierMtimes := m.hierarchy.mtimes
 	m.mu.RUnlock()
 
+	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
 	if hierarchical {
-		_, _, newHashes, _, _, hErr := scanDirHierarchicalWithMetrics(m.path, priorHierMtimes, m.getMetrics(), m.getLogger())
-		if hErr != nil {
-			return false, "", fmt.Errorf("hierarchical scan: %w", hErr)
+		if err == nil && scan.conflict != nil {
+			err = scan.conflict
 		}
-		changed := false
-		if len(newHashes) != len(priorHierHashes) {
-			changed = true
-		} else {
-			for k, v := range newHashes {
-				if priorHierHashes[k] != v {
+		if err != nil {
+			return false, "", fmt.Errorf("hierarchical scan: %w", err)
+		}
+		changed := len(scan.files) != len(priorHierHashes)
+		if !changed {
+			for _, f := range scan.files {
+				if priorHierHashes[f.absPath] != f.hash {
 					changed = true
 					break
 				}
@@ -1489,11 +1596,10 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 		return changed, ReloadReasonForced, nil
 	}
 
-	_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM, m.getLogger())
 	if err != nil {
 		return false, "", err
 	}
-	return compositeHash != prevHash, ReloadReasonSource, nil
+	return scan.composite != prevHash, ReloadReasonSource, nil
 }
 
 func (m *ConfigManager) GetConfig() *ThresholdConfig {

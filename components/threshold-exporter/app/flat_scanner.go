@@ -1,6 +1,9 @@
 package main
 
-// Flat-mode directory scanner + per-file YAML cache + multi-file merge.
+// Flat-mode parse helpers + multi-file merge. The directory walk itself
+// lives in config_tree_scan.go (scanDirTree, one walk for both planes since
+// #1568); the flat scanner that used to live here survives only as a test
+// projection in scan_wrappers_test.go.
 //
 // v2.8.0 PR-7 split out of config.go to live next to flatScanState
 // (PR-5). The flat-mode pipeline is what `IncrementalLoad` and
@@ -14,10 +17,8 @@ package main
 //                              Load delegates to fullDirLoad (config.go) so
 //                              the initial load and the watch loop share one
 //                              composite-hash construction + per-file cache.
-//   scanDirFileHashes(...)   — per-file SHA-256 + mtime-fast-path stat.
-//                              Caches file bytes for the parse phase to
-//                              avoid double disk read. Used by
-//                              IncrementalLoad + fullDirLoad.
+//   absScanRoot(dir)         — the ONE derivation of the conf.d root every
+//                              consumer of the walker's absolute keys uses.
 //   applyBoundaryRules(...)  — enforce "state_filters / defaults only
 //                              in _defaults.yaml; profiles only in
 //                              _profiles.yaml" convention.
@@ -29,14 +30,12 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -164,160 +163,6 @@ func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, 
 		return partial, false
 	}
 	return partial, true
-}
-
-// scanDirFileHashes scans a directory and returns per-file SHA-256 hashes,
-// the composite hash, per-file mtime+size stats, and a byte cache of files
-// that were actually read (for reuse by callers that need file contents,
-// avoiding double disk reads in fullDirLoad/IncrementalLoad).
-//
-// Uses DirEntry.Info() to get mtime+size from the directory listing itself,
-// avoiding separate os.Stat calls per file.
-//
-// When oldHashes and oldMtimes are provided (non-nil), the mtime guard kicks in:
-// files whose ModTime and Size match the previous scan reuse the cached SHA-256
-// without re-reading file contents. This reduces NoChange cost from O(N×read)
-// to O(N×stat) — typically 4-5× faster at 1000 tenants.
-func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[string]fileStat, logger *log.Logger) (map[string]string, string, map[string]fileStat, map[string][]byte, error) {
-	if logger == nil {
-		logger = log.Default()
-	}
-	// ⛔ RECURSIVE since #1521. It was `os.ReadDir` + `if IsDir() { continue }`,
-	// which gave this scanner a SMALLER population than the hierarchical one
-	// reading the same tree: a tenant one directory down resolved through
-	// `/effective` and emitted no `user_threshold` at all, with no error and no
-	// metric to notice it by. See `config_nested_tenant_test.go`.
-	//
-	// ⛔ THE MAP KEY IS NOW A ROOT-RELATIVE SLASH PATH, not a bare filename, and
-	// that is load-bearing rather than cosmetic. With bare names `a/x.yaml` and
-	// `x.yaml` collide in `perFile`/`mtimes`/`dataCache` and one of the two
-	// tenants disappears silently — the same failure this change exists to fix.
-	// Callers already rebuild the path as `filepath.Join(m.path, name)`, which
-	// stays correct for a relative path, so the key change is invisible to them.
-	//
-	// ⚠️ WalkDir's error is NOT swallowed: a missing root has to stay a hard
-	// error (the caller treats it as "config dir unreadable"), so it is checked
-	// up front rather than left to the callback.
-	if _, serr := os.Stat(dir); serr != nil {
-		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, serr)
-	}
-	// ⛔ THE WALK ROOT IS THE RESOLVED PATH, and that is a fix rather than a
-	// tidy-up. `os.Stat` above follows symlinks, but `filepath.WalkDir` LSTATS
-	// its root and never follows one — so a `-config-dir` that is a symlink to
-	// the real directory was visited once as a non-directory, matched no
-	// `.yaml` suffix, and the walk ended with zero files and a nil error.
-	// `fullDirLoad`'s empty guard then failed the whole load with
-	// "no .yaml files found". Measured: `Load(real dir)` nil vs
-	// `Load(symlink)` "no .yaml files found", at uid 0 and uid 65534 alike.
-	// The pre-#1521 `os.ReadDir` followed the link, so this was a regression
-	// introduced by the recursion, not a pre-existing gap.
-	//
-	// ⚠️ Only the ROOT is resolved. Symlinked entries INSIDE the tree are
-	// still not followed — that is WalkDir's documented behaviour, it matches
-	// the hierarchical scanner walking the same tree, and following them would
-	// open a cycle risk that neither scanner is written to survive.
-	walkRoot := resolveScanRoot(dir)
-
-	type dirFile struct {
-		name string      // root-relative, slash-separated
-		info os.FileInfo // from DirEntry.Info(), avoids separate os.Stat
-	}
-	var files []dirFile
-	walkErr := filepath.WalkDir(walkRoot, func(full string, entry fs.DirEntry, werr error) error {
-		if werr != nil {
-			// One unreadable subtree must not blank the whole config; the
-			// hierarchical scanner reading the same tree logs and continues too.
-			logger.Printf("WARN: skip unreadable path %s: %v", full, werr)
-			if entry != nil && entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		name := entry.Name()
-		if entry.IsDir() {
-			// Dot-prefixed directories are pruned whole — which also covers the
-			// K8s ConfigMap symlink shims (`..data`, `..2026_04_25_…`), since a
-			// `..` name is a `.` name. Measured on a real mount layout: both
-			// scanners see the two root-level entries and nothing doubled.
-			if full != walkRoot && strings.HasPrefix(name, ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		// ⛔ CASE-INSENSITIVE since #1521, matching `config_hierarchy.go` and the
-		// loader itself. It used to be exact, so `UPPER.YAML` AT THE ROOT — no
-		// nesting involved — produced the identical symptom: found by `Resolve()`,
-		// absent from `/metrics`. Two enumerators over one tree with two
-		// different skip rules is the defect class; this closes the second half.
-		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
-			return nil
-		}
-		info, ierr := entry.Info()
-		if ierr != nil {
-			logger.Printf("WARN: skip unreadable entry %s: %v", full, ierr)
-			return nil
-		}
-		rel, rerr := filepath.Rel(walkRoot, full)
-		if rerr != nil {
-			logger.Printf("WARN: skip path outside root %s: %v", full, rerr)
-			return nil
-		}
-		files = append(files, dirFile{name: filepath.ToSlash(rel), info: info})
-		return nil
-	})
-	if walkErr != nil {
-		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, walkErr)
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-
-	perFile := make(map[string]string, len(files))
-	mtimes := make(map[string]fileStat, len(files))
-	dataCache := make(map[string][]byte)
-	compositeHasher := sha256.New()
-
-	for _, f := range files {
-		cur := fileStat{ModTime: f.info.ModTime().UnixNano(), Size: f.info.Size()}
-		fullPath := filepath.Join(dir, f.name)
-
-		// Mtime guard: reuse cached hash if mtime+size unchanged and file
-		// is older than 2 seconds (safety window for coarse-mtime filesystems).
-		if oldHashes != nil && oldMtimes != nil {
-			age := time.Since(f.info.ModTime())
-			if prev, ok := oldMtimes[f.name]; ok && age > 2*time.Second {
-				if oldHash, hok := oldHashes[f.name]; hok && cur == prev {
-					perFile[f.name] = oldHash
-					mtimes[f.name] = cur
-					compositeHasher.Write([]byte(oldHash))
-					continue
-				}
-			}
-		}
-
-		data, rerr := os.ReadFile(fullPath)
-		if rerr != nil {
-			logger.Printf("WARN: skip unreadable file %s: %v", f.name, rerr)
-			continue
-		}
-		h := fmt.Sprintf("%x", sha256.Sum256(data))
-		perFile[f.name] = h
-		mtimes[f.name] = cur
-		compositeHasher.Write([]byte(h))
-		// Only cache bytes for files whose hash changed or is new (saves memory
-		// in incremental path where 999/1000 files are unchanged).
-		if oldHashes == nil {
-			// First load: cache everything (fullDirLoad needs all bytes)
-			dataCache[f.name] = data
-		} else if oldH, ok := oldHashes[f.name]; !ok || oldH != h {
-			// Changed or added file: cache for Phase 3 re-parse
-			dataCache[f.name] = data
-		}
-	}
-
-	return perFile, fmt.Sprintf("%x", compositeHasher.Sum(nil)), mtimes, dataCache, nil
 }
 
 // applyBoundaryRules enforces the boundary convention: state_filters and
