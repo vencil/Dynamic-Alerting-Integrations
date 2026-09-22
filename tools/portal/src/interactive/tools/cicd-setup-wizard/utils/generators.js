@@ -341,7 +341,7 @@ ${pinNote}jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate config (schema + routing + policy)
         run: |
           # docker -v CREATES a missing host path instead of failing, so a
@@ -376,7 +376,7 @@ ${pinNote}jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # The blast radius is computed against the pull request's base
           # commit, which a shallow clone does not contain.
@@ -457,7 +457,7 @@ ${pinNote}jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:${config.deploy === 'kustomize' ? `
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build ConfigMaps via Kustomize
         run: |
           # --load-restrictor: conf.d files are symlinked into kustomize/base/,
@@ -471,7 +471,7 @@ ${pinNote}jobs:
       - name: Reload Prometheus
         run: |
           kubectl rollout restart deployment/prometheus -n monitoring` : config.deploy === 'helm' ? `
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\

@@ -1052,9 +1052,15 @@ def _cli_gh_triggers(deploy: str) -> dict:
 # for both surviving methods, and the parameter stays so that a fourth deploy
 # method with a checkout-less apply stage has somewhere to say so instead of
 # being wedged into a bare constant.
+# ⛔ TRANSCRIBED ON PURPOSE, and it is only half the guard (issue 1417). This
+# catches "somebody moved the pin"; it can never catch "the pin should have
+# moved and did not", because it IS the thing that would have to be updated.
+# The other half is derived: section 11's
+# `test_the_delivered_action_pins_track_the_platforms_own` reads the majors out
+# of `.github/workflows/**`, so the platform's own bump is what reds this.
 def _cli_gh_uses(deploy: str) -> list[str]:
     del deploy  # same for kustomize and helm; see the note above
-    return sorted(["actions/checkout@v4"] * 3
+    return sorted(["actions/checkout@v6"] * 3
                   + ["marocchino/sticky-pull-request-comment@v2"])
 
 
@@ -7994,4 +8000,245 @@ def test_no_portal_prose_offers_a_deploy_mode_the_cli_does_not(tmp_path) -> None
         "either never finds it or gets `invalid choice` from the command it "
         "hands them. #1351 retired `--deploy argocd` and left exactly one of "
         "these behind, which is why this test exists."
+    )
+
+
+# ============================================================
+# ── 11. Delivered ACTION PINS vs the platform's own (#1417) ──
+# ============================================================
+#
+# ⛔ The half a pin cannot buy. Every `uses:` in the delivered workflow is
+# transcribed twice — once in each generator — and `_cli_gh_uses` above pins the
+# set. That catches somebody MOVING a pin. It cannot catch the pin that should
+# have moved and did not, because the transcription is itself the thing that
+# would have to change: the expectation and the artifact go stale together, in
+# step, green the whole way.
+#
+# Measured at the time this section was written: the platform ran
+# `actions/checkout@v6` in 79 `uses:` lines and shipped `@v4` to customers from
+# both generators, two majors behind, with every test in this file green.
+# `actions/checkout@v3` was retired by GitHub over runner Node churn rather than
+# by anyone here, so "two majors behind" is not a style question — it is the
+# lead time before a customer's pipeline starts warning and then stops running,
+# and nothing in this repository would have said so first.
+#
+# So this section derives the comparison instead of adding a fourth
+# transcription: the majors come out of `.github/workflows/**`, the shipped
+# majors come out of the generated artifact, and the platform's own bump is what
+# turns this red.
+#
+# ⚠️ Deliberately NOT asserted: that the tracked major runs on every runner a
+# customer might have (GHES, self-hosted, older `ubuntu-*` images). This
+# compares us with us. The policy note in `init_project.py` states that limit.
+
+_PLATFORM_WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
+
+
+def _action_major(ref: str) -> tuple[str, str] | None:
+    """``actions/checkout@v6`` -> ``("actions/checkout", "6")``.
+
+    ⛔ Returns None for anything without an `@` and for local refs (`./…`,
+    `docker://…`): a composite action inside this repository has no upstream
+    major to track, and reading one out of a path would invent a comparison.
+
+    ⚠️ The major is taken from the FIRST dot-separated component, so
+    `@v3.7.0` and `@0.35.0` answer "3" and "0". A pin that carries a patch is
+    still tracked at its major — the alternative (exact-string equality) would
+    red on the platform pinning a newer patch of the same major, which is not
+    drift a customer ever feels.
+    """
+    ref = ref.strip()
+    if ref.startswith(("./", "docker://")) or "@" not in ref:
+        return None
+    name, _, version = ref.partition("@")
+    major = version.lstrip("vV").split(".")[0]
+    if not name or not major:
+        return None
+    return name, major
+
+
+def _uses_refs(workflow: dict) -> list[str]:
+    """Every `uses:` a workflow declares, job level and step level."""
+    refs: list[str] = []
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        if isinstance(job.get("uses"), str):  # reusable workflow call
+            refs.append(job["uses"])
+        for step in job.get("steps") or []:
+            if isinstance(step, dict) and isinstance(step.get("uses"), str):
+                refs.append(step["uses"])
+    return refs
+
+
+@functools.lru_cache(maxsize=1)
+def _platform_action_majors() -> dict[str, frozenset[str]]:
+    """action name -> the majors THIS repository's own workflows run on.
+
+    ⛔ Parsed, not grepped. `grep -o 'actions/checkout@v[0-9]*'` over the same
+    directory answers 82 where the parse answers 79: the extra three sit in
+    English comments, and a comment is exactly the kind of text that keeps
+    naming an old major after the `uses:` line moved. The question here is
+    which version RUNS.
+    """
+    majors: dict[str, set[str]] = {}
+    files = sorted(
+        p for p in _PLATFORM_WORKFLOW_DIR.glob("*.y*ml") if p.is_file()
+    )
+    assert files, (
+        f"no workflow files under {_PLATFORM_WORKFLOW_DIR} — the derivation "
+        f"broke, and every comparison built on it would pass over nothing"
+    )
+    for path in files:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(loaded, dict), f"{path.name} did not parse as a mapping"
+        for ref in _uses_refs(loaded):
+            parsed = _action_major(ref)
+            if parsed is None:
+                continue
+            name, major = parsed
+            majors.setdefault(name, set()).add(major)
+    assert majors, (
+        "read no versioned `uses:` refs out of this platform's own workflows"
+    )
+    return {name: frozenset(v) for name, v in majors.items()}
+
+
+def _assert_pins_track_the_platform(refs: list[str], label: str) -> None:
+    """Every delivered ref whose action the platform also runs tracks its major.
+
+    ⚠️ The cost of "is among", stated rather than hidden: where the platform
+    itself carries two majors of one action (it does — `actions/upload-artifact`
+    ran v4 and v7 side by side when this was written), a delivered pin matching
+    either satisfies this. Requiring the NEWEST would assert a policy the
+    platform does not keep on itself, and this gate is about agreement between
+    the two, not about being first.
+
+    ⚠️ So WHEN this fires, measured rather than reasoned: moving ONE workflow to
+    `actions/checkout@v7` left all seven cells green (78 files still said v6, so
+    v6 stayed in the set); rewriting every `uses:` line reds all seven. The
+    signal is "the platform FINISHED a migration", not "somebody started one" —
+    which is the right edge for a customer pin (a half-migrated platform has not
+    decided anything yet) and is also the reason this gate cannot be read as
+    "we are never behind".
+    """
+    platform = _platform_action_majors()
+    compared: list[str] = []
+    stale: list[str] = []
+    for ref in refs:
+        parsed = _action_major(ref)
+        if parsed is None:
+            continue
+        name, major = parsed
+        theirs = platform.get(name)
+        if theirs is None:
+            continue  # nothing of ours to compare it with
+        compared.append(ref)
+        if major not in theirs:
+            stale.append(
+                f"{ref}  (this platform runs "
+                f"{'/'.join('v' + m for m in sorted(theirs))})"
+            )
+    assert compared, (
+        f"{label}: not one delivered `uses:` names an action this platform also "
+        f"runs, so this comparison graded nothing. Either the artifact stopped "
+        f"using actions (then delete this gate deliberately) or the parse broke "
+        f"(then fix it) — silence here is the failure mode #1417 is about.\n"
+        f"  delivered refs: {sorted(set(refs))}"
+    )
+    assert not stale, (
+        f"{label}: delivered action pin(s) left behind by this platform's own:\n"
+        + "\n".join(f"  {s}" for s in stale)
+        + "\n⛔ Owner call on #1417: the delivered pins track the majors this "
+        "repository runs on itself. Bump the `uses:` line in BOTH generators "
+        "(scripts/tools/ops/init_project.py and the wizard's generators.js) and "
+        "the transcribed set in `_cli_gh_uses`. If a customer runner cannot "
+        "take the tracked major, that is a policy change — say so in the "
+        "ACTION PIN POLICY note in init_project.py rather than pinning here."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_delivered_action_pins_track_the_platforms_own(
+    generated, ci, deploy,
+) -> None:
+    """`da-tools init`'s workflow does not ship a major we abandoned."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_pins_track_the_platform(
+        _uses_refs(workflow), f"da-tools init --ci {ci} --deploy {deploy}",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_pins_track_the_platforms_own(tmp_path, deploy) -> None:
+    """And so does the copy-me YAML the wizard puts on screen.
+
+    ⛔ Held separately from the CLI leg even though section 9 compares the two
+    artifacts step by step. That comparison is what makes them agree; this is
+    what makes agreeing on a STALE pin insufficient — two generators moved in
+    lockstep is still two majors behind.
+    """
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_pins_track_the_platform(
+        _uses_refs(workflow), f"wizard preview (deploy={deploy})",
+    )
+
+
+# `uses:` lines inside fenced blocks in the docs — the third hand-written copy
+# of a customer artifact, and the one with no generator behind it.
+_DOC_USES_RE = re.compile(
+    r"^\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*$",
+    re.MULTILINE,
+)
+
+# ⛔ Generated or historical trees, excluded by path rather than by judgement:
+#   * docs/interactive/** and docs/assets/dist/** are build output — the source
+#     they come from is already gated above.
+#   * CHANGELOG.md records what a release SHIPPED; rewriting a past entry to
+#     match today's major would make the history a lie.
+_DOC_SNIPPET_SKIP = ("docs/interactive/", "docs/assets/dist/")
+
+
+def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
+    """A snippet a customer copies is a pin we shipped, generator or not.
+
+    ⛔ A `uses:` line inside a fenced block, not the word "checkout" in prose.
+    That is the discriminator this repository keeps relearning: the three doc
+    hits #1417 named were `actions/checkout@v4` copy-me snippets, while the
+    prose around them talks about `@v3`'s retirement on purpose — a predicate
+    matching the STRING would red on the sentence that explains why the gate
+    exists. This one matches the structure `uses: <action>@<version>`.
+    """
+    offenders: dict[str, list[str]] = {}
+    scanned = 0
+    for path in sorted(_REPO_ROOT.joinpath("docs").rglob("*.md")):
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        if any(rel.startswith(skip) for skip in _DOC_SNIPPET_SKIP):
+            continue
+        scanned += 1
+        for ref in _DOC_USES_RE.findall(path.read_text(encoding="utf-8")):
+            parsed = _action_major(ref)
+            if parsed is None:
+                continue
+            name, major = parsed
+            theirs = _platform_action_majors().get(name)
+            if theirs is None or major in theirs:
+                continue
+            offenders.setdefault(rel, []).append(
+                f"{ref}  (this platform runs "
+                f"{'/'.join('v' + m for m in sorted(theirs))})"
+            )
+    assert scanned >= 50, (
+        f"only {scanned} docs/**.md files scanned — the walk broke and this "
+        f"test would pass over nothing"
+    )
+    assert not offenders, (
+        "doc snippet(s) pin an action major this platform no longer runs:\n"
+        + "\n".join(f"  {f}: {hits}" for f, hits in sorted(offenders.items()))
+        + "\n⛔ These are copy-me blocks: a customer pasting one gets the major "
+        "we abandoned. Bump the snippet, or drop the version from the line if "
+        "the passage is about behaviour rather than about a version."
     )

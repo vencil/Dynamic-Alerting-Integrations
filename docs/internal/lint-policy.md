@@ -71,12 +71,12 @@ def get_added_lines(file_path, base="origin/main"):
 
 ### ⚠️ Implementation gotcha：GitHub Actions 淺拷貝陷阱
 
-`actions/checkout@v4` 預設 `fetch-depth: 1`（淺 clone，只拉當前 commit）。在 CI 上跑 `git diff origin/main` 會直接 fatal error，因為 `.git` 內根本沒有 `origin/main` ref 的歷史。
+`actions/checkout` 預設 `fetch-depth: 1`（淺 clone，只拉當前 commit）。在 CI 上跑 `git diff origin/main` 會直接 fatal error，因為 `.git` 內根本沒有 `origin/main` ref 的歷史。
 
 **所有 (b)/(c) class lint 對應的 GitHub Actions workflow 必須**：
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v6
   with:
     fetch-depth: 0    # full history — required for diff-only lints
 ```

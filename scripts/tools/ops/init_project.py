@@ -229,6 +229,27 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 # whatsoever — the staleness is only ever found by looking.
 GIT_SYNC_IMAGE = 'registry.k8s.io/git-sync/git-sync:v4.7.1'
 
+# ⛔ ACTION PIN POLICY (issue 1417, owner call: follow the platform). The
+# GitHub Actions the delivered workflow uses are pinned to the SAME major this
+# repository runs on itself, and the tripwire for that is derived rather than
+# transcribed: `test_the_delivered_action_pins_track_the_platforms_own` reads
+# the majors out of `.github/workflows/**` and compares them to the majors in
+# the generated artifact, so the platform moving to a new major is what turns
+# this red — no list here has to be remembered.
+#
+# ⚠️ The reason a bare version pin needed a policy at all: a pin makes "somebody
+# CHANGED this" red and "this SHOULD have changed and did not" invisible, and
+# the second is the one that reaches customers. `actions/checkout@v3` was
+# retired by GitHub (runner Node churn), not by us; v4 will go the same way, and
+# until this gate existed nothing in this repository would have said so first.
+#
+# ⚠️ Not verified, and the reason this is a policy and not a fact: whether the
+# tracked major runs on every runner a customer may use (GitHub Enterprise
+# Server, self-hosted, older `ubuntu-*` images). We measure agreement with the
+# platform, not universal availability. A customer on a runner that cannot take
+# the tracked major edits the two `uses:` lines in their own repository — the
+# delivered pipeline is theirs once written.
+
 # The tool image every generated project runs, and the only ref that reaches
 # 100% of them: it lands in the GitHub workflow `env`, in the GitLab `variables`
 # block, AND in `.pre-commit-config.da.yaml` as a `language: docker_image` entry,
@@ -1167,7 +1188,7 @@ def _build_github_apply_stage(
         if: github.event_name == 'workflow_dispatch'
         environment: production
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
           - name: Build ConfigMaps via Kustomize
             run: |
               # --load-restrictor: conf.d files are symlinked into
@@ -1198,7 +1219,7 @@ def _build_github_apply_stage(
         if: github.event_name == 'workflow_dispatch'
         environment: production
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
           - name: Helm upgrade threshold-exporter
             run: |
               helm upgrade --install threshold-exporter \\
@@ -1375,7 +1396,7 @@ def _gen_github_actions(
       validate:
         runs-on: ubuntu-latest
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
 
           - name: Validate config (schema + routing + policy)
             run: |
@@ -1415,7 +1436,7 @@ def _gen_github_actions(
           contents: read
           pull-requests: write
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
             with:
               # Load-bearing. The blast radius is computed against the PR's
               # base commit, and checkout's default (fetch-depth: 1) does not
@@ -2667,7 +2688,11 @@ _PRECOMMIT_REPO_MOUNT = '/src'
 
 
 def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
-    """Generate .pre-commit-config.yaml snippet.
+    # ⛔ RAW docstring: it quotes `^conf\.d/` and `\.` twice below, and a plain
+    # docstring makes those invalid escape sequences — a DeprecationWarning
+    # today, a SyntaxError in a future Python. Found while bumping this file for
+    # issue 1417; it pre-dates that work.
+    r"""Generate .pre-commit-config.yaml snippet.
 
     ⛔ Takes the image as an argument. It used to hardcode
     `ghcr.io/vencil/da-tools:latest`, so a customer who ran

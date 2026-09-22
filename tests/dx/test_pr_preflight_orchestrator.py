@@ -497,7 +497,7 @@ class TestCheckPass2TrailerStrict:
         assert "skipping" in out.lower()
 
     def test_rev_list_failure_returns_one_with_checkout_hint(self, monkeypatch, tmp_path, capsys):
-        """Common CI failure: `actions/checkout@v4` shallow clone makes
+        """Common CI failure: an `actions/checkout` shallow clone makes
         origin/main unresolvable. Error message must point at fetch-depth: 0.
         """
         self._stub_subprocess(
@@ -513,7 +513,7 @@ class TestCheckPass2TrailerStrict:
         assert rc == 1
         err = capsys.readouterr().err
         assert "fetch-depth: 0" in err  # actionable CI guidance
-        assert "actions/checkout@v4" in err
+        assert "actions/checkout" in err
 
     def test_log_failure_returns_one(self, monkeypatch, tmp_path, capsys):
         """Less common: rev-list succeeds but log fails (e.g. corrupt repo).

@@ -36,7 +36,7 @@ CLI
 
 CI gotcha
 ---------
-The `actions/checkout@v4` step MUST set ``fetch-depth: 0`` so `<base>..HEAD`
+The `actions/checkout` step MUST set ``fetch-depth: 0`` so `<base>..HEAD`
 resolves; otherwise `git log` fatals with "unknown revision" and the lint
 silently skips. The companion workflow at `.github/workflows/planning-status-sync.yaml`
 hard-codes this.
@@ -149,7 +149,7 @@ def extract_trailers(base: str, *, repo_root: Path = REPO_ROOT) -> List[TrailerH
     except CheckError as e:
         raise CheckError(
             f"base ref '{base}' not found in repo. "
-            "If running in GitHub Actions, ensure actions/checkout@v4 has "
+            "If running in GitHub Actions, ensure actions/checkout has "
             "fetch-depth: 0."
         ) from e
 
