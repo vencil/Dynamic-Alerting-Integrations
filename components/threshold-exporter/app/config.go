@@ -547,13 +547,16 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	prevHash := m.lastHash
 	m.mu.RUnlock()
 
-	newHashes, compositeHash, newMtimes, dataCache := scan.relHashes(), scan.composite, scan.relMtimes(), scan.dataCache()
-
-	// Quick check: composite hash unchanged → no work needed
-	unchanged := compositeHash == prevHash
-	if unchanged {
+	// Quick check FIRST: composite hash unchanged → no work needed. The
+	// three projection maps below are ~1000 entries each on a 1000-tenant
+	// tree; building them before this check charged every quiet tick for
+	// maps it then threw away (the bench gate's +37% bytes on
+	// IncrementalLoad_1000_NoChange_MtimeGuard).
+	compositeHash := scan.composite
+	if compositeHash == prevHash {
 		return nil
 	}
+	newHashes, newMtimes, dataCache := scan.relHashes(), scan.relMtimes(), scan.dataCache()
 
 	// ⛔ A SCAN THAT FINDS NOTHING IS AN ERROR, NEVER AN EMPTY CONFIG.
 	// `fullDirLoad` has always treated `len(perFileHashes) == 0` as a hard

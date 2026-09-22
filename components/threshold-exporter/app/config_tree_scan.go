@@ -84,10 +84,14 @@ type treeFile struct {
 	// because it was too young for the mtime guard, whose hash then matched
 	// the prior, is NOT cached — the flat plane's cache has always held "what
 	// needs re-parsing", not "what was read".
-	data       []byte
-	tenantIDs  []string // sorted; nil for `_`-prefixed, unparseable or tenant-less files
-	isDefaults bool     // basename folds to `_defaults.yaml` / `_defaults.yml`
-	reused     bool     // hash + tenantIDs came from prior (mtime fast-path)
+	data []byte
+	// tenantIDs is sorted; nil for `_`-prefixed, unparseable or tenant-less
+	// files. ⛔ IMMUTABLE once parseTenantDecls returns it: a carried file
+	// shares the prior's slice (no copy), so nothing may append to or
+	// reorder it. Readers range over it or hand it to sortedTenantIDs.
+	tenantIDs  []string
+	isDefaults bool // basename folds to `_defaults.yaml` / `_defaults.yml`
+	reused     bool // hash + tenantIDs came from prior (mtime fast-path)
 	// parsed records that THIS scan ran parseTenantDecls on the file's
 	// bytes. False when the declarations were carried from the prior — by
 	// the mtime fast-path, or because the file was read (too young for the
@@ -301,7 +305,11 @@ func walkDirTree(root string, prior *treeScan, metrics *configMetrics, logger *l
 			f.hash = pf.hash
 			// ⛔ THE CARRY. Reusing the hash without the declarations would
 			// make the tenant vanish from the hierarchy on every quiet tick.
-			f.tenantIDs = append([]string(nil), pf.tenantIDs...)
+			// The slice is SHARED, not copied: tenantIDs is never mutated
+			// after parseTenantDecls builds it (see the field's doc), and a
+			// copy per file was 1000 allocs on every quiet tick of a
+			// 1000-tenant tree.
+			f.tenantIDs = pf.tenantIDs
 			f.reused = true
 		} else {
 			data, rerr := os.ReadFile(e.abs)
@@ -320,8 +328,9 @@ func walkDirTree(root string, prior *treeScan, metrics *configMetrics, logger *l
 				// Same bytes as the prior: the declarations cannot differ, so
 				// carry them instead of parsing again. A prior that failed to
 				// parse is excluded on purpose — it must be re-parsed (and
-				// re-counted) every scan, see parseFailed.
-				f.tenantIDs = append([]string(nil), pf.tenantIDs...)
+				// re-counted) every scan, see parseFailed. Shared, not copied
+				// (immutable once built).
+				f.tenantIDs = pf.tenantIDs
 			default:
 				f.tenantIDs, f.parseFailed = parseTenantDecls(e.abs, data, metrics, logger)
 				f.parsed = true
