@@ -246,7 +246,7 @@ fi
 
 ### 2.4 Stage 3: Apply
 
-手動觸發（`workflow_dispatch`），需要 `production` environment 審批。三種部署路徑的具體操作見下方 §3。
+手動觸發（`workflow_dispatch`），需要 `production` environment 審批。各部署路徑的具體操作見下方 §3。
 
 ## 3. 部署模式
 
