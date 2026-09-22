@@ -182,8 +182,8 @@ def test_top_level_routing_receiver_is_validated(tmp_path: Path) -> None:
 
     platform-defaults.schema.json accepts `^_routing` through an EMPTY
     patternProperties schema, so a top-level `_routing_enforced:` body was
-    validated by nothing — 18 of the 52 documented units, the largest group.
-    This is the same flat-`receiver_type` class the tenant side already caught.
+    validated by nothing. This is the same flat-`receiver_type` class the tenant
+    side already caught.
     """
     body = (
         "```yaml\n"
