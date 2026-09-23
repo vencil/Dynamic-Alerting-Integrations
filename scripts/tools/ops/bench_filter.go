@@ -39,8 +39,10 @@
 // Design notes
 // ------------
 //   - Stdlib only. Lives in the `benchfilter` module (go.mod beside it) so
-//     golangci-lint reads it; `go run` still works on a bare copy outside any
-//     module, which is how the release bench harness stashes it.
+//     golangci-lint reads it. The release bench harness copies this file
+//     alone and `go run`s it from the exporter module's directory, so it can
+//     rely on no sibling file and on no go.mod but the exporter's — at
+//     whichever tag is checked out (TestBareCopyNeedsOnlyThisFile).
 //   - Bufio scanner buffer is bumped to 16 MiB to survive large -json events
 //     (some tests emit long log messages in a single Output field). A line
 //     that REACHES that ceiling stops the scan (bufio errors at >=, not >),
