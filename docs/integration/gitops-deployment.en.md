@@ -186,8 +186,8 @@ python3 scripts/ops/configmap_assemble.py \
   the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
   under `examples/` or any hierarchical subdirectory (`region-eu/` and the
   like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
-  the rest as `(+N more)`** — run a recursive reader (`validate_config`) for
-  the full list. The exporter reads the tree recursively in-cluster
+  the rest as `(+N more)`** — the full list is the `skipped_nested_files` field
+  of the flat-reader rows in `validate_config --json`. The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
 - **A carrier nothing can be read from is named, not blocked**: a dangling
   symlink or a directory carrying a config name (`db-x.yaml/`) at the top

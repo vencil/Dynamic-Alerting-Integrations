@@ -2143,6 +2143,8 @@ docker run --rm \
 
 ⛔ **The report's own rows are authoritative** (the `Total: N checks` line). This list previously carried an item called "Tenant name consistency" and **no check does that** — measured: a file named `hotel.yaml` declaring tenant `totally-different` passes all six rows at exit 0 — while four checks that do run were missing from it. The conditional rows above do not silently pass when their flag is omitted: the row is absent.
 
+⚠️ **Hierarchical `conf.d/` (config files in subdirectories)**: the schema, routes, policy and Policy-as-Code rows get their tenants from a **flat** reader (top level of `--config-dir` only), while the exporter reads the whole tree. On a tree with config files in subdirectories those rows **do not report PASS**: a PASS becomes WARN, and every such row (whatever its status) gains a line naming the skipped files (the first 5, the rest as `(+N more)`; the full list is that row's `skipped_nested_files` in `--json`). Which rows are affected is observed at run time (did the row call a flat reader), not a hard-coded list; a row that answers without reaching a reader (e.g. a policy file with no `allowed_domains`) keeps its PASS. ⛔ **The exit code does not carry this signal**: WARN is still `0` (this repo's own conf.d has an `examples/` subdirectory) — read `Result:` or `--json`, not the exit code, to learn whether every row covered every file (#1652). ⚠️ Not in the v2.9.0 image: the same tree reports `[PASS] routes  0 routes` / `Result: PASS` there
+
 **Output**
 
 Validation result summary (pass/fail list).
@@ -2169,7 +2171,7 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | All validations pass |
+| `0` | No FAIL (there may be WARNs — including a row that did not cover files in subdirectories, see "Hierarchical `conf.d/`" above; read the `Result:` line) |
 | `1` | Validation failed (one or more checks), or a file under `--config-dir` could not be read. ⚠️ An unreadable path passed on the command line (`--policy` / `--rule-packs`) is `2`, not this code |
 | `2` | Caller error (arguments, paths, environment) — not a problem with your config. ⚠️ The v2.9.0 image does not distinguish this code |
 

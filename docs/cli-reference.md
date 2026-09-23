@@ -1953,6 +1953,8 @@ da-tools validate-config --config-dir <path> [options]
 
 ⛔ **以報表實際印出的列為準**（`Total: N checks` 那一段）。這份清單先前列著一個叫「Tenant 名稱一致性」的項目，而**沒有任何檢查在做那件事**——實測檔名 `hotel.yaml` 宣告租戶 `totally-different`，六項全 PASS、exit 0；同時它漏掉了四個真的會跑的檢查。條件式的那幾項省略對應旗標時**整列不會出現**，不是靜默通過。
 
+⚠️ **階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。這類列在有子目錄設定檔的樹上**不會回 PASS**：原本的 PASS 降為 WARN，且每一列（不論狀態）都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。哪幾列受影響是執行時觀測出來的（該列有沒有呼叫平面讀取器），不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS`
+
 **輸出**
 
 驗證結果摘要（通過/失敗列表）。
@@ -1968,7 +1970,7 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 所有驗證通過 |
+| `0` | 沒有 FAIL（可能有 WARN——包含上面「階層式 `conf.d/`」那種列沒涵蓋子目錄檔的情況；看 `Result:` 行） |
 | `1` | 驗證失敗（一項或多項），或 `--config-dir` 底下有檔案讀不到。⚠️ 命令列上的路徑（`--policy` / `--rule-packs`）讀不到算 `2`，不算這一碼 |
 | `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
 
