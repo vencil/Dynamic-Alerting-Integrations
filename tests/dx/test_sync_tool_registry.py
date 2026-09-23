@@ -283,6 +283,41 @@ class TestSyncFlowMap:
         assert exc.value.code == srt.EXIT_CALLER_ERROR
 
 
+class TestSyncFrontmatterRoot:
+    """`--sync-frontmatter` 讀的 JSX 根（issue #1454）。
+
+    它原本讀 `docs/<file>`，而 JSX 搬到 portal 之後那裡一支都沒有；缺檔又只在
+    `--verbose` 下才印，所以 45 支全被略過、回報「in sync」。
+    """
+
+    def test_every_real_registry_entry_resolves_under_jsx_root(self):
+        tools = srt.parse_registry(str(srt.REGISTRY_PATH))
+        assert tools, "registry parsed to nothing — this test would be vacuous"
+        missing = [t["key"] for t in tools
+                   if not (srt.JSX_ROOT / t.get("file", f"{t['key']}.jsx")).is_file()]
+        assert not missing, (
+            f"registry entries not found under JSX_ROOT={srt.JSX_ROOT}: {missing}")
+
+    def test_no_entry_resolving_is_fatal_not_in_sync(self, tmp_path, monkeypatch,
+                                                      capsys):
+        monkeypatch.setattr(srt, "JSX_ROOT", tmp_path / "nowhere")
+        ok = srt.sync_frontmatter([{"key": "x", "file": "x.jsx"}],
+                                  dry_run=True, verbose=False)
+        assert ok is None
+        err = capsys.readouterr().err
+        assert "file not found" in err and "wrong JSX root" in err
+
+    def test_main_exits_caller_error_when_no_jsx_resolves(self, wired, tmp_path,
+                                                          monkeypatch):
+        monkeypatch.setattr(srt, "JSX_ROOT", tmp_path / "nowhere")
+        monkeypatch.setattr(sys, "argv",
+                            ["sync_tool_registry.py", "--sync-frontmatter",
+                             "--dry-run"])
+        with pytest.raises(SystemExit) as exc:
+            srt.main()
+        assert exc.value.code == srt.EXIT_CALLER_ERROR
+
+
 # ---------------------------------------------------------------------------
 # Pure generators
 # ---------------------------------------------------------------------------

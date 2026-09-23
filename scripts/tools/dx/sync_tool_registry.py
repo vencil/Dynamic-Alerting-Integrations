@@ -40,6 +40,11 @@ PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_PATH = PROJECT_ROOT / "docs" / "interactive" / "index.html"
 LOADER_PATH = PROJECT_ROOT / "docs" / "assets" / "jsx-loader.html"
+# Registry `file:` paths resolve under the portal source tree — the same root
+# check_tool_registry_jsx_parity.py uses. It used to be `docs/`, where no JSX
+# has lived since the portal move, so --sync-frontmatter silently skipped every
+# tool and reported "in sync" (issue #1454).
+JSX_ROOT = PROJECT_ROOT / "tools" / "portal" / "src"
 
 
 # ---------------------------------------------------------------------------
@@ -335,17 +340,25 @@ _AUDIENCE_MAP = {
 _AUDIENCE_REVERSE = {v: k for k, v in _AUDIENCE_MAP.items()}
 
 
-def sync_frontmatter(tools: list, dry_run: bool, verbose: bool) -> bool:
-    """Sync registry audience/tags → JSX frontmatter. Returns True if changed."""
+def sync_frontmatter(tools: list, dry_run: bool, verbose: bool):
+    """Sync registry audience/tags → JSX frontmatter.
+
+    Returns True if changed, False if in sync, and **None** when not a single
+    registry entry resolved to a file — a wrong root, not an all-clear. A
+    missing file is always reported (not only under --verbose): skipping them
+    quietly is how this function once skipped all 45 and looked in sync.
+    """
     any_changed = False
+    found = 0
 
     for tool in tools:
         key = tool["key"]
-        jsx_path = PROJECT_ROOT / "docs" / tool.get("file", f"{key}.jsx")
+        jsx_path = JSX_ROOT / tool.get("file", f"{key}.jsx")
         if not jsx_path.exists():
-            if verbose:
-                print(f"  [frontmatter] {key}: file not found, skipping")
+            print(f"  [frontmatter] {key}: file not found: {jsx_path}",
+                  file=sys.stderr)
             continue
+        found += 1
 
         content = jsx_path.read_text(encoding="utf-8")
         fm_match = re.match(r"^(---\n)([\s\S]*?)\n(---)", content)
@@ -402,6 +415,10 @@ def sync_frontmatter(tools: list, dry_run: bool, verbose: bool) -> bool:
         elif verbose:
             print(f"  [frontmatter] {key}: in sync")
 
+    if tools and not found:
+        print(f"ERROR: none of the {len(tools)} registry entries resolved under "
+              f"{JSX_ROOT} — wrong JSX root", file=sys.stderr)
+        return None
     return any_changed
 
 
@@ -476,6 +493,8 @@ def main():
         print()
         print("=== Frontmatter Sync ===")
         changed_fm = sync_frontmatter(tools, args.dry_run, args.verbose)
+        if changed_fm is None:
+            sys.exit(EXIT_CALLER_ERROR)
 
     if args.scan_appears_in:
         print()
