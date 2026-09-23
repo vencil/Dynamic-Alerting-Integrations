@@ -803,7 +803,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-promtool-3.13.1
+          key: ${{ runner.os }}-vibe-dl-promtool-3.14.0
 
       - name: Cache pinned binary downloads (vmutils)
         uses: actions/cache@v5
@@ -819,9 +819,9 @@ jobs:
 
       - name: Install promtool
         run: |
-          PROM_VERSION=3.13.1
-          # Pinned SHA-256 of prometheus-3.13.1.linux-amd64.tar.gz (upstream sha256sums.txt).
-          PROM_SHA256=962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
+          PROM_VERSION=3.14.0
+          # Pinned SHA-256 of prometheus-3.14.0.linux-amd64.tar.gz (upstream sha256sums.txt).
+          PROM_SHA256=f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/prometheus-${PROM_VERSION}.tgz" ]; then

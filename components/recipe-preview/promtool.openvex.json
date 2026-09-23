@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "govulncheck/vex:23e0da5ca8cb1534881e56b6f121f723a69f3830f15fdc87e4d95e047d20b193",
+  "@id": "govulncheck/vex:5430eac6c0cd9b1bf9732540c0be453f90b296242ee17426a28a1936ad5c31f8",
   "author": "Unknown Author",
-  "timestamp": "2026-07-26T12:27:20.842713882Z",
+  "timestamp": "2026-09-23T12:11:31.3556692Z",
   "version": 1,
   "tooling": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
   "statements": [
@@ -69,7 +69,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
             }
           ]
         }
@@ -91,7 +91,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
             }
           ]
         }
@@ -113,7 +113,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
             }
           ]
         }
@@ -131,7 +131,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.52.0"
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
             }
           ]
         }
@@ -142,11 +142,11 @@
     },
     {
       "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5942",
-        "name": "GO-2026-5942",
-        "description": "Parsing an invalid SVCB or HTTPS RR can panic in golang.org/x/net/dns/dnsmessage",
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6303",
+        "name": "GO-2026-6303",
+        "description": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
         "aliases": [
-          "CVE-2026-46600"
+          "CVE-2026-56854"
         ]
       },
       "products": [
@@ -154,7 +154,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/golang.org%2Fx%2Fnet@v0.55.0"
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
             }
           ]
         }
@@ -165,11 +165,12 @@
     },
     {
       "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5970",
-        "name": "GO-2026-5970",
-        "description": "Infinite loop on invalid input in golang.org/x/text",
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6348",
+        "name": "GO-2026-6348",
+        "description": "Heap Memory Exhaustion (OOM) via HTTP/2 DATA Frame Fragmentation in google.golang.org/grpc",
         "aliases": [
-          "CVE-2026-56852"
+          "CVE-2026-84304",
+          "GHSA-vp52-pcj8-j9qc"
         ]
       },
       "products": [
@@ -177,7 +178,99 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/golang.org%2Fx%2Ftext@v0.38.0"
+              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
+            }
+          ]
+        }
+      ],
+      "status": "affected"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6354",
+        "name": "GO-2026-6354",
+        "description": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
+        "aliases": [
+          "CVE-2026-78662"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6355",
+        "name": "GO-2026-6355",
+        "description": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
+        "aliases": [
+          "CVE-2026-56855"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6441",
+        "name": "GO-2026-6441",
+        "description": "Bypass of xDS RBAC HTTP filter header matching in google.golang.org/grpc",
+        "aliases": [
+          "CVE-2026-84303",
+          "GHSA-qc2q-p7wx-3px3"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6443",
+        "name": "GO-2026-6443",
+        "description": "Server panic via missing authority or Host headers in google.golang.org/grpc",
+        "aliases": [
+          "CVE-2026-84445",
+          "GHSA-2v4p-qf9q-27wj"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
             }
           ]
         }
