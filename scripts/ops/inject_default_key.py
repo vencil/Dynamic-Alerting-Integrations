@@ -30,6 +30,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# ⛔ Same predicate as every other producer of a `defaults:` block, imported
+# rather than respelled (#1412). This file lives outside `scripts/tools/`, so the
+# path insert is explicit.
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[1] / "tools" / "ops"))
+from _registry_lib import is_shipped_optional_key  # noqa: E402
+
 
 def _is_numeric_str(s: str) -> bool:
     """Return True if `s` parses as int or float."""
@@ -50,6 +57,22 @@ def _is_numeric_str(s: str) -> bool:
 
 def inject(path: Path, key: str, value: str) -> int:
     """Inject `key: value` under `defaults:` in `path`. Returns exit code."""
+    # ⛔ Shape before value, and the two refusals answer different questions. A
+    # `<base>_critical` or dimensional `key{…}` name is inert under `defaults:`
+    # however numeric its value: the exporter resolves the critical tier from
+    # tenant overrides keyed on `defaults[<base>]`, and dimensional thresholds
+    # have no default path at all. Nothing reports it — no parse error, no WARN,
+    # no series — which is why this is refused at the boundary rather than
+    # watched for downstream (#1218 / #1412).
+    if not is_shipped_optional_key(key):
+        print(
+            f"[inject_default_key] ERROR: key {key!r} cannot live under "
+            f"`defaults:`: a `_critical` suffix or a `key{{label=...}}` token is "
+            f"inert there and fails SILENTLY. Inject the base key here and put "
+            f"the tier in a `<tenant>.yaml` override (#1218 / #1412)",
+            file=sys.stderr,
+        )
+        return 1
     if not _is_numeric_str(value):
         print(
             f"[inject_default_key] ERROR: value {value!r} for key {key!r} is "
