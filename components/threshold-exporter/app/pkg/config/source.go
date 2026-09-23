@@ -284,22 +284,25 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		name := path.Base(p)
 		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
-		// ⛔ DELIBERATELY NOT `internal/confdname.IsDefaults`, even though
-		// collapsing copies is the point of the #1911 family. That predicate
-		// uses `strings.EqualFold`; the walker this scanner must reproduce uses
-		// `strings.ToLower(name) == "_defaults.yaml"`. Measured in Go:
+		// ⛔ The comparison is ToLower + `==`, NOT `strings.EqualFold` — the
+		// walker's relation. The two differ on U+017F:
 		//
 		//	name := "_defaultſ.yaml"                       // U+017F LONG S
 		//	strings.ToLower(name) == "_defaults.yaml"      // false  ← the walker
-		//	strings.EqualFold(name, "_defaults.yaml")      // true   ← confdname
+		//	strings.EqualFold(name, "_defaults.yaml")      // true
 		//
-		// ⛔ And this is not two defensible designs: confdname cites
-		// `tests/shared/confd_name_classification_matrix.json` as its contract,
-		// and that file defines the field as "name LOWERCASED is exactly …" —
-		// the walker's semantics. So `IsDefaults` does not satisfy the contract
-		// it cites (issue #1670). Adopting it here would buy one fewer copy by
-		// importing a known defect. Pinned by
-		// TestSharedDefaultsPredicateStillDisagreesWithTheWalker.
+		// Pinned by the `_defaultſ.yaml` cell in
+		// config_source_oracle_parity_test.go (switching this line to
+		// EqualFold was measured to turn that test red).
+		//
+		// ⚠️ This is a private copy of `internal/confdname.IsReserved` +
+		// `IsDefaults`. Until #1670 that copy was DELIBERATELY kept, because
+		// `IsDefaults` used EqualFold and would have imported the defect above.
+		// That reason is gone: `IsDefaults` now uses the same ToLower relation,
+		// and replacing this block with it was measured to keep the oracle
+		// parity test green. What remains is the same unmade trade noted on
+		// `hasHiddenSegment` — it would be `pkg/`'s first non-test `internal/` edge —
+		// so it is an open duplicate, not a settled one.
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {

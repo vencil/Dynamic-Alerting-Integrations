@@ -214,6 +214,20 @@ func TestMatrixStillCoversWhatThesePredicatesCanGetWrong(t *testing.T) {
 			},
 		},
 		{
+			why: "a name that Unicode case FOLDING equates with a defaults literal " +
+				"but LOWERCASING does not (e.g. `_defaultſ.yaml`, U+017F) — the " +
+				"row that catches an EqualFold implementation of IsDefaults, which " +
+				"this package actually shipped until #1670. Every other row gets " +
+				"the same answer under both relations",
+			match: func(r matrixRow) bool {
+				if r.DefaultsFile {
+					return false
+				}
+				return strings.EqualFold(r.Name, "_defaults.yaml") ||
+					strings.EqualFold(r.Name, "_defaults.yml")
+			},
+		},
+		{
 			why: "a reserved-prefix name that is NOT the chain carrier — separates " +
 				"`reserved` from `defaults`",
 			match: func(r matrixRow) bool { return r.ReservedPrefix && !r.DefaultsFile },

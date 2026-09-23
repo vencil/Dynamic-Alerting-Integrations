@@ -86,8 +86,29 @@ func SplitCarrier(base string) (stem string, ok bool) {
 // (`conf.d/examples/`) that is NOT the chain carrier; a prefix implementation
 // passes every other name and was measured (#1588) to make `describe_tenant`
 // reproduce the exporter's merged hash on only three of five shipped tenants.
+//
+// ⛔ And the fold is `strings.ToLower` + `==`, NOT `strings.EqualFold` (#1670).
+// The two are different relations: EqualFold is Unicode SIMPLE CASE FOLDING,
+// which puts U+017F `ſ` (LATIN SMALL LETTER LONG S) in the same fold orbit as
+// `s` and `S`, while ToLower leaves `ſ` alone because it is already lowercase.
+// The exporter's scanner (`config_tree_scan.go`) and the shared matrix's
+// `defaults_file` definition ("name lowercased is exactly …") are both the
+// ToLower relation. Measured on this toolchain:
+//
+//	strings.EqualFold("_defaultſ.yaml", "_defaults.yaml")       == true
+//	strings.ToLower("_defaultſ.yaml") == "_defaults.yaml"       == false
+//
+// With EqualFold here, `_defaultſ.yaml` was the Base-PR chain carrier on the
+// write plane while the exporter treats it as an ordinary reserved file whose
+// `defaults:` block it never merges. A brute force substituting every valid
+// non-ASCII rune for every single byte of the defaults literals found exactly
+// two such names (`_defaultſ.yaml` / `_defaultſ.yml`); both are matrix rows
+// now. SplitCarrier keeps EqualFold: the same single-substitution brute force
+// found no name where its answer differs from the exporter's
+// `HasSuffix(ToLower(name), …)` (multi-rune shapes were not measured).
 func IsDefaults(base string) bool {
-	return strings.EqualFold(base, "_defaults.yaml") || strings.EqualFold(base, "_defaults.yml")
+	lower := strings.ToLower(base)
+	return lower == "_defaults.yaml" || lower == "_defaults.yml"
 }
 
 // IsHidden reports whether the exporter's walker skips `base` outright.
