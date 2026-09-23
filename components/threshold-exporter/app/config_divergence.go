@@ -17,13 +17,13 @@ package main
 // file one directory down resolved via /effective, was absent from
 // /metrics, and emitted ZERO signal. This file made that audible; #1521
 // made the flat scanner recursive, and #1568 replaced both walkers with
-// the one in config_tree_scan.go, so which files exist is no longer a
+// the one in pkg/config/tree_scan.go, so which files exist is no longer a
 // cause on either plane.
 //
 // ⛔ THE AUDIT IS NOT OBSOLETE, and the reason is not sentimental. The two
 // planes still PARSE what the one walk found SEPARATELY —
 // `parsePartialConfig` (flat, full ThresholdConfig) versus
-// `parseTenantDecls` (hierarchy, `tenants:` keys only) — so a file can be
+// pkg/config's `parseTenantDecls` (hierarchy, `tenants:` keys only) — so a file can be
 // dropped by one and kept by the other. The reachable cause today is a
 // file whose platform block fails the flat parse: `Defaults` is
 // `map[string]float64`, so a `defaults:` entry of the wrong shape makes

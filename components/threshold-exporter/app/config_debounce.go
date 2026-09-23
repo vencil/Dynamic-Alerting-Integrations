@@ -4,7 +4,7 @@ package main
 // Debounced reload + hierarchical diff (v2.7.0, Phase 3)
 // ============================================================
 //
-// This file wires the single conf.d tree walk (config_tree_scan.go) and the
+// This file wires the single conf.d tree walk (pkg/config/tree_scan.go) and the
 // deep merge + dual-hash engine (config_inheritance.go) into ConfigManager's
 // WatchLoop via a burst-coalescing debounce window.
 //
@@ -304,8 +304,8 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 // computeMergedHash with an empty chain is well-defined.
 func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
 	scan, scanErr := scanDirTree(m.path, prior.tree, m.getMetrics(), m.getLogger())
-	if scanErr == nil && scan.conflict != nil {
-		scanErr = scan.conflict
+	if scanErr == nil && scan.Conflict != nil {
+		scanErr = scan.Conflict
 	}
 	if scanErr != nil {
 		m.getLogger().Printf("ERROR: hierarchical scan failed: %v", scanErr)
@@ -317,7 +317,7 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	// flat tick does not walk again. IncrementalLoad's own cold-start
 	// guard (no flat cache yet → full load) is kept here for the same
 	// reason it exists there.
-	if !prior.hierarchicalMode && len(scan.defaults) == 0 {
+	if !prior.hierarchicalMode && len(scan.Defaults) == 0 {
 		m.mu.RLock()
 		hasCache := len(m.flat.hashes) > 0
 		m.mu.RUnlock()
@@ -335,10 +335,10 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	}
 
 	return reloadScanState{
-		tenants:  scan.tenants,
-		defaults: scan.defaults,
-		hashes:   scan.absHashes(),
-		graph:    scan.inheritanceGraph(),
+		tenants:  scan.Tenants,
+		defaults: scan.Defaults,
+		hashes:   scan.AbsHashes(),
+		graph:    scan.InheritanceGraph(),
 		tree:     scan,
 	}, false, nil
 }
@@ -551,7 +551,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 // SetLastReloadComplete (v2.8.0 B-1.P2-a) is stamped strictly post
 // commit so the gauge cannot advance ahead of observable state.
 func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result reloadResult) error {
-	if len(scan.tree.files) == 0 {
+	if len(scan.tree.Files) == 0 {
 		err := fmt.Errorf("no .yaml files found in %s", m.path)
 		m.getLogger().Printf("ERROR: flat rebuild inside diffAndReload refused: %v", err)
 		return err

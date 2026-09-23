@@ -3,7 +3,7 @@
 // These benchmarks measure the hierarchical production hot path: WatchLoop
 // → diffAndReload over a domain/region/env tree with `_defaults.yaml` at
 // every level and tenant YAML at leaves. Since #1568 one walker
-// (`scanDirTree`, config_tree_scan.go) serves both planes; the flat
+// (`config.ScanDirTree`, pkg/config/tree_scan.go) serves both planes; the flat
 // benchmarks in `config_bench_test.go` drive the same walker over a flat
 // fixture. The historical `scanDirHierarchical` is a test-only projection
 // now (scan_wrappers_test.go) and no benchmark measures it.

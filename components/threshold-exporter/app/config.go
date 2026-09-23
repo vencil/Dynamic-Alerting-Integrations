@@ -31,7 +31,7 @@ type flatScanState struct {
 	// the next scan (#1568). It is retained here, next to `hashes` and
 	// `configs`, and installed with them by installConfig. Correctness of
 	// the partial reuse in commitFlatFrom does not depend on that pairing —
-	// the reuse is gated on `hashes[k] == scan.files[k].hash`, so a prior
+	// the reuse is gated on `hashes[k] == scan.Files[k].Hash`, so a prior
 	// from an older commit only costs a disk read per file whose bytes the
 	// walker did not cache. Keeping the three together is what makes the
 	// quiet tick stat-only: every unchanged file is a fast-path hit AND a
@@ -435,8 +435,8 @@ func (m *ConfigManager) installConfig(
 // to tolerate: a tree the flat plane cannot read is a hard error for the
 // load, as it always was.
 func rejectDuplicateTenant(scan *treeScan) error {
-	if scan.conflict != nil {
-		return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", scan.conflict)
+	if scan.Conflict != nil {
+		return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", scan.Conflict)
 	}
 	return nil
 }
@@ -552,11 +552,11 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// tree; building them before this check charged every quiet tick for
 	// maps it then threw away (the bench gate's +37% bytes on
 	// IncrementalLoad_1000_NoChange_MtimeGuard).
-	compositeHash := scan.composite
+	compositeHash := scan.Composite
 	if compositeHash == prevHash {
 		return nil
 	}
-	newHashes, newMtimes, dataCache := scan.relHashes(), scan.relMtimes(), scan.dataCache()
+	newHashes, newMtimes, dataCache := scan.RelHashes(), scan.RelMtimes(), scan.DataCache()
 
 	// ⛔ A SCAN THAT FINDS NOTHING IS AN ERROR, NEVER AN EMPTY CONFIG.
 	// `fullDirLoad` has always treated `len(perFileHashes) == 0` as a hard
@@ -824,7 +824,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	refreshRefused(&merged)
 	refreshTenantSources()
 
-	scan.releaseData()
+	scan.ReleaseData()
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  newHashes,
 		configs: newConfigs,
@@ -1224,7 +1224,7 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 	if err := rejectDuplicateTenant(scan); err != nil {
 		return err
 	}
-	if len(scan.files) == 0 {
+	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
 	}
 	m.populateHierarchyStateFrom(scan)
@@ -1244,7 +1244,7 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 // never caches) is re-read and re-judged, so its ERROR/WARN and its
 // parse-failure count fire again exactly as on a cold load.
 func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
-	if len(scan.files) == 0 {
+	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
 	}
 
@@ -1253,13 +1253,13 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	priorConfigs := m.flat.configs
 	m.mu.RUnlock()
 
-	fileConfigs := make(map[string]ThresholdConfig, len(scan.files))
-	for _, name := range scan.keys {
-		f := scan.files[name]
+	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
+	for _, name := range scan.Keys {
+		f := scan.Files[name]
 		fullPath := filepath.Join(m.path, name)
-		data := f.data
+		data := f.Data
 		if data == nil {
-			if priorHashes[name] == f.hash {
+			if priorHashes[name] == f.Hash {
 				if partial, ok := priorConfigs[name]; ok {
 					fileConfigs[name] = partial
 					continue
@@ -1335,11 +1335,11 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	m.hierarchy.unreachableInherited = unreachable
 	m.mu.Unlock()
 
-	scan.releaseData()
-	m.commitConfig(&merged, scan.composite, &flatScanState{
-		hashes:  scan.relHashes(),
+	scan.ReleaseData()
+	m.commitConfig(&merged, scan.Composite, &flatScanState{
+		hashes:  scan.RelHashes(),
 		configs: fileConfigs,
-		mtimes:  scan.relMtimes(),
+		mtimes:  scan.RelMtimes(),
 		tree:    scan,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
@@ -1366,7 +1366,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // merging in place so a partial install never leaves torn state visible
 // to the /effective read path.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
-	tenants, defaults, graph := scan.tenants, scan.defaults, scan.inheritanceGraph()
+	tenants, defaults, graph := scan.Tenants, scan.Defaults, scan.InheritanceGraph()
 	if len(defaults) == 0 && len(tenants) == 0 {
 		// Empty tree or flat layout with no files we recognize. Don't
 		// flip hierarchicalMode — a later add-a-_defaults-file event will
@@ -1414,7 +1414,7 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 		m.hierarchy.enabled = true
 	}
 	m.hierarchy.tenantSources = tenants
-	m.hierarchy.hashes = scan.absHashes()
+	m.hierarchy.hashes = scan.AbsHashes()
 	m.hierarchy.mergedHashes = newMergedHashes
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
@@ -1581,16 +1581,16 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 
 	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
 	if hierarchical {
-		if err == nil && scan.conflict != nil {
-			err = scan.conflict
+		if err == nil && scan.Conflict != nil {
+			err = scan.Conflict
 		}
 		if err != nil {
 			return false, "", fmt.Errorf("hierarchical scan: %w", err)
 		}
-		changed := len(scan.files) != len(priorHierHashes)
+		changed := len(scan.Files) != len(priorHierHashes)
 		if !changed {
-			for _, f := range scan.files {
-				if priorHierHashes[f.absPath] != f.hash {
+			for _, f := range scan.Files {
+				if priorHierHashes[f.AbsPath] != f.Hash {
 					changed = true
 					break
 				}
@@ -1602,7 +1602,7 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
-	return scan.composite != prevHash, ReloadReasonSource, nil
+	return scan.Composite != prevHash, ReloadReasonSource, nil
 }
 
 func (m *ConfigManager) GetConfig() *ThresholdConfig {
