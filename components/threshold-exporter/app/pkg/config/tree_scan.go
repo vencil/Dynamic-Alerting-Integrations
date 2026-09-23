@@ -17,7 +17,11 @@ package config
 // the divergence audit (app/config_divergence.go) exists because it was not.
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
-// ⛔ It is the only conf.d walker in the codebase's production paths: the
+// ⛔ It is the only RECURSIVE conf.d walker in the exporter module's
+// production paths. (Not the only reader of conf.d in the repo: tenant-api
+// lists it with its own non-recursive os.ReadDir — internal/handler/
+// tenant_list.go, internal/confd/resolve.go, internal/federation/orphan/
+// detector.go — and describe_tenant.py walks it in Python.) The
 // exporter's manager (package main) reaches it through the one-line adapter
 // `scanDirTree` (app/config_tree_scan.go), and since W2 (#1677) the two
 // library readers in THIS package consume its product instead of walking on
@@ -32,7 +36,7 @@ package config
 //
 // ⚠️ WHAT IS STILL NOT ONE RULE (not one WALK): ResolveEffective derives its
 // defaults CHAIN from scan.Defaults with its own case-folding rule
-// (legacyDefaultsChain in hierarchy.go) rather than CollectDefaultsChain —
+// (legacyDefaultsByDir in hierarchy.go) rather than CollectDefaultsChain —
 // that is #1674 (B8). tree_scan_parity_test.go pins, row by row, where the
 // three planes agree and where they still diverge, so neither side can move
 // silently.
