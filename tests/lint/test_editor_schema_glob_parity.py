@@ -280,14 +280,21 @@ class _RecordingValidator:
 
 @pytest.fixture(scope="module")
 def ci(tmp_path_factory) -> dict[str, str]:
-    confd = tmp_path_factory.mktemp("parity") / "conf.d"
-    for rel in CORPUS:
+    # One tree per corpus entry: the corpus holds case-only pairs
+    # (`db-a.yaml` / `db-a.YAML`), which a case-insensitive filesystem
+    # (macOS, Windows) collapses into one file when written side by side.
+    root = tmp_path_factory.mktemp("parity")
+    seen: dict[str, str] = {}
+    for i, rel in enumerate(CORPUS):
+        confd = root / str(i) / "conf.d"
         p = confd / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("rel: " + json.dumps(rel) + "\n", encoding="utf-8")
-    rec = _RecordingValidator()
-    validate_dir(str(confd), {"id": "T"}, rec, {"id": "P"})
-    return {rel: rec.seen.get(rel, "-") for rel in CORPUS}
+        rec = _RecordingValidator()
+        validate_dir(str(confd), {"id": "T"}, rec, {"id": "P"})
+        assert set(rec.seen) <= {rel}, rec.seen
+        seen[rel] = rec.seen.get(rel, "-")
+    return seen
 
 
 @pytest.fixture(scope="module")
