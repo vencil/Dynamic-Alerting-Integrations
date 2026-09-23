@@ -1495,10 +1495,10 @@ def _gen_github_actions(
         # ⛔ The OUTER bound, and it has to stay above the sum of the step caps
         # below (6+1+5+5+5+2+2 = 26). If the job cap fires first the run is
         # CANCELLED, and every `!cancelled()` step — the fallback report and the
-        # comment — is skipped: #1421's stale comment, reached through a timeout
-        # instead of through a failing step. Which is also why EVERY step below
-        # carries its own cap, including the cheap ones: an uncapped step has no
-        # way to end except by taking the job cap with it (#1948 review). Held by
+        # comment — is skipped: the issue 1421 stale comment, reached through a
+        # timeout instead of through a failing step. Which is also why EVERY
+        # step below carries its own cap, including the cheap ones: an uncapped
+        # step has no way to end except by taking the job cap with it. Held by
         # `test_step_timeouts_leave_room_under_the_job_timeout`, which grades
         # both halves — no uncapped step, and the sum under this number.
         timeout-minutes: 30
