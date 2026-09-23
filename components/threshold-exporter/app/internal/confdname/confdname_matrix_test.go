@@ -213,18 +213,27 @@ func TestMatrixStillCoversWhatThesePredicatesCanGetWrong(t *testing.T) {
 				return strings.HasPrefix(strings.ToLower(r.Name), "_defaults") && !r.DefaultsFile
 			},
 		},
+		// ⛔ Two clauses, one per extension branch, not one clause over both.
+		// A blind reviewer measured the single-clause version: with the `.yml`
+		// fold row deleted and IsDefaults folding on the `.yml` literal only,
+		// every test here stayed green — the surviving `.yaml` row satisfied
+		// the clause while measuring nothing about the other branch.
 		{
-			why: "a name that Unicode case FOLDING equates with a defaults literal " +
-				"but LOWERCASING does not (e.g. `_defaultſ.yaml`, U+017F) — the " +
-				"row that catches an EqualFold implementation of IsDefaults, which " +
-				"this package actually shipped until #1670. Every other row gets " +
-				"the same answer under both relations",
+			why: "a `.yaml` name that Unicode case FOLDING equates with " +
+				"`_defaults.yaml` but LOWERCASING does not (e.g. `_defaultſ.yaml`, " +
+				"U+017F) — the row that catches an EqualFold implementation of " +
+				"IsDefaults on the `.yaml` branch, which this package shipped until #1670",
 			match: func(r matrixRow) bool {
-				if r.DefaultsFile {
-					return false
-				}
-				return strings.EqualFold(r.Name, "_defaults.yaml") ||
-					strings.EqualFold(r.Name, "_defaults.yml")
+				return !r.DefaultsFile && strings.EqualFold(r.Name, "_defaults.yaml")
+			},
+		},
+		{
+			why: "a `.yml` name that Unicode case FOLDING equates with " +
+				"`_defaults.yml` but LOWERCASING does not (e.g. `_defaultſ.yml`) — " +
+				"the same catch on the `.yml` branch; a fix applied to one literal " +
+				"leaves the other folding",
+			match: func(r matrixRow) bool {
+				return !r.DefaultsFile && strings.EqualFold(r.Name, "_defaults.yml")
 			},
 		},
 		{

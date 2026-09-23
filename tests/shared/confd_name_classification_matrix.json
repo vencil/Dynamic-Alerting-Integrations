@@ -6,9 +6,10 @@
     "are listed below; the full set of consumers is whatever",
     "`git grep -l confd_name_classification_matrix` names today:",
     "",
-    "  Go     components/threshold-exporter/app/config_hierarchy.go",
-    "         (scanDirHierarchical) - the production hot-reload scanner; what",
-    "         it classifies is what /metrics serves",
+    "  Go     the threshold-exporter's production hot-reload walker (named",
+    "         by role, not file: it has moved once, #1568, and is due to move",
+    "         again); what it classifies is what /metrics serves. Its test",
+    "         entry point is still called scanDirHierarchical",
     "  Go     components/tenant-api/internal/confd (TenantIDFromFile) - the",
     "         write plane's filename<->tenant-id mapping, and the source of the",
     "         live-tenant set federation orphan detection subtracts against",
@@ -203,7 +204,7 @@
       "hidden": false,
       "defaults_file": false,
       "stem": "",
-      "why": "The .yml half of the fold-relation row. The defaults comparison has one literal per extension and a fix applied to one of them leaves the other folding. A brute force substituting every non-ASCII rune for each byte of the defaults literals found exactly these two names where the two relations disagree."
+      "why": "The .yml half of the fold-relation row. The defaults comparison has one literal per extension and a fix applied to one of them leaves the other folding. Under SINGLE-rune substitution (every non-ASCII rune for each byte of the defaults literals) these two are the only names where the two relations disagree. Over every combination of each character's full fold orbit there are 3072 such names (e.g. `_DEFAULTſ.YAML`); all of them carry `ſ` in the `s` position, which is the character these two rows exercise."
     },
     {
       "name": "_rbac.yaml",
