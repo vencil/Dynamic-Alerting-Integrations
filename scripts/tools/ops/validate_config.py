@@ -711,25 +711,21 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Profile keys don't use reserved prefixes (_, _routing, _state_)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
+
+    ⚠️ Profile keys are NOT cross-checked against `defaults:` in
+    `_defaults.yaml`, and this check does not read that file at all. It
+    used to read it into a `known_defaults` set that nothing consumed —
+    no verdict depended on it — and that dead read went through the flat
+    root-carrier lookup, so on an ADR-017 tree with a nested
+    `_defaults.yaml` it turned this row PASS -> WARN for a file it never
+    used (#1652). If the cross-check is ever added back, bring #1448's
+    trap with it: `defaults:` written as a bare key parses to None, so
+    read it as `raw.get("defaults") or {}`, never `.get("defaults", {})`.
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
     profiles_raw = load_yaml_file(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
-
-    # Load defaults for cross-referencing
-    defaults_path = str(resolve_defaults_file(cfg))
-    defaults_raw = load_yaml_file(defaults_path, default={})
-    known_defaults = set()
-    if isinstance(defaults_raw, dict):
-        # `or {}`, not just the get() default: a `defaults:` key that exists
-        # with nothing under it (every entry commented out — an ordinary
-        # file) parses to None, and the get() default only fires when the
-        # key is *absent*. #1448: this raised AttributeError and took the
-        # whole report with it, in the very function the ticket named.
-        declared = defaults_raw.get("defaults") or {}
-        if isinstance(declared, dict):
-            known_defaults = set(declared.keys())
 
     warnings = []
     tenant_count = 0

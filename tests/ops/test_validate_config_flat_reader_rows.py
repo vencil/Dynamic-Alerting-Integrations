@@ -252,6 +252,12 @@ def test_a_nested_defaults_carrier_is_what_the_lookup_reports(tmp_path):
     row = vc._run_check("policy_dsl", vc.check_policy_dsl, d, _config_dir=d)
     assert row["status"] == vc.WARN, row
     assert row["skipped_nested_files"] == ["prod/_defaults.yaml"], row
+    # ``profiles`` does not read ``_defaults.yaml`` at all (its old read fed
+    # a set nothing consumed and was deleted), so the ADR-017 layout — a
+    # nested ``_defaults.yaml`` per level — must not cost it its PASS.
+    prof = vc._run_check("profiles", vc.check_profiles, d, _config_dir=d)
+    assert prof["status"] == vc.PASS, prof
+    assert "skipped_nested_files" not in prof, prof
 
 
 def test_the_flat_reader_hint_points_at_its_own_docs(tmp_path, cli_argv,
