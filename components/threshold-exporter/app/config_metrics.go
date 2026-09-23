@@ -236,7 +236,8 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called from the tree scan (parseTenantDecls) whenever
+// basename. Called from the tree scan (pkg/config parseTenantDecls, via
+// config.ScanObserver) whenever
 // yaml.Unmarshal returns an error for a non-_-prefixed tenant file, and
 // from the flat parse (parsePartialConfig) for the same file. file_basename
 // (not full path) is used as the label to keep cardinality bounded
@@ -259,8 +260,17 @@ func (cm *configMetrics) IncParseFailure(fileBasename string) {
 func (cm *configMetrics) ObserveScanDuration() func() {
 	t0 := time.Now()
 	return func() {
-		cm.scanDuration.Observe(time.Since(t0).Seconds())
+		cm.ObserveScanElapsed(time.Since(t0))
 	}
+}
+
+// ObserveScanElapsed records one already-measured scan duration into
+// da_config_scan_duration_seconds. It is the config.ScanObserver method the
+// conf.d walker (pkg/config.ScanDirTree, #1941) calls: the walker takes its
+// own t0 so no closure crosses the interface — a returned closure escaped
+// to the heap there and cost one alloc per scan on the fast path.
+func (cm *configMetrics) ObserveScanElapsed(d time.Duration) {
+	cm.scanDuration.Observe(d.Seconds())
 }
 
 // IncReloadTrigger bumps the reload counter for the given reason. Safe

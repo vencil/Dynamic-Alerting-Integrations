@@ -1,9 +1,10 @@
 package main
 
 // Flat-mode parse helpers + multi-file merge. The directory walk itself
-// lives in config_tree_scan.go (scanDirTree, one walk for both planes since
-// #1568); the flat scanner that used to live here survives only as a test
-// projection in scan_wrappers_test.go.
+// lives in pkg/config/tree_scan.go (config.ScanDirTree, one walk for both
+// planes since #1568, moved out of this package in #1941; reached through
+// scanDirTree in config_tree_scan.go); the flat scanner that used to live
+// here survives only as a test projection in scan_wrappers_test.go.
 //
 // v2.8.0 PR-7 split out of config.go to live next to flatScanState
 // (PR-5). The flat-mode pipeline is what `IncrementalLoad` and
@@ -17,8 +18,8 @@ package main
 //                              Load delegates to fullDirLoad (config.go) so
 //                              the initial load and the watch loop share one
 //                              composite-hash construction + per-file cache.
-//   absScanRoot(dir)         — the ONE derivation of the conf.d root every
-//                              consumer of the walker's absolute keys uses.
+//   (absScanRoot, the ONE derivation of the conf.d root, moved with the
+//   walker to pkg/config in #1941; config_tree_scan.go forwards to it.)
 //   applyBoundaryRules(...)  — enforce "state_filters / defaults only
 //                              in _defaults.yaml; profiles only in
 //                              _profiles.yaml" convention.
@@ -77,47 +78,6 @@ func scanKeyBase(key string) string { return path.Base(key) }
 // apart silently. (CodeRabbit, #1569.)
 func isNestedPlatformFile(key string) bool {
 	return strings.Contains(key, "/") && strings.HasPrefix(scanKeyBase(key), "_")
-}
-
-// absScanRoot is resolveScanRoot preceded by the absolutisation every caller
-// needs and one of them once forgot.
-//
-// ⛔ `m.path` is whatever `-config-dir` was given, frequently relative, while
-// the hierarchical scanner stores absolute paths. Comparing the two without
-// this made EVERY defaults file look like a subtree file — measured on the
-// repo's own flat golden fixtures, whose ROOT defaults keys were then copied
-// into tenant maps. That was fixed in place; this hoists the three-line
-// derivation out of the one caller that had it so a second caller cannot get
-// it subtly different. (#1569 sweep B-2.)
-func absScanRoot(dir string) string {
-	clean := filepath.Clean(dir)
-	if abs, err := filepath.Abs(dir); err == nil {
-		clean = filepath.Clean(abs)
-	}
-	return resolveScanRoot(clean)
-}
-
-// resolveScanRoot is the ONE derivation of "which directory is the conf.d
-// root" that every enumerator over that tree must use.
-//
-// ⛔ IT EXISTS BECAUSE HAVING TWO OF THEM IS THIS TICKET'S ENTIRE DEFECT
-// CLASS. `filepath.WalkDir` lstats its root and never follows a symlink, so
-// each scanner that starts from an unresolved `-config-dir` silently sees an
-// EMPTY tree when that path is a link. Fixing only the flat scanner produced
-// exactly the split this PR closes, one layer down: measured on a symlinked
-// root, `GetConfig()` had the tenant while `hierarchy.enabled` was false and
-// `tenantSources` was empty, so the tenant's series carried the ROOT default
-// (50) instead of the subtree's (90) — and the divergence audit reports only
-// the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
-//
-// ⚠️ Falls back to the given path when resolution fails (dangling link,
-// permission), so the caller's own error handling still decides — this
-// function never turns a broken path into a different one.
-func resolveScanRoot(dir string) string {
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		return resolved
-	}
-	return dir
 }
 
 // reportUnparseableNestedPlatformFile keeps a genuinely broken nested

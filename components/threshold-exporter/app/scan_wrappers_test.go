@@ -37,7 +37,7 @@ import (
 // to O(N×stat) — typically 4-5× faster at 1000 tenants.
 //
 // ⛔ THIS IS A WRAPPER OVER scanDirTree (#1568). The walk, the skip rules and
-// the mtime guard live in config_tree_scan.go, shared with the hierarchical
+// the mtime guard live in pkg/config/tree_scan.go, shared with the hierarchical
 // scanner, so the two planes can no longer disagree about which files exist.
 // What this function keeps is its projection: root-relative slash-path keys
 // (bare names collide across directories — #1521), a hash-of-hashes
@@ -51,7 +51,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
-	return scan.relHashes(), scan.composite, scan.relMtimes(), scan.dataCache(), nil
+	return scan.RelHashes(), scan.Composite, scan.RelMtimes(), scan.DataCache(), nil
 }
 
 // treeScanPriorFromFlat rebuilds a prior from the flat plane's two cache
@@ -69,21 +69,24 @@ func treeScanPriorFromFlat(oldHashes map[string]string, oldMtimes map[string]fil
 	if oldHashes == nil {
 		return nil
 	}
-	prior := &treeScan{files: make(map[string]*treeFile, len(oldHashes))}
+	prior := &treeScan{Files: make(map[string]*treeFile, len(oldHashes))}
 	for k, h := range oldHashes {
 		st, ok := oldMtimes[k]
 		if !ok {
 			st = fileStat{ModTime: -1, Size: -1}
 		}
-		prior.files[k] = &treeFile{relKey: k, hash: h, stat: st}
+		prior.Files[k] = &treeFile{RelKey: k, Hash: h, Stat: st}
 	}
 	return prior
 }
 
-func (s *treeScan) absMtimes() map[string]fileStat {
-	out := make(map[string]fileStat, len(s.files))
-	for _, f := range s.files {
-		out[f.absPath] = f.stat
+// treeScanAbsMtimes is the hierarchy plane's stat projection (keys are Clean
+// absolute paths). A free function, not a method: treeScan is an alias of
+// config.TreeScan since #1941, and this projection is test-only.
+func treeScanAbsMtimes(s *treeScan) map[string]fileStat {
+	out := make(map[string]fileStat, len(s.Files))
+	for _, f := range s.Files {
+		out[f.AbsPath] = f.Stat
 	}
 	return out
 }
@@ -133,8 +136,8 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	if scan.conflict != nil {
-		return nil, nil, nil, nil, nil, scan.conflict
+	if scan.Conflict != nil {
+		return nil, nil, nil, nil, nil, scan.Conflict
 	}
-	return scan.tenants, scan.defaults, scan.absHashes(), scan.absMtimes(), scan.inheritanceGraph(), nil
+	return scan.Tenants, scan.Defaults, scan.AbsHashes(), treeScanAbsMtimes(scan), scan.InheritanceGraph(), nil
 }

@@ -36,7 +36,7 @@ import (
 )
 
 // treeScanFixtureAge is how far into the past fixture mtimes are pushed so
-// the treeScanMtimeGuard window can never be the reason a file was read.
+// the config.TreeScanMtimeGuard window can never be the reason a file was read.
 const treeScanFixtureAge = time.Hour
 
 // writeAgedFile writes content and back-dates the mtime past the guard.
@@ -68,7 +68,7 @@ func twoTenantTree(t *testing.T) string {
 
 // treeScanTenantIDs reuses sortedTenantIDs (config_source_oracle_parity_test.go)
 // on the scan's tenants product.
-func treeScanTenantIDs(scan *treeScan) []string { return sortedTenantIDs(scan.tenants) }
+func treeScanTenantIDs(scan *treeScan) []string { return sortedTenantIDs(scan.Tenants) }
 
 func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 	t.Parallel()
@@ -84,11 +84,11 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 	if got, want := treeScanTenantIDs(first), []string{"t-alpha", "t-beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("first scan tenants = %v, want %v", got, want)
 	}
-	for k, f := range first.files {
-		if f.data == nil {
+	for k, f := range first.Files {
+		if f.Data == nil {
 			t.Errorf("cold scan must cache every file's bytes; %s has none", k)
 		}
-		if f.reused {
+		if f.Reused {
 			t.Errorf("cold scan cannot reuse anything; %s claims it did", k)
 		}
 	}
@@ -98,15 +98,15 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 	// a read could notice the change.
 	betaPath := filepath.Join(root, "nested", "t-beta.yaml")
 	swapped := "tenants:\n  t-zeta: {}\n"
-	if len(swapped) != int(first.files["nested/t-beta.yaml"].stat.Size) {
+	if len(swapped) != int(first.Files["nested/t-beta.yaml"].Stat.Size) {
 		t.Fatalf("fixture drift: swapped document is %d bytes, original %d — the "+
 			"stat would differ and the fast-path could not be measured",
-			len(swapped), first.files["nested/t-beta.yaml"].stat.Size)
+			len(swapped), first.Files["nested/t-beta.yaml"].Stat.Size)
 	}
 	if err := os.WriteFile(betaPath, []byte(swapped), 0o600); err != nil {
 		t.Fatalf("swap bytes: %v", err)
 	}
-	old := time.Unix(0, first.files["nested/t-beta.yaml"].stat.ModTime)
+	old := time.Unix(0, first.Files["nested/t-beta.yaml"].Stat.ModTime)
 	if err := os.Chtimes(betaPath, old, old); err != nil {
 		t.Fatalf("restore mtime: %v", err)
 	}
@@ -120,29 +120,29 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 			"(t-zeta present means the file was READ; t-beta absent means the "+
 			"carry is gone)", got, want)
 	}
-	if second.tenants["t-beta"] != first.tenants["t-beta"] {
-		t.Errorf("t-beta source moved: %q → %q", first.tenants["t-beta"], second.tenants["t-beta"])
+	if second.Tenants["t-beta"] != first.Tenants["t-beta"] {
+		t.Errorf("t-beta source moved: %q → %q", first.Tenants["t-beta"], second.Tenants["t-beta"])
 	}
-	if second.composite != first.composite {
-		t.Errorf("composite moved on an unchanged-by-stat tree: %s → %s", first.composite, second.composite)
+	if second.Composite != first.Composite {
+		t.Errorf("composite moved on an unchanged-by-stat tree: %s → %s", first.Composite, second.Composite)
 	}
-	for k, f := range second.files {
-		if !f.reused {
+	for k, f := range second.Files {
+		if !f.Reused {
 			t.Errorf("%s was read on the warm scan (stat unchanged, aged past the guard)", k)
 		}
-		if f.data != nil {
+		if f.Data != nil {
 			t.Errorf("%s carries bytes on the warm scan; the cache must hold only files that need re-parsing", k)
 		}
-		if f.hash != first.files[k].hash {
-			t.Errorf("%s hash moved on the warm scan: %s → %s", k, first.files[k].hash, f.hash)
+		if f.Hash != first.Files[k].Hash {
+			t.Errorf("%s hash moved on the warm scan: %s → %s", k, first.Files[k].Hash, f.Hash)
 		}
 	}
-	if !reflect.DeepEqual(second.inheritanceGraph().TenantDefaults, first.inheritanceGraph().TenantDefaults) {
+	if !reflect.DeepEqual(second.InheritanceGraph().TenantDefaults, first.InheritanceGraph().TenantDefaults) {
 		t.Errorf("inheritance graph moved across the fast-path:\n first %v\nsecond %v",
-			first.inheritanceGraph().TenantDefaults, second.inheritanceGraph().TenantDefaults)
+			first.InheritanceGraph().TenantDefaults, second.InheritanceGraph().TenantDefaults)
 	}
-	if !reflect.DeepEqual(second.defaults, first.defaults) {
-		t.Errorf("defaults set moved across the fast-path: %v → %v", first.defaults, second.defaults)
+	if !reflect.DeepEqual(second.Defaults, first.Defaults) {
+		t.Errorf("defaults set moved across the fast-path: %v → %v", first.Defaults, second.Defaults)
 	}
 	if strings.Contains(buf.String(), "WARN") {
 		t.Errorf("unexpected WARN on a healthy tree:\n%s", buf.String())
@@ -176,14 +176,14 @@ func TestScanDirTree_YoungFileIsReadDespiteMatchingStat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
 	}
-	if second.files["t-alpha.yaml"].reused {
+	if second.Files["t-alpha.yaml"].Reused {
 		t.Errorf("a file younger than the guard must be read, not reused")
 	}
-	if second.files["nested/t-beta.yaml"].reused != true {
+	if second.Files["nested/t-beta.yaml"].Reused != true {
 		t.Errorf("an aged, unchanged sibling must still take the fast-path")
 	}
 	// Read, hash unchanged → not cached (the cache is "needs re-parse").
-	if second.files["t-alpha.yaml"].data != nil {
+	if second.Files["t-alpha.yaml"].Data != nil {
 		t.Errorf("a re-read file whose hash did not move must not be cached")
 	}
 }
@@ -439,10 +439,10 @@ func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 			if tree2 == tree {
 				t.Errorf("the reload did not retain its own scan as the next prior")
 			}
-			if f := tree2.files[betaKey]; f == nil || !f.reused {
+			if f := tree2.Files[betaKey]; f == nil || !f.Reused {
 				t.Errorf("%s was read on a tick that did not touch it (fast-path lost)", betaKey)
 			}
-			if f := tree2.files["t-alpha.yaml"]; f == nil || f.reused {
+			if f := tree2.Files["t-alpha.yaml"]; f == nil || f.Reused {
 				t.Errorf("the edited t-alpha.yaml took the fast-path; its bytes were never read")
 			}
 
@@ -520,10 +520,10 @@ func TestBrokenFileIsReReadOnEveryTick(t *testing.T) {
 	m.mu.RLock()
 	tree := m.flat.tree
 	m.mu.RUnlock()
-	if f := tree.files["broken.yaml"]; f == nil || !f.parseFailed {
+	if f := tree.Files["broken.yaml"]; f == nil || !f.ParseFailed {
 		t.Errorf("the retained scan does not mark broken.yaml as parseFailed; the carve-out has nothing to key on")
 	}
-	if f := tree.files["t-alpha.yaml"]; f == nil || f.parseFailed {
+	if f := tree.Files["t-alpha.yaml"]; f == nil || f.ParseFailed {
 		t.Errorf("the retained scan marks the healthy t-alpha.yaml as parseFailed")
 	}
 }
@@ -547,8 +547,8 @@ func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first scan: %v", err)
 	}
-	for k, f := range first.files {
-		if !strings.HasPrefix(filepath.Base(k), "_") && !f.parsed {
+	for k, f := range first.Files {
+		if !strings.HasPrefix(filepath.Base(k), "_") && !f.Parsed {
 			t.Errorf("cold scan must parse every tenant carrier; %s was not", k)
 		}
 	}
@@ -569,24 +569,92 @@ func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
 	}
-	alpha := second.files["t-alpha.yaml"]
-	if alpha.reused {
+	alpha := second.Files["t-alpha.yaml"]
+	if alpha.Reused {
 		t.Fatalf("t-alpha is younger than the guard; it must have been read")
 	}
-	if alpha.parsed {
+	if alpha.Parsed {
 		t.Errorf("t-alpha was read but its hash did not move: declarations must be carried, not re-parsed")
 	}
-	if got, want := alpha.tenantIDs, []string{"t-alpha"}; !reflect.DeepEqual(got, want) {
+	if got, want := alpha.TenantIDs, []string{"t-alpha"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("carried declarations = %v, want %v", got, want)
 	}
-	beta := second.files["nested/t-beta.yaml"]
-	if !beta.parsed {
+	beta := second.Files["nested/t-beta.yaml"]
+	if !beta.Parsed {
 		t.Errorf("t-beta's bytes changed; it must be parsed")
 	}
-	if got, want := beta.tenantIDs, []string{"t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {
+	if got, want := beta.TenantIDs, []string{"t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("parsed declarations = %v, want %v", got, want)
 	}
 	if got, want := treeScanTenantIDs(second), []string{"t-alpha", "t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("tenants = %v, want %v", got, want)
 	}
+}
+
+// TestScanDirTree_NilConfigMetricsIsTrueNilObserver pins the typed-nil
+// conversion in scanObserverFor (#1941). The walker moved to pkg/config and
+// takes a config.ScanObserver interface; a nil *configMetrics passed straight
+// through would be a NON-nil interface holding a nil pointer, so the walker's
+// `obs != nil` guards would pass and ObserveScanElapsed would dereference a
+// nil receiver. The historical contract — "metrics may be nil: nothing is
+// counted, nothing panics" — must survive the move.
+//
+// Discriminating: remove the `if metrics == nil { return nil }` in
+// scanObserverFor and the first assertion fails, and the scan below panics
+// (configMetrics' methods are not nil-safe). A nil *configMetrics owns no
+// metric, so the only ways to "touch a metric" through it are that panic or
+// an adapter that substituted another instance (e.g. the package singleton)
+// — the true-nil assertion rules out both.
+func TestScanDirTree_NilConfigMetricsIsTrueNilObserver(t *testing.T) {
+	t.Parallel()
+	var nilMetrics *configMetrics
+
+	if obs := scanObserverFor(nilMetrics); obs != nil {
+		t.Fatalf("scanObserverFor(nil *configMetrics) = %#v, want a TRUE nil config.ScanObserver "+
+			"(a typed nil inside the interface makes config.ScanDirTree call methods on a nil receiver)", obs)
+	}
+	if obs := scanObserverFor(freshMetricsOnly(t)); obs == nil {
+		t.Fatal("scanObserverFor(non-nil) must pass the instance through")
+	}
+
+	root := twoTenantTree(t)
+	writeAgedFile(t, filepath.Join(root, "broken.yaml"), "tenants: [unclosed\n")
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("scanDirTree with a nil *configMetrics panicked: %v", r)
+			}
+		}()
+		scan, err := scanDirTree(root, nil, nilMetrics, logger)
+		if err != nil {
+			t.Fatalf("scanDirTree: %v", err)
+		}
+		if got, want := treeScanTenantIDs(scan), []string{"t-alpha", "t-beta"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("tenants = %v, want %v", got, want)
+		}
+		if f := scan.Files["broken.yaml"]; f == nil || !f.ParseFailed {
+			t.Errorf("broken.yaml must be kept and marked ParseFailed: %+v", f)
+		}
+		// Error return and conflict paths, also with nil metrics.
+		if _, err := scanDirTree(filepath.Join(root, "missing"), nil, nilMetrics, logger); err == nil {
+			t.Error("missing root must be an error")
+		}
+		writeAgedFile(t, filepath.Join(root, "dup.yaml"), "tenants:\n  t-alpha: {}\n")
+		if scan, err := scanDirTree(root, nil, nilMetrics, logger); err != nil || scan.Conflict == nil {
+			t.Errorf("duplicate tenant: err=%v, want a conflict on the scan", err)
+		}
+	}()
+	if !strings.Contains(buf.String(), "WARN: cannot parse") {
+		t.Errorf("parse failure must still be LOGGED with nil metrics; log:\n%s", buf.String())
+	}
+}
+
+// freshMetricsOnly is freshMetrics without the registry.
+func freshMetricsOnly(t *testing.T) *configMetrics {
+	t.Helper()
+	m, _ := freshMetrics(t)
+	return m
 }

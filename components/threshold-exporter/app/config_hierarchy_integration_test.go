@@ -301,7 +301,7 @@ defaults:
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 		_, srcHere := m.hierarchy.tenantSources["tenant-b"]
-		_, treeHere := m.flat.tree.files["team-a/tenant-b.yaml"]
+		_, treeHere := m.flat.tree.Files["team-a/tenant-b.yaml"]
 		return !srcHere && !treeHere
 	})
 	if !ok {
@@ -327,7 +327,7 @@ defaults:
 	if _, stillHere := m.hierarchy.hashes[filepath.Join(absScanRoot(dir), "team-a", "tenant-b.yaml")]; stillHere {
 		t.Errorf("m.hierarchy.hashes still has team-a/tenant-b.yaml")
 	}
-	if _, stillHere := m.flat.tree.files["team-a/tenant-b.yaml"]; stillHere {
+	if _, stillHere := m.flat.tree.Files["team-a/tenant-b.yaml"]; stillHere {
 		t.Errorf("the retained scan still has team-a/tenant-b.yaml")
 	}
 	if m.hierarchy.graph == nil {
