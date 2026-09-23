@@ -22,9 +22,9 @@ package config
 // the merge engine should consider — and leaves the parsing, hashing,
 // dedup, and InheritanceGraph construction in one place
 // (`ScanFromConfigSource`). The disk path keeps its own walker
-// (`scanDirHierarchical`) for production because that walker also
-// records mtimes for debounced-reload change detection — a concern
-// the simulate path doesn't share.
+// (`ScanDirTree` in tree_scan.go) for production because that walker
+// also records mtimes for debounced-reload change detection — a
+// concern the simulate path doesn't share.
 //
 // Design choice: ConfigSource returns a `map[absPath][]byte` rather
 // than streaming through a callback. The hierarchy scan needs the
@@ -221,14 +221,14 @@ func relToRoot(p, root string) (rel string, inside bool) {
 	return p[len(root)+1:], true
 }
 
-// ScanFromConfigSource is the in-memory cousin of scanDirHierarchical:
-// it takes a corpus from a ConfigSource and produces the same outputs
-// (tenants map, defaults set, per-file hashes, InheritanceGraph) using
-// identical classification + dedup + chain rules.
+// ScanFromConfigSource is the in-memory cousin of ScanDirTree
+// (tree_scan.go): it takes a corpus from a ConfigSource and produces the
+// same hierarchy outputs (tenants map, defaults set, per-file hashes,
+// InheritanceGraph) using identical classification + dedup + chain rules.
 //
 // This is what the /simulate endpoint calls. Production reload still
-// uses scanDirHierarchical because that path also gathers mtimes for
-// change detection — a concern simulate doesn't share.
+// uses ScanDirTree because that path also gathers mtimes for change
+// detection — a concern simulate doesn't share.
 func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	tenants map[string]string,
 	defaults map[string]bool,
@@ -270,7 +270,8 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// answered `[fromcache fromgit nested plain]` where the walker
 		// answered `[nested plain]`, at arbitrary depth (`.cache/deep/`).
 		//
-		// ⛔ The comment previously here said "match scanDirHierarchical"
+		// ⛔ The comment previously here said it matched the disk walker
+		// (then the exporter's hierarchical scanner, now ScanDirTree)
 		// while doing the opposite. That sentence is why the divergence
 		// survived: every reader who checked took the claim for the check.
 		rel, inRoot := relToRoot(p, absRoot)
@@ -309,13 +310,13 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 				defaults[p] = true
 			}
 			// Other `_*.yaml` are hashed for completeness but not part
-			// of the inheritance graph (mirrors scanDirHierarchical).
+			// of the inheritance graph (mirrors ScanDirTree).
 			continue
 		}
 
 		// Tenant file: parse `tenants:` block. Lightweight shape
-		// matching scanDirHierarchical — full config re-parsed by
-		// computeMergedHash on demand.
+		// matching ScanDirTree's parseTenantDecls — full config
+		// re-parsed by computeMergedHash on demand.
 		var doc struct {
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
@@ -323,7 +324,7 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 			// In simulate mode we surface parse errors loudly: the
 			// caller is interactively asking "what would happen if
 			// I committed this?", a malformed YAML is the answer.
-			// Production scanDirHierarchical logs+skips because a
+			// Production ScanDirTree logs+skips because a
 			// single broken file shouldn't take down the WatchLoop;
 			// here we want the 400 response.
 			return nil, nil, nil, nil, fmt.Errorf("parse %s: %w", p, perr)

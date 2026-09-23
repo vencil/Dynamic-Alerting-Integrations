@@ -9,13 +9,15 @@ package config
 // (components/tenant-api) for the GET /tenants/{id}/effective endpoint
 // introduced in v2.7.0 (§8.11.3 Phase 6).
 //
-// Why a second implementation? The exporter's `app/config_hierarchy.go` +
-// `app/config_inheritance.go` live in `package main` so they can share state
-// with ConfigManager. Cross-module borrowing would require either (a) a big
-// ConfigManager → pkg/config refactor, or (b) a thin standalone resolver
-// following the same parity rules as describe_tenant.py. We picked (b): the
-// golden-fixture tests pin the 16-char merged_hash output, so any semantic
-// drift between the two Go call sites is caught by CI.
+// Not a second implementation. The WALK is the exporter's own: ResolveEffective
+// runs one ScanDirTree (tree_scan.go, the one conf.d walker the exporter's
+// ConfigManager also uses) and reads the tenant's file, the defaults set and
+// every file's bytes off that scan (W2, #1677). The MERGE core below is the
+// one the exporter calls too — app/config_inheritance.go is a set of thin
+// wrappers over DeepMerge / ComputeMergedHash in this file. What remains
+// resolver-specific is the defaults-CHAIN selection (legacyDefaultsByDir),
+// which #1674 folds into CollectDefaultsChain. The golden-fixture tests pin
+// the 16-char merged_hash against describe_tenant.py.
 //
 // Semantic rules enforced (MUST match describe_tenant.py + app/):
 //   - _metadata is never inherited
@@ -29,8 +31,8 @@ package config
 //   - defaults chain is L0→Ln (root first, leaf last)
 //
 // Limit of scope: this resolver is *read-only* and *stateless*. Each call
-// re-walks the directory — fine for an API endpoint that serves a handful of
-// tenants per second. The exporter's ConfigManager still owns the hot-reload
+// runs one fresh ScanDirTree (no prior, so every file is read and hashed) —
+// fine for an API endpoint that serves a handful of tenants per second. The exporter's ConfigManager still owns the hot-reload
 // cache for Prometheus /metrics scrapes.
 
 import (
@@ -39,9 +41,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
+	"io"
+	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -81,120 +84,104 @@ type EffectiveConfig struct {
 	MergedDefaults map[string]any `json:"-"`
 }
 
-// ResolveEffective walks `configDir` looking for the tenant file that defines
-// `tenantID`, collects the _defaults.yaml chain from root down to the tenant's
-// directory, and returns the merged config plus dual hashes.
+// ResolveEffective locates the tenant file that defines `tenantID` in ONE
+// ScanDirTree walk of `configDir` (the exporter's own walker), collects the
+// _defaults.yaml chain from root down to the tenant's directory, and returns
+// the merged config plus dual hashes.
 //
 // Returns (nil, ErrTenantNotFound) when the tenant isn't present — callers
-// should translate to 404. All other errors (bad YAML, unreadable file, etc.)
-// are returned as-is for 500-class handling.
+// should translate to 404. A tenant declared in two files returns its own
+// *DuplicateTenantError; a duplicate that does not involve `tenantID` does
+// not fail this call. All other errors (bad YAML, a tenant body that is not
+// a mapping, missing root, etc.) are returned as-is for 500-class handling.
 //
-// The paths in DefaultsChain and SourceFile are relative to `configDir` so
-// the JSON response doesn't leak container paths like `/conf.d/...`.
+// The paths in DefaultsChain and SourceFile are relative to the RESOLVED
+// root (ScanDirTree symlink-resolves `configDir`, so a symlinked
+// `--config-dir` is served rather than 404'd) so the JSON response doesn't
+// leak container paths like `/conf.d/...`.
+//
+// ⚠️ An unreadable file is logged-and-dropped by the walker (and the log is
+// discarded here), so an unreadable tenant file reads as "not found" and an
+// unreadable _defaults.yaml drops out of the chain. Before W2 (#1677) an
+// unreadable defaults file was a hard error on this path.
 func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
-	absRoot, err := filepath.Abs(configDir)
+	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
 	if err != nil {
-		return nil, fmt.Errorf("resolve root %q: %w", configDir, err)
+		return nil, err
 	}
-	absRoot = filepath.Clean(absRoot)
+	return newEffectiveResolver(scan).resolve(tenantID)
+}
 
-	info, err := os.Stat(absRoot)
-	if err != nil {
-		return nil, fmt.Errorf("stat %q: %w", absRoot, err)
+// discardLogger silences the walker for the library readers. ⛔ Deliberate:
+// ResolveEffective runs once per tenant-api request and ScopeEffective once
+// per da-guard run; the walker's WARN lines (unparseable file, unreadable
+// entry) would repeat per request into the API's log. Both readers were
+// silent before they consumed the walker, and they stay so. log.Logger is
+// safe for concurrent use and io.Discard holds no state.
+var discardLogger = log.New(io.Discard, "", 0)
+
+// effectiveResolver answers per-tenant effective configs from ONE scan. It
+// is built once per ResolveEffective call and once per ScopeEffective call
+// (which is what makes a scope one walk instead of a re-walk per tenant).
+type effectiveResolver struct {
+	scan          *TreeScan
+	defaultsByDir map[string]string // dir → the one defaults file legacyDefaultsByDir picks there
+}
+
+func newEffectiveResolver(scan *TreeScan) *effectiveResolver {
+	return &effectiveResolver{scan: scan, defaultsByDir: legacyDefaultsByDir(scan.Defaults)}
+}
+
+// legacyDefaultsByDir is ResolveEffective's defaults-selection rule, kept
+// EXACTLY as it was when it ran its own walk, now computed from the walker's
+// Defaults set:
+//
+//   - the name is case-folded (`_DEFAULTS.YAML` counts);
+//   - in one directory a `.yaml` spelling beats any `.yml` spelling;
+//   - among `.yaml` case variants the LAST in walk order wins, among `.yml`
+//     variants the FIRST (the old walk overwrote on `.yaml` and kept-first
+//     on `.yml`).
+//
+// Sorting the absolute paths reproduces walk order WITHIN a directory
+// (WalkDir visits a directory's entries in lexical order, and two paths in
+// one directory compare by their base name), which is the only order this
+// rule reads.
+//
+// ⛔ This is NOT CollectDefaultsChain (which matches the two exact lower-case
+// names and is what the exporter's graph uses). #1674 (B8) decides the
+// case-folding question and collapses this function into
+// CollectDefaultsChain; until then the two "upper-case _DEFAULTS.YAML" rows
+// in tree_scan_parity_test.go stay expect=diverge on purpose.
+func legacyDefaultsByDir(defaults map[string]bool) map[string]string {
+	paths := make([]string, 0, len(defaults))
+	for p := range defaults {
+		paths = append(paths, p)
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%q is not a directory", absRoot)
-	}
-
-	// Single pass: find tenant file + collect _defaults.yaml paths.
-	defaultsByDir := make(map[string]string) // dir → absolute path of its _defaults.yaml
-	var tenantFile string
-	var tenantBytes []byte
-
-	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			// Tolerate permission errors on individual entries — match the
-			// exporter's behavior and Python's rglob semantics.
-			return nil
-		}
-		name := d.Name()
-		if d.IsDir() {
-			if path != absRoot && strings.HasPrefix(name, ".") {
-				return fs.SkipDir
+	sort.Strings(paths)
+	byDir := make(map[string]string, len(paths))
+	for _, p := range paths {
+		dir := filepath.Dir(p)
+		switch strings.ToLower(filepath.Base(p)) {
+		case "_defaults.yaml":
+			byDir[dir] = p
+		case "_defaults.yml":
+			if _, exists := byDir[dir]; !exists {
+				byDir[dir] = p
 			}
-			return nil
 		}
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
-			return nil
-		}
-		clean := filepath.Clean(path)
-
-		if strings.HasPrefix(name, "_") {
-			// Only _defaults.yaml enters the chain map. .yaml wins over .yml
-			// if both exist at the same level.
-			switch lower {
-			case "_defaults.yaml":
-				defaultsByDir[filepath.Dir(clean)] = clean
-			case "_defaults.yml":
-				// Don't overwrite an existing .yaml entry at the same dir.
-				dir := filepath.Dir(clean)
-				if _, exists := defaultsByDir[dir]; !exists {
-					defaultsByDir[dir] = clean
-				}
-			}
-			return nil
-		}
-
-		// Tenant candidate — peek at `tenants:` keys.
-		data, rerr := os.ReadFile(clean)
-		if rerr != nil {
-			return nil
-		}
-		var doc struct {
-			Tenants map[string]yaml.Node `yaml:"tenants"`
-		}
-		if perr := yaml.Unmarshal(data, &doc); perr != nil {
-			return nil
-		}
-		if _, ok := doc.Tenants[tenantID]; ok {
-			if tenantFile != "" && tenantFile != clean {
-				// Duplicate definition across files — same error-loud principle
-				// as the exporter's scanner. Returning via the walk-closure
-				// needs care: filepath.WalkDir will propagate this out. Typed
-				// so library callers can errors.As it (#127 C6-A); the Error()
-				// string is byte-identical to the former fmt.Errorf.
-				return &DuplicateTenantError{
-					TenantID: tenantID,
-					PathA:    tenantFile,
-					PathB:    clean,
-				}
-			}
-			tenantFile = clean
-			tenantBytes = data
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
 	}
-	if tenantFile == "" {
-		return nil, ErrTenantNotFound
-	}
+	return byDir
+}
 
-	// Build the defaults chain from root down to the tenant file's directory.
-	chain := make([]string, 0, 4)
-	current := filepath.Dir(tenantFile)
-	rootClean := absRoot
+// chain returns the defaults files from the scan root (L0) down to leafDir.
+func (r *effectiveResolver) chain(leafDir string) []string {
 	var rev []string
+	current := leafDir
 	for {
-		if p, ok := defaultsByDir[current]; ok {
+		if p, ok := r.defaultsByDir[current]; ok {
 			rev = append(rev, p)
 		}
-		if current == rootClean {
+		if current == r.scan.AbsRoot {
 			break
 		}
 		parent := filepath.Dir(current)
@@ -203,17 +190,55 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		}
 		current = parent
 	}
-	// Reverse so L0 (root) comes first — matches describe_tenant.py line 152.
+	// Reverse so L0 (root) comes first — matches describe_tenant.py.
+	chain := make([]string, 0, len(rev))
 	for i := len(rev) - 1; i >= 0; i-- {
 		chain = append(chain, rev[i])
 	}
+	return chain
+}
 
-	// Read defaults bodies in order.
+// bytesOf returns the bytes the scan read for absPath. A prior-less scan
+// caches every file it kept, so this is the snapshot the walk hashed — no
+// second os.ReadFile, and the tenant file and its defaults come from one
+// read of the tree.
+func (r *effectiveResolver) bytesOf(absPath string) ([]byte, error) {
+	rel, err := filepath.Rel(r.scan.AbsRoot, absPath)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not under %q: %w", absPath, r.scan.AbsRoot, err)
+	}
+	f, ok := r.scan.Files[filepath.ToSlash(rel)]
+	if !ok || f.Data == nil {
+		// Unreachable for a prior-less scan; loud rather than an empty merge.
+		return nil, fmt.Errorf("read %q: no bytes cached by the scan", absPath)
+	}
+	return f.Data, nil
+}
+
+// rel renders absPath relative to the resolved scan root, slash-separated.
+func (r *effectiveResolver) rel(absPath string) string {
+	if rp, err := filepath.Rel(r.scan.AbsRoot, absPath); err == nil {
+		return filepath.ToSlash(rp)
+	}
+	return filepath.ToSlash(absPath)
+}
+
+func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
+	tenantFile, err := r.scan.Locate(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	tenantBytes, err := r.bytesOf(tenantFile)
+	if err != nil {
+		return nil, err
+	}
+
+	chain := r.chain(filepath.Dir(tenantFile))
 	defaultsYAML := make([][]byte, 0, len(chain))
 	for _, p := range chain {
-		b, rerr := os.ReadFile(p)
-		if rerr != nil {
-			return nil, fmt.Errorf("read defaults %q: %w", p, rerr)
+		b, berr := r.bytesOf(p)
+		if berr != nil {
+			return nil, fmt.Errorf("read defaults %q: %w", p, berr)
 		}
 		defaultsYAML = append(defaultsYAML, b)
 	}
@@ -230,23 +255,14 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 	mergedSum := sha256.Sum256(cjson)
 	sourceSum := sha256.Sum256(tenantBytes)
 
-	// Convert absolute paths to repo-relative for the response body.
 	relChain := make([]string, len(chain))
 	for i, p := range chain {
-		if r, rerr := filepath.Rel(absRoot, p); rerr == nil {
-			relChain[i] = filepath.ToSlash(r)
-		} else {
-			relChain[i] = filepath.ToSlash(p)
-		}
-	}
-	relSource := filepath.ToSlash(tenantFile)
-	if r, rerr := filepath.Rel(absRoot, tenantFile); rerr == nil {
-		relSource = filepath.ToSlash(r)
+		relChain[i] = r.rel(p)
 	}
 
 	return &EffectiveConfig{
 		TenantID:           tenantID,
-		SourceFile:         relSource,
+		SourceFile:         r.rel(tenantFile),
 		SourceHash:         fmt.Sprintf("%x", sourceSum)[:16],
 		MergedHash:         fmt.Sprintf("%x", mergedSum)[:16],
 		DefaultsChain:      relChain,
@@ -444,7 +460,19 @@ func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("tenant file missing 'tenants' key")
 	}
-	raw, ok := tenantsBlock[tenantID].(map[string]any)
+	val, present := tenantsBlock[tenantID]
+	if present && val == nil {
+		// `tenants:\n  t1:\n` — a tenant declared with a null (empty) body.
+		// The walker counts it and the exporter's flat plane serves it with
+		// the inherited defaults, so the merge must too: an empty override,
+		// not "not in file" (#1677 F2). Before this, /effective 500'd on it,
+		// da-guard failed the whole scope, and the exporter's own merged hash
+		// for the tenant was skipped. describe_tenant.py maps the same body
+		// to `{}` at ingest. A non-mapping, non-null body (`t1: 5`) still
+		// errors below.
+		return map[string]any{}, nil
+	}
+	raw, ok := val.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("tenant %q not in file", tenantID)
 	}

@@ -146,6 +146,19 @@ def _iter_confd_yaml(root, suffixes, entries=None):
     )
 
 
+def _tenant_body(tconfig: Any) -> Any:
+    """Normalise one tenant's body at ingest.
+
+    `tenants:\\n  t1:\\n` (a tenant declared with an empty / null body) parses
+    to None. The exporter serves such a tenant with its inherited defaults,
+    and pkg/config extractTenantRaw maps the null body to an empty override
+    (#1677 F2) — so this oracle does too. Before, deep_merge(merged, None)
+    crashed the whole run with AttributeError. Any other non-dict body is
+    passed through unchanged (the Go side rejects it; out of scope here).
+    """
+    return {} if tconfig is None else tconfig
+
+
 class ConfDScanner:
     """Scan a conf.d/ directory and build the inheritance graph."""
 
@@ -246,7 +259,7 @@ class ConfDScanner:
             if not isinstance(tenants_block, dict):
                 continue
             for tid, tconfig in tenants_block.items():
-                self.tenants[tid] = tconfig
+                self.tenants[tid] = _tenant_body(tconfig)
                 self.tenant_files[tid] = fp.resolve()
                 self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
 
@@ -261,7 +274,7 @@ class ConfDScanner:
                 continue
             for tid, tconfig in tenants_block.items():
                 if tid not in self.tenants:
-                    self.tenants[tid] = tconfig
+                    self.tenants[tid] = _tenant_body(tconfig)
                     self.tenant_files[tid] = fp.resolve()
                     self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
 

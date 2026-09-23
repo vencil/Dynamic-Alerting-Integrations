@@ -7,16 +7,19 @@ import "fmt"
 // to delete the old flat copy after `git mv` to the nested layout) that the
 // platform should reject hard rather than silently last-wins-merge.
 //
-// Returned by all three pkg/config directory walkers — ResolveEffective
-// (hierarchy.go), ScopeEffective (scope.go), and ScanFromConfigSource
-// (source.go) — and by the exporter's scanDirHierarchical
-// (app/config_hierarchy.go), which returns the same type through the
-// `type DuplicateTenantError = config.DuplicateTenantError` alias in
-// config_types.go. All consumers detect it via
-// `errors.As(err, &DuplicateTenantError{})` (issue #127, v2.8.x hardening).
+// Produced by the one disk walker, ScanDirTree (tree_scan.go): recorded as
+// TreeScan.Conflict (the exporter's whole-tree verdict; package main sees
+// the same type through the `type DuplicateTenantError =
+// config.DuplicateTenantError` alias in config_types.go) and, per tenant,
+// returned by TreeScan.Locate — which is how ResolveEffective (hierarchy.go)
+// and ScopeEffective (scope.go) surface it. ScanFromConfigSource
+// (source.go), the in-memory scanner, returns it too. All consumers detect
+// it via `errors.As(err, &DuplicateTenantError{})` (issue #127, v2.8.x
+// hardening).
 //
-// Before v2.8.x: the exporter's scanDirHierarchical returned a generic
-// fmt.Errorf, and Load() swallowed it with a WARN log. Customers could deploy
+// Before v2.8.x: the exporter's hierarchical scanner (since replaced by
+// ScanDirTree) returned a generic fmt.Errorf, and Load() swallowed it with
+// a WARN log. Customers could deploy
 // with a duplicate tenant silently merged via map last-wins iteration — easy
 // to miss in production.
 //

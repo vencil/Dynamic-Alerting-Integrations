@@ -150,6 +150,22 @@
       "_defaults.yaml"
     ],
     "effective_config": {
+      "container_memory": 85,
+      "mysql_connections": 80,
+      "redis_connected_clients": 5000
+    },
+    "fixture_dir": "opt-out-null-threshold",
+    "merged_hash": "1676af8e97c690e0",
+    "scenario": "null-body",
+    "source_file": "null-body.yaml",
+    "source_hash": "10c3b8b6cda54452",
+    "tenant_id": "tenant-null-body"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
       "threshold": {
         "cpu": 80
       }
