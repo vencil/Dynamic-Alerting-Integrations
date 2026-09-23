@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -32,8 +31,13 @@ import (
 // The hidden shapes are deliberately three: a dot FILE, a dot DIRECTORY, and a
 // dot directory with a PLAIN level under it — a fix that only tested the file's
 // immediate parent passes the first two and still misses the third.
-// `_defaultſ.yaml` (U+017F) is a different axis: it is the one name where the
-// walker's ToLower rule and `confdname`'s EqualFold disagree (#1670).
+// `_defaultſ.yaml` (U+017F) is a different axis: the fold RELATION. Lowercasing
+// leaves `ſ` alone, so the walker does not treat it as a chain carrier; Unicode
+// case folding (`strings.EqualFold`) maps it to `s` and does. `confdname`
+// folded until #1670, and this cell was then the one name where it and the
+// walker disagreed. The cell stays after that fix because it is still the only
+// thing here that would catch `ScanFromConfigSource` switching its own defaults
+// rule to a folding comparison — the shared matrix does not drive this scanner.
 var hiddenAxisCorpus = map[string]string{
 	"_defaults.yaml":     "defaults:\n  cpu_usage: 80\n",
 	"_defaultſ.yaml":     "defaults:\n  cpu_usage: 99\n",
@@ -244,45 +248,6 @@ func relPathList(t *testing.T, paths []string, root string) []string {
 		out = append(out, filepath.ToSlash(rel))
 	}
 	return out
-}
-
-// TestSharedDefaultsPredicateStillDisagreesWithTheWalker pins the divergence
-// that keeps `ScanFromConfigSource` on its own copy of the defaults rule
-// (issue #1670), because until now nothing in the repo asserted it — the fact
-// existed only as prose in a comment, and prose does not go red.
-//
-// ⛔ IT ASSERTS THE DISAGREEMENT, NOT THE WRONG ANSWER. Pinning
-// `IsDefaults("_defaultſ.yaml") == true` would read as an endorsement and
-// would have to be deleted to fix the bug. Pinning "these two disagree" makes
-// the fix itself the trigger: the day `internal/confdname` is reconciled with
-// the walker, this test fails, and its message says what to do about it.
-//
-// ⛔ `internal/confdname`'s matrix parity test cannot cover this cell — the
-// matrix's 23 rows carry exactly one non-ASCII name (`İ.yaml`) and it is on
-// the extension axis, so ToLower and EqualFold agree on every row it has.
-func TestSharedDefaultsPredicateStillDisagreesWithTheWalker(t *testing.T) {
-	t.Parallel()
-
-	const name = "_defaultſ.yaml" // U+017F LATIN SMALL LETTER LONG S
-
-	// The walker's rule, restated here rather than called: scanDirHierarchical
-	// lowercases and compares against the two literals.
-	lower := strings.ToLower(name)
-	walkerSaysDefaults := lower == "_defaults.yaml" || lower == "_defaults.yml"
-	sharedSaysDefaults := confdname.IsDefaults(name)
-
-	if walkerSaysDefaults == sharedSaysDefaults {
-		t.Fatalf("confdname.IsDefaults(%q) = %v and the walker's rule = %v — they now AGREE.\n"+
-			"If #1670 has been fixed, that is the good news and this test has done its job:\n"+
-			"  1. delete this test,\n"+
-			"  2. re-read the \"DELIBERATELY NOT internal/confdname.IsDefaults\" note in\n"+
-			"     pkg/config/source.go — its reason no longer holds, and ScanFromConfigSource\n"+
-			"     may finally be able to drop its private copy of the rule,\n"+
-			"  3. remove the %q cell from hiddenAxisCorpus, or keep it and say why.\n"+
-			"If instead the WALKER moved, stop: the walker is the authority the shared\n"+
-			"predicate is defined against, not the other way round.",
-			name, sharedSaysDefaults, walkerSaysDefaults, name)
-	}
 }
 
 func equalStrings(a, b []string) bool {

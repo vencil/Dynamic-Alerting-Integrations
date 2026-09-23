@@ -100,8 +100,8 @@ def test_matrix_still_carries_the_shapes_it_exists_for() -> None:
         "without it the whole pin is a lowercase-only tautology)":
             lambda r: r["yaml_extension"] and r["name"] != r["name"].lower(),
         "a non-lowercase spelling of the _defaults chain carrier (the exporter "
-        "compares that name folded; a reader that folds only the extension "
-        "hashes the file and then drops its defaults: block)":
+        "compares that name LOWERCASED; a reader that lowercases only the "
+        "extension hashes the file and then drops its defaults: block)":
             lambda r: r["defaults_file"] and r["name"] != r["name"].lower(),
         "a hidden YAML name (keeps `hidden` from being conflated with "
         "`yaml_extension`)":
@@ -144,6 +144,22 @@ def test_matrix_still_carries_the_shapes_it_exists_for() -> None:
         "config_stem offset dogfood — 'İ'.lower() is two characters, so an "
         "offset read off the folded copy slices the original wrongly)":
             lambda r: len(r["name"]) != len(r["name"].lower()),
+        # ⛔ The FOLD-RELATION rows (#1670), one per extension branch.
+        # `str.casefold()` maps U+017F `ſ` to `s`; `str.lower()` leaves it
+        # alone. Every other row answers `defaults_file` the same under both,
+        # so without these an `is_defaults_name` rewritten to `casefold()`
+        # would pass every consumer. Per branch because a blind reviewer
+        # measured, on the Go side, that one row for both let a fold applied
+        # to the `.yml` literal alone stay green.
+        "a .yaml name that casefold() equates with '_defaults.yaml' but "
+        "lower() does not (e.g. '_defaultſ.yaml' — pins that defaults_file "
+        "is LOWERCASED, not case-folded, on the .yaml branch)":
+            lambda r: (not r["defaults_file"]
+                       and r["name"].casefold() == "_defaults.yaml"),
+        "a .yml name that casefold() equates with '_defaults.yml' but "
+        "lower() does not (same pin, on the .yml branch)":
+            lambda r: (not r["defaults_file"]
+                       and r["name"].casefold() == "_defaults.yml"),
     }
     missing = [why for why, pred in checks.items() if not has(pred)]
     assert not missing, (

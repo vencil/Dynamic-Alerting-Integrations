@@ -174,7 +174,7 @@ func TestNameMatrixStillCarriesTheShapesItExistsFor(t *testing.T) {
 		why string
 	}{
 		{upperExt, "a YAML name whose EXTENSION is not all-lowercase — the #1537 row; without it the whole pin is a lowercase-only tautology"},
-		{upperDefaults, "a non-lowercase spelling of the _defaults chain carrier — the exporter compares that name folded, so a reader that folds only the extension hashes the file and then drops its defaults: block"},
+		{upperDefaults, "a non-lowercase spelling of the _defaults chain carrier — the exporter compares that name LOWERCASED, so a reader that lowercases only the extension hashes the file and then drops its defaults: block"},
 		{hiddenYAML, "a hidden YAML name — keeps `hidden` from being conflated with `yaml_extension`"},
 		{reservedNonDefaults, "a reserved YAML name that is NOT the defaults carrier — separates the two reserved sub-cases"},
 		{nonYAML, "a non-YAML name — otherwise nothing pins that the extension test refuses anything"},
