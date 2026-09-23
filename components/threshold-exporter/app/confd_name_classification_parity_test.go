@@ -126,7 +126,7 @@ func TestConfdNameMatrixCoversThisScannersProjections(t *testing.T) {
 		why string
 	}{
 		{foldedExt, "a YAML name whose extension is not all-lowercase — without it every projection below is a lowercase-only tautology (#1537's own row)"},
-		{foldedDefaults, "a non-lowercase spelling of _defaults — the ONLY thing that can make the `defaults` projection fail, since this scanner compares that name folded"},
+		{foldedDefaults, "a non-lowercase spelling of _defaults — this scanner compares the LOWERCASED name, so without one the `defaults` projection cannot fail on a scanner that stops lowercasing it"},
 		{hiddenYAML, "a hidden YAML name — the only row that separates the `hashes` projection from a plain extension test"},
 		{reservedNonDefaults, "a reserved YAML name that is not _defaults — the only row that separates `hashes` from `tenants` and `defaults` from `reserved`"},
 		{nonYAML, "a non-YAML name — otherwise nothing pins that this scanner refuses anything at all"},

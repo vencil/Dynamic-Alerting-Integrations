@@ -336,13 +336,15 @@ type carrierOrigin struct {
 // ⛔ THE CHAIN-CARRIER REFUSAL IS NOT GATED ON THE SLOT BEING TAKEN, and that
 // is the whole point of where it sits. An earlier version asked "is this path
 // already occupied, and if so is it the defaults name" — a byte-exact map
-// lookup guarding a CASE-FOLDING predicate. Measured: tenant `_DEFAULTS`
+// lookup guarding a case-INSENSITIVE predicate (one that compares the
+// LOWERCASED name — not Unicode case folding, which differs on U+017F; see
+// #1670). Measured: tenant `_DEFAULTS`
 // emits `_DEFAULTS.yaml`, which collides with `_defaults.yaml` on no byte at
 // all, so the refusal never fired — and yet `confdname.IsDefaults` says true,
 // the allocator routes it into the Base PR as a defaults carrier, and the
-// exporter (`config_hierarchy.go`, which lowercases before comparing) merges
-// it into EVERY tenant's chain in that directory. One reader comparing bytes
-// beside another comparing folded case is this family's whole shape, and the
+// exporter (its hot-reload walker lowercases before comparing) merges it into
+// EVERY tenant's chain in that directory. One reader comparing bytes beside
+// another comparing lowercased names is this family's whole shape, and the
 // first version of this guard had it inside itself.
 //
 // ⛔ TENANT-VS-TENANT COLLISIONS KEEP THE HISTORICAL LAST-WRITE-WINS and only
