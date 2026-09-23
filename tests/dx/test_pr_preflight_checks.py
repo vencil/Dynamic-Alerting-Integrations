@@ -345,15 +345,21 @@ class TestCheckLocalHooks:
         assert "command not found: git" in result.detail
         assert "install_prepush_hook.sh" not in result.detail
 
-    def test_clearing_markers_does_not_crash_when_git_cannot_run(
+    def test_clearing_the_marker_does_not_crash_when_git_cannot_run(
         self, monkeypatch, tmp_path
     ):
-        """A Local hooks FAIL clears markers; that path must survive a missing git."""
+        """A Local hooks FAIL clears the marker; that path must survive no git.
+
+        ⛔ Without git there is no HEAD sha, so there is no marker to name —
+        None, not a crash and not a guess at which file to delete.
+        """
         def _no_git(*a, **k):
             raise FileNotFoundError("git")
 
         monkeypatch.setattr(pp.subprocess, "run", _no_git)
-        assert pp.clear_markers(tmp_path) == 0
+        removed, problem = pp.clear_marker(tmp_path)
+        assert removed is None
+        assert problem, "undecidable must be reported, not read as 'nothing to do'"
 
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)

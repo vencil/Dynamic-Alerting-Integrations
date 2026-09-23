@@ -864,33 +864,47 @@ def marker_path(repo_root: Path, head_sha: str) -> Path:
     return _git_dir(repo_root) / f"{MARKER_PREFIX}.{head_sha}"
 
 
-def write_marker(repo_root: Path) -> Optional[Path]:
-    """Touch `.git/.preflight-ok.<HEAD>`. Returns the path on success, else None."""
+def write_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """Touch `.git/.preflight-ok.<HEAD>`. Returns `(written, problem)`.
+
+    ⛔ Same contract as `clear_marker`: "could not" is reported, never silent.
+    """
     sha = _head_sha(repo_root)
     if not sha:
-        return None
+        return None, "無法判定 HEAD 是哪一顆 commit"
     p = marker_path(repo_root, sha)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch(exist_ok=True)
-        return p
-    except OSError:
-        return None
+    except OSError as e:
+        return None, f"{type(e).__name__}: {e}"
+    return p, None
 
 
-def clear_markers(repo_root: Path) -> int:
-    """Remove all `.preflight-ok.*` markers. Returns count removed."""
-    git_dir = _git_dir(repo_root)
-    if not git_dir.exists():
-        return 0
-    count = 0
-    for f in git_dir.glob(f"{MARKER_PREFIX}.*"):
-        try:
-            f.unlink()
-            count += 1
-        except OSError:
-            pass
-    return count
+def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """Remove the marker for HEAD — that ONE commit.
+
+    Returns `(removed, problem)`. Both None means there was nothing to remove.
+
+    ⛔ "could not" must not look like "nothing to do": this runs on FAIL, so the
+    silent side is the allowing one.
+
+    ⛔ Do not widen back to `glob(f"{MARKER_PREFIX}.*")` — `_git_dir` is
+    `--git-common-dir`, so that reaches every worktree's markers, and the reader
+    keys on the sha, so it buys nothing. Measurements: #1917. Residual: #1951.
+    Pinned by `TestFailPathClearRadius`.
+    """
+    sha = _head_sha(repo_root)
+    if not sha:
+        return None, "無法判定 HEAD 是哪一顆 commit"
+    p = marker_path(repo_root, sha)
+    try:
+        if not p.exists():
+            return None, None
+        p.unlink()
+    except OSError as e:
+        return None, f"{type(e).__name__}: {e}"
+    return p, None
 
 
 # ─── Check Functions ─────────────────────────────────────
@@ -1621,16 +1635,22 @@ def main() -> int:
     # --- Preflight marker (consumed by pre-push gate) --------------------
     # On PASS (with or without WARN): write `.git/.preflight-ok.<HEAD>` so
     # require_preflight_pass.sh lets the subsequent `git push` through.
-    # On FAIL: clear any stale markers so the user can't push a broken SHA
-    # that happened to have an older successful marker.
+    # On FAIL: remove the marker for THIS commit only (#1917; the why is in
+    # `clear_marker`'s docstring).
     if report.has_failure:
-        cleared = clear_markers(repo_root)
+        cleared, problem = clear_marker(repo_root)
         if cleared:
-            print(f"   ↳ cleared {cleared} stale preflight marker(s)")
+            print(f"   ↳ removed this commit's preflight marker: {cleared.name}")
+        elif problem:
+            print(f"   ⚠️ 未能撤銷這顆 commit 的 preflight marker（{problem}）"
+                  "——若它先前通過過，pre-push 會照樣放行；請手動刪除該檔")
     else:
-        marker = write_marker(repo_root)
+        marker, problem = write_marker(repo_root)
         if marker:
             print(f"   ↳ wrote preflight marker: {marker.name}")
+        elif problem:
+            print(f"   ⚠️ 未能寫入 preflight marker（{problem}）"
+                  "——這次的 PASS 不會被 pre-push 認得，下一次 push 仍會被擋")
 
     # ⛔ FAIL ⇒ 非零，不看任何旗標；⛔ WARN 維持 0（#1472）。
     if report.has_failure:
