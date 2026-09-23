@@ -616,6 +616,7 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 	@python3 ./scripts/ops/configmap_assemble.py \
 		--config-dir "$$CONFDIR" --output .build/threshold-config.yaml
 
+.PHONY: sharded-assemble
 sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
 	@mkdir -p .build
 	@python3 ./scripts/tools/ops/assemble_config_dir.py \
@@ -623,31 +624,37 @@ sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make s
 		--manifest .build/assembly-manifest.json
 	@echo "✓ manifest: .build/assembly-manifest.json"
 
+.PHONY: sharded-check
 sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
 	@python3 ./scripts/tools/ops/assemble_config_dir.py \
 		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --check
 
+.PHONY: assembler-render
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir
 	@python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
 	@echo "✓ rendered to .build/config-dir/"
 
+.PHONY: assembler-install-crd
 assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 	@kubectl apply -f k8s/crd/thresholdconfig-crd.yaml
 	@kubectl apply -f k8s/crd/assembler-rbac.yaml
 	@echo "✓ CRD + RBAC installed"
 
+.PHONY: validate-routes
 validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking)
 	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
+.PHONY: validate-config
 validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
 	@python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check
 
+.PHONY: onboard-analyze
 onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 	@python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
@@ -668,6 +675,7 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 # 而那個 job 有 path filter。「只有 path-filtered PR job 看得到的守門員」對
 # release 而言，跟「只有 pytest 看得到」是同一句話：等於不存在。tag 前必須
 # 自己跑一次。
+.PHONY: version-check
 version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT/NO-SOURCE 皆會 fail)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
@@ -808,6 +816,7 @@ verify-release: ## 驗證 tools/v* release artefact (sha256 + cosign keyless). �
 		$(if $(DOWNLOAD_DIR),--download-dir $(DOWNLOAD_DIR)) \
 		$(if $(QUIET),--quiet)
 
+.PHONY: sync-tools
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
@@ -1028,9 +1037,11 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo ""
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
+.PHONY: version-show
 version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
+.PHONY: bump-docs
 bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
