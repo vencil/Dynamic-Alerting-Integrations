@@ -20,9 +20,11 @@ fail in opposite directions. A wrong "arms errexit/pipefail" makes a file
 strict ⇒ a loud red with an exemption exit. A wrong "relaxes" clears the
 whole file ⇒ a silent miss. So every doubt is resolved toward loud:
 
-- **Arming is read wide**: any whitespace token after the first ``set``
-  word on the line counts, whatever the command is (``echo set foo -e``
-  and ``set -- -e`` arm it too — over-reports, not misses).
+- **Arming is read wide**: any token after the first ``set`` word on the
+  logical line counts, whatever the command is (``echo set foo -e`` and
+  ``set -- -e`` arm it too — over-reports, not misses). A logical line
+  joins physical lines ending in ``\\``; tokens split on whitespace and
+  ``;&|()`` and lose surrounding quotes (``set -euo "pipefail"``).
 - **Relaxing is read narrow**: only a line that *starts* with ``set``;
   its arguments end at ``;`` ``&`` ``|`` ``#`` and option parsing ends at
   ``--`` / ``-`` (``set -- +e`` sets a positional parameter, not a flag).
@@ -96,9 +98,6 @@ _SET_WORD = re.compile(r"(?<![\w$.-])set(?![\w-])")
 _LINE_START_SET = re.compile(r"^\s*set(?:\s+|$)")
 _ARG_END = re.compile(r"[;&|#]")
 _WIDE_SPLIT = re.compile(r"[\s;&|()]+")
-_ERREXIT_CLUSTER = re.compile(r"^-[A-Za-z]*e[A-Za-z]*$")
-_PIPEFAIL_CLUSTER = re.compile(r"^-[A-Za-z]*o$")
-_RELAX_CLUSTER = re.compile(r"^\+[A-Za-z]*e[A-Za-z]*$")
 _READ = re.compile(r"PIPESTATUS")
 _EXEMPT = re.compile(r"#\s*pipestatus-ok:(.*)$")
 _POPULATION = re.compile(r"(?:\.sh|^\.github/workflows/[^/]+\.ya?ml)$")
@@ -116,18 +115,47 @@ class FileResult:
     exempted: List[int] = field(default_factory=list)
 
 
+def _flags(tok: str, sigil: str) -> str:
+    """Letters of a ``-xyz`` / ``+xyz`` option cluster, or "" if it is not one.
+
+    Plain string checks, not a regex: a backtracking pattern here was
+    quadratic on one long near-matching token.
+    """
+    body = tok[1:]
+    if len(tok) > 1 and tok[0] == sigil and body.isascii() and body.isalpha():
+        return body
+    return ""
+
+
+def _logical_lines(code: List[Tuple[int, str]]) -> List[str]:
+    """Join physical lines that end in a backslash continuation."""
+    out: List[str] = []
+    buf = ""
+    for _, ln in code:
+        if ln.endswith("\\"):
+            buf += ln[:-1] + " "
+            continue
+        out.append(buf + ln)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
 def _arms(line: str) -> Tuple[bool, bool]:
     """Wide side: (errexit, pipefail) armed by any token after the first ``set`` word."""
     m = _SET_WORD.search(line)
     if not m:
         return False, False
-    toks = [t for t in _WIDE_SPLIT.split(line[m.end():]) if t]
+    toks = [t.strip("'\"") for t in _WIDE_SPLIT.split(line[m.end():])]
+    toks = [t for t in toks if t]
     errexit = pipefail = False
     for i, tok in enumerate(toks):
         nxt = toks[i + 1] if i + 1 < len(toks) else ""
-        if _ERREXIT_CLUSTER.match(tok) or (tok == "-o" and nxt == "errexit"):
+        flags = _flags(tok, "-")
+        if "e" in flags or (tok == "-o" and nxt == "errexit"):
             errexit = True
-        if _PIPEFAIL_CLUSTER.match(tok) and nxt == "pipefail":
+        if flags.endswith("o") and nxt == "pipefail":
             pipefail = True
     return errexit, pipefail
 
@@ -143,7 +171,7 @@ def _relaxes(line: str) -> bool:
     for i, tok in enumerate(toks):
         if tok in ("--", "-"):
             return False
-        if _RELAX_CLUSTER.match(tok):
+        if "e" in _flags(tok, "+"):
             return True
         if tok == "+o" and i + 1 < len(toks) and toks[i + 1] in ("errexit", "pipefail"):
             return True
@@ -154,7 +182,7 @@ def scan_text(path: str, text: str) -> FileResult:
     """Pure core: apply the file-level predicate to one file's text."""
     code = [(i, ln) for i, ln in enumerate(text.splitlines(), 1)
             if not _COMMENT_LINE.match(ln)]
-    armed = [_arms(ln) for _, ln in code]
+    armed = [_arms(ln) for ln in _logical_lines(code)]
     strict = (any(e for e, _ in armed) and any(p for _, p in armed)
               and not any(_relaxes(ln) for _, ln in code))
     result = FileResult(path=path, strict=strict)

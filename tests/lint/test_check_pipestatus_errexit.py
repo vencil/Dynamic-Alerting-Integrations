@@ -60,6 +60,8 @@ def test_errexit_and_pipefail_on_one_set_line_with_long_errexit():
     "set -o pipefail\t-e",
     "set -euo pipefail;",          # separator glued to the last flag
     "( set -euo pipefail )",
+    'set -euo "pipefail"',            # quoted option argument
+    "set -o 'errexit' -o pipefail",
 ])
 def test_errexit_flag_after_other_flags_is_seen(arm):
     # Miss direction: errexit need not be the first argument of `set`.
@@ -80,6 +82,12 @@ def test_boundary_arming_is_read_wide(line):
 @pytest.mark.parametrize("line", ["offset -e", "reset -e", "x.set -e", "$set -e", "set-e"])
 def test_set_must_be_a_whole_word_to_arm(line):
     assert not lint.scan_text("x.sh", f"{line}\nset -o pipefail\n").strict
+
+
+def test_backslash_continuation_is_one_logical_line():
+    # Miss direction: bash joins the continuation before parsing `set`.
+    text = "set -e \\\n  -o pipefail\nx | y\nrc=${PIPESTATUS[0]}\n"
+    assert [ln for ln, _ in _viol(text)] == [4]
 
 
 def test_workflow_run_block_is_scanned_like_a_script():
@@ -135,6 +143,8 @@ def test_comment_mentions_are_not_reads():
     "echo set foo +e",    # `set` is an argument, not the command
     "true  # set +e",     # only in a trailing comment
     "set -o pipefail; +e",  # +e belongs to no `set` after the separator
+    "set +x",             # relaxes xtrace, not errexit
+    "set +f",             # both exist in the live tree
 ])
 def test_not_a_relaxation_does_not_clear_the_file(line):
     # Miss direction: each of these would silently clear every read in the
@@ -200,6 +210,14 @@ def test_boundary_line_start_relaxation_in_a_heredoc_clears_the_file():
     text = ("set -euo pipefail\ncat <<'EOF'\nset +e\nEOF\n"
             "x | y\nr=${PIPESTATUS[0]}\n")
     assert _viol(text) == []
+
+
+def test_long_option_cluster_token_is_linear():
+    import time
+    tok = "e" * 200000 + "!"
+    t0 = time.monotonic()
+    lint.scan_text("x.sh", f"echo set foo -{tok}\nset +{tok}\n")
+    assert time.monotonic() - t0 < 2.0
 
 
 def test_long_line_with_many_set_words_is_linear():
