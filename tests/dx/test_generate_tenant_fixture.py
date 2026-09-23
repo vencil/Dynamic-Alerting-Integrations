@@ -320,3 +320,66 @@ def test_the_default_output_dir_names_no_flag(fixture_module, tmp_path):
         fixture_module.generate_flat(1, blocker / "conf.d", False, 42, flag=None)
     assert ei.value.flag is None
     assert "internal output path" in str(ei.value)
+
+
+# ── `--extra-defaults` cannot smuggle an inert key in (#1412) ───────────────
+#
+# ⛔ The numeric guard next to this refusal answers a different question, and the
+# gap between them is the whole finding: `mysql_connections_critical=90` is
+# numeric, parses, and lands in `defaults:` — where the exporter never looks at
+# it (`resolveCriticalRows` keys off `defaults[<base>]` from TENANT overrides;
+# `resolveDimensionalRows` is tenant-only). No parse error, no WARN, no series,
+# which is #1218's silent failure reached through a caller-supplied name.
+#
+# ⚠️ Why the refusal is here rather than in `check_threshold_reachability`: this
+# tool writes fixture trees that no face of that gate reads, so the gate could
+# not see it — that is exactly what #1412 reported. Its census now exempts this
+# module BY NAMING this refusal, so deleting these cells turns that exemption
+# into a claim with nothing behind it.
+import random  # noqa: E402
+
+
+@pytest.mark.parametrize("key", [
+    "mysql_connections_critical",
+    "redis_memory_used_bytes_critical",
+    "es_disk_usage_percent{index=main}",
+])
+def test_extra_defaults_refuses_a_key_that_is_inert_under_defaults(
+    fixture_module, key,
+):
+    with pytest.raises(ValueError) as ei:
+        fixture_module._gen_defaults_yaml(
+            random.Random(7), ["mariadb"], extra_defaults={key: 90},
+        )
+    msg = str(ei.value)
+    assert key in msg
+    assert "inert" in msg
+    assert "<tenant>.yaml" in msg, (
+        "the refusal must name where the tier belongs instead; an error that "
+        "only says no leaves the caller to guess"
+    )
+
+
+def test_extra_defaults_still_takes_an_ordinary_key(fixture_module):
+    """The must-not-fire control: the refusal is about the shape, not the flag.
+
+    A `_gen_defaults_yaml` that rejected every `extra_defaults` key would pass
+    the cells above, and the bench harness (`bench_trigger=50`, the reason the
+    flag exists) would break instead.
+    """
+    doc = fixture_module._gen_defaults_yaml(
+        random.Random(7), ["mariadb"], extra_defaults={"bench_trigger": 50},
+    )
+    assert doc["defaults"]["bench_trigger"] == 50
+
+
+def test_the_refusal_uses_the_registry_predicate_not_its_own_copy(fixture_module):
+    """⛔ Imported, not respelled.
+
+    `not key.endswith("_critical") and "{" not in key` already exists in
+    `_registry_lib.is_shipped_optional_key`, and the exporter's `resolve.go` is
+    what both describe. A fourth hand-copy is how the contract drifts: this
+    asserts the module actually binds that function, so a future edit that
+    inlines the predicate here fails instead of silently forking it.
+    """
+    assert fixture_module.is_shipped_optional_key.__module__ == "_registry_lib"

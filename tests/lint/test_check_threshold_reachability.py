@@ -241,7 +241,14 @@ def test_run_check_returns_all_three_result_keys():
         "artifacts_without_defaults", "confd_roots_scanned",
         "confd_roots_exempt_from_fifth_floor",
         "confd_roots_watched_by_fifth_floor",
-        "roots_only_the_fifth_floor_notices"}, sorted(result["stats"])
+        "roots_only_the_fifth_floor_notices",
+        # ⛔ Present even on this synthetic call (`defaults_faces=({}, {})`): the
+        # `defaults:` writer census (#1412) reads the repository rather than the
+        # faces it was handed, on purpose. Its question is "which producers
+        # EXIST", so making it follow an injected face set would let a caller
+        # switch the floor off by passing none.
+        "defaults_writer_census", "defaults_writer_faces",
+        "defaults_writer_exempt"}, sorted(result["stats"])
 
 
 def test_main_without_ci_is_report_only(monkeypatch):
@@ -2900,6 +2907,26 @@ def test_every_stats_field_is_recomputed_from_the_faces():
     assert stats["confd_roots_scanned"] != stats["artifact_faces"]
     assert stats["confd_roots_scanned"] != stats["confd_roots_watched_by_fifth_floor"]
 
+    # The census fields (#1412), recounted from the census itself rather than
+    # restated — the same rule as every field above. ⛔ The third line is the one
+    # that matters: faces + exempt must EXHAUST the population, because a hit
+    # that is in neither is the violation this floor exists to raise, so a census
+    # total larger than the sum means a module is being reported and this
+    # arithmetic is the cross-check on that.
+    census = gate._defaults_writer_census()
+    assert stats["defaults_writer_census"] == len(census)
+    # ⛔ The INTERSECTIONS, not `len()` of the constants: the printed figures
+    # must move when a face stops matching or an exemption goes stale, which is
+    # the whole reason they are called re-derived (#1948 review).
+    assert stats["defaults_writer_faces"] == len(
+        set(census) & gate._DEFAULTS_FACE_MODULES)
+    assert stats["defaults_writer_exempt"] == len(
+        set(census) & set(gate._DEFAULTS_WRITER_EXEMPT))
+    assert (stats["defaults_writer_faces"] + stats["defaults_writer_exempt"]
+            == stats["defaults_writer_census"]), (
+        "the census population is not exhausted by faces + exemptions, so "
+        "`run_check` is reporting an uncovered writer — read its errors")
+
     # ⛔ "EVERY field" made mechanical: a field added to `stats` later and not
     # asserted above turns this red rather than silently joining the four that
     # already shipped unguarded.
@@ -2909,6 +2936,8 @@ def test_every_stats_field_is_recomputed_from_the_faces():
         "confd_roots_exempt_from_fifth_floor",
         "confd_roots_watched_by_fifth_floor",
         "roots_only_the_fifth_floor_notices",
+        "defaults_writer_census", "defaults_writer_faces",
+        "defaults_writer_exempt",
     }, sorted(stats)
 
 
@@ -5941,3 +5970,229 @@ def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
     # Control: unpatched, the real tree is clean through the real entry, so
     # both raises above are the rig's doing rather than a broken repo.
     gate._defaults_faces()
+
+
+# ── The floor UNDER the face list: the `defaults:` writer census (#1412) ─────
+#
+# ⛔ Set equality over the enumerated faces catches a producer that was renamed,
+# dropped or misfiled. It cannot catch one that ARRIVES, because absence from a
+# hand-written list is not a mismatch — and #1412 is exactly that: a fifth
+# producer (`generate_tenant_fixture`, copying caller-supplied `extra_defaults`
+# straight into `defaults:`) was invisible to every assertion in this file.
+#
+# So the population is derived and the coverage claim is checked against it. What
+# these cells protect is the DERIVATION, in both directions: a new writer must be
+# reported, and the exemption list must not be able to grow silently or outlive
+# the code it describes.
+
+
+def test_the_defaults_writer_census_finds_the_known_producers():
+    """⛔ The must-fire control for the census itself.
+
+    A census that found nothing, or that missed the modules whose faces are
+    already in this gate, would make `UNCOVERED-DEFAULTS-WRITER` unreachable —
+    and an unreachable violation reads exactly like a clean repository.
+    """
+    census = gate._defaults_writer_census()
+    assert census, "the census found no `defaults:` writer at all"
+    missing = sorted(gate._DEFAULTS_FACE_MODULES - set(census))
+    assert not missing, (
+        f"the census does not see {missing}, which this gate already reads as "
+        f"generator faces. Its predicates no longer match the shapes real "
+        f"producers use, so a NEW producer would not be seen either."
+    )
+    # PARSE-FAIL is reported, never swallowed: a syntactically broken producer
+    # must not vanish from the population.
+    broken = {m: sorted(k) for m, k in census.items() if "PARSE-FAIL" in k}
+    assert not broken, f"unparseable module(s) under scripts/: {broken}"
+
+
+def test_a_new_defaults_writer_is_reported_not_counted(tmp_path, monkeypatch):
+    """Plant a sixth producer; the gate must name it.
+
+    ⛔ Planted as a real FILE under a real root and read through the real census,
+    not by stubbing the census's return value — a stub would prove that the
+    reporting code works while leaving the question "do the predicates see a new
+    module" unanswered, which is the question #1412 is about.
+    """
+    root = tmp_path / "scripts"
+    (root / "tools" / "dx").mkdir(parents=True)
+    planted = root / "tools" / "dx" / "smuggle_defaults.py"
+    planted.write_text(
+        "def build():\n"
+        "    doc = {}\n"
+        "    doc['defaults'] = {}\n"
+        "    doc['defaults']['mysql_connections_critical'] = 90\n"
+        "    return doc\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    census = gate._defaults_writer_census()
+    assert "scripts/tools/dx/smuggle_defaults.py" in census, census
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    hits = [e for e in errors if "UNCOVERED-DEFAULTS-WRITER" in e]
+    assert len(hits) == 1, errors
+    assert "smuggle_defaults.py" in hits[0]
+    # The message has to say what to DO — add a face, or refuse at the boundary.
+    assert "input boundary" in hits[0] and "generator face" in hits[0]
+    # ⛔ And the exemptions are now stale against this planted tree, which is the
+    # other direction of the same rule: every one of them must be reported.
+    assert len([e for e in errors if "STALE-EXEMPTION" in e]) == len(
+        gate._DEFAULTS_WRITER_EXEMPT)
+
+
+def test_a_face_that_leaves_the_census_is_reported_by_the_gate(tmp_path, monkeypatch):
+    """⛔ The predicates' own must-fire control, inside the gate.
+
+    `test_the_defaults_writer_census_finds_the_known_producers` above already
+    fails when a face stops matching — but the hook that runs this module
+    invokes `--ci`, not pytest, so on the path that actually gates a commit the
+    regression was silent. Planting a tree where the faces do not exist is the
+    same rig as the uncovered-writer cell: a census whose predicates went blind
+    looks exactly like this.
+    """
+    root = tmp_path / "scripts"
+    (root / "tools" / "dx").mkdir(parents=True)
+    (root / "tools" / "dx" / "unrelated.py").write_text(
+        "X = {'defaults': {}}\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    errors: list[str] = []
+    stats: dict = {}
+    gate._report_defaults_writer_census(errors, stats)
+
+    blind = [e for e in errors if "CENSUS-BLIND" in e]
+    assert len(blind) == len(gate._DEFAULTS_FACE_MODULES), errors
+    assert all("repair the predicates" in e for e in blind)
+    # …and the printed figure moved WITH the population, which is the claim
+    # `main()` makes about these three numbers.
+    assert stats["defaults_writer_faces"] == 0
+    assert stats["defaults_writer_census"] == 1
+
+
+def test_an_undecodable_module_is_reported_not_a_crash(tmp_path, monkeypatch):
+    """A file that cannot be decoded must land as PARSE-FAIL, not as a traceback.
+
+    ⛔ Measured before the fix: `read_text(encoding="utf-8")` raised
+    `UnicodeDecodeError` straight out of `run_check`, so `main()` printed
+    "reachability check crashed" — the census reported NOTHING, and the message
+    did not even name the file. The sibling artifact reader in this module
+    carries the same fix for the same reason.
+    """
+    root = tmp_path / "scripts"
+    root.mkdir()
+    (root / "latin1.py").write_bytes(b"# caf\xe9 = 1\nX = 1\n")
+    (root / "nullbyte.py").write_bytes(b"X = 1\x00\n")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    census = gate._defaults_writer_census()
+    assert census.get("scripts/latin1.py") == {"PARSE-FAIL"}, census
+    assert census.get("scripts/nullbyte.py") == {"PARSE-FAIL"}, census
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    named = [e for e in errors if "latin1.py" in e or "nullbyte.py" in e]
+    assert len(named) == 2 and all("PARSE-FAIL" in e for e in named), errors
+
+
+def test_an_empty_census_fails_closed(tmp_path, monkeypatch):
+    """A scan that reads nothing is a broken scan, not a clean repository."""
+    empty = tmp_path / "scripts"
+    empty.mkdir()
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", empty)
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    assert len(errors) == 1 and "CENSUS-EMPTY" in errors[0], errors
+
+
+def test_every_census_exemption_names_a_mechanism():
+    """⛔ The list that could rot this floor back into an enumeration.
+
+    An exemption is allowed to say "this is not a threshold-defaults producer",
+    but only with a reason a reader can CHECK: a refusal in code, another gate
+    that reads the result, or "removes keys only". A judgement ("harmless",
+    "not relevant") is how a census degrades into the hand-written list it
+    replaced, one plausible sentence at a time.
+    """
+    verbs = ("refuses", "PROJECTS", "passes", "removes", "READS", "domain")
+    for module, reason in sorted(gate._DEFAULTS_WRITER_EXEMPT.items()):
+        assert len(reason) >= 40, (module, reason)
+        assert any(v in reason for v in verbs), (
+            f"{module}'s exemption reason names no mechanism — it must say what "
+            f"makes the shape impossible or who else checks it, not that it is "
+            f"fine: {reason!r}"
+        )
+        # A module that is also a face would be exempt from its own coverage.
+        assert module not in gate._DEFAULTS_FACE_MODULES, module
+
+
+def test_the_two_exempted_writers_really_do_refuse_the_inert_shapes():
+    """The exemptions for the two fixture tools claim a refusal; run it.
+
+    ⛔ This is the cell that keeps the census honest. Both entries in
+    `_DEFAULTS_WRITER_EXEMPT` that say "refuses … at its own input boundary" are
+    load-bearing: if either tool stopped refusing, the census would keep passing
+    while a producer that can emit the #1218 shape sat outside every face. Their
+    own test files pin the behaviour; this asserts the CLAIM here matches it, so
+    the two cannot drift apart.
+    """
+    import importlib.util as _ilu
+
+    ops_dir = gate.PROJECT_ROOT / "scripts" / "tools" / "ops"
+    if str(ops_dir) not in sys.path:
+        sys.path.insert(0, str(ops_dir))
+
+    for rel, bad_key in (
+        ("scripts/tools/dx/generate_tenant_fixture.py", "mysql_connections_critical"),
+        ("scripts/ops/inject_default_key.py", "pg_replication_lag_critical"),
+    ):
+        assert "refuses" in gate._DEFAULTS_WRITER_EXEMPT[rel]
+        spec = _ilu.spec_from_file_location(
+            f"_census_probe_{Path(rel).stem}", gate.PROJECT_ROOT / rel)
+        assert spec is not None and spec.loader is not None
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert not mod.is_shipped_optional_key(bad_key), (
+            f"{rel} binds a predicate that ACCEPTS {bad_key!r} — the refusal "
+            f"the census exemption names would then let the shape through"
+        )
+
+
+def test_an_unparseable_module_is_reported_not_skipped(tmp_path, monkeypatch):
+    """The census's fail-closed arm, measured rather than asserted in a comment.
+
+    ⛔ A `SyntaxError` under `scripts/` must not make a module VANISH from the
+    population: "we could not read it" and "it writes no `defaults:`" are the two
+    states this whole floor exists to keep apart, and an `except SyntaxError:
+    continue` would have collapsed them silently. The coverage delta on the
+    pull request that added this floor is what surfaced the arm as untested —
+    the branch existed, the claim about it was in a docstring, and nothing ran it.
+    """
+    root = tmp_path / "scripts"
+    (root / "tools" / "dx").mkdir(parents=True)
+    broken = root / "tools" / "dx" / "half_written.py"
+    broken.write_text("def build(:\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    census = gate._defaults_writer_census()
+    rel = "scripts/tools/dx/half_written.py"
+    assert census.get(rel) == {"PARSE-FAIL"}, census
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    named = [e for e in errors if "half_written.py" in e]
+    assert len(named) == 1 and "UNCOVERED-DEFAULTS-WRITER" in named[0], errors
+    assert "PARSE-FAIL" in named[0], (
+        "the report must say WHY the module is in the population — a reader who "
+        "cannot tell 'it writes defaults' from 'it does not parse' gets sent to "
+        "the wrong repair"
+    )

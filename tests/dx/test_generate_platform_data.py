@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DX_DIR = _REPO_ROOT / "scripts" / "tools" / "dx"
@@ -173,3 +174,194 @@ class TestDeclaredKeys:
         assert "declaredKeys" in data
         for pack in data["rulePacks"].values():
             assert "declaredKeys" not in pack
+
+
+class TestThePortalOfflineFallbackIsGenerated:
+    """#1226 §2 — the portal's offline Rule Pack catalog is a projection now.
+
+    ⛔ What these cells protect is not the file's content but the CLAIM that
+    nothing has to be hand-copied any more. The defect they stand in for: #1215
+    added `mysql_replication_lag` to the MariaDB defaults, the hand-typed mirror
+    in `rule-packs.js` never got it, and the Vitest gate that compares the two is
+    path-gated on `tools/portal/**` — a change that touches no portal file never
+    runs it. So the projection is checked here, in a suite with a catch-all path
+    filter, and by `--check` in the unconditional `platform-data-check` hook.
+    """
+
+    _FALLBACK_REL = (
+        "tools/portal/src/interactive/tools/_common/data/rule-packs-fallback.json"
+    )
+    _DRIFT_GATE_REL = "tools/portal/tests/rule-packs-fallback-drift.test.ts"
+
+    def test_the_fallback_on_disk_is_what_the_generator_would_write(self):
+        """Byte equality, so a hand edit cannot survive anywhere."""
+        import json
+
+        mod = _load_module()
+        expected = json.dumps(
+            mod.build_fallback(mod.build_platform_data()),
+            indent=2, ensure_ascii=False) + "\n"
+        on_disk = (_REPO_ROOT / self._FALLBACK_REL).read_text(encoding="utf-8")
+        assert on_disk == expected, (
+            f"{self._FALLBACK_REL} is not what the generator produces — run "
+            f"`make platform-data`. ⛔ Do NOT edit that file: it is the portal's "
+            f"offline catalog and its whole point is that it cannot disagree "
+            f"with docs/assets/platform-data.json."
+        )
+
+    def test_the_projection_matches_the_field_list_the_portal_gate_compares(self):
+        """⛔ The two ends of the same contract, held to each other.
+
+        `_FALLBACK_FIELDS` here decides what the generated file CARRIES;
+        `carried()` in the portal's drift gate decides what that gate COMPARES. A
+        field added on one side only is invisible in both directions: a new
+        carried field nothing compares is ungated, and a compared field nothing
+        carries fails on every pack. Reading the gate's own source is what makes
+        this a comparison rather than a second transcription of the list.
+        """
+        import re
+
+        gate_src = (_REPO_ROOT / self._DRIFT_GATE_REL).read_text(encoding="utf-8")
+        body = gate_src[gate_src.index("function carried(pack: any)"):]
+        body = body[:body.index("\n}")]
+        # `label: pack.label,` / `required: pack.required ?? false,`
+        compared = set(re.findall(r"^\s{4}(\w+):\s*pack\.", body, re.MULTILINE))
+        assert compared, (
+            f"read no compared fields out of {self._DRIFT_GATE_REL} — the "
+            f"`carried()` projection moved or was renamed. Re-point this test at "
+            f"it; do not delete the comparison."
+        )
+        mod = _load_module()
+        carried_here = {name for name, _default in mod._FALLBACK_FIELDS}
+        assert carried_here == compared, (
+            f"the generated fallback carries {sorted(carried_here)} while the "
+            f"portal drift gate compares {sorted(compared)}. The difference is "
+            f"either a field nothing checks or a check with nothing behind it:\n"
+            f"  only generated: {sorted(carried_here - compared)}\n"
+            f"  only compared:  {sorted(compared - carried_here)}"
+        )
+
+    def test_pack_and_default_key_ORDER_survives_the_projection(self):
+        """Order is user-visible, so it is part of the contract.
+
+        `getAllMetricKeys` iterates `Object.entries(pack.defaults)` and the portal
+        renders packs in `packOrder`, so a projection that sorted either would
+        reorder autocomplete lists with nothing red to say so.
+        """
+        mod = _load_module()
+        data = mod.build_platform_data()
+        fallback = mod.build_fallback(data)
+
+        assert fallback["packOrder"] == data["packOrder"]
+        assert list(fallback["rulePacks"]) == data["packOrder"]
+        for pack_id in data["packOrder"]:
+            source_defaults = data["rulePacks"][pack_id].get("defaults") or {}
+            assert (list(fallback["rulePacks"][pack_id]["defaults"])
+                    == list(source_defaults)), pack_id
+        # …and a pack with several defaults really exists, or the loop above is
+        # satisfied by sixteen single-key maps.
+        assert max(len(p["defaults"]) for p in fallback["rulePacks"].values()) >= 3
+
+    def test_check_reds_on_a_hand_edited_fallback(self, tmp_path, monkeypatch,
+                                                  capsys):
+        """The must-fire control for the hook that guards this file.
+
+        ⛔ Driven through `main()` with `--check`, not by calling the comparison
+        directly: what protects the file in CI is that entry point, and a test of
+        an inner helper would stay green if the `--check` branch stopped reading
+        the fallback at all.
+        """
+        import json
+
+        mod = _load_module()
+        dirty = tmp_path / "rule-packs-fallback.json"
+        good = mod.build_fallback(mod.build_platform_data())
+        first_pack = good["packOrder"][0]
+        good["rulePacks"][first_pack]["label"] = "Hand Edited"
+        dirty.write_text(json.dumps(good, indent=2, ensure_ascii=False) + "\n",
+                         encoding="utf-8")
+        monkeypatch.setattr(mod, "FALLBACK_PATH", dirty)
+        monkeypatch.setattr(sys, "argv",
+                            ["generate_platform_data.py", "--check"])
+
+        with pytest.raises(SystemExit) as ei:
+            mod.main()
+        assert ei.value.code != 0
+        out = capsys.readouterr().out
+        assert "rule-packs-fallback.json" in out
+        assert "make platform-data" in out
+
+    def test_the_hook_that_runs_check_actually_watches_both_files(self):
+        """⛔ Found by mutation, not by design.
+
+        Deleting the fallback path from `platform-data-check`'s `files:` regex
+        left every other cell in this class green: they call the tool, and the
+        tool still compares both files. What that regex decides is whether a
+        LOCAL `pre-commit` run — which only sees staged paths — reaches the hook
+        at all when the fallback is the only thing edited by hand, which is
+        precisely the #1226 shape.
+
+        ⚠️ Bounded honestly: CI's Lint job runs this hook with `--all-files` and
+        has no `if:`/`needs:`, so the regex is not the last line of defence. What
+        it buys is the local red, at commit time, instead of a CI round trip.
+        """
+        import re
+
+        config = yaml.safe_load(
+            (_REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+        hooks = [h for repo in config["repos"] for h in repo.get("hooks", [])
+                 if h.get("id") == "platform-data-check"]
+        assert len(hooks) == 1, "platform-data-check is not declared exactly once"
+        pattern = re.compile(hooks[0]["files"])
+        # ⛔ The GENERATOR is in the list too (#1948 review). A commit that
+        # changes only `generate_platform_data.py` — a new carried field, a
+        # different projection — stages no other watched path, so the local
+        # pre-commit run skipped the very check that would have caught the
+        # output going stale. CI's `--all-files` run covers it; this is the
+        # local red, at commit time.
+        for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL,
+                    "scripts/tools/dx/generate_platform_data.py"):
+            assert pattern.match(rel), (
+                f"the platform-data-check hook does not watch {rel}, so editing "
+                f"it alone stages no file the hook reacts to and the local "
+                f"pre-commit run passes over the change"
+            )
+
+    def test_check_passes_on_the_real_pair(self, monkeypatch, capsys):
+        """The must-not-fire control: `--check` is not simply always red.
+
+        Without this cell, a `--check` that exited non-zero unconditionally would
+        satisfy the one above while making `make platform-data` impossible to
+        land.
+        """
+        mod = _load_module()
+        monkeypatch.setattr(sys, "argv",
+                            ["generate_platform_data.py", "--check"])
+        mod.main()  # returns instead of raising SystemExit
+        out = capsys.readouterr().out
+        assert "rule-packs-fallback.json is up to date" in out
+
+    def test_a_packorder_that_disagrees_with_the_packs_is_refused(self):
+        """`build_fallback`'s own fail-closed arms, run rather than described.
+
+        ⛔ The projection iterates `packOrder`, so a `packOrder` naming a pack
+        that does not exist would put a `None`-filled entry in the offline
+        catalog, and one MISSING a pack would silently drop it from the offline
+        path while every field check above still passed on what remained. Both
+        are asserts in the builder; the coverage delta on the pull request that
+        added them is what showed neither was ever executed.
+        """
+        mod = _load_module()
+        data = mod.build_platform_data()
+        good_order = list(data["packOrder"])
+
+        ghost = {**data, "packOrder": good_order + ["no_such_pack"]}
+        with pytest.raises(AssertionError, match="packOrder names packs"):
+            mod.build_fallback(ghost)
+
+        dropped = {**data, "packOrder": good_order[:-1]}
+        with pytest.raises(AssertionError, match="disagree"):
+            mod.build_fallback(dropped)
+
+        # Must-not-fire control: the real pair is accepted.
+        assert mod.build_fallback(data)["packOrder"] == good_order

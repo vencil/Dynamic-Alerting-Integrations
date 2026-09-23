@@ -3116,6 +3116,216 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             )
 
 
+# ── FIFTH FLOOR — who ELSE writes a `defaults:` block (#1412) ────────────────
+#
+# ⛔ The generator faces above are ENUMERATED, and set equality over them (see
+# `test_real_repo_defaults_faces_are_all_present_and_clean`) catches a producer
+# that is renamed, dropped, or misfiled. It cannot catch a producer that ARRIVES:
+# a fifth module writing into a `defaults:` mapping is simply absent from the
+# list, and absence is not a mismatch. #1412 named the live instance —
+# `generate_tenant_fixture` takes caller-supplied `extra_defaults` and copies
+# them straight into `defaults:`, `<base>_critical` included, which is exactly
+# the #1218 shape this gate's fourth face exists to refuse — and it was invisible
+# here.
+#
+# So the population is DERIVED and the coverage claim is checked against it. The
+# census parses `scripts/**/*.py` and looks for three shapes, because the four
+# known producers do not share one:
+#
+#   * a dict literal carrying a `defaults` key (scaffold_tenant, onboard_platform)
+#   * a subscript write into `…["defaults"]` (generate_tenant_fixture)
+#   * a string literal with a `defaults:` line of its own — a YAML template
+#     (init_project, inject_default_key)
+#
+# ⚠️ A predicate this wide finds modules that merely PASS a `defaults:` block
+# through or read one, so each is exempted BY NAME WITH A REASON below. That is
+# the part to be suspicious of: an exemption is how this floor could rot into the
+# enumeration it replaces. Two things hold it. The reason must name a MECHANISM
+# (a refusal in code, another gate, "removes only"), not a judgement; and a
+# stale exemption — a module that stopped matching the census — is itself a
+# violation, so the list cannot outlive the code it describes.
+#
+# ⚠️ Scope, stated rather than implied: `scripts/**` only. A `defaults:` writer
+# living in Go, in a Helm template, or outside `scripts/` is not in this
+# population. The chart's own `values.yaml` is a face above precisely because it
+# is not Python.
+
+_DEFAULTS_CENSUS_ROOT = PROJECT_ROOT / "scripts"
+
+# The modules the generator faces above actually read. ⛔ Spelled here rather
+# than parsed out of the face labels: a label is prose and may be reworded, while
+# these are import targets. Dropping a face without dropping its entry is caught
+# by the set-equality test over faces, not by this floor.
+_DEFAULTS_FACE_MODULES = frozenset({
+    "scripts/tools/ops/scaffold_tenant.py",
+    "scripts/tools/ops/init_project.py",
+    "scripts/tools/ops/onboard_platform.py",
+})
+
+# module -> why the census hit is not a threshold-defaults producer. Each reason
+# names the MECHANISM that makes it safe, so a reader can check the claim.
+_DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
+    "scripts/tools/dx/generate_tenant_fixture.py":
+        "refuses a key that would be inert under `defaults:` where "
+        "`--extra-defaults` enters `_gen_defaults_yaml`, using the same "
+        "`_registry_lib.is_shipped_optional_key` predicate this gate polices, so "
+        "it cannot emit the #1218 shape whatever a caller passes; pinned by "
+        "tests/dx/test_generate_tenant_fixture.py",
+    "scripts/ops/inject_default_key.py":
+        "refuses the same shapes at the same boundary, with the same predicate, "
+        "for the bench-fixture injector; pinned by "
+        "tests/ops/test_inject_default_key.py",
+    "scripts/tools/dx/generate_platform_data.py":
+        "PROJECTS scaffold_tenant's defaults into docs data "
+        "(docs/assets/platform-data.json); it introduces no key name of its "
+        "own, and its source is the scaffold face above",
+    "scripts/tools/ops/da_assembler.py":
+        "passes an operator-supplied `defaults` block through into a conf.d "
+        "document; the key names are the operator's and the resulting file is "
+        "read by the DERIVED artifact half of this gate",
+    "scripts/tools/ops/deprecate_rule.py":
+        "removes keys and rewrites what is left; it can shrink a `defaults:` "
+        "map but never name a new key",
+    "scripts/tools/ops/policy_opa_bridge.py":
+        "READS `_defaults.yaml` (`load_defaults`); the census hit is the dict "
+        "shape in its module docstring",
+    "scripts/tools/dx/waveform_score.py":
+        "a different domain entirely — its `defaults:` is the severity to "
+        "tolerance-ceiling matrix, not threshold defaults",
+}
+
+
+def _defaults_writer_census() -> dict[str, set[str]]:
+    """{module path: the census shapes it matches} over `scripts/**/*.py`.
+
+    ⛔ Parsed, not grepped. A grep for the subscript text cannot tell a write
+    from a read, and a comment mentioning the word counts the same as code.
+
+    ⚠️ A file that does not parse is reported as `PARSE-FAIL` rather than
+    skipped: skipping would make a syntactically broken producer invisible,
+    which is the failure direction this whole floor is about.
+    """
+    import ast
+
+    found: dict[str, set[str]] = {}
+
+    def mark(path: Path, shape: str) -> None:
+        found.setdefault(
+            path.relative_to(PROJECT_ROOT).as_posix(), set()).add(shape)
+
+    for path in sorted(_DEFAULTS_CENSUS_ROOT.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            # ⛔ Three, not one (#1948 review). `SyntaxError` alone leaves two
+            # ways for an unreadable file to CRASH this gate instead of being
+            # reported: `read_text` raises `UnicodeDecodeError` on a file under
+            # `scripts/` that is not valid UTF-8, and `ast.parse` raises
+            # `ValueError` for an embedded null byte. Both escape `run_check`,
+            # so `main()` prints "reachability check crashed" and the census
+            # reports nothing at all — and the decode error does not even name
+            # the file. `_assert_defaults_artifacts_match_schema` above learned
+            # the same lesson from a blind review ("a repo whose comments are
+            # largely CJK will meet that one"); this is that fix, one reader
+            # over.
+            mark(path, "PARSE-FAIL")
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                if any(isinstance(k, ast.Constant) and k.value == "defaults"
+                       for k in node.keys):
+                    mark(path, "dict-literal")
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = (node.targets if isinstance(node, ast.Assign)
+                           else [node.target])
+                for target in targets:
+                    cur = target
+                    while isinstance(cur, ast.Subscript):
+                        if (isinstance(cur.slice, ast.Constant)
+                                and cur.slice.value == "defaults"):
+                            mark(path, "subscript-write")
+                        cur = cur.value
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                # ⛔ A `defaults:` line inside a MULTI-LINE literal. The
+                # single-line form matched this module's own predicate string
+                # (`line.strip() == "defaults:"`) and reported the gate itself as
+                # an uncovered producer on the first run — a census that finds
+                # its own source text is measuring the wrong thing, and the
+                # shape it is actually looking for is a rendered document.
+                lines = node.value.splitlines()
+                if len(lines) > 1 and any(ln.strip() == "defaults:" for ln in lines):
+                    mark(path, "yaml-template")
+    return found
+
+
+def _report_defaults_writer_census(errors: list[str],
+                                   stats: dict | None = None) -> None:
+    """Every census hit must be a face, or an exemption naming a mechanism.
+
+    ⚠️ The figure goes into `stats`, never into `infos`. A unit run of
+    `run_check` with synthetic demand and supply asserts that a clean case is
+    SILENT — `test_chart_armed_key_is_silent` — and an unconditional info line
+    here broke that contract on arrival. Silence is a real assertion in this
+    gate, so the census reports a number the way the other floors do.
+    """
+    census = _defaults_writer_census()
+    if not census:
+        errors.append(
+            "CENSUS-EMPTY: the `defaults:` writer census found nothing under "
+            f"{_DEFAULTS_CENSUS_ROOT.name}/, which cannot be true — the four "
+            "generator faces above live there. The scan or its predicates "
+            "broke, and an empty population makes the coverage claim below "
+            "vacuous. (#1412)"
+        )
+        return
+    for module in sorted(census):
+        if module in _DEFAULTS_FACE_MODULES or module in _DEFAULTS_WRITER_EXEMPT:
+            continue
+        errors.append(
+            f"UNCOVERED-DEFAULTS-WRITER: {module} writes a `defaults:` mapping "
+            f"({', '.join(sorted(census[module]))}) and is neither a face of "
+            "this gate nor exempt. A producer this gate cannot see may ship a "
+            "`<base>_critical` or dimensional key under `defaults:`, where the "
+            "resolver never looks — #1218's silent failure, one producer over. "
+            "Either add it as a generator face (feed it a probe, as "
+            "`migration/onboard` does), or make the shape impossible at its "
+            "input boundary and exempt it here with that mechanism named. "
+            "(#1412)"
+        )
+    for module in sorted(_DEFAULTS_WRITER_EXEMPT):
+        if module not in census:
+            errors.append(
+                f"STALE-EXEMPTION: {module} is exempt from the `defaults:` "
+                "writer census but no longer matches it — the code it "
+                "described has moved or gone. Remove the entry so the census "
+                "stops carrying a claim about nothing. (#1412)"
+            )
+    # ⛔ The must-fire control for the census's own predicates (#1948 review).
+    # A face module that stops matching means the shapes no longer find a KNOWN
+    # producer — so a new one would be missed too — and the only thing that saw
+    # that was a pytest, while the hook that runs this gate invokes `--ci` and
+    # not pytest. Same shape as CENSUS-EMPTY, one level finer.
+    for module in sorted(_DEFAULTS_FACE_MODULES - set(census)):
+        errors.append(
+            f"CENSUS-BLIND: {module} is read as a generator face of this gate, "
+            "but the `defaults:` writer census does not see it. Its predicates "
+            "no longer match a producer they are known to match, so a NEW "
+            "producer would be invisible as well — repair the predicates, do "
+            "not drop the face. (#1412)"
+        )
+    if stats is not None:
+        # ⛔ Counted from the CENSUS, not from `len()` of the two constants.
+        # `main()` prints these three under a note saying they are re-derived
+        # rather than restated, and for two of them that was false: a stale
+        # exemption or a blinded face left the printed figure unchanged while
+        # the population underneath it had moved (#1948 review).
+        stats["defaults_writer_census"] = len(census)
+        stats["defaults_writer_faces"] = len(
+            set(census) & _DEFAULTS_FACE_MODULES)
+        stats["defaults_writer_exempt"] = len(
+            set(census) & set(_DEFAULTS_WRITER_EXEMPT))
+
+
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
     if key in deferred:
         return True
@@ -3287,6 +3497,7 @@ def run_check(
     for face, keys in sorted(artifact_faces.items()):
         _report_placement(face, keys, errors)
 
+
     # ⛔ The coverage figure is COMPUTED and printed, never written into a
     # comment. The comment that used to carry it was corrected once and went
     # stale twice; a number nobody re-measures is a number that will be wrong.
@@ -3396,6 +3607,11 @@ def run_check(
                 "ships it — remove it from NOT_CHART_ARMED so the gate protects it."
             )
 
+    # ⛔ The floor UNDER the face list itself (#1412): every check above can only
+    # see the producers somebody remembered to enumerate. Runs last because it
+    # writes its figure into `stats`, which is built above.
+    _report_defaults_writer_census(errors, stats)
+
     return {"errors": errors, "infos": infos, "stats": stats}
 
 
@@ -3476,6 +3692,19 @@ def main(argv: list[str] | None = None) -> int:
         f"{stats['artifact_keys']} key(s), inspected at every depth of "
         f"`defaults:`; {stats['artifacts_without_defaults']} artifact(s) declare "
         "no `defaults:` section at all.", file=sys.stderr)
+
+    # ⛔ The census figure PRINTS, because the alternative is a floor whose only
+    # visible state is silence — and this gate's own rule is that "not measured"
+    # and "measured, nothing found" must not look alike (#1412). The three
+    # numbers are summed from the same call that raised any violation above, not
+    # restated from a constant.
+    if "defaults_writer_census" in stats:
+        print(
+            "INFO: defaults-writer census: "
+            f"{stats['defaults_writer_census']} module(s) under scripts/ write a "
+            f"`defaults:` mapping — {stats['defaults_writer_faces']} are faces of "
+            f"this gate, {stats['defaults_writer_exempt']} are exempt by name "
+            "with a reason.", file=sys.stderr)
 
     # The fifth floor's own figure, re-derived rather than restated (#1411).
     # ⛔ The COUNT never travels alone. On its own it is the exact shape that

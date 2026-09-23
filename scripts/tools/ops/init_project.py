@@ -241,6 +241,27 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 # whatsoever — the staleness is only ever found by looking.
 GIT_SYNC_IMAGE = 'registry.k8s.io/git-sync/git-sync:v4.7.1'
 
+# ⛔ ACTION PIN POLICY (issue 1417, owner call: follow the platform). The
+# GitHub Actions the delivered workflow uses are pinned to the SAME major this
+# repository runs on itself, and the tripwire for that is derived rather than
+# transcribed: `test_the_delivered_action_pins_track_the_platforms_own` reads
+# the majors out of `.github/workflows/**` and compares them to the majors in
+# the generated artifact, so the platform moving to a new major is what turns
+# this red — no list here has to be remembered.
+#
+# ⚠️ The reason a bare version pin needed a policy at all: a pin makes "somebody
+# CHANGED this" red and "this SHOULD have changed and did not" invisible, and
+# the second is the one that reaches customers. `actions/checkout@v3` was
+# retired by GitHub (runner Node churn), not by us; v4 will go the same way, and
+# until this gate existed nothing in this repository would have said so first.
+#
+# ⚠️ Not verified, and the reason this is a policy and not a fact: whether the
+# tracked major runs on every runner a customer may use (GitHub Enterprise
+# Server, self-hosted, older `ubuntu-*` images). We measure agreement with the
+# platform, not universal availability. A customer on a runner that cannot take
+# the tracked major edits the two `uses:` lines in their own repository — the
+# delivered pipeline is theirs once written.
+
 # The tool image every generated project runs, and the only ref that reaches
 # 100% of them: it lands in the GitHub workflow `env`, in the GitLab `variables`
 # block, AND in `.pre-commit-config.da.yaml` as a `language: docker_image` entry,
@@ -1178,8 +1199,28 @@ def _build_github_apply_stage(
         runs-on: ubuntu-latest
         if: github.event_name == 'workflow_dispatch'
         environment: production
+        # Wider than the other two: this one talks to a cluster, and a rollout
+        # that is merely slow must not be killed halfway.
+        timeout-minutes: 30
+        concurrency:
+          # ⛔ `cancel-in-progress: FALSE`, and the difference from the other two
+          # jobs is the whole reason this block is spelled out per job rather
+          # than once at workflow level. Cancelling a read-only validate or a
+          # superseded diff costs nothing; cancelling this one interrupts
+          # `kubectl apply` / `helm upgrade` partway and leaves the cluster in a
+          # state no commit describes.
+          # ⛔ The group is keyed on the TARGET NAMESPACE, not on the ref. This
+          # job is workflow_dispatch-only and a dispatch can start from any
+          # branch, while every one of them deploys to the same namespace — so a
+          # ref-keyed group puts two dispatches in DIFFERENT groups and lets
+          # them run `kubectl apply` / `helm upgrade` at the same time, which is
+          # the exact interleaving this block exists to prevent. A job-level
+          # `concurrency` cannot read `env:`, so the namespace is baked in here
+          # at generation time.
+          group: dynamic-alerting-apply-{namespace}
+          cancel-in-progress: false
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
           - name: Build ConfigMaps via Kustomize
             run: |
               # --load-restrictor: conf.d files are symlinked into
@@ -1209,8 +1250,28 @@ def _build_github_apply_stage(
         runs-on: ubuntu-latest
         if: github.event_name == 'workflow_dispatch'
         environment: production
+        # Wider than the other two: this one talks to a cluster, and a rollout
+        # that is merely slow must not be killed halfway.
+        timeout-minutes: 30
+        concurrency:
+          # ⛔ `cancel-in-progress: FALSE`, and the difference from the other two
+          # jobs is the whole reason this block is spelled out per job rather
+          # than once at workflow level. Cancelling a read-only validate or a
+          # superseded diff costs nothing; cancelling this one interrupts
+          # `kubectl apply` / `helm upgrade` partway and leaves the cluster in a
+          # state no commit describes.
+          # ⛔ The group is keyed on the TARGET NAMESPACE, not on the ref. This
+          # job is workflow_dispatch-only and a dispatch can start from any
+          # branch, while every one of them deploys to the same namespace — so a
+          # ref-keyed group puts two dispatches in DIFFERENT groups and lets
+          # them run `kubectl apply` / `helm upgrade` at the same time, which is
+          # the exact interleaving this block exists to prevent. A job-level
+          # `concurrency` cannot read `env:`, so the namespace is baked in here
+          # at generation time.
+          group: dynamic-alerting-apply-{namespace}
+          cancel-in-progress: false
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
           - name: Helm upgrade threshold-exporter
             run: |
               helm upgrade --install threshold-exporter \\
@@ -1386,8 +1447,19 @@ def _gen_github_actions(
       # ── Stage 1: Validate ─────────────────────────────────
       validate:
         runs-on: ubuntu-latest
+        # A job with no timeout gets GitHub's default of 6 hours. Nothing here
+        # takes minutes: it is one `docker run` per step. A wedged image pull or
+        # a hung container therefore holds a runner for the rest of the working
+        # day instead of failing while somebody is still looking at the PR.
+        timeout-minutes: 10
+        concurrency:
+          # Two pushes in a row used to run this twice, in parallel, with no
+          # ordering between them. Validation is read-only and idempotent, so
+          # the older run has nothing to contribute once a newer commit exists.
+          group: dynamic-alerting-validate-${{{{ github.event.pull_request.number || github.ref }}}}
+          cancel-in-progress: true
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
 
           - name: Validate config (schema + routing + policy)
             run: |
@@ -1417,9 +1489,40 @@ def _gen_github_actions(
 
       # ── Stage 2: Generate routes + blast radius ────────────
       generate:
-        needs: validate
+        # ⛔ NO `needs:` — deliberately, and this is a fix rather than an
+        # omission. It used to be `needs: validate`, and the `if:` below carries
+        # no status function, so an implicit `success()` applied: any red in
+        # `validate` skipped this whole job. `validate` lints custom Prometheus
+        # rules under the rule-packs tree, which has NO causal relationship to
+        # the tenant-config blast radius — so one unrelated lint ERROR anywhere
+        # in that tree took the blast-radius comment away from EVERY config pull
+        # request in the repository until somebody fixed it, and what reviewers
+        # saw meanwhile was the previous run's report, which looks current.
+        # This platform's own config-diff.yaml computes its blast radius with no
+        # `needs:` at all, for the same reason.
+        # ⚠️ This is not "validation no longer gates anything": `apply` still
+        # needs `validate`, and that is the edge that protects the cluster.
         runs-on: ubuntu-latest
         if: github.event_name == 'pull_request'
+        # ⛔ The OUTER bound, and it has to stay above the sum of the step caps
+        # below (6+1+5+5+5+2+2 = 26). If the job cap fires first the run is
+        # CANCELLED, and every `!cancelled()` step — the fallback report and the
+        # comment — is skipped: the issue 1421 stale comment, reached through a
+        # timeout instead of through a failing step. Which is also why EVERY
+        # step below carries its own cap, including the cheap ones: an uncapped
+        # step has no way to end except by taking the job cap with it. Held by
+        # `test_step_timeouts_leave_room_under_the_job_timeout`, which grades
+        # both halves — no uncapped step, and the sum under this number.
+        timeout-minutes: 30
+        concurrency:
+          # ⛔ Load-bearing for the COMMENT, not just for runner minutes. The
+          # sticky comment is edited in place under a fixed header, so two runs
+          # of this job race to overwrite the same comment body and the loser is
+          # whichever finishes LAST — not whichever commit is newer. Push twice
+          # quickly and the PR can end up showing the older commit's blast
+          # radius, with nothing in the comment to say so.
+          group: dynamic-alerting-blast-radius-${{{{ github.event.pull_request.number || github.ref }}}}
+          cancel-in-progress: true
         # The only job that writes anything back to the PR. A job-level block
         # REPLACES the workflow one rather than merging, so `contents: read` is
         # restated here — dropping it would 403 the checkout.
@@ -1427,7 +1530,11 @@ def _gen_github_actions(
           contents: read
           pull-requests: write
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
+            # The one step here whose honest cap is not small — a full-history
+            # clone of a large repository takes minutes. It is still capped:
+            # see the job cap above for what an uncapped step costs.
+            timeout-minutes: 6
             with:
               # Load-bearing. The blast radius is computed against the PR's
               # base commit, and checkout's default (fetch-depth: 1) does not
@@ -1443,9 +1550,20 @@ def _gen_github_actions(
               fetch-depth: 0
 
           - name: Prepare output directory
+            timeout-minutes: 1
             run: mkdir -p .output
 
           - name: Generate Alertmanager routes
+            id: routes
+            # ⛔ Step caps, and the arithmetic is the point: every step in this
+            # job is capped and the caps sum to 26, under this job's 30, so a hung
+            # computation FAILS AS A STEP and the fallback below still runs. If
+            # the JOB cap fired first the run would be CANCELLED, and both the
+            # fallback and the comment step carry `!cancelled()` — correct for a
+            # superseded run, but it would leave the previous report standing
+            # with nothing to say the new run died. Held by
+            # `test_step_timeouts_leave_room_under_the_job_timeout`.
+            timeout-minutes: 5
             run: |
               # Read-only, deliberately: this step VALIDATES the routes it
               # would generate; nothing downstream consumes a written file.
@@ -1465,6 +1583,8 @@ def _gen_github_actions(
                 generate-routes --config-dir /data/conf.d --validate
 
           - name: Resolve base config snapshot
+            id: snapshot
+            timeout-minutes: 5
             if: github.event_name == 'pull_request'
             env:
               # Passed through env rather than interpolated into the script, so
@@ -1543,6 +1663,8 @@ def _gen_github_actions(
               fi
 
           - name: Config diff (blast radius)
+            id: diff
+            timeout-minutes: 5
             run: |
               # config-diff signals findings through its exit code, so a bare
               # call cannot work: "changed" is exit 1, and this job runs on
@@ -1572,8 +1694,11 @@ def _gen_github_actions(
               #       `da-tools init` does not emit).
               #   1 = changes detected  -> the report is the payload.
               #   2 and above           -> the run did not complete; fail, and
-              #       post nothing (the comment step inherits an implicit
-              #       success(), so a failure here skips it).
+              #       the step below replaces the report with an explicit
+              #       "NOT COMPUTED" note naming which step failed. It used to
+              #       post nothing at all (the comment step inherited an
+              #       implicit success()), which left the previous run's report
+              #       on the pull request looking current.
               #
               # The head-side directory is checked FIRST because a bind mount
               # creates a missing host path instead of failing. config-diff
@@ -1622,8 +1747,55 @@ def _gen_github_actions(
                 exit 1
               fi
 
+          - name: Explain a blast radius that could not be computed
+            # ⛔ The point of this step is that the comment below has something
+            # CURRENT to post on every path, including the failing ones. The
+            # sticky comment is edited in place under a fixed header: when a step
+            # above exits non-zero, the comment step used to be skipped by its
+            # implicit success() and the PREVIOUS run's report stayed on the pull
+            # request, timestamped when it was first posted and with no
+            # notification that anything changed. Stale is worse than absent
+            # here, because stale looks like the answer. There is a red X on the
+            # run, but nothing on the comment itself says it is out of date.
+            # `!cancelled()` rather than `always()`: a run cancelled by the
+            # concurrency group above has been SUPERSEDED, and a superseded run
+            # must not overwrite the winner's comment.
+            if: ${{{{ !cancelled() }}}}
+            timeout-minutes: 2
+            env:
+              ROUTES_OUTCOME: ${{{{ steps.routes.outcome }}}}
+              SNAPSHOT_OUTCOME: ${{{{ steps.snapshot.outcome }}}}
+              DIFF_OUTCOME: ${{{{ steps.diff.outcome }}}}
+            run: |
+              # The diff step writes the report and then refuses to publish an
+              # empty one, so "the file is non-empty AND that step succeeded" is
+              # the only state in which the report is this run's own work.
+              if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then
+                exit 0
+              fi
+              mkdir -p .output
+              {{
+                echo "## Blast radius: NOT COMPUTED"
+                echo
+                echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run's report. **Nothing here says the change is safe — it says nobody measured it.**"
+                echo
+                echo "| step | outcome |"
+                echo "| --- | --- |"
+                echo "| Generate Alertmanager routes | \\`${{ROUTES_OUTCOME:-did not run}}\\` |"
+                echo "| Resolve base config snapshot | \\`${{SNAPSHOT_OUTCOME:-did not run}}\\` |"
+                echo "| Config diff (blast radius) | \\`${{DIFF_OUTCOME:-did not run}}\\` |"
+                echo
+                echo "Open the failing step in this run's log: each failure path prints an \\`::error::\\` line naming the cause (base commit missing from the clone, a submodule or symlink where the config directory should be, \\`CONFIG_DIR\\` pointing at a path this commit does not have, or the tool exiting above 1)."
+              }} > .output/blast-radius.md
+
           - name: Post PR comment with blast radius
-            if: github.event_name == 'pull_request'
+            # See the step above: skipping this on a failure is what leaves a
+            # stale report standing. Both steps share one condition on purpose.
+            if: ${{{{ !cancelled() }}}}
+            # Capped like the rest: this step talks to the GitHub API, and a
+            # hang here is the one that would eat the job cap AFTER the report
+            # was written but BEFORE it was posted.
+            timeout-minutes: 2
             uses: marocchino/sticky-pull-request-comment@v2
             with:
               path: .output/blast-radius.md
@@ -2877,7 +3049,11 @@ _PRECOMMIT_REPO_MOUNT = '/src'
 
 
 def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
-    """Generate .pre-commit-config.yaml snippet.
+    # ⛔ RAW docstring: it quotes `^conf\.d/` and `\.` twice below, and a plain
+    # docstring makes those invalid escape sequences — a DeprecationWarning
+    # today, a SyntaxError in a future Python. Found while bumping this file for
+    # issue 1417; it pre-dates that work.
+    r"""Generate .pre-commit-config.yaml snippet.
 
     ⛔ Takes the image as an argument. It used to hardcode
     `ghcr.io/vencil/da-tools:latest`, so a customer who ran

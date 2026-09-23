@@ -60,7 +60,12 @@ MARK = registry_lib.COUNTEREXAMPLE_MARK
 # ci.yml's `python` path filter. A join split across constants degrades to a
 # directory and drops out of that scan.
 PLATFORM_DATA = REPO_ROOT / "docs/assets/platform-data.json"
-PORTAL_FALLBACK = REPO_ROOT / "tools/portal/src/interactive/tools/_common/data/rule-packs.js"
+# ⛔ The GENERATED offline catalog, not `rule-packs.js` (#1226). The accessor
+# there no longer contains the packs — it imports this file — so the face
+# below would read a source file with no registry key in it at all. The
+# extractor-sanity test above catches that as "this face names no key",
+# which is the right red for the wrong reason: the SURFACE moved.
+PORTAL_FALLBACK = REPO_ROOT / "tools/portal/src/interactive/tools/_common/data/rule-packs-fallback.json"
 TEMPLATE_DATA = REPO_ROOT / "docs/assets/template-data.json"
 TEMPLATE_GALLERY = REPO_ROOT / "tools/portal/src/interactive/tools/template-gallery.jsx"
 MULTI_TENANT = REPO_ROOT / "tools/portal/src/interactive/tools/multi-tenant-comparison.jsx"
@@ -212,7 +217,7 @@ def _extra_faces(doc, written) -> dict:
         # JSON carries the datum, not the sentence: presence of the field IS
         # the rendering for a machine-readable face.
         "docs/assets/platform-data.json": (pd_keys, pd_text),
-        "portal offline fallback rule-packs.js":
+        "portal offline fallback rule-packs-fallback.json":
             (_presented_keys(doc, fallback), fallback),
         "scaffold_tenant → _defaults.yaml (batch path)":
             (scaffold_presented, written["_defaults.yaml"]),
@@ -386,16 +391,20 @@ def test_face_renders_every_counterexample_it_presents(faces, ce_keys):
 # tight and too loose at once: `platform-data.json` puts `observed` exactly 8
 # lines under its key, so adding one field before it (`critical_of` sits
 # immediately before `value_counterexample` in `_FIELD_ORDER`) would have
-# false-redded a correct change — while `rule-packs.js` writes a whole pack on
+# false-redded a correct change — while `rule-packs.js` wrote a whole pack on
 # ONE line, making the window the entire pack and the adjacency claim empty
 # there (blind review, #1344).
+# ⚠️ That second half is now history: since #1226 the offline catalog is the
+# pretty-printed `rule-packs-fallback.json`, so its key→clause distances are the
+# same shape as platform-data.json's. Re-measured on the generated file rather
+# than assumed — see `test_the_adjacency_window_still_has_headroom`.
 _ADJACENCY_CHARS = 800
 
 # Which language(s) a face must render the measured clause in. The two DATA
 # faces carry the registry object verbatim and are consumed by both locales, so
 # both clauses must be there; a rendered surface owes only its own language.
 _EN_FACES = ("(en)", "init_project")
-_BILINGUAL_FACES = ("platform-data.json", "rule-packs.js")
+_BILINGUAL_FACES = ("platform-data.json", "rule-packs-fallback.json")
 
 
 def _face_langs(name: str) -> tuple[str, ...]:
@@ -419,6 +428,55 @@ def _renders_near(raw: str, key: str, observed: str) -> bool:
         if needle in flat[lo: m.end() + _ADJACENCY_CHARS]:
             return True
     return False
+
+
+def test_the_adjacency_window_still_has_headroom(faces, ce_keys):
+    """Measure the real key→clause distances; do not trust the 800.
+
+    ⛔ `_ADJACENCY_CHARS` is a measured constant with a comment stating today's
+    widest case, and the surface it was measured against MOVED (#1226 replaced
+    the one-line `rule-packs.js` packs with pretty-printed JSON). A constant
+    whose measurement is stale fails in the direction that reads like a real
+    defect: a correct render, red, because the clause sat 20 characters past a
+    window nobody re-measured. So the distance is re-derived here and the
+    headroom asserted, instead of the comment being re-typed.
+    """
+    worst = 0
+    worst_where = ""
+    for name, (presented, raw) in sorted(faces.items()):
+        flat = _flatten(raw)
+        for key in sorted(presented & set(ce_keys)):
+            for lang in _face_langs(name):
+                needle = _flatten(
+                    registry_lib.counterexample_observed(ce_keys[key], lang))
+                if not needle:
+                    continue
+                best = None
+                for m in re.finditer(
+                        rf"(?<![0-9A-Za-z_]){re.escape(key)}(?![0-9A-Za-z_])",
+                        flat):
+                    for n in re.finditer(re.escape(needle), flat):
+                        gap = (n.start() - m.end() if n.start() >= m.end()
+                               else m.start() - n.end())
+                        if gap >= 0 and (best is None or gap < best):
+                            best = gap
+                if best is not None and best > worst:
+                    worst, worst_where = best, f"{name} / {key} / {lang}"
+    assert worst, "measured no key→clause distance at all — the faces or the "\
+                  "flattener changed shape and this test graded nothing"
+    assert worst <= _ADJACENCY_CHARS, (
+        f"the widest key→clause distance is now {worst} characters "
+        f"({worst_where}), past the {_ADJACENCY_CHARS}-character window — "
+        f"`_renders_near` would red a correct render. Raise the constant WITH "
+        f"this number in its comment."
+    )
+    # …and the window is not absurdly wide either: a window far past the real
+    # spread stops being an adjacency claim at all.
+    assert _ADJACENCY_CHARS <= worst * 4, (
+        f"the window ({_ADJACENCY_CHARS}) is more than 4x the widest real "
+        f"distance ({worst}, {worst_where}) — adjacency is barely constraining "
+        f"anything. Re-measure and tighten."
+    )
 
 
 # The machine-readable face presents EVERY shipped registry key by

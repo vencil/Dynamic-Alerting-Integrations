@@ -512,7 +512,7 @@ def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
 class DiffBaseMissingError(RuntimeError):
     """Raised when the diff base ref (e.g. origin/main) cannot be resolved.
 
-    Most common cause: GitHub Actions ``actions/checkout@v4`` defaults to
+    Most common cause: GitHub Actions ``actions/checkout`` defaults to
     ``fetch-depth: 1`` (shallow clone), which leaves no ``origin/main`` in
     the CI worker's ``.git`` directory. See ``docs/internal/lint-policy.md``
     §"GitHub Actions 淺拷貝陷阱" — workflows running diff-aware lints must
@@ -553,7 +553,7 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
         raise DiffBaseMissingError(
             f"git diff base ref '{base}' does not resolve in this repo.\n"
             f"  - In CI: `git fetch --no-tags origin {hint_branch}` before the\n"
-            f"    lint. ⛔ `actions/checkout@v4` with fetch-depth: 0 alone does\n"
+            f"    lint. ⛔ `actions/checkout` with fetch-depth: 0 alone does\n"
             f"    NOT guarantee a refs/remotes/origin/{hint_branch} ref (measured;\n"
             f"    see the fetch step in .github/workflows/ci.yml)\n"
             f"  - Locally: ensure you have an up-to-date `origin/main`\n"

@@ -745,7 +745,7 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
         print(f"❌ git rev-list {base_ref}..HEAD failed: {stderr}", file=sys.stderr)
         print(
             f"   Common cause: '{base_ref}' not in local refs. In GitHub Actions,\n"
-            "   ensure `actions/checkout@v4` uses `fetch-depth: 0` and that the\n"
+            "   ensure `actions/checkout` uses `fetch-depth: 0` and that the\n"
             "   base branch is explicitly fetched (see workflows/planning-status-sync.yaml).",
             file=sys.stderr,
         )
@@ -1564,7 +1564,7 @@ def main() -> int:
         "--base-ref",
         default="origin/main",
         help="Base ref for trailer-scan range (default: origin/main). "
-             "Pair with `actions/checkout@v4 fetch-depth: 0` in CI.",
+             "Pair with `actions/checkout fetch-depth: 0` in CI.",
     )
     # ⛔ `parser.error` 而不是 return：`main()` 的 return 不會 raise，測試會紅。
     if "--ci" in sys.argv[1:]:

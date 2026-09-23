@@ -120,3 +120,53 @@ def test_main_happy_path_returns_0(mod, tmp_path):
         ["inject_default_key.py", str(p), "bench_trigger", "50"]
     )
     assert rc == 0
+
+
+# ── The inert-shape refusal (#1412) ─────────────────────────────────────────
+#
+# ⛔ A different question from the numeric guard above, and the reason both
+# exist: `mysql_connections_critical: 90` passes every check this tool had. It
+# is numeric, it is a valid YAML key, the file still parses — and under
+# `defaults:` the exporter never looks at it (`resolveCriticalRows` reads the
+# critical tier from tenant overrides keyed on `defaults[<base>]`;
+# `resolveDimensionalRows` is tenant-only). No parse error, no WARN, no series.
+#
+# This tool is also why the refusal lives HERE rather than in a downstream gate:
+# it writes into fixture trees that no `check_threshold_reachability` face reads,
+# so it was one of the two producers #1412 found invisible. The census in that
+# gate exempts this module BY NAMING this refusal — so if these tests go, the
+# exemption is a claim with nothing behind it.
+@pytest.mark.parametrize("key", [
+    "mysql_connections_critical",
+    "pg_replication_lag_critical",
+    "es_disk_usage_percent{index=main}",
+])
+def test_inert_default_shapes_are_refused(mod, tmp_path, key, capsys):
+    p = tmp_path / "_defaults.yaml"
+    before = "defaults:\n  mysql_connections: 80\n"
+    p.write_text(before, encoding="utf-8")
+
+    rc = mod.inject(p, key, "90")
+
+    assert rc == 1, f"{key!r} was accepted under `defaults:`"
+    # ⛔ The file is UNCHANGED. A refusal that still wrote would be worse than no
+    # refusal: the operator reads an error and the inert key ships anyway.
+    assert p.read_text(encoding="utf-8") == before
+    err = capsys.readouterr().err
+    assert "fails SILENTLY" in err
+    assert "<tenant>.yaml" in err, (
+        "the refusal must say where the tier DOES belong; an error that only "
+        "says no leaves the operator to guess"
+    )
+
+
+def test_the_base_key_of_a_refused_tier_is_still_accepted(mod, tmp_path):
+    """The refusal is about the SHAPE, not about the metric.
+
+    Without this cell a tool that refused every key would satisfy the test above
+    — the "must-fire" control has to be paired with a "must-not-fire" one.
+    """
+    p = tmp_path / "_defaults.yaml"
+    p.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    assert mod.inject(p, "pg_replication_lag", "30") == 0
+    assert "pg_replication_lag: 30" in p.read_text(encoding="utf-8")

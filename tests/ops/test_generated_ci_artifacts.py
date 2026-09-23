@@ -1052,9 +1052,15 @@ def _cli_gh_triggers(deploy: str) -> dict:
 # for both surviving methods, and the parameter stays so that a fourth deploy
 # method with a checkout-less apply stage has somewhere to say so instead of
 # being wedged into a bare constant.
+# ⛔ TRANSCRIBED ON PURPOSE, and it is only half the guard (issue 1417). This
+# catches "somebody moved the pin"; it can never catch "the pin should have
+# moved and did not", because it IS the thing that would have to be updated.
+# The other half is derived: section 11's
+# `test_the_delivered_action_pins_track_the_platforms_own` reads the majors out
+# of `.github/workflows/**`, so the platform's own bump is what reds this.
 def _cli_gh_uses(deploy: str) -> list[str]:
     del deploy  # same for kustomize and helm; see the note above
-    return sorted(["actions/checkout@v4"] * 3
+    return sorted(["actions/checkout@v6"] * 3
                   + ["marocchino/sticky-pull-request-comment@v2"])
 
 
@@ -1084,7 +1090,19 @@ _GH_JOB_EVENTS = {
 # NARROW. All three let more reach production; none of the others sees this one.
 _GH_JOB_NEEDS = {
     "validate": (),
-    "generate": ("validate",),
+    # ⛔ EMPTY ON PURPOSE (#1421 face 3), and this row is the one to read twice.
+    # It used to be `("validate",)`. The `if:` on this job carries no status
+    # function, so an implicit `success()` applied and ANY red in `validate` —
+    # including the custom-rule governance lint, which is scoped to the
+    # rule-packs tree and has no causal relationship to tenant-config blast
+    # radius — skipped this job entirely. One unrelated lint ERROR in that tree
+    # therefore took the blast-radius comment away from every config pull
+    # request in the customer's repository until somebody fixed it, and what
+    # reviewers saw in the meantime was the previous run's report, which looks
+    # current. This platform's own config-diff.yaml has no `needs:` either.
+    # ⚠️ So the narrow-edge risk this map was written for still applies to the
+    # row BELOW: `apply` is what reaches the cluster, and its edge must stay.
+    "generate": (),
     "apply": ("validate",),
 }
 
@@ -4228,6 +4246,32 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"',
     'exit 1',
     'fi',
+    # ⛔ The fallback report (#1421 face 1). Its whole purpose is to run when a
+    # step ABOVE has failed, which is why it re-creates `.output` and why its
+    # first branch is the only exit that leaves the real report in place: the
+    # diff step refuses to publish an empty file, so "that step succeeded AND
+    # the file is non-empty" is exactly the state where the report is this
+    # run's own work. Everything else overwrites it with a note naming which
+    # step failed — because the comment is edited in place, and leaving the
+    # previous run's report standing makes a stale answer look like a current
+    # one.
+    'if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then',
+    'exit 0',
+    'fi',
+    'mkdir -p .output',
+    '{',
+    'echo "## Blast radius: NOT COMPUTED"',
+    'echo',
+    'echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run\'s report. **Nothing here says the change is safe — it says nobody measured it.**"',
+    'echo',
+    'echo "| step | outcome |"',
+    'echo "| --- | --- |"',
+    'echo "| Generate Alertmanager routes | \\`${ROUTES_OUTCOME:-did not run}\\` |"',
+    'echo "| Resolve base config snapshot | \\`${SNAPSHOT_OUTCOME:-did not run}\\` |"',
+    'echo "| Config diff (blast radius) | \\`${DIFF_OUTCOME:-did not run}\\` |"',
+    'echo',
+    'echo "Open the failing step in this run\'s log: each failure path prints an \\`::error::\\` line naming the cause (base commit missing from the clone, a submodule or symlink where the config directory should be, \\`CONFIG_DIR\\` pointing at a path this commit does not have, or the tool exiting above 1)."',
+    '} > .output/blast-radius.md',
 ]
 
 # ⛔ Was the GitLab blast-radius script, pinned line by line. The job is gone
@@ -7995,3 +8039,598 @@ def test_no_portal_prose_offers_a_deploy_mode_the_cli_does_not(tmp_path) -> None
         "hands them. #1351 retired `--deploy argocd` and left exactly one of "
         "these behind, which is why this test exists."
     )
+
+
+# ============================================================
+# ── 11. Delivered ACTION PINS vs the platform's own (#1417) ──
+# ============================================================
+#
+# ⛔ The half a pin cannot buy. Every `uses:` in the delivered workflow is
+# transcribed twice — once in each generator — and `_cli_gh_uses` above pins the
+# set. That catches somebody MOVING a pin. It cannot catch the pin that should
+# have moved and did not, because the transcription is itself the thing that
+# would have to change: the expectation and the artifact go stale together, in
+# step, green the whole way.
+#
+# Measured at the time this section was written: the platform ran
+# `actions/checkout@v6` in 79 `uses:` lines and shipped `@v4` to customers from
+# both generators, two majors behind, with every test in this file green.
+# `actions/checkout@v3` was retired by GitHub over runner Node churn rather than
+# by anyone here, so "two majors behind" is not a style question — it is the
+# lead time before a customer's pipeline starts warning and then stops running,
+# and nothing in this repository would have said so first.
+#
+# So this section derives the comparison instead of adding a fourth
+# transcription: the majors come out of `.github/workflows/**`, the shipped
+# majors come out of the generated artifact, and the platform's own bump is what
+# turns this red.
+#
+# ⚠️ Deliberately NOT asserted: that the tracked major runs on every runner a
+# customer might have (GHES, self-hosted, older `ubuntu-*` images). This
+# compares us with us. The policy note in `init_project.py` states that limit.
+
+_PLATFORM_WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
+
+
+def _action_major(ref: str) -> tuple[str, str] | None:
+    """``actions/checkout@v6`` -> ``("actions/checkout", "6")``.
+
+    ⛔ Returns None for anything without an `@` and for local refs (`./…`,
+    `docker://…`): a composite action inside this repository has no upstream
+    major to track, and reading one out of a path would invent a comparison.
+
+    ⚠️ The major is taken from the FIRST dot-separated component, so
+    `@v3.7.0` and `@0.35.0` answer "3" and "0". A pin that carries a patch is
+    still tracked at its major — the alternative (exact-string equality) would
+    red on the platform pinning a newer patch of the same major, which is not
+    drift a customer ever feels.
+    """
+    ref = ref.strip()
+    if ref.startswith(("./", "docker://")) or "@" not in ref:
+        return None
+    name, _, version = ref.partition("@")
+    major = version.lstrip("vV").split(".")[0]
+    if not name or not major:
+        return None
+    return name, major
+
+
+def _uses_refs(workflow: dict) -> list[str]:
+    """Every `uses:` a workflow declares, job level and step level."""
+    refs: list[str] = []
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        if isinstance(job.get("uses"), str):  # reusable workflow call
+            refs.append(job["uses"])
+        for step in job.get("steps") or []:
+            if isinstance(step, dict) and isinstance(step.get("uses"), str):
+                refs.append(step["uses"])
+    return refs
+
+
+@functools.lru_cache(maxsize=1)
+def _platform_action_majors() -> dict[str, frozenset[str]]:
+    """action name -> the majors THIS repository's own workflows run on.
+
+    ⛔ Parsed, not grepped. `grep -o 'actions/checkout@v[0-9]*'` over the same
+    directory answers 82 where the parse answers 79: the extra three sit in
+    English comments, and a comment is exactly the kind of text that keeps
+    naming an old major after the `uses:` line moved. The question here is
+    which version RUNS.
+    """
+    majors: dict[str, set[str]] = {}
+    files = sorted(
+        p for p in _PLATFORM_WORKFLOW_DIR.glob("*.y*ml") if p.is_file()
+    )
+    assert files, (
+        f"no workflow files under {_PLATFORM_WORKFLOW_DIR} — the derivation "
+        f"broke, and every comparison built on it would pass over nothing"
+    )
+    for path in files:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(loaded, dict), f"{path.name} did not parse as a mapping"
+        for ref in _uses_refs(loaded):
+            parsed = _action_major(ref)
+            if parsed is None:
+                continue
+            name, major = parsed
+            majors.setdefault(name, set()).add(major)
+    assert majors, (
+        "read no versioned `uses:` refs out of this platform's own workflows"
+    )
+    return {name: frozenset(v) for name, v in majors.items()}
+
+
+def _assert_pins_track_the_platform(refs: list[str], label: str) -> None:
+    """Every delivered ref whose action the platform also runs tracks its major.
+
+    ⚠️ The cost of "is among", stated rather than hidden: where the platform
+    itself carries two majors of one action (it does — `actions/upload-artifact`
+    ran v4 and v7 side by side when this was written), a delivered pin matching
+    either satisfies this. Requiring the NEWEST would assert a policy the
+    platform does not keep on itself, and this gate is about agreement between
+    the two, not about being first.
+
+    ⚠️ So WHEN this fires, measured rather than reasoned: moving ONE workflow to
+    `actions/checkout@v7` left all seven cells green (78 files still said v6, so
+    v6 stayed in the set); rewriting every `uses:` line reds all seven. The
+    signal is "the platform FINISHED a migration", not "somebody started one" —
+    which is the right edge for a customer pin (a half-migrated platform has not
+    decided anything yet) and is also the reason this gate cannot be read as
+    "we are never behind".
+    """
+    platform = _platform_action_majors()
+    compared: list[str] = []
+    stale: list[str] = []
+    for ref in refs:
+        parsed = _action_major(ref)
+        if parsed is None:
+            continue
+        name, major = parsed
+        theirs = platform.get(name)
+        if theirs is None:
+            continue  # nothing of ours to compare it with
+        compared.append(ref)
+        if major not in theirs:
+            stale.append(
+                f"{ref}  (this platform runs "
+                f"{'/'.join('v' + m for m in sorted(theirs))})"
+            )
+    assert compared, (
+        f"{label}: not one delivered `uses:` names an action this platform also "
+        f"runs, so this comparison graded nothing. Either the artifact stopped "
+        f"using actions (then delete this gate deliberately) or the parse broke "
+        f"(then fix it) — silence here is the failure mode #1417 is about.\n"
+        f"  delivered refs: {sorted(set(refs))}"
+    )
+    assert not stale, (
+        f"{label}: delivered action pin(s) left behind by this platform's own:\n"
+        + "\n".join(f"  {s}" for s in stale)
+        + "\n⛔ Owner call on #1417: the delivered pins track the majors this "
+        "repository runs on itself. Bump the `uses:` line in BOTH generators "
+        "(scripts/tools/ops/init_project.py and the wizard's generators.js) and "
+        "the transcribed set in `_cli_gh_uses`. If a customer runner cannot "
+        "take the tracked major, that is a policy change — say so in the "
+        "ACTION PIN POLICY note in init_project.py rather than pinning here."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_delivered_action_pins_track_the_platforms_own(
+    generated, ci, deploy,
+) -> None:
+    """`da-tools init`'s workflow does not ship a major we abandoned."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_pins_track_the_platform(
+        _uses_refs(workflow), f"da-tools init --ci {ci} --deploy {deploy}",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_pins_track_the_platforms_own(tmp_path, deploy) -> None:
+    """And so does the copy-me YAML the wizard puts on screen.
+
+    ⛔ Held separately from the CLI leg even though section 9 compares the two
+    artifacts step by step. That comparison is what makes them agree; this is
+    what makes agreeing on a STALE pin insufficient — two generators moved in
+    lockstep is still two majors behind.
+    """
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_pins_track_the_platform(
+        _uses_refs(workflow), f"wizard preview (deploy={deploy})",
+    )
+
+
+# `uses:` lines inside fenced blocks in the docs — the third hand-written copy
+# of a customer artifact, and the one with no generator behind it.
+_DOC_USES_RE = re.compile(
+    r"^\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*$",
+    re.MULTILINE,
+)
+
+# ⛔ Generated or historical trees, excluded by path rather than by judgement:
+#   * docs/interactive/** and docs/assets/dist/** are build output — the source
+#     they come from is already gated above.
+#   * CHANGELOG.md records what a release SHIPPED; rewriting a past entry to
+#     match today's major would make the history a lie.
+_DOC_SNIPPET_SKIP = ("docs/interactive/", "docs/assets/dist/")
+
+
+def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
+    """A snippet a customer copies is a pin we shipped, generator or not.
+
+    ⛔ A `uses:` line inside a fenced block, not the word "checkout" in prose.
+    That is the discriminator this repository keeps relearning: the three doc
+    hits #1417 named were `actions/checkout@v4` copy-me snippets, while the
+    prose around them talks about `@v3`'s retirement on purpose — a predicate
+    matching the STRING would red on the sentence that explains why the gate
+    exists. This one matches the structure `uses: <action>@<version>`.
+    """
+    offenders: dict[str, list[str]] = {}
+    scanned = 0
+    for path in sorted(_REPO_ROOT.joinpath("docs").rglob("*.md")):
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        if any(rel.startswith(skip) for skip in _DOC_SNIPPET_SKIP):
+            continue
+        scanned += 1
+        for ref in _DOC_USES_RE.findall(path.read_text(encoding="utf-8")):
+            parsed = _action_major(ref)
+            if parsed is None:
+                continue
+            name, major = parsed
+            theirs = _platform_action_majors().get(name)
+            if theirs is None or major in theirs:
+                continue
+            offenders.setdefault(rel, []).append(
+                f"{ref}  (this platform runs "
+                f"{'/'.join('v' + m for m in sorted(theirs))})"
+            )
+    assert scanned >= 50, (
+        f"only {scanned} docs/**.md files scanned — the walk broke and this "
+        f"test would pass over nothing"
+    )
+    assert not offenders, (
+        "doc snippet(s) pin an action major this platform no longer runs:\n"
+        + "\n".join(f"  {f}: {hits}" for f, hits in sorted(offenders.items()))
+        + "\n⛔ These are copy-me blocks: a customer pasting one gets the major "
+        "we abandoned. Bump the snippet, or drop the version from the line if "
+        "the passage is about behaviour rather than about a version."
+    )
+
+
+# ============================================================
+# ── 12. The blast-radius comment as STATE, not as output (#1421) ──
+# ============================================================
+#
+# ⛔ One root cause wearing three faces. The comment is posted by
+# `marocchino/sticky-pull-request-comment@v2` under a fixed header, which EDITS
+# an existing comment in place. So the comment is not an output of a successful
+# run — it is a claim about the pull request that outlives whichever run wrote
+# it. Every path that fails to refresh it leaves the previous run's report
+# standing, timestamped when it was FIRST posted, with no notification (GitHub
+# sends none for an edit) and nothing in the body to say it is out of date.
+#
+# ⚠️ Stale is worse than absent, and that asymmetry is the whole design rule
+# here: an absent comment is visibly absent, while a stale one reads as the
+# answer. The run carries a red X, but the comment does not.
+#
+# The three faces, and what holds each now:
+#   1. the comment step was skipped on every failure path (implicit success())
+#      -> a fallback step writes an explicit "NOT COMPUTED" report and both
+#         steps run under `!cancelled()`; pinned below and EXECUTED below.
+#   2. no concurrency group -> two runs of the same job raced to overwrite one
+#      comment body, and the winner was whichever finished LAST, not whichever
+#      commit was newer -> per-job groups, pinned below.
+#   3. `generate` needed `validate`, whose custom-rule lint has no causal
+#      relationship to tenant config -> the edge is gone; `_GH_JOB_NEEDS` above
+#      pins its absence, and the note there says why.
+#
+# ⚠️ Face 2 with honesty about the comparison: this platform's own
+# config-diff.yaml declares no concurrency either, so "the platform does it
+# differently" was never the argument. The argument is the in-place edit.
+
+# Status functions that make a step reachable after an earlier failure. An `if:`
+# with none of these gets an implicit `success()`, which is exactly the defect.
+_FAILURE_REACHING_FUNCS = ("always()", "!cancelled()", "! cancelled()",
+                           "failure()")
+
+
+def _comment_step(workflow: dict) -> tuple[str, dict]:
+    """(job name, the step that posts the sticky comment)."""
+    for job_name, job in workflow["jobs"].items():
+        for step in job.get("steps") or []:
+            if "sticky-pull-request-comment" in str(step.get("uses", "")):
+                return job_name, step
+    raise AssertionError(
+        "no sticky-comment step in this workflow. If the blast-radius report "
+        "now reaches reviewers some other way, re-point this section at that "
+        "mechanism — do not delete it: the stale-comment failure belongs to "
+        "whatever publishes the report."
+    )
+
+
+def _assert_comment_survives_failure(workflow: dict, label: str) -> None:
+    job_name, comment = _comment_step(workflow)
+    steps = workflow["jobs"][job_name]["steps"]
+    cond = str(comment.get("if", ""))
+    assert any(fn in cond for fn in _FAILURE_REACHING_FUNCS), (
+        f"{label}: the sticky-comment step's condition is {cond!r}, which "
+        f"carries no status function — so it inherits an implicit success() and "
+        f"is SKIPPED whenever an earlier step in the job fails. The previous "
+        f"run's report then stays on the pull request looking current (#1421 "
+        f"face 1). Use one of {_FAILURE_REACHING_FUNCS}."
+    )
+    # ⛔ Reachability alone is not enough: the action refuses to publish a
+    # missing or empty file, so a comment step that survives a failure still
+    # posts nothing unless something guarantees a body.
+    writers = [
+        s for s in steps
+        if ".output/blast-radius.md" in str(s.get("run", ""))
+        and any(fn in str(s.get("if", "")) for fn in _FAILURE_REACHING_FUNCS)
+    ]
+    assert writers, (
+        f"{label}: nothing writes `.output/blast-radius.md` on a failure path, "
+        f"so the comment step — reachable or not — has no body to post and the "
+        f"stale comment survives anyway. The generated workflow carries a step "
+        f"that replaces the report with an explicit 'NOT COMPUTED' note."
+    )
+    hint = "\n".join(str(w.get("run", "")) for w in writers)
+    assert "NOT COMPUTED" in hint, (
+        f"{label}: the failure-path writer does not say the radius was not "
+        f"computed. A body that merely exists is the same trap one level in: "
+        f"the reader has to be told that nobody measured this change."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_the_blast_radius_comment_is_refreshed_on_every_path(
+    generated, ci, deploy,
+) -> None:
+    """`da-tools init`'s artifact never leaves a stale report standing."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_comment_survives_failure(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_comment_is_refreshed_on_every_path(
+    tmp_path, deploy,
+) -> None:
+    """And the copy-me YAML the wizard shows carries the same shape."""
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_comment_survives_failure(workflow, f"wizard preview ({deploy})")
+
+
+# GitHub's default job timeout is 6 hours. The ceiling here is not a
+# performance target — it is "a wedged job must fail while somebody is still
+# looking at the pull request".
+_TIMEOUT_CEILING_MINUTES = 60
+
+
+def _assert_jobs_are_bounded_and_serialised(workflow: dict, label: str) -> None:
+    for job_name, job in workflow["jobs"].items():
+        timeout = job.get("timeout-minutes")
+        assert isinstance(timeout, int), (
+            f"{label}: job `{job_name}` declares no `timeout-minutes`, so it "
+            f"inherits GitHub's 6-hour default — a hung `docker run` holds a "
+            f"runner for the rest of the day (#1421 face 2)."
+        )
+        assert 0 < timeout <= _TIMEOUT_CEILING_MINUTES, (
+            f"{label}: job `{job_name}` has timeout-minutes: {timeout}, which "
+            f"is not a bound anyone would notice. Keep it under "
+            f"{_TIMEOUT_CEILING_MINUTES}."
+        )
+        conc = job.get("concurrency")
+        assert isinstance(conc, dict) and conc.get("group"), (
+            f"{label}: job `{job_name}` declares no concurrency group. Two runs "
+            f"then race, and for the comment-posting job the winner is whichever "
+            f"finishes LAST rather than whichever commit is newer (#1421 face 2)."
+        )
+        group = str(conc["group"])
+        # ⛔ Derived from `environment:`, not from the job's NAME. The job that
+        # talks to a cluster is the one carrying a deployment environment, and a
+        # future fourth job would be caught by the same rule.
+        reaches_cluster = "environment" in job
+        cancels = conc.get("cancel-in-progress")
+        if reaches_cluster:
+            # ⛔ The OPPOSITE requirement from the jobs below, and CodeRabbit
+            # found the earlier version keyed on `github.ref` (#1948 review):
+            # this job is workflow_dispatch-only, a dispatch can start from ANY
+            # branch, and each one deploys to the same namespace — so keying the
+            # group on the ref puts two dispatches in different groups and lets
+            # them apply concurrently, which is precisely what the group is here
+            # to stop. A constant is correct here; what must never appear is a
+            # per-ref or per-PR key.
+            varies_by = [tok for tok in ("github.ref", "pull_request",
+                                         "github.sha", "github.head_ref")
+                         if tok in group]
+            assert not varies_by, (
+                f"{label}: job `{job_name}` carries `environment: "
+                f"{job['environment']}` and a concurrency group that varies by "
+                f"{varies_by} ({group!r}). Two dispatches from different refs "
+                f"then land in different groups and reach the same cluster at "
+                f"the same time. Key it on what they SHARE — the target "
+                f"namespace."
+            )
+            assert cancels is False, (
+                f"{label}: job `{job_name}` carries `environment: "
+                f"{job['environment']}` and `cancel-in-progress: {cancels!r}`. "
+                f"Cancelling it interrupts `kubectl apply` / `helm upgrade` "
+                f"partway and leaves the cluster in a state no commit "
+                f"describes. Serialise it, never cancel it."
+            )
+        else:
+            assert "${{" in group, (
+                f"{label}: job `{job_name}`'s concurrency group {group!r} is a "
+                f"constant, so every pull request in the repository serialises "
+                f"against every other one. Key it on the pull request or the "
+                f"ref. (The cluster-reaching job above is the exception, and "
+                f"for the opposite reason.)"
+            )
+            assert cancels is True, (
+                f"{label}: job `{job_name}` has `cancel-in-progress: "
+                f"{cancels!r}`. Without cancellation the group only QUEUES the "
+                f"superseded run, which then finishes later and overwrites the "
+                f"newer run's sticky comment — the race this block exists to "
+                f"remove."
+            )
+
+
+def _assert_step_caps_fit_under_the_job_cap(workflow: dict, label: str) -> None:
+    """A hung step must fail AS A STEP, not by the job being cancelled.
+
+    ⛔ The arithmetic is the contract (#1948 review). A job that hits its own
+    `timeout-minutes` is CANCELLED, and every step carrying `!cancelled()` —
+    which on the comment-posting job is the fallback report and the sticky
+    comment itself — is then skipped. The previous run's report stays on the
+    pull request with nothing to say the new run died: #1421's defect, reached
+    through the timeout instead of through a failing step. So the step caps on
+    the computation steps must SUM to less than the job cap, leaving the job cap
+    as the outer bound it is meant to be rather than the one that fires.
+
+    ⛔ Two halves, and the second one is why this is not just arithmetic: in the
+    commenting job NO step may be uncapped. Summing only the steps that happen
+    to carry a cap grades the ones already written and says nothing about the
+    next one — a fourth computation step added with no cap is precisely the step
+    that runs until the JOB cap fires (#1948 review, second round).
+    """
+    for job_name, job in workflow["jobs"].items():
+        steps = job.get("steps") or []
+        capped = [s for s in steps if isinstance(s.get("timeout-minutes"), int)]
+        if not capped:
+            continue
+        total = sum(int(s["timeout-minutes"]) for s in capped)
+        job_cap = job.get("timeout-minutes")
+        assert isinstance(job_cap, int) and total < job_cap, (
+            f"{label}: job `{job_name}` caps its steps at {total} minutes in "
+            f"total while the job itself is capped at {job_cap!r}. The job cap "
+            f"would fire first and CANCEL the run, which skips every "
+            f"`!cancelled()` step — including the one that replaces a stale "
+            f"blast-radius comment."
+        )
+    # ⛔ Fail-closed, and deliberately NOT a count: the job whose comment must
+    # stay current is the one that needs the caps, so an artifact with no steps
+    # is not "nothing to check", it is the check having nothing to grade — and
+    # an artifact with three capped steps beside one uncapped one is worse,
+    # because it reads as covered.
+    commenting_job, _ = _comment_step(workflow)
+    steps = workflow["jobs"][commenting_job].get("steps") or []
+    uncapped = [
+        step.get("name") or step.get("uses") or f"step #{index}"
+        for index, step in enumerate(steps)
+        if not isinstance(step.get("timeout-minutes"), int)
+    ]
+    assert steps and not uncapped, (
+        f"{label}: the job that posts the blast-radius comment "
+        f"(`{commenting_job}`) has {len(steps)} step(s), of which these carry "
+        f"no `timeout-minutes`: {uncapped}. An uncapped step cannot fail on its "
+        f"own — it runs until the JOB cap fires, and that CANCELS the run, "
+        f"which skips the `!cancelled()` fallback and the comment with it and "
+        f"leaves the previous run's report standing as though it were current."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_step_timeouts_leave_room_under_the_job_timeout(
+    generated, ci, deploy,
+) -> None:
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_step_caps_fit_under_the_job_cap(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_step_timeouts_leave_room(tmp_path, deploy) -> None:
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_step_caps_fit_under_the_job_cap(workflow, f"wizard preview ({deploy})")
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_every_generated_job_is_bounded_and_serialised(
+    generated, ci, deploy,
+) -> None:
+    """Timeouts and concurrency, with the apply job's semantics inverted."""
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_jobs_are_bounded_and_serialised(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_every_wizard_preview_job_is_bounded_and_serialised(
+    tmp_path, deploy,
+) -> None:
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_jobs_are_bounded_and_serialised(workflow, f"wizard preview ({deploy})")
+
+
+_FALLBACK_STEP = "Explain a blast radius that could not be computed"
+
+# ⛔ A marker that appears NOWHERE else, and the first spelling is why: the
+# stale report said "1 tenant changed (previous run)" and the check for its
+# survival looked for "previous run" — which the replacement body also contains
+# ("this comment replaces the previous run's report"), so three correct cells
+# reported the defect. Same shape as the residue predicates in section 10: the
+# predicate compared a string while the question was about which BODY is on the
+# pull request.
+_STALE_MARKER = "STALE-PAYLOAD-FROM-AN-EARLIER-RUN"
+_STALE = f"# Blast radius\n\n- 1 tenant changed ({_STALE_MARKER})\n"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash on PATH")
+@pytest.mark.parametrize("outcomes,pre_existing,want_stale_gone,want_in_body", [
+    # The only state that leaves the real report alone: the diff step succeeded
+    # and left a non-empty file.
+    (("success", "success", "success"), _STALE, False, "1 tenant changed"),
+    # ⭐ THE case #1421 is about: the snapshot step failed, so the diff step
+    # never ran, and the previous run's report is sitting on the pull request.
+    (("success", "failure", "skipped"), _STALE, True, "NOT COMPUTED"),
+    # The diff step ran and failed (rc >= 2, or an empty report it refused to
+    # publish). Its own file may even be there — it must still be replaced.
+    (("success", "success", "failure"), _STALE, True, "NOT COMPUTED"),
+    # Checkout died: nothing ran, `.output` does not exist, and the fallback has
+    # to create it or the comment step publishes nothing at all.
+    (("", "", ""), None, True, "did not run"),
+])
+def test_the_fallback_report_is_executed_not_just_pinned(
+    generated, tmp_path, outcomes, pre_existing, want_stale_gone, want_in_body,
+) -> None:
+    """Run the generated step body against each outcome the job can reach.
+
+    ⛔ Executed rather than read, for the reason this file's header gives about
+    the #1358 step: a shell body that LOOKS right is not evidence. Here the
+    branch that matters is the negative one — "leave the real report alone" —
+    and a fallback that overwrote a good report on every run would read exactly
+    the same in the diff.
+    """
+    step, _, _ = _extract_step(generated[("github", "kustomize")], _FALLBACK_STEP)
+    assert any(fn in str(step.get("if", "")) for fn in _FAILURE_REACHING_FUNCS)
+
+    work = tmp_path / "work"
+    work.mkdir()
+    if pre_existing is not None:
+        (work / ".output").mkdir()
+        (work / ".output" / "blast-radius.md").write_text(pre_existing, encoding="utf-8")
+
+    script = work / "step.sh"
+    script.write_text(str(step["run"]), encoding="utf-8")
+    routes, snapshot, diff = outcomes
+    proc = subprocess.run(
+        ["bash", "-e", str(script)], cwd=work, capture_output=True, text=True,
+        encoding="utf-8", timeout=60,
+        env={**os.environ, "ROUTES_OUTCOME": routes,
+             "SNAPSHOT_OUTCOME": snapshot, "DIFF_OUTCOME": diff},
+    )
+    assert proc.returncode == 0, (
+        f"the fallback step itself failed (rc={proc.returncode}); it runs on the "
+        f"failure paths, so it must not add a second failure:\n{proc.stderr}"
+    )
+    body = (work / ".output" / "blast-radius.md").read_text(encoding="utf-8")
+    assert want_in_body in body, f"{want_in_body!r} not in:\n{body}"
+    if want_stale_gone:
+        assert _STALE_MARKER not in body, (
+            "the previous run's report survived this path — which is the whole "
+            f"defect:\n{body}"
+        )
+        # The reader must be able to tell WHICH step failed, not just that
+        # something did.
+        for name, outcome in (("Generate Alertmanager routes", routes),
+                              ("Resolve base config snapshot", snapshot),
+                              ("Config diff (blast radius)", diff)):
+            assert name in body
+            assert (outcome or "did not run") in body

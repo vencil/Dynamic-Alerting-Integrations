@@ -40,6 +40,95 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
 K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
 OUTPUT_PATH = REPO_ROOT / "docs" / "assets" / "platform-data.json"
+
+# ⛔ The portal's OFFLINE fallback, generated from the same build (#1226 §2).
+# It used to be a hand-typed object literal inside `rule-packs.js` mirroring the
+# `rulePacks` section of the file above, and nothing regenerated it: #1215 added
+# `mysql_replication_lag` to the MariaDB defaults and the mirror never got it,
+# which shipped a portal that showed one set of thresholds online and another
+# offline. `dev-rules.md`'s "add / change a Rule Pack" SOP never mentioned the
+# mirror either, so following the SOP could not have caught it.
+#
+# ⚠️ The file is JSON rather than a `.js` module on purpose — the same shape
+# `recipe-status.json` next to it already uses, so there is one convention for
+# "generated data the portal imports", and `check_jsx_loader_compat.py` passes
+# relative imports without an allowlist entry.
+FALLBACK_PATH = (
+    REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
+    / "_common" / "data" / "rule-packs-fallback.json"
+)
+
+# The fields the offline fallback carries, and the ONLY place that list lives on
+# the Python side. ⛔ It must stay equal to `carried()` in
+# `tools/portal/tests/rule-packs-fallback-drift.test.ts`, which is what compares
+# the two files in the portal's own suite; `test_the_fallback_projection_matches_
+# the_drift_gates_field_list` reads that test file and holds the two to each
+# other, so adding a field here without teaching that gate is a red, not a
+# silent one-sided widening.
+#
+# ⚠️ `display` / `exporterFull` / `defaultOn` are deliberately absent: no
+# in-browser tool reads them, and carrying them would make the offline bundle
+# larger for nothing.
+_FALLBACK_FIELDS: tuple[tuple[str, object], ...] = (
+    ("label", None),
+    ("category", None),
+    ("exporter", None),
+    ("configMap", None),
+    ("recordingRules", None),
+    ("alertRules", None),
+    ("required", False),
+    ("defaults", {}),
+    ("metrics", []),
+    ("dependencies", None),
+)
+
+
+def _display_path(path: Path) -> str:
+    """Repo-relative when it can be, absolute otherwise.
+
+    ⚠️ `Path.relative_to` RAISES for a path outside the repository, and the
+    raise lands inside an error message — so the tool would die with a
+    ValueError while trying to tell the operator what was wrong. Measured: a
+    test that points `FALLBACK_PATH` at a temp file (the only honest way to
+    drive the `--check` failure branch) hit exactly that.
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def build_fallback(data: dict) -> dict:
+    """Project `platform-data.json` down to what the portal needs offline.
+
+    ⛔ Pack ORDER is preserved from `packOrder`, and the per-pack `defaults` key
+    order is preserved as the source has it: `getAllMetricKeys` iterates
+    `Object.entries(pack.defaults)`, so that order is user-visible in
+    autocomplete and validation lists. A dict comprehension over `sorted(...)`
+    here would have reordered every pack's keys with nothing red to say so.
+    """
+    packs = data["rulePacks"]
+    order = data["packOrder"]
+    missing = [p for p in order if p not in packs]
+    assert not missing, f"packOrder names packs that do not exist: {missing}"
+    assert set(order) == set(packs), (
+        f"packOrder and rulePacks disagree: {sorted(set(packs) ^ set(order))}"
+    )
+    return {
+        "_generated": (
+            "GENERATED from docs/assets/platform-data.json by "
+            "generate_platform_data.py — DO NOT EDIT. Run `make platform-data`."
+        ),
+        "packOrder": list(order),
+        "rulePacks": {
+            pack_id: {
+                field: (packs[pack_id].get(field)
+                        if packs[pack_id].get(field) is not None else default)
+                for field, default in _FALLBACK_FIELDS
+            }
+            for pack_id in order
+        },
+    }
 SCAFFOLD_PATH = SCRIPT_DIR.parent / "ops" / "scaffold_tenant.py"
 
 
@@ -586,6 +675,9 @@ def main():
         return d
 
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    fallback_content = (
+        json.dumps(build_fallback(data), indent=2, ensure_ascii=False) + "\n"
+    )
 
     if args.dry_run:
         print(content)
@@ -603,15 +695,36 @@ def main():
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
                   f"Run `make platform-data` to update.")
             sys.exit(EXIT_VIOLATION)
-        else:
-            print(f"✅ {OUTPUT_PATH.relative_to(REPO_ROOT)} is up to date.")
+        # ⛔ The fallback is checked SEPARATELY and by exact bytes. It carries no
+        # volatile field, so there is nothing to strip — and an edit to it alone
+        # (the shape #1226 is about: somebody "fixes" the offline catalog by
+        # hand) leaves the file above untouched, so the comparison up there
+        # cannot see it.
+        if not FALLBACK_PATH.exists():
+            print(f"❌ {_display_path(FALLBACK_PATH)} does not exist. "
+                  f"Run `make platform-data` first.")
+            sys.exit(EXIT_VIOLATION)
+        if FALLBACK_PATH.read_text(encoding="utf-8") != fallback_content:
+            print(f"❌ {_display_path(FALLBACK_PATH)} is outdated or was "
+                  f"hand-edited. It is GENERATED from "
+                  f"{OUTPUT_PATH.relative_to(REPO_ROOT)}; run `make "
+                  f"platform-data` to regenerate. (#1226)")
+            sys.exit(EXIT_VIOLATION)
+        print(f"✅ {OUTPUT_PATH.relative_to(REPO_ROOT)} is up to date.")
+        print(f"✅ {_display_path(FALLBACK_PATH)} is up to date.")
         return
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(content, encoding="utf-8", newline="\n")
     os.chmod(OUTPUT_PATH,
              stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+    FALLBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FALLBACK_PATH.write_text(fallback_content, encoding="utf-8", newline="\n")
+    os.chmod(FALLBACK_PATH,
+             stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
     print(f"✅ Generated {OUTPUT_PATH.relative_to(REPO_ROOT)}")
+    print(f"✅ Generated {_display_path(FALLBACK_PATH)} "
+          f"(the portal's offline fallback)")
     print(f"   {data['totals']['packs']} packs, "
           f"{data['totals']['recordingRules']} recording rules, "
           f"{data['totals']['alertRules']} alert rules")

@@ -7,8 +7,18 @@
  *      from docs/assets/platform-data.json (production path)
  *   2. baked-in inline catalog — offline / standalone fallback
  *
- * The baked-in catalog is a HAND-MAINTAINED MIRROR of the generated source of
- * truth docs/assets/platform-data.json (produced by `make platform-data` /
+ * ⛔ The baked-in catalog is GENERATED as of #1226 — `make platform-data` writes
+ * `_common/data/rule-packs-fallback.json` from the same build that writes
+ * platform-data.json, and the unconditional `platform-data-check` hook compares
+ * the two by bytes. So this gate no longer stands between a regen and a
+ * forgotten hand-copy; what it still holds is the ACCESSOR: that with
+ * window.__PLATFORM_DATA unset the module really resolves to the generated file,
+ * in packOrder, with per-pack defaults key order intact — i.e. that the offline
+ * path a customer without the fetch gets is the same catalog. ⚠️ Do NOT read a
+ * pass here as "the mirror was hand-checked"; that question moved.
+ *
+ * It was a HAND-MAINTAINED MIRROR of the generated source of truth
+ * docs/assets/platform-data.json (produced by `make platform-data` /
  * generate_platform_data.py). It carries label / category / exporter /
  * configMap / recordingRules / alertRules / required / defaults
  * ({value,unit,desc}) / metrics / dependencies. Only the presentation-derived

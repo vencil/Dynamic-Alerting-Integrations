@@ -36,6 +36,13 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
+# ⛔ The predicate that decides whether a key can live under `defaults:` at all,
+# imported from the module that owns it rather than respelled here (#1412). A
+# fourth hand-copy of `not key.endswith("_critical") and "{" not in key` is how
+# the contract this gate polices drifts in the first place.
+sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
+from _registry_lib import is_shipped_optional_key  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -263,6 +270,27 @@ def _gen_defaults_yaml(
             defaults["defaults"][m] = rng.randint(50, 100000)
     if extra_defaults:
         for k, v in extra_defaults.items():
+            # ⛔ The SHAPE check, and it is separate from the numeric one below
+            # on purpose: a `<base>_critical` or dimensional `key{…}` name with a
+            # perfectly numeric value is the failure this refuses. Under
+            # `defaults:` the exporter's resolver never looks at either —
+            # `resolveCriticalRows` keys off `defaults[<base>]` and
+            # `resolveDimensionalRows` is tenant-only — so the key is inert and
+            # NOTHING says so: no parse error, no WARN, no series. #1218 is that
+            # failure in a customer-facing producer; #1412 is this path, which
+            # copies caller-supplied names straight through and was invisible to
+            # the reachability gate that exists to catch it.
+            if not is_shipped_optional_key(k):
+                raise ValueError(
+                    f"--extra-defaults key {k!r} cannot live under `defaults:`: "
+                    f"a `_critical` suffix or a `key{{label=…}}` token is inert "
+                    f"there (the resolver reads the critical tier from tenant "
+                    f"overrides keyed on `defaults[<base>]`, and dimensional "
+                    f"thresholds have no default path at all), and it fails "
+                    f"silently — no parse error and no series. Put the base key "
+                    f"in `defaults:` and the tier in a `<tenant>.yaml` override. "
+                    f"(#1218 / #1412)"
+                )
             if not isinstance(v, (int, float)) or isinstance(v, bool):
                 raise ValueError(
                     f"--extra-defaults value {k}={v!r} is not numeric; "

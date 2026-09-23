@@ -340,8 +340,15 @@ permissions:
 ${pinNote}jobs:
   validate:
     runs-on: ubuntu-latest
+    # A job with no timeout gets GitHub's default of 6 hours, and nothing here
+    # takes minutes. Validation is read-only, so a superseded run has nothing
+    # left to contribute.
+    timeout-minutes: 10
+    concurrency:
+      group: dynamic-alerting-validate-\${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate config (schema + routing + policy)
         run: |
           # docker -v CREATES a missing host path instead of failing, so a
@@ -365,9 +372,25 @@ ${pinNote}jobs:
           fi
 
   generate:
-    needs: validate
+    # No needs: on purpose. It used to be needs: validate, and the if: below
+    # carries no status function, so an implicit success() applied - one lint
+    # ERROR in the custom rule-packs tree, which has nothing to do with the
+    # tenant-config blast radius, took this comment away from every config pull
+    # request in the repository. apply still needs validate; that is the edge
+    # that protects the cluster.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Above the sum of the step caps below (6+1+5+5+5+2+2 = 26), or it fires
+    # first and CANCELS the run, which skips the !cancelled() steps. Every step
+    # below is capped for the same reason: an uncapped one can only end by
+    # taking the job cap with it.
+    timeout-minutes: 30
+    concurrency:
+      # The sticky comment is edited in place under a fixed header, so two runs
+      # race to overwrite the same body and the LAST to finish wins - not the
+      # newer commit.
+      group: dynamic-alerting-blast-radius-\${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     # Load-bearing, not boilerplate: the blast-radius comment is this job's
     # only output, and GITHUB_TOKEN defaults to read-only on repositories
     # created after 2023-02. The scope sits on this job alone so that apply,
@@ -376,14 +399,23 @@ ${pinNote}jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        # The only step whose honest cap is not small: a full-history clone.
+        timeout-minutes: 6
         with:
           # The blast radius is computed against the pull request's base
           # commit, which a shallow clone does not contain.
           fetch-depth: 0
       - name: Prepare output directory
+        timeout-minutes: 1
         run: mkdir -p .output
       - name: Generate Alertmanager routes
+        id: routes
+        # Every step in this job is capped and the caps sum to 26, under this
+        # job's 30, so a hung step FAILS instead of the job being cancelled - a
+        # cancelled run skips the !cancelled() fallback below and leaves the
+        # previous report standing.
+        timeout-minutes: 5
         run: |
           # Validate only (#1423 / #1650): --validate returns before -o is
           # used, and the tool now refuses the two together.
@@ -392,6 +424,8 @@ ${pinNote}jobs:
             ${image} \\
             generate-routes --config-dir /data/conf.d --validate
       - name: Resolve base config snapshot
+        id: snapshot
+        timeout-minutes: 5
         if: github.event_name == 'pull_request'
         env:
           # Through env, not interpolated into the script, so the expression
@@ -420,6 +454,8 @@ ${pinNote}jobs:
             exit 1
           fi
       - name: Config diff (blast radius)
+        id: diff
+        timeout-minutes: 5
         run: |
           # config-diff signals findings through its exit code, so both 0 (no
           # change) and 1 (changes) are ordinary outcomes here; 2 and above
@@ -444,8 +480,42 @@ ${pinNote}jobs:
             echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"
             exit 1
           fi
+      - name: Explain a blast radius that could not be computed
+        # The comment below is edited in place, so skipping it on a failure
+        # leaves the PREVIOUS run's report standing as though it were current -
+        # and stale is worse than absent, because stale looks like the answer.
+        # !cancelled() rather than always(): a run the concurrency group
+        # superseded must not overwrite the winner's comment.
+        if: \${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          ROUTES_OUTCOME: \${{ steps.routes.outcome }}
+          SNAPSHOT_OUTCOME: \${{ steps.snapshot.outcome }}
+          DIFF_OUTCOME: \${{ steps.diff.outcome }}
+        run: |
+          if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then
+            exit 0
+          fi
+          mkdir -p .output
+          {
+            echo "## Blast radius: NOT COMPUTED"
+            echo
+            echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run's report. **Nothing here says the change is safe - it says nobody measured it.**"
+            echo
+            echo "| step | outcome |"
+            echo "| --- | --- |"
+            echo "| Generate Alertmanager routes | \\\`\${ROUTES_OUTCOME:-did not run}\\\` |"
+            echo "| Resolve base config snapshot | \\\`\${SNAPSHOT_OUTCOME:-did not run}\\\` |"
+            echo "| Config diff (blast radius) | \\\`\${DIFF_OUTCOME:-did not run}\\\` |"
+            echo
+            echo "Open the failing step in this run's log: each failure path prints an ::error:: line naming the cause."
+          } > .output/blast-radius.md
       - name: Post PR comment with blast radius
-        if: github.event_name == 'pull_request'
+        # Same condition as the step above, on purpose.
+        if: \${{ !cancelled() }}
+        # Capped too: this one talks to the GitHub API, and a hang here would
+        # eat the job cap after the report was written but before it was posted.
+        timeout-minutes: 2
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: .output/blast-radius.md
@@ -456,8 +526,20 @@ ${pinNote}jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
+    # Wider than the other two: this one talks to a cluster.
+    timeout-minutes: 30
+    concurrency:
+      # cancel-in-progress: FALSE - cancelling this interrupts kubectl apply or
+      # helm upgrade partway and leaves the cluster in a state no commit
+      # describes. The group still serialises two manual dispatches.
+      # Keyed on the target namespace, NOT on the ref: this job is
+      # workflow_dispatch-only, a dispatch can start from any branch, and every
+      # one of them deploys to the same namespace - a ref-keyed group would put
+      # two dispatches in different groups and let them apply at the same time.
+      group: dynamic-alerting-apply-monitoring
+      cancel-in-progress: false
     steps:${config.deploy === 'kustomize' ? `
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build ConfigMaps via Kustomize
         run: |
           # --load-restrictor: conf.d files are symlinked into kustomize/base/,
@@ -471,7 +553,7 @@ ${pinNote}jobs:
       - name: Reload Prometheus
         run: |
           kubectl rollout restart deployment/prometheus -n monitoring` : config.deploy === 'helm' ? `
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\
