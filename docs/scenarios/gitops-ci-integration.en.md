@@ -295,7 +295,13 @@ ln -s ../../conf.d/prod-redis.yaml .
 security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
 ```
 
-That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes.
+That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes. Copy both spellings the exporter reads (`.yaml` and `.yml`, any case) and skip dotfiles; a single `cp ../../conf.d/*.yaml .` silently leaves `.yml` tenants out:
+
+```bash
+find ../../conf.d -maxdepth 1 -type f \( -iname '*.yaml' -o -iname '*.yml' \) ! -name '.*' -exec cp {} . \;
+```
+
+⛔ **Linking or copying is not enough on its own: `configMapGenerator.files` in `kustomization.yaml` is an explicit list — kustomize does not glob.** A file that is not named there never becomes a ConfigMap key, so the exporter in the cluster never sees that tenant, while every `conf.d/` tool still reports it. `da-tools init` lists every top-level config file `conf.d/` holds when it runs (both spellings); a tenant file you add afterwards has to be linked **and** added to `files:`.
 
 **CI apply:**
 
