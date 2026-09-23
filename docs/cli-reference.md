@@ -1749,44 +1749,42 @@ ConfigMap 局部更新工具，支援 preview（--diff）和直接應用。
 **語法**
 
 ```bash
-da-tools patch-config [<tenant> <metric> <value> | --diff] [options]
+python3 scripts/tools/ops/patch_config.py [--diff [--json]] <tenant> <metric> <value>
 ```
 
-**必需參數**
-
-選擇一種模式：
-
-1. **更新模式**：`<tenant> <metric> <value>`
-2. **Preview 模式**：`--diff`
+讀寫 `monitoring` namespace 的 `threshold-config`，需要 PATH 上的 `kubectl` 與可用的 kubeconfig。`<value>` 是具體值、`default`（刪掉租戶的 key）或 `disable`。
 
 **選項**
 
-| 選項 | 說明 | 預設值 |
-|------|------|--------|
-| `--namespace <NS>` | K8s namespace | `monitoring` |
-| `--configmap <CM>` | ConfigMap 名稱 | `threshold-config` |
-| `--dry-run` | 僅顯示將應用的變更，不實際更新 | false |
-| `--yes` | 跳過確認提示 | false |
+| 參數 | 說明 |
+|------|------|
+| `--diff` | 只預覽，不套用 |
+| `--json` | 以 JSON 輸出預覽；必須搭配 `--diff` |
 
-**輸出**
+**租戶定位**：要改的 key 是 `threshold-config` 裡 `tenants:` 宣告了該租戶的**那一個** YAML key（不論檔名、大小寫或 `.yml`），patch 寫回該 key。`_defaults` key 不分大小寫、`.yaml`／`.yml` 皆可。沒有 key 宣告該租戶時，具體值在 multi-file 版面建立 `<tenant>.yaml`，在 legacy 版面寫進 `config.yaml`。`default` 在租戶未設該 metric 時是 no-op（結束碼 `0`），目標格原文已等於新值時亦同；讓租戶區塊變空時區塊保留。
 
-Preview 或確認訊息。
+**讀取**：純量取原文、不做型別轉換（`010` 就是 `010`）。
+
+**拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；查找路徑上有 merge key `<<`；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫會以 YAML 1.1 型別重新序列化該 key 的其他值，並遺失註解。
+
+**`--diff`**：`changed` 與 apply 同一判定——apply 不送 patch 時為 `false`。`--json` 的 `before.value` 是原文字串（null 為 `null`，mapping／sequence 為其 YAML 文字）。
+
+**`--json`**：每條結束路徑的 stdout 都是一份 JSON；`--json --help` 為結束碼 `0`、`status: "help"`。結束碼 `2` 時鍵與預覽相同、值清空，另加 `status: "caller_error"` 與 `reason`（`json_requires_diff`／`bad_arguments`／`configmap_shape`／`kubectl_failed`／`unexpected_error`）。
 
 **範例**
 
 ```bash
-da-tools patch-config --diff
-da-tools patch-config db-a mysql_connections 100 --dry-run
-da-tools patch-config db-a mysql_connections 100 --yes
+python3 scripts/tools/ops/patch_config.py --diff db-a mysql_connections 100
+python3 scripts/tools/ops/patch_config.py --diff --json db-a mysql_connections 100 | jq .changed
+python3 scripts/tools/ops/patch_config.py db-a mysql_connections 100
 ```
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 未捕捉例外（traceback）——實測 `kubectl` 不在 PATH 時是這一格 |
-| `2` | 呼叫端錯誤：`kubectl get configmap threshold-config -n monitoring` 非零結束（例如叢集連不上、ConfigMap 不存在、無權限）、legacy 格式的 ConfigMap 缺 `config.yaml`、`--json` 沒配 `--diff`（拒絕套用），或 argparse 拒絕的參數 |
+| `0` | 成功；含 `default` 的 no-op |
+| `2` | 呼叫端錯誤：`kubectl` 無法執行或非零結束（例如不在 PATH、叢集連不上、ConfigMap 不存在、無權限）、上述任一種拒絕、`--json` 沒配 `--diff`（拒絕套用）、argparse 拒絕的參數、未預期的例外 |
 
 ---
 

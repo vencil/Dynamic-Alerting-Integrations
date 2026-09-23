@@ -36,10 +36,10 @@ cleanup() {
   ${PATCH_CMD} "${TENANT}" mysql_connections_critical default 2>/dev/null || true
   cleanup_port_forwards
 }
-trap cleanup EXIT
 
 # 保存原始值
 ORIG_CONNECTIONS=$(get_cm_value "${TENANT}" "mysql_connections")
+trap cleanup EXIT
 log "Original mysql_connections for ${TENANT}: ${ORIG_CONNECTIONS}"
 
 # ============================================================

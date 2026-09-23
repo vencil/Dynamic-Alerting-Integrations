@@ -63,10 +63,9 @@ SCOPE — WHAT THIS GATE ASSERTS
   Recipes whose mode identity is observable in the payload (a discriminator
   field, a must-not-be-empty field, a precedence between two flags) now carry a
   ``doc_check`` that asserts it.
-* **One recipe asserts an exit code instead of a document**: ``patch_config[apply]``
-  (``--json`` without ``--diff``). That combination is contradictory on a
-  mutating tool, so the contract there is "reject it" (exit 2, empty stdout),
-  not "emit a document" — the full rationale is inline at the recipe.
+* **``expect_caller_error`` recipes assert the exit code as well as the
+  document**: the tool must reject the invocation with exit 2 *and* still put
+  one JSON document on stdout (``patch_config``'s early exits).
 
 HOW THE MODES ARE DRIVEN (every dependency is mocked, none is contacted)
 -----------------------------------------------------------------------
@@ -103,7 +102,8 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    is no terminal path to speak of.  That boundary is already gated by
    ``test_tool_exit_codes.py::test_invalid_args_exits_caller_error``.  The
    contract here covers paths the tool itself reaches after accepting its args.
-2. **Nine recipes are skipped on a Windows host** — and only there.  Windows
+   Exception: ``patch_config[bad-arguments]``, a tool that answers them too.
+2. Windows
    ``CreateProcess`` resolves a bare ``kubectl`` to ``kubectl.exe`` and ignores
    ``PATHEXT``, so the fake-kubectl shim is bypassed and the REAL kubectl would
    run.  Rather than let those recipes report a bogus "cluster unreachable"
@@ -127,7 +127,7 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    `threshold_recommend --markdown` itself) lets `--json` win, so this is an
    outlier, not a convention.  It is deliberately **not** gated yet: two output
    formats on one stdout is a genuine contradiction and the resolution
-   (fail-loud `EXIT_CALLER_ERROR` like `patch_config[apply]`, or an argparse
+   (fail-loud `EXIT_CALLER_ERROR` plus an envelope like `patch_config[apply]`, or an argparse
    mutually-exclusive group) is a caller-facing behaviour decision for the
    owner, not something this gate should decide by fiat.  Once decided, add the
    recipe with `expect_caller_error=True`.
@@ -394,9 +394,18 @@ def stub_url():
 #      reach, so no ConfigMap can be written by a test run.
 # ═══════════════════════════════════════════════════════════════════════════
 _FAKE_KUBECTL_PY = r'''
-import json, sys
+import json, os, sys
 
 argv = sys.argv[1:]
+
+# A recipe may replace the threshold-config JSON (FAKE_KUBECTL_CM), or make
+# that read fail (FAKE_KUBECTL_CM == "fail").
+if "get" in argv and "threshold-config" in argv and os.environ.get("FAKE_KUBECTL_CM"):
+    if os.environ["FAKE_KUBECTL_CM"] == "fail":
+        print("fake kubectl: connection refused", file=sys.stderr)
+        sys.exit(1)
+    print(os.environ["FAKE_KUBECTL_CM"])
+    sys.exit(0)
 
 # `kubectl get configmap threshold-config -n monitoring -o json` — patch_config,
 # batch_diagnose tenant auto-discovery.
@@ -580,9 +589,8 @@ class Recipe:
     build: Callable[[Path, str], list[str]]   # (tmp_path, stub_url) -> argv tail
     sandbox: bool = False                     # run from the sandbox_repo copy
     needs_kubectl: bool = False               # relies on the fake-kubectl shim
-    # A flag combination the tool must REJECT rather than serve. The contract
-    # for such a recipe is the exit code, not a JSON document on stdout — see
-    # `patch_config[apply]` for the only case, and the exemption note there.
+    # An invocation the tool must REJECT: exit EXIT_CALLER_ERROR, and still
+    # exactly one JSON document on stdout.
     expect_caller_error: bool = False
     # OPTIONAL payload assertion, run after the document parses. Returns a
     # reason string when the document is wrong, or None when it is fine.
@@ -597,10 +605,27 @@ class Recipe:
     # field) — especially where two modes are COMBINED and one could swallow
     # the other. Keep it about mode identity, not report content (see SCOPE §3).
     doc_check: Callable[[object], str | None] | None = None
+    # OPTIONAL value of FAKE_KUBECTL_CM for this recipe (see _FAKE_KUBECTL_PY).
+    fake_cm: str | None = None
 
     @property
     def id(self) -> str:
         return f"{self.tool}[{self.mode}]"
+
+
+_PC_DIFF = ["tenant-x", "cpu", "1", "--diff", "--json"]
+
+
+def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
+    """An early-exit envelope: `status: caller_error` and the given `reason`."""
+    def check(doc: object) -> str | None:
+        if not isinstance(doc, dict):
+            return f"expected a JSON object, got {type(doc).__name__}"
+        got = (doc.get("status"), doc.get("reason"))
+        if got != ("caller_error", reason):
+            return f"(status, reason) must be ('caller_error', {reason!r}), got {got}"
+        return None
+    return check
 
 
 def _checklist_doc(doc: object) -> str | None:
@@ -940,24 +965,31 @@ RECIPES: list[Recipe] = [
     # ── patch_config  (⚠ known multi-mode trap: apply vs --diff) ───────────
     R("patch_config", "diff",
       lambda t, s: ["db-a", "max_connections", "150", "--diff", "--json"], needs_kubectl=True),
-    # THE ONE EXIT-CODE RECIPE, not a JSON-document one (#1112 fiat).
-    #
-    # `--json` without `--diff` is a CONTRADICTORY flag combination on a
-    # *mutating* tool: `--json` asks for the diff-preview document (the help
-    # text has always said "requires --diff"), while the absence of `--diff`
-    # means "apply for real". The tool used to resolve that contradiction by
-    # silently dropping `--json` and APPLYING the change — a caller that asked
-    # for a preview got a live ConfigMap write instead.
-    #
-    # The contract cannot be "emit one JSON document" here, because there is no
-    # honest document to emit: serving the request at all is the bug. So the
-    # fix is fail-loud — error on stderr, EXIT_CALLER_ERROR, nothing applied —
-    # and the assertion is therefore `exit == 2`, not `json.loads(stdout)`.
-    # (Contradictory flags = caller error, same as an argparse rejection, which
-    # `test_tool_exit_codes.py::test_invalid_args_exits_caller_error` gates.)
-    R("patch_config", "apply",
-      lambda t, s: ["db-a", "max_connections", "150", "--json"],
-      needs_kubectl=True, expect_caller_error=True),
+    R("patch_config", "json-help", lambda t, s: ["--json", "-h"],
+      doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "help"
+      else f"status must be 'help', got {d!r:.100}"),
+    # Caller-error early exits: exit 2 and still one document.
+    *[R("patch_config", mode, (lambda a: lambda t, s: a)(argv),
+        needs_kubectl=True, expect_caller_error=True,
+        doc_check=_caller_error_doc(reason), fake_cm=cm)
+      for mode, argv, reason, cm in [
+        # `--json` without `--diff` would APPLY; refused, nothing applied.
+        ("apply", ["tenant-x", "cpu", "1", "--json"], "json_requires_diff", None),
+        ("bad-arguments", ["tenant-x", "--diff", "--json"], "bad_arguments", None),
+        ("json-equals", ["tenant-x", "cpu", "1", "--diff", "--json=x"],
+         "bad_arguments", None),
+        ("diff-configmap-shape", _PC_DIFF, "configmap_shape",
+         json.dumps({"data": {"_defaults.yaml": "defaults: {}",
+                              "a.yaml": "tenants:\n  tenant-x: {}\n",
+                              "b.yaml": "tenants:\n  tenant-x: {}\n"}})),
+        ("diff-data-not-mapping", _PC_DIFF, "configmap_shape",
+         json.dumps({"data": ["_defaults.yaml"]})),
+        ("diff-too-deep", _PC_DIFF, "configmap_shape",
+         json.dumps({"data": {"_defaults.yaml": "[" * 5000 + "]" * 5000}})),
+        ("diff-kubectl-failed", _PC_DIFF, "kubectl_failed", "fail"),
+        ("diff-unexpected-error", _PC_DIFF, "unexpected_error",
+         json.dumps({"data": {"_defaults.yaml": 5}})),
+      ]],
 
     # ── policy_engine ──────────────────────────────────────────────────────
     R("policy_engine", "no-policies",
@@ -1129,6 +1161,9 @@ def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
     env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
     env.pop("PROMETHEUS_URL", None)      # never let a stray env var redirect us
     env.pop("ALERTMANAGER_URL", None)
+    env.pop("FAKE_KUBECTL_CM", None)
+    if recipe.fake_cm is not None:
+        env["FAKE_KUBECTL_CM"] = recipe.fake_cm
     return subprocess.run(
         [sys.executable, str(script), *recipe.build(tmp_path, stub)],
         capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env,
@@ -1172,16 +1207,10 @@ def test_json_mode_emits_exactly_one_json_document(
         )
 
     if recipe.expect_caller_error:
-        # A rejected flag combination: the contract is the exit code (nothing was
-        # served, nothing was applied), and stdout carries no document at all.
         assert proc.returncode == EXIT_CALLER_ERROR, fail(
-            f"contradictory flags must be rejected with "
+            f"a rejected invocation must exit "
             f"EXIT_CALLER_ERROR ({EXIT_CALLER_ERROR}), got {proc.returncode}"
         )
-        assert not stdout.strip(), fail(
-            "a rejected invocation must not write anything to stdout"
-        )
-        return
 
     assert stdout.strip(), fail("stdout is EMPTY — no JSON document at all")
 

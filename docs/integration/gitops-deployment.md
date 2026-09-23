@@ -280,7 +280,7 @@ spec:
 python3 scripts/tools/ops/patch_config.py <tenant> <key> <value>
 ```
 
-ConfigMap 立即更新，threshold-exporter 在下一個 reload 週期（30-60s）自動套用。
+ConfigMap 立即更新，threshold-exporter 在下一個 reload 週期自動套用。它改的是 `tenants:` 宣告了該租戶的那個 key；無法判定時拒絕（見 [`cli-reference.md` patch-config](../cli-reference.md#patch-config)）。
 
 **③ 飄移收斂 (Drift Reconciliation)** — 破窗修改後，SRE **必須**事後補 PR 同步回 Git。否則下一次 GitOps sync 會將 K8s 配置覆蓋回 Git 版本——這正是 GitOps 的自癒特性，天然防止「急救後忘記改程式碼」造成永久技術債。
 

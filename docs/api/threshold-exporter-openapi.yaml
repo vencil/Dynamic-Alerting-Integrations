@@ -150,7 +150,6 @@ paths:
         **Use Cases:**
         - Verify tenant configuration is loaded correctly
         - Debug scheduled threshold override state at specific timestamp
-        - Inspect tenant metadata and routing configuration
       operationId: getConfigDebug
       tags:
         - Debug
@@ -164,7 +163,7 @@ paths:
           schema:
             type: string
             format: date-time
-          example: "2026-03-12T14:30:00Z"
+          example: "2026-03-12T03:30:00Z"
       responses:
         '200':
           description: Configuration state dump
@@ -173,41 +172,23 @@ paths:
               schema:
                 type: string
               example: |
-                === Threshold Exporter Configuration ===
-                
-                Loaded At: 2026-03-12T10:00:00Z
-                Config File: /etc/config/thresholds.yaml
-                Hash: 82a4d... (SHA-256)
-                
-                === Tenants (2) ===
-                
-                [db-a]
-                  Severity Dedup: enabled
-                  Silent Mode: false (expires: never)
-                  State Filter: [compute/HighCPU]
-                  Thresholds:
-                    compute/HighCPU: 80.0
-                    compute/HighCPU[instance=prod-01]: 85.0
-                    memory/HighMemory: 75.0
-                  Metadata:
-                    team: platform
-                    env: prod
-                    sla_tier: gold
-                  Scheduled Overrides:
-                    ├─ compute/HighCPU: 75.0 @ 09:00-17:00 (weekdays)
-                    └─ memory/HighMemory: 70.0 @ maintenance window (Mon 02:00-04:00)
-                
-                [db-b]
-                  Severity Dedup: disabled
-                  Silent Mode: true (expires: 2026-03-12T15:30:00Z)
-                  State Filter: []
-                  Thresholds:
-                    memory/HighMemory: 65.0
-                  Metadata:
-                    team: data
-                    env: staging
-                    sla_tier: silver
-                  Scheduled Overrides: (none)
+                Config loaded: true
+                Last reload:   2026-03-12T10:05:30Z
+                Config mode:   directory
+                Resolve at:    2026-03-12T03:30:00Z (overridden)
+
+                Defaults (2 metrics):
+                  container_cpu: 80
+                  mysql_connections: 80
+
+                Tenants (1):
+                  tenant-a:
+                    container_cpu: 85 (+ 1 time overrides)
+                    mysql_connections: 70
+
+                Resolved thresholds:
+                  tenant=tenant-a metric=cpu value=95 severity=warning component=container
+                  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
       x-code-samples:
         - lang: bash
           label: Current configuration
@@ -216,7 +197,7 @@ paths:
         - lang: bash
           label: Configuration at specific time
           source: |
-            curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
+            curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
 
 components:
   schemas:
