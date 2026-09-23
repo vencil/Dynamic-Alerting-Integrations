@@ -222,7 +222,8 @@ repo 與 issues 皆 **PUBLIC**、公開寫入**不可逆**（索引/fork/存檔�
 
 **新增 / 修改 Rule Pack：**
 ```
-1. make platform-data  # 重新產生 platform-data.json
+1. make platform-data  # 產生 platform-data.json ＋ portal 離線 fallback 兩個檔
+   ⛔ 沒有「同步 fallback」這一步；rule-packs-fallback.json 是生成物，不要手改
 2. 新增 *_zh 雙語 annotation
 3. python scripts/tools/lint/check_bilingual_annotations.py --check
 ```

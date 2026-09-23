@@ -530,11 +530,16 @@ repos:
         files: ^docs/includes/
 
       - id: platform-data-check
-        name: Platform data drift (platform-data.json vs YAML source)
+        name: Platform data drift (platform-data.json + portal offline fallback)
         entry: python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
         language: python
         pass_filenames: false
-        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py)
+        # ⛔ The last entry is the portal's OFFLINE fallback, which this tool now
+        # generates too (#1226). Without it, hand-editing the fallback alone
+        # touches no file this hook watches, and the edit lands unseen — which is
+        # the whole failure class here: the Vitest drift gate that compares the
+        # two is path-gated on tools/portal/**, so it did not run for #1215.
+        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check
