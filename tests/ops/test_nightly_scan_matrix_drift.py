@@ -3479,6 +3479,53 @@ def test_expansion_detector_is_not_vacuous() -> None:
         )
 
 
+def _report_sh_positional_arity() -> tuple[int, int]:
+    """(required, maximum) positional args, DERIVED from the script's own reads.
+
+    Only the top-level `VAR="${N:?…}"` / `VAR="${N:-…}"` assignments count: the
+    `$*` / `$@` inside `gh_do` are that function's own arguments, and the `$1` /
+    `$2` in the awk program are awk fields.
+    """
+    reads = re.findall(r'^\w+="\$\{(\d+):([?-])', _report_sh(), re.M)
+    positions = sorted(int(n) for n, _ in reads)
+    assert positions and positions == list(range(1, len(positions) + 1)), (
+        f"file_cve_report.sh positional reads are not a contiguous 1..N run: "
+        f"{positions} — the arity below cannot be derived from them"
+    )
+    return sum(1 for _, op in reads if op == "?"), len(positions)
+
+
+def test_report_call_sites_pass_exactly_the_args_the_script_reads() -> None:
+    """Each call must reach the script as no more words than it reads (#1932).
+
+    Inside the double-quoted remediation a bare `"` does not print — it closes
+    the quoting, and the next unquoted space starts a new word. The script reads
+    `$1`..`$6` and never looks further, so everything after that split is dropped
+    with no error, `set -e` and `|| rc=1` stay silent, and the issue body ships
+    the prose cut off mid-sentence. The existing checks only had a floor
+    (`>= 6`), which an argument split into twelve words satisfies.
+
+    Counted on `_report_calls()`: shlex splits words the way bash does for
+    quoting, and the expansions that could make bash split differently are
+    already forbidden by `test_report_args_contain_no_shell_expansion`.
+    """
+    required, maximum = _report_sh_positional_arity()
+    calls = _report_calls()
+    assert calls, "no call sites parsed — this check would pass vacuously"
+    bad = [
+        (len(args), args[1] if len(args) > 1 else "?")
+        for args in calls
+        if not required <= len(args) <= maximum
+    ]
+    assert not bad, (
+        f"file_cve_report.sh reads {required}..{maximum} positional args, but "
+        f"these call sites pass a different count (argc, label): {bad}\n"
+        "An argument split into extra words is cut off at the last one the script "
+        "reads — silently. Usually a literal \" inside a double-quoted argument: "
+        'escape it as \\" (the rendered text stays byte-identical).'
+    )
+
+
 def test_remediation_text_names_only_real_components() -> None:
     """Remediation prose must not name a component the scan matrix no longer has.
 
