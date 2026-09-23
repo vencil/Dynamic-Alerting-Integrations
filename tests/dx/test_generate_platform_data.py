@@ -313,7 +313,14 @@ class TestThePortalOfflineFallbackIsGenerated:
                  if h.get("id") == "platform-data-check"]
         assert len(hooks) == 1, "platform-data-check is not declared exactly once"
         pattern = re.compile(hooks[0]["files"])
-        for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL):
+        # ⛔ The GENERATOR is in the list too (#1948 review). A commit that
+        # changes only `generate_platform_data.py` — a new carried field, a
+        # different projection — stages no other watched path, so the local
+        # pre-commit run skipped the very check that would have caught the
+        # output going stale. CI's `--all-files` run covers it; this is the
+        # local red, at commit time.
+        for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL,
+                    "scripts/tools/dx/generate_platform_data.py"):
             assert pattern.match(rel), (
                 f"the platform-data-check hook does not watch {rel}, so editing "
                 f"it alone stages no file the hook reacts to and the local "

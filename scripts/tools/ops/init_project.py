@@ -1196,9 +1196,16 @@ def _build_github_apply_stage(
           # than once at workflow level. Cancelling a read-only validate or a
           # superseded diff costs nothing; cancelling this one interrupts
           # `kubectl apply` / `helm upgrade` partway and leaves the cluster in a
-          # state no commit describes. The group still SERIALISES two manual
-          # dispatches so they cannot interleave against the same namespace.
-          group: dynamic-alerting-apply-${{{{ github.ref }}}}
+          # state no commit describes.
+          # ⛔ The group is keyed on the TARGET NAMESPACE, not on the ref. This
+          # job is workflow_dispatch-only and a dispatch can start from any
+          # branch, while every one of them deploys to the same namespace — so a
+          # ref-keyed group puts two dispatches in DIFFERENT groups and lets
+          # them run `kubectl apply` / `helm upgrade` at the same time, which is
+          # the exact interleaving this block exists to prevent. A job-level
+          # `concurrency` cannot read `env:`, so the namespace is baked in here
+          # at generation time.
+          group: dynamic-alerting-apply-{namespace}
           cancel-in-progress: false
         steps:
           - uses: actions/checkout@v6
@@ -1240,9 +1247,16 @@ def _build_github_apply_stage(
           # than once at workflow level. Cancelling a read-only validate or a
           # superseded diff costs nothing; cancelling this one interrupts
           # `kubectl apply` / `helm upgrade` partway and leaves the cluster in a
-          # state no commit describes. The group still SERIALISES two manual
-          # dispatches so they cannot interleave against the same namespace.
-          group: dynamic-alerting-apply-${{{{ github.ref }}}}
+          # state no commit describes.
+          # ⛔ The group is keyed on the TARGET NAMESPACE, not on the ref. This
+          # job is workflow_dispatch-only and a dispatch can start from any
+          # branch, while every one of them deploys to the same namespace — so a
+          # ref-keyed group puts two dispatches in DIFFERENT groups and lets
+          # them run `kubectl apply` / `helm upgrade` at the same time, which is
+          # the exact interleaving this block exists to prevent. A job-level
+          # `concurrency` cannot read `env:`, so the namespace is baked in here
+          # at generation time.
+          group: dynamic-alerting-apply-{namespace}
           cancel-in-progress: false
         steps:
           - uses: actions/checkout@v6
@@ -1478,7 +1492,10 @@ def _gen_github_actions(
         # needs `validate`, and that is the edge that protects the cluster.
         runs-on: ubuntu-latest
         if: github.event_name == 'pull_request'
-        timeout-minutes: 15
+        # 20, not 15: the three computation steps below cap at 5 each, and the
+        # job cap has to sit ABOVE their sum or it fires first and cancels the
+        # run — see the note on the `routes` step.
+        timeout-minutes: 20
         concurrency:
           # ⛔ Load-bearing for the COMMENT, not just for runner minutes. The
           # sticky comment is edited in place under a fixed header, so two runs
@@ -1515,6 +1532,15 @@ def _gen_github_actions(
 
           - name: Generate Alertmanager routes
             id: routes
+            # ⛔ Step caps, and the arithmetic is the point: 3 x 5 = 15 plus
+            # checkout and the comment stays under this job's 20, so a hung
+            # computation FAILS AS A STEP and the fallback below still runs. If
+            # the JOB cap fired first the run would be CANCELLED, and both the
+            # fallback and the comment step carry `!cancelled()` — correct for a
+            # superseded run, but it would leave the previous report standing
+            # with nothing to say the new run died. Held by
+            # `test_step_timeouts_leave_room_under_the_job_timeout`.
+            timeout-minutes: 5
             run: |
               # Read-only, deliberately: this step VALIDATES the routes it
               # would generate; nothing downstream consumes a written file.
@@ -1535,6 +1561,7 @@ def _gen_github_actions(
 
           - name: Resolve base config snapshot
             id: snapshot
+            timeout-minutes: 5
             if: github.event_name == 'pull_request'
             env:
               # Passed through env rather than interpolated into the script, so
@@ -1614,6 +1641,7 @@ def _gen_github_actions(
 
           - name: Config diff (blast radius)
             id: diff
+            timeout-minutes: 5
             run: |
               # config-diff signals findings through its exit code, so a bare
               # call cannot work: "changed" is exit 1, and this job runs on

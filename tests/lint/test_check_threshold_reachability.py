@@ -2915,8 +2915,13 @@ def test_every_stats_field_is_recomputed_from_the_faces():
     # arithmetic is the cross-check on that.
     census = gate._defaults_writer_census()
     assert stats["defaults_writer_census"] == len(census)
-    assert stats["defaults_writer_faces"] == len(gate._DEFAULTS_FACE_MODULES)
-    assert stats["defaults_writer_exempt"] == len(gate._DEFAULTS_WRITER_EXEMPT)
+    # ⛔ The INTERSECTIONS, not `len()` of the constants: the printed figures
+    # must move when a face stops matching or an exemption goes stale, which is
+    # the whole reason they are called re-derived (#1948 review).
+    assert stats["defaults_writer_faces"] == len(
+        set(census) & gate._DEFAULTS_FACE_MODULES)
+    assert stats["defaults_writer_exempt"] == len(
+        set(census) & set(gate._DEFAULTS_WRITER_EXEMPT))
     assert (stats["defaults_writer_faces"] + stats["defaults_writer_exempt"]
             == stats["defaults_writer_census"]), (
         "the census population is not exhausted by faces + exemptions, so "
@@ -6038,6 +6043,62 @@ def test_a_new_defaults_writer_is_reported_not_counted(tmp_path, monkeypatch):
     # other direction of the same rule: every one of them must be reported.
     assert len([e for e in errors if "STALE-EXEMPTION" in e]) == len(
         gate._DEFAULTS_WRITER_EXEMPT)
+
+
+def test_a_face_that_leaves_the_census_is_reported_by_the_gate(tmp_path, monkeypatch):
+    """⛔ The predicates' own must-fire control, inside the gate.
+
+    `test_the_defaults_writer_census_finds_the_known_producers` above already
+    fails when a face stops matching — but the hook that runs this module
+    invokes `--ci`, not pytest, so on the path that actually gates a commit the
+    regression was silent. Planting a tree where the faces do not exist is the
+    same rig as the uncovered-writer cell: a census whose predicates went blind
+    looks exactly like this.
+    """
+    root = tmp_path / "scripts"
+    (root / "tools" / "dx").mkdir(parents=True)
+    (root / "tools" / "dx" / "unrelated.py").write_text(
+        "X = {'defaults': {}}\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    errors: list[str] = []
+    stats: dict = {}
+    gate._report_defaults_writer_census(errors, stats)
+
+    blind = [e for e in errors if "CENSUS-BLIND" in e]
+    assert len(blind) == len(gate._DEFAULTS_FACE_MODULES), errors
+    assert all("repair the predicates" in e for e in blind)
+    # …and the printed figure moved WITH the population, which is the claim
+    # `main()` makes about these three numbers.
+    assert stats["defaults_writer_faces"] == 0
+    assert stats["defaults_writer_census"] == 1
+
+
+def test_an_undecodable_module_is_reported_not_a_crash(tmp_path, monkeypatch):
+    """A file that cannot be decoded must land as PARSE-FAIL, not as a traceback.
+
+    ⛔ Measured before the fix: `read_text(encoding="utf-8")` raised
+    `UnicodeDecodeError` straight out of `run_check`, so `main()` printed
+    "reachability check crashed" — the census reported NOTHING, and the message
+    did not even name the file. The sibling artifact reader in this module
+    carries the same fix for the same reason.
+    """
+    root = tmp_path / "scripts"
+    root.mkdir()
+    (root / "latin1.py").write_bytes(b"# caf\xe9 = 1\nX = 1\n")
+    (root / "nullbyte.py").write_bytes(b"X = 1\x00\n")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    census = gate._defaults_writer_census()
+    assert census.get("scripts/latin1.py") == {"PARSE-FAIL"}, census
+    assert census.get("scripts/nullbyte.py") == {"PARSE-FAIL"}, census
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    named = [e for e in errors if "latin1.py" in e or "nullbyte.py" in e]
+    assert len(named) == 2 and all("PARSE-FAIL" in e for e in named), errors
 
 
 def test_an_empty_census_fails_closed(tmp_path, monkeypatch):

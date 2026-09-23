@@ -8415,17 +8415,31 @@ def _assert_jobs_are_bounded_and_serialised(workflow: dict, label: str) -> None:
             f"finishes LAST rather than whichever commit is newer (#1421 face 2)."
         )
         group = str(conc["group"])
-        assert "${{" in group, (
-            f"{label}: job `{job_name}`'s concurrency group {group!r} is a "
-            f"constant, so every pull request in the repository serialises "
-            f"against every other one. Key it on the pull request or the ref."
-        )
         # ⛔ Derived from `environment:`, not from the job's NAME. The job that
         # talks to a cluster is the one carrying a deployment environment, and a
         # future fourth job would be caught by the same rule.
         reaches_cluster = "environment" in job
         cancels = conc.get("cancel-in-progress")
         if reaches_cluster:
+            # ⛔ The OPPOSITE requirement from the jobs below, and CodeRabbit
+            # found the earlier version keyed on `github.ref` (#1948 review):
+            # this job is workflow_dispatch-only, a dispatch can start from ANY
+            # branch, and each one deploys to the same namespace — so keying the
+            # group on the ref puts two dispatches in different groups and lets
+            # them apply concurrently, which is precisely what the group is here
+            # to stop. A constant is correct here; what must never appear is a
+            # per-ref or per-PR key.
+            varies_by = [tok for tok in ("github.ref", "pull_request",
+                                         "github.sha", "github.head_ref")
+                         if tok in group]
+            assert not varies_by, (
+                f"{label}: job `{job_name}` carries `environment: "
+                f"{job['environment']}` and a concurrency group that varies by "
+                f"{varies_by} ({group!r}). Two dispatches from different refs "
+                f"then land in different groups and reach the same cluster at "
+                f"the same time. Key it on what they SHARE — the target "
+                f"namespace."
+            )
             assert cancels is False, (
                 f"{label}: job `{job_name}` carries `environment: "
                 f"{job['environment']}` and `cancel-in-progress: {cancels!r}`. "
@@ -8434,6 +8448,13 @@ def _assert_jobs_are_bounded_and_serialised(workflow: dict, label: str) -> None:
                 f"describes. Serialise it, never cancel it."
             )
         else:
+            assert "${{" in group, (
+                f"{label}: job `{job_name}`'s concurrency group {group!r} is a "
+                f"constant, so every pull request in the repository serialises "
+                f"against every other one. Key it on the pull request or the "
+                f"ref. (The cluster-reaching job above is the exception, and "
+                f"for the opposite reason.)"
+            )
             assert cancels is True, (
                 f"{label}: job `{job_name}` has `cancel-in-progress: "
                 f"{cancels!r}`. Without cancellation the group only QUEUES the "
@@ -8441,6 +8462,67 @@ def _assert_jobs_are_bounded_and_serialised(workflow: dict, label: str) -> None:
                 f"newer run's sticky comment — the race this block exists to "
                 f"remove."
             )
+
+
+def _assert_step_caps_fit_under_the_job_cap(workflow: dict, label: str) -> None:
+    """A hung step must fail AS A STEP, not by the job being cancelled.
+
+    ⛔ The arithmetic is the contract (#1948 review). A job that hits its own
+    `timeout-minutes` is CANCELLED, and every step carrying `!cancelled()` —
+    which on the comment-posting job is the fallback report and the sticky
+    comment itself — is then skipped. The previous run's report stays on the
+    pull request with nothing to say the new run died: #1421's defect, reached
+    through the timeout instead of through a failing step. So the step caps on
+    the computation steps must SUM to less than the job cap, leaving the job cap
+    as the outer bound it is meant to be rather than the one that fires.
+    """
+    for job_name, job in workflow["jobs"].items():
+        steps = job.get("steps") or []
+        capped = [s for s in steps if isinstance(s.get("timeout-minutes"), int)]
+        if not capped:
+            continue
+        total = sum(int(s["timeout-minutes"]) for s in capped)
+        job_cap = job.get("timeout-minutes")
+        assert isinstance(job_cap, int) and total < job_cap, (
+            f"{label}: job `{job_name}` caps its steps at {total} minutes in "
+            f"total while the job itself is capped at {job_cap!r}. The job cap "
+            f"would fire first and CANCEL the run, which skips every "
+            f"`!cancelled()` step — including the one that replaces a stale "
+            f"blast-radius comment."
+        )
+    # ⛔ Fail-closed: the job whose comment must stay current is the one that
+    # needs the caps, so an artifact with none of them is not "nothing to
+    # check", it is the check having nothing to grade.
+    commenting_job, _ = _comment_step(workflow)
+    capped_names = [
+        s.get("name") for s in workflow["jobs"][commenting_job].get("steps") or []
+        if isinstance(s.get("timeout-minutes"), int)
+    ]
+    assert len(capped_names) >= 3, (
+        f"{label}: the job that posts the blast-radius comment "
+        f"(`{commenting_job}`) caps only {capped_names} — the computation steps "
+        f"must each carry a step timeout, or a hung one takes the job cap and "
+        f"cancels the comment refresh with it."
+    )
+
+
+@pytest.mark.parametrize("ci,deploy", GH_COMBOS)
+def test_step_timeouts_leave_room_under_the_job_timeout(
+    generated, ci, deploy,
+) -> None:
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8")
+    )
+    _assert_step_caps_fit_under_the_job_cap(
+        workflow, f"CLI artifact (--ci {ci} --deploy {deploy})",
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_the_wizard_preview_step_timeouts_leave_room(tmp_path, deploy) -> None:
+    workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
+    _assert_step_caps_fit_under_the_job_cap(workflow, f"wizard preview ({deploy})")
 
 
 @pytest.mark.parametrize("ci,deploy", GH_COMBOS)

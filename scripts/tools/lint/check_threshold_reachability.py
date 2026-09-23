@@ -3216,7 +3216,18 @@ def _defaults_writer_census() -> dict[str, set[str]]:
     for path in sorted(_DEFAULTS_CENSUS_ROOT.rglob("*.py")):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError:
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            # ⛔ Three, not one (#1948 review). `SyntaxError` alone leaves two
+            # ways for an unreadable file to CRASH this gate instead of being
+            # reported: `read_text` raises `UnicodeDecodeError` on a file under
+            # `scripts/` that is not valid UTF-8, and `ast.parse` raises
+            # `ValueError` for an embedded null byte. Both escape `run_check`,
+            # so `main()` prints "reachability check crashed" and the census
+            # reports nothing at all — and the decode error does not even name
+            # the file. `_assert_defaults_artifacts_match_schema` above learned
+            # the same lesson from a blind review ("a repo whose comments are
+            # largely CJK will meet that one"); this is that fix, one reader
+            # over.
             mark(path, "PARSE-FAIL")
             continue
         for node in ast.walk(tree):
@@ -3289,10 +3300,30 @@ def _report_defaults_writer_census(errors: list[str],
                 "described has moved or gone. Remove the entry so the census "
                 "stops carrying a claim about nothing. (#1412)"
             )
+    # ⛔ The must-fire control for the census's own predicates (#1948 review).
+    # A face module that stops matching means the shapes no longer find a KNOWN
+    # producer — so a new one would be missed too — and the only thing that saw
+    # that was a pytest, while the hook that runs this gate invokes `--ci` and
+    # not pytest. Same shape as CENSUS-EMPTY, one level finer.
+    for module in sorted(_DEFAULTS_FACE_MODULES - set(census)):
+        errors.append(
+            f"CENSUS-BLIND: {module} is read as a generator face of this gate, "
+            "but the `defaults:` writer census does not see it. Its predicates "
+            "no longer match a producer they are known to match, so a NEW "
+            "producer would be invisible as well — repair the predicates, do "
+            "not drop the face. (#1412)"
+        )
     if stats is not None:
+        # ⛔ Counted from the CENSUS, not from `len()` of the two constants.
+        # `main()` prints these three under a note saying they are re-derived
+        # rather than restated, and for two of them that was false: a stale
+        # exemption or a blinded face left the printed figure unchanged while
+        # the population underneath it had moved (#1948 review).
         stats["defaults_writer_census"] = len(census)
-        stats["defaults_writer_faces"] = len(_DEFAULTS_FACE_MODULES)
-        stats["defaults_writer_exempt"] = len(_DEFAULTS_WRITER_EXEMPT)
+        stats["defaults_writer_faces"] = len(
+            set(census) & _DEFAULTS_FACE_MODULES)
+        stats["defaults_writer_exempt"] = len(
+            set(census) & set(_DEFAULTS_WRITER_EXEMPT))
 
 
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:

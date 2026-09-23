@@ -538,7 +538,7 @@ repos:
         # touches no file this hook watches, and the edit lands unseen — which is
         # the whole failure class here: the Vitest drift gate that compares the
         # two is path-gated on tools/portal/**, so it did not run for #1215.
-        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
+        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check

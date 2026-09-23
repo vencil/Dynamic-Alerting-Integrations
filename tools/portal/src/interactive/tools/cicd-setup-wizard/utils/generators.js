@@ -380,7 +380,8 @@ ${pinNote}jobs:
     # that protects the cluster.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Above the sum of the step caps below, or it fires first and cancels.
+    timeout-minutes: 20
     concurrency:
       # The sticky comment is edited in place under a fixed header, so two runs
       # race to overwrite the same body and the LAST to finish wins - not the
@@ -404,6 +405,10 @@ ${pinNote}jobs:
         run: mkdir -p .output
       - name: Generate Alertmanager routes
         id: routes
+        # 3 x 5 stays under this job's 20, so a hung step FAILS instead of
+        # the job being cancelled - a cancelled run skips the !cancelled()
+        # fallback below and leaves the previous report standing.
+        timeout-minutes: 5
         run: |
           # Validate only (#1423 / #1650): --validate returns before -o is
           # used, and the tool now refuses the two together.
@@ -413,6 +418,7 @@ ${pinNote}jobs:
             generate-routes --config-dir /data/conf.d --validate
       - name: Resolve base config snapshot
         id: snapshot
+        timeout-minutes: 5
         if: github.event_name == 'pull_request'
         env:
           # Through env, not interpolated into the script, so the expression
@@ -442,6 +448,7 @@ ${pinNote}jobs:
           fi
       - name: Config diff (blast radius)
         id: diff
+        timeout-minutes: 5
         run: |
           # config-diff signals findings through its exit code, so both 0 (no
           # change) and 1 (changes) are ordinary outcomes here; 2 and above
@@ -514,7 +521,11 @@ ${pinNote}jobs:
       # cancel-in-progress: FALSE - cancelling this interrupts kubectl apply or
       # helm upgrade partway and leaves the cluster in a state no commit
       # describes. The group still serialises two manual dispatches.
-      group: dynamic-alerting-apply-\${{ github.ref }}
+      # Keyed on the target namespace, NOT on the ref: this job is
+      # workflow_dispatch-only, a dispatch can start from any branch, and every
+      # one of them deploys to the same namespace - a ref-keyed group would put
+      # two dispatches in different groups and let them apply at the same time.
+      group: dynamic-alerting-apply-monitoring
       cancel-in-progress: false
     steps:${config.deploy === 'kustomize' ? `
       - uses: actions/checkout@v6
