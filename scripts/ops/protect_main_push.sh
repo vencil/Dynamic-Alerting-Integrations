@@ -10,7 +10,7 @@
 #
 # ⛔ 舊檔頭教過兩條，兩條現在都是錯的：
 #   1. `pre-commit install --hook-type pre-push` —— pre-commit 只會餵 hook **一個**
-#      refspec，於是「同時推 feat/x 和 main」讓 main 對本守衛隱形（#1689 實測：
+#      refspec，於是「同時推 feat/x 和 main」可能讓 main 對本守衛隱形（#1689 實測：
 #      印 Passed 且 main 真的推上去了）。而且設了 core.hooksPath 時它直接 rc=1。
 #   2. 自己 `printf … > .git/hooks/pre-push` 只掛本檔 —— 那會把
 #      require_preflight_pass 與 mkdocs strict **靜默拆掉**，而畫面上這一支還在。

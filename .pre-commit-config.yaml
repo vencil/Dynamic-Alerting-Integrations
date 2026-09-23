@@ -10,14 +10,13 @@
 # which is the slot pre-commit calls with the FULL refspec.
 #
 # They had to leave: pre-commit reads git's pre-push stdin itself and hands a
-# hook exactly ONE ref (hook_impl._pre_push_ns returns on the first pushable
-# line), so a push carrying several refs showed the guards only the first one
-# in sort order. Measured with this repo's own guards on git 2.55.0 /
-# pre-commit 4.6.0: `git push origin aaa main` printed
+# hook at most ONE ref (hook_impl._pre_push_ns returns on the first pushable
+# line), so a push carrying several refs showed the guards one row — and none
+# at all when every row is a deletion (#1852). Measured with this repo's own
+# guards on git 2.55.0 / pre-commit 4.6.0: `git push origin aaa main` printed
 # "Guard: block direct push to main ... Passed" and main really moved on the
 # remote, while `git push origin main` alone was blocked. Every branch prefix
-# dev-rules #12 asks for — feat/ fix/ chore/ — sorts before `main`, so the
-# exposed case was the normal one.
+# dev-rules #12 asks for — feat/ fix/ chore/ — sorts before `main`.
 #
 # ⛔ Do not add them back here, and do not "simplify" the install line back to
 # `pre-commit install --hook-type pre-push`: that reintroduces the one-ref
@@ -69,8 +68,8 @@ repos:
       # now run by scripts/ops/prepush_dispatch.sh, installed by
       # scripts/ops/install_prepush_hook.sh. See this file's header for the
       # measurement; the short version is that a hook run by pre-commit is shown
-      # exactly one refspec, so a push carrying `feat/x` and `main` together
-      # hid `main` from the guard that exists to block it.
+      # at most one refspec, so a push carrying `feat/x` and `main` together
+      # could hide `main` from the guard that exists to block it.
       #
       # ⛔ Adding a `stages: [pre-push]` entry here does not just duplicate the
       # dispatcher — the copy that pre-commit runs is the BLIND one.

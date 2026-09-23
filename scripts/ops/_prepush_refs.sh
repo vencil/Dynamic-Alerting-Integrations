@@ -101,16 +101,20 @@
 #       so a warning would be byte-for-byte the same picture as the bug this
 #       file exists to remove.
 #
-# ⚠️ KNOWN RESIDUAL — the env channel carries ONE ref; a push can carry N.
-#   hook_impl._pre_push_ns returns on the first pushable line it finds, so
-#   under pre-commit a guard is shown one of N refs. Measured, with both
-#   branches already present on the remote:
+# ⚠️ KNOWN RESIDUAL — the env channel carries at most ONE ref; a push carries N.
+#   hook_impl._pre_push_ns returns on the first PUSHABLE row (it skips rows
+#   whose local sha is all-zero, i.e. deletions), so under pre-commit a guard
+#   is shown one of N refs. Measured, with both branches already on the remote:
 #       git push origin main aaa-first
 #         native stdin   -> 2 rows (aaa-first, main)
 #         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
 #         result         -> main was updated by that same command
-#   ⛔ Which ref survives is LEXICOGRAPHIC, not the order you typed — writing
-#   `main` first does not protect it.
+#   ⛔ AT MOST one: when every row is a deletion, _pre_push_ns returns None and
+#   pre-commit runs NO hook at all (measured; must-ring control in the same
+#   test: an ordinary push does run them).
+#   ⛔ WHICH row is git's, not yours — writing `main` first does not protect
+#   it, and the answer differs per push shape (#1852 has the measurements).
+#   Nothing in this repo may depend on it: the guards read stdin instead.
 #   A guard built on this helper does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py

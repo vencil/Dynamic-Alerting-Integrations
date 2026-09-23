@@ -115,7 +115,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 
 ⚠️ **pre-push 守衛不在那份清單裡**（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。擋直推 main／要求 preflight marker／mkdocs strict 由 [`prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；會把既有的 pre-push hook——全新 clone 上是 git-lfs 的——移到 `pre-push.chained` 並繼續執行）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 列回答。
 
-⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit 只餵 hook **一個** refspec，於是「同時推 `feat/x` 和 `main`」會讓 main 對守衛隱形。
+⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit **最多**只餵 hook 一個 refspec，於是「同時推 `feat/x` 和 `main`」可能讓 main 對守衛隱形。
 
 ## 專案概覽
 
