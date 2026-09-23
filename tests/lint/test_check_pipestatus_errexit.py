@@ -58,16 +58,28 @@ def test_errexit_and_pipefail_on_one_set_line_with_long_errexit():
     "set -o pipefail -o errexit",
     "set -u -o pipefail -e",
     "set -o pipefail\t-e",
+    "set -euo pipefail;",          # separator glued to the last flag
+    "( set -euo pipefail )",
 ])
 def test_errexit_flag_after_other_flags_is_seen(arm):
     # Miss direction: errexit need not be the first argument of `set`.
     assert _viol(f"{arm}\nx | y\nr=${{PIPESTATUS[0]}}\n")
 
 
-def test_flag_of_a_later_command_is_not_sets():
-    # `grep -e` after `;` is not an errexit flag of `set`.
-    text = "set -o pipefail; grep -e foo f\nx | y\nr=${PIPESTATUS[0]}\n"
-    assert not lint.scan_text("x.sh", text).strict
+@pytest.mark.parametrize("line", [
+    "set -o pipefail; grep -e foo f",   # a later command's -e
+    "echo set foo -e; set -o pipefail",  # `set` is only an argument
+    "set -- -e; set -o pipefail",        # -e is a positional parameter
+])
+def test_boundary_arming_is_read_wide(line):
+    # Documented over-report: arming is read wide on purpose, so a wrong
+    # "armed" is a loud red with an exemption exit, never a silent miss.
+    assert lint.scan_text("x.sh", f"{line}\nx | y\nr=${{PIPESTATUS[0]}}\n").strict
+
+
+@pytest.mark.parametrize("line", ["offset -e", "reset -e", "x.set -e", "$set -e", "set-e"])
+def test_set_must_be_a_whole_word_to_arm(line):
+    assert not lint.scan_text("x.sh", f"{line}\nset -o pipefail\n").strict
 
 
 def test_workflow_run_block_is_scanned_like_a_script():
@@ -84,6 +96,7 @@ def test_workflow_run_block_is_scanned_like_a_script():
     "set +e", "set +eu", "set +o errexit", "set +o pipefail",
     # over-rejection direction: the relaxing flag need not come first
     "set -e +o pipefail", "set -o pipefail +e", "set -u +o errexit",
+    "  set +e  # relaxed for the loop below", "set +e;",
 ])
 def test_relaxed_file_is_not_flagged(relax):
     text = f"set -euo pipefail\n{relax}\nx | y\nrc=${{PIPESTATUS[0]}}\nset -e\n"
@@ -100,6 +113,7 @@ def test_relaxation_must_not_be_matched_as_errexit_on():
     "set -e\nx | y\nrc=${PIPESTATUS[0]}\n",            # Actions default: no pipefail
     "set -o pipefail\nx | y\nrc=${PIPESTATUS[0]}\n",   # no errexit
     "set -xo pipefail\nx | y\nrc=${PIPESTATUS[0]}\n",  # -x is not -e
+    "set -e -o nounset\nx | y\nrc=${PIPESTATUS[0]}\n",  # -o other than pipefail
 ])
 def test_not_strict_file_is_not_flagged(text):
     assert _viol(text) == []
@@ -113,6 +127,28 @@ def test_comment_mentions_are_not_reads():
             "    #   GO_RC=\"${PIPESTATUS[0]}\"\n"
             "go test | tee log\n")
     assert _viol(text) == []
+
+
+@pytest.mark.parametrize("line", [
+    "set -- +e",          # `--` ends options: +e is a positional parameter
+    "set - +e",           # so does a lone `-`
+    "echo set foo +e",    # `set` is an argument, not the command
+    "true  # set +e",     # only in a trailing comment
+    "set -o pipefail; +e",  # +e belongs to no `set` after the separator
+])
+def test_not_a_relaxation_does_not_clear_the_file(line):
+    # Miss direction: each of these would silently clear every read in the
+    # file if it were read as relaxing. bash ground truth for `set -- +e`:
+    # errexit stays on (see test_ground_truth_set_dashdash_keeps_errexit).
+    text = f"set -euo pipefail\n{line}\nx | y\nr=${{PIPESTATUS[0]}}\n"
+    assert _viol(text)
+
+
+def test_boundary_relaxation_not_at_line_start_is_not_seen():
+    # Documented over-report: a real relaxation that does not start the
+    # line is missed on purpose (loud, exemptable), not guessed at.
+    text = "set -euo pipefail\nfoo; set +e\nx | y\nr=${PIPESTATUS[0]}\n"
+    assert _viol(text)
 
 
 def test_commented_relaxation_does_not_relax():
@@ -159,9 +195,19 @@ def test_misspelled_exemption_does_not_count():
 
 # --- documented boundaries --------------------------------------------------
 
-def test_boundary_trailing_comment_relaxation_hides_the_file():
-    # Known miss: only whole-line comments are masked.
-    assert _viol("set -euo pipefail\ntrue  # set +e\nx | y\nr=${PIPESTATUS[0]}\n") == []
+def test_boundary_line_start_relaxation_in_a_heredoc_clears_the_file():
+    # Known miss: the text rule cannot tell a heredoc body from code.
+    text = ("set -euo pipefail\ncat <<'EOF'\nset +e\nEOF\n"
+            "x | y\nr=${PIPESTATUS[0]}\n")
+    assert _viol(text) == []
+
+
+def test_long_line_with_many_set_words_is_linear():
+    import time
+    line = ("set " + "x " * 20) * 8000
+    t0 = time.monotonic()
+    lint.scan_text("x.sh", line + "\n")
+    assert time.monotonic() - t0 < 2.0
 
 
 def test_boundary_relaxation_is_file_level():
@@ -188,6 +234,13 @@ _BASH = shutil.which("bash")
 def test_ground_truth_long_flag_read_is_unreachable():
     p = subprocess.run([_BASH, "-c", _STRICT_LONG], capture_output=True, text=True, timeout=30)
     assert p.returncode != 0 and "reached" not in p.stdout
+
+
+@pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
+def test_ground_truth_set_dashdash_keeps_errexit():
+    p = subprocess.run([_BASH, "-c", "set -e; set -- +e; [[ -o errexit ]] && echo on"],
+                       capture_output=True, text=True, timeout=30)
+    assert p.stdout.strip() == "on"
 
 
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
