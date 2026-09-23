@@ -11,9 +11,11 @@
 // tenant it is for), writing them out a second time would have been the family
 // reproducing itself inside one binary. So the rule lives here once.
 //
-// The authority for the NAME rules is
-// `components/threshold-exporter/app/config_hierarchy.go` — the production
-// hot-reload scanner, which decides which files are read at all. ⛔ Its name
+// The authority for the NAME rules is the exporter's production hot-reload
+// walker (the tree scan ConfigManager's reload runs), which decides which
+// files are read at all. It is named by role, not by file, on purpose: it has
+// already moved once (#1568) and this sentence named the old file for a
+// release after it had gone. ⛔ Its name
 // rules are the only thing restated here: that scanner takes tenant IDENTITY
 // from the `tenants:` keys inside each document, never from a filename, so
 // nothing in this package answers "who is being served". The agreement is pinned
@@ -86,8 +88,37 @@ func SplitCarrier(base string) (stem string, ok bool) {
 // (`conf.d/examples/`) that is NOT the chain carrier; a prefix implementation
 // passes every other name and was measured (#1588) to make `describe_tenant`
 // reproduce the exporter's merged hash on only three of five shipped tenants.
+//
+// ⛔ And the comparison is `strings.ToLower` + `==`, NOT `strings.EqualFold` (#1670).
+// The two are different relations: EqualFold is Unicode SIMPLE CASE FOLDING,
+// which puts U+017F `ſ` (LATIN SMALL LETTER LONG S) in the same fold orbit as
+// `s` and `S`, while ToLower leaves `ſ` alone because it is already lowercase.
+// The exporter's hot-reload walker and the shared matrix's
+// `defaults_file` definition ("name lowercased is exactly …") are both the
+// ToLower relation. Measured on this toolchain:
+//
+//	strings.EqualFold("_defaultſ.yaml", "_defaults.yaml")       == true
+//	strings.ToLower("_defaultſ.yaml") == "_defaults.yaml"       == false
+//
+// With EqualFold here, `_defaultſ.yaml` was the Base-PR chain carrier on the
+// write plane while the exporter treats it as an ordinary reserved file whose
+// `defaults:` block it never merges. How many names that is depends on the
+// search, so both measurements are stated with their scope:
+//
+//   - substituting ONE non-ASCII rune for one byte of a defaults literal:
+//     exactly two names, `_defaultſ.yaml` / `_defaultſ.yml`;
+//   - every combination over each character's full fold orbit (`s`/`S`/`ſ`,
+//     `a`/`A`, …): 3072 names (2048 `.yaml`, 1024 `.yml`), e.g.
+//     `_DEFAULTſ.YAML`. Every one of them has `ſ` in the `s` position — the
+//     only non-ASCII member of any orbit here — so the two matrix rows
+//     exercise the one character that separates the relations.
+//
+// SplitCarrier keeps EqualFold: the single-substitution search found no name
+// where its answer differs from the exporter's `HasSuffix(ToLower(name), …)`
+// (no fold-orbit search was run for it).
 func IsDefaults(base string) bool {
-	return strings.EqualFold(base, "_defaults.yaml") || strings.EqualFold(base, "_defaults.yml")
+	lower := strings.ToLower(base)
+	return lower == "_defaults.yaml" || lower == "_defaults.yml"
 }
 
 // IsHidden reports whether the exporter's walker skips `base` outright.
@@ -106,7 +137,7 @@ func IsReserved(base string) bool { return strings.HasPrefix(base, "_") }
 //
 // ⛔ THIS IS NOT "WHO THE EXPORTER SERVES OUT OF THIS FILE", and must never be
 // used to answer that. The exporter takes tenant IDENTITY from the `tenants:`
-// keys INSIDE the document (`config_hierarchy.go`: `for tid := range
+// keys INSIDE the document (the hot-reload walker's `for tid := range
 // doc.Tenants`) — measured, there is no place in the exporter that derives a
 // tenant id from a filename. A basename only decides CLASSIFICATION: is this
 // file read at all, and is it the chain carrier.

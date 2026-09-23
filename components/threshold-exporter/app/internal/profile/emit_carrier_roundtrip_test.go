@@ -262,15 +262,17 @@ func TestEmit_ACarrierNameThatDoesNotReadBackAsItsTenantSaysSo(t *testing.T) {
 // reviewer measured in the FIRST version of the refusal above.
 //
 // ⛔ That version asked "is this path already occupied, and if so is it the
-// defaults name" — a byte-exact map lookup guarding a case-FOLDING predicate.
-// Tenant `_DEFAULTS` emits `_DEFAULTS.yaml`, which collides with
-// `_defaults.yaml` on no byte at all, so the refusal never fired: the file was
-// written, with a `tenants:` block, and `confdname.IsDefaults` says true — so
-// the allocator routes it into the Base PR as a defaults carrier and the
-// exporter, which lowercases before comparing, merges it into EVERY tenant's
-// chain in that directory.
+// defaults name" — a byte-exact map lookup guarding a case-INSENSITIVE
+// predicate (it compares the LOWERCASED name; see
+// TestEmit_ALongSVariantIsNotTheChainCarrier for why lowercasing and Unicode
+// case folding are not the same relation). Tenant `_DEFAULTS` emits
+// `_DEFAULTS.yaml`, which collides with `_defaults.yaml` on no byte at all, so
+// the refusal never fired: the file was written, with a `tenants:` block, and
+// `confdname.IsDefaults` says true — so the allocator routes it into the Base
+// PR as a defaults carrier and the exporter, which lowercases before
+// comparing, merges it into EVERY tenant's chain in that directory.
 //
-// One reader comparing bytes beside another comparing folded case is this
+// One reader comparing bytes beside another comparing lowercased names is this
 // family's entire shape, and the guard against it had it inside itself.
 func TestEmit_ACaseVariantOfTheChainCarrierNameIsRefusedToo(t *testing.T) {
 	t.Parallel()
@@ -280,7 +282,8 @@ func TestEmit_ACaseVariantOfTheChainCarrierNameIsRefusedToo(t *testing.T) {
 	if body, ok := out.Files["conf.d/dom/_DEFAULTS.yaml"]; ok {
 		t.Errorf("tenant %q was written to %q, a name every reader of this tree "+
 			"classifies as the inheritance-chain carrier (it differs from "+
-			"`_defaults.yaml` in case only, and every classifier here folds case).\n"+
+			"`_defaults.yaml` in ASCII case only, and every classifier here "+
+			"compares the lowercased name).\n"+
 			"  ⛔ it collides with nothing byte-for-byte, so an occupancy check "+
 			"cannot see it — the refusal has to be on the NAME.\n"+
 			"  the exporter would merge this into every tenant's chain in the "+
@@ -291,6 +294,53 @@ func TestEmit_ACaseVariantOfTheChainCarrierNameIsRefusedToo(t *testing.T) {
 			"warning says why.\n  warnings: %v", "_DEFAULTS", out.Warnings)
 	}
 	// The ordinary tenant must be untouched.
+	if _, ok := out.Files["conf.d/dom/ordinary.yaml"]; !ok {
+		t.Errorf("the well-named tenant lost its carrier; files: %v",
+			sortedCarrierKeys(out.Files))
+	}
+}
+
+// TestEmit_ALongSVariantIsNotTheChainCarrier pins the other side of the
+// refusal above (#1670): a name that Unicode case FOLDING equates with
+// `_defaults.yaml` but LOWERCASING does not is NOT the chain carrier, so it
+// must not draw the chain-carrier refusal.
+//
+// `_defaultſ` ends in U+017F LATIN SMALL LETTER LONG S. `strings.EqualFold`
+// maps it to `s`; `strings.ToLower` leaves it alone because it is already
+// lowercase. The exporter compares the lowercased name, so it treats
+// `_defaultſ.yaml` as an ordinary reserved file and never merges it into a
+// chain. Until #1670 `confdname.IsDefaults` folded instead, so this emitter
+// refused the tenant as if it were writing the chain carrier.
+//
+// What the emitter must do now is what it does for any reserved-prefix id:
+// write the carrier and WARN that the name does not read back as the tenant
+// (the batch-PR allocator drops reserved names, so it will reach no PR).
+// Refusing it would be a claim about the exporter that the exporter does not
+// make; writing it silently would lose the tenant with nobody told.
+func TestEmit_ALongSVariantIsNotTheChainCarrier(t *testing.T) {
+	t.Parallel()
+	const tenant = "_defaultſ" // U+017F LATIN SMALL LETTER LONG S
+	const key = "conf.d/dom/_defaultſ.yaml"
+	ps, rules := twoTenantProposal(tenant, "ordinary")
+	out := emitOneProposalFor(t, ps, rules)
+
+	if w := warningNaming(out.Warnings, tenant, "refused"); w != "" {
+		t.Errorf("tenant %q was refused as the inheritance-chain carrier, but the "+
+			"exporter lowercases before comparing and U+017F has no lowercase "+
+			"form other than itself — that name is an ordinary reserved file, "+
+			"not the chain carrier.\n  ⛔ an EqualFold comparison says otherwise; "+
+			"that is the #1670 divergence.\n  warning: %q", tenant, w)
+	}
+	if _, ok := out.Files[key]; !ok {
+		t.Errorf("tenant %q's carrier %q was not written; files: %v",
+			tenant, key, sortedCarrierKeys(out.Files))
+	}
+	if w := warningNaming(out.Warnings, tenant, "reads back as tenant"); w == "" {
+		t.Errorf("tenant %q was written under a reserved-prefix name that reads "+
+			"back as no tenant, and NO warning says so — the allocator will drop "+
+			"it and the operator would never know.\n  warnings: %v",
+			tenant, out.Warnings)
+	}
 	if _, ok := out.Files["conf.d/dom/ordinary.yaml"]; !ok {
 		t.Errorf("the well-named tenant lost its carrier; files: %v",
 			sortedCarrierKeys(out.Files))
