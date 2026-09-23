@@ -1368,9 +1368,11 @@ jobs:
       # Reference engine for the editor-glob parity test (#1815). Pinned to
       # the picomatch that yaml-language-server 1.24.0 carries in
       # vscode-yaml 1.24.0's package-lock; zero dependencies, so no lockfile.
+      # The job gates a required check, so ride out registry blips explicitly
+      # (npm's own default is 2 retries).
       - name: Install picomatch (editor glob parity reference)
         run: |
-          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund picomatch@4.0.5
+          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
 
       - name: Cache pip packages
@@ -1721,9 +1723,11 @@ jobs:
       # Reference engine for the editor-glob parity test (#1815). Pinned to
       # the picomatch that yaml-language-server 1.24.0 carries in
       # vscode-yaml 1.24.0's package-lock; zero dependencies, so no lockfile.
+      # The job gates a required check, so ride out registry blips explicitly
+      # (npm's own default is 2 retries).
       - name: Install picomatch (editor glob parity reference)
         run: |
-          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund picomatch@4.0.5
+          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
 
       - name: Cache pip packages

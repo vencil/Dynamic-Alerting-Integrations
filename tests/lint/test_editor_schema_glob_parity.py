@@ -358,6 +358,11 @@ def test_translator_refuses_unmodelled_syntax():
                 _glob_to_regex(bad, mode)
 
 
+#: The picomatch vscode-yaml 1.24.0 bundles (its package-lock); ci.yml installs
+#: exactly this.
+PINNED_PICOMATCH = "4.0.5"
+
+
 def _picomatch_dir() -> Path | None:
     env = os.environ.get("PICOMATCH_DIR")
     cands = [Path(env)] if env else []
@@ -376,6 +381,14 @@ def test_translator_agrees_with_real_picomatch(schemas):
             pytest.fail(f"VIBE_REQUIRE_PICOMATCH=1 but {msg} — the CI install "
                         "step regressed")
         pytest.skip(msg + " — parity rests on the translator")
+    # The CI install pins the version yaml-language-server 1.24.0 ships; the
+    # local fallback (tests/e2e/node_modules) is a transitive dep and may be
+    # another version. Under the CI contract, compare against the pinned one.
+    version = json.loads((pm_dir / "package.json").read_text(encoding="utf-8"))["version"]
+    if os.environ.get("VIBE_REQUIRE_PICOMATCH") == "1":
+        assert version == PINNED_PICOMATCH, (
+            f"VIBE_REQUIRE_PICOMATCH=1 but {pm_dir} is picomatch {version}, "
+            f"not {PINNED_PICOMATCH} — the reference engine drifted")
     script = (
         "const pm=require(process.argv[1]);"
         "const [g,uris]=JSON.parse(require('fs').readFileSync(0,'utf8'));"
