@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DX_DIR = _REPO_ROOT / "scripts" / "tools" / "dx"
@@ -289,6 +290,35 @@ class TestThePortalOfflineFallbackIsGenerated:
         out = capsys.readouterr().out
         assert "rule-packs-fallback.json" in out
         assert "make platform-data" in out
+
+    def test_the_hook_that_runs_check_actually_watches_both_files(self):
+        """⛔ Found by mutation, not by design.
+
+        Deleting the fallback path from `platform-data-check`'s `files:` regex
+        left every other cell in this class green: they call the tool, and the
+        tool still compares both files. What that regex decides is whether a
+        LOCAL `pre-commit` run — which only sees staged paths — reaches the hook
+        at all when the fallback is the only thing edited by hand, which is
+        precisely the #1226 shape.
+
+        ⚠️ Bounded honestly: CI's Lint job runs this hook with `--all-files` and
+        has no `if:`/`needs:`, so the regex is not the last line of defence. What
+        it buys is the local red, at commit time, instead of a CI round trip.
+        """
+        import re
+
+        config = yaml.safe_load(
+            (_REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+        hooks = [h for repo in config["repos"] for h in repo.get("hooks", [])
+                 if h.get("id") == "platform-data-check"]
+        assert len(hooks) == 1, "platform-data-check is not declared exactly once"
+        pattern = re.compile(hooks[0]["files"])
+        for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL):
+            assert pattern.match(rel), (
+                f"the platform-data-check hook does not watch {rel}, so editing "
+                f"it alone stages no file the hook reacts to and the local "
+                f"pre-commit run passes over the change"
+            )
 
     def test_check_passes_on_the_real_pair(self, monkeypatch, capsys):
         """The must-not-fire control: `--check` is not simply always red.
