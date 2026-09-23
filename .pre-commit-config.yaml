@@ -730,7 +730,9 @@ repos:
       # fixtures to stop testing what they exist to test.
       #
       # Note the editor side already validates ALL of these: devcontainer.json maps
-      # `**/conf.d/[^_]*.yaml` to this schema, so a red squiggle appeared for
+      # every conf.d tenant file to this schema (its `yaml.schemas` globs; parity
+      # with this gate is derived by tests/lint/test_editor_schema_glob_parity.py,
+      # #1815), so a red squiggle appeared for
       # cache-demo.yaml the whole time while CI stayed silent. This closes that
       # editor-vs-CI asymmetry for shipped trees. Named explicitly in ci.yml's Lint
       # job too, which runs unconditionally (no path filter) — see #1223's lesson
