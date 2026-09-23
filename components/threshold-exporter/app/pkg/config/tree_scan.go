@@ -18,7 +18,9 @@ package config
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
 // ⛔ It is the only RECURSIVE conf.d walker in the exporter module's
-// production paths. (Not the only reader of conf.d in the repo: tenant-api
+// production paths — pinned by app/confd_walker_population_test.go, which
+// fails on any other production file that lists a directory (cmd/da-batchpr
+// is excluded by name: it walks a PR payload, not conf.d). (Not the only reader of conf.d in the repo: tenant-api
 // lists it with its own non-recursive os.ReadDir — internal/handler/
 // tenant_list.go, internal/confd/resolve.go, internal/federation/orphan/
 // detector.go — and describe_tenant.py walks it in Python.) The
