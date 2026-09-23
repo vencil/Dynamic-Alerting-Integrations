@@ -2991,6 +2991,11 @@ class TestDryRunWritesNothing:
     **看不到這支工具**：它的 `OPS_DIR` 只掃 `scripts/tools/ops/`，
     `bump_docs.py` 在 `dx/`。實測把上述守衛全部拿掉，該檔 24 條測試全綠。
     這條把斷言放在工具自己的測試檔裡，不依賴跑哪個子集、也不依賴順序。
+
+    ⚠️ 上一段描述的是當時的狀態。#1454 D 之後那個閘門也掃 `dx/`，並以
+    `bump_docs[versions]` / `bump_docs[sync-counts]` 兩條子行程 recipe 各自
+    擋住這四個守衛；這個 class 仍保留——它在行程內、不需沙箱，失敗訊息指得
+    更準。
     """
 
     def _probe_repo(self, tmp_path, monkeypatch):
