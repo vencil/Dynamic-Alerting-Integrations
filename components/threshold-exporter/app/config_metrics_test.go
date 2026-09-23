@@ -39,20 +39,6 @@ func freshMetrics(t *testing.T) (*configMetrics, *prometheus.Registry) {
 	return fresh, reg
 }
 
-func TestObserveScanDuration_RecordsOneSample(t *testing.T) {
-	t.Parallel()
-	fresh, _ := freshMetrics(t)
-
-	done := fresh.ObserveScanDuration()
-	// Minimum sleep to avoid a zero-duration sample that could confuse
-	// bucket boundary assertions. 1ms is the smallest bucket.
-	done()
-
-	if got := testutil.CollectAndCount(fresh.scanDuration); got != 1 {
-		t.Errorf("expected 1 scan duration observation, got %d", got)
-	}
-}
-
 func TestScanDirHierarchical_IncrementsScanDuration(t *testing.T) {
 	t.Parallel()
 	fresh, _ := freshMetrics(t)

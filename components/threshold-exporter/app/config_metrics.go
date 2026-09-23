@@ -236,31 +236,38 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called from the tree scan (parseTenantDecls) whenever
+// basename. Called from the tree scan (pkg/config parseTenantDecls, via
+// config.ScanObserver) whenever
 // yaml.Unmarshal returns an error for a non-_-prefixed tenant file, and
 // from the flat parse (parsePartialConfig) for the same file. file_basename
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
+//
+// ⛔ NIL-RECEIVER SAFE, like the other two config.ScanObserver methods
+// (ObserveScanElapsed, SetLastScanComplete). It is the second line of
+// defence against the typed-nil trap: scanObserverFor already turns a nil
+// *configMetrics into a true nil interface, but pkg/config is imported by
+// other modules and a caller that skips that conversion must get "nothing
+// counted", not a panic. Pinned by TestScanDirTree_NilConfigMetrics.
 func (cm *configMetrics) IncParseFailure(fileBasename string) {
+	if cm == nil {
+		return
+	}
 	cm.parseFailures.WithLabelValues(fileBasename).Inc()
 }
 
-// ObserveScanDuration starts a timer and returns a stop function that
-// records the elapsed time into da_config_scan_duration_seconds. Idiomatic
-// use:
-//
-//	defer m.ObserveScanDuration()()
-//
-// Returns the "stop" closure so the caller can also record duration
-// manually when needed (e.g., for log correlation). Using time.Since
-// directly (vs. prometheus.NewTimer) lets us share the t0 for both the
-// metric and the debug log without double-observing.
-func (cm *configMetrics) ObserveScanDuration() func() {
-	t0 := time.Now()
-	return func() {
-		cm.scanDuration.Observe(time.Since(t0).Seconds())
+// ObserveScanElapsed records one already-measured scan duration into
+// da_config_scan_duration_seconds. It is the config.ScanObserver method the
+// conf.d walker (pkg/config.ScanDirTree, #1941) calls: the walker takes its
+// own t0 so no closure crosses the interface — a returned closure escaped
+// to the heap there and cost one alloc per scan on the fast path.
+// Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) ObserveScanElapsed(d time.Duration) {
+	if cm == nil {
+		return
 	}
+	cm.scanDuration.Observe(d.Seconds())
 }
 
 // IncReloadTrigger bumps the reload counter for the given reason. Safe
@@ -358,7 +365,11 @@ func (cm *configMetrics) ObserveDebounceBatch(n int) {
 // value so a transient scan failure does not look like a successful
 // completion. Tests that want a clean baseline observe via freshMetrics
 // + m.SetMetrics injection (see config_metrics_test.go).
+// Nil-receiver safe (see IncParseFailure).
 func (cm *configMetrics) SetLastScanComplete(t time.Time) {
+	if cm == nil {
+		return
+	}
 	cm.lastScanComplete.Set(float64(t.Unix()))
 }
 

@@ -39,14 +39,14 @@ type (
 
 	// InheritanceGraph was promoted to pkg/config in v2.8.0 PR-8 so cmd/da-guard
 	// and tenant-api can construct it without importing package main.
-	// app's scanDirTree still owns the disk-walking implementation (it
-	// threads fileStat for the mtime fast-path).
+	// The disk walker (config.ScanDirTree, #1941) lives there too; this
+	// package reaches it through config_tree_scan.go.
 	InheritanceGraph = config.InheritanceGraph
 
 	// DuplicateTenantError is the cross-file duplicate-tenant error, lowered
 	// into pkg/config (C6-A, #127 library-side gap) so tenant-api /
 	// cmd/da-guard / simulate can errors.As it.
-	// app's scanDirTree (which records it on the scan) and the callers that
+	// config.ScanDirTree records it on the scan; the callers here that
 	// errors.As it keep compiling unchanged through this alias.
 	DuplicateTenantError = config.DuplicateTenantError
 )
@@ -54,11 +54,3 @@ type (
 // NewInheritanceGraph re-exports the pkg/config constructor under its
 // historical name so existing app/test callers compile unchanged.
 var NewInheritanceGraph = config.NewInheritanceGraph
-
-// fileStat is app-only — pkg/config has no concept of file mtimes
-// because it's the standalone resolver layer. Kept here next to the
-// other manager-state types it pairs with.
-type fileStat struct {
-	ModTime int64 // UnixNano
-	Size    int64
-}

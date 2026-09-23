@@ -329,7 +329,7 @@ func benchScanDirTreeCold(b *testing.B, dir string) {
 }
 
 // benchScanDirTreeWarm expects dir to already be backdated beyond
-// treeScanMtimeGuard (the caller's job) so the prior's stats match and
+// config.TreeScanMtimeGuard (the caller's job) so the prior's stats match and
 // every file takes the fast-path. It checks that once before timing: a
 // "warm" bench that silently re-reads the tree would report the cold cost
 // under the warm name.
@@ -346,13 +346,13 @@ func benchScanDirTreeWarm(b *testing.B, dir string) {
 		b.Fatal(err)
 	}
 	reread := 0
-	for _, f := range probe.files {
-		if !f.reused {
+	for _, f := range probe.Files {
+		if !f.Reused {
 			reread++
 		}
 	}
 	if reread != 0 {
-		b.Fatalf("warm bench is not warm: %d/%d files were re-read (fixture not backdated past the mtime guard?)", reread, len(probe.files))
+		b.Fatalf("warm bench is not warm: %d/%d files were re-read (fixture not backdated past the mtime guard?)", reread, len(probe.Files))
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
