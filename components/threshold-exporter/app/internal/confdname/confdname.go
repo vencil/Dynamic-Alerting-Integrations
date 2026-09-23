@@ -89,7 +89,7 @@ func SplitCarrier(base string) (stem string, ok bool) {
 // passes every other name and was measured (#1588) to make `describe_tenant`
 // reproduce the exporter's merged hash on only three of five shipped tenants.
 //
-// ⛔ And the fold is `strings.ToLower` + `==`, NOT `strings.EqualFold` (#1670).
+// ⛔ And the comparison is `strings.ToLower` + `==`, NOT `strings.EqualFold` (#1670).
 // The two are different relations: EqualFold is Unicode SIMPLE CASE FOLDING,
 // which puts U+017F `ſ` (LATIN SMALL LETTER LONG S) in the same fold orbit as
 // `s` and `S`, while ToLower leaves `ſ` alone because it is already lowercase.
