@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shlex
@@ -41,7 +42,16 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import is_defaults_name, iter_config_files, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    WARN_LIMIT,
+    configmap_key_problem,
+    is_defaults_name,
+    iter_config_files,
+    printable_name,
+    unusable_config_paths,
+    unusable_reason,
+    warn_nested,
+)
 # #1310 — the declared-without-value key names shipped in `optional_overrides:`.
 # Same import shape as scaffold_tenant.py's (see its comment): the derivation is
 # shared so the two customer-side `_defaults.yaml` producers cannot disagree
@@ -2510,28 +2520,63 @@ def _kustomize_carrier_files(
       * the config files already at the TOP LEVEL of `conf_dir`, enumerated by
         `_lib_confd.iter_config_files` (the exporter's own name rule: both
         spellings, any case, dotfiles skipped).
-    The planned half is what keeps `--dry-run` (and a first run, before
-    `conf.d/` exists) correct: nothing needs to be on disk for it to appear.
+    The planned half means the answer does not depend on `conf.d/` already
+    existing (a first `init`) or on the order `run_init` writes files in.
+    (`--dry-run` never calls this: it previews paths, not file contents.)
 
     ⚠️ Deduplicated by FILENAME only, never by tenant stem. `db-c.yml` and
     `db-c.yaml` side by side are two ConfigMap keys because they are two
-    files; collapsing them here would hide that defect, not fix it.
+    files; collapsing them here would hide that defect, not fix it. The same
+    holds for `_defaults.yml` next to the `_defaults.yaml` init always writes
+    (#1942): both are listed.
 
     Order: the defaults carrier(s) first, then plain sorted — deterministic,
     so a re-run over an unchanged tree regenerates byte-identical output.
 
-    ⚠️ Flat by necessity — `configMapGenerator.files` makes flat ConfigMap
-    keys, so a file below the top level cannot be carried by this path. That
-    is said out loud with `warn_nested` (stderr, once per directory) rather
-    than baked into a generated file as a comment: the nested set is a fact
-    about the tree at generation time and a committed comment would go stale
-    the moment it changes, while the warning is the family's channel for
-    exactly this "a flat reader skipped files" fact.
+    ⛔ Three kinds of entry are LEFT OUT, and each is named on stderr, never
+    dropped in silence (a tenant missing behind a green light is #1911's
+    shape). None of them changes the exit code: by the time this runs, init
+    has already written conf.d/ and the CI files, and rc != 0 would read as
+    "nothing happened" while most of the tree was replaced — the same reason
+    the rest of init's post-write findings (`_print_summary`) are notices.
+      * below the top level — `configMapGenerator.files` makes flat keys.
+        `warn_nested` (the family's channel for "a flat reader skipped
+        files"), not a generated comment: a committed comment about the
+        tree's shape would go stale the moment the tree changes.
+      * config-NAMED but unreadable (broken symlink, a `db-x.yaml/`
+        directory) — `iter_config_files` filters those silently;
+        `unusable_config_paths` names them, worded by `unusable_reason`
+        exactly as `configmap_assemble` words them.
+      * a name that can never be a ConfigMap key (`db b.yaml`, `a=b.yaml`,
+        `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
+        `IsConfigMapKey`, shared with `configmap_assemble`. kustomize would
+        refuse the build (or, for `=`, read `key=path`), so listing it
+        breaks every tenant rather than losing one.
     """
     names = {'_defaults.yaml'} | {f'{t}.yaml' for t in tenants}
     if conf_dir is not None:
         warn_nested(conf_dir, tool='init_project')
         names |= {p.name for p in iter_config_files(conf_dir, recursive=False)}
+        unusable = unusable_config_paths(conf_dir, recursive=False)
+        for p in unusable[:WARN_LIMIT]:
+            print(f"WARN: init_project: {printable_name(p.name)!r} in "
+                  f"{conf_dir} {unusable_reason(p)} — it carries a config "
+                  f"name but nothing can be read from it, so it is left out "
+                  f"of kustomize/base (files: and README) and its tenants are "
+                  f"absent from the ConfigMap.", file=sys.stderr)
+        if len(unusable) > WARN_LIMIT:
+            print(f"WARN: init_project: (+{len(unusable) - WARN_LIMIT} more "
+                  f"unreadable config-named entries in {conf_dir}; this list "
+                  f"is capped at {WARN_LIMIT})", file=sys.stderr)
+    illegal = sorted((n, why) for n in names
+                     if (why := configmap_key_problem(n)) is not None)
+    for name, why in illegal:
+        print(f"WARN: init_project: {printable_name(name)!r} cannot be a "
+              f"ConfigMap key ({why}); it is left out of kustomize/base "
+              f"(files: and README), so the exporter never sees it. Rename "
+              f"it to match [-._a-zA-Z0-9]+ and list it in files:.",
+              file=sys.stderr)
+    names -= {n for n, _ in illegal}
     return sorted(names, key=lambda n: (not is_defaults_name(n), n))
 
 
@@ -2546,7 +2591,12 @@ def _gen_kustomize_base(
 
     configmap_files = (files if files is not None
                        else _kustomize_carrier_files(tenants))
-    file_lines = '\n'.join(f'    - {f}' for f in configmap_files)
+    # ⛔ Quoted, every entry: these are file names from the customer's tree,
+    # not ours. Written plain, `#h.yaml` became a comment (a null entry),
+    # `%p.yaml` was invalid YAML, and a name like `null` or `1.10` would load
+    # as a non-string. A JSON string is a valid YAML double-quoted scalar
+    # (#1791 blind review).
+    file_lines = '\n'.join(f'    - {json.dumps(f)}' for f in configmap_files)
 
     return (
         "# kustomization.yaml — Dynamic Alerting ConfigMap generator\n"
@@ -2581,8 +2631,13 @@ def _gen_kustomize_base(
 #: only one spelling. `find -iname` matches both spellings in any case (the
 #: exporter's rule), `! -name '.*'` skips dotfiles as the exporter does, and
 #: zero matches is rc 0. `-maxdepth 1` because ConfigMap keys are flat.
+#: ⛔ `-L`: `iter_config_files` follows symlinks, so a carrier that is a
+#: link (`db-s.yaml -> ../shared/db-s.yaml`) IS in `files:`; plain `-type f`
+#: skipped it and the copied tree could not build. Under `-L`, `-type f` tests
+#: the target, so a broken link is still skipped — the same file set
+#: `files:` holds.
 _KUSTOMIZE_COPY_CMD = (
-    "find ../../conf.d -maxdepth 1 -type f "
+    "find -L ../../conf.d -maxdepth 1 -type f "
     "\\( -iname '*.yaml' -o -iname '*.yml' \\) ! -name '.*' "
     "-exec cp {} . \\;"
 )
@@ -2616,7 +2671,9 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
 
     `configMapGenerator.files` in `kustomization.yaml` is an explicit list —
     kustomize does not glob. The list above is every top-level config file
-    that `conf.d/` held when this was generated. A tenant file you add
+    that `conf.d/` held when this was generated, except entries that cannot
+    be read or whose name can never be a ConfigMap key (anything outside
+    `[-._a-zA-Z0-9]`); `init` named those on stderr. A tenant file you add
     afterwards — `.yaml` or `.yml` — has to be linked here AND added to
     `files:`; otherwise it never becomes a ConfigMap key, while every
     `conf.d/` tool (and `da-tools validate-config`) still reports it.
@@ -2642,7 +2699,8 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
     deployment tool cannot pass it (some ArgoCD setups need
     `kustomize.buildOptions` configured cluster-side), copy the files
     in instead of linking them. This copies every top-level config file,
-    both `.yaml` and `.yml`, and skips dotfiles:
+    both `.yaml` and `.yml`, following symlinks (a broken link is skipped)
+    and skipping dotfiles:
 
     ```bash
     {copy_cmd}

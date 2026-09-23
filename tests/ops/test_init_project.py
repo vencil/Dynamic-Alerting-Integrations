@@ -1765,18 +1765,15 @@ class TestKustomizeBaseEnumeratesConfd:
             assert files.count('t-one.yaml') == 1
             assert files.count('t-one.yml') == 1
 
-    def test_dry_run_planned_carriers_without_any_conf_d(self):
-        """`--dry-run` writes nothing, so the planned set must stand alone."""
+    def test_planned_carriers_do_not_need_conf_d_to_exist(self):
+        """A first `init`: nothing is on disk yet, the planned set stands alone."""
         with tempfile.TemporaryDirectory() as tmp:
             conf = ip.Path(tmp) / 'conf.d'  # does not exist
             assert ip._kustomize_carrier_files(['t-one', 't-two'], conf) == [
                 '_defaults.yaml', 't-one.yaml', 't-two.yaml']
             assert not conf.exists()
-            with pytest.raises(SystemExit):
-                ip._handle_dry_run(dict(_KUST_CFG, tenants=['t-one']), tmp)
-            assert os.listdir(tmp) == []
 
-    def test_dry_run_planned_carriers_union_existing_yml(self):
+    def test_planned_carriers_union_existing_yml(self):
         with tempfile.TemporaryDirectory() as tmp:
             conf = ip.Path(tmp) / 'conf.d'
             conf.mkdir()
@@ -1817,31 +1814,149 @@ class TestKustomizeBaseEnumeratesConfd:
         __import__('shutil').which('bash') is None
         or __import__('shutil').which('find') is None,
         reason='bash and find are needed to execute the README command')
-    @pytest.mark.parametrize('names,expected', [
-        (('a.yaml', 'b.yml', '.hidden.yaml'), {'a.yaml', 'b.yml'}),
-        (('a.yaml',), {'a.yaml'}),
-        (('b.yml',), {'b.yml'}),
-        (('UP.YAML', 'x.Yml', 'readme.txt'), {'UP.YAML', 'x.Yml'}),
-        ((), set()),
+    @pytest.mark.parametrize('names,links,expected', [
+        (('a.yaml', 'b.yml', '.hidden.yaml'), {}, {'a.yaml', 'b.yml'}),
+        (('a.yaml',), {}, {'a.yaml'}),
+        (('b.yml',), {}, {'b.yml'}),
+        (('UP.YAML', 'x.Yml', 'readme.txt'), {}, {'UP.YAML', 'x.Yml'}),
+        ((), {}, set()),
+        # A carrier that is a symlink is in `files:` (iter_config_files
+        # follows links), so the copy must bring it; a broken one is in
+        # neither.
+        (('_defaults.yaml',),
+         {'db-s.yaml': '../shared/db-s.yaml', 'gone.yaml': '../shared/nope.yaml'},
+         {'_defaults.yaml', 'db-s.yaml'}),
     ])
     def test_readme_copy_command_copies_every_top_level_carrier(
-            self, names, expected):
+            self, names, links, expected):
         import subprocess
         with tempfile.TemporaryDirectory() as gen:
             ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
             cmd = self._copy_command(gen)
         with tempfile.TemporaryDirectory() as tmp:
+            if links and not _symlinks_usable(os.path.join(tmp, 'probe')):
+                pytest.skip('this machine cannot create symlinks')
             conf = os.path.join(tmp, 'conf.d')
             base = os.path.join(tmp, 'kustomize', 'base')
             os.makedirs(os.path.join(conf, 'sub'))
+            os.makedirs(os.path.join(tmp, 'shared'))
             os.makedirs(base)
+            with open(os.path.join(tmp, 'shared', 'db-s.yaml'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
             for name in names + ('sub/deep.yaml',):
                 with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
                     fh.write('tenants: {}\n')
+            for name, target in links.items():
+                os.symlink(target, os.path.join(conf, name))
             run = subprocess.run(['bash', '-c', cmd], cwd=base,
                                  capture_output=True, text=True, timeout=30)
             assert run.returncode == 0, run.stderr
             assert set(os.listdir(base)) == expected
+            # …and it is the very set `files:` is built from.
+            assert set(os.listdir(base)) == _top_level_config_names(conf)
+
+    # ── blind-review round (#1791): names from the customer's tree ──
+
+    @pytest.mark.parametrize('name', [
+        'null', 'true', '1.10', '~', '#h.yaml', '%p.yaml', 'a: b.yaml',
+        '-x.yaml', "'q'.yaml", '"d".yaml', 'é.yaml', '[x].yaml', '*a.yaml',
+    ])
+    def test_every_files_entry_is_quoted_and_round_trips(self, name):
+        """Quoting is independent of key legality: whatever reaches `files:`
+        must load back as exactly that string."""
+        text = ip._gen_kustomize_base([], 'monitoring',
+                                      files=['_defaults.yaml', name])
+        assert yaml.safe_load(text)['configMapGenerator'][0]['files'] == [
+            '_defaults.yaml', name]
+
+    def test_legal_names_from_disk_round_trip_through_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for n in ('null.yaml', '1.10.yml', '-x.yaml', 'A_b.YAML'):
+                with open(os.path.join(conf, n), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            assert set(_kust_files(tmp)) == _top_level_config_names(conf)
+
+    @pytest.mark.parametrize('bad', [
+        'a=b.yaml', '#h.yaml', '%p.yaml', 'db b.yaml', 'x,y.yaml', '..x.yaml',
+    ])
+    def test_a_name_that_cannot_be_a_configmap_key_is_named_and_left_out(
+            self, bad, capsys):
+        from _lib_confd import configmap_key_problem
+        assert configmap_key_problem(bad) is not None  # the shared oracle
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for n in (bad, 't-ok.yml'):
+                with open(os.path.join(conf, n), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            capsys.readouterr()
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            err = capsys.readouterr().err
+            files = _kust_files(tmp)
+            if bad.startswith('.'):
+                # Hidden: the exporter never reads it, so there is nothing
+                # to lose and nothing to say.
+                assert bad not in files
+                return
+            assert bad not in files
+            assert bad not in _readme_link_targets(tmp)
+            assert repr(bad) in err and 'cannot be a ConfigMap key' in err
+            # Must-fire control in the same tree: the legal one survives.
+            assert 't-ok.yml' in files
+
+    def test_illegal_name_leaves_the_cli_at_rc_0(self):
+        """Post-write finding: a notice, not a failure (see the docstring)."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            with open(os.path.join(conf, 'a=b.yaml'), 'w', encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            run = subprocess.run(
+                [sys.executable, os.path.join(REPO_ROOT, 'scripts', 'tools',
+                                              'ops', 'init_project.py'),
+                 '--non-interactive', '--tenants', 't-one', '--rule-packs',
+                 'mariadb', '-o', tmp, '--force'],
+                capture_output=True, text=True, timeout=180)
+            assert run.returncode == 0, run.stderr
+            assert "'a=b.yaml' cannot be a ConfigMap key" in run.stderr
+            assert 'a=b.yaml' not in _kust_files(tmp)
+
+    def test_unreadable_config_named_entries_are_named_and_left_out(
+            self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(os.path.join(conf, 't-dir.yaml'))
+            broken = _symlinks_usable(os.path.join(tmp, 'probe'))
+            if broken:
+                os.symlink('nowhere.yaml', os.path.join(conf, 't-gone.yaml'))
+            capsys.readouterr()
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            err = capsys.readouterr().err
+            files = _kust_files(tmp)
+            assert 't-dir.yaml' not in files
+            assert "'t-dir.yaml'" in err and 'is a directory' in err
+            if broken:
+                assert 't-gone.yaml' not in files
+                assert "'t-gone.yaml'" in err and 'broken symlink' in err
+
+    def test_a_second_defaults_spelling_is_listed_not_collapsed(self):
+        """#1942's shape, pinned as-is: init always writes `_defaults.yaml`,
+        so a tree that already had `_defaults.yml` carries two defaults
+        carriers. Listing both keeps that visible; collapsing would hide it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            with open(os.path.join(conf, '_defaults.yml'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write('defaults: {}\n')
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            files = _kust_files(tmp)
+            assert files[:2] == ['_defaults.yaml', '_defaults.yml']
 
 
 # ============================================================
