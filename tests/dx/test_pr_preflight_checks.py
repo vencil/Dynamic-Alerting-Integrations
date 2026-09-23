@@ -357,7 +357,9 @@ class TestCheckLocalHooks:
             raise FileNotFoundError("git")
 
         monkeypatch.setattr(pp.subprocess, "run", _no_git)
-        assert pp.clear_marker(tmp_path) is None
+        removed, problem = pp.clear_marker(tmp_path)
+        assert removed is None
+        assert problem, "undecidable must be reported, not read as 'nothing to do'"
 
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)

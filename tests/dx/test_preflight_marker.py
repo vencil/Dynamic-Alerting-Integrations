@@ -11,6 +11,7 @@ and the bash gate script via subprocess with synthetic stdin + env.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import shutil
@@ -28,7 +29,7 @@ _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
 # subprocess. Git Bash on Windows mangles `C:\path\file` argument
 # translation (similar to verify_release.sh), so the gate-script tests
 # can't run on Windows. The Python-only tests in this module
-# (TestWriteMarker / TestClearMarkers / etc.) DO run cross-platform.
+# (TestMarkerPython / TestFailPathClearRadius) DO run cross-platform.
 _BASH_SCRIPT_SKIP = pytest.mark.skipif(
     sys.platform == "win32",
     reason="bash gate-script tests need POSIX path translation; "
@@ -341,8 +342,9 @@ class TestMarkerPython:
         # Unrelated file must survive.
         (git_dir / "config").touch(exist_ok=True)
 
-        removed = mod.clear_marker(tmp_path)
+        removed, problem = mod.clear_marker(tmp_path)
 
+        assert problem is None
         assert removed is not None
         assert removed.name == f".preflight-ok.{sha}"
         assert not removed.exists()
@@ -354,27 +356,23 @@ class TestMarkerPython:
     def test_clear_marker_reports_none_when_head_has_no_marker(
         self, tmp_path, monkeypatch
     ):
-        """Nothing to remove ⇒ None, and other commits' markers still survive."""
+        """Nothing to remove ⇒ (None, None) — ⛔ and NOT a reported problem.
+
+        The two Nones are the difference between "there was nothing here" and
+        "I could not tell / could not do it"; only the latter gets printed.
+        """
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".git" / ".preflight-ok.aaa").touch()
-        assert mod.clear_marker(tmp_path) is None
+        assert mod.clear_marker(tmp_path) == (None, None)
         assert (tmp_path / ".git" / ".preflight-ok.aaa").exists()
 
     def test_clear_on_empty(self, tmp_path, monkeypatch):
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert mod.clear_marker(tmp_path) is None
-
-    def test_marker_path_uses_head_sha(self, tmp_path, monkeypatch):
-        mod = _load()
-        sha = _init_git(tmp_path)
-        monkeypatch.chdir(tmp_path)
-        p = mod.marker_path(tmp_path, sha)
-        assert p.name.endswith(sha)
-        assert mod.MARKER_PREFIX in p.name
+        assert mod.clear_marker(tmp_path) == (None, None)
 
     def test_a_marker_written_in_a_worktree_lands_in_the_shared_git_dir(
         self, tmp_path, monkeypatch
@@ -426,15 +424,44 @@ class TestFailPathClearRadius:
     _OTHER_A = "a" * 40
     _OTHER_B = "b" * 40
 
-    _CHECKS = (
-        "check_branch_identity", "check_behind_main", "check_conflict",
-        "check_local_hooks", "check_scope_drift", "check_commit_scope_range",
-        "check_ci_status", "check_pr_mergeable",
-    )
+    @staticmethod
+    def _checks_main_feeds_to_the_report():
+        """Derive the check names from `main()`'s source, don't list them.
+
+        ⛔ A hand-written tuple cannot notice a NINTH check being added: the new
+        one would not be stubbed and would really run here — network, `gh`, or
+        a 300s `pre-commit --all-files` — silently. Re-derived from the calls
+        `main()` passes to `report.add(...)`, a new check is stubbed the day it
+        lands. (An `assert hasattr` only ever caught renames.)
+        """
+        tree = ast.parse(_PY_SCRIPT.read_text(encoding="utf-8"))
+        main_fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "main"
+        )
+        names = set()
+        for node in ast.walk(main_fn):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add"):
+                continue
+            for arg in node.args:
+                if (isinstance(arg, ast.Call)
+                        and isinstance(arg.func, ast.Name)
+                        and arg.func.id.startswith("check_")):
+                    names.add(arg.func.id)
+        # ⛔ Must-fire control: an AST walk that silently yields nothing would
+        # stub nothing and let every check run for real — "could not read the
+        # source" must not look like "there are no checks".
+        assert "check_branch_identity" in names, (
+            f"derivation found no known check (got {sorted(names)}) — the "
+            "shape of main() changed and this test is measuring nothing"
+        )
+        return names
 
     def _drive(self, mod, monkeypatch, wt, status):
         """Run main() from inside `wt` with every check forced to `status`."""
-        for name in self._CHECKS:
+        for name in self._checks_main_feeds_to_the_report():
             assert hasattr(mod, name), f"check no longer exists: {name}"
             monkeypatch.setattr(
                 mod, name,
@@ -445,8 +472,14 @@ class TestFailPathClearRadius:
         monkeypatch.setattr(sys, "argv", ["pr_preflight.py"])
         return mod.main()
 
-    def _setup(self, tmp_path):
-        """Main repo + one linked worktree. Returns (wt, shared_git_dir, sha)."""
+    def _setup(self, tmp_path, plant_head=True):
+        """Main repo + one linked worktree. Returns (wt, shared_git_dir, sha).
+
+        `plant_head=False` leaves HEAD's marker absent, so a test that asserts
+        it exists afterwards is asserting that `main()` WROTE it — with it
+        planted, that assertion is held up by the fixture and passes even if
+        the write path is gone.
+        """
         sha = _init_git(tmp_path)
         # ⛔ Unique per test: tmp_path.parent is shared across the class, and a
         # reused name makes `worktree add` exit 128 on the second test.
@@ -457,11 +490,13 @@ class TestFailPathClearRadius:
             capture_output=True, text=True,
         ).returncode == 0
         shared = tmp_path / ".git"
-        # An earlier PASS on this very commit, plus two markers standing in for
-        # other commits — in this repo, other sessions' worktrees.
-        (shared / f".preflight-ok.{sha}").touch()
+        # Two markers standing in for other commits — in this repo, other
+        # sessions' worktrees.
         (shared / f".preflight-ok.{self._OTHER_A}").touch()
         (shared / f".preflight-ok.{self._OTHER_B}").touch()
+        if plant_head:
+            # An earlier PASS on this very commit.
+            (shared / f".preflight-ok.{sha}").touch()
         return wt, shared, sha
 
     def test_a_failing_run_in_one_worktree_spares_other_commits_markers(
@@ -486,16 +521,74 @@ class TestFailPathClearRadius:
             "nothing here determines staleness, so the word must not be printed"
         )
 
-    def test_a_passing_run_removes_nothing(self, tmp_path, monkeypatch):
-        """Must-not-fire control: the clear path belongs to FAIL only."""
+    @pytest.mark.parametrize("status_name", ["PASS", "WARN"])
+    def test_a_non_failing_run_writes_this_commits_marker_and_removes_nothing(
+        self, tmp_path, monkeypatch, status_name
+    ):
+        """The whole point of the mechanism: a clean run earns a marker.
+
+        ⛔ HEAD's marker is NOT planted, so `exists()` here means `main()` wrote
+        it. WARN is parametrised because it is the ordinary state, not an edge:
+        a detached worktree alone makes `Branch identity` WARN, and the write /
+        clear branch turns on `has_failure`, which WARN must not trip (#1472).
+        """
+        mod = _load()
+        wt, shared, sha = self._setup(tmp_path, plant_head=False)
+
+        rc = self._drive(mod, monkeypatch, wt, getattr(mod.Status, status_name))
+
+        assert rc == mod.EXIT_OK
+        assert (shared / f".preflight-ok.{sha}").exists(), (
+            f"a {status_name}-only run left no marker — the next push is "
+            "blocked although preflight was clean"
+        )
+        # Must-not-fire control: the clear path belongs to FAIL only.
+        for other in (self._OTHER_A, self._OTHER_B):
+            assert (shared / f".preflight-ok.{other}").exists()
+        assert len(list(shared.glob(".preflight-ok.*"))) == 3
+
+    def test_an_undecidable_head_is_reported_not_silently_skipped(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """⛔ git unavailable ⇒ say so. Silence here reads as "revoked".
+
+        Narrowing the radius introduced this case: the glob never needed to
+        know which commit it was on, `clear_marker` does. `run()` turns a git
+        timeout into rc 124 and the checks FAIL, so this path is reached on
+        exactly the machine where git is too slow to answer.
+        """
+        mod = _load()
+        wt, shared, sha = self._setup(tmp_path)
+        monkeypatch.setattr(mod, "_head_sha", lambda repo_root: None)
+
+        rc = self._drive(mod, monkeypatch, wt, mod.Status.FAIL)
+        out = capsys.readouterr().out
+
+        assert rc == mod.EXIT_VIOLATION
+        assert (shared / f".preflight-ok.{sha}").exists(), "precondition"
+        assert "未能撤銷" in out, (
+            "the marker survived a FAIL and nothing was printed — the push "
+            "will be allowed and the operator has no way to know"
+        )
+
+    def test_a_marker_that_cannot_be_removed_is_reported(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Same class as the undecidable HEAD: could-not must not read as done."""
         mod = _load()
         wt, shared, sha = self._setup(tmp_path)
 
-        rc = self._drive(mod, monkeypatch, wt, mod.Status.PASS)
+        def _refuse(self, *a, **kw):
+            raise PermissionError(13, "in use")
 
-        assert rc == mod.EXIT_OK
-        assert len(list(shared.glob(".preflight-ok.*"))) == 3
-        assert (shared / f".preflight-ok.{sha}").exists()
+        monkeypatch.setattr(Path, "unlink", _refuse)
+
+        rc = self._drive(mod, monkeypatch, wt, mod.Status.FAIL)
+        out = capsys.readouterr().out
+
+        assert rc == mod.EXIT_VIOLATION
+        assert (shared / f".preflight-ok.{sha}").exists(), "precondition"
+        assert "未能撤銷" in out and "PermissionError" in out
 
 
 @_BASH_SCRIPT_SKIP

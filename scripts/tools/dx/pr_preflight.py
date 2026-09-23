@@ -878,8 +878,17 @@ def write_marker(repo_root: Path) -> Optional[Path]:
         return None
 
 
-def clear_marker(repo_root: Path) -> Optional[Path]:
-    """Remove the marker for HEAD — that ONE commit. Returns it, else None.
+def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """Remove the marker for HEAD — that ONE commit.
+
+    Returns `(removed, problem)`. Both None means there was nothing to remove.
+
+    ⛔ "could not" must not look like "nothing to do" — the reader's own rule
+    (`require_preflight_pass.sh`: "Unknown must not mean OK"), and here the
+    silent side is the allowing one: this runs on FAIL, so a revocation that
+    quietly does nothing leaves an earlier PASS on the same sha standing and
+    the push goes through. Narrowing the radius introduced the undecidable
+    case — the glob never needed to know which commit it was on.
 
     ⛔ Do not widen this back to `glob(f"{MARKER_PREFIX}.*")`. `_git_dir` is
     `--git-common-dir`, so that glob reaches every worktree's markers at once,
@@ -893,15 +902,15 @@ def clear_marker(repo_root: Path) -> Optional[Path]:
     """
     sha = _head_sha(repo_root)
     if not sha:
-        return None
+        return None, "無法判定 HEAD 是哪一顆 commit"
     p = marker_path(repo_root, sha)
     try:
         if not p.exists():
-            return None
+            return None, None
         p.unlink()
-    except OSError:
-        return None
-    return p
+    except OSError as e:
+        return None, f"{type(e).__name__}: {e}"
+    return p, None
 
 
 # ─── Check Functions ─────────────────────────────────────
@@ -1637,9 +1646,12 @@ def main() -> int:
     # one — every other marker belongs to a different commit, very likely in
     # a different worktree (#1917; `clear_marker`'s docstring has the why).
     if report.has_failure:
-        cleared = clear_marker(repo_root)
+        cleared, problem = clear_marker(repo_root)
         if cleared:
             print(f"   ↳ removed this commit's preflight marker: {cleared.name}")
+        elif problem:
+            print(f"   ⚠️ 未能撤銷這顆 commit 的 preflight marker（{problem}）"
+                  "——若它先前通過過，pre-push 會照樣放行；請手動刪除該檔")
     else:
         marker = write_marker(repo_root)
         if marker:

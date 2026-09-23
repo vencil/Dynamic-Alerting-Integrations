@@ -336,7 +336,7 @@ class TestMainOrchestrator:
         """Avoid touching real git state: stub repo-root + marker writers."""
         monkeypatch.setattr(pp, "find_repo_root", lambda: tmp_path)
         monkeypatch.setattr(pp, "write_marker", lambda repo_root: None)
-        monkeypatch.setattr(pp, "clear_marker", lambda repo_root: None)
+        monkeypatch.setattr(pp, "clear_marker", lambda repo_root: (None, None))
         monkeypatch.setattr(os, "chdir", lambda p: None)
 
     def test_check_commit_msg_path_short_circuits(self, monkeypatch, tmp_path, capsys, cli_argv):
