@@ -33,6 +33,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // treeScanFixtureAge is how far into the past fixture mtimes are pushed so
@@ -591,65 +593,101 @@ func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
 	}
 }
 
-// TestScanDirTree_NilConfigMetricsIsTrueNilObserver pins the typed-nil
-// conversion in scanObserverFor (#1941). The walker moved to pkg/config and
-// takes a config.ScanObserver interface; a nil *configMetrics passed straight
-// through would be a NON-nil interface holding a nil pointer, so the walker's
-// `obs != nil` guards would pass and ObserveScanElapsed would dereference a
-// nil receiver. The historical contract — "metrics may be nil: nothing is
-// counted, nothing panics" — must survive the move.
+// TestScanDirTree_NilConfigMetrics pins the two independent defences against
+// the typed-nil trap (#1941). The walker moved to pkg/config and takes a
+// config.ScanObserver interface; a nil *configMetrics passed straight through
+// is a NON-nil interface holding a nil pointer, so the walker's `obs != nil`
+// guards pass and it calls the methods on a nil receiver. The historical
+// contract — "metrics may be nil: nothing is counted, nothing panics" — must
+// survive the move.
 //
-// Discriminating: remove the `if metrics == nil { return nil }` in
-// scanObserverFor and the first assertion fails, and the scan below panics
-// (configMetrics' methods are not nil-safe). A nil *configMetrics owns no
-// metric, so the only ways to "touch a metric" through it are that panic or
-// an adapter that substituted another instance (e.g. the package singleton)
-// — the true-nil assertion rules out both.
-func TestScanDirTree_NilConfigMetricsIsTrueNilObserver(t *testing.T) {
+// Defence 1: scanObserverFor converts a nil *configMetrics into a TRUE nil
+// interface. Defence 2: the three ScanObserver methods of *configMetrics
+// are nil-receiver safe (for callers in other modules that skip defence 1).
+// Each subtest is red for exactly the defence it names (measured):
+//
+//	remove defence 1 only → adapter_returns_true_nil red
+//	remove defence 2 only → typed_nil_observer_direct panics red
+//	remove both           → all three red (end_to_end panics too)
+//
+// Subtests, not sequential assertions: a t.Fatalf in the first check would
+// otherwise hide whether the scan below it still panics. A nil
+// *configMetrics owns no metric, so "no metric touched" reduces to "no
+// panic" plus "the adapter did not substitute another instance" (e.g. the
+// package singleton) — the true-nil assertion rules the latter out.
+func TestScanDirTree_NilConfigMetrics(t *testing.T) {
 	t.Parallel()
 	var nilMetrics *configMetrics
 
-	if obs := scanObserverFor(nilMetrics); obs != nil {
-		t.Fatalf("scanObserverFor(nil *configMetrics) = %#v, want a TRUE nil config.ScanObserver "+
-			"(a typed nil inside the interface makes config.ScanDirTree call methods on a nil receiver)", obs)
+	buildTree := func(t *testing.T) string {
+		t.Helper()
+		root := twoTenantTree(t)
+		writeAgedFile(t, filepath.Join(root, "broken.yaml"), "tenants: [unclosed\n")
+		return root
 	}
-	if obs := scanObserverFor(freshMetricsOnly(t)); obs == nil {
-		t.Fatal("scanObserverFor(non-nil) must pass the instance through")
-	}
-
-	root := twoTenantTree(t)
-	writeAgedFile(t, filepath.Join(root, "broken.yaml"), "tenants: [unclosed\n")
-	var buf bytes.Buffer
-	logger := log.New(&buf, "", 0)
-
-	func() {
+	// scanAll drives the success (with a parse failure), error and
+	// conflict paths — every ScanObserver method the walker can call —
+	// and reports a panic instead of crashing the test binary.
+	scanAll := func(t *testing.T, root string, scan func(root string, logger *log.Logger) (*treeScan, error)) {
+		t.Helper()
+		var buf bytes.Buffer
+		logger := log.New(&buf, "", 0)
 		defer func() {
 			if r := recover(); r != nil {
-				t.Fatalf("scanDirTree with a nil *configMetrics panicked: %v", r)
+				t.Fatalf("scan with a nil *configMetrics panicked: %v", r)
 			}
 		}()
-		scan, err := scanDirTree(root, nil, nilMetrics, logger)
+		got, err := scan(root, logger)
 		if err != nil {
-			t.Fatalf("scanDirTree: %v", err)
+			t.Fatalf("scan: %v", err)
 		}
-		if got, want := treeScanTenantIDs(scan), []string{"t-alpha", "t-beta"}; !reflect.DeepEqual(got, want) {
-			t.Errorf("tenants = %v, want %v", got, want)
+		if ids, want := treeScanTenantIDs(got), []string{"t-alpha", "t-beta"}; !reflect.DeepEqual(ids, want) {
+			t.Errorf("tenants = %v, want %v", ids, want)
 		}
-		if f := scan.Files["broken.yaml"]; f == nil || !f.ParseFailed {
+		if f := got.Files["broken.yaml"]; f == nil || !f.ParseFailed {
 			t.Errorf("broken.yaml must be kept and marked ParseFailed: %+v", f)
 		}
-		// Error return and conflict paths, also with nil metrics.
-		if _, err := scanDirTree(filepath.Join(root, "missing"), nil, nilMetrics, logger); err == nil {
+		if !strings.Contains(buf.String(), "WARN: cannot parse") {
+			t.Errorf("parse failure must still be LOGGED with nil metrics; log:\n%s", buf.String())
+		}
+		if _, err := scan(filepath.Join(root, "missing"), logger); err == nil {
 			t.Error("missing root must be an error")
 		}
 		writeAgedFile(t, filepath.Join(root, "dup.yaml"), "tenants:\n  t-alpha: {}\n")
-		if scan, err := scanDirTree(root, nil, nilMetrics, logger); err != nil || scan.Conflict == nil {
+		if dup, err := scan(root, logger); err != nil || dup.Conflict == nil {
 			t.Errorf("duplicate tenant: err=%v, want a conflict on the scan", err)
 		}
-	}()
-	if !strings.Contains(buf.String(), "WARN: cannot parse") {
-		t.Errorf("parse failure must still be LOGGED with nil metrics; log:\n%s", buf.String())
 	}
+
+	t.Run("adapter_returns_true_nil", func(t *testing.T) {
+		t.Parallel()
+		if obs := scanObserverFor(nilMetrics); obs != nil {
+			t.Errorf("scanObserverFor(nil *configMetrics) = %#v, want a TRUE nil config.ScanObserver "+
+				"(a typed nil inside the interface makes config.ScanDirTree call methods on a nil receiver)", obs)
+		}
+		if obs := scanObserverFor(freshMetricsOnly(t)); obs == nil {
+			t.Error("scanObserverFor(non-nil) must pass the instance through")
+		}
+	})
+
+	t.Run("typed_nil_observer_direct", func(t *testing.T) {
+		t.Parallel()
+		// Bypasses defence 1 on purpose: what a caller in another module
+		// that forgets the conversion would hand the walker. Assigning a
+		// concrete *configMetrics makes the interface non-nil by the
+		// language (staticcheck SA4023 proves it statically).
+		var typedNil config.ScanObserver = nilMetrics
+		scanAll(t, buildTree(t), func(root string, logger *log.Logger) (*treeScan, error) {
+			return config.ScanDirTree(root, nil, typedNil, logger)
+		})
+	})
+
+	t.Run("end_to_end", func(t *testing.T) {
+		t.Parallel()
+		scanAll(t, buildTree(t), func(root string, logger *log.Logger) (*treeScan, error) {
+			return scanDirTree(root, nil, nilMetrics, logger)
+		})
+	})
 }
 
 // freshMetricsOnly is freshMetrics without the registry.

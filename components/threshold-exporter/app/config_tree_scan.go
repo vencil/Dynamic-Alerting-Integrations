@@ -51,12 +51,12 @@ func scanDirTree(root string, prior *treeScan, metrics *configMetrics, logger *l
 //
 // ⛔ THE TYPED-NIL TRAP. Passing `metrics` straight through would store a nil
 // *configMetrics in a non-nil interface: config.ScanDirTree's `obs != nil`
-// checks would then pass and call its methods on a nil receiver, which
-// panic (configMetrics' methods dereference their collectors; measured:
-// nil pointer dereference with this guard removed). The historical contract
-// ("metrics may be nil: nothing is counted") therefore lives HERE, as an
-// explicit true-nil return. Pinned by
-// TestScanDirTree_NilConfigMetricsIsTrueNilObserver.
+// checks would then pass and call its methods on a nil receiver. The
+// historical contract ("metrics may be nil: nothing is counted") therefore
+// lives HERE first, as an explicit true-nil return. The three observer
+// methods of *configMetrics are also nil-receiver safe, as a second,
+// independent line of defence (config_metrics.go). Each defence is pinned
+// on its own by a subtest of TestScanDirTree_NilConfigMetrics.
 func scanObserverFor(metrics *configMetrics) config.ScanObserver {
 	if metrics == nil {
 		return nil

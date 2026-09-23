@@ -16,11 +16,14 @@ package config
 // the divergence audit (app/config_divergence.go) exists because it was not.
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
-// ⛔ It is also the ONLY walker the exporter's production code (package
-// main) can call: main reaches it through the one-line adapter `scanDirTree`
-// (app/config_tree_scan.go), and the two historical functions survive as
-// projections in app/scan_wrappers_test.go, so a second enumerator cannot be
-// reintroduced on a manager path without moving a symbol out of a test file.
+// ⛔ It is the only walker the exporter's manager (package main) calls
+// TODAY: main reaches it through the one-line adapter `scanDirTree`
+// (app/config_tree_scan.go), and the two historical functions survive only
+// as projections in app/scan_wrappers_test.go. That is a fact about current
+// call sites, not a structural guarantee — ResolveEffective and
+// ScopeEffective below are exported from this same package, run their own
+// walks, and main could call them. W2 (#1941 follow-up) makes both consume
+// ScanDirTree, which is what turns "one walker" into construction.
 // Where the two walkers disagreed, the cell takes the HIERARCHICAL walker's
 // answer: that one is the oracle of the cross-language name-classification
 // matrix (app/confd_name_classification_parity_test.go), so /metrics and
@@ -102,8 +105,9 @@ type FileStat struct {
 // fragile at the call site — a nil *T stored in the interface is NOT == nil,
 // so ScanDirTree would call methods on a nil receiver. Callers holding a
 // possibly-nil pointer must convert it to a true nil interface first
-// (package main does, in its scanDirTree adapter; pinned by
-// TestScanDirTree_NilConfigMetricsIsTrueNilObserver).
+// (package main does, in its scanDirTree adapter), or make its methods
+// nil-receiver safe (*configMetrics does both; pinned by
+// app's TestScanDirTree_NilConfigMetrics).
 type ScanObserver interface {
 	// ObserveScanElapsed records one scan's wall-clock duration.
 	//
