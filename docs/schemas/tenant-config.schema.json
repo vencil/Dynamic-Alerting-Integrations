@@ -4,7 +4,7 @@
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
   "version": "v2.9.0",
-  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
+  "$comment": "Applies to conf.d tenant files, flat or nested: extension .yaml or .yml in any case, basename NOT starting with `_` or `.` (the set scripts/tools/lint/check_confd_schema.py validates). Editor binding: copy the yaml.schemas block from .devcontainer/devcontainer.json (not repeated here; see docs/internal/editor-schema-validation.md for why the globs look the way they do).",
   "type": "object",
   "required": ["tenants"],
   "properties": {

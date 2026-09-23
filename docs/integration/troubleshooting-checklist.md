@@ -1370,7 +1370,7 @@ da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds
 **Fix**：
 
 ```bash
-# 看當前 schema 定義：conf.d/*.yaml 由這份 JSON Schema 規範
+# 看當前 schema 定義：conf.d 租戶檔（.yaml / .yml；不含 _ 開頭的平台檔）由這份 JSON Schema 規範
 cat docs/schemas/tenant-config.schema.json
 # 對照修 yaml，補欄位 / 改拼字
 
