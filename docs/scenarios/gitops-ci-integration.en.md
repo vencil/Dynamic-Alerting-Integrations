@@ -295,10 +295,10 @@ ln -s ../../conf.d/prod-redis.yaml .
 security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
 ```
 
-That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes. Copy both spellings the exporter reads (`.yaml` and `.yml`, any case), follow symlinks (`-L`; a broken link is skipped) and skip dotfiles; a single `cp ../../conf.d/*.yaml .` silently leaves `.yml` tenants out:
+That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes. Copy both spellings the exporter reads (`.yaml` and `.yml`, any case), follow symlinks (`-L`; a broken link is skipped), skip dotfiles, and first remove any same-named link or file in `kustomize/base/` (after the `ln -s` setup above, a plain `cp` reports `are the same file` and leaves every link in place); a single `cp ../../conf.d/*.yaml .` silently leaves `.yml` tenants out:
 
 ```bash
-find -L ../../conf.d -maxdepth 1 -type f \( -iname '*.yaml' -o -iname '*.yml' \) ! -name '.*' -exec cp {} . \;
+find -L ../../conf.d -maxdepth 1 -type f \( -iname '*.yaml' -o -iname '*.yml' \) ! -name '.*' -exec sh -c 'for f; do rm -f -- "./${f##*/}" && cp -- "$f" . || exit 1; done' sh {} +
 ```
 
 ⛔ **Linking or copying is not enough on its own: `configMapGenerator.files` in `kustomization.yaml` is an explicit list — kustomize does not glob.** A file that is not named there never becomes a ConfigMap key, so the exporter in the cluster never sees that tenant, while every `conf.d/` tool still reports it. `da-tools init` lists every top-level config file `conf.d/` holds when it runs (both spellings); a name that can never be a ConfigMap key (anything outside `[-._a-zA-Z0-9]`, e.g. a space or `=`) and an unreadable entry are left out and named on stderr; a tenant file you add afterwards has to be linked **and** added to `files:`.

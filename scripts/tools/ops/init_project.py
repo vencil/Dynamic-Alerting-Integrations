@@ -2639,12 +2639,22 @@ def _gen_kustomize_base(
 #: ⚠️ The price of `-L`: a symlink LOOP (`loop.yaml -> loop.yaml`) makes find
 #: print "Too many levels of symbolic links" and exit 1 after copying the
 #: rest (measured; without `-L` it was rc 0). Left loud on purpose — the loop
-#: is not a carrier, `init` already names it as unreadable, and swallowing
-#: find's rc would also swallow a real copy failure. The README says so.
+#: is not a carrier and `init` already names it as unreadable. The README
+#: says so.
+#: ⛔ `rm -f` BEFORE `cp` (CodeRabbit on PR #1944): this command is the
+#: fallback for readers who ran the `ln -s` setup above and then hit the load
+#: restrictor, so `kustomize/base/` usually already holds a link per carrier.
+#: `cp src ./name` onto a link to `src` is "the same file" — measured: cp
+#: refused every file, the links stayed links, and the build still failed.
+#: ⛔ `{} +` with an explicit `exit 1`, not `-exec cp {} . \;`: find ignores
+#: the exit status of a `\;` command, so the old form returned rc 0 while cp
+#: failed on every file (measured, same run). Under `+` find exits non-zero
+#: when the command does.
 _KUSTOMIZE_COPY_CMD = (
     "find -L ../../conf.d -maxdepth 1 -type f "
     "\\( -iname '*.yaml' -o -iname '*.yml' \\) ! -name '.*' "
-    "-exec cp {} . \\;"
+    "-exec sh -c 'for f; do rm -f -- \"./${f##*/}\" "
+    "&& cp -- \"$f\" . || exit 1; done' sh {} +"
 )
 
 
@@ -2705,7 +2715,8 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
     `kustomize.buildOptions` configured cluster-side), copy the files
     in instead of linking them. This copies every top-level config file,
     both `.yaml` and `.yml`, following symlinks (a broken link is skipped)
-    and skipping dotfiles:
+    and skipping dotfiles, and replaces any link or file already here with
+    the same name (so it also works after the `ln -s` setup above):
 
     ```bash
     {copy_cmd}

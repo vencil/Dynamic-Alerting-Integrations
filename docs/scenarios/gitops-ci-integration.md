@@ -271,10 +271,10 @@ ln -s ../../conf.d/prod-redis.yaml .
 security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
 ```
 
-那是 kustomize 預設 load-restrictor 的既定行為，不是連結壞掉。`da-tools init` 產出的 workflow 已經帶了這個旗標。若你的部署工具無法傳旗標（部分 ArgoCD 需要在叢集側設 `kustomize.buildOptions`），改用 `cp` 複製檔案而非連結——代價是 `conf.d/` 每次變更都要重新複製。複製時要涵蓋 exporter 讀的兩種拼法（`.yaml` 與 `.yml`，不分大小寫）、跟隨 symlink（`-L`；斷鏈會被略過）並略過 dotfile；只寫 `cp ../../conf.d/*.yaml .` 會悄悄漏掉 `.yml` 租戶：
+那是 kustomize 預設 load-restrictor 的既定行為，不是連結壞掉。`da-tools init` 產出的 workflow 已經帶了這個旗標。若你的部署工具無法傳旗標（部分 ArgoCD 需要在叢集側設 `kustomize.buildOptions`），改用 `cp` 複製檔案而非連結——代價是 `conf.d/` 每次變更都要重新複製。複製時要涵蓋 exporter 讀的兩種拼法（`.yaml` 與 `.yml`，不分大小寫）、跟隨 symlink（`-L`；斷鏈會被略過）並略過 dotfile，並先刪掉 `kustomize/base/` 裡同名的連結或檔案（做過上面 `ln -s` 的人照這條複製才會真的換成檔案；直接 `cp` 會回報 `are the same file`、連結原封不動）；只寫 `cp ../../conf.d/*.yaml .` 會悄悄漏掉 `.yml` 租戶：
 
 ```bash
-find -L ../../conf.d -maxdepth 1 -type f \( -iname '*.yaml' -o -iname '*.yml' \) ! -name '.*' -exec cp {} . \;
+find -L ../../conf.d -maxdepth 1 -type f \( -iname '*.yaml' -o -iname '*.yml' \) ! -name '.*' -exec sh -c 'for f; do rm -f -- "./${f##*/}" && cp -- "$f" . || exit 1; done' sh {} +
 ```
 
 ⛔ **只連結或複製還不夠：`kustomization.yaml` 的 `configMapGenerator.files` 是明列清單，kustomize 不做 glob。** 沒被列進去的檔案永遠不會成為 ConfigMap 的 key，叢集裡的 exporter 就看不到那個租戶，而 `conf.d/` 工具族全都說它存在。`da-tools init` 會列出執行當下 `conf.d/` 頂層的所有設定檔（兩種拼法都算）；不可能當 ConfigMap key 的檔名（`[-._a-zA-Z0-9]` 以外的字元，例如空白或 `=`）與讀不到的項目會被排除，並在 stderr 逐個點名；之後新增的租戶檔要**同時**連結並加進 `files:`。

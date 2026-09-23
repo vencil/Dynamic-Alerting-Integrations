@@ -1856,6 +1856,66 @@ class TestKustomizeBaseEnumeratesConfd:
             # …and it is the very set `files:` is built from.
             assert set(os.listdir(base)) == _top_level_config_names(conf)
 
+    @pytest.mark.skipif(
+        __import__('shutil').which('bash') is None
+        or __import__('shutil').which('find') is None,
+        reason='bash and find are needed to execute the README command')
+    def test_readme_copy_command_replaces_the_setup_links(self):
+        """The copy fallback is for readers who already ran the `ln -s` setup
+        and then hit the load restrictor, so `kustomize/base/` holds a link per
+        carrier. Copying onto a link to the same file is refused by cp ("are
+        the same file"); the old command left every link in place at rc 0
+        (CodeRabbit on PR #1944, measured). Every carrier must end up a
+        regular file with the source bytes."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as gen:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
+            cmd = self._copy_command(gen)
+        with tempfile.TemporaryDirectory() as tmp:
+            if not _symlinks_usable(os.path.join(tmp, 'probe')):
+                pytest.skip('this machine cannot create symlinks')
+            conf = os.path.join(tmp, 'conf.d')
+            base = os.path.join(tmp, 'kustomize', 'base')
+            os.makedirs(conf)
+            os.makedirs(base)
+            for name in ('a.yaml', 'b.yml'):
+                with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
+                    fh.write(f'tenants: {{{name[0]}: {{}}}}\n')
+                os.symlink(os.path.join('..', '..', 'conf.d', name),
+                           os.path.join(base, name))
+            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+                                 capture_output=True, text=True, timeout=30)
+            assert run.returncode == 0, run.stderr
+            for name in ('a.yaml', 'b.yml'):
+                dst = os.path.join(base, name)
+                assert not os.path.islink(dst), f'{name} is still a symlink'
+                with open(dst, encoding='utf-8') as got, \
+                        open(os.path.join(conf, name), encoding='utf-8') as want:
+                    assert got.read() == want.read()
+
+    @pytest.mark.skipif(
+        __import__('shutil').which('bash') is None
+        or __import__('shutil').which('find') is None,
+        reason='bash and find are needed to execute the README command')
+    def test_readme_copy_command_fails_loudly_when_a_copy_fails(self):
+        """`find -exec … \\;` ignores the command's exit status, so a copy that
+        failed on every file still returned rc 0. A destination that cannot be
+        replaced (a directory with the carrier's name) must make it non-zero."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as gen:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
+            cmd = self._copy_command(gen)
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            base = os.path.join(tmp, 'kustomize', 'base')
+            os.makedirs(conf)
+            os.makedirs(os.path.join(base, 'a.yaml'))   # cannot be rm -f'd
+            with open(os.path.join(conf, 'a.yaml'), 'w', encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+                                 capture_output=True, text=True, timeout=30)
+            assert run.returncode != 0, (run.stdout, run.stderr)
+
     # ── blind-review round (#1791): names from the customer's tree ──
 
     @pytest.mark.parametrize('name', [
