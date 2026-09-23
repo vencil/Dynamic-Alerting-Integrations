@@ -2636,6 +2636,11 @@ def _gen_kustomize_base(
 #: skipped it and the copied tree could not build. Under `-L`, `-type f` tests
 #: the target, so a broken link is still skipped — the same file set
 #: `files:` holds.
+#: ⚠️ The price of `-L`: a symlink LOOP (`loop.yaml -> loop.yaml`) makes find
+#: print "Too many levels of symbolic links" and exit 1 after copying the
+#: rest (measured; without `-L` it was rc 0). Left loud on purpose — the loop
+#: is not a carrier, `init` already names it as unreadable, and swallowing
+#: find's rc would also swallow a real copy failure. The README says so.
 _KUSTOMIZE_COPY_CMD = (
     "find -L ../../conf.d -maxdepth 1 -type f "
     "\\( -iname '*.yaml' -o -iname '*.yml' \\) ! -name '.*' "
@@ -2705,6 +2710,9 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
     ```bash
     {copy_cmd}
     ```
+
+    A symlink loop in `conf.d/` (a link that points at itself) makes `find`
+    report it and exit 1 after copying everything else; remove the loop.
 
     It builds with the default restrictor, at the cost of having to re-copy
     whenever `conf.d/` changes — and `files:` still has to name every file.

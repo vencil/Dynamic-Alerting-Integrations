@@ -34,7 +34,8 @@
   argv list 交給 `kubectl`（`shell=False`），中間沒有任何一層會再解析一次
   檔名。`db b.yaml` 不再讓 `basename` 收到兩個引數而掉副檔名，
   `db-a (copy).yaml` 也不再把整條 recipe 炸成無法診斷的語法錯誤。⛔ 但
-  「穿得過 shell」不等於「能當 key」——見下面 `configmap_key_problem`。
+  「穿得過 shell」不等於「能當 key」——見 `_lib_confd.configmap_key_problem`
+  （#1791 起與 `init_project` 共用，本檔 import 它）。
 - **#1797 範例樹**：`CONFDIR` 的預設值指向本 repo 自帶的開發範例樹
   （`db-a` / `db-b`）。照文件的 CI 片段跑會把示範租戶 apply 上生產，所以
   這支對那棵樹**硬擋**，要明示 `ALLOW_SAMPLE_CONFDIR=1` 才放行。
