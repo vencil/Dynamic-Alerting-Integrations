@@ -333,3 +333,28 @@ class TestThePortalOfflineFallbackIsGenerated:
         mod.main()  # returns instead of raising SystemExit
         out = capsys.readouterr().out
         assert "rule-packs-fallback.json is up to date" in out
+
+    def test_a_packorder_that_disagrees_with_the_packs_is_refused(self):
+        """`build_fallback`'s own fail-closed arms, run rather than described.
+
+        ⛔ The projection iterates `packOrder`, so a `packOrder` naming a pack
+        that does not exist would put a `None`-filled entry in the offline
+        catalog, and one MISSING a pack would silently drop it from the offline
+        path while every field check above still passed on what remained. Both
+        are asserts in the builder; the coverage delta on the pull request that
+        added them is what showed neither was ever executed.
+        """
+        mod = _load_module()
+        data = mod.build_platform_data()
+        good_order = list(data["packOrder"])
+
+        ghost = {**data, "packOrder": good_order + ["no_such_pack"]}
+        with pytest.raises(AssertionError, match="packOrder names packs"):
+            mod.build_fallback(ghost)
+
+        dropped = {**data, "packOrder": good_order[:-1]}
+        with pytest.raises(AssertionError, match="disagree"):
+            mod.build_fallback(dropped)
+
+        # Must-not-fire control: the real pair is accepted.
+        assert mod.build_fallback(data)["packOrder"] == good_order

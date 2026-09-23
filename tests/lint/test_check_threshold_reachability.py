@@ -6103,3 +6103,35 @@ def test_the_two_exempted_writers_really_do_refuse_the_inert_shapes():
             f"{rel} binds a predicate that ACCEPTS {bad_key!r} — the refusal "
             f"the census exemption names would then let the shape through"
         )
+
+
+def test_an_unparseable_module_is_reported_not_skipped(tmp_path, monkeypatch):
+    """The census's fail-closed arm, measured rather than asserted in a comment.
+
+    ⛔ A `SyntaxError` under `scripts/` must not make a module VANISH from the
+    population: "we could not read it" and "it writes no `defaults:`" are the two
+    states this whole floor exists to keep apart, and an `except SyntaxError:
+    continue` would have collapsed them silently. The coverage delta on the
+    pull request that added this floor is what surfaced the arm as untested —
+    the branch existed, the claim about it was in a docstring, and nothing ran it.
+    """
+    root = tmp_path / "scripts"
+    (root / "tools" / "dx").mkdir(parents=True)
+    broken = root / "tools" / "dx" / "half_written.py"
+    broken.write_text("def build(:\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "_DEFAULTS_CENSUS_ROOT", root)
+
+    census = gate._defaults_writer_census()
+    rel = "scripts/tools/dx/half_written.py"
+    assert census.get(rel) == {"PARSE-FAIL"}, census
+
+    errors: list[str] = []
+    gate._report_defaults_writer_census(errors)
+    named = [e for e in errors if "half_written.py" in e]
+    assert len(named) == 1 and "UNCOVERED-DEFAULTS-WRITER" in named[0], errors
+    assert "PARSE-FAIL" in named[0], (
+        "the report must say WHY the module is in the population — a reader who "
+        "cannot tell 'it writes defaults' from 'it does not parse' gets sent to "
+        "the wrong repair"
+    )
