@@ -44,6 +44,8 @@ package main
 //     module has one today, internal/batchpr/git_shell.go
 //     (`git status --porcelain` in collectRebaseConflicts), which walks a PR
 //     work tree, not the exporter's conf.d.
+//   - reflection that looks a method up by string (reflect.Value.MethodByName
+//     ("Readdirnames")…): no selector names the entry point in the source.
 //   - cgo and raw syscalls.
 //   - third-party dependencies (enumeration inside a module this one imports).
 //   - a conf.d reader that opens files by a name it already knows without

@@ -19,7 +19,7 @@ package config
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
 // ⛔ It is the only RECURSIVE conf.d walker in the exporter module's
 // production paths — pinned by app/confd_walker_population_test.go, which
-// fails on any other production function that references a stdlib
+// fails on any other production function that references a stdlib DIRECT
 // directory-listing entry point (see that file's NOT GUARDED list;
 // cmd/da-batchpr's walkFilesDir is excluded by name: it walks a PR payload,
 // not conf.d). (Not the only reader of conf.d in the repo: tenant-api
