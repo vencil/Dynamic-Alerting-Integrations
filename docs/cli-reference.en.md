@@ -1881,59 +1881,42 @@ ConfigMap partial update tool with preview (--diff) and direct application suppo
 **Syntax**
 
 ```bash
-docker run --rm \
-  [-v <config_dir>:/etc/config:ro] \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  patch-config [<tenant> <metric> <value> | --diff] [options]
+python3 scripts/tools/ops/patch_config.py [--diff [--json]] <tenant> <metric> <value>
 ```
 
-**Required Parameters**
-
-Choose one mode:
-
-1. **Update Mode**: `<tenant> <metric> <value>`
-2. **Preview Mode**: `--diff`
+Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubectl` on PATH and a working kubeconfig. `<value>` is a concrete value, `default` (delete the tenant's key) or `disable`.
 
 **Options**
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--namespace <NS>` | K8s namespace | `monitoring` |
-| `--configmap <CM>` | ConfigMap name | `threshold-config` |
-| `--dry-run` | Show changes without applying | false |
-| `--yes` | Skip confirmation prompt | false |
+| Parameter | Description |
+|-----------|-------------|
+| `--diff` | Preview only, apply nothing |
+| `--json` | Print the preview as JSON; requires `--diff` |
 
-**Output**
+**Locating the tenant**: the key patched is **the one** YAML key in `threshold-config` whose `tenants:` mapping declares the tenant (whatever its name, casing or `.yml` spelling), and the patch is written back to that key. The `_defaults` key is matched in any casing, `.yaml` or `.yml`. When no key declares the tenant, a concrete value creates `<tenant>.yaml` in the multi-file layout and goes into `config.yaml` in the legacy layout. `default` is a no-op when the tenant does not set that metric (exit `0`), as is a value the target already holds as its source text; a tenant block it leaves empty is kept.
 
-Preview or confirmation message.
+**Reading**: a scalar is its source text, never type-converted (`010` is `010`).
+
+**Refused (exit `2`, nothing written)**: two or more keys declaring the tenant; no readable key declaring the tenant while some key cannot be read (the message names those keys); a merge key `<<` on the path being read; a ConfigMap whose `data` is not a mapping; two `_defaults` keys, or neither a `_defaults` nor a `config.yaml` key; a tenant block that is not a mapping; a key to rewrite that declares more than one tenant (except `config.yaml` in the legacy layout); a key to create that starts with `.` or `_`. ⚠️ The rewrite re-serialises the key's other values with YAML 1.1 types and drops its comments.
+
+**`--diff`**: `changed` is apply's own verdict — `false` when apply would send no patch. Under `--json`, `before.value` is the source text (`null` for null, the YAML text for a mapping or sequence).
+
+**`--json`**: stdout is one JSON document on every terminal path; `--json --help` exits `0` with `status: "help"`. On exit `2` it carries the preview keys with empty values plus `status: "caller_error"` and `reason` (`json_requires_diff` / `bad_arguments` / `configmap_shape` / `kubectl_failed` / `unexpected_error`).
 
 **Examples**
 
 ```bash
-# Preview current ConfigMap and changes
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  patch-config --diff
-
-# Update single metric
-docker run --rm \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  patch-config db-a mysql_connections 100 --dry-run
-
-# Apply update
-docker run --rm \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  patch-config db-a mysql_connections 100 --yes
+python3 scripts/tools/ops/patch_config.py --diff db-a mysql_connections 100
+python3 scripts/tools/ops/patch_config.py --diff --json db-a mysql_connections 100 | jq .changed
+python3 scripts/tools/ops/patch_config.py db-a mysql_connections 100
 ```
 
 **Exit Codes**
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Uncaught exception (traceback) — measured when `kubectl` is not on PATH |
-| `2` | Caller error: `kubectl get configmap threshold-config -n monitoring` exited non-zero (e.g. cluster unreachable, ConfigMap missing, no permission), a legacy-format ConfigMap without `config.yaml`, `--json` without `--diff` (refuses to apply), or arguments argparse rejects |
+| `0` | Success, including a `default` no-op |
+| `2` | Caller error: `kubectl` could not run or exited non-zero (e.g. not on PATH, cluster unreachable, ConfigMap missing, no permission), any refusal above, `--json` without `--diff` (refuses to apply), arguments argparse rejects, or an unexpected exception |
 
 ---
 

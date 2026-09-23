@@ -339,7 +339,7 @@ spec:
 python3 scripts/tools/ops/patch_config.py <tenant> <key> <value>
 ```
 
-ConfigMap updates immediately, threshold-exporter auto-applies the change in the next reload cycle (30-60s).
+ConfigMap updates immediately, threshold-exporter auto-applies the change in the next reload cycle. It patches the key whose `tenants:` mapping declares the tenant; it refuses when that key cannot be determined (see [`cli-reference.en.md` patch-config](../cli-reference.en.md#patch-config)).
 
 **③ Drift Reconciliation** — After break-glass patching, SRE **must** backfill a PR to sync changes back to Git. Otherwise, the next GitOps sync will overwrite the K8s config back to the Git version — this is GitOps' built-in self-healing feature, naturally preventing "emergency fix but forgot to update the code" technical debt.
 

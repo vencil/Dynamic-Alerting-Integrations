@@ -10,6 +10,7 @@
   6. run_cmd() — 指令執行
 """
 
+import json
 from unittest import mock
 
 import pytest
@@ -30,7 +31,7 @@ class TestGetCurrentValue:
             }
         }
         val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "mysql_connections")
-        assert val == 50
+        assert val == "50"
         assert source == "tenant"
 
     def test_multifile_defaults_fallback(self):
@@ -42,7 +43,7 @@ class TestGetCurrentValue:
             }
         }
         val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "mysql_connections")
-        assert val == 70
+        assert val == "70"
         assert source == "defaults"
 
     def test_multifile_not_found(self):
@@ -60,7 +61,7 @@ class TestGetCurrentValue:
             }
         }
         val, source = pc.get_current_value(cm_data, "legacy", "db-a", "mysql_connections")
-        assert val == 50
+        assert val == "50"
         assert source == "tenant"
 
 
@@ -105,11 +106,10 @@ class TestDiffPreview:
         assert "disabled" in diff["after"]["state"]
 
     def test_no_change(self):
-        """值未變更時 changed=False。"""
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: '50'\n",
             }
         }
         diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
@@ -201,7 +201,7 @@ class TestDiffPreviewDeclaredTier:
         assert pc.get_current_value(
             cm_data, "legacy", "db-a", self.DECLARED)[1] == "declared"
         assert pc.get_current_value(
-            cm_data, "legacy", "db-a", "mysql_connections") == (70, "defaults")
+            cm_data, "legacy", "db-a", "mysql_connections") == ("70", "defaults")
 
 
 class TestFindAffectedAlerts:
@@ -223,7 +223,7 @@ class TestDetectMode:
 
     def test_multifile(self):
         """測試多檔案模式偵測。"""
-        cm_data = {"data": {"_defaults.yaml": "stuff"}}
+        cm_data = {"data": {"_defaults.yaml": "defaults: {}"}}
         assert pc.detect_mode(cm_data) == "multi-file"
 
     def test_legacy(self):
@@ -274,9 +274,13 @@ class TestRunCmd:
         result = pc.run_cmd("echo hello")
         assert result == "hello"
 
-    def test_failure_exits(self):
-        with pytest.raises(SystemExit):
+    def test_failure_raises(self):
+        with pytest.raises(pc.KubectlError):
             pc.run_cmd(["false"])
+
+    def test_missing_binary_raises(self):
+        with pytest.raises(pc.KubectlError):
+            pc.run_cmd(["/nonexistent/kubectl-for-test"])
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +325,8 @@ class TestPatchLegacy:
         }
         result = pc.patch_legacy(cm_data, "db-a", "mysql_connections", "default")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert "db-a" not in patched["tenants"]
+        # 空區塊保留：刪掉會把租戶除名
+        assert patched["tenants"]["db-a"] == {}
 
     def test_new_tenant(self):
         cm_data = {
@@ -332,11 +337,6 @@ class TestPatchLegacy:
         result = pc.patch_legacy(cm_data, "db-new", "cpu", "90")
         patched = yaml.safe_load(result["data"]["config.yaml"])
         assert patched["tenants"]["db-new"]["cpu"] == "90"
-
-    def test_missing_config_yaml_exits(self):
-        cm_data = {"data": {}}
-        with pytest.raises(SystemExit):
-            pc.patch_legacy(cm_data, "db-a", "cpu", "90")
 
     def test_no_tenants_key(self):
         cm_data = {"data": {"config.yaml": yaml.dump({"defaults": {"cpu": 50}})}}
@@ -401,7 +401,7 @@ class TestGetCurrentValueExtended:
             }
         }
         val, source = pc.get_current_value(cm_data, "legacy", "db-a", "mysql_connections")
-        assert val == 70
+        assert val == "70"
         assert source == "defaults"
 
     def test_legacy_not_found(self):
@@ -517,17 +517,9 @@ class TestMainCLI:
 
     @mock.patch("patch_config.run_cmd")
     def test_json_without_diff_is_caller_error(self, mock_run, capsys):
-        """#1112: `--json` 無 `--diff` → exit 2、stdout 空、什麼都不套用。
+        """`--json` 無 `--diff` → exit 2、stdout 一份 envelope、什麼都不套用。
 
-        這組 flag 在**會改東西**的工具上是矛盾的：`--json` 要的是 diff 預覽
-        文件（help 一直寫著 "requires --diff"），而沒有 `--diff` 意思是「真的
-        套下去」。舊行為是默默丟掉 `--json` 然後 **APPLY** ——要預覽的 caller
-        拿到的是一次真實 ConfigMap 寫入。契約因此是 fail-loud，不是「吐一份
-        文件」：沒有誠實的文件可吐，服務這個請求本身就是 bug。
-
-        `mock_run.assert_not_called()` 是本測試的核心：它釘住「**沒有套用**」，
-        而不只是「exit code 對」——若有人把檢查移到 run_cmd 之後，exit code
-        仍是 2，但 ConfigMap 已經被改了。
+        `mock_run.assert_not_called()` 釘住「沒有套用」，不只是 exit code。
         """
         with mock.patch("sys.argv", [
             "patch_config.py", "--json", "db-a", "cpu", "90",
@@ -537,10 +529,22 @@ class TestMainCLI:
 
         assert exc_info.value.code == 2          # EXIT_CALLER_ERROR
         captured = capsys.readouterr()
-        assert captured.out == ""                # 被拒絕的請求不寫 stdout
+        doc = json.loads(captured.out)
+        assert (doc["status"], doc["reason"]) == ("caller_error",
+                                                  "json_requires_diff")
         assert "--diff" in captured.err          # 錯誤訊息說明矛盾何在
-        assert "ERROR" in captured.err
         mock_run.assert_not_called()             # ⇒ kubectl 沒被叫，什麼都沒套用
+
+    @pytest.mark.parametrize("flag", ["--js", "--j"])
+    @mock.patch("patch_config.run_cmd")
+    def test_abbreviated_json_flag_still_gets_an_envelope(self, mock_run, capsys, flag):
+        """argparse 接受 `--js`＝`--json`；參數錯誤時也要吐 envelope。"""
+        with mock.patch("sys.argv", ["patch_config.py", "tenant-x", "--diff", flag]):
+            with pytest.raises(SystemExit) as exc_info:
+                pc.main()
+        assert exc_info.value.code == 2
+        assert json.loads(capsys.readouterr().out)["reason"] == "bad_arguments"
+        mock_run.assert_not_called()
 
     @mock.patch("patch_config.os.remove")
     @mock.patch("patch_config.run_cmd")
@@ -554,3 +558,743 @@ class TestMainCLI:
             pc.main()
         out = capsys.readouterr().out
         assert "Success" in out
+
+
+# ---------------------------------------------------------------------------
+# #1927 / #1928 — 租戶的載體 key 看內容、不看檔名
+# ---------------------------------------------------------------------------
+# 這一組測的是 `locate_tenant_key` 這個唯一述詞，以及讀／寫兩條路徑都經過它。
+# ⛔ fixture 刻意用中性名稱（tenant-x / team-x / other-t），不用 repo 的範例
+# 租戶 id；其中「檔名 ≠ 租戶」那格正是 stem 比對必然看錯的形狀。
+
+_DEFAULTS = "defaults:\n  cpu: 70\n"
+_DEEP = "a: " + "[" * 1000 + "]" * 1000 + "\n"
+
+
+def _cm(**data):
+    return {"data": data}
+
+
+def _decl(tenant, **metrics):
+    return yaml.safe_dump({"tenants": {tenant: metrics}})
+
+
+class TestLocateTenantKey:
+    """`locate_tenant_key`：哪一個 key 的 `tenants:` 宣告了這個租戶。"""
+
+    def test_yml_carrier_is_found(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yml"
+
+    def test_uppercase_yaml_carrier_is_found(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "TENANT-X.YAML": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "TENANT-X.YAML"
+
+    def test_key_name_differs_from_tenant(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "team-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "team-x.yaml"
+
+    def test_same_named_key_that_does_not_declare_the_tenant_is_not_it(self):
+        """`tenant-x.yaml` 存在但宣告的是別的租戶 ⇒ 它不是 tenant-x 的載體。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("other-t", cpu="1"),
+                    "team-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "team-x.yaml"
+
+    def test_two_keys_declaring_one_tenant_is_refused_naming_both(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50"),
+                    "tenant-x.yml": _decl("tenant-x", cpu="60")})
+        with pytest.raises(pc.ConfigMapShapeError) as exc:
+            pc.locate_tenant_key(cm, "tenant-x")
+        assert "tenant-x.yaml" in str(exc.value)
+        assert "tenant-x.yml" in str(exc.value)
+
+    @pytest.mark.parametrize("broken", [
+        "tenants: {tenant-x: [unclosed\n",
+        "tenants:\n  other-t: {}\n  other-t: {}\n",
+        _DEEP,
+        "tenants:\n  ? [a]\n  : {}\n",
+    ], ids=["syntax", "tenants-duplicate", "too-deep", "tenants-non-scalar-key"])
+    def test_other_key_read_past_does_not_block_the_target(self, broken):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50"),
+                    "broken.yaml": broken})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
+        assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "6") is not None
+
+    def test_merge_key_in_other_tenants_is_still_refused(self):
+        """`<<` 可能藏宣告。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50"),
+                    "other.yaml": "b: &b {u: {}}\ntenants:\n  <<: *b\n"})
+        with pytest.raises(pc.ConfigMapShapeError, match="merge"):
+            pc.locate_tenant_key(cm, "tenant-x")
+
+    def test_defaults_deep_duplicate_does_not_block_writes(self):
+        cm = _cm(**{"_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.build_patch(cm, pc.detect_mode(cm), "tenant-x", "cpu", "6")
+
+    @pytest.mark.parametrize("own", [
+        "tenants: {tenant-x: [unclosed\n",
+        "tenants:\n  tenant-x: {}\n  tenant-x: {}\n",
+        _DEEP,
+    ], ids=["syntax", "tenants-duplicate", "too-deep"])
+    def test_broken_own_key_fails_read_and_write(self, own):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "tenant-x.yaml": own})
+        with pytest.raises(pc.ConfigMapShapeError, match="tenant-x.yaml"):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        with pytest.raises(pc.ConfigMapShapeError, match="tenant-x.yaml"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+
+    def test_tenants_block_in_reserved_key_is_not_a_declaration(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS + "tenants:\n  tenant-x: {cpu: 1}\n",
+                    "_profiles.yaml": _decl("tenant-x", cpu="2")})
+        assert pc.locate_tenant_key(cm, "tenant-x") is None
+
+    def test_hidden_key_is_not_a_declaration(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    ".tenant-x.yaml": _decl("tenant-x", cpu="1"),
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
+
+    def test_reserved_key_does_not_make_a_real_carrier_ambiguous(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS + "tenants:\n  tenant-x: {cpu: 1}\n",
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
+
+
+class TestDefaultsKeyDetection:
+    """`_defaults` 的偵測：大小寫摺疊、.yaml/.yml 兩種拼法。"""
+
+    def test_defaults_yml_is_multi_file(self):
+        cm = _cm(**{"_defaults.yml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.detect_mode(cm) == "multi-file"
+
+    def test_uppercase_defaults_is_multi_file(self):
+        cm = _cm(**{"_DEFAULTS.YAML": _DEFAULTS})
+        assert pc.detect_mode(cm) == "multi-file"
+
+    def test_platform_tiers_are_read_from_defaults_yml(self):
+        cm = _cm(**{"_defaults.yml": "defaults:\n  cpu: 70\n"
+                                     "optional_overrides: [mem]\n"})
+        assert pc.read_platform_tiers(cm, "multi-file") == ({"cpu": "70"}, ["mem"])
+
+    def test_two_keys_folding_to_defaults_is_refused(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "_Defaults.yml": _DEFAULTS})
+        with pytest.raises(pc.ConfigMapShapeError) as exc:
+            pc.detect_mode(cm)
+        assert "_defaults.yaml" in str(exc.value)
+        assert "_Defaults.yml" in str(exc.value)
+
+    def test_neither_defaults_nor_config_yaml_is_refused(self):
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.detect_mode(_cm(**{"tenant-x.yaml": _decl("tenant-x", cpu="1")}))
+
+    def test_legacy_is_still_recognised(self):
+        assert pc.detect_mode(_cm(**{"config.yaml": "tenants: {}\n"})) == "legacy"
+
+
+class TestRoundtripRead:
+    """`read_roundtrip_value`：`_lib.sh get_cm_value` 印的那個值。"""
+
+    def test_value_from_yml_carrier(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yml": _decl("tenant-x", cpu="55")})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "55"
+
+    def test_value_from_carrier_named_differently(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "team-x.yaml": _decl("tenant-x", cpu="55")})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "55"
+
+    def test_metric_absent_prints_default(self):
+        """往返協定：租戶在、metric 不在 ⇒ `default`（送回 patch_config 即刪 key）。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="55")})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "mem") == "default"
+
+    def test_tenant_absent_is_refused(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "other-t.yaml": _decl("other-t", cpu="1")})
+        with pytest.raises(pc.ConfigMapShapeError) as exc:
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        assert "tenant-x" in str(exc.value)
+
+    def test_legacy_tenant_absent_is_refused(self):
+        cm = _cm(**{"config.yaml": _decl("other-t", cpu="1")})
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+
+    def test_legacy_tenant_present(self):
+        cm = _cm(**{"config.yaml": _decl("tenant-x", cpu="42")})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "42"
+
+    def test_unrecognised_schema_is_refused(self):
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.read_roundtrip_value(
+                _cm(**{"tenant-x.yaml": _decl("tenant-x", cpu="1")}),
+                "tenant-x", "cpu")
+
+    def test_shell_entry_point_keeps_stdout_empty_on_refusal(self, capsys):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "a.yaml": _decl("tenant-x", cpu="1"),
+                    "b.yaml": _decl("tenant-x", cpu="2")})
+        rc = pc.shell_get_cm_value(json.dumps(cm), "tenant-x", "cpu")
+        out = capsys.readouterr()
+        assert rc != 0
+        assert out.out == ""
+        assert "a.yaml" in out.err and "b.yaml" in out.err
+
+
+class TestWritePathUsesTheLocator:
+    """寫入路徑 patch 的是定位到的那個 key，不管它叫什麼。"""
+
+    def test_existing_yml_carrier_is_patched_not_a_new_yaml(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yml": _decl("tenant-x", cpu="50")})
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", "90")
+        assert list(patch["data"]) == ["tenant-x.yml"]
+        assert yaml.safe_load(patch["data"]["tenant-x.yml"]) == {
+            "tenants": {"tenant-x": {"cpu": "90"}}}
+
+    def test_carrier_named_differently_is_patched_in_place(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "team-x.yaml": _decl("tenant-x", cpu="50")
+                    + "# kept\n"})
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", "default")
+        assert list(patch["data"]) == ["team-x.yaml"]
+
+    def test_default_for_undeclared_tenant_is_a_noop(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "other-t.yaml": _decl("other-t", cpu="1")})
+        assert pc.patch_multifile(cm, "tenant-x", "cpu", "default") is None
+
+    def test_concrete_value_for_undeclared_tenant_creates_its_key(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS})
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", "90")
+        assert list(patch["data"]) == ["tenant-x.yaml"]
+
+    def test_write_refuses_when_two_keys_declare_the_tenant(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "a.yaml": _decl("tenant-x", cpu="1"),
+                    "b.yml": _decl("tenant-x", cpu="2")})
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "90")
+
+    @mock.patch("patch_config.run_cmd")
+    def test_cli_default_for_undeclared_tenant_writes_nothing(self, mock_run,
+                                                              capsys):
+        """對一個沒讀到的租戶送 `default` 的呼叫端：不得順手建出新租戶。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS})
+        mock_run.side_effect = [json.dumps(cm)]
+        with mock.patch("sys.argv",
+                        ["patch_config.py", "tenant-x", "cpu", "default"]):
+            pc.main()  # rc 0：不得 SystemExit
+        assert mock_run.call_count == 1  # 只有 get，沒有 patch
+        assert "No-op" in capsys.readouterr().err
+
+    @mock.patch("patch_config.run_cmd")
+    def test_cli_ambiguous_tenant_exits_2_and_applies_nothing(self, mock_run,
+                                                              capsys):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "a.yaml": _decl("tenant-x", cpu="1"),
+                    "b.yaml": _decl("tenant-x", cpu="2")})
+        mock_run.side_effect = [json.dumps(cm)]
+        with mock.patch("sys.argv",
+                        ["patch_config.py", "tenant-x", "cpu", "90"]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        assert exc.value.code == 2
+        assert mock_run.call_count == 1
+        assert "a.yaml" in capsys.readouterr().err
+
+
+
+# ---------------------------------------------------------------------------
+# 載體與值的形狀
+# ---------------------------------------------------------------------------
+
+class TestCarrierAndValueShapes:
+
+    def test_non_yaml_key_is_not_a_carrier(self):
+        """副檔名是候選條件之一——`notes.txt` 裡的 `tenants:` 不算宣告。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "notes.txt": _decl("tenant-x", cpu="1"),
+                    "tenant-x.yaml": _decl("tenant-x", cpu="50")})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
+
+    @pytest.mark.parametrize("tid", ["010", "yes"])
+    def test_tenant_id_is_the_key_text(self, tid):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tx.yaml": f"tenants:\n  {tid}:\n    cpu: '5'\n"})
+        assert pc.locate_tenant_key(cm, tid) == "tx.yaml"
+        assert pc.read_roundtrip_value(cm, tid, "cpu") == "5"
+
+    def test_legacy_get_current_value_reads_a_carrier_other_than_config_yaml(self):
+        """legacy 版面下租戶在 `extra.yaml`，不是 `config.yaml`。"""
+        cm = _cm(**{"config.yaml": "defaults:\n  m: 1\n",
+                    "extra.yaml": "tenants:\n  tb: {m: '2'}\n"})
+        assert pc.get_current_value(cm, "legacy", "tb", "m") == ("2", "tenant")
+
+    def test_legacy_default_keeps_the_empty_block_outside_config_yaml(self):
+        """`config.yaml` 以外的載體裡，刪掉空區塊會把租戶除名。"""
+        cm = _cm(**{"config.yaml": "tenants: {}\n",
+                    "extra.yaml": "tenants:\n  tb: {m: '2'}\n"})
+        patch = pc.patch_legacy(cm, "tb", "m", "default")
+        assert yaml.safe_load(patch["data"]["extra.yaml"]) == {"tenants": {"tb": {}}}
+
+    def test_legacy_default_keeps_the_empty_block_in_config_yaml_too(self):
+        """還原成 default 後租戶仍註冊，再讀不會 rc 2。"""
+        cm = _cm(**{"config.yaml": "tenants:\n  tb: {m: '2'}\n"})
+        patch = pc.patch_legacy(cm, "tb", "m", "default")
+        assert yaml.safe_load(patch["data"]["config.yaml"]) == {"tenants": {"tb": {}}}
+        assert pc.read_roundtrip_value(_cm(**patch["data"]), "tb", "m") == "default"
+
+    @pytest.mark.parametrize("raw", [
+        "{default: '5', overrides: []}",
+        "[1, 2]",
+    ])
+    def test_non_roundtrippable_value_is_refused(self, raw):
+        """mapping／sequence 值（排程式、_routing）無法靠字串寫入還原。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": f"tenants:\n  tenant-x:\n    cpu: {raw}\n"})
+        with pytest.raises(pc.ConfigMapShapeError) as exc:
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        assert "cpu" in str(exc.value)
+
+    @pytest.mark.parametrize("raw,exporter_text", [
+        ("'70'", "70"), ("70", "70"), ("0.5", "0.5"), ("disable", "disable"),
+        ("010", "010"), ("1:30", "1:30"), ("0b11", "0b11"), ("1_000", "1_000"),
+        ("true", "true"), ("yes", "yes"), ("'010'", "010"), ("|-\n      y", "y"),
+        ("!!int 010", "010"), ("!!float 80", "80"), ("!!bool true", "true"),
+    ])
+    def test_scalar_is_read_as_exporter_text_and_survives_a_write_back(
+            self, raw, exporter_text):
+        """讀 → 用 patch-config 寫回 → 再讀：兩次都是 exporter 看到的原文。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": f"tenants:\n  tenant-x:\n    cpu: {raw}\n"})
+        first = pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        assert first == exporter_text
+        written = pc.patch_multifile(cm, "tenant-x", "cpu", first)["data"]
+        again = pc.read_roundtrip_value(_cm(**{**cm["data"], **written}),
+                                        "tenant-x", "cpu")
+        assert again == exporter_text
+        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == (
+            exporter_text, "tenant")
+
+    @pytest.mark.parametrize("block", ["5", "[a]", "'str'"])
+    def test_tenant_block_that_is_not_a_mapping_is_refused(self, block):
+        """讀取不得印 default、寫入不得靜默蓋成 {}。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": f"tenants:\n  tenant-x: {block}\n"})
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "9")
+
+    def test_null_tenant_block_is_an_empty_registered_tenant(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": "tenants:\n  tenant-x:\n"})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "default"
+
+    @pytest.mark.parametrize("defaults", ["defaults: [unclosed\n", "- a\n"])
+    def test_unusable_defaults_is_refused_only_by_diff(self, defaults):
+        cm = _cm(**{"_defaults.yaml": defaults,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="5")})
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        assert pc.build_patch(cm, pc.detect_mode(cm), "tenant-x", "cpu", "9")
+        with pytest.raises(pc.ConfigMapShapeError, match="_defaults.yaml"):
+            pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")
+
+    @pytest.mark.parametrize("tenant", ["_x", ".x", "_defaults"])
+    def test_new_key_that_is_not_a_carrier_is_refused(self, tenant):
+        """`_x.yaml`／`.x.yaml`／`_defaults.yaml` 不會被讀成租戶載體。"""
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.patch_multifile(_cm(**{"_defaults.yaml": _DEFAULTS}),
+                               tenant, "cpu", "9")
+
+    def test_legacy_empty_config_yaml_is_not_reported_missing(self):
+        """key 在、內容空，不是「not found」。"""
+        patch = pc.patch_legacy(_cm(**{"config.yaml": ""}), "tb", "m", "1")
+        assert yaml.safe_load(patch["data"]["config.yaml"]) == {
+            "tenants": {"tb": {"m": "1"}}}
+
+    @pytest.mark.parametrize("word", ["Default", "DEFAULT"])
+    def test_default_is_case_insensitive(self, word):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("tenant-x", cpu="5")})
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", word)
+        assert yaml.safe_load(patch["data"]["tenant-x.yaml"]) == {
+            "tenants": {"tenant-x": {}}}
+        assert pc.patch_multifile(_cm(**{"_defaults.yaml": _DEFAULTS}),
+                                  "tenant-x", "cpu", word) is None
+
+    @pytest.mark.parametrize("stdin", ["", "not json"])
+    def test_shell_entry_point_refuses_unparseable_input(self, stdin, capsys):
+        """kubectl 失敗時 stdin 為空——不得印 `default`、不得 rc 0。"""
+        rc = pc.shell_get_cm_value(stdin, "tenant-x", "cpu")
+        out = capsys.readouterr()
+        assert rc != 0
+        assert out.out == ""
+        assert "get_cm_value:" in out.err
+
+
+# ---------------------------------------------------------------------------
+# 節點讀取：只讀原文、不建構；歧義一律拒絕
+# ---------------------------------------------------------------------------
+
+_T = "tenants:\n  tenant-x:\n    cpu: '5'\n"
+
+
+def _two(text, other=None):
+    data = {"_defaults.yaml": _DEFAULTS, "tenant-x.yaml": text}
+    if other is not None:
+        data["other-t.yaml"] = other
+    return _cm(**data)
+
+
+class TestNodeReader:
+
+    @pytest.mark.parametrize("other", [
+        "tenants:\n  other-t:\n    note: 2020-13-45\n",
+        "tenants:\n  other-t:\n    cpu: !foo 80\n",
+    ])
+    def test_value_pyyaml_cannot_construct_does_not_block_other_tenants(
+            self, other):
+        cm = _two(_T, other)
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == (
+            "5", "tenant")
+
+    def test_custom_tag_value_is_its_text(self):
+        cm = _two("tenants:\n  tenant-x:\n    cpu: !foo 80\n")
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "80"
+
+    @pytest.mark.parametrize("text", [
+        "tenants:\n  tenant-x:\n    cpu: '1'\n    cpu: '2'\n",
+        "misc:\n  a: 1\n  a: 2\ntenants:\n  tenant-x: {}\n",
+    ], ids=["metric", "elsewhere"])
+    def test_duplicate_key_is_refused(self, text):
+        with pytest.raises(pc.ConfigMapShapeError, match="twice"):
+            pc.read_roundtrip_value(_two(text), "tenant-x", "cpu")
+
+    @pytest.mark.parametrize("text", [
+        "b: &b {cpu: '5'}\ntenants:\n  tenant-x:\n    <<: *b\n",
+        "b: &b {tenant-x: {}}\ntenants:\n  <<: *b\n",
+    ], ids=["in-block", "in-tenants"])
+    def test_merge_key_on_the_lookup_path_is_refused(self, text):
+        with pytest.raises(pc.ConfigMapShapeError, match="merge"):
+            pc.read_roundtrip_value(_two(text), "tenant-x", "cpu")
+
+    def test_merge_key_off_the_lookup_path_is_read_past(self):
+        """他租戶區塊裡的 `<<` 不擋 tenant-x。"""
+        other = "b: &b {cpu: '1'}\ntenants:\n  other-t:\n    <<: *b\n"
+        assert pc.read_roundtrip_value(_two(_T, other), "tenant-x", "cpu") == "5"
+
+    def test_null_tenant_key_declares_nothing(self):
+        """null key 不宣告任何租戶。"""
+        cm = _two("tenants:\n  ~: {cpu: '1'}\n  tenant-x: {cpu: '5'}\n")
+        assert pc.locate_tenant_key(cm, "~") is None
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+
+    def test_non_scalar_key_on_the_lookup_path_is_refused(self):
+        text = "tenants:\n  ? [a]\n  : {}\n  tenant-x: {cpu: '5'}\n"
+        with pytest.raises(pc.ConfigMapShapeError, match="non-scalar"):
+            pc.read_roundtrip_value(_two(text), "tenant-x", "cpu")
+
+    def test_only_the_first_document_is_read(self):
+        """第二份文件以後的宣告、重複 key、語法錯都不讀。"""
+        cm = _two(_T + "---\ntenants:\n  other-t: {}\n  other-t: {}\n"
+                       "---\nx: [unclosed\n")
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        assert pc.locate_tenant_key(cm, "other-t") is None
+
+    @pytest.mark.parametrize("text", ["\ufeff" + _T, _T.replace("\n", "\r\n")],
+                             ids=["bom", "crlf"])
+    def test_bom_and_crlf_carriers(self, text):
+        cm = _two(text)
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        written = pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]
+        assert pc.read_roundtrip_value(_cm(**{**cm["data"], **written}),
+                                       "tenant-x", "cpu") == "6"
+
+    @pytest.mark.parametrize("raw,why", [
+        ("~", "null"), ("null", "null"), ("", "null"), ("!!null ''", "null"),
+        ("|\n      x", "newline"),
+    ])
+    def test_value_a_string_write_cannot_restore_is_refused(self, raw, why):
+        cm = _two(f"tenants:\n  tenant-x:\n    cpu: {raw}\n")
+        with pytest.raises(pc.ConfigMapShapeError, match=why):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+
+
+class TestDiffBeforeAndChanged:
+
+    def test_before_value_is_source_text_in_both_tiers(self):
+        cm = _cm(**{"_defaults.yaml": "defaults:\n  mem: !!float 80\n",
+                    "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu: !!int 010\n"})
+        for metric, text in (("cpu", "010"), ("mem", "80")):
+            diff = pc.diff_preview(cm, "multi-file", "tenant-x", metric, "9")
+            assert diff["before"]["value"] == text
+
+    def test_null_tenant_value_is_none(self):
+        cm = _two("tenants:\n  tenant-x:\n    cpu: ~\n")
+        before = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["before"]
+        assert (before["value"], before["source"]) == (None, "tenant")
+
+    def test_mapping_value_is_its_yaml_text(self):
+        cm = _two("tenants:\n  tenant-x:\n    cpu: {default: '5', overrides: []}\n")
+        value = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu",
+                                "9")["before"]["value"]
+        assert isinstance(value, str)
+        assert yaml.safe_load(value) == {"default": "5", "overrides": []}
+
+    @pytest.mark.parametrize("data", [
+        {"_defaults.yaml": _DEFAULTS},
+        {"_defaults.yaml": _DEFAULTS, "tenant-x.yaml": _decl("tenant-x", mem="1")},
+    ], ids=["tenant-undeclared", "metric-absent"])
+    def test_default_that_apply_skips_is_not_a_change(self, data):
+        cm = _cm(**data)
+        diff = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "default")
+        assert diff["changed"] is False
+        assert pc.patch_multifile(cm, "tenant-x", "cpu", "default") is None
+
+    def test_default_that_removes_a_value_is_a_change(self):
+        cm = _two(_T)
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu",
+                               "default")["changed"] is True
+        assert pc.patch_multifile(cm, "tenant-x", "cpu", "default") is not None
+
+    @mock.patch("patch_config.os.remove")
+    @mock.patch("patch_config.run_cmd")
+    def test_apply_writes_despite_an_unparseable_defaults_key(self, mock_run, _rm):
+        cm = _cm(**{"_defaults.yaml": "defaults: [unclosed\n",
+                    "tenant-x.yaml": _T})
+        mock_run.side_effect = [json.dumps(cm), ""]
+        with mock.patch("sys.argv", ["patch_config.py", "tenant-x", "cpu", "9"]):
+            pc.main()
+        assert mock_run.call_count == 2
+
+
+    @pytest.mark.parametrize("defaults,tenant,value", [
+        ("defaults:\n  cpu: '70'\n", "tenants:\n  tenant-x: {}\n", "70"),
+        (_DEFAULTS, "tenants:\n  tenant-x:\n    cpu: ~\n", "None"),
+    ], ids=["inherited-same-number", "null-vs-None"])
+    def test_changed_is_what_apply_would_write(self, defaults, tenant, value):
+        cm = _cm(**{"_defaults.yaml": defaults, "tenant-x.yaml": tenant})
+        diff = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", value)
+        assert diff["changed"] is True
+        assert pc.patch_multifile(cm, "tenant-x", "cpu", value)["data"] != cm["data"]
+
+
+class TestWriteScope:
+    """寫入只改宣告單一租戶的 key；legacy 的 `config.yaml` 例外。"""
+
+    _SHARED = "tenants:\n  tenant-x: {cpu: '5'}\n  other-t: {cpu: '1'}\n"
+
+    def test_key_declaring_two_tenants_is_refused_naming_it(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "shared.yaml": self._SHARED})
+        with pytest.raises(pc.ConfigMapShapeError, match="shared.yaml"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+
+    def test_legacy_non_config_yaml_key_declaring_two_tenants_is_refused(self):
+        cm = _cm(**{"config.yaml": "defaults: {}\n", "extra.yaml": self._SHARED})
+        with pytest.raises(pc.ConfigMapShapeError, match="extra.yaml"):
+            pc.patch_legacy(cm, "tenant-x", "cpu", "6")
+
+    def test_legacy_config_yaml_may_declare_several(self):
+        """對照組：本組「必須成功」的成員。"""
+        cm = _cm(**{"config.yaml": self._SHARED})
+        patched = yaml.safe_load(pc.patch_legacy(cm, "tenant-x", "cpu", "6")
+                                 ["data"]["config.yaml"])
+        assert patched["tenants"] == {"tenant-x": {"cpu": "6"},
+                                      "other-t": {"cpu": "1"}}
+
+    def test_self_referential_alias_is_written_without_recursing(self):
+        cm = _two("a: &x [*x]\n" + _T)
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+        assert pc.read_roundtrip_value(_cm(**{**cm["data"], **patch["data"]}),
+                                       "tenant-x", "cpu") == "6"
+
+
+_UNREADABLE = {
+    "tab": 'tenants:\n  tenant-x:\n    cpu:\t"70"\n',
+    "syntax": "tenants: {tenant-x: [unclosed\n",
+    "root-duplicate": "a: 1\na: 2\ntenants:\n  tenant-x: {cpu: '70'}\n",
+    "tenants-duplicate": "tenants:\n  tenant-x: {}\n  tenant-x: {}\n",
+    "too-deep": _DEEP,
+}
+
+
+class TestUnreadableKeyWithUndeclaredTenant:
+    """找不到宣告、又有 key 讀不了 ⇒ 拒絕並點名該 key。"""
+
+    @pytest.mark.parametrize("path", ["read", "default", "diff", "concrete"])
+    @pytest.mark.parametrize("text", list(_UNREADABLE.values()), ids=list(_UNREADABLE))
+    def test_is_refused_naming_the_key(self, text, path):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "team-x.yaml": text})
+        with pytest.raises(pc.ConfigMapShapeError, match="team-x.yaml"):
+            if path == "read":
+                pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+            elif path in ("default", "concrete"):
+                pc.build_patch(cm, "multi-file", "tenant-x", "cpu",
+                               "default" if path == "default" else "9")
+            else:
+                pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")
+
+    @pytest.mark.parametrize("text", list(_UNREADABLE.values()), ids=list(_UNREADABLE))
+    def test_declared_tenant_is_unaffected(self, text):
+        """對照組：本組「必須成功」的成員。"""
+        cm = _two(_T, text)
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "default")
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["changed"]
+
+
+class TestReaderBounds:
+
+    def test_duplicate_scan_visits_each_node_once(self, monkeypatch):
+        """alias 扇出（billion laughs）：每條邊只走一次，不隨路徑數爆炸。"""
+        levels = ["l0: &l0 [x, x, x, x, x, x, x, x, x, x]"] + [
+            f"l{i}: &l{i} [{', '.join([f'*l{i - 1}'] * 10)}]" for i in range(1, 7)]
+        text = "\n".join(levels) + "\n" + _T
+        nodes, edges, stack = set(), 0, [yaml.compose(text)]
+        while stack:
+            n = stack.pop()
+            if id(n) not in nodes:
+                nodes.add(id(n))
+                children = ([x for kv in n.value for x in kv]
+                            if isinstance(n, yaml.MappingNode)
+                            else n.value if isinstance(n, yaml.SequenceNode) else [])
+                edges += len(children)
+                stack += children
+        visits = []
+        real = pc._refuse_duplicate_keys
+        monkeypatch.setattr(pc, "_refuse_duplicate_keys",
+                            lambda node, label, seen: visits.append(id(node))
+                            or real(node, label, seen))
+        pc.read_node(text, "t.yaml")
+        assert len(set(visits)) == len(nodes)
+        assert len(visits) == edges + 1  # one call per edge, not per path
+
+    def test_nesting_too_deep_is_a_shape_error(self):
+        with pytest.raises(pc.ConfigMapShapeError, match="too deeply"):
+            pc.read_node("[" * 5000 + "]" * 5000, "t.yaml")
+
+    @pytest.mark.parametrize("cm", [{"data": ["x"]}, ["x"]])
+    def test_data_that_is_not_a_mapping_is_a_shape_error(self, cm):
+        with pytest.raises(pc.ConfigMapShapeError, match="not a mapping"):
+            pc.detect_mode(cm)
+
+    @pytest.mark.parametrize("value", ["-1e3", "-inf", "--x"])
+    def test_value_the_parser_rejects_is_not_printed(self, value):
+        cm = _two(f"tenants:\n  tenant-x:\n    cpu: '{value}'\n")
+        with pytest.raises(pc.ConfigMapShapeError, match="arguments do not accept"):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+
+    def test_negative_number_the_parser_accepts_is_printed(self):
+        """對照組：本組「必須成功」的成員。"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '-1'\n")
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "-1"
+
+    def test_help_value_prints_nothing_to_stdout(self, capsys):
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '-h'\n")
+        with pytest.raises(pc.ConfigMapShapeError):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+        assert capsys.readouterr().out == ""
+
+
+class TestSameValueAndUnrelatedCarriers:
+
+    def test_setting_the_current_value_is_not_a_change(self):
+        cm = _two("tenants:\n  tenant-x:\n    cpu: 70  # note\n")
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "70")["changed"] is False
+        assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "70") is None
+
+    @pytest.mark.parametrize("other", [
+        "tenants:\n  other-t:\n    cpu: '1'\n    cpu: '2'\n",
+        "? [a]\n: 1\ntenants:\n  other-t: {cpu: '1'}\n",
+    ], ids=["nested-duplicate", "root-non-scalar-key"])
+    def test_unrelated_carrier_shape_does_not_block_the_target(self, other):
+        cm = _two(_T, other)
+        assert pc.read_roundtrip_value(cm, "tenant-x", "cpu") == "5"
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "6")["changed"]
+        assert pc.patch_multifile(cm, "tenant-x", "cpu", "6") is not None
+
+    def test_value_with_nul_is_refused(self):
+        cm = _two('tenants:\n  tenant-x:\n    cpu: "a\\0b"\n')
+        with pytest.raises(pc.ConfigMapShapeError, match="NUL"):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+
+
+class TestWriteAndCliEdges:
+
+    @pytest.mark.parametrize("tenants", ["[a, b]", "5"])
+    def test_tenants_that_is_not_a_mapping_is_not_overwritten(self, tenants):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "ta.yaml": f"tenants: {tenants}\n"})
+        with pytest.raises(pc.ConfigMapShapeError, match="not a YAML mapping"):
+            pc.patch_multifile(cm, "ta", "k", "3")
+
+    @pytest.mark.parametrize("tid", ["010", "yes"])
+    def test_write_that_would_rename_the_tenant_is_refused(self, tid):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "t.yaml": f"tenants:\n  {tid}: {{m: '1', n: '2'}}\n"})
+        with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
+            pc.patch_multifile(cm, tid, "m", "5")
+
+    def test_new_key_already_holding_another_tenant_is_refused(self):
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "tenant-x.yaml": _decl("other-t", cpu="1")})
+        with pytest.raises(pc.ConfigMapShapeError, match="tenant-x.yaml"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+
+    @pytest.mark.parametrize("argv", [["--diff", "--json"], ["--diff", "--json=x"]],
+                             ids=["root-not-mapping", "json-equals"])
+    @mock.patch("patch_config.run_cmd")
+    def test_cli_caller_errors_keep_rc_and_reason(self, mock_run, capsys, argv):
+        """root 不是 mapping ⇒ configmap_shape；
+        `--json=x` ⇒ bad_arguments。"""
+        mock_run.return_value = json.dumps(
+            {"data": {"_defaults.yaml": _DEFAULTS, "tx.yaml": "- a\n"}})
+        with mock.patch("sys.argv", ["patch_config.py", "tx", "m", "1", *argv]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        assert exc.value.code == 2
+        reason = json.loads(capsys.readouterr().out)["reason"]
+        assert reason == ("configmap_shape" if argv[-1] == "--json"
+                          else "bad_arguments")
+
+    def test_json_help_is_rc_0_and_one_document(self, capsys):
+        with mock.patch("sys.argv", ["patch_config.py", "--json", "-h"]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        assert not exc.value.code
+        out = capsys.readouterr()
+        assert json.loads(out.out)["status"] == "help"
+        assert "usage" in out.err and "rejected" not in out.err
+
+    def test_non_scalar_key_in_the_tenant_block_is_refused(self):
+        cm = _two("tenants:\n  tenant-x:\n    ? [a]\n    : 1\n    cpu: '5'\n")
+        with pytest.raises(pc.ConfigMapShapeError, match="non-scalar"):
+            pc.read_roundtrip_value(cm, "tenant-x", "cpu")
+
+    def test_default_removes_a_value_that_reads_default(self):
+        cm = _two("tenants:\n  tenant-x:\n    _state_maintenance: default\n")
+        patch = pc.build_patch(cm, "multi-file", "tenant-x",
+                               "_state_maintenance", "default")
+        assert yaml.safe_load(patch["data"]["tenant-x.yaml"]) == {
+            "tenants": {"tenant-x": {}}}
+
+    @mock.patch("patch_config.run_cmd", return_value="[]")
+    def test_kubectl_json_that_is_not_an_object_is_kubectl_failed(self, _run, capsys):
+        with mock.patch("sys.argv", ["patch_config.py", "--diff", "--json",
+                                     "tx", "m", "1"]):
+            with pytest.raises(SystemExit):
+                pc.main()
+        assert json.loads(capsys.readouterr().out)["reason"] == "kubectl_failed"

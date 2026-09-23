@@ -322,13 +322,13 @@ spec:
     # 掛載設定
     volumeMounts:
     - name: config
-      mountPath: /etc/config
+      mountPath: /etc/threshold-exporter/conf.d
       readOnly: true
   
   volumes:
   - name: config
     configMap:
-      name: threshold-exporter-config
+      name: threshold-config
 ```
 
 ---
@@ -350,8 +350,8 @@ curl -s http://localhost:8080/api/v1/config | head -50
 #### 查詢特定時間點的設定
 
 ```bash
-# 查詢 2026-03-12T14:30:00Z 時的排程式覆寫狀態
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
+# 查詢 2026-03-12T03:30:00Z 時的排程式覆寫狀態（即下方回應範例）
+curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
 ```
 
 ### 查詢參數
@@ -367,91 +367,26 @@ curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
 
 ### 回應範例
 
+以下是輸出（`handlers.go` 的 `configViewHandler`；一個 `_defaults.yaml` 加一個租戶檔、帶 `?at=` 時）。
+
 ```
-=== Threshold Exporter Configuration ===
+Config loaded: true
+Last reload:   2026-03-12T10:05:30Z
+Config mode:   directory
+Resolve at:    2026-03-12T03:30:00Z (overridden)
 
-Loaded At: 2026-03-12T10:00:00Z
-Config File: /etc/config/thresholds.yaml
-Hash: 82a4d7c9f1e3b5a2c8d4e6f9a1b3c5d7 (SHA-256)
-Reload Interval: 30 seconds
-Last Reload: 2026-03-12T10:05:30Z
+Defaults (2 metrics):
+  container_cpu: 80
+  mysql_connections: 80
 
-=== Tenants (2) ===
+Tenants (1):
+  tenant-a:
+    container_cpu: 85 (+ 1 time overrides)
+    mysql_connections: 70
 
-[db-a]
-  namespace: db-a
-  cluster: dynamic-alerting-cluster
-  
-  Mode Configuration:
-    Severity Dedup: enabled
-    Silent Mode: false (expires: never)
-    State Filter: [compute/HighCPU]
-  
-  Thresholds:
-    compute/HighCPU: 80.0
-    compute/HighCPU[instance=prod-01]: 85.0
-    compute/HighCPU[instance=prod-02]: 82.0
-    memory/HighMemory: 75.0
-    storage/HighDiskUsage: 85.0
-  
-  Metadata:
-    team: platform
-    env: prod
-    sla_tier: gold
-    runbook_url: https://wiki.example.com/db-a
-    oncall: platform-oncall@example.com
-  
-  Scheduled Overrides:
-    compute/HighCPU:
-      └─ 75.0 @ 09:00-17:00 Mon-Fri (weekdays business hours)
-    memory/HighMemory:
-      └─ 70.0 @ Mon 02:00-04:00 (weekly maintenance window)
-  
-  Routing:
-    _routing_enforced: enabled (NOC + tenant channels)
-    _routing_defaults.severity_critical: '#critical-alerts'
-    _routing_defaults.severity_warning: '#general-alerts'
-    _routing_overrides.HighCPU: '#compute-team' (per-alert override)
-
-[db-b]
-  namespace: db-b
-  cluster: dynamic-alerting-cluster
-  
-  Mode Configuration:
-    Severity Dedup: disabled
-    Silent Mode: true (expires: 2026-03-12T15:30:00Z)
-    State Filter: []
-  
-  Thresholds:
-    memory/HighMemory: 65.0
-    network/HighPacketLoss: 5.0
-  
-  Metadata:
-    team: data
-    env: staging
-    sla_tier: silver
-    runbook_url: https://wiki.example.com/db-b
-    oncall: data-team@example.com
-  
-  Scheduled Overrides: (none)
-  
-  Routing:
-    _routing_enforced: disabled
-    _routing_defaults: (using platform defaults)
-
-=== Validation Status ===
-
-Config Hash: 82a4d7c9f1e3b5a2c8d4e6f9a1b3c5d7
-Tenant Keys Valid: ✓ All 7 keys validated
-Cardinality: db-a=18 series, db-b=5 series (total 23, limit per tenant: 500)
-Routes Valid: ✓ All receivers reachable
-Routing Policy: ✓ Webhook domains within allowlist
-
-=== Events (Last 10 minutes) ===
-
-2026-03-12T10:05:30Z [INFO] Config reloaded successfully
-2026-03-12T09:55:15Z [INFO] ConfigMap change detected, triggering reload
-2026-03-12T09:34:22Z [WARN] Cardinality warning: db-a approaching limit (18/500)
+Resolved thresholds:
+  tenant=tenant-a metric=cpu value=95 severity=warning component=container
+  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
 ```
 
 ### 常見用途
@@ -459,27 +394,19 @@ Routing Policy: ✓ Webhook domains within allowlist
 #### 1. 驗證租戶設定已正確載入
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 30 "^\[db-a\]"
+curl -s http://localhost:8080/api/v1/config | grep -A 20 "^Tenants"
 ```
 
 #### 2. 檢查排程式覆寫在特定時間點的狀態
 
-假設 `compute/HighCPU` 在工作時間（09:00-17:00）有排程式覆寫，檢查上午 10 點 30 分的值：
-
 ```bash
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 10 "Scheduled Overrides"
+curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 50 "^Resolved thresholds"
 ```
 
-#### 3. 確認設定雜湊和最後重新載入時間
+#### 3. 確認最後重新載入時間與載入模式
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | head -20
-```
-
-#### 4. 驗證租戶中繼資料已正確設定
-
-```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 10 "Metadata:"
+curl -s http://localhost:8080/api/v1/config | head -3
 ```
 
 ---
@@ -541,13 +468,13 @@ scrape_configs:
 kubectl logs <pod-name> -n monitoring
 
 # 驗證 ConfigMap 是否存在
-kubectl get configmap threshold-exporter-config -n monitoring
+kubectl get configmap threshold-config -n monitoring
 
 # 檢查 ConfigMap 內容
-kubectl get configmap threshold-exporter-config -n monitoring -o yaml
+kubectl get configmap threshold-config -n monitoring -o yaml
 
 # 驗證掛載路徑
-kubectl exec <pod-name> -n monitoring -- ls -la /etc/config/
+kubectl exec <pod-name> -n monitoring -- ls -la /etc/threshold-exporter/conf.d/
 ```
 
 ### 問題：/metrics 端點返回空結果或缺少預期指標
@@ -576,7 +503,7 @@ kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
 curl -s http://<pod-ip>:8080/metrics | grep da_config_event
 
 # 檢查 ConfigMap 的更新時間
-kubectl get configmap threshold-exporter-config -n monitoring -o wide
+kubectl get configmap threshold-config -n monitoring -o wide
 
 # 查看設定重新載入日誌
 kubectl logs <pod-name> -n monitoring | tail -50

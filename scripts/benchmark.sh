@@ -41,6 +41,11 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+# No leading 0: bash arithmetic would read `010` as octal 8.
+if ! [[ "${SYNTH_TENANTS}" =~ ^[1-9][0-9]*$ ]]; then
+  err "--tenants must be a whole number >= 1 without leading zeros (got: ${SYNTH_TENANTS})"
+  exit 1
+fi
 
 # --- Cleanup ---
 PF_PID=""
@@ -230,79 +235,27 @@ if [[ "${UNDER_LOAD}" == true ]]; then
   UL_MEM_BEFORE_B=$(prom_scalar 'process_resident_memory_bytes{job="prometheus"}' '0')
   UL_MEM_BEFORE_MB=$(python3 -c "print(f'{float(${UL_MEM_BEFORE_B})/1024/1024:.1f}')" 2>/dev/null || echo "N/A")
 
-  # --- Generate synthetic tenant YAML ---
+  # --- Inject synthetic tenants: one `synth-NNNN.yaml` key per tenant ---
+  # ⚠️ An emptied `thresholds.yaml` (`tenants: {}`) is not detected.
+  BENCH_SYNTH="${SCRIPT_DIR}/ops/bench_synth_tenants.py"
   SYNTH_DIR=$(mktemp -d)
-  trap "rm -rf ${SYNTH_DIR}; cleanup" EXIT
+  SYNTH_STATE="${SYNTH_DIR}/injected-keys"
+  SYNTH_CLEANED=false
+  synth_cleanup() {
+    [[ "${SYNTH_CLEANED}" == true ]] && return 0
+    [[ -s "${SYNTH_STATE}" ]] || return 0
+    if python3 "${BENCH_SYNTH}" cleanup --state-file "${SYNTH_STATE}"; then
+      SYNTH_CLEANED=true
+      return 0
+    fi
+    err "Synthetic tenant cleanup FAILED — threshold-config may still hold the keys listed in ${SYNTH_STATE} (kept for you). Retry with: python3 ${BENCH_SYNTH} cleanup --state-file ${SYNTH_STATE}"
+    return 1
+  }
+  # ⚠️ NOT GUARDED: no test runs this trap wiring or the cleanup `exit 1` below.
+  trap 'if synth_cleanup; then rm -rf "${SYNTH_DIR}"; fi; cleanup' EXIT
 
-  python3 -c "
-import yaml, os, stat
-tenants = {}
-for i in range(${SYNTH_TENANTS}):
-    name = f'synth-{i:04d}'
-    tenants[name] = {
-        'mysql_connections': str(50 + i % 100),
-        # threads-shaped value domain 20-59 (warning default 30 / critical 50),
-        # not the old percent-shaped 60-99 — the #1231 rename fixed the
-        # semantics, so the synthetic spread follows (#944 unit sanity).
-        'mysql_threads_running': str(20 + i % 40),
-        'container_cpu': str(70 + i % 30),
-        'container_memory': str(75 + i % 20),
-    }
-data = yaml.dump({'tenants': tenants}, default_flow_style=False)
-out = '${SYNTH_DIR}/synth-tenants.yaml'
-with open(out, 'w') as f:
-    f.write(data)
-os.chmod(out, 0o600)
-print(f'Generated {len(tenants)} tenants → {out}')
-"
-
-  # --- Patch ConfigMap with synthetic tenants ---
-  # Read current ConfigMap, merge synthetic tenants, apply
   RELOAD_START=$(date +%s%N)
-
-  python3 -c "
-import subprocess, yaml, json, sys, os, stat
-
-# Read current ConfigMap
-result = subprocess.run(
-    ['kubectl', 'get', 'configmap', 'threshold-config', '-n', 'monitoring', '-o', 'json'],
-    capture_output=True, text=True
-)
-if result.returncode != 0:
-    print('Failed to read threshold-config ConfigMap', file=sys.stderr)
-    sys.exit(1)
-
-cm = json.loads(result.stdout)
-config_str = cm['data'].get('thresholds.yaml', '')
-config = yaml.safe_load(config_str) or {}
-
-# Merge synthetic tenants
-with open('${SYNTH_DIR}/synth-tenants.yaml') as f:
-    synth = yaml.safe_load(f)
-
-if 'tenants' not in config:
-    config['tenants'] = {}
-config['tenants'].update(synth.get('tenants', {}))
-
-# Write merged config
-merged = yaml.dump(config, default_flow_style=False)
-patch_json = json.dumps({'data': {'thresholds.yaml': merged}})
-patch_file = '${SYNTH_DIR}/patch.json'
-with open(patch_file, 'w') as f:
-    f.write(patch_json)
-os.chmod(patch_file, 0o600)
-
-# Apply patch
-result = subprocess.run(
-    ['kubectl', 'patch', 'configmap', 'threshold-config', '-n', 'monitoring',
-     '--type', 'merge', '-p', patch_json],
-    capture_output=True, text=True
-)
-if result.returncode != 0:
-    print(f'Patch failed: {result.stderr}', file=sys.stderr)
-    sys.exit(1)
-print(f'Patched ConfigMap with {len(synth.get(\"tenants\", {}))} synthetic tenants')
-" 2>/dev/null
+  python3 "${BENCH_SYNTH}" inject --tenants "${SYNTH_TENANTS}" --state-file "${SYNTH_STATE}"
 
   # --- Wait for exporter reload (SHA-256 change detection) ---
   info "Waiting for exporter hot-reload (up to 90s)..."
@@ -345,33 +298,12 @@ print(f'Patched ConfigMap with {len(synth.get(\"tenants\", {}))} synthetic tenan
   UL_EVAL_TIME_S=$(prom_scalar 'sum(prometheus_rule_group_last_duration_seconds)')
   UL_EVAL_TIME_MS=$(python3 -c "print(f'{float(${UL_EVAL_TIME_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
 
-  # --- Cleanup: remove synthetic tenants from ConfigMap ---
+  # --- Cleanup: remove the injected synth-NNNN.yaml keys ---
   info "Cleaning up synthetic tenants..."
-  python3 -c "
-import subprocess, yaml, json, sys
-
-result = subprocess.run(
-    ['kubectl', 'get', 'configmap', 'threshold-config', '-n', 'monitoring', '-o', 'json'],
-    capture_output=True, text=True
-)
-cm = json.loads(result.stdout)
-config = yaml.safe_load(cm['data'].get('thresholds.yaml', '')) or {}
-
-# Remove synth- tenants
-tenants = config.get('tenants', {})
-synth_keys = [k for k in tenants if k.startswith('synth-')]
-for k in synth_keys:
-    del tenants[k]
-
-merged = yaml.dump(config, default_flow_style=False)
-patch_json = json.dumps({'data': {'thresholds.yaml': merged}})
-subprocess.run(
-    ['kubectl', 'patch', 'configmap', 'threshold-config', '-n', 'monitoring',
-     '--type', 'merge', '-p', patch_json],
-    capture_output=True, text=True
-)
-print(f'Removed {len(synth_keys)} synthetic tenants')
-" 2>/dev/null
+  if ! synth_cleanup; then
+    exit 1
+  fi
+  rm -rf "${SYNTH_DIR}"
 
   UL_STATUS="completed"
   log "Under-load benchmark complete."

@@ -322,13 +322,13 @@ spec:
     # Mount configuration
     volumeMounts:
     - name: config
-      mountPath: /etc/config
+      mountPath: /etc/threshold-exporter/conf.d
       readOnly: true
   
   volumes:
   - name: config
     configMap:
-      name: threshold-exporter-config
+      name: threshold-config
 ```
 
 ---
@@ -350,8 +350,8 @@ curl -s http://localhost:8080/api/v1/config | head -50
 #### Query Configuration at Specific Timestamp
 
 ```bash
-# Check scheduled override state at 2026-03-12T14:30:00Z
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
+# Check scheduled override state at 2026-03-12T03:30:00Z (the response example below)
+curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
 ```
 
 ### Query Parameters
@@ -367,91 +367,26 @@ curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
 
 ### Response Example
 
+Output (`configViewHandler` in `handlers.go`; one `_defaults.yaml` plus one tenant file, with `?at=`).
+
 ```
-=== Threshold Exporter Configuration ===
+Config loaded: true
+Last reload:   2026-03-12T10:05:30Z
+Config mode:   directory
+Resolve at:    2026-03-12T03:30:00Z (overridden)
 
-Loaded At: 2026-03-12T10:00:00Z
-Config File: /etc/config/thresholds.yaml
-Hash: 82a4d7c9f1e3b5a2c8d4e6f9a1b3c5d7 (SHA-256)
-Reload Interval: 30 seconds
-Last Reload: 2026-03-12T10:05:30Z
+Defaults (2 metrics):
+  container_cpu: 80
+  mysql_connections: 80
 
-=== Tenants (2) ===
+Tenants (1):
+  tenant-a:
+    container_cpu: 85 (+ 1 time overrides)
+    mysql_connections: 70
 
-[db-a]
-  namespace: db-a
-  cluster: dynamic-alerting-cluster
-  
-  Mode Configuration:
-    Severity Dedup: enabled
-    Silent Mode: false (expires: never)
-    State Filter: [compute/HighCPU]
-  
-  Thresholds:
-    compute/HighCPU: 80.0
-    compute/HighCPU[instance=prod-01]: 85.0
-    compute/HighCPU[instance=prod-02]: 82.0
-    memory/HighMemory: 75.0
-    storage/HighDiskUsage: 85.0
-  
-  Metadata:
-    team: platform
-    env: prod
-    sla_tier: gold
-    runbook_url: https://wiki.example.com/db-a
-    oncall: platform-oncall@example.com
-  
-  Scheduled Overrides:
-    compute/HighCPU:
-      └─ 75.0 @ 09:00-17:00 Mon-Fri (weekdays business hours)
-    memory/HighMemory:
-      └─ 70.0 @ Mon 02:00-04:00 (weekly maintenance window)
-  
-  Routing:
-    _routing_enforced: enabled (NOC + tenant channels)
-    _routing_defaults.severity_critical: '#critical-alerts'
-    _routing_defaults.severity_warning: '#general-alerts'
-    _routing_overrides.HighCPU: '#compute-team' (per-alert override)
-
-[db-b]
-  namespace: db-b
-  cluster: dynamic-alerting-cluster
-  
-  Mode Configuration:
-    Severity Dedup: disabled
-    Silent Mode: true (expires: 2026-03-12T15:30:00Z)
-    State Filter: []
-  
-  Thresholds:
-    memory/HighMemory: 65.0
-    network/HighPacketLoss: 5.0
-  
-  Metadata:
-    team: data
-    env: staging
-    sla_tier: silver
-    runbook_url: https://wiki.example.com/db-b
-    oncall: data-team@example.com
-  
-  Scheduled Overrides: (none)
-  
-  Routing:
-    _routing_enforced: disabled
-    _routing_defaults: (using platform defaults)
-
-=== Validation Status ===
-
-Config Hash: 82a4d7c9f1e3b5a2c8d4e6f9a1b3c5d7
-Tenant Keys Valid: ✓ All 7 keys validated
-Cardinality: db-a=18 series, db-b=5 series (total 23, limit per tenant: 500)
-Routes Valid: ✓ All receivers reachable
-Routing Policy: ✓ Webhook domains within allowlist
-
-=== Events (Last 10 minutes) ===
-
-2026-03-12T10:05:30Z [INFO] Config reloaded successfully
-2026-03-12T09:55:15Z [INFO] ConfigMap change detected, triggering reload
-2026-03-12T09:34:22Z [WARN] Cardinality warning: db-a approaching limit (18/500)
+Resolved thresholds:
+  tenant=tenant-a metric=cpu value=95 severity=warning component=container
+  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
 ```
 
 ### Common Use Cases
@@ -459,27 +394,19 @@ Routing Policy: ✓ Webhook domains within allowlist
 #### 1. Verify Tenant Configuration is Loaded Correctly
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 30 "^\[db-a\]"
+curl -s http://localhost:8080/api/v1/config | grep -A 20 "^Tenants"
 ```
 
 #### 2. Check Scheduled Override State at Specific Timestamp
 
-Suppose `compute/HighCPU` has a scheduled override during business hours (09:00-17:00). Check the value at 10:30 AM:
-
 ```bash
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 10 "Scheduled Overrides"
+curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 50 "^Resolved thresholds"
 ```
 
-#### 3. Verify Configuration Hash and Last Reload Time
+#### 3. Check Last Reload Time and Load Mode
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | head -20
-```
-
-#### 4. Validate Tenant Metadata is Set Correctly
-
-```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 10 "Metadata:"
+curl -s http://localhost:8080/api/v1/config | head -3
 ```
 
 ---
@@ -541,13 +468,13 @@ scrape_configs:
 kubectl logs <pod-name> -n monitoring
 
 # Verify ConfigMap exists
-kubectl get configmap threshold-exporter-config -n monitoring
+kubectl get configmap threshold-config -n monitoring
 
 # Check ConfigMap contents
-kubectl get configmap threshold-exporter-config -n monitoring -o yaml
+kubectl get configmap threshold-config -n monitoring -o yaml
 
 # Verify mount path
-kubectl exec <pod-name> -n monitoring -- ls -la /etc/config/
+kubectl exec <pod-name> -n monitoring -- ls -la /etc/threshold-exporter/conf.d/
 ```
 
 ### Issue: /metrics Endpoint Returns Empty Results or Missing Expected Metrics
@@ -576,7 +503,7 @@ kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
 curl -s http://<pod-ip>:8080/metrics | grep da_config_event
 
 # Check ConfigMap update time
-kubectl get configmap threshold-exporter-config -n monitoring -o wide
+kubectl get configmap threshold-config -n monitoring -o wide
 
 # View configuration reload logs
 kubectl logs <pod-name> -n monitoring | tail -50
