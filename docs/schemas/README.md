@@ -14,7 +14,7 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 
 ### `tenant-config.schema.json`
 
-**Purpose**: Validates tenant YAML configuration files (`conf.d/*.yaml`) for the Dynamic Alerting platform.
+**Purpose**: Validates tenant YAML configuration files in `conf.d/` (flat or nested; `.yaml` or `.yml`, any case; basename not starting with `_` or `.`) for the Dynamic Alerting platform. `_defaults*` files use `platform-defaults.schema.json` instead.
 
 **Coverage**:
 - Tenant configuration structure (`tenants:` mapping)
@@ -39,19 +39,19 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 1. **Install YAML extension** (if not already installed):
    - Go to Extensions → search for "YAML" → install "YAML" by Red Hat
 
-2. **Add schema mapping** to `VS Code settings.json`:
-   ```json
-   "yaml.schemas": {
-     "./docs/schemas/tenant-config.schema.json": "conf.d/*.yaml"
-   }
-   ```
+2. **Add schema mapping** to `VS Code settings.json`: copy the `yaml.schemas` block from
+   [`.devcontainer/devcontainer.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.devcontainer/devcontainer.json)
+   (inside the dev container it is already applied). It binds both extension spellings and
+   keeps `_*` platform files off the tenant schema; a plain `"conf.d/*.yaml"` would miss
+   `.yml` files and put the tenant schema on `_defaults.yaml`. Why the globs look the way they
+   do: [`editor-schema-validation.md`](../internal/editor-schema-validation.md).
 
    **Finding settings.json**:
    - **Windows/Linux**: `Ctrl+Shift+P` → "Preferences: Open Settings (JSON)"
    - **macOS**: `Cmd+Shift+P` → "Preferences: Open Settings (JSON)"
 
 3. **Verify**:
-   - Open any `conf.d/*.yaml` file
+   - Open any tenant file under `conf.d/` (e.g. `conf.d/db-a.yaml`)
    - YAML extension should show autocomplete, validation, and inline documentation
 
 ### Expected Behavior

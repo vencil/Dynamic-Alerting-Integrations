@@ -1373,7 +1373,7 @@ da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds
 **Fix**:
 
 ```bash
-# View current schema definition: conf.d/*.yaml is governed by this JSON Schema
+# View current schema definition: conf.d tenant files (.yaml / .yml; not the _-prefixed platform files) are governed by this JSON Schema
 cat docs/schemas/tenant-config.schema.json
 # Compare and modify the yaml — add field / fix spelling
 
