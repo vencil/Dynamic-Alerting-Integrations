@@ -28,6 +28,27 @@ Checks:
                     reject the ENTIRE config dir (`DuplicateTenantError`), so
                     this one FAIL is about every tenant in the tree (#1577)
 
+Hierarchical trees: several rows (today schema, routes, policy and
+policy_dsl) get their tenants from a reader that is FLAT — it reads only the
+top level of --config-dir — while threshold-exporter reads the whole tree.
+When such a row runs on a tree that has config files in subdirectories, it
+does not report PASS: a PASS becomes WARN, and every status gains a detail
+line naming how many files that reader skipped and which (the first few;
+the full list is the row's `skipped_nested_files` in --json). Which rows
+this applies to is observed at run time, not listed here — a row is flagged
+because it called a flat reader, so a check that stops (or starts) doing so
+changes sides by itself. A row that never consulted a reader (e.g. `policy`
+without an allowlist to enforce) keeps its PASS. ⚠️ Observed means "went
+through `warn_nested` or `resolve_defaults_file`"; a root file opened by name
+(`profiles` reads only the root `_profiles.yaml`) is not seen — see
+`_lib_confd.observe_flat_reads` for the full list of what is not.
+
+⚠️ The exit code does NOT carry this signal: WARN is exit 0 like every other
+WARN, because a hierarchical conf.d/ is a supported layout (this repo's own
+has an `examples/` subdirectory) and a FAIL would turn every such tree's CI
+red over a limitation of this tool. Read `Result:` or --json, not the exit
+code, to learn whether every row covered every file.
+
 Usage:
   # Minimal (YAML + schema + routes):
   python3 scripts/tools/validate_config.py \\
@@ -70,8 +91,12 @@ from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
+    WARN_LIMIT,
+    FlatRead,
     is_reserved_name,
     iter_config_files,
+    observe_flat_reads,
+    printable_name,
     resolve_defaults_file,
     unusable_config_paths,
     unusable_reason,
@@ -686,25 +711,21 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Profile keys don't use reserved prefixes (_, _routing, _state_)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
+
+    ⚠️ Profile keys are NOT cross-checked against `defaults:` in
+    `_defaults.yaml`, and this check does not read that file at all. It
+    used to read it into a `known_defaults` set that nothing consumed —
+    no verdict depended on it — and that dead read went through the flat
+    root-carrier lookup, so on an ADR-017 tree with a nested
+    `_defaults.yaml` it turned this row PASS -> WARN for a file it never
+    used (#1652). If the cross-check is ever added back, bring #1448's
+    trap with it: `defaults:` written as a bare key parses to None, so
+    read it as `raw.get("defaults") or {}`, never `.get("defaults", {})`.
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
     profiles_raw = load_yaml_file(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
-
-    # Load defaults for cross-referencing
-    defaults_path = str(resolve_defaults_file(cfg))
-    defaults_raw = load_yaml_file(defaults_path, default={})
-    known_defaults = set()
-    if isinstance(defaults_raw, dict):
-        # `or {}`, not just the get() default: a `defaults:` key that exists
-        # with nothing under it (every entry commented out — an ordinary
-        # file) parses to None, and the get() default only fires when the
-        # key is *absent*. #1448: this raised AttributeError and took the
-        # whole report with it, in the very function the ticket named.
-        declared = defaults_raw.get("defaults") or {}
-        if isinstance(declared, dict):
-            known_defaults = set(declared.keys())
 
     warnings = []
     tenant_count = 0
@@ -1323,6 +1344,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             # field may remain".
             entry.pop("reads_config_dir", None)
             entry.pop("hint", None)
+            entry.pop("hint_docs", None)
             if not entry.get("unusable_files"):
                 entry.pop("unusable_files", None)
             if unusable and _caveat_applies(r):
@@ -1330,6 +1352,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             if r["status"] != PASS:
                 hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
                 hint = r.get("hint") or hint
+                docs = r.get("hint_docs") or docs
                 if hint:
                     entry["suggested_action"] = hint
                     entry["docs_link"] = _docs_url(docs)
@@ -1359,6 +1382,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         if r["status"] != PASS:
             hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
             hint = r.get("hint") or hint
+            docs = r.get("hint_docs") or docs
             if hint:
                 # ⛔ The hint is written for a report that could read every
                 # file. With a broken `_defaults.yaml`, `schema` reports each
@@ -1439,6 +1463,86 @@ def _reads_config_dir(config_dir, args, kwargs) -> bool:
         v == config_dir for v in kwargs.values())
 
 
+FLAT_READER_HINT = (
+    "This row read only the top level of --config-dir, so it did not check "
+    "the files named above, which threshold-exporter does load. To have "
+    "this row check them, run validate-config once more with --config-dir "
+    "pointed at each subdirectory listed, or flatten the tree. Neither "
+    "reproduces the exporter's per-level _defaults.yaml inheritance.")
+
+#: Where `FLAT_READER_HINT` points. A row carrying that hint gets THIS link
+#: instead of its check's `_CHECK_HINTS` page: the advice and the page it
+#: sends the reader to have to be about the same thing.
+FLAT_READER_DOCS = "docs/cli-reference.md#hierarchical-confd"
+
+
+def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
+                     config_dir: str | None) -> dict[str, object]:
+    """Stop a row whose verdict came from a FLAT reader passing as complete.
+
+    #1652 / #1911: `schema`, `routes`, `policy` and `policy_dsl` get their
+    tenants from readers that read only the top level of the tree, while the
+    exporter reads it recursively. On a tree whose tenants live in `prod/`
+    those rows reported ``[PASS] routes  0 routes, 0 receivers`` and
+    ``Result: PASS`` — the same answer as a clean flat tree — with the only
+    trace of the difference a stderr WARN that reaches neither this report
+    nor --json.
+
+    ⛔ WHICH rows is observed, not declared: `flat_reads` is what
+    `_lib_confd.observe_flat_reads` recorded while the row's check ran —
+    each `warn_nested` call (every nested config file) and each
+    `resolve_defaults_file` call (only nested `_defaults.yaml` carriers,
+    because that is all a root-carrier lookup skips). A check that returns
+    before reaching either — `policy` with no allowlist — keeps its PASS
+    without being listed as an exception. ⚠️ `policy_dsl` is NOT such a
+    check: it locates the root carrier before any early return, so "no
+    policies" keeps its PASS only on a tree whose nested files are all
+    tenants. On an ADR-017 tree (a `prod/_defaults.yaml` beside the root
+    one) it is WARN naming that file, even when neither holds `_policies` —
+    correctly, since the answer "no policies" was reached without opening
+    it. ⚠️ What it cannot see is spelled out on
+    `observe_flat_reads`: a flat read that calls neither (the enumeration
+    contract matches guard NAMES, and two of its guard names record
+    nothing — pinned by `tests/shared/test_flat_read_observation_pin.py`),
+    and a root file opened by name, e.g. `check_profiles`' `_profiles.yaml`.
+
+    ⛔ PASS -> WARN, never -> FAIL: see the module docstring. A WARN/FAIL
+    keeps its status and its own hint (and that hint's docs link); it gains
+    the detail line, because "3 findings" on a tree where the reader
+    skipped part of the files is not the whole count either.
+    """
+    by_dir: dict[str, tuple[str, dict[str, None]]] = {}
+    for rec in flat_reads:
+        d_abs = os.path.abspath(rec.directory)
+        _spelling, rels = by_dir.setdefault(d_abs, (rec.directory, {}))
+        for p in rec.skipped:
+            rels.setdefault(p.relative_to(Path(rec.directory)).as_posix(), None)
+    root_abs = os.path.abspath(config_dir) if config_dir is not None else None
+    skipped: list[str] = []
+    for d_abs, (d, rel_set) in by_dir.items():
+        rels = sorted(rel_set)
+        if not rels:
+            continue
+        shown = [printable_name(r) for r in rels[:WARN_LIMIT]]
+        more = (f" (+{len(rels) - WARN_LIMIT} more)"
+                if len(rels) > WARN_LIMIT else "")
+        where = "--config-dir" if d_abs == root_abs else printable_name(d)
+        row["details"] = list(row.get("details") or []) + [
+            f"{len(rels)} config file(s) in subdirectories of {where} were "
+            f"SKIPPED by this check (its reader is flat — top level only): "
+            f"{', '.join(shown)}{more}"]
+        skipped.extend(rels if d_abs == root_abs
+                       else [Path(d, r).as_posix() for r in rels])
+    if skipped:
+        row["skipped_nested_files"] = skipped
+        if row["status"] == PASS:
+            row["status"] = WARN
+            if not row.get("hint"):
+                row["hint"] = FLAT_READER_HINT
+                row["hint_docs"] = FLAT_READER_DOCS
+    return row
+
+
 def _run_check(name: str, fn, *args, _config_dir: str | None = None,
                **kwargs) -> dict[str, object]:
     """Run one check and turn an *input*-caused crash into a report row.
@@ -1482,8 +1586,12 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     the traceback still reaches stderr and the run exits 2, so a run that
     could not complete stays distinguishable from one that found violations.
     """
+    # #1652: every exit below goes through `_flag_flat_reads`, including
+    # the crash rows — a check that died after reading flat still read flat.
+    flat_reads: list[FlatRead] = []
     try:
-        row = fn(*args, **kwargs)
+        with observe_flat_reads(flat_reads):
+            row = fn(*args, **kwargs)
         # ⛔ setdefault, not assignment — and THIS is the one site where the
         # distinction is load-bearing, because `row` came from the check
         # itself: a check that already knows its failure is an argv error
@@ -1494,7 +1602,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
         # whenever any tenant file happened to be unreadable — measured.
         row.setdefault("reads_config_dir",
                        _reads_config_dir(_config_dir, args, kwargs))
-        return row
+        return _flag_flat_reads(row, flat_reads, _config_dir)
     except _INPUT_ERRORS as exc:
         detail = " ".join(str(exc).split())
         row = _make_result(
@@ -1526,7 +1634,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
         # because there is nothing here to overwrite.
         row.setdefault("reads_config_dir",
                        _reads_config_dir(_config_dir, args, kwargs))
-        return row
+        return _flag_flat_reads(row, flat_reads, _config_dir)
     except SystemExit as exc:
         # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
         # see it — and `_parse_config_files` calls `sys.exit()` when the
@@ -1548,7 +1656,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              "this tool — please report it."],
             caller_error=True)
         row["reads_config_dir"] = _reads_config_dir(_config_dir, args, kwargs)
-        return row
+        return _flag_flat_reads(row, flat_reads, _config_dir)
     except Exception as exc:  # noqa: BLE001 — see the contract above
         traceback.print_exc()
         detail = " ".join(str(exc).split()) or exc.__class__.__name__
@@ -1576,7 +1684,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
         # because there is nothing here to overwrite.
         row.setdefault("reads_config_dir",
                        _reads_config_dir(_config_dir, args, kwargs))
-        return row
+        return _flag_flat_reads(row, flat_reads, _config_dir)
 
 
 # ============================================================
