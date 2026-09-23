@@ -10,8 +10,11 @@ package config
 // library can validate them."
 //
 // hierarchy.go::ResolveEffective answers that question for ONE tenant
-// at a time. This file is the loop around it that turns
-// "directory-of-tenants" into "list-of-EffectiveConfig".
+// at a time. This file turns "directory-of-tenants" into
+// "list-of-EffectiveConfig" over ONE ScanDirTree walk (tree_scan.go, the
+// exporter's own walker; W2, #1677): the in-scope tenants are read off
+// the scan's files, and each is resolved from the same scan by the
+// resolver ResolveEffective uses — no re-walk per tenant.
 //
 // Why a separate file rather than extending hierarchy.go: hierarchy.go
 // is the public read-only resolver imported by tenant-api at runtime,
@@ -37,7 +40,8 @@ package config
 //     the tree". That's the natural pre-commit / local-dev flow.
 //
 // Working-tree assumption: like ResolveEffective, this reads files
-// from disk as-is. CI flows running on a PR head commit see the
+// from disk as-is (once: every tenant is resolved from the bytes of
+// the one scan, so the result describes one snapshot of the tree). CI flows running on a PR head commit see the
 // post-edit state. Pre-commit hooks should run after `git add`
 // since the disk state is what gets read; staged-but-not-checked-in
 // edits only show up if the caller's working tree has them.
@@ -46,14 +50,12 @@ package config
 // path C-7b /simulate handles for one tenant at a time.
 
 import (
+	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // ScopedTenants is the bundle ScopeEffective returns: per-tenant
@@ -84,20 +86,29 @@ type ScopedTenants struct {
 //   - configDir doesn't exist or isn't a directory.
 //   - scopeDir lies outside configDir (security guard against
 //     `--scope ../etc/passwd`).
-//   - any tenant ID is defined in two different files (matches
-//     ResolveEffective's loud-failure stance — duplicates are
-//     usually a copy-paste bug).
-//   - a tenant file is unreadable or contains malformed YAML.
+//   - a tenant ID under the scope is defined in two different files
+//     (returned as the raw *DuplicateTenantError, matching
+//     ResolveEffective's loud-failure stance — duplicates are usually a
+//     copy-paste bug). A duplicate that involves no in-scope tenant does
+//     not fail the scope.
+//   - any in-scope tenant fails to resolve (e.g. a tenant body that is
+//     not a mapping), wrapped as `resolve tenant %q: ...`.
+//
+// A tenant file that is unreadable or not valid YAML is not an error: the
+// walker logs (here: discards) and skips it, as the exporter does.
+//
+// configDir and scopeDir are both symlink-resolved (AbsScanRoot) before
+// the containment check, so a symlinked --config-dir and a --scope spelled
+// through either the link or the real path describe the same tree.
 //
 // A scope that contains zero tenants is NOT an error — Tenants
 // will simply be nil. The caller (CLI) prints a friendly message
 // and exits success in that case (vacuously safe defaults change).
 func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
-	absRoot, err := filepath.Abs(configDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve configDir %q: %w", configDir, err)
-	}
-	absRoot = filepath.Clean(absRoot)
+	// The configDir checks keep their historical messages (callers and the
+	// CLI print them); ScanDirTree below repeats the same stat on the same
+	// resolved path, so the two cannot disagree.
+	absRoot := AbsScanRoot(configDir)
 	info, err := os.Stat(absRoot)
 	if err != nil {
 		return nil, fmt.Errorf("stat configDir %q: %w", absRoot, err)
@@ -106,14 +117,23 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 		return nil, fmt.Errorf("configDir %q is not a directory", absRoot)
 	}
 
-	if scopeDir == "" {
-		scopeDir = absRoot
-	}
-	absScope, err := filepath.Abs(scopeDir)
+	// ONE walk, the exporter's own (W2, #1677): tenant attribution, the
+	// defaults set and the bytes all come from this scan.
+	scan, err := ScanDirTree(absRoot, nil, nil, discardLogger)
 	if err != nil {
-		return nil, fmt.Errorf("resolve scopeDir %q: %w", scopeDir, err)
+		return nil, err
 	}
-	absScope = filepath.Clean(absScope)
+	absRoot = scan.AbsRoot
+
+	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a
+	// resolved root with an unresolved scope made every mixed spelling fail
+	// (#1677 F1, measured: root=link + scope=link/sub → "tenant not found";
+	// root=link + scope=real/sub and root=real + scope=link/sub →
+	// "outside configDir").
+	absScope := absRoot
+	if scopeDir != "" {
+		absScope = AbsScanRoot(scopeDir)
+	}
 
 	// Containment check. filepath.Rel produces "../" when scope
 	// escapes root; we reject any path whose first segment is "..".
@@ -131,67 +151,22 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 		return nil, fmt.Errorf("scopeDir %q is not a directory", absScope)
 	}
 
-	// First pass: collect tenant ID → file containing it, scoped
-	// to the subtree under absScope. Reusing the per-file YAML
-	// peek pattern from ResolveEffective so the duplicate-tenant
-	// detection rules are identical.
-	tenantToFile := make(map[string]string)
-	walkErr := filepath.WalkDir(absScope, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			// Match ResolveEffective: tolerate per-entry errors
-			// (e.g. permission) so a single unreadable file
-			// doesn't sink the whole scan.
-			return nil
+	// In-scope tenants: every tenant declared by a kept file at-or-below
+	// absScope. Read off scan.Files (not scan.Tenants, which is nil under a
+	// duplicate anywhere in the tree), so a duplicate fails the scope iff an
+	// IN-SCOPE tenant is involved — a duplicate entirely outside the scope
+	// does not. A hidden scope yields zero tenants: the walker prunes hidden
+	// directories, so no kept file lives under it.
+	inScope := make(map[string]struct{})
+	for _, f := range scan.Files {
+		if len(f.TenantIDs) == 0 || !pathAtOrBelow(f.AbsPath, absScope, rel == ".") {
+			continue
 		}
-		name := d.Name()
-		if d.IsDir() {
-			if path != absScope && strings.HasPrefix(name, ".") {
-				return fs.SkipDir
-			}
-			return nil
+		for _, id := range f.TenantIDs {
+			inScope[id] = struct{}{}
 		}
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
-			return nil
-		}
-		// Skip _-prefixed files: those are defaults / profiles /
-		// other reserved namespaces, never tenant carriers.
-		if strings.HasPrefix(name, "_") {
-			return nil
-		}
-		clean := filepath.Clean(path)
-		data, rerr := os.ReadFile(clean)
-		if rerr != nil {
-			return nil
-		}
-		var doc struct {
-			Tenants map[string]yaml.Node `yaml:"tenants"`
-		}
-		if perr := yaml.Unmarshal(data, &doc); perr != nil {
-			return nil
-		}
-		for tenantID := range doc.Tenants {
-			if existing, ok := tenantToFile[tenantID]; ok && existing != clean {
-				// Typed so library callers can errors.As it (#127 C6-A);
-				// Error() string byte-identical to the former fmt.Errorf.
-				return &DuplicateTenantError{
-					TenantID: tenantID,
-					PathA:    existing,
-					PathB:    clean,
-				}
-			}
-			tenantToFile[tenantID] = clean
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
 	}
-
-	if len(tenantToFile) == 0 {
+	if len(inScope) == 0 {
 		return &ScopedTenants{}, nil
 	}
 
@@ -199,43 +174,52 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// decision and the guard library's findings sort don't depend
 	// on this order, but stable output makes diff-based golden
 	// tests possible.
-	tenantIDs := make([]string, 0, len(tenantToFile))
-	for id := range tenantToFile {
+	tenantIDs := make([]string, 0, len(inScope))
+	for id := range inScope {
 		tenantIDs = append(tenantIDs, id)
 	}
 	sort.Strings(tenantIDs)
 
-	// Second pass: ResolveEffective per tenant. This re-walks
-	// configDir each time which is O(NumFiles × NumTenants) but
-	// fine for the scale we target (1000 tenants × ~few-hundred
-	// YAML files = ~minutes of cold cache walk on synthetic
-	// fixtures, well below CI timeout). If a future PR needs to
-	// scale up, the right move is to memoize the defaults-chain
-	// computation per directory, not to re-architect this.
+	// Resolve every tenant from the SAME scan: no re-walk per tenant (this
+	// used to call ResolveEffective per tenant, re-walking configDir each
+	// time — O(files × tenants)); the defaults selection is computed once.
+	resolver := newEffectiveResolver(scan)
 	out := &ScopedTenants{
 		Tenants: make([]*EffectiveConfig, 0, len(tenantIDs)),
 	}
-	seenFiles := make(map[string]struct{}, len(tenantToFile))
+	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
-		ec, err := ResolveEffective(absRoot, id)
+		ec, err := resolver.resolve(id)
 		if err != nil {
+			// A duplicate is returned as the raw typed error (the message
+			// operators already know); anything else keeps the per-tenant
+			// wrap and still fails the whole scope — loud, not skipped.
+			var dup *DuplicateTenantError
+			if errors.As(err, &dup) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("resolve tenant %q: %w", id, err)
 		}
 		out.Tenants = append(out.Tenants, ec)
-		seenFiles[tenantToFile[id]] = struct{}{}
+		seenFiles[ec.SourceFile] = struct{}{}
 	}
 
-	// SourceFiles, repo-relative for friendliness, sorted.
+	// SourceFiles, root-relative for friendliness, sorted.
 	files := make([]string, 0, len(seenFiles))
 	for f := range seenFiles {
-		if r, rerr := filepath.Rel(absRoot, f); rerr == nil {
-			files = append(files, filepath.ToSlash(r))
-		} else {
-			files = append(files, filepath.ToSlash(f))
-		}
+		files = append(files, f)
 	}
 	sort.Strings(files)
 	out.SourceFiles = files
 
 	return out, nil
+}
+
+// pathAtOrBelow reports whether p lies under dir (both Clean absolute
+// paths). wholeTree short-circuits the root scope.
+func pathAtOrBelow(p, dir string, wholeTree bool) bool {
+	if wholeTree {
+		return true
+	}
+	return strings.HasPrefix(p, dir+string(filepath.Separator))
 }

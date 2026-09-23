@@ -247,7 +247,7 @@ GET /api/v1/tenants/{id}/effective
 
 - `404 ErrTenantNotFound` — tenant 不存在
 - `400` — tenant_id 驗證失敗（長度、字元集）
-- Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`，與 exporter 繼承邏輯 100% 一致（shared validation logic）
+- Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`：走的是 exporter 同一支 conf.d walker（`ScanDirTree`，#1677）與同一個合併核心，所以 symlink 的 `--config-dir`、隱藏目錄、空 body 租戶的判定都與 exporter 相同。⚠️ 唯一尚未收斂的是 `_defaults` 檔名大小寫（`_DEFAULTS.YAML`）的 chain 選擇規則，由 #1674 處理
 
 **除錯 CLI（da-tools）**
 

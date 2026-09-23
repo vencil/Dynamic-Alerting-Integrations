@@ -6,9 +6,10 @@ package config
 //
 // Before this walker the same conf.d tree was walked by two independent
 // functions with two hand-written skip rules in the exporter's package main:
-//
-//	flat_scanner.go     scanDirFileHashes            → bytes, hashes, mtimes
-//	config_hierarchy.go scanDirHierarchicalWithMetrics → tenants, defaults, graph
+// a FLAT scanner (bytes, hashes, mtimes) and a HIERARCHICAL scanner
+// (tenants, defaults, graph). Both are gone from production; their names
+// survive only as test projections onto this walk in
+// app/scan_wrappers_test.go.
 //
 // Two enumerators over one tree is the defect CLASS (#1911): every cell of
 // the skip rule — hidden dir, hidden file, extension case, `_` prefix,
@@ -16,26 +17,25 @@ package config
 // the divergence audit (app/config_divergence.go) exists because it was not.
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
-// ⛔ It is the only walker the exporter's manager (package main) calls
-// TODAY: main reaches it through the one-line adapter `scanDirTree`
-// (app/config_tree_scan.go), and the two historical functions survive only
-// as projections in app/scan_wrappers_test.go. That is a fact about current
-// call sites, not a structural guarantee — ResolveEffective and
-// ScopeEffective below are exported from this same package, run their own
-// walks, and main could call them. W2 (#1941 follow-up) makes both consume
-// ScanDirTree, which is what turns "one walker" into construction.
-// Where the two walkers disagreed, the cell takes the HIERARCHICAL walker's
-// answer: that one is the oracle of the cross-language name-classification
-// matrix (app/confd_name_classification_parity_test.go), so /metrics and
-// /effective now agree by construction rather than by audit.
+// ⛔ It is the only conf.d walker in the codebase's production paths: the
+// exporter's manager (package main) reaches it through the one-line adapter
+// `scanDirTree` (app/config_tree_scan.go), and since W2 (#1677) the two
+// library readers in THIS package consume its product instead of walking on
+// their own — ResolveEffective (hierarchy.go; tenant-api's /effective) and
+// ScopeEffective (scope.go; cmd/da-guard) each run exactly one ScanDirTree
+// and read tenants through TreeScan.Locate, defaults through
+// TreeScan.Defaults, and bytes through TreeFile.Data.
+// Where the two historical walkers disagreed, the cell takes the
+// HIERARCHICAL walker's answer: that one is the oracle of the cross-language
+// name-classification matrix (app/confd_name_classification_parity_test.go),
+// so /metrics and /effective agree by construction rather than by audit.
 //
-// ⚠️ WHAT IS NOT YET ONE WALK (#1941 moved this file here from package main
-// with zero behavior change; #1911 ①(a)). ResolveEffective (hierarchy.go) and
-// ScopeEffective (scope.go) in THIS package still enumerate the tree on their
-// own. Making them consume ScanDirTree is the follow-up (W2). Until then
-// tree_scan_parity_test.go pins, row by row, where the three planes agree
-// and where they currently diverge (#1677 F1–F3, #1674 B8), so the move
-// cannot silently change either side.
+// ⚠️ WHAT IS STILL NOT ONE RULE (not one WALK): ResolveEffective derives its
+// defaults CHAIN from scan.Defaults with its own case-folding rule
+// (legacyDefaultsChain in hierarchy.go) rather than CollectDefaultsChain —
+// that is #1674 (B8). tree_scan_parity_test.go pins, row by row, where the
+// three planes agree and where they still diverge, so neither side can move
+// silently.
 //
 // The hierarchy products are the Go port of the Python reference
 // implementation (ADR-016; scripts/tools/dx/describe_tenant.py):
@@ -175,10 +175,25 @@ type TreeScan struct {
 
 	// Hierarchy products. When Conflict is non-nil the Tenants map and the
 	// graph are nil: a duplicate tenant across files is a rejected
-	// configuration, not a graph with one edge fewer.
+	// configuration, not a graph with one edge fewer. That is the EXPORTER's
+	// whole-tree verdict; the per-tenant view that survives a conflict (what
+	// /effective and da-guard answer) is Locate.
 	Tenants  map[string]string // tenantID → AbsPath
 	Defaults map[string]bool   // AbsPath → true
+	// Conflict is the FIRST cross-file duplicate in walk order (PathA/PathB
+	// are the first two declaring files for that tenant, in walk order).
 	Conflict *DuplicateTenantError
+
+	// attrib is every tenant's FIRST declaring file in walk order, recorded
+	// even when the tree has a conflict. When Conflict is nil it is the very
+	// map exported as Tenants (no second allocation on the clean path).
+	// dups holds, per tenant declared in more than one file, that tenant's
+	// own first two declaring files; nil unless the tree has a conflict.
+	// Unexported and read only through Locate, so the exported contract
+	// ("Tenants is nil under a conflict") is unchanged. Immutable once the
+	// walk returns.
+	attrib map[string]string
+	dups   map[string]*DuplicateTenantError
 
 	// graph is built on first use (InheritanceGraph), not by the walk: the
 	// flat plane's paths (IncrementalLoad, the flat branch of detectChange)
@@ -240,7 +255,9 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //   - every other kept file is parsed for its top-level `tenants:` keys; a
 //     parse failure is logged, counted on obs (when non-nil) and drops
 //     the file from `Tenants` only — it stays hashed and watched.
-//   - the same tenant declared in two files is a conflict (see TreeScan).
+//   - the same tenant declared in two files is a conflict (see TreeScan):
+//     the whole-tree verdict (Conflict, nil Tenants) is the exporter's, the
+//     per-tenant verdict (Locate) is the read-only diagnostics'.
 //
 // prior enables the mtime fast-path: a file whose ModTime+Size equal the
 // prior's and that is older than TreeScanMtimeGuard reuses the prior's hash
@@ -412,19 +429,77 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 
 	// Tenant attribution + cross-file duplicate detection (#127 guardrail:
 	// silently preferring one file would mask config drift).
+	//
+	// ⛔ The loop does NOT stop at the first conflict (#1677 W2). Stopping
+	// left every tenant unattributed, so a per-tenant reader (ResolveEffective,
+	// ScopeEffective) could not tell "tx is a duplicate" from "innocent ty
+	// lives in c.yaml". The whole-tree verdict is unchanged — Conflict is the
+	// first duplicate in walk order and Tenants stays nil under it — and the
+	// per-tenant view is kept unexported behind Locate.
 	tenants := make(map[string]string)
+	var dups map[string]*DuplicateTenantError
 	for _, f := range walkOrder {
 		for _, tid := range f.TenantIDs {
-			if prev, exists := tenants[tid]; exists && prev != f.AbsPath {
-				scan.Conflict = &DuplicateTenantError{TenantID: tid, PathA: prev, PathB: f.AbsPath}
-				return scan, nil
+			prev, exists := tenants[tid]
+			if !exists {
+				tenants[tid] = f.AbsPath
+				continue
 			}
-			tenants[tid] = f.AbsPath
+			if prev == f.AbsPath {
+				continue
+			}
+			if _, seen := dups[tid]; seen {
+				continue // a third declaring file: the first two are what we name
+			}
+			dup := &DuplicateTenantError{TenantID: tid, PathA: prev, PathB: f.AbsPath}
+			if dups == nil {
+				dups = make(map[string]*DuplicateTenantError)
+			}
+			dups[tid] = dup
+			if scan.Conflict == nil {
+				scan.Conflict = dup
+			}
 		}
 	}
-	scan.Tenants = tenants
+	scan.attrib = tenants
+	scan.dups = dups
+	if scan.Conflict == nil {
+		scan.Tenants = tenants
+	}
 	// The inheritance graph is NOT built here — see InheritanceGraph.
 	return scan, nil
+}
+
+// Locate is the per-tenant view of the walk, and the ONLY one that survives
+// a conflict: it answers for one tenant regardless of whether some OTHER
+// tenant is duplicated.
+//
+//   - tenant declared in two or more files → that tenant's own
+//     *DuplicateTenantError (its first two declaring files, walk order);
+//   - tenant declared nowhere (or only in `_`-prefixed / unparseable files)
+//     → ErrTenantNotFound;
+//   - otherwise → the absolute path (under AbsRoot) of its declaring file.
+//
+// ⚠️ This is deliberately NOT what the exporter does with a conflict: the
+// exporter rejects the whole tree (Conflict / nil Tenants). Locate is for the
+// read-only diagnostics (ResolveEffective, ScopeEffective), where refusing to
+// describe an innocent tenant because a neighbour is broken would only hide
+// the one answer the operator asked for.
+func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
+	if d, ok := s.dups[tenantID]; ok {
+		return "", d
+	}
+	attrib := s.attrib
+	if attrib == nil {
+		// A TreeScan not produced by the walk (e.g. a test-built prior) has
+		// no private attribution; Tenants is the same information there.
+		attrib = s.Tenants
+	}
+	p, ok := attrib[tenantID]
+	if !ok {
+		return "", ErrTenantNotFound
+	}
+	return p, nil
 }
 
 // parseTenantDecls extracts the top-level `tenants:` keys of one tenant
@@ -537,8 +612,10 @@ func AbsScanRoot(dir string) string {
 // `tenantSources` was empty, so the tenant's series carried the ROOT default
 // (50) instead of the subtree's (90) — and the divergence audit reports only
 // the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
-// ResolveEffective / ScopeEffective do NOT use it yet (#1677 F1; pinned by
-// tree_scan_parity_test.go until W2).
+// ResolveEffective / ScopeEffective reach it through ScanDirTree since W2
+// (#1677 F1), and ScopeEffective also resolves its --scope with AbsScanRoot
+// so a root and a scope spelled through different links still compare as
+// one tree (pinned by tree_scan_parity_test.go).
 //
 // ⚠️ Falls back to the given path when resolution fails (dangling link,
 // permission), so the caller's own error handling still decides — this

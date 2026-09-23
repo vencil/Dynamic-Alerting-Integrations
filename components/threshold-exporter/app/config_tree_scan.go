@@ -7,8 +7,8 @@ package main
 // The walker itself — the skip rules, the mtime fast-path that carries
 // tenant declarations, the flat and hierarchy products, the metric
 // contract — moved to pkg/config (#1941, #1911 ①(a)) so that
-// pkg/config.ResolveEffective / ScopeEffective can consume the same walk in
-// a follow-up. That move changed nothing on this side: package main keeps
+// pkg/config.ResolveEffective / ScopeEffective could consume the same walk,
+// which they do since W2 (#1677). That move changed nothing on this side: package main keeps
 // its historical names through the aliases and the one-line adapter below,
 // and every call site reads the same as before except for the (now
 // exported) field and method names.

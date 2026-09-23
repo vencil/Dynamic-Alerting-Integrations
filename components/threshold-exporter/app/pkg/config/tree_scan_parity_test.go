@@ -6,15 +6,29 @@ package config
 // Three planes answer "which tenants exist under this tree, and what is each
 // one's defaults chain":
 //
-//	WALKER   ScanDirTree → Tenants + InheritanceGraph().TenantDefaults (the
-//	         production chain, not one recomputed here), plus the walker's own
-//	         classification: sorted Files keys and Defaults (root-relative)
+//	WALKER   ScanDirTree →
+//	         - tenants: the exporter's whole-tree verdict (sorted Tenants, or
+//	           "ERR: <Conflict>" — a duplicate anywhere rejects the tree);
+//	         - per tenant: TreeScan.Locate (dup → that tenant's own error,
+//	           absent → NOTFOUND), then the chain from
+//	           InheritanceGraph().TenantDefaults (the production chain, not
+//	           one recomputed here) or, under a conflict where there is no
+//	           graph, CollectDefaultsChain over scan.Defaults — the function
+//	           the graph is built from;
+//	         - scope: the tenants declared by files under the scope, or ERR
+//	           iff one of THEM is a duplicate;
+//	         plus the walker's own classification: sorted Files keys and
+//	         Defaults (root-relative)
 //	RESOLVE  ResolveEffective(root, id) → err | DefaultsChain
-//	SCOPE    ScopeEffective(root, scope) → err | tenant ids
+//	SCOPE    ScopeEffective(root, scope) → err | tenant ids (a row may spell
+//	         the scope path differently from the root — scopeDir)
 //
 // W1 (#1941) moved the walker into this package with ZERO behavior change on
-// either side; W2 makes ResolveEffective / ScopeEffective consume it. This
-// table is the guard for both steps. Every row pins the CURRENT observation
+// either side; W2 (#1677) made ResolveEffective / ScopeEffective consume it,
+// which flipped the symlinked-root, null-body, hidden-scope and
+// duplicate-plus-innocent rows to agree. The two upper-case _DEFAULTS.YAML
+// rows stay diverge until #1674 (B8) settles defaults-name case folding, and
+// the scalar-body row until #1957. Every row pins the CURRENT observation
 // of all three planes exactly — for the walker that includes which files it
 // kept (Files) and which it classified as defaults (Defaults), so a change to
 // its skip or classification rules is red even when no chain moves:
@@ -63,9 +77,14 @@ type parityCase struct {
 	build   func(t *testing.T, base string) (root string)
 	queries []string
 	scope   string // relative to root; "" = the root itself
-	expect  string // "agree" | "diverge"
-	owner   string // diverge only: the ticket whose fix flips this row
-	want    parityObs
+	// scopeDir, when set, is how the SCOPE plane spells the scope (given the
+	// root build returned) — e.g. through the real path behind a symlinked
+	// root. `scope` still names the same directory, root-relative, for the
+	// WALKER plane. nil = filepath.Join(root, scope).
+	scopeDir func(root string) string
+	expect   string // "agree" | "diverge"
+	owner    string // diverge only: the ticket whose fix flips this row
+	want     parityObs
 }
 
 func parityWrite(t *testing.T, path, content string) {
@@ -87,7 +106,7 @@ func parityNorm(msg string, roots ...string) string {
 	return filepath.ToSlash(msg)
 }
 
-func observeParity(t *testing.T, root string, queries []string, scopeRel string) parityObs {
+func observeParity(t *testing.T, root string, queries []string, scopeRel string, scopeSpelling func(root string) string) parityObs {
 	t.Helper()
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -120,11 +139,44 @@ func observeParity(t *testing.T, root string, queries []string, scopeRel string)
 	sort.Strings(defs)
 	obs.walkerDefs = fmt.Sprint(defs)
 
+	scopeAbs := filepath.Join(scan.AbsRoot, filepath.FromSlash(scopeRel))
+	underScope := func(p string) bool {
+		return scopeRel == "" || strings.HasPrefix(p, scopeAbs+string(filepath.Separator))
+	}
+
+	// The graph production serves; nil under a conflict (the exporter
+	// rejects the whole tree). ⛔ The exported contract is asserted here, not
+	// assumed: under a conflict Tenants must stay nil.
+	graph := scan.InheritanceGraph()
 	if scan.Conflict != nil {
+		if scan.Tenants != nil || graph != nil {
+			t.Fatalf("scan has a conflict but Tenants=%v graph=%v — the exporter's whole-tree rejection contract is broken", scan.Tenants, graph)
+		}
+		// The exporter's whole-tree verdict, unchanged by W2.
 		obs.walkerTenants = norm(scan.Conflict)
-		obs.walkerScope = obs.walkerTenants
-		for _, q := range queries {
-			obs.walker[q] = obs.walkerTenants
+
+		// Scope under a conflict: ERR iff an IN-SCOPE tenant is a duplicate
+		// (first such tenant in sorted order), else the in-scope tenants.
+		set := map[string]bool{}
+		for _, f := range scan.Files {
+			if underScope(f.AbsPath) {
+				for _, id := range f.TenantIDs {
+					set[id] = true
+				}
+			}
+		}
+		ids := make([]string, 0, len(set))
+		for id := range set {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		obs.walkerScope = fmt.Sprint(nonNilStrings(ids))
+		for _, id := range ids {
+			var dup *DuplicateTenantError
+			if _, lerr := scan.Locate(id); errors.As(lerr, &dup) {
+				obs.walkerScope = norm(lerr)
+				break
+			}
 		}
 	} else {
 		ids := make([]string, 0, len(scan.Tenants))
@@ -134,39 +186,51 @@ func observeParity(t *testing.T, root string, queries []string, scopeRel string)
 		sort.Strings(ids)
 		obs.walkerTenants = fmt.Sprint(ids)
 
-		scopeAbs := filepath.Join(scan.AbsRoot, filepath.FromSlash(scopeRel))
 		var inScope []string
 		for _, id := range ids {
-			src := scan.Tenants[id]
-			if scopeRel == "" || strings.HasPrefix(src, scopeAbs+string(filepath.Separator)) {
+			if underScope(scan.Tenants[id]) {
 				inScope = append(inScope, id)
 			}
 		}
 		obs.walkerScope = fmt.Sprint(nonNilStrings(inScope))
+	}
 
-		graph := scan.InheritanceGraph()
-		for _, q := range queries {
-			if _, ok := scan.Tenants[q]; !ok {
-				obs.walker[q] = "NOTFOUND"
-				continue
-			}
+	// Per-tenant WALKER verdict: the walk's per-tenant view (Locate), so an
+	// uninvolved tenant under a conflict still reads its chain.
+	for _, q := range queries {
+		src, lerr := scan.Locate(q)
+		switch {
+		case errors.Is(lerr, ErrTenantNotFound):
+			obs.walker[q] = "NOTFOUND"
+			continue
+		case lerr != nil:
+			obs.walker[q] = norm(lerr)
+			continue
+		}
+		var chain []string
+		if graph != nil {
 			// The chain production serves, read off the scan's own graph —
 			// not recomputed here, so a regression in how the scan builds
 			// its graph is visible to this table.
-			chain, ok := graph.TenantDefaults[q]
+			c, ok := graph.TenantDefaults[q]
 			if !ok {
-				t.Fatalf("tenant %s is in scan.Tenants but missing from InheritanceGraph().TenantDefaults", q)
+				t.Fatalf("tenant %s is located by the scan but missing from InheritanceGraph().TenantDefaults", q)
 			}
-			rel := make([]string, 0, len(chain))
-			for _, p := range chain {
-				r, rerr := filepath.Rel(scan.AbsRoot, p)
-				if rerr != nil {
-					t.Fatalf("chain entry %s not under %s: %v", p, scan.AbsRoot, rerr)
-				}
-				rel = append(rel, filepath.ToSlash(r))
-			}
-			obs.walker[q] = fmt.Sprintf("chain=%v", rel)
+			chain = c
+		} else {
+			// No graph under a conflict: the function the graph is built
+			// from, over the same scan.
+			chain = CollectDefaultsChain(filepath.Dir(src), scan.AbsRoot, scan.Defaults)
 		}
+		rel := make([]string, 0, len(chain))
+		for _, p := range chain {
+			r, rerr := filepath.Rel(scan.AbsRoot, p)
+			if rerr != nil {
+				t.Fatalf("chain entry %s not under %s: %v", p, scan.AbsRoot, rerr)
+			}
+			rel = append(rel, filepath.ToSlash(r))
+		}
+		obs.walker[q] = fmt.Sprintf("chain=%v", rel)
 	}
 
 	// RESOLVE.
@@ -182,10 +246,14 @@ func observeParity(t *testing.T, root string, queries []string, scopeRel string)
 		}
 	}
 
-	// SCOPE.
+	// SCOPE. The scope path is spelled through `root` unless the row says
+	// otherwise (scopeSpelling: e.g. the real path behind a symlinked root).
 	scopeDir := root
 	if scopeRel != "" {
 		scopeDir = filepath.Join(root, filepath.FromSlash(scopeRel))
+	}
+	if scopeSpelling != nil {
+		scopeDir = scopeSpelling(root)
 	}
 	st, serr := ScopeEffective(root, scopeDir)
 	if serr != nil {
@@ -349,17 +417,46 @@ func parityCases() []parityCase {
 				return link
 			},
 			queries: []string{"tsym"},
-			expect:  "diverge",
-			owner:   "W2, #1677 F1 (ResolveEffective/ScopeEffective do not resolve a symlinked root; WalkDir never follows it)",
+			expect:  "agree", // was diverge until W2 (#1677 F1): RESOLVE NOTFOUND, SCOPE []
 			want: parityObs{
 				walkerTenants: "[tsym]",
 				walkerFiles:   "[_defaults.yaml sub/t.yaml]",
 				walkerDefs:    "[_defaults.yaml]",
 				walker:        map[string]string{"tsym": "chain=[_defaults.yaml]"},
-				resolve:       map[string]string{"tsym": "NOTFOUND"},
+				resolve:       map[string]string{"tsym": "chain=[_defaults.yaml]"},
 				walkerScope:   "[tsym]",
-				scope:         "[]",
+				scope:         "[tsym]",
 			},
+		},
+		{
+			// root=link, scope=link/sub. On main: SCOPE "tenant not found"
+			// (the scope walk found tsym, the unresolved re-walk did not).
+			name:    "symlinked root, scope spelled through the link",
+			build:   paritySymlinkTree(true),
+			queries: []string{"tsym"},
+			scope:   "sub",
+			expect:  "agree",
+			want:    paritySymlinkWant,
+		},
+		{
+			// root=link, scope=real/sub. On main: "outside configDir".
+			name:     "symlinked root, scope spelled through the real path",
+			build:    paritySymlinkTree(true),
+			queries:  []string{"tsym"},
+			scope:    "sub",
+			scopeDir: func(root string) string { return filepath.Join(filepath.Dir(root), "real", "sub") },
+			expect:   "agree",
+			want:     paritySymlinkWant,
+		},
+		{
+			// root=real, scope=link/sub. On main: "outside configDir".
+			name:     "real root, scope spelled through a symlink",
+			build:    paritySymlinkTree(false),
+			queries:  []string{"tsym"},
+			scope:    "sub",
+			scopeDir: func(root string) string { return filepath.Join(filepath.Dir(root), "link", "sub") },
+			expect:   "agree",
+			want:     paritySymlinkWant,
 		},
 		{
 			name: "tenant declared with a null body",
@@ -369,16 +466,35 @@ func parityCases() []parityCase {
 				return root
 			},
 			queries: []string{"tnull", "tok"},
-			expect:  "diverge",
-			owner:   "W2, #1677 F2 (the walker counts a null-bodied tenant; ResolveEffective rejects it, sinking the whole scope)",
+			expect:  "agree", // was diverge until W2 (#1677 F2): RESOLVE tnull "not in file", SCOPE failed whole
 			want: parityObs{
 				walkerTenants: "[tnull tok]",
 				walkerFiles:   "[a.yaml b.yaml]",
 				walkerDefs:    "[]",
 				walker:        map[string]string{"tnull": "chain=[]", "tok": "chain=[]"},
-				resolve:       map[string]string{"tnull": `ERR: tenant "tnull" not in file`, "tok": "chain=[]"},
+				resolve:       map[string]string{"tnull": "chain=[]", "tok": "chain=[]"},
 				walkerScope:   "[tnull tok]",
-				scope:         `ERR: resolve tenant "tnull": tenant "tnull" not in file`,
+				scope:         "[tnull tok]",
+			},
+		},
+		{
+			name: "tenant body is a scalar",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "a.yaml"), "tenants:\n  tsc: 5\n")
+				parityWrite(t, filepath.Join(root, "b.yaml"), "tenants:\n  tok: {}\n")
+				return root
+			},
+			queries: []string{"tsc", "tok"},
+			expect:  "diverge",
+			owner:   "P, #1957 (unified parse: the walker counts a tenant whose body the full parse rejects)",
+			want: parityObs{
+				walkerTenants: "[tok tsc]",
+				walkerFiles:   "[a.yaml b.yaml]",
+				walkerDefs:    "[]",
+				walker:        map[string]string{"tsc": "chain=[]", "tok": "chain=[]"},
+				resolve:       map[string]string{"tsc": `ERR: tenant "tsc" not in file`, "tok": "chain=[]"},
+				walkerScope:   "[tok tsc]",
+				scope:         `ERR: resolve tenant "tsc": tenant "tsc" not in file`,
 			},
 		},
 		{
@@ -390,8 +506,7 @@ func parityCases() []parityCase {
 			},
 			queries: []string{"thid", "tvis"},
 			scope:   ".hidden",
-			expect:  "diverge",
-			owner:   "W2, #1677 F3 (ScopeEffective does not prune a hidden scope root, then ResolveEffective cannot find what it enumerated)",
+			expect:  "agree", // was diverge until W2 (#1677 F3): SCOPE enumerated thid, then RESOLVE could not find it
 			want: parityObs{
 				walkerTenants: "[tvis]",
 				walkerFiles:   "[visible/t.yaml]",
@@ -399,7 +514,7 @@ func parityCases() []parityCase {
 				walker:        map[string]string{"thid": "NOTFOUND", "tvis": "chain=[]"},
 				resolve:       map[string]string{"thid": "NOTFOUND", "tvis": "chain=[]"},
 				walkerScope:   "[]",
-				scope:         `ERR: resolve tenant "thid": tenant not found in config tree`,
+				scope:         "[]",
 			},
 		},
 		{
@@ -452,14 +567,17 @@ func parityCases() []parityCase {
 				return root
 			},
 			queries: []string{"ty", "tx"},
-			expect:  "diverge",
-			owner:   "W2 (the walker rejects the whole tree; ResolveEffective errors only when the conflict involves the queried tenant)",
+			// Was diverge until W2: the walker's per-tenant verdict came from
+			// the whole-tree rejection, so innocent ty read the tx error.
+			// walkerTenants still pins that rejection — it is the exporter's
+			// verdict and W2 does not change it.
+			expect: "agree",
 			want: parityObs{
 				walkerTenants: `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
 				walkerFiles:   "[a.yaml b.yaml c.yaml]",
 				walkerDefs:    "[]",
 				walker: map[string]string{
-					"ty": `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
+					"ty": "chain=[]",
 					"tx": `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
 				},
 				resolve: map[string]string{
@@ -470,13 +588,104 @@ func parityCases() []parityCase {
 				scope:       `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
 			},
 		},
+		{
+			name: "two different duplicates: each queried tenant gets its own",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "a.yaml"), "tenants:\n  tx: {}\n")
+				parityWrite(t, filepath.Join(root, "b.yaml"), "tenants:\n  tw: {}\n  tx: {}\n")
+				parityWrite(t, filepath.Join(root, "c.yaml"), "tenants:\n  tw: {}\n")
+				parityWrite(t, filepath.Join(root, "d.yaml"), "tenants:\n  ty: {}\n")
+				return root
+			},
+			queries: []string{"tw", "tx", "ty"},
+			expect:  "agree",
+			want: parityObs{
+				// The whole-tree verdict names the FIRST duplicate in walk order.
+				walkerTenants: `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
+				walkerFiles:   "[a.yaml b.yaml c.yaml d.yaml]",
+				walkerDefs:    "[]",
+				walker: map[string]string{
+					"tw": `ERR: duplicate tenant ID "tw": defined in both <root>/b.yaml and <root>/c.yaml`,
+					"tx": `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
+					"ty": "chain=[]",
+				},
+				resolve: map[string]string{
+					"tw": `ERR: duplicate tenant ID "tw": defined in both <root>/b.yaml and <root>/c.yaml`,
+					"tx": `ERR: duplicate tenant ID "tx": defined in both <root>/a.yaml and <root>/b.yaml`,
+					"ty": "chain=[]",
+				},
+				// The scope names the first duplicated in-scope tenant in
+				// sorted order.
+				walkerScope: `ERR: duplicate tenant ID "tw": defined in both <root>/b.yaml and <root>/c.yaml`,
+				scope:       `ERR: duplicate tenant ID "tw": defined in both <root>/b.yaml and <root>/c.yaml`,
+			},
+		},
+		{
+			name: "duplicate entirely outside the scope",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "x", "a.yaml"), "tenants:\n  tx: {}\n")
+				parityWrite(t, filepath.Join(root, "x", "b.yaml"), "tenants:\n  tx: {}\n")
+				parityWrite(t, filepath.Join(root, "y", "c.yaml"), "tenants:\n  ty: {}\n")
+				return root
+			},
+			queries: []string{"ty", "tx"},
+			scope:   "y",
+			expect:  "agree",
+			want: parityObs{
+				walkerTenants: `ERR: duplicate tenant ID "tx": defined in both <root>/x/a.yaml and <root>/x/b.yaml`,
+				walkerFiles:   "[x/a.yaml x/b.yaml y/c.yaml]",
+				walkerDefs:    "[]",
+				walker: map[string]string{
+					"ty": "chain=[]",
+					"tx": `ERR: duplicate tenant ID "tx": defined in both <root>/x/a.yaml and <root>/x/b.yaml`,
+				},
+				resolve: map[string]string{
+					"ty": "chain=[]",
+					"tx": `ERR: duplicate tenant ID "tx": defined in both <root>/x/a.yaml and <root>/x/b.yaml`,
+				},
+				walkerScope: "[ty]",
+				scope:       "[ty]",
+			},
+		},
 	}
+}
+
+// paritySymlinkTree builds <base>/real (a root _defaults.yaml and
+// sub/t.yaml declaring tsym) plus <base>/link → real, and returns the link
+// (viaLink) or the real directory as the root.
+func paritySymlinkTree(viaLink bool) func(t *testing.T, base string) string {
+	return func(t *testing.T, base string) string {
+		realDir := filepath.Join(base, "real")
+		parityWrite(t, filepath.Join(realDir, "_defaults.yaml"), "defaults:\n  cpu: 1\n")
+		parityWrite(t, filepath.Join(realDir, "sub", "t.yaml"), "tenants:\n  tsym: {}\n")
+		link := filepath.Join(base, "link")
+		if err := os.Symlink(realDir, link); err != nil {
+			t.Skipf("os.Symlink unavailable here (%v) — symlinked rows cannot be built on this platform "+
+				"(Windows without the symlink privilege); they are measured on Linux/macOS CI", err)
+		}
+		if viaLink {
+			return link
+		}
+		return realDir
+	}
+}
+
+// paritySymlinkWant is what every plane reads for paritySymlinkTree scoped
+// to sub/, whichever way root and scope are spelled.
+var paritySymlinkWant = parityObs{
+	walkerTenants: "[tsym]",
+	walkerFiles:   "[_defaults.yaml sub/t.yaml]",
+	walkerDefs:    "[_defaults.yaml]",
+	walker:        map[string]string{"tsym": "chain=[_defaults.yaml]"},
+	resolve:       map[string]string{"tsym": "chain=[_defaults.yaml]"},
+	walkerScope:   "[tsym]",
+	scope:         "[tsym]",
 }
 
 func checkParityRow(t *testing.T, tc parityCase) {
 	t.Helper()
 	root := tc.build(t, t.TempDir())
-	got := observeParity(t, root, tc.queries, tc.scope)
+	got := observeParity(t, root, tc.queries, tc.scope, tc.scopeDir)
 	disagree := planesAgree(got, tc.queries)
 	drift := diffObs(got, tc.want, tc.queries)
 

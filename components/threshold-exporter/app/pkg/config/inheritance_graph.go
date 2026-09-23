@@ -2,12 +2,12 @@ package config
 
 // InheritanceGraph + the defaults-chain walker that builds it.
 //
-// v2.8.0 PR-8 promoted these from `app/config_hierarchy.go` so that
+// v2.8.0 PR-8 promoted these from the exporter's package main so that
 // `pkg/config/source.go` (also new in PR-8) and any future cmd/da-guard
 // or tenant-api consumer can construct the graph without depending on
-// `package main`. The exporter's disk scanner (`scanDirHierarchical`)
-// still lives in app/ because it threads `fileStat` (mtime cache) which
-// is exporter-specific.
+// `package main`. The exporter's disk walker, ScanDirTree (tree_scan.go),
+// has since moved into this package too (#1941), mtime cache included,
+// and builds its graph with CollectDefaultsChain below.
 //
 // Semantic rules unchanged from the original definition (parity-pinned
 // against describe_tenant.py + golden fixtures):
@@ -84,8 +84,9 @@ func (g *InheritanceGraph) TenantsAffectedBy(defaultsPath string) []string {
 // picking the `_defaults.yaml` (or `.yml`) at each level and reversing
 // the accumulator so chain[0] is the top-most (L0) defaults.
 //
-// Both the exporter's disk scanner (scanDirHierarchical in app/) and
-// the in-memory scanFromConfigSource in this package call this helper.
+// Both the exporter's disk walker (TreeScan.InheritanceGraph over
+// ScanDirTree, tree_scan.go) and the in-memory ScanFromConfigSource in
+// this package call this helper.
 // `defaults` is the populated set of known _defaults.yaml paths
 // (basename match, set membership only — values are unused).
 func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []string {

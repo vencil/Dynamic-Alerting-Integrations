@@ -245,7 +245,7 @@ GET /api/v1/tenants/{id}/effective
 
 - `404 ErrTenantNotFound` — tenant does not exist
 - `400` — tenant_id validation failure (length, charset)
-- Handler calls `pkg/config.ResolveEffective(tenantID)` directly, 100% identical to exporter inheritance logic (shared validation logic)
+- Handler calls `pkg/config.ResolveEffective(tenantID)` directly: it reads the exporter's own conf.d walker (`ScanDirTree`, #1677) and the same merge core, so a symlinked `--config-dir`, hidden directories and null-body tenants are judged exactly as the exporter judges them. ⚠️ The one rule not yet converged is the defaults-chain choice for upper-case `_defaults` names (`_DEFAULTS.YAML`), tracked in #1674
 
 **Debug / Migration CLI (da-tools)**
 **Debug CLI (da-tools)**

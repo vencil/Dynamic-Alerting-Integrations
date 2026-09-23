@@ -239,6 +239,26 @@ def s_opt_out_null_threshold():
 
 
 # -------------------------------------------------------------------------
+# Scenario 8b: a tenant declared with a NULL body (#1677 F2)
+#
+# `tenants:\n  tenant-null-body:\n` — the exporter's flat plane serves this
+# tenant with every inherited default, but pkg/config extractTenantRaw used
+# to reject it ("not in file": /effective 500, da-guard failed the scope, the
+# exporter skipped its merged hash) and describe_tenant.py crashed on it
+# (AttributeError: 'NoneType' object has no attribute 'items'). Both now read
+# the null body as an empty override; this pins that the two agree on the
+# merged hash. Written into the opt-out-null-threshold tree as its OWN file
+# (no existing byte moves, no new conf.d root for the reachability floors),
+# so it inherits that tree's real flat-metric-key _defaults.yaml.
+# -------------------------------------------------------------------------
+def s_null_body():
+    d = reset("opt-out-null-threshold")
+    write(d / "null-body.yaml", """tenants:
+  tenant-null-body:
+""")
+
+
+# -------------------------------------------------------------------------
 # Scenario 9: a `defaults:` wrapper WITH sibling top-level keys.
 #
 # `components/threshold-exporter/config/conf.d/_defaults.yaml` carries
@@ -299,6 +319,7 @@ SCENARIOS = [
     ("array-replace", "tenant-arr", s_array_replace),
     ("opt-out-null", "tenant-optout", s_opt_out_null),
     ("opt-out-null-threshold", "tenant-null", s_opt_out_null_threshold),
+    ("null-body", "tenant-null-body", s_null_body),         # same fixture dir, own file
     ("metadata-skipped", "tenant-meta", s_metadata_skipped),
     ("wrapper-siblings", "tenant-sib", s_wrapper_siblings),
 ]
@@ -342,6 +363,7 @@ def main() -> int:
         "array-replace": "array-replace",
         "opt-out-null": "opt-out-null",
         "opt-out-null-threshold": "opt-out-null-threshold",
+        "null-body": "opt-out-null-threshold",
         "metadata-skipped": "metadata-skipped",
         "wrapper-siblings": "wrapper-siblings",
     }

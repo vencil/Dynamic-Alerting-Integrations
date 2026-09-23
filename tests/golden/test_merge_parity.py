@@ -17,6 +17,9 @@ Fixtures cover every deep_merge rule from ADR-017:
 - opt-out-null:      null deletes a reserved key, not a threshold key
 - opt-out-null-threshold: real flat-metric-key shape — null keeps the
                      inherited default, "disable" is the opt-out (#1339)
+- null-body:         a tenant declared with a null body (`tenant-x:` and
+                     nothing under it) inherits every default (#1677 F2);
+                     lives in the opt-out-null-threshold tree as its own file
 - metadata-skipped:  _metadata never propagates
 - wrapper-siblings:  `defaults:` wrapper WITH sibling top-level keys — the
                      shape the shipped platform file has. See
