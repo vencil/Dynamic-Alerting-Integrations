@@ -64,6 +64,7 @@ __all__ = [
     "is_hidden_name",
     "is_reserved_name",
     "iter_config_files",
+    "FlatRead",
     "resolve_defaults_file",
     "nested_yaml_files",
     "nested_yaml_warning",
@@ -314,16 +315,21 @@ def resolve_defaults_file(
     resolving it by directory order would make it an intermittent one.
     """
     root = Path(base)
-    # ⛔ Prints, but is NOT recorded by `observe_flat_reads` (#1652). This
-    # is a lookup of the ONE root carrier, not a read of the tenants: the
-    # observers ask "did this verdict come from a reader that skipped the
-    # tenants in subdirectories?", and recording here answered yes for
-    # every caller that merely locates `_defaults.yaml` — measured,
-    # validate_config's `profiles` row (which reads the tenants
-    # recursively) and `policy_dsl` with no policies both went PASS -> WARN
-    # on a tree whose only nested file was a tenant. What this lookup does
-    # skip — a `sub/_defaults.yaml` — stays on stderr only.
-    warn_nested(root, tool=tool, observed=False)
+    # #1652: what `observe_flat_reads` records here is what THIS lookup
+    # skipped, not the whole nested set `warn_nested` would record. It looks
+    # for one carrier at the root, so what it misses is a `sub/_defaults.yaml`
+    # — the exporter merges those (ADR-017), and a caller that takes
+    # `_policies` from the root carrier silently has none when they live
+    # only in `prod/_defaults.yaml` (measured: validate_config's
+    # `policy_dsl` FAIL on the flat twin, PASS on the hierarchical one).
+    # ⛔ Not the whole nested set: recording every nested file here turned
+    # `profiles` (whose tenants are read recursively) and `policy_dsl` with
+    # no policies into WARN on a tree whose only nested file was a TENANT —
+    # a file this lookup was never going to read. The judge is what was
+    # skipped, not who is calling.
+    nested = nested_yaml_files(root)
+    _record_flat_read(root, [p for p in nested if is_defaults_name(p.name)])
+    _print_nested_once(root, tool=tool)
     try:
         for entry in sorted(root.iterdir()):
             if entry.is_file() and is_defaults_name(entry.name):
@@ -725,6 +731,10 @@ def nested_yaml_warning(
     shown = [printable_name(p.relative_to(root).as_posix())
              for p in missed[:limit]]
     more = f" (+{len(missed) - limit} more)" if len(missed) > limit else ""
+    # ⛔ Scoped to THIS read, not to "this tool's output" (#1652): one command
+    # can mix readers — validate_config reads yaml_syntax / profiles /
+    # tenant_uniqueness recursively in the same run that prints this for its
+    # routing reader — so a sentence about the whole output was false there.
     # ⛔ No "run a recursive reader (e.g. validate_config)" advice (#1652):
     # validate_config's schema / routes / policy / policy_dsl rows go through
     # flat readers themselves, so that pointer sent the operator from one
@@ -738,11 +748,10 @@ def nested_yaml_warning(
         f"{tool}: read {config_dir} FLAT (top level only), but {len(missed)} "
         f"config file(s) live in subdirectories and were SKIPPED: "
         f"{', '.join(shown)}{more}. "
-        f"threshold-exporter reads this tree recursively (ADR-016/017), so "
-        f"what this tool just reported does not describe what the exporter "
-        f"is serving. Before acting on this output, treat it as covering "
-        f"the top-level files only, or flatten the tree so every reader "
-        f"sees the same files."
+        f"threshold-exporter reads this tree recursively (ADR-016/017). "
+        f"Whatever {tool} derived from THIS read covers the top-level files "
+        f"only and says nothing about the skipped ones; flatten the tree if "
+        f"every reader must see the same files."
     )
 
 
@@ -761,35 +770,65 @@ def reset_warned_for_test() -> None:
     _WARNED.clear()
 
 
-# Sinks collecting every `warn_nested` call made while they are installed.
-# A ContextVar holding an immutable tuple, not a module-level list: nothing
+class FlatRead(NamedTuple):
+    """One flat read seen by `observe_flat_reads`."""
+
+    directory: str
+    """The directory as the reader was handed it."""
+
+    skipped: tuple[Path, ...]
+    """Config files below its top level that THIS read did not open."""
+
+
+# Sinks collecting the flat reads made while they are installed. A
+# ContextVar holding an immutable tuple, not a module-level list: nothing
 # has to be reset between tests, and a nested or concurrent observer cannot
 # see (or clear) another one's records.
-_FLAT_READ_SINKS: contextvars.ContextVar[tuple[list[str], ...]] = (
+_FLAT_READ_SINKS: contextvars.ContextVar[tuple[list[FlatRead], ...]] = (
     contextvars.ContextVar("_FLAT_READ_SINKS", default=()))
 
 
+def _record_flat_read(config_dir: str | os.PathLike[str],
+                      skipped: "Iterable[Path]") -> None:
+    """Hand one flat read to every installed observer (no-op with none)."""
+    sinks = _FLAT_READ_SINKS.get()
+    if not sinks:
+        return
+    rec = FlatRead(os.fspath(config_dir), tuple(skipped))
+    for sink in sinks:
+        sink.append(rec)
+
+
 @contextlib.contextmanager
-def observe_flat_reads(sink: list[str]) -> Iterator[list[str]]:
-    """Append to `sink` every directory some code in this block read FLAT.
+def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
+    """Append to `sink` each flat read made in this block, with what it skipped.
 
-    #1652: `warn_nested` is where a flat reader announces itself — the
-    enumeration contract (`tests/shared/test_confd_enumeration_contract.py`)
-    requires every reader of a tenant config dir to either recurse or call
-    it. So "did this computation consult a flat reader?" can be answered by
-    observing that call instead of by a hand-kept list of which callers
-    happen to be flat, which would drift the first time a reader changes
-    sides. `validate_config` uses this to stop a flat row's PASS reading as
-    a verdict about files it never opened.
+    #1652: `validate_config` uses this to stop a row whose tenants came
+    from a flat reader reporting PASS about files that reader never opened.
 
-    ⚠️ One flat read is NOT recorded: `resolve_defaults_file` locating the
-    root carrier. It prints like any other flat read, but it is a lookup of
-    one named file, not a read of the tenants; see the comment there.
+    What is OBSERVED — exactly two call sites, both in this module:
+
+    * `warn_nested(d)`: recorded with every config file below the top level
+      of `d` (the same set it prints), on every call — including a flat
+      tree (nothing skipped) and repeats its print memo silences.
+    * `resolve_defaults_file(d)`: recorded with only the nested DEFAULTS
+      carriers (`is_defaults_name`), because locating the root carrier is
+      all it does; a nested tenant is not something it was going to read.
+
+    What is NOT observed, and why that is not closed by construction:
+
+    * A flat read that calls neither. The enumeration contract
+      (`tests/shared/test_confd_enumeration_contract.py`) makes a flat scan
+      name a guard, but it matches call NAMES only and its guard set also
+      admits `nested_yaml_warning` / `nested_yaml_files`, neither of which
+      records anything. `tests/shared/test_flat_read_observation_pin.py`
+      pins that no production code outside this module calls those two, so
+      a new caller has to decide here instead of silently escaping.
+    * A read that is not an enumeration at all — `Path(d) / "_profiles.yaml"`
+      opens a root file by name and no guard is involved.
 
     The sink is passed in rather than created here so the caller still has
-    it when the block exits by exception. Every call is recorded, including
-    ones on a flat tree (nothing skipped) and repeats the memo would
-    silence; what to make of them is the caller's question.
+    it when the block exits by exception.
     """
     token = _FLAT_READ_SINKS.set(_FLAT_READ_SINKS.get() + (sink,))
     try:
@@ -798,8 +837,7 @@ def observe_flat_reads(sink: list[str]) -> Iterator[list[str]]:
         _FLAT_READ_SINKS.reset(token)
 
 
-def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
-                observed: bool = True) -> bool:
+def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) -> bool:
     """Print the nested-config warning to stderr, at most once per directory.
 
     Returns whether anything was printed.
@@ -815,17 +853,24 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
 
     Callers should use this instead of hand-rolling the print, so the
     dedup and the stderr choice live in one place.
-
-    `observed=False` prints exactly the same but keeps the call out of
-    `observe_flat_reads`; it exists for `resolve_defaults_file` (see there)
-    and is not for a reader of tenants.
     """
     # Recorded BEFORE the flat-tree early return and the memo: an observer
     # asks "did this code path read `config_dir` flat?", and the answer is
-    # yes on the second call too, when nothing is printed.
-    if observed:
-        for sink in _FLAT_READ_SINKS.get():
-            sink.append(os.fspath(config_dir))
+    # yes on the second call too, when nothing is printed. The walk is only
+    # paid when an observer is installed.
+    if _FLAT_READ_SINKS.get():
+        _record_flat_read(config_dir, nested_yaml_files(config_dir))
+    return _print_nested_once(config_dir, tool=tool)
+
+
+def _print_nested_once(config_dir: str | os.PathLike[str], *,
+                       tool: str | None = None) -> bool:
+    """The stderr half of `warn_nested`, with no `observe_flat_reads` record.
+
+    ⛔ Private on purpose: the only caller outside `warn_nested` is
+    `resolve_defaults_file`, which records a narrower skipped set itself.
+    `test_flat_read_observation_pin` keeps it from being called elsewhere.
+    """
     msg = nested_yaml_warning(config_dir, tool=tool)
     if msg is None:
         return False

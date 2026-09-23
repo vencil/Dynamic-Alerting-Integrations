@@ -187,7 +187,8 @@ python3 scripts/ops/configmap_assemble.py \
   under `examples/` or any hierarchical subdirectory (`region-eu/` and the
   like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
   the rest as `(+N more)`** — the full list is the `skipped_nested_files` field
-  of the flat-reader rows in `validate_config --json`. The exporter reads the tree recursively in-cluster
+  of the `schema` row in `validate_config --json` (see
+  [cli-reference](../cli-reference.en.md#hierarchical-confd)). The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
 - **A carrier nothing can be read from is named, not blocked**: a dangling
   symlink or a directory carrying a config name (`db-x.yaml/`) at the top

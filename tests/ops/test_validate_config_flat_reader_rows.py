@@ -11,9 +11,15 @@ are flat: every row name comes from the tool's own ``--json`` output, and the
 assertion is the same for all of them — "if the flat twin of a tree is not
 PASS on this row, the hierarchical twin is not PASS either". A recursive row
 satisfies it by finding the same problem; a flat row can only satisfy it by
-admitting what it skipped. A row that starts reading flat later is covered
-without anyone updating a list, and a row added later with no corpus entry
-that makes it fire reddens ``test_the_corpus_exercises_every_row``.
+admitting what it skipped. A row added later with no corpus entry that makes
+it fire reddens ``test_the_corpus_exercises_every_row``.
+
+⚠️ What this measures is bounded by the corpus's SHAPES, not by the rows.
+Two moves are exercised: tenant files into ``prod/`` (every entry), and a
+non-tenant carrier — a ``_defaults.yaml`` holding ``_policies`` — into
+``prod/`` while the root keeps a plain one (``dsl-policy-in-nested-defaults``).
+A reader that skips some OTHER kind of file (e.g. a nested ``_profiles.yaml``)
+is outside it, whatever the row.
 """
 
 from __future__ import annotations
@@ -38,25 +44,27 @@ _GOOD_TENANT = (
 )
 _POLICY = "allowed_domains: [\"allowed.example.com\"]\n"
 
-# Each entry: (id, top-level files, tenant files, extra argv). Tenant files
-# are what the hierarchical twin moves into a subdirectory; top-level files
-# (`_defaults.yaml`, `_profiles.yaml`, ...) stay where they are in both.
+# Each entry: (id, top-level files, tenant files, extra argv, move_top).
+# Tenant files are what the hierarchical twin moves into a subdirectory.
+# Top-level files stay at the root in both twins — unless `move_top`, in
+# which case the hierarchical twin moves them into the subdirectory too and
+# the root keeps only a plain `_defaults.yaml`.
 # Every entry is meant to make at least one row non-PASS on the FLAT twin —
 # `test_flat_twin_fires` checks that it does.
 _CORPUS = [
     ("unknown-key", {}, {
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connectionz: \"70\"\n"},
-     []),
+     [], False),
     ("receiver-not-an-object", {}, {
         "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
                       "    _routing:\n      receiver: \"not-an-object\"\n")},
-     []),
+     [], False),
     ("webhook-outside-allowlist", {}, {
         "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
                       "    _routing:\n      receiver:\n"
                       "        type: webhook\n"
                       "        url: https://hooks.bad.com/x\n")},
-     ["--policy", "{policy}"]),
+     ["--policy", "{policy}"], False),
     ("dsl-policy-violated", {
         "_defaults.yaml": (_DEFAULTS +
                            "_policies:\n"
@@ -66,30 +74,45 @@ _CORPUS = [
                            "    operator: required\n"
                            "    severity: error\n")}, {
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
-     []),
+     [], False),
     ("unknown-profile", {}, {
         "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
                       "    _profile: no-such-profile\n")},
-     []),
+     [], False),
     ("tenant-declared-twice", {}, {
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
         "db-a-copy.yaml": "tenants:\n  db-a:\n    mysql_connections: \"60\"\n"},
-     []),
+     [], False),
     ("top-level-is-a-list", {}, {
         "db-a.yaml": "- not\n- a\n- mapping\n"},
-     []),
+     [], False),
+    # #1652 blind review F1: the policies live ONLY in a nested carrier. The
+    # root-carrier lookup finds a `_defaults.yaml` with no `_policies`, so
+    # before the fix `policy_dsl` said "No _policies defined — skipped" /
+    # PASS on the hierarchical twin while the flat twin FAILed.
+    ("dsl-policy-in-nested-defaults", {
+        "_defaults.yaml": (_DEFAULTS +
+                           "_policies:\n"
+                           "  - name: routing-required\n"
+                           "    description: Routing required\n"
+                           "    target: _routing\n"
+                           "    operator: required\n"
+                           "    severity: error\n")}, {
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
+     [], True),
 ]
 
 
 def _tree(root: pathlib.Path, top: dict[str, str], tenants: dict[str, str],
-          sub: str | None) -> str:
+          sub: str | None, move_top: bool = False) -> str:
     d = root / "conf.d"
     d.mkdir(parents=True)
-    files = {"_defaults.yaml": _DEFAULTS, **top}
-    for name, body in files.items():
-        (d / name).write_text(body, encoding="utf-8")
     where = d / sub if sub else d
     where.mkdir(exist_ok=True)
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    for name, body in top.items():
+        (where if move_top else d).joinpath(name).write_text(
+            body, encoding="utf-8")
     for name, body in tenants.items():
         (where / name).write_text(body, encoding="utf-8")
     return str(d)
@@ -108,11 +131,11 @@ def _run(config_dir: str, extra: list[str], tmp_path: pathlib.Path,
 
 
 def _twins(case, tmp_path, cli_argv, capsys):
-    _id, top, tenants, extra = case
+    _id, top, tenants, extra, move_top = case
     flat = _run(_tree(tmp_path / "flat", top, tenants, None), extra,
                 tmp_path, cli_argv, capsys)
-    hier = _run(_tree(tmp_path / "hier", top, tenants, "prod"), extra,
-                tmp_path, cli_argv, capsys)
+    hier = _run(_tree(tmp_path / "hier", top, tenants, "prod", move_top),
+                extra, tmp_path, cli_argv, capsys)
     return flat, hier
 
 
@@ -148,7 +171,7 @@ def test_the_corpus_exercises_every_row(tmp_path, cli_argv, capsys):
     seen: set[str] = set()
     fired: set[str] = set()
     for i, case in enumerate(_CORPUS):
-        _id, top, tenants, extra = case
+        _id, top, tenants, extra, _move_top = case
         _rc, rows = _run(_tree(tmp_path / f"c{i}", top, tenants, None),
                          extra, tmp_path, cli_argv, capsys)
         seen |= set(rows)
@@ -202,3 +225,54 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     assert dsl["status"] == vc.PASS, dsl
     assert routes["status"] == vc.WARN, routes
     assert routes["skipped_nested_files"] == ["prod/db-a.yaml"], routes
+
+
+def test_a_nested_tenant_alone_does_not_flag_a_root_carrier_lookup(tmp_path):
+    """Negative control for the defaults-carrier record (#1652 F1).
+
+    ``profiles`` reads tenants recursively and only LOCATES the root
+    ``_defaults.yaml``; ``policy_dsl`` with no policies stops after that
+    lookup. With nothing nested but a tenant, that lookup skipped nothing it
+    was looking for — measured: recording every nested file there turned
+    both into WARN on exactly this tree.
+    """
+    d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, "prod")
+    for name, fn in (("profiles", vc.check_profiles),
+                     ("policy_dsl", vc.check_policy_dsl)):
+        row = vc._run_check(name, fn, d, _config_dir=d)
+        assert row["status"] == vc.PASS, row
+        assert "skipped_nested_files" not in row, row
+
+
+def test_a_nested_defaults_carrier_is_what_the_lookup_reports(tmp_path):
+    """Must-fire twin of the control above: the same lookup, with a nested
+    ``_defaults.yaml`` that it did not open, names THAT file and only it."""
+    d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS},
+              {"db-a.yaml": _GOOD_TENANT}, "prod", move_top=True)
+    row = vc._run_check("policy_dsl", vc.check_policy_dsl, d, _config_dir=d)
+    assert row["status"] == vc.WARN, row
+    assert row["skipped_nested_files"] == ["prod/_defaults.yaml"], row
+
+
+def test_the_flat_reader_hint_points_at_its_own_docs(tmp_path, cli_argv,
+                                                     capsys):
+    """The advice and the page it links must be about the same thing: a row
+    downgraded for skipping files links the hierarchical-tree section, not
+    its check's generic page."""
+    d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, "prod")
+    _rc, rows = _run(d, [], tmp_path, cli_argv, capsys)
+    flagged = [r for r in rows.values() if r.get("skipped_nested_files")
+               and r["suggested_action"] == vc.FLAT_READER_HINT]
+    assert flagged, rows
+    for r in flagged:
+        assert r["docs_link"] == vc._docs_url(vc.FLAT_READER_DOCS), r
+        assert "hint_docs" not in r, r
+    # The anchor exists in both languages — read with the doc-link linter's
+    # own heading reader rather than a third slug implementation.
+    from check_doc_links import DocLinkChecker
+    root = pathlib.Path(__file__).resolve().parents[2]
+    checker = DocLinkChecker(str(root))
+    path, _, anchor = vc.FLAT_READER_DOCS.partition("#")
+    for doc in (path, path.replace(".md", ".en.md")):
+        assert anchor in checker._get_headings(root / doc), (
+            f"{doc}: no heading with anchor #{anchor}")

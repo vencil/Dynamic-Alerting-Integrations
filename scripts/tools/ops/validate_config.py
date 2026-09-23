@@ -38,7 +38,10 @@ the full list is the row's `skipped_nested_files` in --json). Which rows
 this applies to is observed at run time, not listed here — a row is flagged
 because it called a flat reader, so a check that stops (or starts) doing so
 changes sides by itself. A row that never consulted a reader (e.g. `policy`
-without an allowlist to enforce) keeps its PASS.
+without an allowlist to enforce) keeps its PASS. ⚠️ Observed means "went
+through `warn_nested` or `resolve_defaults_file`"; a root file opened by name
+(`profiles` reads only the root `_profiles.yaml`) is not seen — see
+`_lib_confd.observe_flat_reads` for the full list of what is not.
 
 ⚠️ The exit code does NOT carry this signal: WARN is exit 0 like every other
 WARN, because a hierarchical conf.d/ is a supported layout (this repo's own
@@ -89,9 +92,9 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
+    FlatRead,
     is_reserved_name,
     iter_config_files,
-    nested_yaml_files,
     observe_flat_reads,
     printable_name,
     resolve_defaults_file,
@@ -1345,6 +1348,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             # field may remain".
             entry.pop("reads_config_dir", None)
             entry.pop("hint", None)
+            entry.pop("hint_docs", None)
             if not entry.get("unusable_files"):
                 entry.pop("unusable_files", None)
             if unusable and _caveat_applies(r):
@@ -1352,6 +1356,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             if r["status"] != PASS:
                 hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
                 hint = r.get("hint") or hint
+                docs = r.get("hint_docs") or docs
                 if hint:
                     entry["suggested_action"] = hint
                     entry["docs_link"] = _docs_url(docs)
@@ -1381,6 +1386,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         if r["status"] != PASS:
             hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
             hint = r.get("hint") or hint
+            docs = r.get("hint_docs") or docs
             if hint:
                 # ⛔ The hint is written for a report that could read every
                 # file. With a broken `_defaults.yaml`, `schema` reports each
@@ -1462,12 +1468,19 @@ def _reads_config_dir(config_dir, args, kwargs) -> bool:
 
 
 FLAT_READER_HINT = (
-    "Do not read this row as covering the files named above: it read only "
-    "the top level of --config-dir, while threshold-exporter loads the "
-    "whole tree. Check those files by another route before relying on it.")
+    "This row read only the top level of --config-dir, so it did not check "
+    "the files named above, which threshold-exporter does load. To have "
+    "this row check them, run validate-config once more with --config-dir "
+    "pointed at each subdirectory listed, or flatten the tree. Neither "
+    "reproduces the exporter's per-level _defaults.yaml inheritance.")
+
+#: Where `FLAT_READER_HINT` points. A row carrying that hint gets THIS link
+#: instead of its check's `_CHECK_HINTS` page: the advice and the page it
+#: sends the reader to have to be about the same thing.
+FLAT_READER_DOCS = "docs/cli-reference.md#hierarchical-confd"
 
 
-def _flag_flat_reads(row: dict[str, object], flat_reads: list[str],
+def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
                      config_dir: str | None) -> dict[str, object]:
     """Stop a row whose verdict came from a FLAT reader passing as complete.
 
@@ -1479,34 +1492,36 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[str],
     trace of the difference a stderr WARN that reaches neither this report
     nor --json.
 
-    ⛔ WHICH rows is observed, not declared. `flat_reads` is every directory
-    the row's check handed to `warn_nested` (see `observe_flat_reads`), and
-    the conf.d enumeration contract makes that call mandatory for a flat
-    reader. A declared set of row names would be a second copy of "which
-    reader is flat" that nothing keeps in step with the readers; this way a
-    check that never reached a reader — `policy` with no allowlist,
-    `policy_dsl` with no policies — keeps its PASS without being listed as
-    an exception, and one that starts reading flat is flagged without
-    anyone remembering to add it. ⚠️ Locating the root `_defaults.yaml`
-    (`resolve_defaults_file`) is deliberately NOT recorded — see there — so
-    a `sub/_defaults.yaml` that `policy_dsl` never reads `_policies` from
-    is still only a stderr WARN.
+    ⛔ WHICH rows is observed, not declared: `flat_reads` is what
+    `_lib_confd.observe_flat_reads` recorded while the row's check ran —
+    each `warn_nested` call (every nested config file) and each
+    `resolve_defaults_file` call (only nested `_defaults.yaml` carriers,
+    because that is all a root-carrier lookup skips). A check that returns
+    before reaching either — `policy` with no allowlist, `policy_dsl` with
+    no policies anywhere — keeps its PASS without being listed as an
+    exception. ⚠️ What it cannot see is spelled out on
+    `observe_flat_reads`: a flat read that calls neither (the enumeration
+    contract matches guard NAMES, and two of its guard names record
+    nothing — pinned by `tests/shared/test_flat_read_observation_pin.py`),
+    and a root file opened by name, e.g. `check_profiles`' `_profiles.yaml`.
 
     ⛔ PASS -> WARN, never -> FAIL: see the module docstring. A WARN/FAIL
-    keeps its status and its own hint; it gains the detail line, because
-    "3 findings" on a tree where the reader skipped the other half of the
-    files is not the whole count either.
+    keeps its status and its own hint (and that hint's docs link); it gains
+    the detail line, because "3 findings" on a tree where the reader
+    skipped part of the files is not the whole count either.
     """
-    seen: dict[str, str] = {}
-    for d in flat_reads:
-        seen.setdefault(os.path.abspath(d), d)
+    by_dir: dict[str, tuple[str, dict[str, None]]] = {}
+    for rec in flat_reads:
+        d_abs = os.path.abspath(rec.directory)
+        _spelling, rels = by_dir.setdefault(d_abs, (rec.directory, {}))
+        for p in rec.skipped:
+            rels.setdefault(p.relative_to(Path(rec.directory)).as_posix(), None)
     root_abs = os.path.abspath(config_dir) if config_dir is not None else None
     skipped: list[str] = []
-    for d_abs, d in seen.items():
-        missed = nested_yaml_files(d)
-        if not missed:
+    for d_abs, (d, rel_set) in by_dir.items():
+        rels = sorted(rel_set)
+        if not rels:
             continue
-        rels = [p.relative_to(Path(d)).as_posix() for p in missed]
         shown = [printable_name(r) for r in rels[:WARN_LIMIT]]
         more = (f" (+{len(rels) - WARN_LIMIT} more)"
                 if len(rels) > WARN_LIMIT else "")
@@ -1523,6 +1538,7 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[str],
             row["status"] = WARN
             if not row.get("hint"):
                 row["hint"] = FLAT_READER_HINT
+                row["hint_docs"] = FLAT_READER_DOCS
     return row
 
 
@@ -1571,7 +1587,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     """
     # #1652: every exit below goes through `_flag_flat_reads`, including
     # the crash rows — a check that died after reading flat still read flat.
-    flat_reads: list[str] = []
+    flat_reads: list[FlatRead] = []
     try:
         with observe_flat_reads(flat_reads):
             row = fn(*args, **kwargs)

@@ -150,7 +150,7 @@ python3 scripts/ops/configmap_assemble.py \
 
 ⚠️ 幾件文件以前沒說的事：
 
-- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（完整清單在 `validate_config --json` 平面讀取列的 `skipped_nested_files`），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（完整清單在 `validate_config --json` 的 `schema` 列的 `skipped_nested_files`，見 [cli-reference](../cli-reference.md#hierarchical-confd)），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
 - **讀不到的載體會具名但不擋**：`CONFDIR` 頂層若有**斷鏈 symlink** 或**取了 config 名字的目錄**（`db-x.yaml/`），它們進不了 ConfigMap，stderr 會逐個 `WARN` 點名。⛔ 那不是警告性的雜訊——那個租戶在叢集上沒有告警。
 - **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
 - **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
