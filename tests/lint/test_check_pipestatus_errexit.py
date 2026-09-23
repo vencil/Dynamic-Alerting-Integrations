@@ -53,6 +53,23 @@ def test_errexit_and_pipefail_on_one_set_line_with_long_errexit():
     assert _viol("set -o errexit -o pipefail\nx | y\nr=${PIPESTATUS[1]}\n")
 
 
+@pytest.mark.parametrize("arm", [
+    "set -o pipefail -e",
+    "set -o pipefail -o errexit",
+    "set -u -o pipefail -e",
+    "set -o pipefail\t-e",
+])
+def test_errexit_flag_after_other_flags_is_seen(arm):
+    # Miss direction: errexit need not be the first argument of `set`.
+    assert _viol(f"{arm}\nx | y\nr=${{PIPESTATUS[0]}}\n")
+
+
+def test_flag_of_a_later_command_is_not_sets():
+    # `grep -e` after `;` is not an errexit flag of `set`.
+    text = "set -o pipefail; grep -e foo f\nx | y\nr=${PIPESTATUS[0]}\n"
+    assert not lint.scan_text("x.sh", text).strict
+
+
 def test_workflow_run_block_is_scanned_like_a_script():
     text = ("jobs:\n  a:\n    steps:\n      - run: |\n"
             "          set -euo pipefail\n"
@@ -63,7 +80,11 @@ def test_workflow_run_block_is_scanned_like_a_script():
 
 # --- relaxation (over-rejection direction) ---------------------------------
 
-@pytest.mark.parametrize("relax", ["set +e", "set +eu", "set +o errexit", "set +o pipefail"])
+@pytest.mark.parametrize("relax", [
+    "set +e", "set +eu", "set +o errexit", "set +o pipefail",
+    # over-rejection direction: the relaxing flag need not come first
+    "set -e +o pipefail", "set -o pipefail +e", "set -u +o errexit",
+])
 def test_relaxed_file_is_not_flagged(relax):
     text = f"set -euo pipefail\n{relax}\nx | y\nrc=${{PIPESTATUS[0]}}\nset -e\n"
     assert _viol(text) == []

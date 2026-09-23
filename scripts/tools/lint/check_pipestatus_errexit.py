@@ -73,9 +73,14 @@ except Exception:  # pragma: no cover
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _COMMENT_LINE = re.compile(r"^\s*#")
-_ERREXIT_ON = re.compile(r"\bset\s+(?:-[A-Za-z]*e[A-Za-z]*\b|-o\s+errexit\b)")
-_PIPEFAIL_ON = re.compile(r"\bset\s+.*-[A-Za-z]*o\s+pipefail\b")
-_RELAX = re.compile(r"\bset\s+(?:\+[A-Za-z]*e[A-Za-z]*\b|\+o\s+(?:errexit|pipefail)\b)")
+# All three look for their flag at ANY position among one `set` command's
+# arguments (`set -o pipefail -e` arms errexit as surely as `set -e`). The
+# shared prefix stops at a command separator so a flag of a later command on
+# the same line is not read as `set`'s.
+_SET_ARG = r"\bset\s+(?:[^;&|\n]*?\s)?"
+_ERREXIT_ON = re.compile(_SET_ARG + r"(?:-[A-Za-z]*e[A-Za-z]*|-o\s+errexit)\b")
+_PIPEFAIL_ON = re.compile(_SET_ARG + r"-[A-Za-z]*o\s+pipefail\b")
+_RELAX = re.compile(_SET_ARG + r"(?:\+[A-Za-z]*e[A-Za-z]*|\+o\s+(?:errexit|pipefail))\b")
 _READ = re.compile(r"PIPESTATUS")
 _EXEMPT = re.compile(r"#\s*pipestatus-ok:(.*)$")
 _POPULATION = re.compile(r"(?:\.sh|^\.github/workflows/[^/]+\.ya?ml)$")
