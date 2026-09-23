@@ -103,25 +103,40 @@
         "redhat.vscode-yaml",
         "ms-python.python"
       ],
-      // #658: wire the tenant-config JSON Schema to conf.d tenant YAML so
-      // authors get inline validation + autocomplete in-container. The `[^_]`
-      // char-class EXCLUDES platform files (_profiles / _routing* / _rbac ...)
-      // whose shapes differ from the tenant schema. We inject this here (not
-      // .vscode/settings.json — that path is gitignored: .gitignore `.vscode/*`)
-      // so the association ships with the dev container.
-      // _defaults*.yaml get the platform-defaults schema (top-level key guard,
-      // #658 fast-follow) — same schema the CI confd-schema-check validates them
-      // against, so the editor and CI agree (cross-surface consistency).
-      // Non-container editors: see docs/internal/editor-schema-validation.md.
+      // #658: wire conf.d YAML to the SAME two schemas the CI
+      // confd-schema-check (scripts/tools/lint/check_confd_schema.py) uses,
+      // over the SAME file set (#1815): both extension spellings in any case
+      // (.yaml / .yml / .YAML ...), flat and nested under conf.d/.
+      //   tenant schema           <- basename not starting with `_` or `.`
+      //   platform-defaults schema <- basename starting with `_defaults`, any case
+      //   other `_*` meta-files (_profiles / _routing* / _rbac ...) get neither;
+      //   their shapes differ and they have their own validators.
+      // Glob dialect: yaml-language-server 1.24 matches with picomatch in
+      // `bash` mode, where a bare `*` also crosses `/`; the extglob
+      // `*([^/])` (zero or more non-slash chars) keeps each match inside the
+      // basename. `[^_.]` must name `.` explicitly: a leading class is not
+      // covered by picomatch's dotfile guard.
+      // NOT covered: yaml-language-server <= 1.23 escapes `^` and `(`, so
+      // these globs bind nothing there (no validation rather than wrong
+      // validation). Known difference from CI (whose walker enters every
+      // directory; the exporter skips dot-directories): a dot-directory
+      // under conf.d/ is bound by 1.24 only when it is the FIRST level
+      // (conf.d/.x/t.yaml yes, conf.d/a/.x/t.yaml no); the non-bash
+      // matcher of the next release binds neither.
+      // Parity is derived, not asserted: tests/lint/test_editor_schema_glob_parity.py.
+      // We inject this here (not .vscode/settings.json — that path is
+      // gitignored: .gitignore `.vscode/*`) so the association ships with the
+      // dev container. Non-container editors: see
+      // docs/internal/editor-schema-validation.md.
       "settings": {
         "yaml.schemas": {
           "./docs/schemas/tenant-config.schema.json": [
-            "**/conf.d/[^_]*.yaml",
-            "**/conf.d/**/[^_]*.yaml"
+            "**/conf.d/**/[^_.]*([^/]).[yY][aA][mM][lL]",
+            "**/conf.d/**/[^_.]*([^/]).[yY][mM][lL]"
           ],
           "./docs/schemas/platform-defaults.schema.json": [
-            "**/conf.d/_defaults*.yaml",
-            "**/conf.d/**/_defaults*.yaml"
+            "**/conf.d/**/_[dD][eE][fF][aA][uU][lL][tT][sS]*([^/]).[yY][aA][mM][lL]",
+            "**/conf.d/**/_[dD][eE][fF][aA][uU][lL][tT][sS]*([^/]).[yY][mM][lL]"
           ]
         }
       }

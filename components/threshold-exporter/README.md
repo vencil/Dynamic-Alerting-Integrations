@@ -32,7 +32,7 @@
 
 | | |
 |---|---|
-| **輸入** | `conf.d/*.yaml`——單檔扁平 _或_ `<domain>/<region>/<tenant>.yaml` 階層；由 K8s ConfigMap volume 在 runtime 注入 |
+| **輸入** | `conf.d/` 下的 `*.yaml` / `*.yml`（副檔名不分大小寫；`.` 開頭的檔與目錄略過）——單檔扁平 _或_ `<domain>/<region>/<tenant>.yaml` 階層；由 K8s ConfigMap volume 在 runtime 注入 |
 | **輸出** | Prometheus gauge `user_threshold{tenant, component, metric, severity, …}` + 數個營運狀態 gauge + 一組 reload 觀測 metrics |
 | **解決的問題** | 千租戶場景下，避免「改一個閾值要動 PromQL recording rule + 重啟 Prometheus」 |
 | **不做的事** | 不執行 PromQL（只輸出 threshold gauge）· 不做告警路由（交給 Alertmanager）· 不持久化（無狀態，ConfigMap 是唯一真實來源） |
