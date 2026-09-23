@@ -1654,6 +1654,372 @@ class TestGenKustomizeBase:
 
 
 # ============================================================
+# ── 8b. kustomize base carriers come from conf.d itself (#1791) ──
+# ============================================================
+#
+# `files:` in kustomize/base/kustomization.yaml IS the set of ConfigMap keys.
+# It used to be `_defaults.yaml` + `<tenant>.yaml` for `--tenants` only, so a
+# `.yml` carrier the exporter reads never became a key, while every conf.d
+# tool reported it (#1911's shape). The README's `ln -s` lines were a second
+# hand-built copy of the same list, and its fallback `cp ../../conf.d/*.yaml`
+# a third.
+
+_KUST_CFG = {
+    'ci': 'github',
+    'deploy': 'kustomize',
+    'rule_packs': ['mariadb'],
+    'namespace': 'monitoring',
+    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+}
+
+
+def _kust_files(out):
+    path = os.path.join(out, 'kustomize', 'base', 'kustomization.yaml')
+    with open(path, encoding='utf-8') as fh:
+        doc = yaml.safe_load(fh)
+    (gen,) = doc['configMapGenerator']
+    return gen['files']
+
+
+def _readme_text(out):
+    path = os.path.join(out, 'kustomize', 'base', 'README.md')
+    with open(path, encoding='utf-8') as fh:
+        return fh.read()
+
+
+def _readme_link_targets(out):
+    """Basenames the README's `ln -s <target> .` lines link, in order."""
+    import shlex
+    targets = []
+    for line in _readme_text(out).splitlines():
+        if line.startswith('ln -s '):
+            argv = shlex.split(line)
+            assert argv[:2] == ['ln', '-s'] and argv[-1] == '.', line
+            targets.append(os.path.basename(argv[2]))
+    return targets
+
+
+def _top_level_config_names(conf_dir):
+    """The oracle: top-level config files, by the shared exporter-mirror rule."""
+    from _lib_confd import iter_config_files
+    return {p.name for p in iter_config_files(conf_dir, recursive=False)}
+
+
+class TestKustomizeBaseEnumeratesConfd:
+
+    def test_yml_carrier_present_before_rerun_is_a_configmap_key(self):
+        """A `.yml` tenant already in conf.d is in `files:` AND linked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one', 't-two'])
+            ip.run_init(cfg, tmp)
+            with open(os.path.join(tmp, 'conf.d', 't-three.yml'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write('tenants:\n  t-three:\n    mysql_connections: "80"\n')
+            ip.run_init(cfg, tmp)  # the `--force` re-run, same flags
+            assert 't-three.yml' in _kust_files(tmp)
+            assert 't-three.yml' in _readme_link_targets(tmp)
+
+    def test_tenants_flag_carrier_is_listed_in_both(self):
+        """Must-fire control: a `--tenants` carrier is listed in both files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            assert 't-one.yaml' in _kust_files(tmp)
+            assert 't-one.yaml' in _readme_link_targets(tmp)
+
+    @pytest.mark.parametrize('preexisting', [
+        (),
+        ('t-yml.yml',),
+        ('UPPER.YAML', 'mixed.Yml', '.hidden.yaml', 'notes.txt'),
+    ])
+    def test_files_equal_the_top_level_config_files_on_disk(self, preexisting):
+        """Property: `files:` == README links == top-level config files.
+
+        The right-hand side is derived from the generated tree through
+        `_lib_confd`, not written out here, so a new carrier kind cannot be
+        missing from both the product and the expectation at once.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for name in preexisting:
+                with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one', 't-two']), tmp)
+            on_disk = _top_level_config_names(conf)
+            files = _kust_files(tmp)
+            assert len(files) == len(set(files))
+            assert set(files) == on_disk
+            assert _readme_link_targets(tmp) == files
+            from _lib_confd import is_defaults_name
+            assert is_defaults_name(files[0])
+            assert files[1:] == sorted(files[1:])
+
+    def test_dedup_is_by_filename_not_by_tenant_stem(self):
+        """`x.yml` and `x.yaml` are two files, so two keys — not collapsed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            with open(os.path.join(conf, 't-one.yml'), 'w', encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            files = ip._kustomize_carrier_files(['t-one'], ip.Path(conf))
+            assert files.count('t-one.yaml') == 1
+            assert files.count('t-one.yml') == 1
+
+    def test_planned_carriers_do_not_need_conf_d_to_exist(self):
+        """A first `init`: nothing is on disk yet, the planned set stands alone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = ip.Path(tmp) / 'conf.d'  # does not exist
+            assert ip._kustomize_carrier_files(['t-one', 't-two'], conf) == [
+                '_defaults.yaml', 't-one.yaml', 't-two.yaml']
+            assert not conf.exists()
+
+    def test_planned_carriers_union_existing_yml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = ip.Path(tmp) / 'conf.d'
+            conf.mkdir()
+            (conf / 't-old.yml').write_text('tenants: {}\n', encoding='utf-8')
+            assert ip._kustomize_carrier_files(['t-new'], conf) == [
+                '_defaults.yaml', 't-new.yaml', 't-old.yml']
+
+    def test_nested_files_are_not_listed_but_are_announced(self, capsys):
+        import _lib_confd
+        _lib_confd.reset_warned_for_test()
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = ip.Path(tmp) / 'conf.d'
+            (conf / 'team').mkdir(parents=True)
+            (conf / 'team' / 't-deep.yaml').write_text('tenants: {}\n',
+                                                        encoding='utf-8')
+            files = ip._kustomize_carrier_files(['t-one'], conf)
+            assert 't-deep.yaml' not in files
+            assert 'team/t-deep.yaml' in capsys.readouterr().err
+        _lib_confd.reset_warned_for_test()
+
+    def test_readme_says_later_additions_need_link_and_files_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            text = _readme_text(tmp)
+            assert 'kustomize does not glob' in text
+            assert '`.yaml` or `.yml`' in text
+            assert 'cp ../../conf.d/*.yaml' not in text
+
+    @staticmethod
+    def _copy_command(out):
+        """The fallback copy command, extracted from the generated README."""
+        blocks = re.findall(r'```bash\n(.*?)```', _readme_text(out), re.S)
+        cmds = [b.strip() for b in blocks if 'cp ' in b]
+        assert len(cmds) == 1, blocks
+        return cmds[0]
+
+    @pytest.mark.skipif(
+        __import__('shutil').which('bash') is None
+        or __import__('shutil').which('find') is None,
+        reason='bash and find are needed to execute the README command')
+    @pytest.mark.parametrize('names,links,expected', [
+        (('a.yaml', 'b.yml', '.hidden.yaml'), {}, {'a.yaml', 'b.yml'}),
+        (('a.yaml',), {}, {'a.yaml'}),
+        (('b.yml',), {}, {'b.yml'}),
+        (('UP.YAML', 'x.Yml', 'readme.txt'), {}, {'UP.YAML', 'x.Yml'}),
+        ((), {}, set()),
+        # A carrier that is a symlink is in `files:` (iter_config_files
+        # follows links), so the copy must bring it; a broken one is in
+        # neither.
+        (('_defaults.yaml',),
+         {'db-s.yaml': '../shared/db-s.yaml', 'gone.yaml': '../shared/nope.yaml'},
+         {'_defaults.yaml', 'db-s.yaml'}),
+    ])
+    def test_readme_copy_command_copies_every_top_level_carrier(
+            self, names, links, expected):
+        import subprocess
+        with tempfile.TemporaryDirectory() as gen:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
+            cmd = self._copy_command(gen)
+        with tempfile.TemporaryDirectory() as tmp:
+            if links and not _symlinks_usable(os.path.join(tmp, 'probe')):
+                pytest.skip('this machine cannot create symlinks')
+            conf = os.path.join(tmp, 'conf.d')
+            base = os.path.join(tmp, 'kustomize', 'base')
+            os.makedirs(os.path.join(conf, 'sub'))
+            os.makedirs(os.path.join(tmp, 'shared'))
+            os.makedirs(base)
+            with open(os.path.join(tmp, 'shared', 'db-s.yaml'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            for name in names + ('sub/deep.yaml',):
+                with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            for name, target in links.items():
+                os.symlink(target, os.path.join(conf, name))
+            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+                                 capture_output=True, text=True, timeout=30)
+            assert run.returncode == 0, run.stderr
+            assert set(os.listdir(base)) == expected
+            # …and it is the very set `files:` is built from.
+            assert set(os.listdir(base)) == _top_level_config_names(conf)
+
+    @pytest.mark.skipif(
+        __import__('shutil').which('bash') is None
+        or __import__('shutil').which('find') is None,
+        reason='bash and find are needed to execute the README command')
+    def test_readme_copy_command_replaces_the_setup_links(self):
+        """The copy fallback is for readers who already ran the `ln -s` setup
+        and then hit the load restrictor, so `kustomize/base/` holds a link per
+        carrier. Copying onto a link to the same file is refused by cp ("are
+        the same file"); the old command left every link in place at rc 0
+        (CodeRabbit on PR #1944, measured). Every carrier must end up a
+        regular file with the source bytes."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as gen:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
+            cmd = self._copy_command(gen)
+        with tempfile.TemporaryDirectory() as tmp:
+            if not _symlinks_usable(os.path.join(tmp, 'probe')):
+                pytest.skip('this machine cannot create symlinks')
+            conf = os.path.join(tmp, 'conf.d')
+            base = os.path.join(tmp, 'kustomize', 'base')
+            os.makedirs(conf)
+            os.makedirs(base)
+            for name in ('a.yaml', 'b.yml'):
+                with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
+                    fh.write(f'tenants: {{{name[0]}: {{}}}}\n')
+                os.symlink(os.path.join('..', '..', 'conf.d', name),
+                           os.path.join(base, name))
+            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+                                 capture_output=True, text=True, timeout=30)
+            assert run.returncode == 0, run.stderr
+            for name in ('a.yaml', 'b.yml'):
+                dst = os.path.join(base, name)
+                assert not os.path.islink(dst), f'{name} is still a symlink'
+                with open(dst, encoding='utf-8') as got, \
+                        open(os.path.join(conf, name), encoding='utf-8') as want:
+                    assert got.read() == want.read()
+
+    @pytest.mark.skipif(
+        __import__('shutil').which('bash') is None
+        or __import__('shutil').which('find') is None,
+        reason='bash and find are needed to execute the README command')
+    def test_readme_copy_command_fails_loudly_when_a_copy_fails(self):
+        """`find -exec … \\;` ignores the command's exit status, so a copy that
+        failed on every file still returned rc 0. A destination that cannot be
+        replaced (a directory with the carrier's name) must make it non-zero."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as gen:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), gen)
+            cmd = self._copy_command(gen)
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            base = os.path.join(tmp, 'kustomize', 'base')
+            os.makedirs(conf)
+            os.makedirs(os.path.join(base, 'a.yaml'))   # cannot be rm -f'd
+            with open(os.path.join(conf, 'a.yaml'), 'w', encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+                                 capture_output=True, text=True, timeout=30)
+            assert run.returncode != 0, (run.stdout, run.stderr)
+
+    # ── blind-review round (#1791): names from the customer's tree ──
+
+    @pytest.mark.parametrize('name', [
+        'null', 'true', '1.10', '~', '#h.yaml', '%p.yaml', 'a: b.yaml',
+        '-x.yaml', "'q'.yaml", '"d".yaml', 'é.yaml', '[x].yaml', '*a.yaml',
+    ])
+    def test_every_files_entry_is_quoted_and_round_trips(self, name):
+        """Quoting is independent of key legality: whatever reaches `files:`
+        must load back as exactly that string."""
+        text = ip._gen_kustomize_base([], 'monitoring',
+                                      files=['_defaults.yaml', name])
+        assert yaml.safe_load(text)['configMapGenerator'][0]['files'] == [
+            '_defaults.yaml', name]
+
+    def test_legal_names_from_disk_round_trip_through_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for n in ('null.yaml', '1.10.yml', '-x.yaml', 'A_b.YAML'):
+                with open(os.path.join(conf, n), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            assert set(_kust_files(tmp)) == _top_level_config_names(conf)
+
+    @pytest.mark.parametrize('bad', [
+        'a=b.yaml', '#h.yaml', '%p.yaml', 'db b.yaml', 'x,y.yaml', '..x.yaml',
+    ])
+    def test_a_name_that_cannot_be_a_configmap_key_is_named_and_left_out(
+            self, bad, capsys):
+        from _lib_confd import configmap_key_problem
+        assert configmap_key_problem(bad) is not None  # the shared oracle
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for n in (bad, 't-ok.yml'):
+                with open(os.path.join(conf, n), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            capsys.readouterr()
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            err = capsys.readouterr().err
+            files = _kust_files(tmp)
+            if bad.startswith('.'):
+                # Hidden: the exporter never reads it, so there is nothing
+                # to lose and nothing to say.
+                assert bad not in files
+                return
+            assert bad not in files
+            assert bad not in _readme_link_targets(tmp)
+            assert repr(bad) in err and 'cannot be a ConfigMap key' in err
+            # Must-fire control in the same tree: the legal one survives.
+            assert 't-ok.yml' in files
+
+    def test_illegal_name_leaves_the_cli_at_rc_0(self):
+        """Post-write finding: a notice, not a failure (see the docstring)."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            with open(os.path.join(conf, 'a=b.yaml'), 'w', encoding='utf-8') as fh:
+                fh.write('tenants: {}\n')
+            run = subprocess.run(
+                [sys.executable, os.path.join(REPO_ROOT, 'scripts', 'tools',
+                                              'ops', 'init_project.py'),
+                 '--non-interactive', '--tenants', 't-one', '--rule-packs',
+                 'mariadb', '-o', tmp, '--force'],
+                capture_output=True, text=True, timeout=180)
+            assert run.returncode == 0, run.stderr
+            assert "'a=b.yaml' cannot be a ConfigMap key" in run.stderr
+            assert 'a=b.yaml' not in _kust_files(tmp)
+
+    def test_unreadable_config_named_entries_are_named_and_left_out(
+            self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(os.path.join(conf, 't-dir.yaml'))
+            broken = _symlinks_usable(os.path.join(tmp, 'probe'))
+            if broken:
+                os.symlink('nowhere.yaml', os.path.join(conf, 't-gone.yaml'))
+            capsys.readouterr()
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            err = capsys.readouterr().err
+            files = _kust_files(tmp)
+            assert 't-dir.yaml' not in files
+            assert "'t-dir.yaml'" in err and 'is a directory' in err
+            if broken:
+                assert 't-gone.yaml' not in files
+                assert "'t-gone.yaml'" in err and 'broken symlink' in err
+
+    def test_a_second_defaults_spelling_is_listed_not_collapsed(self):
+        """#1942's shape, pinned as-is: init always writes `_defaults.yaml`,
+        so a tree that already had `_defaults.yml` carries two defaults
+        carriers. Listing both keeps that visible; collapsing would hide it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            with open(os.path.join(conf, '_defaults.yml'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write('defaults: {}\n')
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            files = _kust_files(tmp)
+            assert files[:2] == ['_defaults.yaml', '_defaults.yml']
+
+
+# ============================================================
 # ── 9. _gen_kustomize_overlay ──
 # ============================================================
 

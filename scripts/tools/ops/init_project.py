@@ -17,8 +17,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import shlex
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -40,6 +42,16 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    WARN_LIMIT,
+    configmap_key_problem,
+    is_defaults_name,
+    iter_config_files,
+    printable_name,
+    unusable_config_paths,
+    unusable_reason,
+    warn_nested,
+)
 # #1310 — the declared-without-value key names shipped in `optional_overrides:`.
 # Same import shape as scaffold_tenant.py's (see its comment): the derivation is
 # shared so the two customer-side `_defaults.yaml` producers cannot disagree
@@ -2663,11 +2675,100 @@ def _gen_gitlab_ci(
 # Configuration File Generators (YAML templates & Kustomize)
 # ============================================================
 
-def _gen_kustomize_base(tenants: list[str], namespace: str) -> str:
-    """Generate kustomize/base/kustomization.yaml."""
+def _kustomize_carrier_files(
+    tenants: list[str], conf_dir: Optional[Path] = None,
+) -> list[str]:
+    """Basenames of the conf.d files that become `threshold-config` keys.
 
-    configmap_files = ['_defaults.yaml'] + [f'{t}.yaml' for t in tenants]
-    file_lines = '\n'.join(f'    - {f}' for f in configmap_files)
+    ⛔ THE one enumeration behind both the kustomization `files:` list and the
+    README's `ln -s` lines (#1791). They used to be two hand-built lists, both
+    `_defaults.yaml` + `<tenant>.yaml` for `--tenants` only, so a carrier the
+    exporter reads but this run did not write — `db-c.yml`, or any tenant file
+    added before a `--force` re-run — was absent from the ConfigMap while
+    every conf.d reader in the family reported it present (#1911's shape).
+
+    The set is the UNION of
+      * the carriers this run writes (`_defaults.yaml` + `<tenant>.yaml`), and
+      * the config files already at the TOP LEVEL of `conf_dir`, enumerated by
+        `_lib_confd.iter_config_files` (the exporter's own name rule: both
+        spellings, any case, dotfiles skipped).
+    The planned half means the answer does not depend on `conf.d/` already
+    existing (a first `init`) or on the order `run_init` writes files in.
+    (`--dry-run` never calls this: it previews paths, not file contents.)
+
+    ⚠️ Deduplicated by FILENAME only, never by tenant stem. `db-c.yml` and
+    `db-c.yaml` side by side are two ConfigMap keys because they are two
+    files; collapsing them here would hide that defect, not fix it. The same
+    holds for `_defaults.yml` next to the `_defaults.yaml` init always writes
+    (#1942): both are listed.
+
+    Order: the defaults carrier(s) first, then plain sorted — deterministic,
+    so a re-run over an unchanged tree regenerates byte-identical output.
+
+    ⛔ Three kinds of entry are LEFT OUT, and each is named on stderr, never
+    dropped in silence (a tenant missing behind a green light is #1911's
+    shape). None of them changes the exit code: by the time this runs, init
+    has already written conf.d/ and the CI files, and rc != 0 would read as
+    "nothing happened" while most of the tree was replaced — the same reason
+    the rest of init's post-write findings (`_print_summary`) are notices.
+      * below the top level — `configMapGenerator.files` makes flat keys.
+        `warn_nested` (the family's channel for "a flat reader skipped
+        files"), not a generated comment: a committed comment about the
+        tree's shape would go stale the moment the tree changes.
+      * config-NAMED but unreadable (broken symlink, a `db-x.yaml/`
+        directory) — `iter_config_files` filters those silently;
+        `unusable_config_paths` names them, worded by `unusable_reason`
+        exactly as `configmap_assemble` words them.
+      * a name that can never be a ConfigMap key (`db b.yaml`, `a=b.yaml`,
+        `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
+        `IsConfigMapKey`, shared with `configmap_assemble`. kustomize would
+        refuse the build (or, for `=`, read `key=path`), so listing it
+        breaks every tenant rather than losing one.
+    """
+    names = {'_defaults.yaml'} | {f'{t}.yaml' for t in tenants}
+    if conf_dir is not None:
+        warn_nested(conf_dir, tool='init_project')
+        names |= {p.name for p in iter_config_files(conf_dir, recursive=False)}
+        unusable = unusable_config_paths(conf_dir, recursive=False)
+        for p in unusable[:WARN_LIMIT]:
+            print(f"WARN: init_project: {printable_name(p.name)!r} in "
+                  f"{conf_dir} {unusable_reason(p)} — it carries a config "
+                  f"name but nothing can be read from it, so it is left out "
+                  f"of kustomize/base (files: and README) and its tenants are "
+                  f"absent from the ConfigMap.", file=sys.stderr)
+        if len(unusable) > WARN_LIMIT:
+            print(f"WARN: init_project: (+{len(unusable) - WARN_LIMIT} more "
+                  f"unreadable config-named entries in {conf_dir}; this list "
+                  f"is capped at {WARN_LIMIT})", file=sys.stderr)
+    illegal = sorted((n, why) for n in names
+                     if (why := configmap_key_problem(n)) is not None)
+    for name, why in illegal:
+        print(f"WARN: init_project: {printable_name(name)!r} cannot be a "
+              f"ConfigMap key ({why}); it is left out of kustomize/base "
+              f"(files: and README), so the exporter never sees it. Rename "
+              f"it to match [-._a-zA-Z0-9]+ and list it in files:.",
+              file=sys.stderr)
+    names -= {n for n, _ in illegal}
+    return sorted(names, key=lambda n: (not is_defaults_name(n), n))
+
+
+def _gen_kustomize_base(
+    tenants: list[str], namespace: str, files: Optional[list[str]] = None,
+) -> str:
+    """Generate kustomize/base/kustomization.yaml.
+
+    `files` is `_kustomize_carrier_files(...)`'s result; when omitted, the
+    planned carriers for `tenants` alone (no conf.d to read).
+    """
+
+    configmap_files = (files if files is not None
+                       else _kustomize_carrier_files(tenants))
+    # ⛔ Quoted, every entry: these are file names from the customer's tree,
+    # not ours. Written plain, `#h.yaml` became a comment (a null entry),
+    # `%p.yaml` was invalid YAML, and a name like `null` or `1.10` would load
+    # as a non-string. A JSON string is a valid YAML double-quoted scalar
+    # (#1791 blind review).
+    file_lines = '\n'.join(f'    - {json.dumps(f)}' for f in configmap_files)
 
     return (
         "# kustomization.yaml — Dynamic Alerting ConfigMap generator\n"
@@ -2675,6 +2776,9 @@ def _gen_kustomize_base(tenants: list[str], namespace: str) -> str:
         "#\n"
         "# Generates threshold-config ConfigMap from conf.d/ files.\n"
         "# Each file becomes a key in the ConfigMap.\n"
+        "# `files:` is an explicit list — kustomize does not glob. A conf.d\n"
+        "# file added later (.yaml or .yml) must be linked into this directory\n"
+        "# AND listed here, or it never becomes a ConfigMap key.\n"
         "\n"
         "apiVersion: kustomize.config.k8s.io/v1beta1\n"
         "kind: Kustomization\n"
@@ -2690,6 +2794,112 @@ def _gen_kustomize_base(tenants: list[str], namespace: str) -> str:
         "generatorOptions:\n"
         "  disableNameSuffixHash: true\n"
     )
+
+
+#: The README's copy-instead-of-link command, run from `kustomize/base/`.
+#: ⛔ Not `cp ../../conf.d/*.yaml .` (#1791): that skipped every `.yml` carrier
+#: the exporter reads, and a second `*.yml` glob would make bash pass the
+#: unmatched pattern through literally, so `cp` fails on any tree that uses
+#: only one spelling. `find -iname` matches both spellings in any case (the
+#: exporter's rule), `! -name '.*'` skips dotfiles as the exporter does, and
+#: zero matches is rc 0. `-maxdepth 1` because ConfigMap keys are flat.
+#: ⛔ `-L`: `iter_config_files` follows symlinks, so a carrier that is a
+#: link (`db-s.yaml -> ../shared/db-s.yaml`) IS in `files:`; plain `-type f`
+#: skipped it and the copied tree could not build. Under `-L`, `-type f` tests
+#: the target, so a broken link is still skipped — the same file set
+#: `files:` holds.
+#: ⚠️ The price of `-L`: a symlink LOOP (`loop.yaml -> loop.yaml`) makes find
+#: print "Too many levels of symbolic links" and exit 1 after copying the
+#: rest (measured; without `-L` it was rc 0). Left loud on purpose — the loop
+#: is not a carrier and `init` already names it as unreadable. The README
+#: says so.
+#: ⛔ `rm -f` BEFORE `cp` (CodeRabbit on PR #1944): this command is the
+#: fallback for readers who ran the `ln -s` setup above and then hit the load
+#: restrictor, so `kustomize/base/` usually already holds a link per carrier.
+#: `cp src ./name` onto a link to `src` is "the same file" — measured: cp
+#: refused every file, the links stayed links, and the build still failed.
+#: ⛔ `{} +` with an explicit `exit 1`, not `-exec cp {} . \;`: find ignores
+#: the exit status of a `\;` command, so the old form returned rc 0 while cp
+#: failed on every file (measured, same run). Under `+` find exits non-zero
+#: when the command does.
+_KUSTOMIZE_COPY_CMD = (
+    "find -L ../../conf.d -maxdepth 1 -type f "
+    "\\( -iname '*.yaml' -o -iname '*.yml' \\) ! -name '.*' "
+    "-exec sh -c 'for f; do rm -f -- \"./${f##*/}\" "
+    "&& cp -- \"$f\" . || exit 1; done' sh {} +"
+)
+
+
+def _gen_kustomize_base_readme(files: list[str]) -> str:
+    """Generate kustomize/base/README.md from the SAME list as `files:`.
+
+    ⛔ The names come from `_kustomize_carrier_files`, never re-derived here.
+    An earlier version wrote a literal `db-a` whatever the customer had asked
+    for (rc=0 and a dangling symlink); the next one derived `<tenant>.yaml`
+    from `--tenants` on its own, and so could not link a `.yml` carrier that
+    `files:` also missed (#1791).
+    """
+    links = '\n'.join(
+        f'ln -s {shlex.quote("../../conf.d/" + name)} .' for name in files
+    )
+    return textwrap.dedent("""\
+    # Kustomize Base
+
+    This directory uses `configMapGenerator` to create the `threshold-config`
+    ConfigMap from your `conf.d/` files.
+
+    **Setup:** link `conf.d/` files into this directory:
+
+    ```bash
+    {links}
+    ```
+
+    ## ⛔ A file added to `conf.d/` later is NOT picked up automatically
+
+    `configMapGenerator.files` in `kustomization.yaml` is an explicit list —
+    kustomize does not glob. The list above is every top-level config file
+    that `conf.d/` held when this was generated, except entries that cannot
+    be read or whose name can never be a ConfigMap key (anything outside
+    `[-._a-zA-Z0-9]`); `init` named those on stderr. A tenant file you add
+    afterwards — `.yaml` or `.yml` — has to be linked here AND added to
+    `files:`; otherwise it never becomes a ConfigMap key, while every
+    `conf.d/` tool (and `da-tools validate-config`) still reports it.
+
+    Files in subdirectories of `conf.d/` cannot become ConfigMap keys through
+    this layout: ConfigMap keys are flat.
+
+    ## ⛔ `kustomize build` needs `--load-restrictor` for this layout
+
+    A symlink pointing outside this directory is refused by kustomize's
+    default load restrictor, which fails the build with
+    `security; file '.../kustomize/base/_defaults.yaml' is not in or
+    below '.../kustomize/base'`. That is the documented behaviour, not
+    a broken link — verified against kustomize as shipped in kubectl.
+
+    Build with:
+
+    ```bash
+    kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod
+    ```
+
+    The generated CI workflow already passes this flag. If your
+    deployment tool cannot pass it (some ArgoCD setups need
+    `kustomize.buildOptions` configured cluster-side), copy the files
+    in instead of linking them. This copies every top-level config file,
+    both `.yaml` and `.yml`, following symlinks (a broken link is skipped)
+    and skipping dotfiles, and replaces any link or file already here with
+    the same name (so it also works after the `ln -s` setup above):
+
+    ```bash
+    {copy_cmd}
+    ```
+
+    A symlink loop in `conf.d/` (a link that points at itself) makes `find`
+    report it and exit 1 after copying everything else; remove the loop.
+
+    It builds with the default restrictor, at the cost of having to re-copy
+    whenever `conf.d/` changes — and `files:` still has to name every file.
+    """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD)
 
 
 def _gen_git_sync_deployment(
@@ -3290,55 +3500,18 @@ def run_init(config: dict, output_dir: str) -> list[str]:
 
     if deploy == 'kustomize':
         kust_base = out / 'kustomize' / 'base'
+        # #1791: ONE enumeration feeds both files below. Taken here, after
+        # step 1 wrote conf.d/, and unioned with the planned carriers inside
+        # the helper, so the answer does not depend on that ordering.
+        carriers = _kustomize_carrier_files(tenants, conf_dir)
         _write_file(
             str(kust_base / 'kustomization.yaml'),
-            _gen_kustomize_base(tenants, namespace),
+            _gen_kustomize_base(tenants, namespace, carriers),
             created,
-        )
-
-        # ⛔ The tenant names come from the caller. An earlier version wrote a
-        # literal `db-a` here whatever the customer had asked for, so on Linux
-        # the command succeeded (rc=0) and left a dangling symlink, and the
-        # reader was never told to link their own tenants at all.
-        _links = '\n'.join(
-            f'ln -s ../../conf.d/{name}.yaml .'
-            for name in ['_defaults'] + list(tenants)
         )
         _write_file(
             str(kust_base / 'README.md'),
-            textwrap.dedent("""\
-            # Kustomize Base
-
-            This directory uses `configMapGenerator` to create the `threshold-config`
-            ConfigMap from your `conf.d/` files.
-
-            **Setup:** link `conf.d/` files into this directory:
-
-            ```bash
-            {links}
-            ```
-
-            ## ⛔ `kustomize build` needs `--load-restrictor` for this layout
-
-            A symlink pointing outside this directory is refused by kustomize's
-            default load restrictor, which fails the build with
-            `security; file '.../kustomize/base/_defaults.yaml' is not in or
-            below '.../kustomize/base'`. That is the documented behaviour, not
-            a broken link — verified against kustomize as shipped in kubectl.
-
-            Build with:
-
-            ```bash
-            kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod
-            ```
-
-            The generated CI workflow already passes this flag. If your
-            deployment tool cannot pass it (some ArgoCD setups need
-            `kustomize.buildOptions` configured cluster-side), copy the files
-            in instead of linking them — `cp ../../conf.d/*.yaml .` builds with
-            the default restrictor, at the cost of having to re-copy whenever
-            `conf.d/` changes.
-            """).format(links=_links),
+            _gen_kustomize_base_readme(carriers),
             created,
         )
 
