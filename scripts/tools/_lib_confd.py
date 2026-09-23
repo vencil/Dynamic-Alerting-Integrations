@@ -302,13 +302,15 @@ def resolve_defaults_file(
     this while #1588 was being fixed, which is the same "one rule, many
     hand-copies" shape #1911 is made of — reproduced inside the fix for it.
 
-    ⚠️ This read is FLAT and therefore calls `warn_nested` itself: on a
-    hierarchical conf.d the exporter also merges `sub/_defaults.yaml`,
-    which this function does not return. `warn_nested` prints at most once
-    per directory per process and prints NOTHING for a flat tree, so the
-    common case is unchanged. `tool` is left to `nested_yaml_warning`'s
-    own default so the message names the command the operator ran rather
-    than this helper.
+    ⚠️ This read is FLAT: on a hierarchical conf.d the exporter also merges
+    `sub/_defaults.yaml`, which this function does not return. It prints
+    the same stderr warning `warn_nested` would (through the shared
+    `_print_nested_once`: at most once per directory per process, NOTHING
+    for a flat tree), but records for `observe_flat_reads` only the nested
+    `_defaults.yaml` carriers it skipped — not every nested file, which is
+    what `warn_nested` records (#1652, see the comment in the body). `tool`
+    is left to `nested_yaml_warning`'s own default so the message names the
+    command the operator ran rather than this helper.
 
     Sorted, so a directory carrying two spellings resolves
     deterministically — two spellings is already a misconfiguration, and
@@ -327,8 +329,11 @@ def resolve_defaults_file(
     # no policies into WARN on a tree whose only nested file was a TENANT —
     # a file this lookup was never going to read. The judge is what was
     # skipped, not who is calling.
-    nested = nested_yaml_files(root)
-    _record_flat_read(root, [p for p in nested if is_defaults_name(p.name)])
+    # The walk is only paid when an observer is installed, as in
+    # `warn_nested`; `_print_nested_once` does its own.
+    if _FLAT_READ_SINKS.get():
+        _record_flat_read(root, [p for p in nested_yaml_files(root)
+                                 if is_defaults_name(p.name)])
     _print_nested_once(root, tool=tool)
     try:
         for entry in sorted(root.iterdir()):

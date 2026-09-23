@@ -1493,9 +1493,14 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
     each `warn_nested` call (every nested config file) and each
     `resolve_defaults_file` call (only nested `_defaults.yaml` carriers,
     because that is all a root-carrier lookup skips). A check that returns
-    before reaching either — `policy` with no allowlist, `policy_dsl` with
-    no policies anywhere — keeps its PASS without being listed as an
-    exception. ⚠️ What it cannot see is spelled out on
+    before reaching either — `policy` with no allowlist — keeps its PASS
+    without being listed as an exception. ⚠️ `policy_dsl` is NOT such a
+    check: it locates the root carrier before any early return, so "no
+    policies" keeps its PASS only on a tree whose nested files are all
+    tenants. On an ADR-017 tree (a `prod/_defaults.yaml` beside the root
+    one) it is WARN naming that file, even when neither holds `_policies` —
+    correctly, since the answer "no policies" was reached without opening
+    it. ⚠️ What it cannot see is spelled out on
     `observe_flat_reads`: a flat read that calls neither (the enumeration
     contract matches guard NAMES, and two of its guard names record
     nothing — pinned by `tests/shared/test_flat_read_observation_pin.py`),

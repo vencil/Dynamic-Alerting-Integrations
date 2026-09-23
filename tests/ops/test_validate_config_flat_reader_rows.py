@@ -210,8 +210,11 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
 
     ``check_policy`` with a policy holding no allowlist and
     ``check_policy_dsl`` with no policies both return before loading tenants;
-    on a hierarchical tree they must stay PASS, while ``check_routes`` on the
-    same tree (which does load tenants flat) must not.
+    on a tree whose only nested file is a TENANT they must stay PASS, while
+    ``check_routes`` on the same tree (which does load tenants flat) must
+    not. ⚠️ Not "on any hierarchical tree": ``check_policy_dsl`` locates the
+    root ``_defaults.yaml`` first, so a nested ``_defaults.yaml`` makes it
+    WARN — see ``test_a_nested_defaults_carrier_is_what_the_lookup_reports``.
     """
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, "prod")
     empty_policy = tmp_path / "empty-policy.yaml"

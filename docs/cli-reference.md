@@ -1953,10 +1953,6 @@ da-tools validate-config --config-dir <path> [options]
 
 ⛔ **以報表實際印出的列為準**（`Total: N checks` 那一段）。這份清單先前列著一個叫「Tenant 名稱一致性」的項目，而**沒有任何檢查在做那件事**——實測檔名 `hotel.yaml` 宣告租戶 `totally-different`，六項全 PASS、exit 0；同時它漏掉了四個真的會跑的檢查。條件式的那幾項省略對應旗標時**整列不會出現**，不是靜默通過。
 
-##### Hierarchical conf.d
-
-**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。「略過了什麼」依讀取方式而定：讀租戶的平面讀取器略過的是子目錄裡的**所有**設定檔；只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS`
-
 **輸出**
 
 驗證結果摘要（通過/失敗列表）。
@@ -1972,9 +1968,13 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 沒有 FAIL（可能有 WARN——包含上面 [Hierarchical conf.d](#hierarchical-confd) 那種列沒涵蓋子目錄檔的情況；看 `Result:` 行） |
+| `0` | 沒有 FAIL（可能有 WARN——包含下方 [Hierarchical conf.d](#hierarchical-confd) 那種列沒涵蓋子目錄檔的情況；看 `Result:` 行） |
 | `1` | 驗證失敗（一項或多項），或 `--config-dir` 底下有檔案讀不到。⚠️ 命令列上的路徑（`--policy` / `--rule-packs`）讀不到算 `2`，不算這一碼 |
 | `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
+
+##### Hierarchical conf.d
+
+**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。「略過了什麼」依讀取方式而定：讀租戶的平面讀取器略過的是子目錄裡的**所有**設定檔；只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。因此只要子目錄裡有 `_defaults.yaml`（標準 ADR-017 樹），Policy-as-Code 列即使沒有任何 `_policies` 也會是 WARN、具名該檔——「沒有 policies」這個答案是沒打開它就得出的。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS`
 
 ---
 

@@ -9,10 +9,20 @@ only, so a reader that calls either of the last two passes the contract while
 staying invisible to the observer. `_print_nested_once` is the same escape in
 private form.
 
-This pins the production call/import sites of those names to exactly the
-current set — none outside `_lib_confd` — derived from the AST of every
-`scripts/**.py` file, so a new one has to be a decision rather than an
-accident.
+What this pins, derived from the AST of every `scripts/**.py` file: no file
+other than `_lib_confd.py` calls, imports, or references as an attribute any
+of those names. So a new use outside `_lib_confd` has to be a decision
+rather than an accident.
+
+⚠️ Its reach, stated rather than implied:
+
+* It matches NAMES — calls, `from … import`, and `x.name` attribute
+  references. It does not follow shadowing (a local `def warn_nested` that
+  does something else) or a string `getattr(mod, "nested_yaml_files")`;
+  both were probed in review and pass through.
+* `_lib_confd.py` itself is exempt as a whole: the must-fire control only
+  checks that it USES these names, not where. A new flat reader written
+  inside `_lib_confd` is out of reach — review of that module is the guard.
 """
 
 from __future__ import annotations
