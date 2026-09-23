@@ -15,6 +15,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **errexit＋pipefail 下讀 `PIPESTATUS` 改由 pre-commit 擋（lint；[#1845](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1845)）**：新增 `check_pipestatus_errexit.py`。檔案的非註解行開了 errexit 與 pipefail、整份沒有任何 `set +e`／`set +o errexit`／`set +o pipefail`，卻有一行讀 `PIPESTATUS` ⇒ 報違規；那一讀在管線失敗時根本跑不到。⛔ 這是**檔案級文字判定**，不判可達性，所以比實際缺陷寬；確認可達的讀取在同一行加 `# pipestatus-ok: <why>` 豁免（理由內容無法驗證）。讀不到母體、不是 git repo、檔案讀不進來一律 rc 2。已知漏判（行尾註解、檔案級放寬、GitHub Actions `shell: bash` 隱含的旗標）寫在工具 docstring，各有測試釘住。
+
 - **文件內嵌的 k8s / CRD 物件現在對真 CRD schema 驗（lint、docs；[#1353](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1353)）**：`check_md_yaml_drift.py` 新增 `--check crd` 與 `md-yaml-crd-check` hook，把 `docs/**` 裡每個帶 `apiVersion` + `kind` 的區塊送進 vendored CRD schema。⛔ 查不到 schema 是**違規不是跳過**：實測 prometheus-operator 的精簡 CRD 變體與 datreeio/CRDs-catalog **都**缺 `AlertmanagerConfig` v1beta1，而那正是 6 個區塊宣告的版本 ⇒ skip-on-missing 會報「乾淨」卻一個都沒驗。驗的是完整 schema 而非只有頂層 required——後者對本次抓到的缺陷回報 0 違規。schema 由 `make crd-schemas` 從**釘住版本**的上游 CRD 產生（不用 catalog，它是有缺口的衍生品），來源、ref 與位元組雜湊記在 `docs/schemas/crd/`。⚠️ 射程只到帶 `apiVersion` 的完整物件；沒有 `apiVersion` 的片段區塊看不見。k8s 內建型別與 apiserver 設定檔格式明列為射程外並印出計數。
 
 ### Changed
