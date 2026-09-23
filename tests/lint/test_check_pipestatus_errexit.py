@@ -90,6 +90,13 @@ def test_backslash_continuation_is_one_logical_line():
     assert [ln for ln, _ in _viol(text)] == [4]
 
 
+def test_continuation_inside_an_option_cluster_joins_without_a_space():
+    # bash deletes backslash-newline and inserts nothing: this is
+    # `set -euo pipefail` (see test_ground_truth_split_cluster_arms_both).
+    text = "set -eu\\\no pipefail\nx | y\nrc=${PIPESTATUS[0]}\n"
+    assert [ln for ln, _ in _viol(text)] == [4]
+
+
 def test_workflow_run_block_is_scanned_like_a_script():
     text = ("jobs:\n  a:\n    steps:\n      - run: |\n"
             "          set -euo pipefail\n"
@@ -259,6 +266,14 @@ def test_ground_truth_set_dashdash_keeps_errexit():
     p = subprocess.run([_BASH, "-c", "set -e; set -- +e; [[ -o errexit ]] && echo on"],
                        capture_output=True, text=True, timeout=30)
     assert p.stdout.strip() == "on"
+
+
+@pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
+def test_ground_truth_split_cluster_arms_both():
+    p = subprocess.run([_BASH, "-c", "set -eu\\\no pipefail\n"
+                        "[[ -o errexit && -o pipefail ]] && echo both"],
+                       capture_output=True, text=True, timeout=30)
+    assert p.stdout.strip() == "both"
 
 
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")

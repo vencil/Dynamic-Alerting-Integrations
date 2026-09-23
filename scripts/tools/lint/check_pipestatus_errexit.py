@@ -128,12 +128,16 @@ def _flags(tok: str, sigil: str) -> str:
 
 
 def _logical_lines(code: List[Tuple[int, str]]) -> List[str]:
-    """Join physical lines that end in a backslash continuation."""
+    """Join physical lines that end in a backslash continuation.
+
+    As bash does: the backslash and the newline are removed and nothing is
+    inserted, so ``set -eu\\`` + ``o pipefail`` is ``set -euo pipefail``.
+    """
     out: List[str] = []
     buf = ""
     for _, ln in code:
         if ln.endswith("\\"):
-            buf += ln[:-1] + " "
+            buf += ln[:-1]
             continue
         out.append(buf + ln)
         buf = ""
