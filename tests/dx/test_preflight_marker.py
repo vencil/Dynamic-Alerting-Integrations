@@ -322,27 +322,51 @@ class TestMarkerPython:
         assert p1 == p2
         assert p1.exists()
 
-    def test_clear_markers_removes_all_preflight_files(self, tmp_path, monkeypatch):
+    def test_clear_marker_removes_head_and_leaves_other_commits_alone(
+        self, tmp_path, monkeypatch
+    ):
+        """#1917: the radius is ONE commit, not the whole shared git dir.
+
+        The two planted markers stand in for other commits — in this repo they
+        are very likely other worktrees' (`_git_dir` is `--git-common-dir`).
+        They are the must-survive control; HEAD's is the must-go one.
+        """
+        mod = _load()
+        sha = _init_git(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        git_dir = tmp_path / ".git"
+        (git_dir / f".preflight-ok.{sha}").touch()
+        (git_dir / ".preflight-ok.aaa").touch()
+        (git_dir / ".preflight-ok.bbb").touch()
+        # Unrelated file must survive.
+        (git_dir / "config").touch(exist_ok=True)
+
+        removed = mod.clear_marker(tmp_path)
+
+        assert removed is not None
+        assert removed.name == f".preflight-ok.{sha}"
+        assert not removed.exists()
+        # Must-survive control group — the #1917 defect deleted these too.
+        assert (git_dir / ".preflight-ok.aaa").exists()
+        assert (git_dir / ".preflight-ok.bbb").exists()
+        assert (git_dir / "config").exists()
+
+    def test_clear_marker_reports_none_when_head_has_no_marker(
+        self, tmp_path, monkeypatch
+    ):
+        """Nothing to remove ⇒ None, and other commits' markers still survive."""
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
-        git_dir = tmp_path / ".git"
-        # Plant several stale markers.
-        (git_dir / ".preflight-ok.aaa").touch()
-        (git_dir / ".preflight-ok.bbb").touch()
-        (git_dir / ".preflight-ok.ccc").touch()
-        # Unrelated file must survive.
-        (git_dir / "config").touch(exist_ok=True)
-        n = mod.clear_markers(tmp_path)
-        assert n == 3
-        assert not list(git_dir.glob(".preflight-ok.*"))
-        assert (git_dir / "config").exists()
+        (tmp_path / ".git" / ".preflight-ok.aaa").touch()
+        assert mod.clear_marker(tmp_path) is None
+        assert (tmp_path / ".git" / ".preflight-ok.aaa").exists()
 
     def test_clear_on_empty(self, tmp_path, monkeypatch):
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert mod.clear_markers(tmp_path) == 0
+        assert mod.clear_marker(tmp_path) is None
 
     def test_marker_path_uses_head_sha(self, tmp_path, monkeypatch):
         mod = _load()
@@ -385,6 +409,93 @@ class TestMarkerPython:
         assert str(p.parent) != private, (
             "writer and gate would disagree: the gate reads the shared dir"
         )
+
+
+class TestFailPathClearRadius:
+    """#1917 — drive `main()`'s real FAIL branch and look at the shared dir.
+
+    ⛔ Behavioural, not a scan of `clear_marker`'s body. The defect was not the
+    helper alone but the pair (unconditional call on FAIL) × (glob over the
+    shared git dir), and only running the orchestrator exercises both. The
+    checks are stubbed because reaching a real FAIL needs `gh`, network and a
+    300s `pre-commit --all-files`; everything about markers — the git repo, the
+    linked worktree, the shared dir, `_head_sha`, `clear_marker`,
+    `write_marker` — is real.
+    """
+
+    _OTHER_A = "a" * 40
+    _OTHER_B = "b" * 40
+
+    _CHECKS = (
+        "check_branch_identity", "check_behind_main", "check_conflict",
+        "check_local_hooks", "check_scope_drift", "check_commit_scope_range",
+        "check_ci_status", "check_pr_mergeable",
+    )
+
+    def _drive(self, mod, monkeypatch, wt, status):
+        """Run main() from inside `wt` with every check forced to `status`."""
+        for name in self._CHECKS:
+            assert hasattr(mod, name), f"check no longer exists: {name}"
+            monkeypatch.setattr(
+                mod, name,
+                lambda *a, _n=name, **kw: mod.CheckResult(_n, status, "stubbed"),
+            )
+        monkeypatch.setattr(mod, "find_repo_root", lambda: wt)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+        monkeypatch.setattr(sys, "argv", ["pr_preflight.py"])
+        return mod.main()
+
+    def _setup(self, tmp_path):
+        """Main repo + one linked worktree. Returns (wt, shared_git_dir, sha)."""
+        sha = _init_git(tmp_path)
+        # ⛔ Unique per test: tmp_path.parent is shared across the class, and a
+        # reused name makes `worktree add` exit 128 on the second test.
+        wt = tmp_path.parent / f"wt-1917-{tmp_path.name}"
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path), "worktree", "add", "-q", "--detach",
+             str(wt), "HEAD"],
+            capture_output=True, text=True,
+        ).returncode == 0
+        shared = tmp_path / ".git"
+        # An earlier PASS on this very commit, plus two markers standing in for
+        # other commits — in this repo, other sessions' worktrees.
+        (shared / f".preflight-ok.{sha}").touch()
+        (shared / f".preflight-ok.{self._OTHER_A}").touch()
+        (shared / f".preflight-ok.{self._OTHER_B}").touch()
+        return wt, shared, sha
+
+    def test_a_failing_run_in_one_worktree_spares_other_commits_markers(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        mod = _load()
+        wt, shared, sha = self._setup(tmp_path)
+
+        rc = self._drive(mod, monkeypatch, wt, mod.Status.FAIL)
+
+        assert rc == mod.EXIT_VIOLATION, "the run under test must actually FAIL"
+        # Must-go: this commit's own marker (an earlier pass no longer holds).
+        assert not (shared / f".preflight-ok.{sha}").exists()
+        # ⛔ Must-survive control group. Before #1917 both of these were gone,
+        # and the run reported them as "stale".
+        for other in (self._OTHER_A, self._OTHER_B):
+            assert (shared / f".preflight-ok.{other}").exists(), (
+                f"another commit's marker ({other[:7]}) was deleted — "
+                "the #1917 radius is back"
+            )
+        assert "stale" not in capsys.readouterr().out, (
+            "nothing here determines staleness, so the word must not be printed"
+        )
+
+    def test_a_passing_run_removes_nothing(self, tmp_path, monkeypatch):
+        """Must-not-fire control: the clear path belongs to FAIL only."""
+        mod = _load()
+        wt, shared, sha = self._setup(tmp_path)
+
+        rc = self._drive(mod, monkeypatch, wt, mod.Status.PASS)
+
+        assert rc == mod.EXIT_OK
+        assert len(list(shared.glob(".preflight-ok.*"))) == 3
+        assert (shared / f".preflight-ok.{sha}").exists()
 
 
 @_BASH_SCRIPT_SKIP

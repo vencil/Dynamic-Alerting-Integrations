@@ -878,19 +878,30 @@ def write_marker(repo_root: Path) -> Optional[Path]:
         return None
 
 
-def clear_markers(repo_root: Path) -> int:
-    """Remove all `.preflight-ok.*` markers. Returns count removed."""
-    git_dir = _git_dir(repo_root)
-    if not git_dir.exists():
-        return 0
-    count = 0
-    for f in git_dir.glob(f"{MARKER_PREFIX}.*"):
-        try:
-            f.unlink()
-            count += 1
-        except OSError:
-            pass
-    return count
+def clear_marker(repo_root: Path) -> Optional[Path]:
+    """Remove the marker for HEAD — that ONE commit. Returns it, else None.
+
+    ⛔ Do not widen this back to `glob(f"{MARKER_PREFIX}.*")`. `_git_dir` is
+    `--git-common-dir`, so that glob reaches every worktree's markers at once,
+    and it buys nothing: the reader keys on the sha
+    (`require_preflight_pass.sh` looks up `$MARKER_PREFIX.<pushed sha>` per
+    published commit, no wildcard fallback), so another commit's marker can
+    never satisfy the gate for the sha being pushed — removing it only takes
+    away a pass someone else earned. What a FAIL does invalidate is an earlier
+    pass on THIS commit, which is this one file. Measurements: #1917.
+    Pinned by `TestFailPathClearRadius`.
+    """
+    sha = _head_sha(repo_root)
+    if not sha:
+        return None
+    p = marker_path(repo_root, sha)
+    try:
+        if not p.exists():
+            return None
+        p.unlink()
+    except OSError:
+        return None
+    return p
 
 
 # ─── Check Functions ─────────────────────────────────────
@@ -1621,12 +1632,14 @@ def main() -> int:
     # --- Preflight marker (consumed by pre-push gate) --------------------
     # On PASS (with or without WARN): write `.git/.preflight-ok.<HEAD>` so
     # require_preflight_pass.sh lets the subsequent `git push` through.
-    # On FAIL: clear any stale markers so the user can't push a broken SHA
-    # that happened to have an older successful marker.
+    # On FAIL: remove the marker for THIS commit, so an earlier pass on the
+    # same sha can't carry a now-broken commit through the gate. ⛔ Only that
+    # one — every other marker belongs to a different commit, very likely in
+    # a different worktree (#1917; `clear_marker`'s docstring has the why).
     if report.has_failure:
-        cleared = clear_markers(repo_root)
+        cleared = clear_marker(repo_root)
         if cleared:
-            print(f"   ↳ cleared {cleared} stale preflight marker(s)")
+            print(f"   ↳ removed this commit's preflight marker: {cleared.name}")
     else:
         marker = write_marker(repo_root)
         if marker:
