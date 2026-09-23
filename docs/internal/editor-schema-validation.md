@@ -28,8 +28,9 @@ lang: zh
 **已知差異（不是等價，照實寫）**：
 
 - **yaml-language-server ≤ 1.23**（vscode-yaml ≤ 1.23）的比對器會把 `^` 與 `(` 當字面字元跳脫 → 這組 glob 在舊版**一個檔都不綁**（沒有驗證，而不是錯誤驗證）。升級擴充套件即可；舊寫法 `[^_]` 在舊版反而把 tenant schema 綁到 `_*` 檔上。
-- **點開頭的子目錄**：glob 的 `**` 不進 `conf.d/.x/`，CI 的 walker 會進（exporter 本身也跳過點目錄）。
-- 對等關係由 `tests/lint/test_editor_schema_glob_parity.py` **推導**：讀 devcontainer.json 的 glob、呼叫 CI 自己的 `validate_dir` 分類，逐一比對。
+- **conf.d 底下點開頭的子目錄**：CI 的 walker 每個目錄都進（exporter 本身跳過點目錄）。1.24（bash 模式）只在點目錄是 conf.d 下**第一層**時綁：`conf.d/.x/t.yaml` 綁、`conf.d/a/.x/t.yaml` 不綁；下一版（`next`，拿掉 bash 模式）兩者都不綁。
+- **workspace 本身位在點目錄底下**（例如 `.claude/worktrees/…` 裡的 checkout）：兩種模式開頭的 `**` 都跨不過點目錄 → 整棵樹一個檔都不綁。
+- 對等關係由 `tests/lint/test_editor_schema_glob_parity.py` **推導**：讀 devcontainer.json 的 glob、呼叫 CI 自己的 `validate_dir` 分類，兩種比對模式各自逐一比對、各自釘住上述差異；模型與真 picomatch 4.0.5（vscode-yaml 1.24.0 內附版本）逐格交叉比對，CI 的 Python Tests 會安裝這個版本。
 
 ## VS Code（零設定，已 codified）
 

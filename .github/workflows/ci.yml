@@ -1216,6 +1216,13 @@ jobs:
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.
       VIBE_REQUIRE_PRE_COMMIT: "1"
+      # #1815: tests/lint/test_editor_schema_glob_parity.py models the glob
+      # matcher yaml-language-server uses and cross-checks that model against
+      # the REAL picomatch, installed below at the version vscode-yaml 1.24.0
+      # bundles. Without it that anchor skips and the parity check rests on
+      # the model alone; this var turns the skip into a failure.
+      VIBE_REQUIRE_PICOMATCH: "1"
+      PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1357,6 +1364,14 @@ jobs:
           sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
           actionlint --version
           command -v actionlint
+
+      # Reference engine for the editor-glob parity test (#1815). Pinned to
+      # the picomatch that yaml-language-server 1.24.0 carries in
+      # vscode-yaml 1.24.0's package-lock; zero dependencies, so no lockfile.
+      - name: Install picomatch (editor glob parity reference)
+        run: |
+          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund picomatch@4.0.5
+          test -f "$PICOMATCH_DIR/package.json"
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -1554,6 +1569,13 @@ jobs:
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.
       VIBE_REQUIRE_PRE_COMMIT: "1"
+      # #1815: tests/lint/test_editor_schema_glob_parity.py models the glob
+      # matcher yaml-language-server uses and cross-checks that model against
+      # the REAL picomatch, installed below at the version vscode-yaml 1.24.0
+      # bundles. Without it that anchor skips and the parity check rests on
+      # the model alone; this var turns the skip into a failure.
+      VIBE_REQUIRE_PICOMATCH: "1"
+      PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1695,6 +1717,14 @@ jobs:
           sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
           actionlint --version
           command -v actionlint
+
+      # Reference engine for the editor-glob parity test (#1815). Pinned to
+      # the picomatch that yaml-language-server 1.24.0 carries in
+      # vscode-yaml 1.24.0's package-lock; zero dependencies, so no lockfile.
+      - name: Install picomatch (editor glob parity reference)
+        run: |
+          npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund picomatch@4.0.5
+          test -f "$PICOMATCH_DIR/package.json"
 
       - name: Cache pip packages
         uses: actions/cache@v5

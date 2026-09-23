@@ -14,7 +14,7 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 
 ### `tenant-config.schema.json`
 
-**Purpose**: Validates tenant YAML configuration files in `conf.d/` (flat or nested; `.yaml` or `.yml`, any case; basename not starting with `_` or `.`) for the Dynamic Alerting platform. `_defaults*` files use `platform-defaults.schema.json` instead.
+**Purpose**：驗證 `conf.d/` 下的租戶設定檔——扁平或巢狀皆可；副檔名 `.yaml` 或 `.yml`，不分大小寫；檔名開頭不是 `_` 也不是 `.`。`_defaults*` 檔改用 `platform-defaults.schema.json`。
 
 **Coverage**:
 - Tenant configuration structure (`tenants:` mapping)
@@ -39,19 +39,19 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 1. **Install YAML extension** (if not already installed):
    - Go to Extensions → search for "YAML" → install "YAML" by Red Hat
 
-2. **Add schema mapping** to `VS Code settings.json`: copy the `yaml.schemas` block from
+2. **Add schema mapping** to `VS Code settings.json`：從
    [`.devcontainer/devcontainer.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.devcontainer/devcontainer.json)
-   (inside the dev container it is already applied). It binds both extension spellings and
-   keeps `_*` platform files off the tenant schema; a plain `"conf.d/*.yaml"` would miss
-   `.yml` files and put the tenant schema on `_defaults.yaml`. Why the globs look the way they
-   do: [`editor-schema-validation.md`](../internal/editor-schema-validation.md).
+   複製 `yaml.schemas` 區塊（dev container 內已自動套用）。它同時綁兩種副檔名拼法，並讓 `_*`
+   平台檔不吃 tenant schema；單寫 `"conf.d/*.yaml"` 會漏掉 `.yml` 檔，還會把 tenant schema
+   套到 `_defaults.yaml` 上。glob 為何長這樣見
+   [`editor-schema-validation.md`](../internal/editor-schema-validation.md)。
 
    **Finding settings.json**:
    - **Windows/Linux**: `Ctrl+Shift+P` → "Preferences: Open Settings (JSON)"
    - **macOS**: `Cmd+Shift+P` → "Preferences: Open Settings (JSON)"
 
 3. **Verify**:
-   - Open any tenant file under `conf.d/` (e.g. `conf.d/db-a.yaml`)
+   - 開啟 `conf.d/` 下任一租戶檔（例如 `conf.d/db-a.yaml`）
    - YAML extension should show autocomplete, validation, and inline documentation
 
 ### Expected Behavior
@@ -236,14 +236,13 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 
 ### IDE Linting
 
-Use the schema with other YAML linters:
+在編輯器之外對整棵 conf.d 跑同一組 schema，用 CI 那支閘門本身——它的選檔規則（兩種副檔名拼法、`_defaults*` 改驗 `platform-defaults.schema.json`、其餘 `_*` 略過並列出）就是編輯器綁定要對齊的那一份：
 
 ```bash
-# Example: yamllint with schema support
-yamllint -d "{extends: default, rules: {document-start: disable}}" \
-  --schema docs/schemas/tenant-config.schema.json \
-  conf.d/*.yaml
+python3 scripts/tools/lint/check_confd_schema.py --config-dir conf.d
 ```
+
+（別用 yamllint 做這件事：yamllint 1.38.0 的 CLI 沒有 `--schema` 參數，傳入會以 rc 2 結束。）
 
 ---
 

@@ -118,9 +118,11 @@
       // covered by picomatch's dotfile guard.
       // NOT covered: yaml-language-server <= 1.23 escapes `^` and `(`, so
       // these globs bind nothing there (no validation rather than wrong
-      // validation). Known difference from CI: `**` does not descend into
-      // dot-directories, so conf.d/.x/t.yaml is validated by CI but not
-      // bound here (the exporter skips dot-directories too).
+      // validation). Known difference from CI (whose walker enters every
+      // directory; the exporter skips dot-directories): a dot-directory
+      // under conf.d/ is bound by 1.24 only when it is the FIRST level
+      // (conf.d/.x/t.yaml yes, conf.d/a/.x/t.yaml no); the non-bash
+      // matcher of the next release binds neither.
       // Parity is derived, not asserted: tests/lint/test_editor_schema_glob_parity.py.
       // We inject this here (not .vscode/settings.json — that path is
       // gitignored: .gitignore `.vscode/*`) so the association ships with the
