@@ -3,7 +3,8 @@
 The would-fire verdict (`firing` / `inactive` / `error`) is classified from
 promtool's *return code + output format*, which is version-bound:
 `_recipe_preview.classify_promtool_result` hard-codes the `FAILED:` /
-`got:[` markers (version-bound; spike-verified stable through promtool 3.12.x). The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
+`got:[` markers, and ci.yml's `Preview would-fire e2e` step re-verifies them
+against whatever version is pinned. The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
 rule-pack gate (`.github/workflows/ci.yml`) installs its OWN pinned promtool.
 
 If those two pins ever skew, the image could classify a verdict differently from
@@ -25,6 +26,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO / "components" / "recipe-preview" / "Dockerfile"
 _CI_YML = _REPO / ".github" / "workflows" / "ci.yml"
 _DEVCONTAINER_SH = _REPO / ".devcontainer" / "install-promtool.sh"
+_NIGHTLY_VM_REPLAY = _REPO / ".github" / "workflows" / "nightly-vm-replay.yaml"
 
 
 def _one(pattern: str, text: str, what: str) -> str:
@@ -105,6 +107,28 @@ def test_devcontainer_promtool_pin_matches_ci() -> None:
         f"promtool amd64 SHA-256 skew: install-promtool.sh pins {dc_sha} but ci.yml "
         f"pins {ci_sha}. Both download the same prometheus-<ver>.linux-amd64 tarball — "
         f"the digests MUST match."
+    )
+
+
+def test_nightly_vm_replay_promtool_pin_matches_ci() -> None:
+    """The nightly VM-replay leg installs its own promtool; it must be the CI pin."""
+    nv = _NIGHTLY_VM_REPLAY.read_text(encoding="utf-8")
+    ci = _CI_YML.read_text(encoding="utf-8")
+
+    nv_ver = _one(r"""^\s*PROM_VERSION=["']?([^\s"'#]+)""", nv,
+                  "nightly-vm-replay.yaml PROM_VERSION")
+    ci_ver = _one(r"""^\s*PROM_VERSION=["']?([^\s"'#]+)""", ci, "ci.yml PROM_VERSION")
+    assert nv_ver == ci_ver, (
+        f"promtool VERSION skew: nightly-vm-replay.yaml pins {nv_ver!r} but ci.yml "
+        f"pins {ci_ver!r}. Bump BOTH together (and refresh the SHA-256)."
+    )
+
+    nv_sha = _one(r"^\s*PROM_SHA256=([0-9a-f]{64})", nv, "nightly-vm-replay.yaml PROM_SHA256")
+    ci_sha = _one(r"^\s*PROM_SHA256=([0-9a-f]{64})", ci, "ci.yml PROM_SHA256")
+    assert nv_sha == ci_sha, (
+        f"promtool amd64 SHA-256 skew: nightly-vm-replay.yaml pins {nv_sha} but "
+        f"ci.yml pins {ci_sha}. Both download the same prometheus-<ver>.linux-amd64 "
+        f"tarball — the digests MUST match."
     )
 
 

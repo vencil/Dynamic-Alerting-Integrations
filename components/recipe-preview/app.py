@@ -416,7 +416,8 @@ def _detect_promtool_version():
     if not p:
         return "absent"
     try:
-        out = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=10)
+        out = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=10,
+                             encoding="utf-8", errors="replace")
         return (out.stderr or out.stdout).strip().splitlines()[0] if (out.stderr or out.stdout) else "unknown"
     except Exception:
         return "unknown"
@@ -433,7 +434,8 @@ _GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 
 def main():
     # §6 #5: record the promtool version at startup — the firing/inactive
-    # verdict contract is version-bound (baseline re-verified on 3.13.1).
+    # verdict contract is version-bound, and ci.yml's "Preview would-fire e2e"
+    # step re-verifies it against whatever version is pinned.
     sys.stderr.write(
         f"recipe-preview listening on {LISTEN_HOST}:{LISTEN_PORT} "
         f"(promtool: {_PROMTOOL_VERSION}, git-sha: {_GIT_SHA}, "

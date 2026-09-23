@@ -216,7 +216,7 @@ def classify_promtool_result(returncode, output):
     "firing" would be a false positive (the exact false-confidence the design
     forbids). So FIRING requires the alert-mismatch signature promtool prints
     when an alert fires against our empty expectation — `FAILED:` plus a
-    non-empty `got:` block (verified verbatim on promtool 3.12.0). Anything
+    non-empty `got:` block. Anything
     else with rc != 0 is an infrastructure/parse error → `error`.
 
       rc == 0                      → inactive (nothing fired)
@@ -344,9 +344,15 @@ def preview_recipe(recipe, tenant, scenario):
         # so the {state:error} contract holds even then. ──
         try:
             pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8", newline="\n")
+            # encoding is explicit: promtool echoes the rule's own annotations,
+            # which are UTF-8. Left to the locale codec, a non-UTF-8 host (cp950)
+            # raises inside subprocess's reader thread, the output arrives EMPTY,
+            # and a firing verdict silently degrades to `error` — the markers
+            # classify_promtool_result looks for are simply not there to find.
             chk = subprocess.run(
                 [_PROMTOOL, "check", "rules", pack_path.name],
                 cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
+                encoding="utf-8", errors="replace",
             )
             if chk.returncode != 0:
                 return _err(f"compiled rule failed promtool check: "
@@ -357,6 +363,7 @@ def preview_recipe(recipe, tenant, scenario):
             res = subprocess.run(
                 [_PROMTOOL, "test", "rules", "preview_test.yaml"],
                 cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
+                encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=f"Custom_{slug}")

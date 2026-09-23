@@ -24,8 +24,8 @@
 #
 # ⛔ govulncheck SILENCE IS NOT EVIDENCE. It only reports what the Go
 # vulnerability database carries. An advisory the DB has not yet ingested
-# (see the GHSA below) produces a clean run that proves NOTHING. Never cite a
-# green govulncheck for an ID that is absent from the DB.
+# produces a clean run that proves NOTHING. Never cite a green govulncheck for
+# an ID that is absent from the DB.
 #
 # GOVERNANCE: per-ID, each with an expiry and a named justification borrowed
 # from the OpenVEX vocabulary (`vulnerable_code_not_present` >
@@ -35,22 +35,10 @@
 # component-docker-build Trivy steps via the `trivyignores:` input. The hard
 # gate (exit-code 1) is unchanged — only these entries are waived.
 #
-# ⚠️ govulncheck AND Trivy DISAGREE ON THIS BINARY, BY DESIGN. The committed
-# promtool.openvex.json marks four findings `affected` that Trivy does not
-# report at all. Measured on the 3.13.1 image (full scan, NO severity filter —
-# 7 findings total), the split is:
-#   * GO-2026-5264 / -5381 / -5662 (prometheus web-UI XSS + remote-read DoS,
-#     aliases GHSA-8rm2-7qqf-34qm / -fw8g-cg8f-9j28 / -vffh-x6r8-xx99):
-#     ABSENT from Trivy at every severity. They live in
-#     github.com/prometheus/prometheus — promtool's OWN main module, stamped
-#     v0.0.0-<date>-<sha>+dirty — and Trivy cannot match a pseudo-version
-#     against an advisory range. Not a gap in this file; a different matcher.
-#   * GO-2026-5970 (alias CVE-2026-56852, x/text v0.38.0 -> 0.39.0): PRESENT
-#     in Trivy but scored UNKNOWN, so `--severity CRITICAL,HIGH` filters it
-#     out. ⏰ WATCH: this is a latent tripwire — if it is later re-scored
-#     HIGH, the release gate starts failing with no change on our side. The
-#     fix then is a promtool re-pin (x/text is upstream's dependency), not a
-#     new entry here.
+# ⏰ WATCH — findings arrive here with no change on our side: the vuln DB keeps
+# matching new advisories against upstream's dependencies inside the bundled
+# binary. The first lever is a promtool re-pin. govulncheck and Trivy match
+# advisories differently, so a clean run of one says nothing about the other.
 # Do not add waiver entries for findings the gate does not actually see:
 # pre-emptive waivers are how a governed register rots into a blanket mute.
 #
@@ -62,42 +50,4 @@
 # the action gains the input; the justification vocabulary is already aligned
 # so the migration is mechanical.
 
-vulnerabilities:
-  # ── gRPC-Go: xDS RBAC and HTTP/2 Vulnerabilities — NOT IN EXECUTE PATH ──────
-  # GHSA-hrxh-6v49-42gf (HIGH, CVSS 4.0 8.8, published 2026-07-21), no CVE
-  # alias. google.golang.org/grpc v1.81.1 -> 1.82.1. Three distinct defects,
-  # and they are NOT in the same state inside our binary — measured, not
-  # assumed (`go tool nm`, 114,639 symbols total):
-  #
-  #   defect                                   package                 symbols
-  #   xDS RBAC authz bypass (8.2)              grpc/internal/xds/rbac        0
-  #   xDS RBAC NOT-matcher panic (5.9)         grpc/internal/xds/rbac        0
-  #   HTTP/2 Rapid-Reset mitigation bypass     grpc/internal/transport      65
-  #     -> DoS (7.5)                           (incl. (*http2Server).HandleStreams)
-  #
-  # The two xDS defects are `vulnerable_code_not_present` (zero symbols; the
-  # whole xds tree is DCE'd out). The HTTP/2 one is NOT — the server transport
-  # IS linked in, so the honest classification for the advisory AS A WHOLE is
-  # the weaker `vulnerable_code_not_in_execute_path`:
-  # recipe-preview spawns promtool with exactly two argv shapes —
-  # `promtool check rules <file>` and `promtool test rules preview_test.yaml`
-  # (scripts/tools/dx/_recipe_preview.py, preview_recipe(): currently :348 and
-  # :358 — anchor on the FUNCTION, line numbers drift) — both offline,
-  # file-only. Nothing ever calls Serve/HandleStreams, so no client HTTP/2
-  # connection is ever accepted, and no xDS control plane is ever contacted.
-  #
-  # NO govulncheck verdict exists for this ID: the Go vuln DB has not ingested
-  # it (golang/vulndb#6061 is open, id still GO-ID-PENDING). Do not read the
-  # clean promtool.openvex.json as clearance for this entry — see the ⛔ above.
-  #
-  # UPGRADE IS NOT AVAILABLE: prometheus/prometheus has no tag after v3.13.1
-  # (not even an RC) and `main`'s go.mod still pins grpc v1.81.1 as of
-  # 2026-07-26, five days after the advisory. The wait has no known bound.
-  #
-  # TRIGGER (delete this entry): prometheus/prometheus bumps grpc to >= 1.82.1
-  # on `main` and ships it -> re-pin PROM_VERSION. Secondary trigger: once
-  # golang/vulndb#6061 lands a GO-2026-* id, re-run govulncheck for a real
-  # symbol-level verdict and replace this prose with it.
-  - id: GHSA-hrxh-6v49-42gf
-    statement: "promtool: xDS halves absent from binary (0 symbols in grpc/internal/xds/rbac); HTTP/2 server transport IS linked but recipe-preview runs only offline `promtool check rules` / `test rules` (_recipe_preview.py preview_recipe(), :348/:358 at time of writing) so no connection is ever served -> vulnerable_code_not_in_execute_path. No upstream fix exists (prometheus main still on grpc v1.81.1). No govulncheck verdict: absent from Go vuln DB (golang/vulndb#6061)."
-    expired_at: 2026-09-24
+vulnerabilities: []

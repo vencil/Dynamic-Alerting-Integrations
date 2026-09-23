@@ -10,14 +10,14 @@
 # this skew). One pinned install point kills the divergence.
 #
 # Pin sync: PROM_VERSION + PROM_SHA256 below MUST equal ci.yml's (the rule-pack
-# gate) — enforced by tests/preview/test_promtool_pin_parity.py. Bump all
-# promtool pins together: ci.yml, nightly-vm-replay.yaml, docs-ci.yaml,
-# components/recipe-preview/Dockerfile, and this script.
+# gate) — enforced by tests/preview/test_promtool_pin_parity.py; bump every
+# copy that test names together. docs-ci.yaml's PROMTOOL_VERSION is a separate
+# pin with its own purpose (#1949).
 set -euo pipefail
 
-PROM_VERSION=3.13.1
+PROM_VERSION=3.14.0
 # SHA-256 of prometheus-${PROM_VERSION}.linux-amd64.tar.gz (upstream sha256sums.txt).
-PROM_SHA256=962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
+PROM_SHA256=f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d
 
 if [ "$(uname -m)" != "x86_64" ]; then
     # Only the amd64 tarball digest is pinned here. Refuse to install an
