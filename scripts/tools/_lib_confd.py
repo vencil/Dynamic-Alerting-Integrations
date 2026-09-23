@@ -51,6 +51,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
+import re
 from typing import Callable, Iterable, Iterator, NamedTuple
 import sys
 from pathlib import Path
@@ -58,6 +59,7 @@ from pathlib import Path
 __all__ = [
     "CONFIG_SUFFIXES",
     "config_stem",
+    "configmap_key_problem",
     "defaults_files_in",
     "has_yaml_extension",
     "is_defaults_name",
@@ -646,6 +648,117 @@ def unusable_config_paths(
     found.sort(key=lambda q: q.relative_to(root).as_posix()
                if q != root else "")
     return found
+
+
+# ── ConfigMap key legality (#1796; shared since #1791) ────────────────
+#
+# ⛔ ONE copy. `configmap_assemble` (ops, repo layout) and `init_project`'s
+# kustomize base (tools, flat da-tools image layout) both need it, and this
+# module is the one both can import: it ships flat in the image
+# (`components/da-tools/app/build.sh`) and `configmap_assemble` already
+# reaches it through `scripts/tools` on `sys.path`.
+#
+# ⛔ NOT from memory. Transcribed from the authority, k8s.io/apimachinery
+# `pkg/util/validation/validation.go`:
+#
+#   const configMapKeyFmt = `[-._a-zA-Z0-9]+`
+#   var configMapKeyRegexp = regexp.MustCompile("^" + configMapKeyFmt + "$")
+#   func IsConfigMapKey(value string) []string {
+#       if len(value) > DNS1123SubdomainMaxLength { ... }   // 253, BYTES
+#       if !configMapKeyRegexp.MatchString(value) { ... }
+#       errs = append(errs, hasChDirPrefix(value)...)       // "." ".." "..*"
+#   }
+#
+# `hasChDirPrefix` is the shared helper `IsValidPathSegmentName` also uses; it
+# rejects `.`, `..` and any name starting with `..`. Go's `len()` counts
+# BYTES, hence the encode below rather than `len(name)`.
+#
+# ⛔ `\Z`, not `$`: Python's `$` also matches just BEFORE a trailing newline,
+# so `db-a.yaml\n` would have been accepted as a key. Go's `regexp` `$`
+# (without `(?m)`) means end-of-text, which is `\Z` here — transcribing `$`
+# to `$` copied the character and lost the meaning.
+_CONFIGMAP_KEY_RE = re.compile(r"\A[-._a-zA-Z0-9]+\Z")
+_MAX_KEY_BYTES = 253  # DNS1123SubdomainMaxLength
+
+
+def _name_bytes(name: str) -> bytes:
+    """The bytes the API server will count for `name`, never raising."""
+    try:
+        return os.fsencode(name)
+    except UnicodeEncodeError:
+        # A synthesised name under a non-UTF-8 locale. UTF-8 is what the
+        # API server counts, and `surrogatepass` keeps a lone surrogate
+        # (what `fsdecode` hands back for an undecodable byte) countable.
+        return name.encode("utf-8", "surrogatepass")
+
+
+def configmap_key_problem(name: str) -> str | None:
+    """Why `name` cannot be a ConfigMap key, or `None` if it can.
+
+    ⛔ **MESSAGE QUALITY, not a guard.** The sentence that used to stand
+    here — "handing it to `kubectl` produces an error that never names the
+    file" — was FALSE, and it was the premise for keeping this function.
+    Re-measured per class, `--from-file="<name>=<abs path>" -n monitoring
+    --dry-run=client -o yaml` against a real kubectl v1.31.0 (sha256
+    `7c27adc6…2437`), every row rc 1:
+
+        db b.yaml          "db b.yaml" is not a valid key name for a
+                           ConfigMap: … regex … '[-._a-zA-Z0-9]+'   NAMED
+        db-a (copy).yaml   same shape                               NAMED
+        ..hidden.yaml      "..hidden.yaml" … must not start with '..'
+                                                                    NAMED
+        db=a.yaml          key names or file paths cannot contain '='
+                                                        names NOTHING
+        db,a.yaml          error reading db: no such file or directory
+                                     names `db`, a fragment that is not a
+                                     file; the real name never appears
+        db"a.yaml          invalid argument "db\"a.yaml=<path>" for
+                           "--from-file" flag: parse error on line 1,
+                           column 3: bare " in non-quoted-field
+                                     NAMED — the whole argument, file name
+                                     included, is echoed back verbatim
+        two bad names      only the FIRST is printed
+
+    ⛔ So what this buys is narrow and none of it is "a defect would pass
+    silently": all offending names at once, a refusal before the
+    subprocess, and the only by-name answer for **`=` and `,`** — two
+    classes, not three. ⚠️ `"` is NOT one of them, however it reads in the
+    earlier prose: pflag echoes the argument, so the name is right there;
+    what this layer adds for `"` is only that the refusal says "illegal
+    ConfigMap key" instead of a CSV parse error at a column number. (All
+    three are split by `readAsCSV` / `ParseFileSource` before
+    `IsConfigMapKey` ever runs — that part held.) Without this function
+    kubectl still exits non-zero and `_write_atomically` is never reached.
+    DROPPING the file instead of refusing would be the silent one (#1603's
+    shape) — hence "rename it" or "leave it out on purpose", never
+    "skip it".
+
+    ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
+    POSIX; Python hands it back with the undecodable ones smuggled in as
+    lone surrogates, and `.encode("utf-8")` then raises `UnicodeEncodeError`
+    — a codec traceback in place of the by-name refusal this function exists
+    to produce. `os.fsencode` reverses the same escape, so the count is the
+    byte count the API server will apply, for every name the filesystem can
+    hand us.
+
+    ⛔ …and it raises the same `UnicodeEncodeError` on a name that did NOT
+    come from the filesystem, once the locale's filesystem encoding is not
+    UTF-8: `os.fsencode` then encodes with `ascii`. No production path
+    reaches that (names come from `iterdir`, so they carry the escape
+    `fsencode` reverses), but a function whose whole job is "refuse by name
+    instead of raising" may not have an input class it raises on.
+    """
+    if len(_name_bytes(name)) > _MAX_KEY_BYTES:
+        return f"longer than {_MAX_KEY_BYTES} bytes"
+    if not _CONFIGMAP_KEY_RE.match(name):
+        bad = sorted({c for c in name if not _CONFIGMAP_KEY_RE.match(c)})
+        shown = " ".join(repr(c) for c in bad) or "(empty name)"
+        return f"contains characters a key may not hold: {shown}"
+    if name in (".", ".."):
+        return f"must not be {name!r}"
+    if name.startswith(".."):
+        return "must not start with '..'"
+    return None
 
 
 def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:
