@@ -247,7 +247,7 @@ GET /api/v1/tenants/{id}/effective
 
 - `404 ErrTenantNotFound` — tenant 不存在
 - `400` — tenant_id 驗證失敗（長度、字元集）
-- Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`：走的是 exporter 同一支 conf.d walker（`ScanDirTree`，#1677）與同一個合併核心，所以 symlink 的 `--config-dir`、隱藏目錄、空 body 租戶的判定都與 exporter 相同。⚠️ 尚未收斂的有兩處：`_defaults` 檔名大小寫（`_DEFAULTS.YAML`）的 chain 選擇規則（#1674）；以及租戶「存不存在」——walker 只讀 `tenants:` 的 key，而 `/metrics` 做完整 parse，body 形狀錯（如純量）的租戶在 `/metrics` 不存在、在 `/effective` 回 500（#1957）
+- Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`：走的是 exporter 同一支 conf.d walker（`ScanDirTree`，#1677）與同一個合併核心，所以 symlink 的 `--config-dir`、隱藏目錄、空 body 租戶的判定都與 exporter 相同。defaults chain 也是同一條規則（#1674）：`_defaults.yaml`／`.yml` 不分大小寫都算載體，但**每個目錄只讀一個**——`.yaml` 拼法勝過 `.yml`；同副檔名的大小寫變體中，`.yaml` 取 walk 順序最後一個、`.yml` 取第一個——一個目錄有多個載體時 exporter 與 `describe_tenant` 都會 WARN，其餘的不被任何平面讀取（`/metrics` 的根層 `Defaults` 也只來自根目錄那一個）。⚠️ 尚未收斂的是租戶「存不存在」——walker 只讀 `tenants:` 的 key，而 `/metrics` 做完整 parse，body 形狀錯（如純量）的租戶在 `/metrics` 不存在、在 `/effective` 回 500（#1957）
 
 **除錯 CLI（da-tools）**
 

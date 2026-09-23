@@ -805,8 +805,10 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		m.mu.RUnlock()
 		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed)
 	} else {
-		// Full rebuild: _defaults or _profiles changed, must re-merge everything
-		merged = mergePartialConfigs(newConfigs)
+		// Full rebuild: _defaults or _profiles changed, must re-merge everything.
+		// A `_` change can move the root carrier selection, which is why the
+		// tenant-patch branch above never needs it (#1674).
+		merged = mergePartialConfigs(newConfigs, rootCarrierKey(scan, m.getLogger()))
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
 	// the else above, so the tenant-patch path published tenants exactly as
@@ -1307,8 +1309,9 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		fileConfigs[name] = partial
 	}
 
-	// Merge all partials
-	merged := mergePartialConfigs(fileConfigs)
+	// Merge all partials; the root Defaults come from the carrier the chain
+	// selects, never from a second spelling beside it (#1674).
+	merged := mergePartialConfigs(fileConfigs, rootCarrierKey(scan, m.getLogger()))
 	merged.ApplyProfiles()
 
 	// #1521 second half: the caller just installed the inheritance graph this

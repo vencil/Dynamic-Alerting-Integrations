@@ -66,6 +66,8 @@ __all__ = [
     "is_hidden_name",
     "is_reserved_name",
     "iter_config_files",
+    "multi_carrier_warning",
+    "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
     "nested_yaml_files",
@@ -243,6 +245,55 @@ def is_defaults_name(name: str) -> bool:
     return name.lower() in ("_defaults.yaml", "_defaults.yml")
 
 
+def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
+    """The ONE carrier a directory's defaults chain reads (#1674, B8).
+
+    `carriers` are the `is_defaults_name` entries of ONE directory, in any
+    order. Every plane answers this the same way — the exporter's chain
+    (`pkg/config` `SelectDefaultsCarriers`), `/effective`, the flat root
+    `Defaults` served on `/metrics`, and `describe_tenant` — so a directory
+    holding two spellings is ONE file on every plane, never a merge:
+
+      * a spelling that lowercases to `_defaults.yaml` beats any spelling
+        that lowercases to `_defaults.yml`;
+      * among `.yaml` case variants the LAST in name order wins, among
+        `.yml` variants the FIRST.
+
+    ⚠️ The asymmetry in the second bullet is not a typo. It is the rule
+    `/effective` had before #1674 (its walk overwrote on `.yaml` and kept
+    the first `.yml`), and the owner ruling keeps it rather than "fixing"
+    it. Order is the name's code-point order, which for UTF-8 names is
+    Go's byte order — the one `filepath.WalkDir` visits a directory in.
+
+    ⛔ Two carriers in one directory is a misconfiguration: callers WARN
+    (see `multi_carrier_warning`) instead of choosing silently.
+    """
+    ordered = sorted(carriers, key=lambda p: Path(p).name)
+    yaml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yaml"]
+    if yaml_spelling:
+        return yaml_spelling[-1]
+    yml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yml"]
+    return yml_spelling[0] if yml_spelling else None
+
+
+def multi_carrier_warning(directory: "str | os.PathLike[str]",
+                          carriers: "Iterable[Path]") -> "str | None":
+    """The operator-facing WARN for a directory with more than one carrier.
+
+    None when there is at most one. The wording matches the exporter's log
+    line so an operator grepping for one finds the other.
+    """
+    names = sorted(Path(p).name for p in carriers)
+    if len(names) < 2:
+        return None
+    chosen = select_defaults_carrier(Path(n) for n in names)
+    ignored = [n for n in names if n != chosen.name]
+    return (f"WARN: conf.d directory {directory} has {len(names)} defaults "
+            f"carriers ({', '.join(names)}); only {chosen.name} is read, "
+            f"{', '.join(ignored)} is ignored on every plane (#1674) — "
+            f"merge them into one file")
+
+
 def config_stem(name: str) -> str:
     """Tenant id carried by a filename, or `""` if it carries none.
 
@@ -314,9 +365,10 @@ def resolve_defaults_file(
     is left to `nested_yaml_warning`'s own default so the message names the
     command the operator ran rather than this helper.
 
-    Sorted, so a directory carrying two spellings resolves
-    deterministically — two spellings is already a misconfiguration, and
-    resolving it by directory order would make it an intermittent one.
+    A directory carrying two spellings resolves to the one the exporter
+    reads (`select_defaults_carrier`, #1674) — before that it was the first
+    in sort order, which picked `_DEFAULTS.YML` over the `_defaults.yaml`
+    the exporter merges, so a writer could edit a file nothing reads.
     """
     root = Path(base)
     # #1652: what `observe_flat_reads` records here is what THIS lookup
@@ -338,9 +390,11 @@ def resolve_defaults_file(
                                  if is_defaults_name(p.name)])
     _print_nested_once(root, tool=tool)
     try:
-        for entry in sorted(root.iterdir()):
-            if entry.is_file() and is_defaults_name(entry.name):
-                return entry
+        chosen = select_defaults_carrier(
+            entry for entry in root.iterdir()
+            if entry.is_file() and is_defaults_name(entry.name))
+        if chosen is not None:
+            return chosen
     except OSError:
         pass
     return root / "_defaults.yaml"

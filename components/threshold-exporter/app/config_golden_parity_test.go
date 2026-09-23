@@ -23,6 +23,10 @@ package main
 //   wrapper-siblings  — `defaults:` wrapper WITH sibling top-level keys, the
 //                       shape the shipped platform file has; see
 //                       tests/golden/build_and_capture.py for its limits
+//   carrier-selection — ONE defaults carrier per directory (#1674): a
+//                       `.yaml`+`.yml` pair reads the `.yaml`, a subtree
+//                       `_DEFAULTS.YML` enters the chain (two tenants, in
+//                       the mixed-mode tree's `carrier/` subtree)
 //
 // If this test is red and the Python side is green, the Go port has drifted.
 // Run `python3 tests/golden/build_and_capture.py` only when Python semantics

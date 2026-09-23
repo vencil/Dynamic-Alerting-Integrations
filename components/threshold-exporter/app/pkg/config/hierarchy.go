@@ -14,10 +14,11 @@ package config
 // ConfigManager also uses) and reads the tenant's file, the defaults set and
 // every file's bytes off that scan (W2, #1677). The MERGE core below is the
 // one the exporter calls too — app/config_inheritance.go is a set of thin
-// wrappers over DeepMerge / ComputeMergedHash in this file. What remains
-// resolver-specific is the defaults-CHAIN selection (legacyDefaultsByDir),
-// which #1674 folds into CollectDefaultsChain. The golden-fixture tests pin
-// the 16-char merged_hash against describe_tenant.py.
+// wrappers over DeepMerge / ComputeMergedHash in this file. And since #1674
+// the defaults CHAIN is the exporter's too: one carrier per directory from
+// TreeScan.DefaultsCarriers, the selection its inheritance graph is built
+// from. The golden-fixture tests pin the 16-char merged_hash against
+// describe_tenant.py.
 //
 // Semantic rules enforced (MUST match describe_tenant.py + app/):
 //   - _metadata is never inherited
@@ -44,7 +45,6 @@ import (
 	"io"
 	"log"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -125,77 +125,22 @@ var discardLogger = log.New(io.Discard, "", 0)
 // (which is what makes a scope one walk instead of a re-walk per tenant).
 type effectiveResolver struct {
 	scan          *TreeScan
-	defaultsByDir map[string]string // dir → the one defaults file legacyDefaultsByDir picks there
+	defaultsByDir map[string]string // dir → the one carrier TreeScan.DefaultsCarriers picks there
 }
 
+// newEffectiveResolver reads the chain rule off the scan — the SAME
+// selection the exporter's inheritance graph is built from (#1674). Until
+// then this file kept its own case-folding rule (legacyDefaultsByDir) while
+// the graph matched only the exact lower-case names, so `_DEFAULTS.YAML`
+// entered /effective's chain and not the exporter's. The rule that function
+// implemented is the one SelectDefaultsCarriers now carries for everyone.
 func newEffectiveResolver(scan *TreeScan) *effectiveResolver {
-	return &effectiveResolver{scan: scan, defaultsByDir: legacyDefaultsByDir(scan.Defaults)}
-}
-
-// legacyDefaultsByDir is ResolveEffective's defaults-selection rule, kept
-// EXACTLY as it was when it ran its own walk, now computed from the walker's
-// Defaults set:
-//
-//   - the name is case-folded (`_DEFAULTS.YAML` counts);
-//   - in one directory a `.yaml` spelling beats any `.yml` spelling;
-//   - among `.yaml` case variants the LAST in walk order wins, among `.yml`
-//     variants the FIRST (the old walk overwrote on `.yaml` and kept-first
-//     on `.yml`).
-//
-// Sorting the absolute paths reproduces walk order WITHIN a directory
-// (WalkDir visits a directory's entries in lexical order, and two paths in
-// one directory compare by their base name), which is the only order this
-// rule reads.
-//
-// ⛔ This is NOT CollectDefaultsChain (which matches the two exact lower-case
-// names and is what the exporter's graph uses). #1674 (B8) decides the
-// case-folding question and collapses this function into
-// CollectDefaultsChain; until then the two "upper-case _DEFAULTS.YAML" rows
-// in tree_scan_parity_test.go stay expect=diverge on purpose.
-func legacyDefaultsByDir(defaults map[string]bool) map[string]string {
-	paths := make([]string, 0, len(defaults))
-	for p := range defaults {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	byDir := make(map[string]string, len(paths))
-	for _, p := range paths {
-		dir := filepath.Dir(p)
-		switch strings.ToLower(filepath.Base(p)) {
-		case "_defaults.yaml":
-			byDir[dir] = p
-		case "_defaults.yml":
-			if _, exists := byDir[dir]; !exists {
-				byDir[dir] = p
-			}
-		}
-	}
-	return byDir
+	return &effectiveResolver{scan: scan, defaultsByDir: scan.DefaultsCarriers().ByDir}
 }
 
 // chain returns the defaults files from the scan root (L0) down to leafDir.
 func (r *effectiveResolver) chain(leafDir string) []string {
-	var rev []string
-	current := leafDir
-	for {
-		if p, ok := r.defaultsByDir[current]; ok {
-			rev = append(rev, p)
-		}
-		if current == r.scan.AbsRoot {
-			break
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
-	}
-	// Reverse so L0 (root) comes first — matches describe_tenant.py.
-	chain := make([]string, 0, len(rev))
-	for i := len(rev) - 1; i >= 0; i-- {
-		chain = append(chain, rev[i])
-	}
-	return chain
+	return chainFromCarriers(leafDir, r.scan.AbsRoot, r.defaultsByDir, nativePathOps)
 }
 
 // bytesOf returns the bytes the scan read for absPath. A prior-less scan

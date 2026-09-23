@@ -33,6 +33,8 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
+    multi_carrier_warning,
+    select_defaults_carrier,
     unusable_config_entries,
     unusable_reason,
 )
@@ -243,8 +245,17 @@ class ConfDScanner:
                 resolved = dp.resolve()
                 defaults_files[str(resolved)] = _load_yaml(dp)
                 by_dir.setdefault(resolved.parent, []).append(resolved)
-        for paths in by_dir.values():
-            paths.sort()  # two spellings in one dir resolve deterministically
+        # #1674 (B8): ONE carrier per directory, chosen by the rule every
+        # plane shares (`select_defaults_carrier`). Before, a directory with
+        # `_defaults.yaml` + `_defaults.yml` put BOTH into the chain and
+        # merged them, while the exporter's chain read one and its flat root
+        # `Defaults` let the `.yml` overwrite — three answers for one tree.
+        # A second spelling is a misconfiguration, so it is named, not merged.
+        for d in sorted(by_dir):
+            msg = multi_carrier_warning(d, by_dir[d])
+            if msg:
+                print(msg, file=sys.stderr)
+            by_dir[d] = [select_defaults_carrier(by_dir[d])]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 

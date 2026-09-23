@@ -691,9 +691,10 @@ def out_of_reach(entries, plane="root"):
 def defaults_carriers(config_dir):
     """conf.d 這一層所有 defaults 載體（`_defaults.yaml`／`.yml`，任意大小寫）。
 
-    exporter 兩種拼法都併進 defaults chain（`config_hierarchy.go` 的
-    `scanDirHierarchicalWithMetrics`），所以寫入端要列舉掃描看得見的同一組。
-    平面讀取，`warn_nested` 具名子目錄。
+    exporter 每個目錄只讀一個載體（#1674：`.yaml` 拼法勝過 `.yml`，見
+    `_lib_confd.select_defaults_carrier`），其餘拼法會被 WARN 且不被任何平面
+    讀取。這裡仍列舉全部拼法、從每一個移除：沒被讀的那個一旦另一個被刪掉就會
+    變成載體，留著舊 key 等於埋一個會復活的閾值。平面讀取，`warn_nested` 具名子目錄。
     """
     base = Path(config_dir)
     warn_nested(base, tool="deprecate_rule")

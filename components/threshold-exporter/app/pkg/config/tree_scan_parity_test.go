@@ -26,9 +26,10 @@ package config
 // W1 (#1941) moved the walker into this package with ZERO behavior change on
 // either side; W2 (#1677) made ResolveEffective / ScopeEffective consume it,
 // which flipped the symlinked-root, null-body, hidden-scope and
-// duplicate-plus-innocent rows to agree. The two upper-case _DEFAULTS.YAML
-// rows stay diverge until #1674 (B8) settles defaults-name case folding, and
-// the scalar-body row until #1957. Every row pins the CURRENT observation
+// duplicate-plus-innocent rows to agree. B8 (#1674) made every chain read
+// one carrier selection (SelectDefaultsCarriers over the case-folded
+// defaults set), which flipped the two upper-case _DEFAULTS.YAML rows; only
+// the scalar-body row stays diverge, until #1957. Every row pins the CURRENT observation
 // of all three planes exactly — for the walker that includes which files it
 // kept (Files) and which it classified as defaults (Defaults), so a change to
 // its skip or classification rules is red even when no chain moves:
@@ -526,13 +527,15 @@ func parityCases() []parityCase {
 				return root
 			},
 			queries: []string{"tk"},
-			expect:  "diverge",
-			owner:   "B8, #1674 (defaults-name case folding: the walker's chain matches exact names, ResolveEffective folds case)",
+			// Was diverge until B8 (#1674): WALKER chain=[sub/_defaults.yml]
+			// (exact lower-case names only), RESOLVE chain=[sub/_DEFAULTS.YAML].
+			// Both now read SelectDefaultsCarriers: the `.yaml` spelling wins.
+			expect: "agree",
 			want: parityObs{
 				walkerTenants: "[tk]",
 				walkerFiles:   "[sub/_DEFAULTS.YAML sub/_defaults.yml sub/t.yaml]",
 				walkerDefs:    "[sub/_DEFAULTS.YAML sub/_defaults.yml]",
-				walker:        map[string]string{"tk": "chain=[sub/_defaults.yml]"},
+				walker:        map[string]string{"tk": "chain=[sub/_DEFAULTS.YAML]"},
 				resolve:       map[string]string{"tk": "chain=[sub/_DEFAULTS.YAML]"},
 				walkerScope:   "[tk]",
 				scope:         "[tk]",
@@ -546,16 +549,63 @@ func parityCases() []parityCase {
 				return root
 			},
 			queries: []string{"tu"},
-			expect:  "diverge",
-			owner:   "B8, #1674 (defaults-name case folding)",
+			// Was diverge until B8 (#1674): WALKER chain=[] — the file was
+			// classified a carrier (walkerDefs) and then left out of the chain.
+			expect: "agree",
 			want: parityObs{
 				walkerTenants: "[tu]",
 				walkerFiles:   "[_DEFAULTS.YAML t.yaml]",
 				walkerDefs:    "[_DEFAULTS.YAML]",
-				walker:        map[string]string{"tu": "chain=[]"},
+				walker:        map[string]string{"tu": "chain=[_DEFAULTS.YAML]"},
 				resolve:       map[string]string{"tu": "chain=[_DEFAULTS.YAML]"},
 				walkerScope:   "[tu]",
 				scope:         "[tu]",
+			},
+		},
+		{
+			// #1674 measurement (C): the exporter's chain stopped at the root,
+			// describe_tenant and ResolveEffective included the subtree file.
+			name: "case-variant .yml carrier in a subtree under a lower-case root carrier",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
+				parityWrite(t, filepath.Join(root, "sub2", "_DEFAULTS.YML"), "defaults:\n  cpu_pct: 90\n")
+				parityWrite(t, filepath.Join(root, "sub2", "t1.yaml"), "tenants:\n  tc: {}\n")
+				return root
+			},
+			queries: []string{"tc"},
+			expect:  "agree",
+			want: parityObs{
+				walkerTenants: "[tc]",
+				walkerFiles:   "[_defaults.yaml sub2/_DEFAULTS.YML sub2/t1.yaml]",
+				walkerDefs:    "[_defaults.yaml sub2/_DEFAULTS.YML]",
+				walker:        map[string]string{"tc": "chain=[_defaults.yaml sub2/_DEFAULTS.YML]"},
+				resolve:       map[string]string{"tc": "chain=[_defaults.yaml sub2/_DEFAULTS.YML]"},
+				walkerScope:   "[tc]",
+				scope:         "[tc]",
+			},
+		},
+		{
+			// #1674 measurement (B): one ROOT with both extensions. The chain
+			// reads the `.yaml` only; the flat plane's root Defaults follow it
+			// (pinned in app/config_defaults_carrier_test.go) and
+			// describe_tenant too (tests/golden carrier-selection fixture).
+			name: "root _defaults.yaml beside _defaults.yml",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
+				parityWrite(t, filepath.Join(root, "_defaults.yml"), "defaults:\n  cpu_pct: 90\n")
+				parityWrite(t, filepath.Join(root, "t.yaml"), "tenants:\n  tp: {}\n")
+				return root
+			},
+			queries: []string{"tp"},
+			expect:  "agree",
+			want: parityObs{
+				walkerTenants: "[tp]",
+				walkerFiles:   "[_defaults.yaml _defaults.yml t.yaml]",
+				walkerDefs:    "[_defaults.yaml _defaults.yml]",
+				walker:        map[string]string{"tp": "chain=[_defaults.yaml]"},
+				resolve:       map[string]string{"tp": "chain=[_defaults.yaml]"},
+				walkerScope:   "[tp]",
+				scope:         "[tp]",
 			},
 		},
 		{

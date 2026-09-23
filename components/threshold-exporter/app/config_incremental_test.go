@@ -441,7 +441,7 @@ profiles:
 
 func TestMergePartialConfigs_Empty(t *testing.T) {
 	t.Parallel()
-	merged := mergePartialConfigs(map[string]ThresholdConfig{})
+	merged := mergePartialConfigs(map[string]ThresholdConfig{}, "")
 	if len(merged.Defaults) != 0 || len(merged.Tenants) != 0 {
 		t.Error("empty merge should produce empty config")
 	}
@@ -458,7 +458,7 @@ func TestMergePartialConfigs_DeterministicOrder(t *testing.T) {
 		},
 	}
 	// b.yaml sorts after a.yaml, so b's value should win
-	merged := mergePartialConfigs(configs)
+	merged := mergePartialConfigs(configs, "")
 	if merged.Defaults["mysql_connections"] != 90 {
 		t.Errorf("expected 90 (b.yaml wins), got %.0f", merged.Defaults["mysql_connections"])
 	}

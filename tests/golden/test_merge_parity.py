@@ -24,6 +24,11 @@ Fixtures cover every deep_merge rule from ADR-017:
 - wrapper-siblings:  `defaults:` wrapper WITH sibling top-level keys — the
                      shape the shipped platform file has. See
                      build_and_capture.py for what it does and does not buy.
+- carrier-selection: ONE defaults carrier per directory (#1674) — a
+                     `_defaults.yaml` + `_defaults.yml` pair reads the
+                     `.yaml` only, and a subtree `_DEFAULTS.YML` enters the
+                     chain; two tenants in the mixed-mode tree's `carrier/`
+                     subtree (no new conf.d root)
 
 Regenerate golden.json by running tests/golden/build_and_capture.py after
 intentional semantic changes.

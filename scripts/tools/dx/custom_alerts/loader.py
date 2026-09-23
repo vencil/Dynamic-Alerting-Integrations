@@ -28,6 +28,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     defaults_files_in,
+    select_defaults_carrier,
     unusable_config_entries,
     unusable_reason,
 )
@@ -101,7 +102,14 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # platform-level `_custom_alerts` list declared in it vanished for
         # EVERY tenant below it — silently, at rc=0, on the shipped tenant
         # self-service path.
-        for p in defaults_files_in(root, files):
+        #
+        # #1674 (B8): and ONE carrier per directory — the one the exporter's
+        # chain and describe_tenant read (`select_defaults_carrier`). This
+        # used to EXTEND across every spelling in a directory; a second
+        # spelling is now a misconfiguration every plane names and none
+        # reads, so a `_custom_alerts` list in it is ignored here too.
+        chosen = select_defaults_carrier(defaults_files_in(root, files))
+        for p in [chosen] if chosen is not None else []:
             try:
                 data = _load_yaml(p)
             except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
@@ -109,12 +117,13 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
                 continue
             alerts = data.get("_custom_alerts") or []
             if alerts:
-                # EXTEND, not assign. The loop above replaced a single
-                # literal-name lookup, and leaving the assignment made the
-                # LAST carrier in a directory silently discard the first --
-                # blind review measured a `critical` platform rule declared
-                # in `_defaults.yaml` vanishing because `_defaults.yml` sat
-                # beside it. Ordering matches `_resolve_defaults_chain`.
+                # One carrier per directory since #1674, so extend and assign
+                # are the same here. The earlier EXTEND merged both spellings
+                # — which kept a `_defaults.yaml` rule from vanishing behind a
+                # `_defaults.yml`, but also served rules from a file the
+                # exporter never reads. Which file wins is now the shared
+                # rule, and the loser is WARNed about by describe_tenant and
+                # the exporter rather than half-read here.
                 out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
