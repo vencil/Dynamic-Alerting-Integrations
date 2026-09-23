@@ -4,9 +4,10 @@
 #
 # Purpose:
 #   Prevent pushing pre-preflight commits that CI will likely reject. The
-#   gate checks for `.git/.preflight-ok.<sha>` — written by
-#   scripts/tools/dx/pr_preflight.py on PASS. A FAIL there removes the marker
-#   for the commit it ran on, and only that one (#1917).
+#   gate checks for `.git/.preflight-ok.<sha>`, written by
+#   scripts/tools/dx/pr_preflight.py. ⛔ When a marker appears or disappears is
+#   that side's business and is NOT restated here — see `write_marker` /
+#   `clear_marker` there. This file only ever asks whether the file is present.
 #
 #   ⛔ `<sha>` is each PUSHED commit, not HEAD, and not "any of them" — the
 #   quantifier and the commit are both load-bearing, and both directions of

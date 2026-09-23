@@ -28,8 +28,8 @@ _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
 # TestGateScript invokes the require_preflight_pass.sh bash script as a
 # subprocess. Git Bash on Windows mangles `C:\path\file` argument
 # translation (similar to verify_release.sh), so the gate-script tests
-# can't run on Windows. The Python-only tests in this module
-# (TestMarkerPython / TestFailPathClearRadius) DO run cross-platform.
+# can't run on Windows. Every other test in this module runs cross-platform;
+# this mark is the only thing that skips, and it is applied to one class.
 _BASH_SCRIPT_SKIP = pytest.mark.skipif(
     sys.platform == "win32",
     reason="bash gate-script tests need POSIX path translation; "
@@ -308,7 +308,8 @@ class TestMarkerPython:
         mod = _load()
         sha = _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
-        p = mod.write_marker(tmp_path)
+        p, problem = mod.write_marker(tmp_path)
+        assert problem is None
         assert p is not None
         assert p.exists()
         assert p.name == f".preflight-ok.{sha}"
@@ -318,20 +319,39 @@ class TestMarkerPython:
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
-        p1 = mod.write_marker(tmp_path)
-        p2 = mod.write_marker(tmp_path)
+        p1, _ = mod.write_marker(tmp_path)
+        p2, _ = mod.write_marker(tmp_path)
         assert p1 == p2
         assert p1.exists()
+
+    @pytest.mark.parametrize("break_it", ["no-head", "cannot-touch"])
+    def test_write_marker_reports_why_it_could_not_write(
+        self, tmp_path, monkeypatch, break_it
+    ):
+        """⛔ Same contract as `clear_marker`: no silent "could not".
+
+        Both failure modes, because only one of them was covered and the other
+        survived mutation.
+        """
+        mod = _load()
+        _init_git(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        if break_it == "no-head":
+            monkeypatch.setattr(mod, "_head_sha", lambda repo_root: None)
+        else:
+            def _refuse(self, *a, **kw):
+                raise PermissionError(13, "in use")
+            monkeypatch.setattr(Path, "touch", _refuse)
+
+        written, problem = mod.write_marker(tmp_path)
+
+        assert written is None
+        assert problem, "a write that did not happen was reported as fine"
 
     def test_clear_marker_removes_head_and_leaves_other_commits_alone(
         self, tmp_path, monkeypatch
     ):
-        """#1917: the radius is ONE commit, not the whole shared git dir.
-
-        The two planted markers stand in for other commits — in this repo they
-        are very likely other worktrees' (`_git_dir` is `--git-common-dir`).
-        They are the must-survive control; HEAD's is the must-go one.
-        """
+        """#1917: the radius is ONE commit, not the whole shared git dir."""
         mod = _load()
         sha = _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -356,11 +376,7 @@ class TestMarkerPython:
     def test_clear_marker_reports_none_when_head_has_no_marker(
         self, tmp_path, monkeypatch
     ):
-        """Nothing to remove ⇒ (None, None) — ⛔ and NOT a reported problem.
-
-        The two Nones are the difference between "there was nothing here" and
-        "I could not tell / could not do it"; only the latter gets printed.
-        """
+        """Nothing to remove ⇒ (None, None) — ⛔ and NOT a reported problem."""
         mod = _load()
         _init_git(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -410,46 +426,36 @@ class TestMarkerPython:
 
 
 class TestFailPathClearRadius:
-    """#1917 — drive `main()`'s real FAIL branch and look at the shared dir.
+    """#1917 — drive `main()`'s real branches and look at the shared git dir.
 
-    ⛔ Behavioural, not a scan of `clear_marker`'s body. The defect was not the
-    helper alone but the pair (unconditional call on FAIL) × (glob over the
-    shared git dir), and only running the orchestrator exercises both. The
-    checks are stubbed because reaching a real FAIL needs `gh`, network and a
-    300s `pre-commit --all-files`; everything about markers — the git repo, the
-    linked worktree, the shared dir, `_head_sha`, `clear_marker`,
-    `write_marker` — is real.
+    ⛔ Behavioural, not a scan of the helpers: the defect was the PAIR (the call
+    in `main()`) × (the radius in `clear_marker`). Only the checks are stubbed;
+    the repo, the linked worktree, the shared dir and both helpers are real.
     """
 
     _OTHER_A = "a" * 40
     _OTHER_B = "b" * 40
 
     @staticmethod
-    def _checks_main_feeds_to_the_report():
-        """Derive the check names from `main()`'s source, don't list them.
+    def _checks_main_calls():
+        """Every `check_*(...)` call in `main()`, derived — ⛔ never listed.
 
-        ⛔ A hand-written tuple cannot notice a NINTH check being added: the new
-        one would not be stubbed and would really run here — network, `gh`, or
-        a 300s `pre-commit --all-files` — silently. Re-derived from the calls
-        `main()` passes to `report.add(...)`, a new check is stubbed the day it
-        lands. (An `assert hasattr` only ever caught renames.)
+        A check this misses is not stubbed and really runs: network, `gh`, or a
+        300s `pre-commit --all-files`. So match the call itself, not how its
+        result travels to `report.add(...)`.
         """
         tree = ast.parse(_PY_SCRIPT.read_text(encoding="utf-8"))
         main_fn = next(
             n for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef) and n.name == "main"
         )
-        names = set()
-        for node in ast.walk(main_fn):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "add"):
-                continue
-            for arg in node.args:
-                if (isinstance(arg, ast.Call)
-                        and isinstance(arg.func, ast.Name)
-                        and arg.func.id.startswith("check_")):
-                    names.add(arg.func.id)
+        names = {
+            node.func.id
+            for node in ast.walk(main_fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id.startswith("check_")
+        }
         # ⛔ Must-fire control: an AST walk that silently yields nothing would
         # stub nothing and let every check run for real — "could not read the
         # source" must not look like "there are no checks".
@@ -461,8 +467,7 @@ class TestFailPathClearRadius:
 
     def _drive(self, mod, monkeypatch, wt, status):
         """Run main() from inside `wt` with every check forced to `status`."""
-        for name in self._checks_main_feeds_to_the_report():
-            assert hasattr(mod, name), f"check no longer exists: {name}"
+        for name in self._checks_main_calls():
             monkeypatch.setattr(
                 mod, name,
                 lambda *a, _n=name, **kw: mod.CheckResult(_n, status, "stubbed"),
@@ -475,10 +480,8 @@ class TestFailPathClearRadius:
     def _setup(self, tmp_path, plant_head=True):
         """Main repo + one linked worktree. Returns (wt, shared_git_dir, sha).
 
-        `plant_head=False` leaves HEAD's marker absent, so a test that asserts
-        it exists afterwards is asserting that `main()` WROTE it — with it
-        planted, that assertion is held up by the fixture and passes even if
-        the write path is gone.
+        ⛔ `plant_head=False` for any test asserting HEAD's marker EXISTS after
+        the run — planted, that assertion is held up by the fixture.
         """
         sha = _init_git(tmp_path)
         # ⛔ Unique per test: tmp_path.parent is shared across the class, and a
@@ -528,9 +531,8 @@ class TestFailPathClearRadius:
         """The whole point of the mechanism: a clean run earns a marker.
 
         ⛔ HEAD's marker is NOT planted, so `exists()` here means `main()` wrote
-        it. WARN is parametrised because it is the ordinary state, not an edge:
-        a detached worktree alone makes `Branch identity` WARN, and the write /
-        clear branch turns on `has_failure`, which WARN must not trip (#1472).
+        it. WARN is a pole because the branch turns on `has_failure`, which WARN
+        must not trip (#1472).
         """
         mod = _load()
         wt, shared, sha = self._setup(tmp_path, plant_head=False)
@@ -550,13 +552,7 @@ class TestFailPathClearRadius:
     def test_an_undecidable_head_is_reported_not_silently_skipped(
         self, tmp_path, monkeypatch, capsys
     ):
-        """⛔ git unavailable ⇒ say so. Silence here reads as "revoked".
-
-        Narrowing the radius introduced this case: the glob never needed to
-        know which commit it was on, `clear_marker` does. `run()` turns a git
-        timeout into rc 124 and the checks FAIL, so this path is reached on
-        exactly the machine where git is too slow to answer.
-        """
+        """⛔ git unavailable ⇒ say so. Silence here reads as "revoked"."""
         mod = _load()
         wt, shared, sha = self._setup(tmp_path)
         monkeypatch.setattr(mod, "_head_sha", lambda repo_root: None)
@@ -569,6 +565,25 @@ class TestFailPathClearRadius:
         assert "未能撤銷" in out, (
             "the marker survived a FAIL and nothing was printed — the push "
             "will be allowed and the operator has no way to know"
+        )
+
+    def test_a_pass_that_could_not_write_its_marker_is_reported(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """⛔ READY + rc 0 + no marker, silently, is a dead end: the push is
+        then refused by a banner telling the operator to run what they just ran.
+        """
+        mod = _load()
+        wt, shared, sha = self._setup(tmp_path, plant_head=False)
+        monkeypatch.setattr(mod, "_head_sha", lambda repo_root: None)
+
+        rc = self._drive(mod, monkeypatch, wt, mod.Status.PASS)
+        out = capsys.readouterr().out
+
+        assert rc == mod.EXIT_OK
+        assert not (shared / f".preflight-ok.{sha}").exists(), "precondition"
+        assert "未能寫入" in out, (
+            "the run said READY and wrote nothing, without saying so"
         )
 
     def test_a_marker_that_cannot_be_removed_is_reported(

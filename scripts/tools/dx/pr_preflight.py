@@ -864,18 +864,21 @@ def marker_path(repo_root: Path, head_sha: str) -> Path:
     return _git_dir(repo_root) / f"{MARKER_PREFIX}.{head_sha}"
 
 
-def write_marker(repo_root: Path) -> Optional[Path]:
-    """Touch `.git/.preflight-ok.<HEAD>`. Returns the path on success, else None."""
+def write_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """Touch `.git/.preflight-ok.<HEAD>`. Returns `(written, problem)`.
+
+    ⛔ Same contract as `clear_marker`: "could not" is reported, never silent.
+    """
     sha = _head_sha(repo_root)
     if not sha:
-        return None
+        return None, "無法判定 HEAD 是哪一顆 commit"
     p = marker_path(repo_root, sha)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch(exist_ok=True)
-        return p
-    except OSError:
-        return None
+    except OSError as e:
+        return None, f"{type(e).__name__}: {e}"
+    return p, None
 
 
 def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
@@ -883,21 +886,12 @@ def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
 
     Returns `(removed, problem)`. Both None means there was nothing to remove.
 
-    ⛔ "could not" must not look like "nothing to do" — the reader's own rule
-    (`require_preflight_pass.sh`: "Unknown must not mean OK"), and here the
-    silent side is the allowing one: this runs on FAIL, so a revocation that
-    quietly does nothing leaves an earlier PASS on the same sha standing and
-    the push goes through. Narrowing the radius introduced the undecidable
-    case — the glob never needed to know which commit it was on.
+    ⛔ "could not" must not look like "nothing to do": this runs on FAIL, so the
+    silent side is the allowing one.
 
-    ⛔ Do not widen this back to `glob(f"{MARKER_PREFIX}.*")`. `_git_dir` is
-    `--git-common-dir`, so that glob reaches every worktree's markers at once,
-    and it buys nothing: the reader keys on the sha
-    (`require_preflight_pass.sh` looks up `$MARKER_PREFIX.<pushed sha>` per
-    published commit, no wildcard fallback), so another commit's marker can
-    never satisfy the gate for the sha being pushed — removing it only takes
-    away a pass someone else earned. What a FAIL does invalidate is an earlier
-    pass on THIS commit, which is this one file. Measurements: #1917.
+    ⛔ Do not widen back to `glob(f"{MARKER_PREFIX}.*")` — `_git_dir` is
+    `--git-common-dir`, so that reaches every worktree's markers, and the reader
+    keys on the sha, so it buys nothing. Measurements: #1917. Residual: #1951.
     Pinned by `TestFailPathClearRadius`.
     """
     sha = _head_sha(repo_root)
@@ -1641,10 +1635,8 @@ def main() -> int:
     # --- Preflight marker (consumed by pre-push gate) --------------------
     # On PASS (with or without WARN): write `.git/.preflight-ok.<HEAD>` so
     # require_preflight_pass.sh lets the subsequent `git push` through.
-    # On FAIL: remove the marker for THIS commit, so an earlier pass on the
-    # same sha can't carry a now-broken commit through the gate. ⛔ Only that
-    # one — every other marker belongs to a different commit, very likely in
-    # a different worktree (#1917; `clear_marker`'s docstring has the why).
+    # On FAIL: remove the marker for THIS commit only (#1917; the why is in
+    # `clear_marker`'s docstring).
     if report.has_failure:
         cleared, problem = clear_marker(repo_root)
         if cleared:
@@ -1653,9 +1645,12 @@ def main() -> int:
             print(f"   ⚠️ 未能撤銷這顆 commit 的 preflight marker（{problem}）"
                   "——若它先前通過過，pre-push 會照樣放行；請手動刪除該檔")
     else:
-        marker = write_marker(repo_root)
+        marker, problem = write_marker(repo_root)
         if marker:
             print(f"   ↳ wrote preflight marker: {marker.name}")
+        elif problem:
+            print(f"   ⚠️ 未能寫入 preflight marker（{problem}）"
+                  "——這次的 PASS 不會被 pre-push 認得，下一次 push 仍會被擋")
 
     # ⛔ FAIL ⇒ 非零，不看任何旗標；⛔ WARN 維持 0（#1472）。
     if report.has_failure:
