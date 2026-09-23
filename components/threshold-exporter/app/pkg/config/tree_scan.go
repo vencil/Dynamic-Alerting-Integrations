@@ -112,7 +112,8 @@ type ScanObserver interface {
 	// ObserveScanElapsed records one scan's wall-clock duration.
 	//
 	// ⚠️ Deliberately NOT the `ObserveScanDuration() func()` shape main's
-	// *configMetrics already had: a closure returned through an interface
+	// *configMetrics used to have (removed in #1941): a closure returned
+	// through an interface
 	// call cannot be inlined, so it escaped to the heap — measured +1
 	// allocs/op on every scan, the warm fast-path included
 	// (ScanDirTree_100_Warm 871→872, IncrementalLoad_1000_NoChange_MtimeGuard
