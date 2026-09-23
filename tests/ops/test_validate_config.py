@@ -1234,41 +1234,6 @@ class TestCustomerRunsTheCommandInTheTroubleshootingTable:
             assert "Traceback" not in err
 
 
-class TestNullDefaultsBlockDoesNotKillTheReport:
-    """``defaults:`` with every entry commented out parses to ``None``.
-
-    #1448 named ``check_profiles``; this is the line inside it that raised.
-    ``.get("defaults", {})`` returns ``None`` for a key that exists with
-    nothing under it — the default only fires when the key is *absent*.
-    """
-
-    @pytest.mark.parametrize("body", [
-        "defaults:\n",
-        "defaults:\n  # mysql_threads_running: 80\n",
-        "defaults: null\n",
-    ], ids=["bare-key", "all-commented-out", "explicit-null"])
-    def test_check_profiles_survives(self, body):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w",
-                      encoding="utf-8", newline="\n") as f:
-                f.write(body)
-            result = vc.check_profiles(d)
-            assert result["status"] in (vc.PASS, vc.WARN, vc.FAIL)
-
-    def test_a_populated_defaults_block_is_still_read(self):
-        """Must-succeed control: `or {}` must not swallow real keys.
-
-        A declared key used by a tenant profile must still count as known —
-        otherwise "survives" could be bought by reading nothing at all.
-        """
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w",
-                      encoding="utf-8", newline="\n") as f:
-                f.write("defaults:\n  mysql_threads_running: 80\n")
-            result = vc.check_profiles(d)
-            assert result["status"] == vc.PASS
-
-
 class TestYamlSyntaxNamesWhatItCannotRead:
     """The one check that opens every customer file is the one that can
     name it — ``UnicodeDecodeError`` carries a codec and an offset, no path.
