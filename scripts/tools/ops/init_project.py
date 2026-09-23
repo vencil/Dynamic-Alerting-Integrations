@@ -1492,10 +1492,16 @@ def _gen_github_actions(
         # needs `validate`, and that is the edge that protects the cluster.
         runs-on: ubuntu-latest
         if: github.event_name == 'pull_request'
-        # 20, not 15: the three computation steps below cap at 5 each, and the
-        # job cap has to sit ABOVE their sum or it fires first and cancels the
-        # run — see the note on the `routes` step.
-        timeout-minutes: 20
+        # ⛔ The OUTER bound, and it has to stay above the sum of the step caps
+        # below (6+1+5+5+5+2+2 = 26). If the job cap fires first the run is
+        # CANCELLED, and every `!cancelled()` step — the fallback report and the
+        # comment — is skipped: #1421's stale comment, reached through a timeout
+        # instead of through a failing step. Which is also why EVERY step below
+        # carries its own cap, including the cheap ones: an uncapped step has no
+        # way to end except by taking the job cap with it (#1948 review). Held by
+        # `test_step_timeouts_leave_room_under_the_job_timeout`, which grades
+        # both halves — no uncapped step, and the sum under this number.
+        timeout-minutes: 30
         concurrency:
           # ⛔ Load-bearing for the COMMENT, not just for runner minutes. The
           # sticky comment is edited in place under a fixed header, so two runs
@@ -1513,6 +1519,10 @@ def _gen_github_actions(
           pull-requests: write
         steps:
           - uses: actions/checkout@v6
+            # The one step here whose honest cap is not small — a full-history
+            # clone of a large repository takes minutes. It is still capped:
+            # see the job cap above for what an uncapped step costs.
+            timeout-minutes: 6
             with:
               # Load-bearing. The blast radius is computed against the PR's
               # base commit, and checkout's default (fetch-depth: 1) does not
@@ -1528,12 +1538,13 @@ def _gen_github_actions(
               fetch-depth: 0
 
           - name: Prepare output directory
+            timeout-minutes: 1
             run: mkdir -p .output
 
           - name: Generate Alertmanager routes
             id: routes
-            # ⛔ Step caps, and the arithmetic is the point: 3 x 5 = 15 plus
-            # checkout and the comment stays under this job's 20, so a hung
+            # ⛔ Step caps, and the arithmetic is the point: every step in this
+            # job is capped and the caps sum to 26, under this job's 30, so a hung
             # computation FAILS AS A STEP and the fallback below still runs. If
             # the JOB cap fired first the run would be CANCELLED, and both the
             # fallback and the comment step carry `!cancelled()` — correct for a
@@ -1738,6 +1749,7 @@ def _gen_github_actions(
             # concurrency group above has been SUPERSEDED, and a superseded run
             # must not overwrite the winner's comment.
             if: ${{{{ !cancelled() }}}}
+            timeout-minutes: 2
             env:
               ROUTES_OUTCOME: ${{{{ steps.routes.outcome }}}}
               SNAPSHOT_OUTCOME: ${{{{ steps.snapshot.outcome }}}}
@@ -1768,6 +1780,10 @@ def _gen_github_actions(
             # See the step above: skipping this on a failure is what leaves a
             # stale report standing. Both steps share one condition on purpose.
             if: ${{{{ !cancelled() }}}}
+            # Capped like the rest: this step talks to the GitHub API, and a
+            # hang here is the one that would eat the job cap AFTER the report
+            # was written but BEFORE it was posted.
+            timeout-minutes: 2
             uses: marocchino/sticky-pull-request-comment@v2
             with:
               path: .output/blast-radius.md

@@ -8475,6 +8475,12 @@ def _assert_step_caps_fit_under_the_job_cap(workflow: dict, label: str) -> None:
     through the timeout instead of through a failing step. So the step caps on
     the computation steps must SUM to less than the job cap, leaving the job cap
     as the outer bound it is meant to be rather than the one that fires.
+
+    ⛔ Two halves, and the second one is why this is not just arithmetic: in the
+    commenting job NO step may be uncapped. Summing only the steps that happen
+    to carry a cap grades the ones already written and says nothing about the
+    next one — a fourth computation step added with no cap is precisely the step
+    that runs until the JOB cap fires (#1948 review, second round).
     """
     for job_name, job in workflow["jobs"].items():
         steps = job.get("steps") or []
@@ -8490,19 +8496,25 @@ def _assert_step_caps_fit_under_the_job_cap(workflow: dict, label: str) -> None:
             f"`!cancelled()` step — including the one that replaces a stale "
             f"blast-radius comment."
         )
-    # ⛔ Fail-closed: the job whose comment must stay current is the one that
-    # needs the caps, so an artifact with none of them is not "nothing to
-    # check", it is the check having nothing to grade.
+    # ⛔ Fail-closed, and deliberately NOT a count: the job whose comment must
+    # stay current is the one that needs the caps, so an artifact with no steps
+    # is not "nothing to check", it is the check having nothing to grade — and
+    # an artifact with three capped steps beside one uncapped one is worse,
+    # because it reads as covered.
     commenting_job, _ = _comment_step(workflow)
-    capped_names = [
-        s.get("name") for s in workflow["jobs"][commenting_job].get("steps") or []
-        if isinstance(s.get("timeout-minutes"), int)
+    steps = workflow["jobs"][commenting_job].get("steps") or []
+    uncapped = [
+        step.get("name") or step.get("uses") or f"step #{index}"
+        for index, step in enumerate(steps)
+        if not isinstance(step.get("timeout-minutes"), int)
     ]
-    assert len(capped_names) >= 3, (
+    assert steps and not uncapped, (
         f"{label}: the job that posts the blast-radius comment "
-        f"(`{commenting_job}`) caps only {capped_names} — the computation steps "
-        f"must each carry a step timeout, or a hung one takes the job cap and "
-        f"cancels the comment refresh with it."
+        f"(`{commenting_job}`) has {len(steps)} step(s), of which these carry "
+        f"no `timeout-minutes`: {uncapped}. An uncapped step cannot fail on its "
+        f"own — it runs until the JOB cap fires, and that CANCELS the run, "
+        f"which skips the `!cancelled()` fallback and the comment with it and "
+        f"leaves the previous run's report standing as though it were current."
     )
 
 

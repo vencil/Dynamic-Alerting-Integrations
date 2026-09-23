@@ -380,8 +380,11 @@ ${pinNote}jobs:
     # that protects the cluster.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # Above the sum of the step caps below, or it fires first and cancels.
-    timeout-minutes: 20
+    # Above the sum of the step caps below (6+1+5+5+5+2+2 = 26), or it fires
+    # first and CANCELS the run, which skips the !cancelled() steps. Every step
+    # below is capped for the same reason: an uncapped one can only end by
+    # taking the job cap with it.
+    timeout-minutes: 30
     concurrency:
       # The sticky comment is edited in place under a fixed header, so two runs
       # race to overwrite the same body and the LAST to finish wins - not the
@@ -397,17 +400,21 @@ ${pinNote}jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v6
+        # The only step whose honest cap is not small: a full-history clone.
+        timeout-minutes: 6
         with:
           # The blast radius is computed against the pull request's base
           # commit, which a shallow clone does not contain.
           fetch-depth: 0
       - name: Prepare output directory
+        timeout-minutes: 1
         run: mkdir -p .output
       - name: Generate Alertmanager routes
         id: routes
-        # 3 x 5 stays under this job's 20, so a hung step FAILS instead of
-        # the job being cancelled - a cancelled run skips the !cancelled()
-        # fallback below and leaves the previous report standing.
+        # Every step in this job is capped and the caps sum to 26, under this
+        # job's 30, so a hung step FAILS instead of the job being cancelled - a
+        # cancelled run skips the !cancelled() fallback below and leaves the
+        # previous report standing.
         timeout-minutes: 5
         run: |
           # Validate only (#1423 / #1650): --validate returns before -o is
@@ -480,6 +487,7 @@ ${pinNote}jobs:
         # !cancelled() rather than always(): a run the concurrency group
         # superseded must not overwrite the winner's comment.
         if: \${{ !cancelled() }}
+        timeout-minutes: 2
         env:
           ROUTES_OUTCOME: \${{ steps.routes.outcome }}
           SNAPSHOT_OUTCOME: \${{ steps.snapshot.outcome }}
@@ -505,6 +513,9 @@ ${pinNote}jobs:
       - name: Post PR comment with blast radius
         # Same condition as the step above, on purpose.
         if: \${{ !cancelled() }}
+        # Capped too: this one talks to the GitHub API, and a hang here would
+        # eat the job cap after the report was written but before it was posted.
+        timeout-minutes: 2
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: .output/blast-radius.md
