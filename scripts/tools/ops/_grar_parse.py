@@ -30,11 +30,11 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
     is_defaults_name,
     iter_config_files,
-    multi_carrier_warning,
     readable_carriers,
     select_defaults_carrier,
     unusable_config_paths,
     unusable_reason,
+    warn_multi_carrier,
     warn_nested,
 )
 
@@ -455,9 +455,7 @@ def _parse_config_files(config_dir: str) -> dict:
     readable, _unreadable = readable_carriers(
         p for p in listed if is_defaults_name(p.name))
     root_carrier = select_defaults_carrier(readable)
-    msg = multi_carrier_warning(config_dir, readable)
-    if msg:
-        print(f"  {msg}", file=sys.stderr)
+    warn_multi_carrier(config_dir, readable)
     for path_p in listed:
         fname = path_p.name
         path = str(path_p)

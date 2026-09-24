@@ -949,7 +949,8 @@ def shipped_optional_keys_for_packs(
     ``init_project._gen_defaults_yaml``) write a customer-side ``_defaults.yaml``
     for the packs that customer selected, and that file is the ONLY declared-key
     source the tenant-api write path ever reads
-    (``config.mergeTenantConfig`` joins ``configDir/_defaults.yaml``). They must
+    (``config.mergeTenantConfig`` reads the root carrier the exporter's chain
+    selects — ``_defaults.yaml`` for these generators; #1674). They must
     ship the same names the chart does, or a tenant on the GitOps topology gets
     a 400 for a key the platform believes it declared.
 

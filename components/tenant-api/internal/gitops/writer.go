@@ -851,7 +851,8 @@ func CheckTenantDocSize(yamlContent string) []string {
 // only meaningful against the tree the write lands on:
 //
 //   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
-//   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>/_defaults.yaml
+//   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>'s root defaults
+//     carrier (the one the exporter's chain selects, #1674)
 //   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
 //
 // The middle one is the trap: "key validation" reads like a pure body check and

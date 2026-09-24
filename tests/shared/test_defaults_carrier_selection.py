@@ -64,6 +64,15 @@ def test_warning_names_the_chosen_and_the_ignored_file() -> None:
     assert multi_carrier_warning("/conf.d", [Path("/conf.d/_defaults.yaml")]) is None
 
 
+def test_warning_compares_carriers_by_path_not_basename() -> None:
+    """Blind review of #1674 round 2: with two entries sharing a basename the
+    basename comparison printed "only _defaults.yaml is read,  is ignored"."""
+    msg = multi_carrier_warning("/conf.d", [Path("/conf.d/a/_defaults.yaml"),
+                                            Path("/conf.d/b/_defaults.yaml")])
+    assert msg is not None and ",  is ignored" not in msg, msg
+    assert "_defaults.yaml is ignored" in msg, msg
+
+
 def test_resolve_defaults_file_returns_the_carrier_the_exporter_reads(
         tmp_path: Path) -> None:
     """Before #1674 the first in sort order won — `_DEFAULTS.YML` over the
@@ -100,6 +109,9 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50, "disk_pct": 4}
     assert "defaults carriers" in r.stderr and "_defaults.yml is ignored" in r.stderr, r.stderr
+    # Once per directory per run: describe_tenant's scanner AND the
+    # custom-alerts loader it calls both see this directory (blind review).
+    assert r.stderr.count("defaults carriers") == 1, r.stderr
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:

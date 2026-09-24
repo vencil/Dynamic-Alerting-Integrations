@@ -33,10 +33,10 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
-    multi_carrier_warning,
     readable_carriers,
     select_defaults_carrier,
     unusable_config_entries,
+    warn_multi_carrier,
     unusable_reason,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -240,18 +240,23 @@ class ConfDScanner:
         # #1588: matched by the shared predicate, not by two literal names.
         # `_DEFAULTS.YAML` measured as invisible here while the exporter
         # merged it into every downstream tenant.
-        # (entry as listed, its resolved path) per directory. ⛔ The pair is
-        # load-bearing: the carrier is SELECTED by the directory-entry name
-        # (what Go's walker sees — WalkDir never follows the link), while
-        # the chain and the JSON keep reporting the resolved path as they
-        # always did. Selecting on the resolved name made a
-        # `_defaults.yaml -> sub/platform-base.yaml` link select nothing and
-        # crash the run (blind review of #1674).
+        # (entry as listed, its resolved path), grouped by the directory that
+        # HOLDS THE ENTRY. ⛔ Both halves are what Go's walker does (WalkDir
+        # never follows a link): the carrier is selected by the entry's name
+        # and belongs to the entry's directory, while the chain and the JSON
+        # keep reporting the resolved path as they always did.
+        #   - selecting on the resolved name made
+        #     `_defaults.yaml -> sub/platform-base.yaml` select nothing and
+        #     crash the run;
+        #   - grouping by the RESOLVED parent moved that link's level into
+        #     `sub/`, so a root tenant lost it and a `sub/` tenant saw only one
+        #     of its two levels — a different merged_hash from the exporter
+        #     (both from blind review of #1674; the root-tenant half predates
+        #     it). Pinned by tests/shared/defaults_symlink_parity_matrix.json.
         listed: dict[Path, list[tuple[Path, Path]]] = {}
         for dp in entries:
             if dp.is_file() and is_defaults_name(dp.name):
-                resolved = dp.resolve()
-                listed.setdefault(resolved.parent, []).append((dp, resolved))
+                listed.setdefault(dp.parent.resolve(), []).append((dp, dp.resolve()))
         # #1674 (B8): ONE carrier per directory, chosen by the rule every
         # plane shares (`select_defaults_carrier`). Before, a directory with
         # `_defaults.yaml` + `_defaults.yml` put BOTH into the chain and
@@ -270,9 +275,7 @@ class ConfDScanner:
             chosen = select_defaults_carrier(readable)
             if chosen is None:
                 continue
-            msg = multi_carrier_warning(d, readable)
-            if msg:
-                print(msg, file=sys.stderr)
+            warn_multi_carrier(d, readable)
             resolved = dict(listed[d])[chosen]
             defaults_files[str(resolved)] = _load_yaml(chosen)
             by_dir[d] = [resolved]

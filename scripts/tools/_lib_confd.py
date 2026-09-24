@@ -68,6 +68,7 @@ __all__ = [
     "iter_config_files",
     "multi_carrier_warning",
     "readable_carriers",
+    "warn_multi_carrier",
     "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
@@ -309,15 +310,39 @@ def multi_carrier_warning(directory: "str | os.PathLike[str]",
     None when there is at most one. The wording matches the exporter's log
     line so an operator grepping for one finds the other.
     """
-    names = sorted(Path(p).name for p in carriers)
-    if len(names) < 2:
+    paths = sorted((Path(p) for p in carriers), key=lambda p: p.name)
+    if len(paths) < 2:
         return None
-    chosen = select_defaults_carrier(Path(n) for n in names)
-    ignored = [n for n in names if n != chosen.name]
+    chosen = select_defaults_carrier(paths)
+    # ⛔ Compared by PATH, not by basename: grouped the wrong way, two
+    # entries can share a name, and the basename comparison printed
+    # "…only _defaults.yaml is read,  is ignored" (blind review of #1674).
+    ignored = [p.name for p in paths if p != chosen]
+    names = [p.name for p in paths]
     return (f"WARN: conf.d directory {directory} has {len(names)} defaults "
             f"carriers ({', '.join(names)}); only {chosen.name} is read, "
             f"{', '.join(ignored)} is ignored on every plane (#1674) — "
             f"merge them into one file")
+
+
+# Directories whose multi-carrier WARN this process has already printed.
+_MULTI_CARRIER_WARNED: set[str] = set()
+
+
+def warn_multi_carrier(directory: "str | os.PathLike[str]",
+                       carriers: "Iterable[Path]") -> None:
+    """Print `multi_carrier_warning` to stderr at most ONCE per directory per
+    process. describe_tenant reads the chain AND calls the custom-alerts
+    loader over the same tree, so each printing its own copy named every
+    misconfigured directory twice (blind review of #1674)."""
+    msg = multi_carrier_warning(directory, carriers)
+    if msg is None:
+        return
+    key = os.path.realpath(directory)
+    if key in _MULTI_CARRIER_WARNED:
+        return
+    _MULTI_CARRIER_WARNED.add(key)
+    print(msg, file=sys.stderr)
 
 
 def config_stem(name: str) -> str:
@@ -967,6 +992,7 @@ def reset_warned_for_test() -> None:
     "last cleanup wins" and would undo a parallel test's writes.
     """
     _WARNED.clear()
+    _MULTI_CARRIER_WARNED.clear()
 
 
 class FlatRead(NamedTuple):

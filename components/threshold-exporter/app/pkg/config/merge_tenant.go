@@ -50,7 +50,7 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // MergeTenantWithRootDefaults loads the root defaults carrier in configDir (if
 // present — the one the exporter's chain selects, any casing, `.yaml` over
 // `.yml`; #1674) and overlays a tenant YAML document on top, returning the merged
-// ThresholdConfig. It populates Defaults + StateFilters from _defaults.yaml so
+// ThresholdConfig. It populates Defaults + StateFilters from that carrier so
 // callers can run ValidateTenantKeys against a *tenant-only* body (the real
 // conf.d/{id}.yaml shape — see db-a.yaml "Only 'tenants' block") and have its
 // metric keys resolve against the inherited platform defaults.
@@ -203,12 +203,14 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 // the exporter's chain selects in configDir (TreeScan.DefaultsCarriers), and
 // false when the root has none or the directory cannot be walked.
 //
-// ⚠️ One ScanDirTree per call — the whole tree is walked and hashed to answer
-// a root-only question. That is the price of not adding a second conf.d
-// lister to this module (confd_walker_population_test pins ScanDirTree as the
-// only one); the callers are per-request tenant-api reads and writes.
+// It runs the walker's root-only, carriers-only mode (scanRootDefaults), not a
+// full ScanDirTree: a full walk per call parsed every tenant file's
+// declarations to answer a root-only question (~100x main's cost on a
+// 1000-file tree, inside the gitops writer's single-writer token). The mode
+// shares the full walk's listing, readability and classification code, so
+// the carrier chosen here is the one the exporter's chain reads.
 func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
-	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
+	scan, err := scanRootDefaults(configDir)
 	if err != nil {
 		return "", nil, false
 	}

@@ -248,6 +248,33 @@ func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {
 	}
 }
 
+// The other arm of the incremental guard: nothing was added or removed, but
+// the root holds two carriers and the UNSELECTED one changed. Without the
+// `Ambiguous > 1` arm the incremental path parses the `.yml` and merges it
+// over the `.yaml` (blind review of #1674 round 2: mutating the guard to
+// `anyRootCarrierKey(added, removed)` alone left the suite green).
+func TestEditingTheUnselectedRootCarrierChangesNothing(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
+	writeFile(t, filepath.Join(dir, "_defaults.yml"), "defaults:\n  cpu_pct: 90\n")
+	writeFile(t, filepath.Join(dir, "tenant-f.yaml"), "tenants:\n  t-f: {}\n")
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	m.SetLogger(log.New(&bytes.Buffer{}, "", 0))
+	if err := m.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad (cold): %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "_defaults.yml"), "defaults:\n  cpu_pct: 91\n")
+	if err := m.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad (after editing _defaults.yml): %v", err)
+	}
+	if want := map[string]float64{"cpu_pct": 50}; !reflect.DeepEqual(m.GetConfig().Defaults, want) {
+		t.Errorf("after editing the unselected _defaults.yml, Defaults = %v, want %v", m.GetConfig().Defaults, want)
+	}
+}
+
 // A case-variant carrier alone is THE carrier on both planes: before #1674
 // the flat plane served it (any `_` file fed Defaults) and the chain left it
 // out (exact lower-case names only).

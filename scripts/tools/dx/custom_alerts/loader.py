@@ -28,11 +28,11 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     defaults_files_in,
-    multi_carrier_warning,
     readable_carriers,
     select_defaults_carrier,
     unusable_config_entries,
     unusable_reason,
+    warn_multi_carrier,
 )
 
 from . import shape as _shape
@@ -125,9 +125,7 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
             continue
         # The losing spelling is named here too, in the exporter's and
         # describe_tenant's words, rather than dropped in silence.
-        msg = multi_carrier_warning(Path(root), readable)
-        if msg:
-            print(msg, file=sys.stderr)
+        warn_multi_carrier(Path(root), readable)
         try:
             data = _load_yaml(chosen)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal

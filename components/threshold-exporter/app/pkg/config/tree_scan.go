@@ -315,7 +315,7 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		t0 := time.Now()
 		defer func() { obs.ObserveScanElapsed(time.Since(t0)) }()
 	}
-	scan, err := walkDirTree(root, prior, obs, logger)
+	scan, err := walkDirTree(root, prior, obs, logger, walkFull)
 	if err != nil {
 		return nil, err
 	}
@@ -325,9 +325,42 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	return scan, nil
 }
 
+// walkMode selects how much of the tree walkDirTree visits. Unexported on
+// purpose: the only non-full caller is scanRootDefaults in this package.
+type walkMode int
+
+const (
+	// walkFull is ScanDirTree: the whole tree, every kept file hashed,
+	// tenant files parsed for their declarations.
+	walkFull walkMode = iota
+	// walkRootCarriers visits ONLY the root directory and keeps ONLY the
+	// entries the full walk would classify as defaults carriers there.
+	walkRootCarriers
+)
+
+// scanRootDefaults is the root-only, carriers-only mode of the ONE walker
+// (#1674 round 2). It exists for callers that need exactly one answer —
+// "which defaults carrier does the chain read at the root, and what are its
+// bytes" (MergeTenantWithRootDefaults, i.e. tenant-api GET / validate / the
+// gitops write gate) — and must not pay a full walk for it: measured on a
+// 1000-file tree, a full ScanDirTree per call was ~100x main's cost, and the
+// gitops writer validates inside its single-writer token.
+//
+// ⛔ It is walkDirTree with a mode, NOT a second lister: the root's entries
+// go through the same hidden / extension / stat / read / classification code
+// as a full scan, so readability and carrier selection
+// (TreeScan.DefaultsCarriers) cannot drift from what the exporter reads.
+// confd_walker_population_test pins walkDirTree as the only listing site.
+// The returned scan has no tenants; only Files/Keys/Defaults and
+// DefaultsCarriers are meaningful.
+func scanRootDefaults(root string) (*TreeScan, error) {
+	return walkDirTree(root, nil, nil, discardLogger, walkRootCarriers)
+}
+
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
-// hash, the classification and the hierarchy products.
-func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger) (*TreeScan, error) {
+// hash, the classification and the hierarchy products. mode is walkFull for
+// every production caller except scanRootDefaults.
+func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 
 	info, serr := os.Stat(absRoot)
@@ -354,7 +387,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != absRoot && strings.HasPrefix(name, ".") {
+			if path != absRoot && (mode == walkRootCarriers || strings.HasPrefix(name, ".")) {
 				return fs.SkipDir
 			}
 			return nil
@@ -364,6 +397,9 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		lower := strings.ToLower(name)
 		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+			return nil
+		}
+		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
 			return nil
 		}
 		entryInfo, ierr := d.Info()

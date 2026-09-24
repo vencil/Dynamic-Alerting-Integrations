@@ -782,6 +782,40 @@ class TestPlatformFileSpelling:
         assert not (out / "_defaults.yml").exists()
         assert (out / "tenant-b.yaml").is_file()
 
+    def test_a_leftover_carrier_spelling_in_output_is_refused(
+            self, config_dir, cli_argv, capsys):
+        """#1674 round 2: source `a/_defaults.yml` + a stale
+        `out/_defaults.yaml` from an earlier run used to exit 0 with "the
+        exporter reads them too" — false: the exporter reads the stale
+        `.yaml` only. Refused, naming the leftover and the remedy."""
+        a = Path(config_dir) / "team-a"
+        a.mkdir()
+        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
+        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    x: '1'\n")
+        out = Path(config_dir) / "output"
+        out.mkdir()
+        _write_file(out / "_defaults.yaml", "defaults:\n  mysql_connections: 99\n")
+        cli_argv("assemble", "--sources", str(a), "--output", str(out))
+        assert main() == 1
+        err = capsys.readouterr().err
+        assert "_defaults.yaml that no source produces" in err, err
+        assert "would read _defaults.yaml" in err, err
+        assert "reads them too" not in err, err
+
+    def test_a_leftover_of_the_same_spelling_is_not_this_conflict(
+            self, config_dir, cli_argv):
+        """Counterfactual: a stale carrier of the SAME name is overwritten by
+        the produced one — one carrier, no refusal."""
+        a = Path(config_dir) / "team-a"
+        a.mkdir()
+        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
+        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    x: '1'\n")
+        out = Path(config_dir) / "output"
+        out.mkdir()
+        _write_file(out / "_defaults.yml", "defaults:\n  mysql_connections: 99\n")
+        cli_argv("assemble", "--sources", str(a), "--output", str(out))
+        assert main() == 0
+
     def test_a_single_carrier_is_not_a_duplicate(self, config_dir):
         """Counterfactual: one carrier across all sources is no conflict."""
         a = Path(config_dir) / "team-a"

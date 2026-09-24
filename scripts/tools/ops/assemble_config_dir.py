@@ -580,6 +580,41 @@ def main() -> int:
 
     preexisting = carriers_already_in(output_dir) if output_dir else {}
     residue = {n: p for n, p in preexisting.items() if n not in file_map}
+
+    # ⛔ #1674: a LEFTOVER root carrier beside the carrier this run produces is
+    # the cross-spelling duplicate `detect_conflicts` refuses among sources,
+    # reached through --output instead. The exporter reads exactly ONE
+    # carrier per directory (`.yaml` over `.yml`, any casing), so
+    # `a/_defaults.yml` + a stale `out/_defaults.yaml` shipped the STALE file
+    # and ignored the produced one everywhere, at rc 0 — under a warning that
+    # said the exporter "reads them too". Same remedy as a leftover that
+    # duplicates a tenant (below): refuse, name it, say how to clear it.
+    produced_carriers = sorted(n for n in file_map if is_defaults_name(n))
+    stale_carriers = sorted(n for n in residue
+                            if "/" not in n and is_defaults_name(n))
+    if produced_carriers and stale_carriers:
+        read = select_defaults_carrier(
+            Path(n) for n in produced_carriers + stale_carriers).name
+        if args.json:
+            print(format_json_report({
+                "status": "conflict",
+                "conflicts": {
+                    "defaults carrier": {"produced": produced_carriers,
+                                         "left_over": stale_carriers,
+                                         "exporter_reads": read},
+                },
+            }))
+        else:
+            print(f"\n❌ {output_dir} already holds defaults carrier(s) "
+                  f"{', '.join(stale_carriers)} that no source produces, beside "
+                  f"{', '.join(produced_carriers)} from this assembly. The "
+                  f"exporter reads exactly one carrier per directory — it "
+                  f"would read {read} and ignore the other everywhere. "
+                  f"Remove the leftover (or point --output at a clean "
+                  f"directory) and re-run; editing the sources cannot reach "
+                  f"it.", file=sys.stderr)
+        return EXIT_VIOLATION
+
     if residue and not args.json:
         # ⛔ The machine-readable face is the one a CI parses, and it used to
         # get a plain `"status": "ok"` for a directory holding carriers this
@@ -587,9 +622,10 @@ def main() -> int:
         # here — duplicating this line into `--json` mode was measured to buy
         # no detection at all (the mutation removing it kills nothing).
         print(f"\n⚠️  {len(residue)} carrier(s) already in {output_dir} are not "
-              f"produced by this assembly, and the exporter reads them too "
-              f"(this tool never clears --output): "
-              f"{', '.join(sorted(residue))}", file=sys.stderr)
+              f"produced by this assembly and are still read by the exporter "
+              f"wherever they are a directory's config (this tool never "
+              f"clears --output): {', '.join(sorted(residue))}",
+              file=sys.stderr)
 
     verdict = tu.verdict_for({**residue, **file_map})
     if verdict.outcome != tu.CLEAN:

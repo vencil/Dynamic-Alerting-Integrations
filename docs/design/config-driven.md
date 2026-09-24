@@ -90,7 +90,8 @@ tenants:
 
 | 檔案類型 | 允許的區塊 | 違規行為 |
 |----------|-----------|---------|
-| `_` 前綴檔 (`_defaults.yaml`) | `defaults`, `state_filters`, `tenants` | — |
+| defaults 載體（`_defaults.yaml`／`.yml`，不分大小寫；每個目錄只讀被選中的一個） | `defaults`, `state_filters`, `optional_overrides`, `profiles`, `tenants` | 同目錄其餘載體整檔不讀 + WARN log |
+| 其他 `_` 前綴檔（`_profiles.yaml`、`_defaults-multidb.yaml` …） | `profiles`, `tenants` | `defaults`／`state_filters`／`optional_overrides` 忽略 + WARN log（#1676） |
 | 租戶檔 (`db-a.yaml`) | 僅 `tenants` | 其他區塊自動忽略 + WARN log |
 
 #### SHA-256 熱重新加載 (Hot-Reload)

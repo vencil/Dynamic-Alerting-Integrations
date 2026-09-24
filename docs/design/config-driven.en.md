@@ -88,7 +88,8 @@ tenants:
 
 | File Type | Allowed Blocks | Violation Behavior |
 |-----------|----------------|-------------------|
-| Files with `_` prefix (`_defaults.yaml`) | `defaults`, `state_filters`, `tenants` | — |
+| Defaults carrier (`_defaults.yaml` / `.yml`, any casing; only the selected one per directory is read) | `defaults`, `state_filters`, `optional_overrides`, `profiles`, `tenants` | Other carriers in the same directory are not read at all + WARN log |
+| Other `_`-prefixed files (`_profiles.yaml`, `_defaults-multidb.yaml`, …) | `profiles`, `tenants` | `defaults` / `state_filters` / `optional_overrides` ignored + WARN log (#1676) |
 | Tenant files (`db-a.yaml`) | Only `tenants` | Other blocks automatically ignored + WARN log |
 
 #### SHA-256 Hot-Reload
