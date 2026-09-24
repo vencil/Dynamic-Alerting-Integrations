@@ -3482,7 +3482,7 @@ def test_expansion_detector_is_not_vacuous() -> None:
 def _report_sh_max_positional() -> int:
     """Highest positional arg the script reads, DERIVED from its own reads.
 
-    Only top-level `VAR=${N…}` / `VAR="$N"` assignments count: the `$*` / `$@`
+    Only top-level assignments count: the `$*` / `$@`
     inside `gh_do` are that function's own arguments, and the `$1` / `$2` in the
     awk program are awk fields.
     """
