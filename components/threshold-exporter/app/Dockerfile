@@ -12,13 +12,16 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# main package files live at app root; pkg/ holds the config library
-# that config_hierarchy.go / config_inheritance.go / config_parse.go
-# import (extracted as a proper library in PR-7/PR-8 during v2.8.0).
-# Both must be COPY'd or `go build` fails with "no required module
-# provides package github.com/vencil/threshold-exporter/pkg/config".
+# main package files live at app root; pkg/ holds the config library the
+# main package imports (extracted as a proper library in PR-7/PR-8 during
+# v2.8.0), and internal/ holds packages both of them import — since #1674
+# the defaults-carrier predicate internal/confdname is imported by
+# flat_scanner.go and pkg/config. All three must be COPY'd or `go build`
+# fails with "no required module provides package
+# github.com/vencil/threshold-exporter/<pkg|internal/...>".
 COPY *.go ./
 COPY pkg ./pkg
+COPY internal ./internal
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /threshold-exporter .
 
