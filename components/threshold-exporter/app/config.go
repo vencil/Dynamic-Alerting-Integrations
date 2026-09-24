@@ -1501,7 +1501,7 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 // (#1969) — before that, only the link's lstat was compared and a `..data`
 // swap was invisible to every tick, i.e. the swap never reloaded. Nested
 // ConfigMap item paths (`team-a/x.yaml`) mount as a DIRECTORY symlink the
-// walker does not follow; files under it are not loaded at all (separate).
+// walker does not follow; files under it are not loaded at all (#1972).
 // Single-file mode hashes the file on every tick (no fast-path).
 // The stopCh parameter allows graceful shutdown — close it to stop the loop.
 //
