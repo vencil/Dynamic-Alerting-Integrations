@@ -603,6 +603,25 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	if anyNestedKey(changed, added, removed) {
 		return m.fullDirLoadFrom(scan)
 	}
+	// ⛔ #1674: an unselected root carrier is never parsed or cached
+	// (isUnselectedRootCarrier), and this path only re-parses changed/added
+	// files — so a carrier that BECOMES selected (`_defaults.yml` once its
+	// `_defaults.yaml` sibling is deleted) would be missing from the cache it
+	// merges, and one that is unselected would be parsed and merged here. The
+	// full load re-reads whatever is uncached and skips the unselected.
+	//
+	// ⚠️ NARROW ON PURPOSE: only when a root carrier was added or removed
+	// (the selection can move) or the root holds more than one (there is an
+	// unselected one). An ordinary edit of the root's only `_defaults.yaml`
+	// keeps the incremental full-rebuild branch below — redirecting every
+	// such edit changed which hierarchy state that branch leaves behind
+	// (measured: TestAnUnparseableFileKeepsItsTenantAttributed went red).
+	// The scan's selection is only consulted when a root carrier moved, so a
+	// tenant-only reload pays nothing for it.
+	if anyRootCarrierKey(changed, added, removed) &&
+		(anyRootCarrierKey(added, removed) || len(scan.DefaultsCarriers().Ambiguous[scan.AbsRoot]) > 1) {
+		return m.fullDirLoadFrom(scan)
+	}
 
 	// Copy cache for mutation — deferred until after diff to avoid
 	// unnecessary allocation when the per-file diff shows no changes
@@ -805,10 +824,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		m.mu.RUnlock()
 		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed)
 	} else {
-		// Full rebuild: _defaults or _profiles changed, must re-merge everything.
-		// A `_` change can move the root carrier selection, which is why the
-		// tenant-patch branch above never needs it (#1674).
-		merged = mergePartialConfigs(newConfigs, rootCarrierKey(scan, m.getLogger()))
+		// Full rebuild: _defaults or _profiles changed, must re-merge everything
+		merged = mergePartialConfigs(newConfigs)
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
 	// the else above, so the tenant-patch path published tenants exactly as
@@ -1255,8 +1272,16 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	priorConfigs := m.flat.configs
 	m.mu.RUnlock()
 
+	// The root carrier the chain selects (#1674). Computed before the loop:
+	// an unselected root carrier is ignored on every plane, so it is not even
+	// parsed here, let alone merged or cached.
+	rootCarrier := rootCarrierKey(scan, m.getLogger())
+
 	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
 	for _, name := range scan.Keys {
+		if isUnselectedRootCarrier(name, rootCarrier) {
+			continue
+		}
 		f := scan.Files[name]
 		fullPath := filepath.Join(m.path, name)
 		data := f.Data
@@ -1309,9 +1334,8 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		fileConfigs[name] = partial
 	}
 
-	// Merge all partials; the root Defaults come from the carrier the chain
-	// selects, never from a second spelling beside it (#1674).
-	merged := mergePartialConfigs(fileConfigs, rootCarrierKey(scan, m.getLogger()))
+	// Merge all partials
+	merged := mergePartialConfigs(fileConfigs)
 	merged.ApplyProfiles()
 
 	// #1521 second half: the caller just installed the inheritance graph this

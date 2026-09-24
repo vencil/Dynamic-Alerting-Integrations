@@ -28,7 +28,11 @@ from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
+    is_defaults_name,
     iter_config_files,
+    multi_carrier_warning,
+    readable_carriers,
+    select_defaults_carrier,
     unusable_config_paths,
     unusable_reason,
     warn_nested,
@@ -175,15 +179,32 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     Handles: defaults keys, _routing_defaults, _routing_enforced,
     routing_profiles (ADR-007), domain_policies (ADR-007).
     Mutates *result* in place.
+
+    ⛔ TWO QUESTIONS, as in the exporter's `applyBoundaryRules` since #1676:
+    "is this a platform (`_`-prefixed) file" gates the routing keys, and "is
+    this the defaults CARRIER" gates `defaults:` / `optional_overrides:`.
+    Before, any `_` file (and, for `defaults:`, any file at all) widened the
+    key universe validate_tenant_keys checks against, while the exporter
+    serves those keys only from the carrier — so a root `_profiles.yaml`
+    carrying `defaults:` passed here and was stripped there.
+    The carrier test is the name predicate; which of SEVERAL carriers is
+    read is the caller's job — `_parse_config_files` never hands this
+    function an unselected spelling (#1674).
     """
-    is_defaults_file = os.path.basename(fname).startswith("_")
+    base = os.path.basename(fname)
+    is_defaults_file = base.startswith("_")   # platform file (routing keys)
+    is_carrier = is_defaults_name(base)
     # #1538: display-only alias. `fname` itself stays raw — it is used for
     # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
     _f = safe_label(fname)
 
-    # Collect defaults keys for schema validation
+    # Collect defaults keys for schema validation — from the carrier only.
     if isinstance(data.get("defaults"), dict):
-        result["defaults_keys"].update(data["defaults"].keys())
+        if is_carrier:
+            result["defaults_keys"].update(data["defaults"].keys())
+        elif data["defaults"]:
+            print(f"  WARN: defaults in {_f} ignored (not a defaults carrier; "
+                  "only _defaults.yaml / _defaults.yml is)", file=sys.stderr)
 
     # #1189 / TRK-337: keys the platform RECOGNISES but supplies no value for
     # (the runtime half of the registry's `tier: optional_overrides`). They
@@ -193,7 +214,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     # self-authorising past this very check; Go strips it from tenant-owned
     # files for the same reason (applyBoundaryRules).
     if "optional_overrides" in data:
-        if is_defaults_file:
+        if is_carrier:
             raw = data["optional_overrides"]
             if isinstance(raw, list):
                 # ⚠️ Non-string entries are dropped LOUDLY. Go decodes this
@@ -214,9 +235,10 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             elif raw is not None:
                 print(f"  WARN: optional_overrides in {_f} must be a list, "
                       "ignoring", file=sys.stderr)
-        else:
+        elif data["optional_overrides"]:
             print(f"  WARN: optional_overrides in {_f} ignored "
-                  "(platform-scoped; only allowed in _ prefixed files)",
+                  "(platform-scoped; only allowed in the defaults carrier, "
+                  "_defaults.yaml / _defaults.yml)",
                   file=sys.stderr)
 
     # Extract _routing_defaults (only from _ prefixed files)
@@ -425,9 +447,25 @@ def _parse_config_files(config_dir: str) -> dict:
     # is flat BY DESIGN (the ADR-016 hierarchy is reported by `warn_nested`
     # above, not routed), and recursing here would silently change which
     # tenants generate-routes emits routes for.
-    for path_p in iter_config_files(config_dir, recursive=False):
+    # #1674: ONE root carrier, chosen by the rule every exporter plane reads
+    # (`select_defaults_carrier`, over the carriers that can be read). Any
+    # other carrier spelling is ignored WHOLE, as the exporter's flat plane
+    # ignores it, and named once.
+    listed = list(iter_config_files(config_dir, recursive=False))
+    readable, _unreadable = readable_carriers(
+        p for p in listed if is_defaults_name(p.name))
+    root_carrier = select_defaults_carrier(readable)
+    msg = multi_carrier_warning(config_dir, readable)
+    if msg:
+        print(f"  {msg}", file=sys.stderr)
+    for path_p in listed:
         fname = path_p.name
         path = str(path_p)
+        if is_defaults_name(fname) and (
+                root_carrier is None or fname != root_carrier.name):
+            if path_p in readable:
+                continue   # the unselected spelling: named above, not read
+            # unreadable: fall through, the read below books it as skipped
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
         # an open-ended `except` around only `safe_load` reads exactly like
         # one that covers the read — measured: a *directory* named

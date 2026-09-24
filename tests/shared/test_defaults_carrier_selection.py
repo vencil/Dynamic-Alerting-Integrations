@@ -102,6 +102,82 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     assert "defaults carriers" in r.stderr and "_defaults.yml is ignored" in r.stderr, r.stderr
 
 
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable here: {exc}")
+
+
+def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
+        tmp_path: Path) -> None:
+    """Blind review of #1674: selecting on the RESOLVED name made
+    `_defaults.yaml -> sub/platform-base.yaml` select nothing and crash with
+    AttributeError (rc 1); before #1674 it was rc 0 with this chain. Go's
+    walker never follows the link, so the entry name is what it classifies."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "platform-base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+    (sub / "t.yaml").write_text("tenants:\n  t-link: {}\n", encoding="utf-8")
+    _symlink_or_skip(tmp_path / "_defaults.yaml", Path("sub") / "platform-base.yaml")
+    r = _describe(tmp_path, "t-link")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["defaults_chain"] == ["sub/platform-base.yaml"]
+    assert out["effective_config"] == {"cpu_pct": 50}
+
+
+def test_describe_tenant_skips_a_dangling_carrier(tmp_path: Path) -> None:
+    """A carrier the walker cannot read is not a candidate: the readable
+    `.yml` is the carrier even though a (dangling) `.yaml` name exists."""
+    (tmp_path / "_defaults.yml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
+    _symlink_or_skip(tmp_path / "_defaults.yaml", tmp_path / "missing.yaml")
+    (tmp_path / "t.yaml").write_text("tenants:\n  t-dang: {}\n", encoding="utf-8")
+    r = _describe(tmp_path, "t-dang")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["defaults_chain"] == ["_defaults.yml"]
+
+
+def _loader_tree(root: Path, *, dangling: str) -> None:
+    ok = "_defaults.yml" if dangling == "_defaults.yaml" else "_defaults.yaml"
+    (root / ok).write_text(
+        "_custom_alerts:\n  - recipe: from_readable\n    params:\n"
+        "      threshold: 50\n", encoding="utf-8")
+    _symlink_or_skip(root / dangling, root / "missing.yaml")
+    (root / "alpha.yaml").write_text("tenants:\n  alpha: {}\n", encoding="utf-8")
+
+
+def test_loader_selects_among_readable_carriers(tmp_path: Path) -> None:
+    """L2 of the blind review: `_defaults.yaml` dangling, `_defaults.yml`
+    readable → the loader compiled NOTHING (it selected the dangling name).
+    The exporter's chain is [_defaults.yml], so its alerts must be inherited,
+    and the dangling entry is still reported."""
+    from dx.custom_alerts import loader  # noqa: PLC0415
+    _loader_tree(tmp_path, dangling="_defaults.yaml")
+    triples, errors = loader.collect_instances(tmp_path)
+    assert {t[1].get("recipe") for t in triples} == {"from_readable"}
+    assert [e for e in errors if "_defaults.yaml" in str(e)], errors
+
+
+def test_loader_still_reports_an_unselected_dangling_carrier(tmp_path: Path) -> None:
+    """L1 of the blind review: a dangling `_defaults.yml` beside a readable
+    `_defaults.yaml` vanished from file_errors once only the selected
+    carrier was loaded."""
+    from dx.custom_alerts import loader  # noqa: PLC0415
+    _loader_tree(tmp_path, dangling="_defaults.yml")
+    triples, errors = loader.collect_instances(tmp_path)
+    assert {t[1].get("recipe") for t in triples} == {"from_readable"}
+    assert [e for e in errors if "_defaults.yml" in str(e)], errors
+
+
+def test_loader_warns_on_a_multi_carrier_directory(tmp_path: Path, capsys) -> None:
+    from dx.custom_alerts import loader  # noqa: PLC0415
+    (tmp_path / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+    (tmp_path / "_defaults.yml").write_text("defaults: {}\n", encoding="utf-8")
+    loader.collect_instances(tmp_path)
+    assert "_defaults.yml is ignored on every plane" in capsys.readouterr().err
+
+
 def test_describe_tenant_single_carrier_is_silent(tmp_path: Path) -> None:
     """Counterfactual for the WARN above: one carrier, no warning."""
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")

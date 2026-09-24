@@ -67,6 +67,7 @@ __all__ = [
     "is_reserved_name",
     "iter_config_files",
     "multi_carrier_warning",
+    "readable_carriers",
     "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
@@ -276,6 +277,31 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
     return yml_spelling[0] if yml_spelling else None
 
 
+def readable_carriers(carriers: "Iterable[Path]"
+                      ) -> "tuple[list[Path], list[tuple[Path, OSError]]]":
+    """Split carriers into (readable, [(unreadable, error)]).
+
+    ⛔ Selection runs over the carriers the exporter's walker KEEPS, and the
+    walker logs-and-drops an entry whose read fails (a dangling symlink, a
+    permission error) from every map — so such an entry is never a
+    candidate there. Selecting among raw directory names instead let a
+    dangling `_defaults.yaml` win over a readable `_defaults.yml` and read
+    as "no carrier" (blind review of #1674). Callers report the unreadable
+    ones, as they did before selection existed.
+    """
+    readable: list[Path] = []
+    unreadable: list[tuple[Path, OSError]] = []
+    for p in carriers:
+        try:
+            with open(p, "rb") as fh:
+                fh.read()
+        except OSError as exc:
+            unreadable.append((Path(p), exc))
+            continue
+        readable.append(Path(p))
+    return readable, unreadable
+
+
 def multi_carrier_warning(directory: "str | os.PathLike[str]",
                           carriers: "Iterable[Path]") -> "str | None":
     """The operator-facing WARN for a directory with more than one carrier.
@@ -390,9 +416,10 @@ def resolve_defaults_file(
                                  if is_defaults_name(p.name)])
     _print_nested_once(root, tool=tool)
     try:
-        chosen = select_defaults_carrier(
+        readable, _unreadable = readable_carriers(
             entry for entry in root.iterdir()
             if entry.is_file() and is_defaults_name(entry.name))
+        chosen = select_defaults_carrier(readable)
         if chosen is not None:
             return chosen
     except OSError:

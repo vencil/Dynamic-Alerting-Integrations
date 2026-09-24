@@ -28,6 +28,8 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     defaults_files_in,
+    multi_carrier_warning,
+    readable_carriers,
     select_defaults_carrier,
     unusable_config_entries,
     unusable_reason,
@@ -108,23 +110,32 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # used to EXTEND across every spelling in a directory; a second
         # spelling is now a misconfiguration every plane names and none
         # reads, so a `_custom_alerts` list in it is ignored here too.
-        chosen = select_defaults_carrier(defaults_files_in(root, files))
-        for p in [chosen] if chosen is not None else []:
-            try:
-                data = _load_yaml(p)
-            except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
-                file_errors.append(_file_skip(str(p.relative_to(config_dir)), exc))
-                continue
-            alerts = data.get("_custom_alerts") or []
-            if alerts:
-                # One carrier per directory since #1674, so extend and assign
-                # are the same here. The earlier EXTEND merged both spellings
-                # — which kept a `_defaults.yaml` rule from vanishing behind a
-                # `_defaults.yml`, but also served rules from a file the
-                # exporter never reads. Which file wins is now the shared
-                # rule, and the loser is WARNed about by describe_tenant and
-                # the exporter rather than half-read here.
-                out.setdefault(Path(root).resolve(), []).extend(alerts)
+        #
+        # ⛔ Candidates are the carriers the exporter's walker KEEPS: one whose
+        # read fails (a dangling symlink, a permission error) is dropped there
+        # before anything selects, so it is dropped here too — and still
+        # reported in `file_errors`, as before selection existed. Selecting
+        # among raw names let a dangling `_defaults.yaml` beat a readable
+        # `_defaults.yml` and yield no alerts (blind review of #1674).
+        readable, unreadable = readable_carriers(defaults_files_in(root, files))
+        for bad, exc in unreadable:
+            file_errors.append(_file_skip(str(bad.relative_to(config_dir)), exc))
+        chosen = select_defaults_carrier(readable)
+        if chosen is None:
+            continue
+        # The losing spelling is named here too, in the exporter's and
+        # describe_tenant's words, rather than dropped in silence.
+        msg = multi_carrier_warning(Path(root), readable)
+        if msg:
+            print(msg, file=sys.stderr)
+        try:
+            data = _load_yaml(chosen)
+        except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+            file_errors.append(_file_skip(str(chosen.relative_to(config_dir)), exc))
+            continue
+        alerts = data.get("_custom_alerts") or []
+        if alerts:
+            out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
 

@@ -119,12 +119,28 @@ class TestParsePlatformConfig:
         # 吵的內容要說出「Go 會整檔失敗」，否則讀 log 的人不知道嚴重度
         assert "whole file" in err
 
-    def test_optional_overrides_unions_across_platform_files(self):
-        """多個 `_` 前綴檔的宣告取聯集（與 defaults_keys 同語意）。"""
+    def test_optional_overrides_only_from_the_carrier(self, capsys):
+        """#1676：只有 defaults 載體能宣告；其他 `_` 檔的宣告出聲後忽略。
+
+        先前是「多個 `_` 前綴檔取聯集」，而 exporter 的 applyBoundaryRules
+        只收載體的——同一份樹，這裡放行、/metrics 剝除。
+        """
         result = _empty_result()
         _parse_platform_config({"optional_overrides": ["a"]}, "_defaults.yaml", result)
         _parse_platform_config({"optional_overrides": ["b"]}, "_extra.yaml", result)
-        assert result["optional_override_keys"] == {"a", "b"}
+        assert result["optional_override_keys"] == {"a"}
+        assert "optional_overrides in _extra.yaml ignored" in capsys.readouterr().err
+
+    def test_defaults_only_from_the_carrier(self, capsys):
+        """#1676：`_profiles.yaml` 的 `defaults:` 不擴充 key 宇集，且要吵。"""
+        result = _empty_result()
+        _parse_platform_config({"defaults": {"cpu_pct": 50}}, "_defaults.yaml", result)
+        _parse_platform_config({"defaults": {"smuggled_pct": 1}}, "_profiles.yaml", result)
+        _parse_platform_config({"defaults": {"tenant_pct": 1}}, "tenant-a.yaml", result)
+        assert result["defaults_keys"] == {"cpu_pct"}
+        err = capsys.readouterr().err
+        assert "defaults in _profiles.yaml ignored" in err
+        assert "defaults in tenant-a.yaml ignored" in err
 
     def test_routing_defaults_from_underscore_file(self):
         result = _empty_result()
@@ -368,3 +384,42 @@ class TestParseTenantOverrides:
         }, result)
         assert result["tenant_profile_refs"]["db-a"] == "team-sre"
         assert result["explicit_routing"]["db-a"]["repeat_interval"] == "30m"
+
+
+# ===========================================================================
+# #1674 / #1676 — the whole-tree reader picks ONE root carrier
+# ===========================================================================
+
+def test_parse_config_files_reads_one_carrier_and_no_smuggled_defaults(
+        tmp_path, capsys):
+    """Blind review of #1674 measured `defaults_keys ['cpu_pct',
+    'smuggled_pct', 'yml_only_pct']` on this tree; the exporter serves only
+    `cpu_pct`."""
+    from generate_alertmanager_routes import _parse_config_files  # noqa: PLC0415
+    (tmp_path / "_defaults.yaml").write_text(
+        "defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+    (tmp_path / "_defaults.yml").write_text(
+        "defaults:\n  yml_only_pct: 1\n", encoding="utf-8")
+    (tmp_path / "_profiles.yaml").write_text(
+        "defaults:\n  smuggled_pct: 1\n", encoding="utf-8")
+    (tmp_path / "tenant-a.yaml").write_text(
+        "tenants:\n  t-a:\n    cpu_pct: \"40\"\n", encoding="utf-8")
+    result = _parse_config_files(str(tmp_path))
+    assert result["defaults_keys"] == {"cpu_pct"}
+    err = capsys.readouterr().err
+    assert "_defaults.yml is ignored on every plane" in err
+    assert "defaults in _profiles.yaml ignored" in err
+
+
+def test_parse_config_files_dangling_carrier_is_not_selected(tmp_path):
+    """A carrier that cannot be read is not a candidate (the exporter's walker
+    drops it), so the readable `.yml` is the carrier."""
+    (tmp_path / "_defaults.yml").write_text(
+        "defaults:\n  yml_pct: 1\n", encoding="utf-8")
+    try:
+        os.symlink(tmp_path / "missing.yaml", tmp_path / "_defaults.yaml")
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable here: {exc}")
+    from generate_alertmanager_routes import _parse_config_files  # noqa: PLC0415
+    result = _parse_config_files(str(tmp_path))
+    assert result["defaults_keys"] == {"yml_pct"}

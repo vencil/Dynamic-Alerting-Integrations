@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_confd import resolve_defaults_file  # noqa: E402  (#1674 carrier selection)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility
@@ -115,8 +116,14 @@ class PolicyResult:
 # (lib loads with default={}, local copy skipped None).
 # ---------------------------------------------------------------------------
 def load_defaults(config_dir: str) -> dict[str, Any]:
-    """Load _defaults.yaml."""
-    defaults_path = Path(config_dir) / "_defaults.yaml"
+    """Load the root defaults carrier.
+
+    #1674: the carrier the exporter reads (`resolve_defaults_file`: any
+    casing, `.yaml` over `.yml`), not a hard-coded `_defaults.yaml` — a root
+    holding only `_defaults.yml` or `_DEFAULTS.YAML` used to give OPA no
+    defaults at all.
+    """
+    defaults_path = resolve_defaults_file(config_dir, tool="policy_opa_bridge")
     if not defaults_path.is_file():
         return {}
     data = load_yaml_file(str(defaults_path))

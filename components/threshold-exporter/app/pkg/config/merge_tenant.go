@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -48,8 +47,9 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 			"additionalProperties:false)", bad)}
 }
 
-// MergeTenantWithRootDefaults loads the root _defaults.yaml in configDir (if
-// present) and overlays a tenant YAML document on top, returning the merged
+// MergeTenantWithRootDefaults loads the root defaults carrier in configDir (if
+// present — the one the exporter's chain selects, any casing, `.yaml` over
+// `.yml`; #1674) and overlays a tenant YAML document on top, returning the merged
 // ThresholdConfig. It populates Defaults + StateFilters from _defaults.yaml so
 // callers can run ValidateTenantKeys against a *tenant-only* body (the real
 // conf.d/{id}.yaml shape — see db-a.yaml "Only 'tenants' block") and have its
@@ -139,11 +139,16 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 		Profiles:     make(map[string]map[string]ScheduledValue),
 	}
 
-	// Load root defaults (_defaults.yaml). A missing file is fine — the tenant
+	// Load the root defaults carrier. A missing one is fine — the tenant
 	// may legitimately rely on metric keys that simply have no default yet,
 	// in which case ValidateTenantKeys still flags genuinely unknown keys.
-	defaultsPath := filepath.Join(configDir, "_defaults.yaml")
-	if data, err := os.ReadFile(defaultsPath); err == nil {
+	//
+	// ⛔ #1674: the carrier is the one the exporter's chain reads at the root
+	// (rootDefaultsCarrier), not a hard-coded `_defaults.yaml`. With that join
+	// a root holding only `_defaults.yml` or `_DEFAULTS.YAML` — both served by
+	// the exporter — read as NO platform surface, so the tenant-api write gate
+	// refused valid keys as unknown and GET under-reported (blind review).
+	if defaultsPath, data, ok := rootDefaultsCarrier(configDir); ok {
 		var defaults ThresholdConfig
 		if err := yaml.Unmarshal(data, &defaults); err != nil {
 			// A file that EXISTS but cannot be decoded is not the benign case
@@ -192,4 +197,32 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 	}
 
 	return merged
+}
+
+// rootDefaultsCarrier returns the path and bytes of the ROOT defaults carrier
+// the exporter's chain selects in configDir (TreeScan.DefaultsCarriers), and
+// false when the root has none or the directory cannot be walked.
+//
+// ⚠️ One ScanDirTree per call — the whole tree is walked and hashed to answer
+// a root-only question. That is the price of not adding a second conf.d
+// lister to this module (confd_walker_population_test pins ScanDirTree as the
+// only one); the callers are per-request tenant-api reads and writes.
+func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
+	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
+	if err != nil {
+		return "", nil, false
+	}
+	p, found := scan.DefaultsCarriers().ByDir[scan.AbsRoot]
+	if !found {
+		return "", nil, false
+	}
+	rel, rerr := filepath.Rel(scan.AbsRoot, p)
+	if rerr != nil {
+		return "", nil, false
+	}
+	f := scan.Files[filepath.ToSlash(rel)]
+	if f == nil || f.Data == nil {
+		return "", nil, false
+	}
+	return p, f.Data, true
 }

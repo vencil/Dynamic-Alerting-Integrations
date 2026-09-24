@@ -6,8 +6,11 @@ package config
 // `pkg/config/source.go` (also new in PR-8) and any future cmd/da-guard
 // or tenant-api consumer can construct the graph without depending on
 // `package main`. The exporter's disk walker, ScanDirTree (tree_scan.go),
-// has since moved into this package too (#1941), mtime cache included,
-// and builds its graph with CollectDefaultsChain below.
+// has since moved into this package too (#1941), mtime cache included.
+// Its graph (TreeScan.InheritanceGraph) selects carriers ONCE per scan
+// (TreeScan.DefaultsCarriers → SelectDefaultsCarriers) and walks each
+// directory's chain with chainFromCarriers; CollectDefaultsChain below is
+// the one-leaf convenience over the same two functions (#1674).
 //
 // Semantic rules (parity-pinned against describe_tenant.py + golden
 // fixtures):

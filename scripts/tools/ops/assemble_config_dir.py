@@ -41,8 +41,10 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
     has_yaml_extension,
+    is_defaults_name,
     is_hidden_name,
     iter_config_files,
+    select_defaults_carrier,
     unusable_config_entries,
     unusable_config_paths,
     unusable_reason,
@@ -206,11 +208,15 @@ def detect_conflicts(
         file_map:  {filename: first_path} for non-conflicting files
     """
     seen: Dict[str, List[Tuple[str, Path]]] = {}
+    # (label, path) of every defaults carrier, in source order (#1674).
+    carriers: List[Tuple[str, Path]] = []
     for src in sources:
         label = str(src)
         for f in discover_yamls(src):
             name = f.name
             seen.setdefault(name, []).append((label, f))
+            if is_defaults_name(name):
+                carriers.append((label, f))
 
     conflicts: Dict[str, List[Tuple[str, Path]]] = {}
     file_map: Dict[str, Path] = {}
@@ -233,6 +239,24 @@ def detect_conflicts(
                 conflicts[name] = entries
         else:
             file_map[name] = entries[0][1]
+
+    # ⛔ #1674: two carrier SPELLINGS are one platform role. The output is one
+    # flat directory, and the exporter reads exactly ONE carrier per directory
+    # (`.yaml` over `.yml`, any casing) — so `a/_defaults.yaml` +
+    # `b/_defaults.yml` used to assemble silently (rc 0) into a directory
+    # whose `b` defaults every plane then ignores. It is the same duplicate
+    # the identical-name branch above reports, with the same policy: the
+    # first source holding a carrier wins (its own carrier by the shared
+    # selection, if it holds several), the rest are reported and not copied.
+    if len({p.name for _, p in carriers}) > 1:
+        first_label = carriers[0][0]
+        winner = select_defaults_carrier(
+            p for lbl, p in carriers if lbl == first_label)
+        for _, p in carriers:
+            file_map.pop(p.name, None)
+            conflicts.pop(p.name, None)
+        file_map[winner.name] = winner
+        conflicts[winner.name] = carriers
 
     return conflicts, file_map
 
@@ -460,7 +484,9 @@ def main() -> int:
             print("⚠️  Platform file duplicates (first source wins):")
             for name, entries in platform_dups.items():
                 for lbl, p in entries:
-                    print(f"   {name} ← {lbl}")
+                    # p.name, not the key: a carrier-spelling duplicate
+                    # (#1674) lists files whose names differ from the winner.
+                    print(f"   {p.name} ← {lbl}")
 
         if real_conflicts:
             print(f"\n❌ {len(real_conflicts)} tenant conflict(s):")

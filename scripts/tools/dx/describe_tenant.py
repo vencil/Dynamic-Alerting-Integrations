@@ -34,6 +34,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_defaults_name,
     is_reserved_name,
     multi_carrier_warning,
+    readable_carriers,
     select_defaults_carrier,
     unusable_config_entries,
     unusable_reason,
@@ -239,23 +240,42 @@ class ConfDScanner:
         # #1588: matched by the shared predicate, not by two literal names.
         # `_DEFAULTS.YAML` measured as invisible here while the exporter
         # merged it into every downstream tenant.
-        by_dir: dict[Path, list[Path]] = {}
+        # (entry as listed, its resolved path) per directory. ⛔ The pair is
+        # load-bearing: the carrier is SELECTED by the directory-entry name
+        # (what Go's walker sees — WalkDir never follows the link), while
+        # the chain and the JSON keep reporting the resolved path as they
+        # always did. Selecting on the resolved name made a
+        # `_defaults.yaml -> sub/platform-base.yaml` link select nothing and
+        # crash the run (blind review of #1674).
+        listed: dict[Path, list[tuple[Path, Path]]] = {}
         for dp in entries:
             if dp.is_file() and is_defaults_name(dp.name):
                 resolved = dp.resolve()
-                defaults_files[str(resolved)] = _load_yaml(dp)
-                by_dir.setdefault(resolved.parent, []).append(resolved)
+                listed.setdefault(resolved.parent, []).append((dp, resolved))
         # #1674 (B8): ONE carrier per directory, chosen by the rule every
         # plane shares (`select_defaults_carrier`). Before, a directory with
         # `_defaults.yaml` + `_defaults.yml` put BOTH into the chain and
         # merged them, while the exporter's chain read one and its flat root
         # `Defaults` let the `.yml` overwrite — three answers for one tree.
         # A second spelling is a misconfiguration, so it is named, not merged.
-        for d in sorted(by_dir):
-            msg = multi_carrier_warning(d, by_dir[d])
+        #
+        # Candidates are the carriers the exporter's walker KEEPS: an entry
+        # it cannot read is logged and dropped there, so it is dropped here
+        # before selecting (`readable_carriers`), and named on stderr.
+        by_dir: dict[Path, list[Path]] = {}
+        for d in sorted(listed):
+            readable, unreadable = readable_carriers(dp for dp, _ in listed[d])
+            for bad, exc in unreadable:
+                print(f"WARNING: skipped {bad} — cannot read: {exc}", file=sys.stderr)
+            chosen = select_defaults_carrier(readable)
+            if chosen is None:
+                continue
+            msg = multi_carrier_warning(d, readable)
             if msg:
                 print(msg, file=sys.stderr)
-            by_dir[d] = [select_defaults_carrier(by_dir[d])]
+            resolved = dict(listed[d])[chosen]
+            defaults_files[str(resolved)] = _load_yaml(chosen)
+            by_dir[d] = [resolved]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 

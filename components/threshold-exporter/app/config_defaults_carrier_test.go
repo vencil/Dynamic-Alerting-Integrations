@@ -176,6 +176,49 @@ func TestRootCarrierPairIsOneFileOnEveryPlane(t *testing.T) {
 	}
 }
 
+// The WARN says the unselected carrier "is ignored on every plane"; that must
+// be true of EVERY section it carries, not only the three carrier-only ones
+// (blind review of #1674: `profiles:` and `tenants:` still reached /metrics).
+func TestUnselectedRootCarrierIsIgnoredWhole(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
+	writeFile(t, filepath.Join(dir, "_defaults.yml"), `defaults:
+  cpu_pct: 90
+profiles:
+  gold:
+    cpu_pct: "70"
+tenants:
+  t-ghost:
+    cpu_pct: "10"
+`)
+	writeFile(t, filepath.Join(dir, "tenant-e.yaml"), "tenants:\n  t-e: {}\n")
+
+	var logBuf bytes.Buffer
+	m := NewConfigManager(dir)
+	defer m.Close()
+	m.SetLogger(log.New(&logBuf, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg := m.GetConfig()
+	if _, ok := cfg.Profiles["gold"]; ok {
+		t.Errorf("profile from the unselected _defaults.yml reached /metrics: %v", cfg.Profiles)
+	}
+	if _, ok := cfg.Tenants["t-ghost"]; ok {
+		t.Errorf("tenant from the unselected _defaults.yml reached /metrics: %v", cfg.Tenants)
+	}
+	if got := cfg.Defaults["cpu_pct"]; got != 50 {
+		t.Errorf("control: cpu_pct = %v, want 50 from the selected _defaults.yaml", got)
+	}
+	if _, ok := cfg.Tenants["t-e"]; !ok {
+		t.Errorf("control: the ordinary tenant is missing: %v", cfg.Tenants)
+	}
+	if !strings.Contains(logBuf.String(), "_defaults.yml is ignored on every plane") {
+		t.Errorf("multi-carrier WARN missing:\n%s", logBuf.String())
+	}
+}
+
 // The incremental flat path re-merges from CACHED partials; the selection
 // must be applied at merge time, not baked into the cache.
 func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {

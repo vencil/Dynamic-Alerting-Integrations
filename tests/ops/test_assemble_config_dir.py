@@ -758,6 +758,42 @@ class TestPlatformFileSpelling:
         assert (out / "_defaults.yml").read_text(
             encoding="utf-8") == "defaults:\n  mysql_connections: 10\n"
 
+    def test_two_carrier_spellings_are_one_platform_duplicate(
+            self, config_dir, cli_argv, capsys):
+        """#1674: `a/_defaults.yaml` + `b/_defaults.yml` used to assemble
+        silently (rc 0) into a directory holding BOTH, where every plane now
+        reads the `.yaml` only and drops `b`'s defaults. Same policy as the
+        identical-name duplicate above: reported, first source wins, one
+        carrier in the output."""
+        a = Path(config_dir) / "team-a"
+        b = Path(config_dir) / "team-b"
+        a.mkdir()
+        b.mkdir()
+        _write_file(a / "_defaults.yaml", "defaults:\n  mysql_connections: 10\n")
+        _write_file(b / "_defaults.yml", "defaults:\n  mysql_connections: 20\n")
+        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    x: '1'\n")
+        out = Path(config_dir) / "output"
+        cli_argv("assemble", "--sources", f"{a},{b}", "--output", str(out))
+        assert main() == 0
+        printed = capsys.readouterr().out
+        assert "Platform file duplicates" in printed
+        assert "_defaults.yml ← " in printed
+        assert (out / "_defaults.yaml").is_file()
+        assert not (out / "_defaults.yml").exists()
+        assert (out / "tenant-b.yaml").is_file()
+
+    def test_a_single_carrier_is_not_a_duplicate(self, config_dir):
+        """Counterfactual: one carrier across all sources is no conflict."""
+        a = Path(config_dir) / "team-a"
+        b = Path(config_dir) / "team-b"
+        a.mkdir()
+        b.mkdir()
+        _write_file(a / "_defaults.yml", "defaults:\n  x: 1\n")
+        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    x: '1'\n")
+        conflicts, file_map = detect_conflicts([a, b])
+        assert conflicts == {}
+        assert file_map["_defaults.yml"] == a / "_defaults.yml"
+
 
 @pytest.mark.skipif(sys.platform == "win32" or shutil.which("make") is None,
                     reason="needs GNU make + POSIX sh; the recipe runs on Linux/macOS")

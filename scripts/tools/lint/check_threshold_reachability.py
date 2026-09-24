@@ -1070,7 +1070,17 @@ def _is_defaults_artifact(name: str) -> bool:
 
 
 def _is_loader_readable_defaults(name: str) -> bool:
-    """EXACTLY what `config_hierarchy.go` will enter into `defaults` (#1458).
+    """EXACTLY the names the exporter's walker CLASSIFIES as a defaults
+    carrier (#1458) — which, since #1674, is necessary but NOT sufficient for
+    being read.
+
+    ⚠️ #1674: in a directory holding two carrier spellings the exporter reads
+    ONE (`_lib_confd.select_defaults_carrier`: `.yaml` over `.yml`) and WARNs
+    about the other. This predicate sees one name at a time, so it still
+    counts the unselected spelling as loader-readable — an over-count, and
+    only on a tree the exporter itself flags as misconfigured. (The walker
+    is now `pkg/config/tree_scan.go` via `confdname.IsDefaults`; the
+    `config_hierarchy.go` citations below predate that move.)
 
     ⛔ Deliberately NARROWER than `_is_defaults_artifact`, and the two must not
     be merged. That one is a PREFIX match on purpose (see its docstring); this
