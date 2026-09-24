@@ -47,8 +47,10 @@ WHAT THIS GUARD DOES **NOT** BUY
   green. Tracked as issue #1350.
 * **It does not build the generated kustomize tree.** ``--deploy kustomize``
   scaffolds ``kustomize/`` + a README telling the user to create symlinks; the
-  workflow's ``kustomize build`` step is never exercised here. Deliberately out
-  of scope for this PR — tracked as issue #1349.
+  workflow's ``kustomize build`` step is never exercised HERE. It is exercised
+  in ``tests/ops/test_generated_kustomize_build.py`` (issue #1349), which runs
+  the README setup and the pipeline's own build line against a real, pinned
+  ``kustomize`` in the ``lint-rule-packs`` job.
 * **It does not verify the portal preview's YAML matches the CLI's.** The portal
   wizard's sample workflow is a SEPARATE hand-written string; this file only
   proves it is a loadable workflow with no unreachable job. On the actionlint

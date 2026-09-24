@@ -899,6 +899,44 @@ jobs:
             tests/dx/test_waveform_compile.py \
             -q -rs
 
+      # #1349: nothing used to RUN `kustomize build` against the tree
+      # `da-tools init --deploy kustomize` (the default deploy) generates — the
+      # only assertions were yaml.safe_load and `'kustomize build' in yaml_str`.
+      # tests/ops/test_generated_kustomize_build.py builds it for real (README
+      # setup → the generated pipeline's own build line → rc + ConfigMap key
+      # set). HARD install, and KUSTOMIZE_REQUIRE=1 turns the module's
+      # no-binary skip into a failure here, so a green job cannot mean "skipped".
+      # The version is pinned in that module too (KUSTOMIZE_PIN) and the module
+      # asserts this step exists — keep the two in sync when re-pinning.
+      - name: Cache pinned binary downloads (kustomize)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-kustomize
+          key: ${{ runner.os }}-vibe-dl-kustomize-5.8.1
+
+      - name: Install kustomize
+        run: |
+          KUSTOMIZE_VERSION=5.8.1
+          # Pinned SHA-256 of kustomize_v5.8.1_linux_amd64.tar.gz (upstream checksums.txt).
+          KUSTOMIZE_SHA256=029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
+          DL="$HOME/.cache/vibe-dl-kustomize"
+          mkdir -p "$DL"
+          TGZ="$DL/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          if [ ! -f "$TGZ" ]; then
+            curl -fsSL --retry 3 "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" -o "$TGZ"
+          fi
+          bash scripts/ops/_verify_download.sh "$TGZ" "$KUSTOMIZE_SHA256"
+          tar xzf "$TGZ" -C /tmp kustomize
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+          kustomize version
+
+      - name: Generated kustomize tree builds (da-tools init → kustomize build)
+        env:
+          KUSTOMIZE_REQUIRE: "1"
+        run: |
+          pip install pytest pyyaml -c requirements/ci-constraints.txt
+          python -m pytest tests/ops/test_generated_kustomize_build.py -q -rsx
+
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
         # REQUIRED provisioning for the promoted parity gate below (soak (a) met, #947).
         # NOT continue-on-error: a missing vmalert-tool makes the gate's pytest module

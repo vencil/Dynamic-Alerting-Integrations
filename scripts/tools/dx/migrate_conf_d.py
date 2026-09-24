@@ -203,8 +203,9 @@ def main() -> None:
         help="Path to conf.d/ directory",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", default=True,
-        help="Print git mv commands without executing (default)",
+        "--dry-run", action="store_true",
+        help="Print git mv commands without executing (default; also wins "
+        "over --apply)",
     )
     parser.add_argument(
         "--apply", action="store_true",
@@ -253,7 +254,13 @@ def main() -> None:
 
     commands = generate_git_commands(actions, conf_d)
 
-    if args.apply:
+    # --dry-run wins over --apply. It used to be `default=True` and never read,
+    # so `--apply --dry-run` ran the mkdir + `git mv` plan (issue #1454; pinned
+    # by tests/shared/test_dry_run_no_write.py).
+    if args.apply and args.dry_run:
+        print("note: --dry-run given, ignoring --apply; nothing will be moved",
+              file=sys.stderr)
+    if args.apply and not args.dry_run:
         print("🚀 Executing migration...")
         for cmd in commands:
             print(f"  $ {' '.join(cmd)}")

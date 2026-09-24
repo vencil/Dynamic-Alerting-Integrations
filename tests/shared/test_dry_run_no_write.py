@@ -225,14 +225,9 @@ KNOWN_DRY_RUN_WRITERS: dict[str, str] = {
     # generate_rule_pack_split / onboard_platform / migrate_rule), so the
     # green is meaningful, not vacuous.
     #
-    # 擴建到 dx/ 時（#1454 D）量到的兩支。兩者同形：`--dry-run` 不是守衛，只是
-    # 預設模式的名字；寫入旗標一給，dry-run 就被忽略。
-    "inject_related_docs": (
-        "`--update --dry-run` rewrites every doc's related-resources section: "
-        "mode is `update if args.update else ...`, --dry-run is never read"),
-    "migrate_conf_d": (
-        "`--apply --dry-run` runs the mkdir + `git mv` plan: --dry-run is "
-        "`default=True` and never read, only --apply is"),
+    # 擴建到 dx/ 時（#1454 D）量到兩支：`inject_related_docs --update --dry-run`
+    # 與 `migrate_conf_d --apply --dry-run` 都照寫——`--dry-run` 從來沒被讀過。
+    # 兩支已改成 dry-run 優先（issue #1454 後續），清單回到空的。
 }
 
 
@@ -353,12 +348,21 @@ def _edit(path: Path, old: str, new: str) -> None:
 # git 身分與設定隔離：fixture 建 repo 與工具子行程共用。GIT_OPTIONAL_LOCKS=0
 # 讓 `git status` 不去順手刷新 .git/index——那是 git 自己的快取寫入，不是工具
 # 的副作用；不關掉的話，快照會把它算成 dry-run 的寫入。
+#
+# maintenance.auto / gc.auto 同理：fixture 的 `git commit` 會叫起
+# `git maintenance run --auto`，它可以 detach 到背景、在工具執行期間才收掉
+# `.git/objects/maintenance.lock`——CI 的 git 2.55 實際發生過（PR #1966 的
+# Python Tests），快照讀成「dry-run 刪了檔」。走 GIT_CONFIG_COUNT 而不是 `-c`，
+# 工具子行程自己跑的 git 也一併關掉。
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "dry-run-gate", "GIT_AUTHOR_EMAIL": "gate@example.invalid",
     "GIT_COMMITTER_NAME": "dry-run-gate",
     "GIT_COMMITTER_EMAIL": "gate@example.invalid",
     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
+    "GIT_CONFIG_KEY_1": "gc.auto", "GIT_CONFIG_VALUE_1": "0",
 }
 
 
@@ -580,9 +584,19 @@ def _stale_tool_registry_outputs(tmp: Path) -> list[str]:
                  r'data-audience="stale"\1', text, count=1)
     assert new != text, "fixture 前提不成立：hub 裡找不到 wizard 卡片"
     hub.write_text(new, encoding="utf-8", newline="\n")
-    # ⚠️ sync_frontmatter 讀的是 `docs/<registry file>`；真的 repo 裡 JSX 已不在
-    # docs/ 底下，所以這條分支在 repo 上找不到任何檔案（見 issue #1454）。
-    jsx = _sb(tmp, "docs/getting-started/wizard.jsx")
+    # sync_frontmatter 讀 `tools/portal/src/<registry file>`（與
+    # check_tool_registry_jsx_parity 同一個 JSX_ROOT）。registry 裡每一條都要
+    # 解析得到：有任何一條缺檔，工具就判「同步不完整」而 exit 1，寫入對照的
+    # exit 0 就量不到（PR #1966）。其餘條目放沒有 frontmatter 的佔位檔，工具會
+    # 略過它們，所以寫入只落在 wizard 上。
+    registry = _sb(tmp, "docs/assets/tool-registry.yaml").read_text(encoding="utf-8")
+    files = re.findall(r"^\s+file:\s*(\S+)\s*$", registry, re.MULTILINE)
+    assert "getting-started/wizard.jsx" in files, "fixture 前提不成立：registry 裡沒有 wizard"
+    for rel in files:
+        stub = _sb(tmp, f"tools/portal/src/{rel}")
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("export default function T() {}\n", encoding="utf-8")
+    jsx = _sb(tmp, "tools/portal/src/getting-started/wizard.jsx")
     jsx.parent.mkdir(parents=True, exist_ok=True)
     jsx.write_text("---\ntitle: Wizard\naudience: [nobody]\ntags: [stale]\n---\n"
                    "export default function W() {}\n", encoding="utf-8")
@@ -648,6 +662,10 @@ class Recipe:
     cwd: str = "cwd"
     # 額外的環境變數；(tmp_path) -> dict。
     env: Callable[[Path], dict[str, str]] | None = None
+    # 寫入模式（write_control 那次）可接受的 exit code。⚠️ 不預設沿用
+    # ok_exits：dry-run 與寫入的 exit 契約可以不同（sync_tool_registry 的
+    # dry-run 在有變更時 exit 1、寫入 exit 0）。
+    write_ok_exits: tuple[int, ...] = (0,)
     # True ⇒ `test_write_mode_control` 會把 `--dry-run` 從 argv 拿掉再跑一次，
     # 並要求 tree **有**變。這是「recipe 真的走到會寫的那條路」的常設證明：
     # fixture 一旦被改成「沒有東西可寫」，dry-run 那條就會變成空的綠，而這條會紅。
@@ -780,13 +798,13 @@ RECIPES: list[Recipe] = [
       build=lambda t, s: ["--platform", "99.0.0", "--tools", "99.0.0", "--dry-run"],
       sandbox=("CLAUDE.md", "components/da-tools/app",
                "helm/federation-reconciler/values.yaml"),
-      cwd="repo", ok_exits=(1,), write_control=True),
+      cwd="repo", ok_exits=(1,), write_ok_exits=(1,), write_control=True),
     R("bump_docs", variant="sync-counts",
       build=lambda t, s: (
           _edit(_sb(t, "CLAUDE.md"), " auto-run + ", "0 auto-run + ")
           or ["--sync-counts", "--dry-run"]),
       sandbox=("CLAUDE.md", ".pre-commit-config.yaml"),
-      cwd="repo", ok_exits=(1,), write_control=True),
+      cwd="repo", ok_exits=(1,), write_ok_exits=(1,), write_control=True),
 
     R("bump_playbook_versions",
       lambda t, s: _playbook_project(t), cwd="proj", write_control=True),
@@ -807,15 +825,16 @@ RECIPES: list[Recipe] = [
                     "--output", _out(t, "tenant-metadata.json"), "--dry-run"],
       write_control=True),
 
-    # ⛔ 下面兩支**沒有** dry-run 守衛：`--dry-run` 只是預設模式的別名，寫入
-    # 旗標（--update / --apply）一給就照寫。recipe 故意把兩者同給——那正是
-    # 「使用者以為自己在預覽」的情境——並列入 KNOWN_DRY_RUN_WRITERS。
+    # 下面兩支的寫入要寫入旗標（--update / --apply）才開，所以 recipe 把它與
+    # --dry-run 同給——那正是「使用者以為自己在預覽」的情境。兩支原本都沒有
+    # 守衛（--dry-run 從沒被讀過），現在是 dry-run 優先。
     R("inject_related_docs",
-      lambda t, s: ["--docs-dir", _related_docs(t), "--update", "--dry-run"]),
+      lambda t, s: ["--docs-dir", _related_docs(t), "--update", "--dry-run"],
+      write_control=True),
 
     R("migrate_conf_d",
       lambda t, s: ["--conf-d", _flat_conf_d_repo(t), "--apply", "--dry-run"],
-      cwd="confrepo", env=lambda t: dict(_GIT_ENV)),
+      cwd="confrepo", env=lambda t: dict(_GIT_ENV), write_control=True),
 
     R("migrate_ssot_language",
       lambda t, s: _ssot_pilot(t),
@@ -1140,6 +1159,13 @@ def test_write_mode_control(recipe: Recipe, tmp_path: Path, stub_url: str):
     write_argv = [a for a in argv if a != "--dry-run"]
     proc, added, removed, changed = _run(recipe, tmp_path, write_argv)
     stderr = proc.stderr.decode("utf-8", "replace")
+    # 先驗「寫入模式正常結束」：寫了一半就 crash 的 run 也會讓 tree 改變，
+    # 只看下面那條會把它當成「前提成立」（CodeRabbit 在 PR #1959 指出）。
+    assert "Traceback (most recent call last)" not in stderr, (
+        f"{recipe.id}: write-mode run crashed. stderr[-400:]: {stderr[-400:]!r}")
+    assert proc.returncode in recipe.write_ok_exits, (
+        f"{recipe.id}: write-mode exit {proc.returncode}, expected one of "
+        f"{recipe.write_ok_exits}. stderr[-400:]: {stderr[-400:]!r}")
     assert added or removed or changed, (
         f"{recipe.id}: the same fixture WITHOUT --dry-run wrote nothing "
         f"(exit {proc.returncode}) — the dry-run recipe for it is a vacuous "

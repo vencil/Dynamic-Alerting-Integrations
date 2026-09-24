@@ -280,7 +280,15 @@ def main():
 
     args = parser.parse_args()
 
-    mode = "update" if args.update else ("check" if args.check else "dry-run")
+    # --dry-run wins over --update: a preview must never write, even when the
+    # write flag is also on the command line. It used to be ignored outright
+    # (the flag was never read), so `--update --dry-run` rewrote every doc
+    # (issue #1454; pinned by tests/shared/test_dry_run_no_write.py).
+    if args.dry_run and args.update:
+        print("note: --dry-run given, ignoring --update; nothing will be written",
+              file=sys.stderr)
+    mode = ("update" if args.update and not args.dry_run
+            else ("check" if args.check else "dry-run"))
     docs_dir = args.docs_dir
 
     docs_root = Path(docs_dir)
