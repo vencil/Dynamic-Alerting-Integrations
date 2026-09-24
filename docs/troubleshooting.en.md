@@ -39,6 +39,8 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 **Cause:** Kubernetes syncs ConfigMap mounts at most every 60 seconds
 
+⚠️ **Still the old value after a minute, and it never updates**: older exporters decided "file unchanged" for a symlinked conf.d entry (a ConfigMap volume's `key -> ..data/key` is one) from the symlink's own mtime, so a `..data` swap was never seen ([#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969)). Affected: v2.9.1 and earlier when conf.d has no `_defaults.yaml` anywhere (flat tree); `main` before the #1969 fix (unreleased) also for hierarchical trees with `_defaults.yaml`. From the fixed version on, the symlink target's mtime is used. On an affected version, only a restart (item 1 below) helps.
+
 **Solution:**
 1. Force restart: `kubectl rollout restart deployment/threshold-exporter`
 2. Or wait for mount sync (typical < 1 minute)

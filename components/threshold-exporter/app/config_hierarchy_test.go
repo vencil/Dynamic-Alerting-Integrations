@@ -307,6 +307,11 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 // The production scanner relies on this behavior but never asserts it.
 // Per Gemini R3 #1: invariant under-test → future Go stdlib change could
 // silently regress. This test nails it down.
+//
+// ⚠️ It is ONE cold scan: it pins what the layout ENUMERATES, not whether a
+// `..data` swap is DETECTED on the next tick — reading it as the latter hid
+// #1969 (the mtime fast-path compared the links' own stat, so a swap was
+// never seen). Swap detection is config_symlink_reload_test.go.
 func TestScanDirHierarchical_K8sSymlinkLayout(t *testing.T) {
 	// Skip on platforms that can't create symlinks without privilege.
 	// Linux CI (ubuntu-latest) always works; Windows developer-mode

@@ -102,9 +102,10 @@ import (
 // prior scan, because the mtime alone cannot prove the bytes are unchanged.
 const TreeScanMtimeGuard = 2 * time.Second
 
-// FileStat is the mtime fast-path's identity of one file: ModTime+Size as
-// read from the directory entry. Zero-value-comparable on purpose (the
-// fast-path compares with ==).
+// FileStat is the mtime fast-path's identity of one file: ModTime+Size of
+// the file the entry NAMES — the directory entry's own stat for a regular
+// file, the TARGET's stat for a symlink (#1969; see walkDirTree).
+// Zero-value-comparable on purpose (the fast-path compares with ==).
 type FileStat struct {
 	ModTime int64 // UnixNano
 	Size    int64
@@ -280,7 +281,9 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //   - directories whose name starts with '.' are pruned whole (never the
 //     root); files whose name starts with '.' are skipped.
 //   - only files whose lower-cased name ends in `.yaml` / `.yml` are kept.
-//   - an entry whose stat or read fails is logged and dropped from every map.
+//   - an entry whose stat or read fails is logged and dropped from every map;
+//     a symlinked file is statted through its target, so a dangling link
+//     is dropped here too (#1969).
 //   - `_`-prefixed files are hashed but never parsed for tenants; the ones
 //     confdname.IsDefaults accepts are entered in `Defaults` (every spelling;
 //     which ONE a directory's chain reads is DefaultsCarriers' question).
@@ -372,7 +375,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	}
 
 	// Phase 1: enumerate. Stats come from the DirEntry so no extra os.Stat
-	// per file; the read is deferred to phase 2 so the fast-path can skip it.
+	// per regular file (a symlink is statted through its target, below);
+	// the read is deferred to phase 2 so the fast-path can skip it.
 	type entry struct {
 		abs  string
 		rel  string
@@ -402,10 +406,47 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
 			return nil
 		}
-		entryInfo, ierr := d.Info()
-		if ierr != nil {
-			logger.Printf("WARN: cannot stat %s: %v", path, ierr)
-			return nil
+		// ⛔ A SYMLINKED FILE IS STATTED THROUGH ITS TARGET (#1969). d.Info()
+		// is the entry's LSTAT: for a symlink that is the link's own mtime
+		// and size, which never move when the target does — a K8s ConfigMap
+		// volume swaps `..data` to a new payload directory and leaves every
+		// `key -> ..data/key` link untouched, and an in-place edit of a
+		// link's target touches no link either. The mtime fast-path below
+		// compared those link stats, matched, and carried the PRIOR hash
+		// on every tick: a ConfigMap `..data` swap never reloaded. So the
+		// FileStat (and the guard's age) of a symlinked entry is the
+		// target's, via os.Stat. Only symlinks pay the extra syscall;
+		// ordinary entries keep d.Info() (the warm-path benches pin that).
+		//
+		// A target that cannot be statted (dangling link, permission) drops
+		// the entry with a WARN, exactly like a read failure in phase 2: the
+		// file is in no map, so a dangling defaults carrier is not a
+		// candidate for DefaultsCarriers and the next spelling in the
+		// directory is selected instead of the unreadable one keeping its
+		// prior hash.
+		//
+		// Residual gap, left open on purpose: ModTime+Size of the target is
+		// not identity. A `..data` swap to a payload whose file has the same
+		// size AND the same mtime (to the filesystem's resolution) as the
+		// old one would still match. kubelet writes the new payload at swap
+		// time, so its mtime moves and it is also inside TreeScanMtimeGuard
+		// on the tick that sees it. dev+inode would close the gap, but they
+		// live in FileInfo.Sys() — *syscall.Stat_t on unix, no inode on
+		// Windows — so it needs a per-platform build-tagged file; not done.
+		var entryInfo os.FileInfo
+		var ierr error
+		if d.Type()&fs.ModeSymlink != 0 {
+			entryInfo, ierr = os.Stat(path)
+			if ierr != nil {
+				logger.Printf("WARN: cannot stat symlink target of %s (dropped): %v", path, ierr)
+				return nil
+			}
+		} else {
+			entryInfo, ierr = d.Info()
+			if ierr != nil {
+				logger.Printf("WARN: cannot stat %s: %v", path, ierr)
+				return nil
+			}
 		}
 		rel, rerr := filepath.Rel(absRoot, path)
 		if rerr != nil {

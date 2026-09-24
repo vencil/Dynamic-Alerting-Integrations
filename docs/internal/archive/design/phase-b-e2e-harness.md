@@ -215,6 +215,8 @@ k3d 內含完整 K8s data plane：CNI（flannel）、kube-proxy iptables、Servi
 
 K8s 把 ConfigMap mount 到 Pod 時用的 atomic-rename-via-symlink 行為，已在 PR #54 的 A-8b unit test (`TestScanDirHierarchical_K8sSymlinkLayout`) 涵蓋。e2e harness 若再測同一件事，是 redundant retest at higher cost。
 
+> ⚠️ **更正（[#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969)）**：A-8b 只驗**一次冷掃描**對這種佈局的列舉（file-symlink 跟進、dir-symlink 不跟進），**不驗 `..data` 換版後的變更偵測**。換版偵測實際上是壞的：walker 的 mtime fast-path 看 symlink 自己的 stat，換版後永遠判成未變。本段「已被 unit test 覆蓋」因此不成立；換版熱重載現由 `components/threshold-exporter/app/config_symlink_reload_test.go`（manager 的 watch tick 與 IncrementalLoad）與 `pkg/config/tree_scan_symlink_test.go` 覆蓋。
+
 **(c) docker-compose 的 concrete 優勢**
 
 | 維度 | docker-compose | k3d |

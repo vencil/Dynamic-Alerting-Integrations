@@ -41,6 +41,8 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 **原因：** Kubernetes 至多每 60 秒同步一次 ConfigMap 掛載
 
+⚠️ **超過一分鐘仍是舊值、且之後永遠不會更新**：舊版 exporter 對 symlink 掛載的 conf.d（ConfigMap volume 的 `key -> ..data/key` 就是這種）判斷「檔案沒變」時看的是 symlink 自己的 mtime，`..data` 換版後永遠判成未變（[#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969)）。受影響：v2.9.1 以前 conf.d 沒有任何 `_defaults.yaml` 的扁平樹；#1969 修正前的 `main`（未發布）則連帶有 `_defaults.yaml` 的階層樹也受影響。修正版本起改看 symlink 目標的 mtime。在舊版上只能用下方第 1 項重啟。
+
 **解決方案：**
 1. 強制重新啟動：`kubectl rollout restart deployment/threshold-exporter`
 2. 或等待掛載同步（典型 < 1分鐘）

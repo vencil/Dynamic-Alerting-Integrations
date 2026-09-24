@@ -1491,9 +1491,15 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 }
 
 // WatchLoop periodically checks for config changes and reloads.
-// Uses content hash comparison for reliable change detection.
-// K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
-// detection is more reliable than ModTime for both modes.
+// Change detection compares content hashes, but in directory mode a file's
+// hash is only recomputed when the walker's mtime fast-path lets it through
+// (pkg/config ScanDirTree: a file whose ModTime+Size match the prior scan and
+// that is older than TreeScanMtimeGuard keeps its prior hash unread). K8s
+// ConfigMap volumes update by swapping the `..data` symlink and leave every
+// `key -> ..data/key` link untouched, so that stat is taken from the link's
+// TARGET (#1969) — before that, a `..data` swap was invisible to every tick
+// whose fast-path covered the swapped keys, i.e. the swap never reloaded.
+// Single-file mode hashes the file on every tick (no fast-path).
 // The stopCh parameter allows graceful shutdown — close it to stop the loop.
 //
 // In directory mode, uses incremental reload (v2.1.0): per-file hash tracking
