@@ -348,12 +348,21 @@ def _edit(path: Path, old: str, new: str) -> None:
 # git 身分與設定隔離：fixture 建 repo 與工具子行程共用。GIT_OPTIONAL_LOCKS=0
 # 讓 `git status` 不去順手刷新 .git/index——那是 git 自己的快取寫入，不是工具
 # 的副作用；不關掉的話，快照會把它算成 dry-run 的寫入。
+#
+# maintenance.auto / gc.auto 同理：fixture 的 `git commit` 會叫起
+# `git maintenance run --auto`，它可以 detach 到背景、在工具執行期間才收掉
+# `.git/objects/maintenance.lock`——CI 的 git 2.55 實際發生過（PR #1966 的
+# Python Tests），快照讀成「dry-run 刪了檔」。走 GIT_CONFIG_COUNT 而不是 `-c`，
+# 工具子行程自己跑的 git 也一併關掉。
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "dry-run-gate", "GIT_AUTHOR_EMAIL": "gate@example.invalid",
     "GIT_COMMITTER_NAME": "dry-run-gate",
     "GIT_COMMITTER_EMAIL": "gate@example.invalid",
     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
+    "GIT_CONFIG_KEY_1": "gc.auto", "GIT_CONFIG_VALUE_1": "0",
 }
 
 
