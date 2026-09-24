@@ -18,8 +18,7 @@ plus the pre-existing one this file was written for: refuse before
 `kubectl apply` when the artifact would make the exporter reject the ENTIRE
 config dir (same-stem `.yaml` + `.yml`).
 
-⚠️ `kubectl` is NOT on the CI runners (only `nightly-image-scan.yaml` and
-`image-ref-resolve.yaml` mention it), so the oracle for the producer half is a
+⚠️ The oracle for the producer half is a
 PATH shim that dumps its own `sys.argv` as JSON. That is also the BETTER
 oracle: it can assert that each `--from-file=key=path` arrived as one argv
 element, byte for byte, which a real `kubectl` would silently absorb.
@@ -58,8 +57,9 @@ _TENANT = "tenants:\n  {t}:\n    mysql_connections: 50\n"
 _DEFAULTS = "defaults:\n  mysql_connections: 100\n"
 
 # A shim that records exactly what argv it was handed and BUILDS the manifest
-# those arguments describe. `KUBECTL_SHIM_FAIL` turns it into a failing
-# kubectl; `KUBECTL_SHIM_DROP` / `KUBECTL_SHIM_ADD` / `KUBECTL_SHIM_TRUNCATE`
+# those arguments describe. `KUBECTL_SHIM_CALLS` names a file it appends one
+# line to per invocation, so a test can count calls. `KUBECTL_SHIM_FAIL`
+# turns it into a failing kubectl; `KUBECTL_SHIM_DROP` / `KUBECTL_SHIM_ADD` / `KUBECTL_SHIM_TRUNCATE`
 # make it produce an artifact that disagrees with its own arguments, which is
 # what `measure_artifact` exists to catch.
 #
@@ -68,6 +68,10 @@ _DEFAULTS = "defaults:\n  mysql_connections: 100\n"
 # shim that cannot be made to LIE would leave the reconciliation untested.
 _SHIM = """#!{python}
 import base64, json, os, sys
+calls = os.environ.get("KUBECTL_SHIM_CALLS")
+if calls:
+    with open(calls, "a", encoding="utf-8") as fh:
+        fh.write("called\\n")
 dump = os.environ.get("KUBECTL_SHIM_ARGV")
 if dump:
     with open(dump, "w", encoding="utf-8") as fh:
@@ -889,27 +893,9 @@ class TestSelectionFollowsTheExportersOwnPredicate:
 # ── #1796: names that cannot be keys, and argv that is not re-parsed ─
 
 class TestFileNamesThatCannotBeConfigMapKeys:
-    """⛔ Refuse BY NAME — but as MESSAGE QUALITY, not as a guard.
-
-    The sentence that stood here ("handing it to `kubectl` produces a
-    message that never says which file") was FALSE, and it was the premise
-    for keeping this whole family. Real kubectl v1.31.0 names `db b.yaml`
-    itself, regex and all, and removing `configmap_key_problem` entirely
-    leaves rc 1 with no artifact written — nothing passes silently.
-
-    What this layer does buy is measured and small: it lists ALL the
-    offending names (kubectl stops at the first), and it is the only
-    by-name answer for **`=` and `,`** — TWO classes, not three. All three
-    of `=`, `,` and `"` are mangled by pflag's CSV split and
-    `ParseFileSource` before `IsConfigMapKey` ever runs, but only the first
-    two lose the name with it: `=` gives `key names or file paths cannot
-    contain '='` (nothing named) and `,` gives `error reading db: no such
-    file or directory` (a fragment that is not a file), while `"` gives
-    `invalid argument "db\\"a.yaml=<path>" for "--from-file" flag: …` —
-    the file name is echoed back verbatim. ⚠️ The earlier version of this
-    sentence put `"` in the same bucket as the other two; that half had not
-    been measured. The per-class measurements are in
-    `configmap_key_problem`'s own docstring.
+    """Refuse BY NAME: every offending name in one run, and before `kubectl`
+    is ever called — the two properties this layer is kept for, each pinned
+    below. No claim is made here about what kubectl's own message says.
 
     ⛔ The one thing that WOULD be silent is dropping the file instead of
     refusing: that loses a tenant behind a green light (#1603's shape).
@@ -929,6 +915,46 @@ class TestFileNamesThatCannotBeConfigMapKeys:
         assert fragment in r.stderr, r.stderr
         assert "[-._a-zA-Z0-9]+" in r.stderr, r.stderr
         assert not _out(tmp_path).exists(), "the artifact was written anyway"
+
+    def test_every_illegal_name_is_listed_in_one_run(self, tmp_path,
+                                                      kubectl_shim):
+        """All offending names in ONE run, not the first one and stop."""
+        d = _tree(tmp_path, ["db-a.yaml"])
+        # ⛔ One tenant per file: two files declaring the same tenant would
+        # also be a duplicate-tenant tree, refused (and named) for that.
+        bad = {"a=b.yaml": "db-x", "db b.yaml": "db-y"}
+        for name, tenant in bad.items():
+            (d / name).write_text(_TENANT.format(t=tenant), encoding="utf-8")
+        r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "cannot be a ConfigMap key" in r.stderr, r.stderr
+        for name in bad:
+            assert repr(name) in r.stderr, (name, r.stderr)
+        assert not _out(tmp_path).exists()
+
+    def test_an_illegal_name_is_refused_before_kubectl_is_called(
+            self, tmp_path, kubectl_shim):
+        """The refusal happens BEFORE the subprocess: the shim counts its
+        calls, and a refused run must leave that count at 0. 必響對照組: the
+        same shim on a legal tree counts exactly 1, so a recorder that never
+        records cannot make the first half pass."""
+        calls = tmp_path / "kubectl-calls"
+
+        legal = _tree(tmp_path, ["db-a.yaml"], at="legal")
+        r = _run(legal, tmp_path / "legal-out.yaml", shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_CALLS": str(calls)})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert calls.read_text(encoding="utf-8").splitlines() == ["called"]
+        calls.unlink()
+
+        d = _tree(tmp_path, ["db-a.yaml"])
+        (d / "db b.yaml").write_text(_TENANT.format(t="db-x"), encoding="utf-8")
+        r = _run(d, _out(tmp_path), shim=kubectl_shim,
+                 env_extra={"KUBECTL_SHIM_CALLS": str(calls)})
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "db b.yaml" in r.stderr, r.stderr
+        assert not calls.exists(), "kubectl was called before the refusal"
+        assert not _out(tmp_path).exists()
 
     def test_shell_metacharacters_are_shown_verbatim_not_evaluated(
             self, tmp_path, kubectl_shim):
@@ -1013,21 +1039,10 @@ class TestFileNamesThatCannotBeConfigMapKeys:
 
 
 class TestTheArtifactIsReconciledAgainstTheTree:
-    """The successor to `TestTheFromFileSourceKubectlHasToParse`, and the
-    reason that class is gone.
+    """⛔ **Not guarded:** `--config-dir .../env=prod/conf.d` is not named by
+    us.
 
-    ⛔ That guard transcribed `ParseFileSource` and counted `=` in the source
-    string. Blind review found the layer ABOVE it: `--from-file` is a pflag
-    `StringSliceVar`, so the value is split by `readAsCSV` first, and a path
-    holding `,` or `"` was fabricated into two sources while the guard said
-    nothing. Transcribing CSV as well buys one layer and leaves the next.
-
-    ⛔ **The cost of removing it**, recorded here because it is a real loss:
-    `--config-dir .../env=prod/conf.d` is no longer named by us. kubectl
-    still refuses (the run fails, its message is forwarded), but that
-    message blames "key names or file paths" and names neither.
-
-    What replaces it asks the artifact instead of the parser: the keys and
+    This asks the artifact instead of the parser: the keys and
     the value lengths in the manifest kubectl just produced must be the
     carriers this run selected. Every mangling of the argument list lands
     there, whichever layer did it.
@@ -1446,19 +1461,12 @@ def test_end_to_end_with_a_real_kubectl(tmp_path):
 
     ⛔ It also carries the one thing `from_file_source_problem` used to
     hold, now that that transcription is gone: a `--config-dir` spelled
-    with an `=` must still end the run non-zero with NO artifact. The cost
-    recorded when that guard was withdrawn is that WE no longer name the
-    path — kubectl's own refusal says `key names or file paths cannot
-    contain '='` and names neither — but "it fails and writes nothing" was
-    left with nothing holding it at all. Asserted here rather than in a
+    with an `=` must still end the run non-zero with NO artifact. Asserted here rather than in a
     guard of its own: only a real kubectl can answer it, which is why this
     is the arm it hangs on.
 
     ⛔ **And that is also its limit, stated rather than fixed.** The whole
-    function sits behind `shutil.which("kubectl")`, and no CI workflow
-    installs kubectl (`grep -rl kubectl .github/workflows/` names only
-    `image-ref-resolve.yaml` and `nightly-image-scan.yaml`, neither of
-    which runs these tests) ⇒ on CI this SKIPS, so the `=` coverage below
+    function sits behind `shutil.which("kubectl")`, so the `=` coverage below
     holds only on a host that happens to have kubectl. No mechanism is
     added for it here: a green CI does not mean that cell ran.
     """

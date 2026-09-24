@@ -184,8 +184,8 @@ def _h(key: str) -> str:
 # A ref that 404s here is a broken pipeline in someone else's repo.
 
 # Chosen for what it CONTAINS, not only for how it can be pinned. Measured
-# (`docker run --entrypoint sh`): a shell, `kubectl` v1.34.9, and `kustomize`
-# v5.8.1. All three are load-bearing — the apply stage is a GitLab `script:`
+# (`docker run --entrypoint sh`): a shell, `kubectl` v1.34.9, and `kustomize`.
+# All three are load-bearing — the apply stage is a GitLab `script:`
 # block, which the runner executes through a shell inside this image, and the
 # first line of that block invokes standalone `kustomize`.
 # ⛔ Two images were rejected on measurement, not on preference:
@@ -2721,9 +2721,7 @@ def _kustomize_carrier_files(
         exactly as `configmap_assemble` words them.
       * a name that can never be a ConfigMap key (`db b.yaml`, `a=b.yaml`,
         `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
-        `IsConfigMapKey`, shared with `configmap_assemble`. kustomize would
-        refuse the build (or, for `=`, read `key=path`), so listing it
-        breaks every tenant rather than losing one.
+        `IsConfigMapKey`, shared with `configmap_assemble`.
     """
     names = {'_defaults.yaml'} | {f'{t}.yaml' for t in tenants}
     if conf_dir is not None:
