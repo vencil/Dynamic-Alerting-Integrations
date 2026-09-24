@@ -3,9 +3,41 @@ package main
 import (
 	"bufio"
 	"errors"
+	"go/build"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestBareCopyNeedsOnlyThisFile pins what bench-gate-release.yaml's
+// "Stash bench harness" step relies on: it copies bench_filter.go alone and
+// later `go run`s that copy from the exporter module's directory (#1871).
+// So go/build's GoFiles must be just that file, and every import must be in
+// the standard library — anything else would resolve, or not, through the
+// exporter's go.mod at whichever tag is checked out.
+//
+// Standard library means "under GOROOT/src", not "first path element has no
+// dot": this module's own path is `benchfilter`, so a subpackage import like
+// benchfilter/x has no dot and still breaks the bare copy. Not checked, and
+// also left behind by the copy: cgo files (not in GoFiles; red here only via
+// their import "C" when cgo is on), .s files, //go:embed patterns.
+func TestBareCopyNeedsOnlyThisFile(t *testing.T) {
+	pkg, err := build.ImportDir(".", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkg.GoFiles) != 1 || pkg.GoFiles[0] != "bench_filter.go" {
+		t.Errorf("non-test files %v: the release harness copies bench_filter.go alone, "+
+			"so anything it needs from a sibling file is missing there", pkg.GoFiles)
+	}
+	goroot := build.Default.GOROOT
+	for _, imp := range append([]string{"fmt"}, pkg.Imports...) { // fmt: GOROOT itself resolves
+		if st, err := os.Stat(filepath.Join(goroot, "src", filepath.FromSlash(imp))); err != nil || !st.IsDir() {
+			t.Errorf("import %q is not under GOROOT/src (%q): not the standard library", imp, goroot)
+		}
+	}
+}
 
 // cpuHeader is the suite header scripts/tools/dx/analyze_bench_history.py
 // reads back out of the bench-baseline.txt artifact (its `_CPU_RE`) to
