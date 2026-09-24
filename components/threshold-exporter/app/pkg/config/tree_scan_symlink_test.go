@@ -44,7 +44,7 @@ func agedSymlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("os.Symlink unavailable here (%v) — symlinked rows cannot be built on this platform "+
-			"(Windows without the symlink privilege); they are measured on Linux/macOS CI", err)
+			"(Windows without the symlink privilege); CI measures them on ubuntu-latest, its only runner", err)
 	}
 	testutil.AgeSymlink(t, link, symlinkFixtureAge)
 }
@@ -123,6 +123,101 @@ func TestScanDirTree_ConfigMapDataSwapChangesHash(t *testing.T) {
 			// move (the swap is not a blanket "everything changed").
 			if next.Files["t.yaml"] == nil || next.Files["t.yaml"].Hash != prior.Files["t.yaml"].Hash {
 				t.Errorf("t.yaml hash moved although its bytes did not")
+			}
+		})
+	}
+}
+
+// TestScanDirTree_SymlinkRetargetToIdenticalStatTarget: the link itself is
+// retargeted (new link renamed over it, as `ln -sfn` does) to a file that
+// was written earlier with the same size AND the same mtime as the old
+// target. The target stat is identical before and after; only the link's
+// lstat moved, so a fast-path keyed on the target alone carries the old
+// hash. Three rows:
+//   - new link fresh: inside the guard, and its lstat differs too.
+//   - new link aged: to a different past time; decided by the link-stat
+//     comparison alone (the guard is not involved).
+//   - link lstat collides, link young: the new link gets the OLD link's
+//     exact mtime (and the same size), a coarse-mtime filesystem's view.
+//     Every stat equals the prior's, so only the guard can catch it — and
+//     only if the guard ages the NEWER of the two mtimes (the link, young)
+//     rather than the target's (old). Pins that choice.
+func TestScanDirTree_SymlinkRetargetToIdenticalStatTarget(t *testing.T) {
+	t.Parallel()
+	const (
+		v1 = "defaults:\n  cpu_pct: 50\n"
+		v2 = "defaults:\n  cpu_pct: 90\n" // same size as v1 on purpose
+	)
+	for _, mode := range []string{"new link fresh", "new link aged", "link lstat collides, link young"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			same := time.Now().Add(-symlinkFixtureAge).Truncate(time.Second)
+			for p, body := range map[string]string{".a/d.yaml": v1, ".b/d.yaml": v2} {
+				full := filepath.Join(root, filepath.FromSlash(p))
+				agedWrite(t, full, body, 0)
+				if err := os.Chtimes(full, same, same); err != nil {
+					t.Fatal(err)
+				}
+			}
+			link := filepath.Join(root, "_defaults.yaml")
+			agedSymlinkOrSkip(t, filepath.Join(".a", "d.yaml"), link)
+			// young is inside the guard but far enough from its edge for the
+			// two scans below to finish first.
+			young := time.Now().Add(-TreeScanMtimeGuard / 4).Truncate(time.Microsecond)
+			if mode == "link lstat collides, link young" {
+				testutil.SetSymlinkMtime(t, link, young)
+			}
+
+			var logBuf bytes.Buffer
+			logger := log.New(&logBuf, "", 0)
+			prior, err := ScanDirTree(root, nil, nil, logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			oldLink, err := os.Lstat(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmp := filepath.Join(root, ".retarget-tmp")
+			if err := os.Symlink(filepath.Join(".b", "d.yaml"), tmp); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "new link aged":
+				testutil.AgeSymlink(t, tmp, symlinkFixtureAge/2)
+			case "link lstat collides, link young":
+				testutil.SetSymlinkMtime(t, tmp, young)
+			}
+			if err := os.Rename(tmp, link); err != nil {
+				t.Fatal(err)
+			}
+			// Fixture check: the target stat really is identical.
+			if ti, err := os.Stat(link); err != nil || ti.ModTime().UnixNano() != prior.Files["_defaults.yaml"].Stat.ModTime ||
+				ti.Size() != prior.Files["_defaults.yaml"].Stat.Size {
+				t.Fatalf("fixture: new target stat (%v, %v) differs from the prior's %+v", ti, err, prior.Files["_defaults.yaml"].Stat)
+			}
+			if mode == "link lstat collides, link young" {
+				if li, err := os.Lstat(link); err != nil || li.ModTime().UnixNano() != oldLink.ModTime().UnixNano() || li.Size() != oldLink.Size() {
+					t.Fatalf("fixture: new link lstat (%v, %v) must equal the old link's (%v, %v)",
+						li, err, oldLink.ModTime(), oldLink.Size())
+				}
+			}
+
+			next, err := ScanDirTree(root, prior, nil, logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nf := next.Files["_defaults.yaml"]
+			if nf == nil {
+				t.Fatalf("_defaults.yaml missing after the retarget; log:\n%s", logBuf.String())
+			}
+			if nf.Hash == prior.Files["_defaults.yaml"].Hash {
+				t.Errorf("_defaults.yaml hash unchanged across the retarget (Reused=%v): the fast-path carried the old target", nf.Reused)
+			}
+			if string(nf.Data) != v2 {
+				t.Errorf("_defaults.yaml Data = %q, want the new target's %q", nf.Data, v2)
 			}
 		})
 	}

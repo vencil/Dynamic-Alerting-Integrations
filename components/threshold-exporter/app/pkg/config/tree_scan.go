@@ -104,11 +104,32 @@ const TreeScanMtimeGuard = 2 * time.Second
 
 // FileStat is the mtime fast-path's identity of one file: ModTime+Size of
 // the file the entry NAMES — the directory entry's own stat for a regular
-// file, the TARGET's stat for a symlink (#1969; see walkDirTree).
+// file, the TARGET's stat for a symlink (#1969; see walkDirTree, and
+// TreeFile.LinkStat for the link's own half).
 // Zero-value-comparable on purpose (the fast-path compares with ==).
 type FileStat struct {
 	ModTime int64 // UnixNano
 	Size    int64
+}
+
+// sameLinkStat reports whether two TreeFile.LinkStat values agree: both nil
+// (two regular files), or both set and equal. A regular file replaced by a
+// symlink (or back) is therefore a change.
+func sameLinkStat(a, b *FileStat) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// guardMtime is the mtime the fast-path's TreeScanMtimeGuard ages: the
+// file's own for a regular file, the NEWER of target and link for a symlink
+// (both must be older than the guard; see walkDirTree).
+func guardMtime(st FileStat, link *FileStat) int64 {
+	if link == nil {
+		return st.ModTime
+	}
+	return max(st.ModTime, link.ModTime)
 }
 
 // ScanObserver receives the walker's metric events. The exporter's
@@ -147,6 +168,12 @@ type TreeFile struct {
 	RelKey  string // root-relative slash path (flat key)
 	Hash    string // full SHA-256 hex
 	Stat    FileStat
+	// LinkStat is the link's OWN lstat (ModTime+Size) when the entry is a
+	// symlink, nil for a regular file (#1969): Stat is then the target's,
+	// and the fast-path needs BOTH unchanged. A pointer, not a second
+	// FileStat, so a regular file's TreeFile stays in its allocation size
+	// class (the warm-path benches' B/op).
+	LinkStat *FileStat
 	// Data holds the file's bytes only when this scan READ the file AND the
 	// caller has no prior hash for it or the hash moved. A file read only
 	// because it was too young for the mtime guard, whose hash then matched
@@ -282,8 +309,8 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //     root); files whose name starts with '.' are skipped.
 //   - only files whose lower-cased name ends in `.yaml` / `.yml` are kept.
 //   - an entry whose stat or read fails is logged and dropped from every map;
-//     a symlinked file is statted through its target, so a dangling link
-//     is dropped here too (#1969).
+//     a symlinked file is statted through its target too, so a dangling
+//     link is dropped here (#1969).
 //   - `_`-prefixed files are hashed but never parsed for tenants; the ones
 //     confdname.IsDefaults accepts are entered in `Defaults` (every spelling;
 //     which ONE a directory's chain reads is DefaultsCarriers' question).
@@ -294,8 +321,9 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //     the whole-tree verdict (Conflict, nil Tenants) is the exporter's, the
 //     per-tenant verdict (Locate) is the read-only diagnostics'.
 //
-// prior enables the mtime fast-path: a file whose ModTime+Size equal the
-// prior's and that is older than TreeScanMtimeGuard reuses the prior's hash
+// prior enables the mtime fast-path: a file whose FileStat equals the
+// prior's (for a symlink: the link's lstat AND the target's stat) and that
+// is older than TreeScanMtimeGuard reuses the prior's hash
 // AND TenantIDs without being read. prior may be nil (cold scan: every file
 // is read and cached).
 //
@@ -377,11 +405,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// Phase 1: enumerate. Stats come from the DirEntry so no extra os.Stat
 	// per regular file (a symlink is statted through its target, below);
 	// the read is deferred to phase 2 so the fast-path can skip it.
+	// name is not stored: it is rel's last element (phase 2 slices it), so
+	// the struct stays at its pre-#1969 size and the warm path's B/op with it.
 	type entry struct {
 		abs  string
 		rel  string
-		name string
-		info os.FileInfo
+		stat FileStat
+		link *FileStat // symlinks only; see TreeFile.LinkStat
 	}
 	var entries []entry
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
@@ -406,54 +436,80 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
 			return nil
 		}
-		// ⛔ A SYMLINKED FILE IS STATTED THROUGH ITS TARGET (#1969). d.Info()
-		// is the entry's LSTAT: for a symlink that is the link's own mtime
-		// and size, which never move when the target does — a K8s ConfigMap
-		// volume swaps `..data` to a new payload directory and leaves every
-		// `key -> ..data/key` link untouched, and an in-place edit of a
-		// link's target touches no link either. The mtime fast-path below
-		// compared those link stats, matched, and carried the PRIOR hash
-		// on every tick: a ConfigMap `..data` swap never reloaded. So the
-		// FileStat (and the guard's age) of a symlinked entry is the
-		// target's, via os.Stat. Only symlinks pay the extra syscall;
-		// ordinary entries keep d.Info() (the warm-path benches pin that).
+		// ⛔ A SYMLINKED FILE IS JUDGED BY ITS LINK *AND* ITS TARGET (#1969).
+		// d.Info() is the entry's LSTAT: for a symlink that is the link's own
+		// mtime and size, which never move when the target does — a K8s
+		// ConfigMap volume swaps `..data` to a new payload directory and
+		// leaves every `key -> ..data/key` link untouched, and an in-place
+		// edit of a link's target touches no link either. The mtime
+		// fast-path below compared those link stats, matched, and carried
+		// the PRIOR hash on every tick: a ConfigMap `..data` swap never
+		// reloaded. The target's stat alone is not enough either: retargeting
+		// the link itself (`ln -sfn`, or an atomic rename of a new link over
+		// it) to another, already-written file whose size and mtime equal
+		// the old target's leaves the target stat unchanged — only the
+		// link's lstat moves. So a symlinked entry carries BOTH — Stat is
+		// the target's (os.Stat), LinkStat the link's (d.Info()) — and the
+		// fast-path needs both unchanged. Only symlinks pay the extra
+		// syscall; ordinary entries keep d.Info() alone (the warm-path
+		// benches pin that).
+		//
+		// The guard's age is the NEWER of the two mtimes, i.e. both must be
+		// older than TreeScanMtimeGuard. The guard exists because an mtime
+		// inside the filesystem's resolution window cannot prove the bytes
+		// settled; that is true of whichever side moved last, so the
+		// conservative reading is the one that re-reads when either is young.
 		//
 		// A target that cannot be statted (dangling link, permission) drops
 		// the entry with a WARN, exactly like a read failure in phase 2: the
 		// file is in no map, so a dangling defaults carrier is not a
 		// candidate for DefaultsCarriers and the next spelling in the
 		// directory is selected instead of the unreadable one keeping its
-		// prior hash.
+		// prior hash. The WARN repeats on every tick while the link dangles,
+		// the same cadence as the phase-2 read-failure WARN.
 		//
-		// Residual gap, left open on purpose: ModTime+Size of the target is
-		// not identity. A `..data` swap to a payload whose file has the same
-		// size AND the same mtime (to the filesystem's resolution) as the
-		// old one would still match. kubelet writes the new payload at swap
-		// time, so its mtime moves and it is also inside TreeScanMtimeGuard
-		// on the tick that sees it. dev+inode would close the gap, but they
-		// live in FileInfo.Sys() — *syscall.Stat_t on unix, no inode on
-		// Windows — so it needs a per-platform build-tagged file; not done.
-		var entryInfo os.FileInfo
-		var ierr error
+		// Residual gap, left open on purpose: two ModTime+Size pairs are not
+		// identity. A change is missed only when BOTH the link's lstat and
+		// the target's stat come out equal to the prior's — e.g. a `..data`
+		// swap (links untouched) to a payload file with the same size and the
+		// same mtime (to the filesystem's resolution) as the old one. What
+		// protects the kubelet path is that kubelet writes the new payload at
+		// swap time, so the target's mtime differs from the old file's and
+		// the stat comparison fails. (The guard does not help there: the
+		// default -reload-interval is 30s against a 2s TreeScanMtimeGuard, so
+		// the tick that sees a swap almost never falls inside it.) dev+inode
+		// would close the gap, but they live in FileInfo.Sys() —
+		// *syscall.Stat_t on unix, no inode on Windows — so it needs a
+		// per-platform build-tagged file; not done.
+		var st FileStat
+		var link *FileStat
 		if d.Type()&fs.ModeSymlink != 0 {
-			entryInfo, ierr = os.Stat(path)
-			if ierr != nil {
-				logger.Printf("WARN: cannot stat symlink target of %s (dropped): %v", path, ierr)
+			linkInfo, lerr := d.Info()
+			if lerr != nil {
+				logger.Printf("WARN: cannot stat %s: %v", path, lerr)
 				return nil
 			}
+			targetInfo, terr := os.Stat(path)
+			if terr != nil {
+				logger.Printf("WARN: cannot stat symlink target of %s (dropped): %v", path, terr)
+				return nil
+			}
+			st = FileStat{ModTime: targetInfo.ModTime().UnixNano(), Size: targetInfo.Size()}
+			link = &FileStat{ModTime: linkInfo.ModTime().UnixNano(), Size: linkInfo.Size()}
 		} else {
-			entryInfo, ierr = d.Info()
+			entryInfo, ierr := d.Info()
 			if ierr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, ierr)
 				return nil
 			}
+			st = FileStat{ModTime: entryInfo.ModTime().UnixNano(), Size: entryInfo.Size()}
 		}
 		rel, rerr := filepath.Rel(absRoot, path)
 		if rerr != nil {
 			logger.Printf("WARN: cannot relativise %s: %v", path, rerr)
 			return nil
 		}
-		entries = append(entries, entry{abs: filepath.Clean(path), rel: filepath.ToSlash(rel), name: name, info: entryInfo})
+		entries = append(entries, entry{abs: filepath.Clean(path), rel: filepath.ToSlash(rel), stat: st, link: link})
 		return nil
 	})
 	if walkErr != nil {
@@ -471,18 +527,21 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// names the first two files in that order, as it always has).
 	var walkOrder []*TreeFile
 	for _, e := range entries {
+		name := e.rel[strings.LastIndexByte(e.rel, '/')+1:]
 		f := &TreeFile{
 			AbsPath:    e.abs,
 			RelKey:     e.rel,
-			Stat:       FileStat{ModTime: e.info.ModTime().UnixNano(), Size: e.info.Size()},
-			IsDefaults: confdname.IsDefaults(e.name),
+			Stat:       e.stat,
+			LinkStat:   e.link,
+			IsDefaults: confdname.IsDefaults(name),
 		}
 
 		var pf *TreeFile
 		if prior != nil {
 			pf = prior.Files[e.rel]
 		}
-		if pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && time.Since(e.info.ModTime()) > TreeScanMtimeGuard {
+		if pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
+			time.Since(time.Unix(0, guardMtime(f.Stat, f.LinkStat))) > TreeScanMtimeGuard {
 			f.Hash = pf.Hash
 			// ⛔ THE CARRY. Reusing the hash without the declarations would
 			// make the tenant vanish from the hierarchy on every quiet tick.
@@ -503,7 +562,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				f.Data = data
 			}
 			switch {
-			case strings.HasPrefix(e.name, "_"):
+			case strings.HasPrefix(name, "_"):
 				// Never parsed for tenants.
 			case pf != nil && pf.Hash == f.Hash && !pf.ParseFailed:
 				// Same bytes as the prior: the declarations cannot differ, so

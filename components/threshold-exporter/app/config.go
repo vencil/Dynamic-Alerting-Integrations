@@ -1496,9 +1496,12 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 // (pkg/config ScanDirTree: a file whose ModTime+Size match the prior scan and
 // that is older than TreeScanMtimeGuard keeps its prior hash unread). K8s
 // ConfigMap volumes update by swapping the `..data` symlink and leave every
-// `key -> ..data/key` link untouched, so that stat is taken from the link's
-// TARGET (#1969) — before that, a `..data` swap was invisible to every tick
-// whose fast-path covered the swapped keys, i.e. the swap never reloaded.
+// `key -> ..data/key` link untouched, so for a symlink that stat is the
+// link's own lstat AND its TARGET's stat, both of which must be unchanged
+// (#1969) — before that, only the link's lstat was compared and a `..data`
+// swap was invisible to every tick, i.e. the swap never reloaded. Nested
+// ConfigMap item paths (`team-a/x.yaml`) mount as a DIRECTORY symlink the
+// walker does not follow; files under it are not loaded at all (separate).
 // Single-file mode hashes the file on every tick (no fast-path).
 // The stopCh parameter allows graceful shutdown — close it to stop the loop.
 //

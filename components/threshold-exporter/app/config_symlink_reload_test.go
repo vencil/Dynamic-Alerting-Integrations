@@ -118,7 +118,7 @@ func symlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("os.Symlink unavailable here (%v) — symlinked conf.d rows cannot be built on this platform "+
-			"(Windows without the symlink privilege); they are measured on Linux/macOS CI", err)
+			"(Windows without the symlink privilege); CI measures them on ubuntu-latest, its only runner", err)
 	}
 }
 
@@ -210,6 +210,45 @@ func symlinkLayouts() []symlinkLayout {
 				}
 				return func() {
 					if err := os.WriteFile(filepath.Join(root, ".store", p.valueFile), []byte(p.files("90")[p.valueFile]), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+		},
+		{
+			// The LINK is retargeted (a new link renamed over it, as
+			// `ln -sfn` does) to another file written earlier with the SAME
+			// size and the SAME mtime as the old target. The target stat
+			// cannot tell the two apart; only the link's own lstat moved.
+			// The new link is aged too (to a different past time), so the
+			// guard is not what catches it.
+			name: "symlink retargeted to a pre-staged target with identical size and mtime",
+			build: func(t *testing.T, root string, p symlinkPlane) func() {
+				same := time.Now().Add(-treeScanFixtureAge).Truncate(time.Second)
+				for k, v := range p.files("50") {
+					if k != p.valueFile {
+						writeAgedAt(t, filepath.Join(root, k), v, treeScanFixtureAge)
+						continue
+					}
+					for dir, body := range map[string]string{".a": v, ".b": p.files("90")[k]} {
+						target := filepath.Join(root, dir, k)
+						writeAgedAt(t, target, body, 0)
+						if err := os.Chtimes(target, same, same); err != nil {
+							t.Fatal(err)
+						}
+					}
+					link := filepath.Join(root, k)
+					symlinkOrSkip(t, filepath.Join(".a", k), link)
+					testutil.AgeSymlink(t, link, treeScanFixtureAge)
+				}
+				return func() {
+					link := filepath.Join(root, p.valueFile)
+					tmp := filepath.Join(root, ".retarget-tmp")
+					if err := os.Symlink(filepath.Join(".b", p.valueFile), tmp); err != nil {
+						t.Fatal(err)
+					}
+					testutil.AgeSymlink(t, tmp, treeScanFixtureAge/2)
+					if err := os.Rename(tmp, link); err != nil {
 						t.Fatal(err)
 					}
 				}
