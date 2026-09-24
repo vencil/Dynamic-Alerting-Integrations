@@ -1234,6 +1234,16 @@ repos:
         # branch. Source-only: configmaps are sync-checked against source
         # separately. Semantic proof: tests/rulepacks/*-void_test.yaml.
 
+      - id: pipestatus-errexit
+        name: "TRK-382: PIPESTATUS read in a file that never relaxes errexit+pipefail (#1845)"
+        entry: python3 -X utf8 scripts/tools/lint/check_pipestatus_errexit.py --ci
+        language: python
+        pass_filenames: false
+        files: (\.sh$|^\.github/workflows/|^scripts/tools/lint/check_pipestatus_errexit\.py$)
+        # File-level text rule, NOT a reachability analysis (that was refuted in
+        # #1820). Full scan of the tracked population; exit via an inline
+        # `# pipestatus-ok: <why>` on the read line. Boundaries in the docstring.
+
       - id: configmap-mount-completeness
         name: "Every configmap-rules-* must be mounted in Prometheus projected volume (#869 dead-rule guard)"
         entry: python3 -X utf8 scripts/tools/lint/check_configmap_mount_completeness.py --ci

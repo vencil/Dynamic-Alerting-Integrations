@@ -243,6 +243,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_orphan_lint.py": _R_LINT,
     "check_path_metadata_consistency.py": _R_LINT,
     "check_pint.py": _R_LINT,
+    "check_pipestatus_errexit.py": _R_LINT,
     "check_planning_status_sync.py": _R_LINT,
     "check_playwright_rtl_drift.py": _R_LINT,
     "check_portal_audience_enum.py": _R_LINT,
@@ -550,8 +551,15 @@ def test_allowlists_shrink_only_count_pin():
     # scripts/tools/lint/ gate, and that directory is English-only across the
     # board, so wiring detect_cli_lang() here would make the generator speak a
     # language the thing it feeds never does.
-    assert len(ENGLISH_ONLY) <= 150, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=150). Adding an "
+    # pin 151: bumped from 150 for check_pipestatus_errexit.py (TRK-382 /
+    # #1845), the pre-commit gate for a PIPESTATUS read under errexit+pipefail.
+    # Same class as the `_R_LINT` siblings it sits beside: a pre-commit/CI gate,
+    # never invoked by a customer, whose output is file:line and a counts line.
+    # ⛔ A choice, not a default — `scripts/tools/lint/` is English-only across
+    # the board. ⚠️ Found the way write_baseline_marker.py's entry records: this
+    # gate turned the PR red; the author had not run tests/shared/ locally.
+    assert len(ENGLISH_ONLY) <= 151, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=151). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
