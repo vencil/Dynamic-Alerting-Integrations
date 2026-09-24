@@ -343,13 +343,15 @@ _AUDIENCE_REVERSE = {v: k for k, v in _AUDIENCE_MAP.items()}
 def sync_frontmatter(tools: list, dry_run: bool, verbose: bool):
     """Sync registry audience/tags → JSX frontmatter.
 
-    Returns True if changed, False if in sync, and **None** when not a single
-    registry entry resolved to a file — a wrong root, not an all-clear. A
-    missing file is always reported (not only under --verbose): skipping them
-    quietly is how this function once skipped all 45 and looked in sync.
+    Returns ``(changed, missing_keys)``, or **None** when not a single registry
+    entry resolved to a file — a wrong root, not an all-clear. A missing file is
+    always reported (not only under --verbose): skipping them quietly is how
+    this function once skipped all 45 and looked in sync. The caller must treat
+    a non-empty ``missing_keys`` as an incomplete sync, not as "in sync".
     """
     any_changed = False
     found = 0
+    missing = []
 
     for tool in tools:
         key = tool["key"]
@@ -357,6 +359,7 @@ def sync_frontmatter(tools: list, dry_run: bool, verbose: bool):
         if not jsx_path.exists():
             print(f"  [frontmatter] {key}: file not found: {jsx_path}",
                   file=sys.stderr)
+            missing.append(key)
             continue
         found += 1
 
@@ -419,7 +422,7 @@ def sync_frontmatter(tools: list, dry_run: bool, verbose: bool):
         print(f"ERROR: none of the {len(tools)} registry entries resolved under "
               f"{JSX_ROOT} — wrong JSX root", file=sys.stderr)
         return None
-    return any_changed
+    return any_changed, missing
 
 
 # ---------------------------------------------------------------------------
@@ -489,12 +492,14 @@ def main():
     changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
 
     changed_fm = False
+    missing_fm = []
     if args.sync_frontmatter:
         print()
         print("=== Frontmatter Sync ===")
-        changed_fm = sync_frontmatter(tools, args.dry_run, args.verbose)
-        if changed_fm is None:
+        result = sync_frontmatter(tools, args.dry_run, args.verbose)
+        if result is None:
             sys.exit(EXIT_CALLER_ERROR)
+        changed_fm, missing_fm = result
 
     if args.scan_appears_in:
         print()
@@ -517,6 +522,15 @@ def main():
             print("  ✅ All appears_in entries match actual references")
         else:
             print(f"\n  {diffs} tool(s) have appears_in mismatches")
+
+    if missing_fm:
+        # A partial frontmatter sync is not "in sync" and not "complete": the
+        # entries whose JSX is missing were never compared.
+        print()
+        print(f"ERROR: frontmatter sync incomplete — {len(missing_fm)} registry "
+              f"entry/entries not found under {JSX_ROOT}: {', '.join(missing_fm)}",
+              file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
 
     any_changed = changed_meta or changed_hub or changed_fm
     if any_changed:

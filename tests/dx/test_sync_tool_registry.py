@@ -317,6 +317,32 @@ class TestSyncFrontmatterRoot:
             srt.main()
         assert exc.value.code == srt.EXIT_CALLER_ERROR
 
+    def test_partial_miss_returns_the_missing_keys(self, tmp_path, monkeypatch):
+        (tmp_path / "a.jsx").write_text("no frontmatter\n", encoding="utf-8")
+        monkeypatch.setattr(srt, "JSX_ROOT", tmp_path)
+        result = srt.sync_frontmatter(
+            [{"key": "a", "file": "a.jsx"}, {"key": "b", "file": "b.jsx"}],
+            dry_run=True, verbose=False)
+        assert result == (False, ["b"])
+
+    def test_main_does_not_report_a_partial_sync_as_success(
+            self, wired, tmp_path, monkeypatch, capsys):
+        """有一支解析得到、其餘缺檔時，舊行為是印「Sync complete」並 exit 0
+        （CodeRabbit 在 PR #1966 提的）。缺檔的條目根本沒比對，不能算同步。"""
+        root = tmp_path / "jsx"
+        (root / "interactive" / "tools").mkdir(parents=True)
+        (root / "interactive" / "tools" / "alpha.jsx").write_text(
+            "no frontmatter\n", encoding="utf-8")
+        monkeypatch.setattr(srt, "JSX_ROOT", root)
+        monkeypatch.setattr(sys, "argv",
+                            ["sync_tool_registry.py", "--sync-frontmatter"])
+        with pytest.raises(SystemExit) as exc:
+            srt.main()
+        out, err = capsys.readouterr()
+        assert exc.value.code == srt.EXIT_VIOLATION
+        assert "Sync complete" not in out and "Everything in sync" not in out
+        assert "frontmatter sync incomplete" in err and "beta, gamma" in err
+
 
 # ---------------------------------------------------------------------------
 # Pure generators
