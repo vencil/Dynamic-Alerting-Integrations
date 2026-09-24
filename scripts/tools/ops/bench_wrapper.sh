@@ -14,7 +14,8 @@
 #      per-bench `ns/op` rows, and PASS/FAIL summaries.
 #   3. Writes:
 #        BENCH_OUT_DIR/bench.out.txt — clean benchmark results (stdout)
-#        BENCH_OUT_DIR/bench.err.log — compile errors / setup failures (fd 2)
+#        BENCH_OUT_DIR/bench.err.log — go test's fd 2 (see below: compile
+#                                      errors land here only on go1.23)
 #        BENCH_OUT_DIR/bench.raw.jsonl — original -json event stream
 #
 #      On a SUCCESSFUL run bench.err.log is normally EMPTY — that is expected,
@@ -25,21 +26,18 @@
 #      in bench.err.log and 6 matching output events on stdout — and so did one
 #      writing directly to os.Stderr.
 #
-#      Compile/setup failures USED TO be the exception and land here, but that
-#      is toolchain-dependent and no longer holds on modern Go:
-#        go1.23.12 — syntax error produced 47 bytes on fd 2 against 26 on stdout.
-#        go1.24.7 / go1.25.1 — syntax error produced **0 bytes** in bench.err.log
-#          (measured TRK-381; build failures arrive as JSON events on stdout).
-#      The pinned CI toolchain is 1.26 and the dev container is 1.23; 1.26 was
-#      NOT measured (not installed in the measuring container) — do not assume it.
-#      ⇒ An EMPTY bench.err.log is expected on go1.24+ even for a compile error.
-#      Read bench.raw.jsonl (or the filtered "FAIL … [setup failed]" line that
-#      bench.out.txt still carries) for those, not bench.err.log.
+#      Compile failures depend on the toolchain. go1.23 writes the compiler's
+#      diagnostics to fd 2, i.e. bench.err.log. go1.24+ (measured 1.24.7,
+#      1.25.1, 1.26.8; CI pins 1.26) sends them as build-output events and
+#      bench.err.log stays EMPTY; bench_filter.go prints those events on its
+#      own stderr, which this script does not redirect, so they reach the
+#      caller's stderr (the job log). bench.out.txt carries only
+#      "FAIL <pkg> [build failed]" — "[setup failed]" when the package cannot
+#      be loaded at all, a line go1.23 does not emit. bench.raw.jsonl has
+#      every event.
 #
-#      This line previously read "raw stderr (log.Printf, compile errors)":
-#      the log.Printf half was wrong, the compile-errors half was right.
-#      The "Why this exists" paragraph at the top of bench_filter.go has always
-#      described the log.Printf behaviour correctly and is the SSOT for it.
+#      The "Why this exists" paragraph at the top of bench_filter.go is the
+#      SSOT for the log.Printf behaviour.
 #
 # Usage
 #   scripts/tools/ops/bench_wrapper.sh -bench=. -benchmem -run=^$ \

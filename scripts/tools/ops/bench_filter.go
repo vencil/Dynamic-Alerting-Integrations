@@ -34,7 +34,8 @@
 //  3. Pass/Fail summary           — "PASS" / "FAIL" / "ok pkg ...s" /
 //     "FAIL\tpkg\ts"
 //
-// Everything else (log.Printf output, progress dots, empty lines) is dropped.
+// Everything else (log.Printf output, progress dots, empty lines) is dropped,
+// except build-output events, which go to stderr (see filter).
 //
 // Design notes
 // ------------
@@ -114,9 +115,19 @@ func keepLine(raw string) bool {
 }
 
 // filter copies the retained lines of a `go test -json` stream from in to
-// out. It is main minus the exit codes, so bench_filter_test.go exercises the
-// same loop the release harness runs; main decides what the two errors mean.
-func filter(in io.Reader, out io.Writer) (readErr, writeErr error) {
+// out, and the text of every build-output event to diag. It is main minus the
+// exit codes, so bench_filter_test.go exercises the same loop the release
+// harness runs; main decides what the two errors mean.
+//
+// Why diag and not out (#1872): from go1.24 on, compile diagnostics arrive
+// in the -json stream as build-output events and bench.err.log stays empty,
+// so dropping them left the job log with only "FAIL pkg [build failed]".
+// main passes os.Stderr, which bench_wrapper.sh leaves on the caller's
+// stderr. out stays byte-for-byte what it was: benchstat reads a
+// "key: value" line as configuration, so a diagnostic of that shape in out
+// would split the comparison. diag write errors are ignored — the same text
+// is in bench.raw.jsonl.
+func filter(in io.Reader, out, diag io.Writer) (readErr, writeErr error) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 
@@ -143,6 +154,10 @@ func filter(in io.Reader, out io.Writer) (readErr, writeErr error) {
 			}
 			continue
 		}
+		if ev.Action == "build-output" {
+			_, _ = io.WriteString(diag, ev.Output)
+			continue
+		}
 		if ev.Action != "output" {
 			continue
 		}
@@ -159,7 +174,7 @@ func filter(in io.Reader, out io.Writer) (readErr, writeErr error) {
 }
 
 func main() {
-	readErr, writeErr := filter(os.Stdin, os.Stdout)
+	readErr, writeErr := filter(os.Stdin, os.Stdout, os.Stderr)
 	if writeErr != nil {
 		fmt.Fprintln(os.Stderr, "bench_filter: writing stdout:", writeErr)
 		os.Exit(1)
