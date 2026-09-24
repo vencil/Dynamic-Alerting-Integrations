@@ -39,6 +39,8 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 **Cause:** Kubernetes syncs ConfigMap mounts at most every 60 seconds
 
+⚠️ **Still the old value after a minute, and it never updates**: older exporters decided "file unchanged" for a symlinked conf.d entry (a ConfigMap volume's `key -> ..data/key` is one) from the symlink's own mtime only, so a `..data` swap was never seen ([#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969)). Affected (read from each version's code): v2.1.0–v2.7.x in every directory mode; v2.8.0–v2.9.1 when conf.d has no `_defaults.yaml` / `_defaults.yml` anywhere (flat mode); v2.0.x is not affected. From the fixed version on, both the symlink's and its target's stat are compared. On an affected version, only a restart (item 1 below) helps. ⚠️ The fix covers flat key layouts only: when ConfigMap `items` use a nested path (e.g. `team-a/x.yaml`), kubelet creates only a top-level directory symlink `team-a -> ..data/team-a`, the exporter does not follow directory symlinks, and those files are never loaded at all — a separate issue, tracked in [#1972](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1972).
+
 **Solution:**
 1. Force restart: `kubectl rollout restart deployment/threshold-exporter`
 2. Or wait for mount sync (typical < 1 minute)
