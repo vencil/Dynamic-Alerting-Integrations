@@ -44,6 +44,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // ConfigSource enumerates YAML files for hierarchical merge. See file
@@ -142,9 +144,10 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 // ⛔ Byte-prefix on `.`, no folding — what the walker does. `confdname.IsHidden`
 // is byte-identical and importable here (measured: `pkg/config` compiles
 // against `internal/confdname`; `internal/batchpr` already imports it), so this
-// IS an unresolved duplicate. What is unresolved is a trade nobody has made:
-// `pkg/` has no `internal/` dependency today, and one edge for two `HasPrefix`
-// calls may not be worth it. Do not read this as a settled reason to leave it.
+// IS an unresolved duplicate. ⚠️ The trade this used to cite ("`pkg/` has no
+// `internal/` dependency today") was made by #1674, which imports
+// `confdname.IsDefaults` into this package; this duplicate was left alone only
+// to keep that change's scope to the defaults carrier. It is an open one.
 func hasHiddenSegment(rel string) bool {
 	// `rel == ""` (the root itself, which the walker never prunes) needs no
 	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
@@ -296,17 +299,11 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// config_source_oracle_parity_test.go (switching this line to
 		// EqualFold was measured to turn that test red).
 		//
-		// ⚠️ This is a private copy of `internal/confdname.IsReserved` +
-		// `IsDefaults`. Until #1670 that copy was DELIBERATELY kept, because
-		// `IsDefaults` used EqualFold and would have imported the defect above.
-		// That reason is gone: `IsDefaults` now uses the same ToLower relation,
-		// and replacing this block with it was measured to keep the oracle
-		// parity test green. What remains is the same unmade trade noted on
-		// `hasHiddenSegment` — it would be `pkg/`'s first non-test `internal/` edge —
-		// so it is an open duplicate, not a settled one.
-		lower := strings.ToLower(name)
+		// The carrier test is `confdname.IsDefaults` — the walker's own
+		// predicate (tree_scan.go) — no longer a private copy of it: #1674
+		// gave `pkg/config` its first `internal/confdname` edge.
 		if strings.HasPrefix(name, "_") {
-			if lower == "_defaults.yaml" || lower == "_defaults.yml" {
+			if confdname.IsDefaults(name) {
 				defaults[p] = true
 			}
 			// Other `_*.yaml` are hashed for completeness but not part
@@ -351,6 +348,9 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	}
 
 	graph = NewInheritanceGraph()
+	// One carrier selection for the whole corpus (#1674): the rule the disk
+	// walker's graph uses, over POSIX paths.
+	byDir := selectDefaultsCarriers(defaults, posixPathOps).ByDir
 	chainCache := make(map[string][]string)
 
 	tenantIDs := make([]string, 0, len(tenants))
@@ -361,15 +361,15 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 
 	for _, tid := range tenantIDs {
 		srcPath := tenants[tid]
-		// path.Dir + CollectDefaultsChainPOSIX: in-memory contract is
-		// POSIX-only; filepath.Dir on Windows would convert /sim/foo to
-		// \sim and break the chain lookup against the POSIX-keyed
-		// defaults map (Simulate Windows-host flake — see
-		// CollectDefaultsChainPOSIX docstring for the full triage).
+		// path.Dir + posixPathOps: in-memory contract is POSIX-only;
+		// filepath.Dir on Windows would convert /sim/foo to \sim and break
+		// the chain lookup against the POSIX-keyed defaults map (Simulate
+		// Windows-host flake — see CollectDefaultsChainPOSIX docstring for
+		// the full triage).
 		dir := path.Dir(srcPath)
 		chain, cached := chainCache[dir]
 		if !cached {
-			chain = CollectDefaultsChainPOSIX(dir, absRoot, defaults)
+			chain = chainFromCarriers(dir, absRoot, byDir, posixPathOps)
 			chainCache[dir] = chain
 		}
 		graph.AddTenant(tid, chain)

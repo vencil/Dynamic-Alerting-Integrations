@@ -168,7 +168,7 @@
       "hidden": false,
       "defaults_file": true,
       "stem": "",
-      "why": "The uppercase spelling of the chain carrier. The exporter compares the defaults name against the LOWERCASED name, so this really does enter the chain — a reader that folded the extension but not the _defaults comparison would hash it and then quietly drop its `defaults:` block."
+      "why": "The uppercase spelling of the chain carrier. The exporter's walker CLASSIFIES by the lowercased name, so this is a carrier. ⛔ Until #1674 (B8) that was all it was: the exporter's inheritance chain matched only the two exact lower-case literals, so this file was hashed, entered in the walker's defaults set, and then left out of every tenant's chain — the exact 'hash it and quietly drop its `defaults:` block' failure this row used to attribute to a hypothetical reader, while /effective and describe_tenant did merge it. Since #1674 every chain picks one carrier per directory from the lowercased classification (a `.yaml` spelling beats `.yml`), so this file IS the chain level when it is the directory's carrier."
     },
     {
       "name": "_Defaults.Yml",

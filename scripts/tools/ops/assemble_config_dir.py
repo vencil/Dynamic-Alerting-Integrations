@@ -41,8 +41,10 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
     has_yaml_extension,
+    is_defaults_name,
     is_hidden_name,
     iter_config_files,
+    select_defaults_carrier,
     unusable_config_entries,
     unusable_config_paths,
     unusable_reason,
@@ -206,11 +208,15 @@ def detect_conflicts(
         file_map:  {filename: first_path} for non-conflicting files
     """
     seen: Dict[str, List[Tuple[str, Path]]] = {}
+    # (label, path) of every defaults carrier, in source order (#1674).
+    carriers: List[Tuple[str, Path]] = []
     for src in sources:
         label = str(src)
         for f in discover_yamls(src):
             name = f.name
             seen.setdefault(name, []).append((label, f))
+            if is_defaults_name(name):
+                carriers.append((label, f))
 
     conflicts: Dict[str, List[Tuple[str, Path]]] = {}
     file_map: Dict[str, Path] = {}
@@ -233,6 +239,24 @@ def detect_conflicts(
                 conflicts[name] = entries
         else:
             file_map[name] = entries[0][1]
+
+    # ⛔ #1674: two carrier SPELLINGS are one platform role. The output is one
+    # flat directory, and the exporter reads exactly ONE carrier per directory
+    # (`.yaml` over `.yml`, any casing) — so `a/_defaults.yaml` +
+    # `b/_defaults.yml` used to assemble silently (rc 0) into a directory
+    # whose `b` defaults every plane then ignores. It is the same duplicate
+    # the identical-name branch above reports, with the same policy: the
+    # first source holding a carrier wins (its own carrier by the shared
+    # selection, if it holds several), the rest are reported and not copied.
+    if len({p.name for _, p in carriers}) > 1:
+        first_label = carriers[0][0]
+        winner = select_defaults_carrier(
+            p for lbl, p in carriers if lbl == first_label)
+        for _, p in carriers:
+            file_map.pop(p.name, None)
+            conflicts.pop(p.name, None)
+        file_map[winner.name] = winner
+        conflicts[winner.name] = carriers
 
     return conflicts, file_map
 
@@ -460,7 +484,9 @@ def main() -> int:
             print("⚠️  Platform file duplicates (first source wins):")
             for name, entries in platform_dups.items():
                 for lbl, p in entries:
-                    print(f"   {name} ← {lbl}")
+                    # p.name, not the key: a carrier-spelling duplicate
+                    # (#1674) lists files whose names differ from the winner.
+                    print(f"   {p.name} ← {lbl}")
 
         if real_conflicts:
             print(f"\n❌ {len(real_conflicts)} tenant conflict(s):")
@@ -554,6 +580,41 @@ def main() -> int:
 
     preexisting = carriers_already_in(output_dir) if output_dir else {}
     residue = {n: p for n, p in preexisting.items() if n not in file_map}
+
+    # ⛔ #1674: a LEFTOVER root carrier beside the carrier this run produces is
+    # the cross-spelling duplicate `detect_conflicts` refuses among sources,
+    # reached through --output instead. The exporter reads exactly ONE
+    # carrier per directory (`.yaml` over `.yml`, any casing), so
+    # `a/_defaults.yml` + a stale `out/_defaults.yaml` shipped the STALE file
+    # and ignored the produced one everywhere, at rc 0 — under a warning that
+    # said the exporter "reads them too". Same remedy as a leftover that
+    # duplicates a tenant (below): refuse, name it, say how to clear it.
+    produced_carriers = sorted(n for n in file_map if is_defaults_name(n))
+    stale_carriers = sorted(n for n in residue
+                            if "/" not in n and is_defaults_name(n))
+    if produced_carriers and stale_carriers:
+        read = select_defaults_carrier(
+            Path(n) for n in produced_carriers + stale_carriers).name
+        if args.json:
+            print(format_json_report({
+                "status": "conflict",
+                "conflicts": {
+                    "defaults carrier": {"produced": produced_carriers,
+                                         "left_over": stale_carriers,
+                                         "exporter_reads": read},
+                },
+            }))
+        else:
+            print(f"\n❌ {output_dir} already holds defaults carrier(s) "
+                  f"{', '.join(stale_carriers)} that no source produces, beside "
+                  f"{', '.join(produced_carriers)} from this assembly. The "
+                  f"exporter reads exactly one carrier per directory — it "
+                  f"would read {read} and ignore the other everywhere. "
+                  f"Remove the leftover (or point --output at a clean "
+                  f"directory) and re-run; editing the sources cannot reach "
+                  f"it.", file=sys.stderr)
+        return EXIT_VIOLATION
+
     if residue and not args.json:
         # ⛔ The machine-readable face is the one a CI parses, and it used to
         # get a plain `"status": "ok"` for a directory holding carriers this
@@ -561,9 +622,10 @@ def main() -> int:
         # here — duplicating this line into `--json` mode was measured to buy
         # no detection at all (the mutation removing it kills nothing).
         print(f"\n⚠️  {len(residue)} carrier(s) already in {output_dir} are not "
-              f"produced by this assembly, and the exporter reads them too "
-              f"(this tool never clears --output): "
-              f"{', '.join(sorted(residue))}", file=sys.stderr)
+              f"produced by this assembly and are still read by the exporter "
+              f"wherever they are a directory's config (this tool never "
+              f"clears --output): {', '.join(sorted(residue))}",
+              file=sys.stderr)
 
     verdict = tu.verdict_for({**residue, **file_map})
     if verdict.outcome != tu.CLEAN:

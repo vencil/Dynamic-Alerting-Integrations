@@ -6,19 +6,26 @@ package config
 // `pkg/config/source.go` (also new in PR-8) and any future cmd/da-guard
 // or tenant-api consumer can construct the graph without depending on
 // `package main`. The exporter's disk walker, ScanDirTree (tree_scan.go),
-// has since moved into this package too (#1941), mtime cache included,
-// and builds its graph with CollectDefaultsChain below.
+// has since moved into this package too (#1941), mtime cache included.
+// Its graph (TreeScan.InheritanceGraph) selects carriers ONCE per scan
+// (TreeScan.DefaultsCarriers → SelectDefaultsCarriers) and walks each
+// directory's chain with chainFromCarriers; CollectDefaultsChain below is
+// the one-leaf convenience over the same two functions (#1674).
 //
-// Semantic rules unchanged from the original definition (parity-pinned
-// against describe_tenant.py + golden fixtures):
-//   - chain is L0..Ln (root first, leaf last) after CollectDefaultsChain
-//     reverses its accumulator
-//   - .yaml wins over .yml when both exist at the same level
+// Semantic rules (parity-pinned against describe_tenant.py + golden
+// fixtures):
+//   - chain is L0..Ln (root first, leaf last)
+//   - ONE carrier per level, chosen by SelectDefaultsCarriers from the
+//     walker's case-folded defaults set (#1674): a `.yaml` spelling beats a
+//     `.yml` one, and a directory with more than one carrier is WARNed about
 //   - filepath.Clean'd paths so equality compares stable across calls
 
 import (
+	"fmt"
 	"path"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // InheritanceGraph tracks the defaults↔tenants dependency for a
@@ -80,17 +87,133 @@ func (g *InheritanceGraph) TenantsAffectedBy(defaultsPath string) []string {
 	return g.DefaultsToTenants[defaultsPath]
 }
 
-// CollectDefaultsChain walks from leafDir up to (and including) root,
-// picking the `_defaults.yaml` (or `.yml`) at each level and reversing
-// the accumulator so chain[0] is the top-most (L0) defaults.
+// DefaultsCarriers is the ONE answer to "which defaults file does this
+// directory's chain read" (#1674, B8). Every plane reads it: the exporter's
+// inheritance graph (TreeScan.InheritanceGraph), /effective and da-guard
+// (ResolveEffective / ScopeEffective), the in-memory simulate source
+// (ScanFromConfigSource), and the flat plane's root `Defaults` on /metrics
+// (package main, the ROOT directory's entry). describe_tenant.py mirrors it
+// in `_lib_confd.select_defaults_carrier`, and the golden fixtures pin the
+// two languages to one merged_hash.
+type DefaultsCarriers struct {
+	// ByDir maps a directory (Clean'd, in the path flavour of the input
+	// set) to the one carrier its chain level reads.
+	ByDir map[string]string
+	// Ambiguous maps each directory holding MORE THAN ONE carrier to all of
+	// them, in walk order. A second spelling is a misconfiguration: every
+	// plane reads only ByDir's pick, and the exporter WARNs from this map on
+	// each load/reload (never on the quiet watch tick).
+	Ambiguous map[string][]string
+}
+
+// SelectDefaultsCarriers applies the selection rule to a defaults SET (the
+// walker's case-folded classification, TreeScan.Defaults: `_DEFAULTS.YML`
+// is a member). Per directory:
 //
-// Both the exporter's disk walker (TreeScan.InheritanceGraph over
-// ScanDirTree, tree_scan.go) and the in-memory ScanFromConfigSource in
-// this package call this helper.
-// `defaults` is the populated set of known _defaults.yaml paths
-// (basename match, set membership only — values are unused).
+//   - a spelling that lower-cases to `_defaults.yaml` beats any spelling that
+//     lower-cases to `_defaults.yml`;
+//   - among `.yaml` case variants the LAST in walk order wins, among `.yml`
+//     variants the FIRST.
+//
+// ⚠️ The asymmetry in the second bullet is deliberate, not a bug to tidy. It
+// is exactly what /effective did before #1674 — its own walk overwrote on
+// `.yaml` and kept the first `.yml` — and the owner ruling on #1674 kept that
+// rule when the chain was made to follow the case-folded classification.
+// Only a directory with two case variants of ONE extension can observe it,
+// and such a directory is WARNed about anyway.
+//
+// Walk order within one directory is lexical by name (filepath.WalkDir), and
+// two paths in one directory compare by their names, so sorting the paths
+// reproduces it — which is the only order this rule reads.
+func SelectDefaultsCarriers(defaults map[string]bool) DefaultsCarriers {
+	return selectDefaultsCarriers(defaults, nativePathOps)
+}
+
+func selectDefaultsCarriers(defaults map[string]bool, ops pathOps) DefaultsCarriers {
+	paths := make([]string, 0, len(defaults))
+	for p := range defaults {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	sel := DefaultsCarriers{ByDir: make(map[string]string, len(paths))}
+	var count map[string]int
+	for _, p := range paths {
+		dir := ops.dir(p)
+		switch strings.ToLower(ops.base(p)) {
+		case "_defaults.yaml":
+			sel.ByDir[dir] = p
+		case "_defaults.yml":
+			if _, exists := sel.ByDir[dir]; !exists {
+				sel.ByDir[dir] = p
+			}
+		default:
+			continue // not a carrier: the set is the walker's, so unreachable
+		}
+		if count == nil {
+			count = make(map[string]int, len(paths))
+		}
+		count[dir]++
+	}
+	for _, p := range paths {
+		dir := ops.dir(p)
+		if count[dir] > 1 {
+			if sel.Ambiguous == nil {
+				sel.Ambiguous = make(map[string][]string)
+			}
+			sel.Ambiguous[dir] = append(sel.Ambiguous[dir], p)
+		}
+	}
+	return sel
+}
+
+// AmbiguityWarnings renders one WARN line per directory holding more than
+// one carrier, sorted by directory. The wording is shared with
+// describe_tenant.py (`_lib_confd.multi_carrier_warning`) so an operator
+// grepping for one finds the other.
+func (c DefaultsCarriers) AmbiguityWarnings() []string {
+	if len(c.Ambiguous) == 0 {
+		return nil
+	}
+	dirs := make([]string, 0, len(c.Ambiguous))
+	for d := range c.Ambiguous {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		all := c.Ambiguous[d]
+		chosen := c.ByDir[d]
+		names := make([]string, 0, len(all))
+		var ignored []string
+		for _, p := range all {
+			names = append(names, filepath.Base(p))
+			if p != chosen {
+				ignored = append(ignored, filepath.Base(p))
+			}
+		}
+		out = append(out, fmt.Sprintf(
+			"WARN: conf.d directory %s has %d defaults carriers (%s); only %s is read, "+
+				"%s is ignored on every plane (#1674) — merge them into one file",
+			d, len(all), strings.Join(names, ", "), filepath.Base(chosen), strings.Join(ignored, ", ")))
+	}
+	return out
+}
+
+// CollectDefaultsChain walks from leafDir up to (and including) root,
+// picking at each level the carrier SelectDefaultsCarriers chooses, and
+// returns the chain root-first (chain[0] is L0).
+//
+// `defaults` is the walker's defaults set (TreeScan.Defaults: case-folded
+// membership, values unused). ⚠️ Before #1674 this function matched only the
+// two exact lower-case names, so `_DEFAULTS.YAML` was classified a carrier
+// and then left out of the chain; the set and the chain now read one rule.
+//
+// Convenience for one leaf: it selects over the whole set on every call.
+// Callers that walk many directories (TreeScan.InheritanceGraph,
+// ResolveEffective, ScanFromConfigSource) select once and call
+// chainFromCarriers.
 func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []string {
-	return collectDefaultsChain(leafDir, root, defaults, nativePathOps)
+	return chainFromCarriers(leafDir, root, selectDefaultsCarriers(defaults, nativePathOps).ByDir, nativePathOps)
 }
 
 // CollectDefaultsChainPOSIX is the POSIX-only sibling of CollectDefaultsChain.
@@ -108,44 +231,37 @@ func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []stri
 // missed the POSIX-keyed defaults map → empty chain → inherited keys
 // silently dropped from the merged config.
 func CollectDefaultsChainPOSIX(leafDir, root string, defaults map[string]bool) []string {
-	return collectDefaultsChain(leafDir, root, defaults, posixPathOps)
+	return chainFromCarriers(leafDir, root, selectDefaultsCarriers(defaults, posixPathOps).ByDir, posixPathOps)
 }
 
-// pathOps abstracts the three path-manipulation functions the defaults-chain
-// walk needs, so one implementation can run over either OS-native filesystem
+// pathOps abstracts the path-manipulation functions the defaults-chain walk
+// needs, so one implementation can run over either OS-native filesystem
 // paths (filepath.*) or the synthetic POSIX paths (path.*) the in-memory
 // config source uses. path.* and filepath.* share these signatures exactly.
 type pathOps struct {
 	clean func(string) string
-	join  func(...string) string
 	dir   func(string) string
+	base  func(string) string
 }
 
 var (
-	nativePathOps = pathOps{clean: filepath.Clean, join: filepath.Join, dir: filepath.Dir}
-	posixPathOps  = pathOps{clean: path.Clean, join: path.Join, dir: path.Dir}
+	nativePathOps = pathOps{clean: filepath.Clean, dir: filepath.Dir, base: filepath.Base}
+	posixPathOps  = pathOps{clean: path.Clean, dir: path.Dir, base: path.Base}
 )
 
-// collectDefaultsChain is the shared body of CollectDefaultsChain (native) and
-// CollectDefaultsChainPOSIX (POSIX). It walks from leafDir up to and including
-// root, picking the `_defaults.yaml` (or `.yml`) at each level, then reverses
-// the accumulator so chain[0] is the top-most (L0) defaults.
-func collectDefaultsChain(leafDir, root string, defaults map[string]bool, ops pathOps) []string {
+// chainFromCarriers walks from leafDir up to and including root, taking
+// byDir's carrier at each level, then reverses the accumulator so chain[0]
+// is the top-most (L0) defaults and the last entry the nearest-to-tenant
+// (Ln) — the order describe_tenant.py produces.
+func chainFromCarriers(leafDir, root string, byDir map[string]string, ops pathOps) []string {
 	var chain []string
 	current := ops.clean(leafDir)
 	rootClean := ops.clean(root)
 
 	for {
-		// Prefer .yaml over .yml when both exist at the same level
-		// (same precedence rule as describe_tenant.py).
-		yamlPath := ops.join(current, "_defaults.yaml")
-		ymlPath := ops.join(current, "_defaults.yml")
-		if defaults[yamlPath] {
-			chain = append(chain, yamlPath)
-		} else if defaults[ymlPath] {
-			chain = append(chain, ymlPath)
+		if p, ok := byDir[current]; ok {
+			chain = append(chain, p)
 		}
-
 		if current == rootClean {
 			break
 		}
@@ -158,8 +274,6 @@ func collectDefaultsChain(leafDir, root string, defaults map[string]bool, ops pa
 		current = parent
 	}
 
-	// Reverse to make chain[0] the top-most (L0) defaults and the last
-	// entry the nearest-to-tenant (Ln). Matches describe_tenant.py line 152.
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}

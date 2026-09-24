@@ -198,8 +198,8 @@ def test_defaults_carriers_returns_exact_names_only_sorted(tmp_path):
 def test_non_carrier_files_with_a_defaults_block_follow_the_exporter_rule(
         tmp_path):
     """A tenant file's `defaults:` is dropped by the exporter → named, not
-    counted; a `_`-prefixed non-carrier IS merged in but this tool may not
-    write it → incomplete, by name, with a reason that says so."""
+    counted; since #1676 a `_`-prefixed non-carrier's block is dropped too
+    (the exporter WARNs and strips it) → named, not counted, rc 0."""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -220,10 +220,10 @@ def test_non_carrier_files_with_a_defaults_block_follow_the_exporter_rule(
 
     r = _run(root2, "--execute")
 
-    assert r.returncode == 1, r.stdout + r.stderr
-    tail = _tail(r.stdout)
-    assert "_defaults-multidb.yaml" in tail and "非 defaults 載體" in tail, tail
-    assert "未寫入" not in tail, tail
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ("_defaults-multidb.yaml 的 defaults 區塊 exporter 會丟棄"
+            "（只從 defaults 載體讀") in r.stdout, r.stdout
+    assert "未寫入" not in r.stdout, r.stdout
     assert "cpu_usage" not in (
         root2 / "_defaults.yaml").read_text(encoding="utf-8")
 
@@ -753,7 +753,8 @@ def test_a_healthy_carrier_is_still_written(tmp_path):
 
 def test_every_underscore_file_on_the_root_plane_is_health_checked(tmp_path):
     """體檢母體是這一層所有 `_` 前綴檔：`_shared.yaml` 的壞 `defaults:` 值也
-    擋下整輪（exporter 會把它併進全域、整份丟掉）。"""
+    擋下整輪（exporter 解碼它失敗就整份丟掉，連同 profiles；#1676 起其
+    `defaults:` 本就不生效，但解碼仍會發生）。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -831,8 +832,9 @@ def test_a_tenant_file_the_tool_cannot_parse_takes_the_unreadable_route(tmp_path
 
 def test_under_plane_subtree_a_root_style_underscore_file_is_not_read(tmp_path):
     """`--plane subtree` 下，這一層 `_defaults` 以外的 `_` 檔 exporter 不讀：root
-    的指引（對該子樹跑）走到 rc 0，不再以「併進全域」判手動。成對反例：同一個
-    檔在 `--plane root` 是 exporter 會併進全域的殘留、rc 1。"""
+    的指引（對該子樹跑）走到 rc 0，不再以「併進全域」判手動。同一個檔在
+    `--plane root` 也不是殘留：#1676 起 exporter 只從 defaults 載體讀
+    `defaults:`，非載體 `_` 檔的會 WARN 後剝除 ⇒ 只提示、不列入未完成。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -856,8 +858,12 @@ def test_under_plane_subtree_a_root_style_underscore_file_is_not_read(tmp_path):
     assert r3.returncode == 0, r3.stdout + r3.stderr
 
     r4 = _run(sub, "--plane", "root", "--execute")
+    # rc 1 only because this layer has no `_defaults.yaml` to write — the
+    # `_shared.yaml` block itself is no longer residue.
     assert r4.returncode == 1, r4.stdout + r4.stderr
-    assert "併進全域" in _tail(r4.stdout), r4.stdout
+    assert "_shared.yaml" not in _tail(r4.stdout), r4.stdout
+    assert "併進全域" not in r4.stdout, r4.stdout
+    assert "_shared.yaml 的 defaults 區塊 exporter 會丟棄（只從 defaults 載體讀" in r4.stdout, r4.stdout
 
 
 def test_a_subtree_carriers_tenants_and_profiles_blocks_are_not_read(tmp_path):
@@ -1214,10 +1220,11 @@ def test_deleting_the_last_default_removes_the_block_and_a_null_block_stays_null
     assert data == {"defaults": None, "optional_overrides": ["x"]}, data
 
 
-def test_a_non_carrier_underscore_file_declaring_the_metric_is_not_ignored(
+def test_a_non_carrier_underscore_file_declaring_the_metric_is_inert(
         tmp_path):
-    """`_shared.yaml` 的 `optional_overrides:` 會被 exporter 併進全域：掃描列得
-    出來、Step 1 依設計不寫 ⇒ rc 1，具名。"""
+    """#1676：`_shared.yaml` 的 `optional_overrides:` exporter 會 WARN 後剝除，
+    不是會生效的殘留——掃描仍列出、點名「exporter 會丟棄」，但不讓整輪失敗。
+    （#1676 之前 exporter 會把它併進全域，這裡判手動、rc 1。）"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -1225,11 +1232,11 @@ def test_a_non_carrier_underscore_file_declaring_the_metric_is_not_ignored(
 
     r = _run(root, "--execute")
 
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "下架完成！" not in r.stdout, r.stdout
-    tail = _tail(r.stdout)
-    assert "_shared.yaml" in tail, tail
-    assert "非 defaults 載體" in tail and "需手動處理" in tail, tail
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成！" in r.stdout, r.stdout
+    assert ("_shared.yaml 的 optional_overrides 區塊 exporter 會丟棄"
+            "（只從 defaults 載體讀") in r.stdout, r.stdout
+    assert "需手動處理" not in r.stdout, r.stdout
 
 
 def test_the_scan_itself_lists_the_declared_tier(tmp_path):

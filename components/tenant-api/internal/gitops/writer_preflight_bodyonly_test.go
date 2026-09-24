@@ -129,7 +129,8 @@ func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 
 	t.Run("platform added a defaults key this pod has not seen", func(t *testing.T) {
 		// ⛔ This arm is why the split line is "reads the tree", not "sounds
-		// static": ValidateTenantKeys merges <configDir>/_defaults.yaml off disk.
+		// static": ValidateTenantKeys merges <configDir>'s root defaults carrier
+		// off disk (the one the exporter's chain selects, #1674).
 		dir := seedStaleAndFresh(t,
 			map[string]string{
 				"_defaults.yaml": "defaults:\n  mysql_connections: 100\n",

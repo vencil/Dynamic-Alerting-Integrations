@@ -38,12 +38,15 @@ package config
 // name-classification matrix (app/confd_name_classification_parity_test.go),
 // so /metrics and /effective agree by construction rather than by audit.
 //
-// ⚠️ WHAT IS STILL NOT ONE RULE (not one WALK): ResolveEffective derives its
-// defaults CHAIN from scan.Defaults with its own case-folding rule
-// (legacyDefaultsByDir in hierarchy.go) rather than CollectDefaultsChain —
-// that is #1674 (B8). tree_scan_parity_test.go pins, row by row, where the
-// three planes agree and where they still diverge, so neither side can move
-// silently.
+// The defaults CHAIN is one rule too since #1674 (B8): the walker classifies
+// carriers case-folded (confdname.IsDefaults, so `_DEFAULTS.YML` is one), and
+// every chain — the exporter's graph, ResolveEffective, ScopeEffective, the
+// flat plane's root Defaults — picks one carrier per directory from that set
+// through TreeScan.DefaultsCarriers (SelectDefaultsCarriers). Before, the
+// graph matched only the two exact lower-case names while ResolveEffective
+// folded case, and the flat plane merged every root `_` file's defaults.
+// tree_scan_parity_test.go pins, row by row, where the three planes agree
+// and where they still diverge, so neither side can move silently.
 //
 // The hierarchy products are the Go port of the Python reference
 // implementation (ADR-016; scripts/tools/dx/describe_tenant.py):
@@ -57,8 +60,8 @@ package config
 // (app/config_golden_parity_test.go). Rules carried over from that
 // reference: directories starting with '_' are NOT pruned (they may hold
 // nested defaults), several tenants may live in one file, and the defaults
-// chain is root-first with `.yaml` beating `.yml` at one level
-// (CollectDefaultsChain). DuplicateTenantError (errors.go) is the typed
+// chain is root-first with ONE carrier per level (SelectDefaultsCarriers:
+// `.yaml` beats `.yml`, case-folded). DuplicateTenantError (errors.go) is the typed
 // cross-file duplicate-tenant error recorded on the scan; package main
 // aliases it, so callers' errors.As unwrap it identically.
 //
@@ -90,6 +93,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // TreeScanMtimeGuard is the safety window for coarse-mtime filesystems: a
@@ -152,7 +157,7 @@ type TreeFile struct {
 	// shares the prior's slice (no copy), so nothing may append to or
 	// reorder it. Readers range over it or hand it to a sorting copy.
 	TenantIDs  []string
-	IsDefaults bool // basename folds to `_defaults.yaml` / `_defaults.yml`
+	IsDefaults bool // confdname.IsDefaults(basename): lower-cases to `_defaults.yaml` / `.yml`
 	Reused     bool // Hash + TenantIDs came from prior (mtime fast-path)
 	// Parsed records that THIS scan ran parseTenantDecls on the file's
 	// bytes. False when the declarations were carried from the prior — by
@@ -212,6 +217,23 @@ type TreeScan struct {
 	// concurrent readers of a retained scan.
 	graphOnce sync.Once
 	graph     *InheritanceGraph
+
+	// carriers is the per-directory defaults selection, built on first use
+	// for the same reason and under the same immutability as graph.
+	carriersOnce sync.Once
+	carriers     DefaultsCarriers
+}
+
+// DefaultsCarriers returns SelectDefaultsCarriers over the scan's Defaults,
+// computed once per scan. It is the chain rule every plane reads — the
+// graph below, ResolveEffective / ScopeEffective, and the exporter's flat
+// root Defaults — so they cannot pick different files for one directory.
+// Answered under a conflict too (the per-tenant readers need it there).
+func (s *TreeScan) DefaultsCarriers() DefaultsCarriers {
+	s.carriersOnce.Do(func() {
+		s.carriers = SelectDefaultsCarriers(s.Defaults)
+	})
+	return s.carriers
 }
 
 // InheritanceGraph returns the scan's inheritance graph, building it on the
@@ -225,6 +247,7 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 			return
 		}
 		g := NewInheritanceGraph()
+		byDir := s.DefaultsCarriers().ByDir
 		chainCache := make(map[string][]string)
 		tenantIDs := make([]string, 0, len(s.Tenants))
 		for tid := range s.Tenants {
@@ -235,7 +258,7 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 			dir := filepath.Dir(s.Tenants[tid])
 			chain, cached := chainCache[dir]
 			if !cached {
-				chain = CollectDefaultsChain(dir, s.AbsRoot, s.Defaults)
+				chain = chainFromCarriers(dir, s.AbsRoot, byDir, nativePathOps)
 				chainCache[dir] = chain
 			}
 			g.AddTenant(tid, chain)
@@ -259,7 +282,8 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //   - only files whose lower-cased name ends in `.yaml` / `.yml` are kept.
 //   - an entry whose stat or read fails is logged and dropped from every map.
 //   - `_`-prefixed files are hashed but never parsed for tenants; the ones
-//     folding to `_defaults.yaml`/`.yml` are entered in `Defaults`.
+//     confdname.IsDefaults accepts are entered in `Defaults` (every spelling;
+//     which ONE a directory's chain reads is DefaultsCarriers' question).
 //   - every other kept file is parsed for its top-level `tenants:` keys; a
 //     parse failure is logged, counted on obs (when non-nil) and drops
 //     the file from `Tenants` only — it stays hashed and watched.
@@ -291,7 +315,7 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		t0 := time.Now()
 		defer func() { obs.ObserveScanElapsed(time.Since(t0)) }()
 	}
-	scan, err := walkDirTree(root, prior, obs, logger)
+	scan, err := walkDirTree(root, prior, obs, logger, walkFull)
 	if err != nil {
 		return nil, err
 	}
@@ -301,9 +325,42 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	return scan, nil
 }
 
+// walkMode selects how much of the tree walkDirTree visits. Unexported on
+// purpose: the only non-full caller is scanRootDefaults in this package.
+type walkMode int
+
+const (
+	// walkFull is ScanDirTree: the whole tree, every kept file hashed,
+	// tenant files parsed for their declarations.
+	walkFull walkMode = iota
+	// walkRootCarriers visits ONLY the root directory and keeps ONLY the
+	// entries the full walk would classify as defaults carriers there.
+	walkRootCarriers
+)
+
+// scanRootDefaults is the root-only, carriers-only mode of the ONE walker
+// (#1674 round 2). It exists for callers that need exactly one answer —
+// "which defaults carrier does the chain read at the root, and what are its
+// bytes" (MergeTenantWithRootDefaults, i.e. tenant-api GET / validate / the
+// gitops write gate) — and must not pay a full walk for it: measured on a
+// 1000-file tree, a full ScanDirTree per call was ~100x main's cost, and the
+// gitops writer validates inside its single-writer token.
+//
+// ⛔ It is walkDirTree with a mode, NOT a second lister: the root's entries
+// go through the same hidden / extension / stat / read / classification code
+// as a full scan, so readability and carrier selection
+// (TreeScan.DefaultsCarriers) cannot drift from what the exporter reads.
+// confd_walker_population_test pins walkDirTree as the only listing site.
+// The returned scan has no tenants; only Files/Keys/Defaults and
+// DefaultsCarriers are meaningful.
+func scanRootDefaults(root string) (*TreeScan, error) {
+	return walkDirTree(root, nil, nil, discardLogger, walkRootCarriers)
+}
+
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
-// hash, the classification and the hierarchy products.
-func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger) (*TreeScan, error) {
+// hash, the classification and the hierarchy products. mode is walkFull for
+// every production caller except scanRootDefaults.
+func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 
 	info, serr := os.Stat(absRoot)
@@ -330,7 +387,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != absRoot && strings.HasPrefix(name, ".") {
+			if path != absRoot && (mode == walkRootCarriers || strings.HasPrefix(name, ".")) {
 				return fs.SkipDir
 			}
 			return nil
@@ -340,6 +397,9 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		lower := strings.ToLower(name)
 		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+			return nil
+		}
+		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
 			return nil
 		}
 		entryInfo, ierr := d.Info()
@@ -370,12 +430,11 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// names the first two files in that order, as it always has).
 	var walkOrder []*TreeFile
 	for _, e := range entries {
-		lower := strings.ToLower(e.name)
 		f := &TreeFile{
 			AbsPath:    e.abs,
 			RelKey:     e.rel,
 			Stat:       FileStat{ModTime: e.info.ModTime().UnixNano(), Size: e.info.Size()},
-			IsDefaults: strings.HasPrefix(e.name, "_") && (lower == "_defaults.yaml" || lower == "_defaults.yml"),
+			IsDefaults: confdname.IsDefaults(e.name),
 		}
 
 		var pf *TreeFile

@@ -20,9 +20,10 @@ package main
 //                              composite-hash construction + per-file cache.
 //   (absScanRoot, the ONE derivation of the conf.d root, moved with the
 //   walker to pkg/config in #1941; config_tree_scan.go forwards to it.)
-//   applyBoundaryRules(...)  — enforce "state_filters / defaults only
-//                              in _defaults.yaml; profiles only in
-//                              _profiles.yaml" convention.
+//   applyBoundaryRules(...)  — enforce "state_filters / defaults /
+//                              optional_overrides only in a defaults
+//                              carrier; profiles only in `_` files"
+//                              convention (#1676).
 //   mergePartialConfigs(...) — deep-merge per-file partials into a
 //                              single ThresholdConfig (used by
 //                              fullDirLoad + IncrementalLoad
@@ -39,6 +40,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // loadFile reads a single YAML config file and returns the parsed config + content hash.
@@ -125,9 +128,25 @@ func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, 
 	return partial, true
 }
 
-// applyBoundaryRules enforces the boundary convention: state_filters and
-// defaults only in _defaults.yaml, profiles only in _profiles.yaml.
-// logger may be nil → falls back to log.Default() (production safety).
+// applyBoundaryRules enforces the boundary convention: state_filters,
+// optional_overrides and defaults only in a defaults CARRIER, profiles only
+// in a platform (`_`-prefixed) file. logger may be nil → falls back to
+// log.Default() (production safety).
+//
+// ⛔ TWO QUESTIONS, NOT ONE (#1676). This used to ask only "is the basename
+// `_`-prefixed" and let every platform file through, so a root
+// `_defaults-multidb.yaml` or `_profiles.yaml` carrying a `defaults:` block
+// had it merged into the ONE global Defaults map served on /metrics — while
+// the inheritance chain (/effective, describe_tenant) reads only the carrier
+// and never saw it. "Is this a platform file" and "is this the defaults
+// carrier" are separate predicates; the carrier one is the SSOT
+// confdname.IsDefaults, the same one the walker classifies with.
+//
+// A carrier is necessary, not sufficient: when a directory has more than one
+// (`_defaults.yaml` + `_defaults.yml`) only the one the chain selects is
+// read — and the others are not read at all. That is a TREE property, so it
+// is decided by the callers (commitFlatFrom skips an unselected root carrier
+// before parsing; see isUnselectedRootCarrier), not per file here.
 func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logger) {
 	if logger == nil {
 		logger = log.Default()
@@ -137,10 +156,29 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	// and strip its platform sections with a WARN — quietly, and for a file the
 	// convention plainly marks as platform-scoped.
 	base := scanKeyBase(name)
-	isDefaultsFile := strings.HasPrefix(base, "_")
-	isProfilesFile := base == "_profiles.yaml" || base == "_profiles.yml"
+	isPlatformFile := confdname.IsReserved(base)
+	isCarrier := confdname.IsDefaults(base)
 
-	if !isDefaultsFile {
+	if isPlatformFile && !isCarrier {
+		// ⛔ Loud, and the same shape as the tenant-file strip below: the
+		// operator put these keys here on purpose and must learn they are not
+		// served. Profiles stay allowed from any platform file (their own
+		// convention, unchanged by #1676).
+		if len(partial.Defaults) > 0 {
+			logger.Printf("WARN: defaults found in %s — not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
+			partial.Defaults = nil
+		}
+		if len(partial.StateFilters) > 0 {
+			logger.Printf("WARN: state_filters found in %s — not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
+			partial.StateFilters = nil
+		}
+		if len(partial.OptionalOverrides) > 0 {
+			logger.Printf("WARN: optional_overrides found in %s — platform-scoped, not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
+			partial.OptionalOverrides = nil
+		}
+	}
+
+	if !isPlatformFile {
 		if len(partial.StateFilters) > 0 {
 			logger.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.StateFilters = nil
@@ -160,7 +198,7 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			partial.Defaults = nil
 		}
 	}
-	if !isProfilesFile && !isDefaultsFile {
+	if !isPlatformFile {
 		if len(partial.Profiles) > 0 {
 			logger.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
 			partial.Profiles = nil
@@ -170,6 +208,9 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 
 // mergePartialConfigs merges all cached partial configs in sorted filename order
 // via mergePartialInto: defaults/state_filters overwrite, tenants/profiles deep merge.
+// An unselected root defaults carrier never reaches `configs` (#1674; see
+// isUnselectedRootCarrier), so every file merged here is one the chain reads
+// or a non-carrier the boundary rules have already judged.
 func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 	// Pre-scan to estimate map capacities, avoiding rehash during merge.
 	// In directory mode each tenant file has exactly 1 tenant, so
@@ -202,6 +243,70 @@ func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 	}
 
 	return merged
+}
+
+// isRootCarrierKey reports whether a scan key is a defaults carrier at the
+// conf.d ROOT (nested carriers never reach the flat merge at all).
+func isRootCarrierKey(key string) bool {
+	return !strings.Contains(key, "/") && confdname.IsDefaults(key)
+}
+
+// isUnselectedRootCarrier reports whether a scan key is a ROOT defaults
+// carrier other than the one the chain selected (rootCarrierKey).
+//
+// ⛔ Such a file contributes NOTHING to the flat plane — not defaults, not
+// state_filters, not optional_overrides, and not profiles or tenants either
+// (#1674). The multi-carrier WARN says it "is ignored on every plane", and a
+// version that dropped only the three carrier sections left an unselected
+// `_defaults.yml` still adding a `profiles:` entry and a `tenants:` entry to
+// /metrics (blind review). It is therefore never parsed or cached here
+// (commitFlatFrom skips it), and any change to a root carrier sends the
+// incremental path to the full load (anyRootCarrierKey), so a cached partial
+// cannot outlive a selection that moved.
+func isUnselectedRootCarrier(key, rootCarrier string) bool {
+	return isRootCarrierKey(key) && key != rootCarrier
+}
+
+// anyRootCarrierKey reports whether a reload touched a root defaults carrier,
+// which can move the root selection.
+func anyRootCarrierKey(groups ...[]string) bool {
+	for _, g := range groups {
+		for _, k := range g {
+			if isRootCarrierKey(k) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rootCarrierKey returns the scan key of the root directory's selected
+// defaults carrier ("" when the root has none), and WARNs once per call for
+// every directory in the tree holding more than one carrier.
+//
+// ⛔ CALLED ONLY WHERE A FULL LOAD BUILDS THE FLAT CONFIG (commitFlatFrom),
+// never on the quiet watch tick — detectChange does not merge — so a
+// misconfigured tree logs once per load/reload, not every WatchInterval.
+// The selection is the scan's own (TreeScan.DefaultsCarriers), the one that
+// scan's inheritance graph is built from, so within one load /metrics' root
+// Defaults and the chain's L0 are the same file. ⚠️ That is a statement
+// about a single scan, not about merged_hash across reloads: a reload that
+// deletes a chain file can leave the exporter's cached merged_hash stale
+// (#1964, pre-existing, not addressed here).
+func rootCarrierKey(scan *treeScan, logger *log.Logger) string {
+	sel := scan.DefaultsCarriers()
+	for _, w := range sel.AmbiguityWarnings() {
+		logger.Print(w)
+	}
+	chosen, ok := sel.ByDir[scan.AbsRoot]
+	if !ok {
+		return ""
+	}
+	rel, err := filepath.Rel(scan.AbsRoot, chosen)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // mergePartialInto deep-merges one partial config into merged using the

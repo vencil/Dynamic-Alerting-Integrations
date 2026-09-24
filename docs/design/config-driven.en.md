@@ -88,7 +88,8 @@ tenants:
 
 | File Type | Allowed Blocks | Violation Behavior |
 |-----------|----------------|-------------------|
-| Files with `_` prefix (`_defaults.yaml`) | `defaults`, `state_filters`, `tenants` | — |
+| Defaults carrier (`_defaults.yaml` / `.yml`, any casing; only the selected one per directory is read) | `defaults`, `state_filters`, `optional_overrides`, `profiles`, `tenants` | Other carriers in the same directory are not read at all + WARN log |
+| Other `_`-prefixed files (`_profiles.yaml`, `_defaults-multidb.yaml`, …) | `profiles`, `tenants` | `defaults` / `state_filters` / `optional_overrides` ignored + WARN log (#1676) |
 | Tenant files (`db-a.yaml`) | Only `tenants` | Other blocks automatically ignored + WARN log |
 
 #### SHA-256 Hot-Reload
@@ -245,7 +246,7 @@ GET /api/v1/tenants/{id}/effective
 
 - `404 ErrTenantNotFound` — tenant does not exist
 - `400` — tenant_id validation failure (length, charset)
-- Handler calls `pkg/config.ResolveEffective(tenantID)` directly: it reads the exporter's own conf.d walker (`ScanDirTree`, #1677) and the same merge core, so a symlinked `--config-dir`, hidden directories and null-body tenants are judged exactly as the exporter judges them. ⚠️ Two things are not yet converged: the defaults-chain choice for upper-case `_defaults` names (`_DEFAULTS.YAML`, #1674), and whether a tenant exists at all — the walker reads only the `tenants:` keys while `/metrics` does a full parse, so a tenant whose body has the wrong shape (e.g. a scalar) is absent from `/metrics` and returns 500 from `/effective` (#1957)
+- Handler calls `pkg/config.ResolveEffective(tenantID)` directly: it reads the exporter's own conf.d walker (`ScanDirTree`, #1677) and the same merge core, so a symlinked `--config-dir`, hidden directories and null-body tenants are judged exactly as the exporter judges them. The defaults chain is the same rule too (#1674): `_defaults.yaml` / `.yml` in any casing is a carrier, but **each directory reads exactly one** — a `.yaml` spelling beats a `.yml` one; among case variants of one extension, `.yaml` takes the last in walk order and `.yml` the first — and a directory with more than one carrier is WARNed about by both the exporter and `describe_tenant`, the others being read by no plane (the root `Defaults` on `/metrics` also come from the root's one carrier only). ⚠️ Still not converged: whether a tenant exists at all — the walker reads only the `tenants:` keys while `/metrics` does a full parse, so a tenant whose body has the wrong shape (e.g. a scalar) is absent from `/metrics` and returns 500 from `/effective` (#1957)
 
 **Debug / Migration CLI (da-tools)**
 **Debug CLI (da-tools)**

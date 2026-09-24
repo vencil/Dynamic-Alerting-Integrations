@@ -1,6 +1,7 @@
 # guard-defaults-impact.yml — C-12 Dangling Defaults Guard PR-5
 #
-# Triggered on PRs that touch any `**/_defaults.yaml`. Builds the
+# Triggered on PRs that touch any defaults carrier (`**/_defaults.yaml` /
+# `.yml`, any casing — #1674). Builds the
 # da-guard Go binary (PR-4), runs it against the changed
 # _defaults.yaml's directory subtree, and posts a sticky Markdown
 # report as a PR comment.
@@ -63,7 +64,15 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "**/_defaults.yaml"
+      # Every spelling the exporter treats as a defaults CHAIN carrier
+      # (`_lib_confd.is_defaults_name` / Go `confdname.IsDefaults`: the name
+      # lower-cased is exactly `_defaults.yaml` or `_defaults.yml`). Since
+      # #1674 `_DEFAULTS.YAML` and `_defaults.yml` are chain levels, so a PR
+      # touching only one of them used to skip this guard. GitHub's filter
+      # globs support `[]` character classes; the diff pathspec in the scope
+      # step below uses `:(icase)` for the same set.
+      - "**/_[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss].[Yy][Aa][Mm][Ll]"
+      - "**/_[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss].[Yy][Mm][Ll]"
       - "components/threshold-exporter/app/cmd/da-guard/**"
       - "components/threshold-exporter/app/internal/guard/**"
       - "components/threshold-exporter/app/pkg/config/scope.go"
@@ -263,7 +272,8 @@ jobs:
             # this step that names one, because zero resolved files must stay
             # benign. This error is about git being unable to answer.
             set +e
-            git diff -z --name-only "origin/${BASE_REF}...HEAD" -- '**/_defaults.yaml' \
+            git diff -z --name-only "origin/${BASE_REF}...HEAD" -- \
+              ':(icase)**/_defaults.yaml' ':(icase)**/_defaults.yml' \
               > "$RUNNER_TEMP/changed-defaults.txt"
             diff_rc=$?
             set -e

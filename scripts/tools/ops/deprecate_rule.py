@@ -501,9 +501,10 @@ def _nested_ignored(name, plane="root"):
 def section_owner(name, section, plane="root"):
     """掃描結果的 `[section]` 在檔 `name` 裡由誰清: 本工具／手動／exporter 丟棄。
 
-    root 層的規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）: 平台
-    區塊（`defaults`／`optional_overrides`／`profiles`）只從 `_` 前綴檔讀；本工具
-    只寫精確名載體的平台區塊與非 `_` 檔的 `tenants:`。子樹裡 exporter 只讀
+    root 層的規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）:
+    `defaults`／`optional_overrides` 只從 defaults 載體讀（#1676；其他 `_` 檔的
+    這兩個區塊 exporter 出 WARN 後剝除，不是殘留）；`profiles` 從任何 `_` 前綴檔
+    讀；本工具只寫載體的平台區塊與非 `_` 檔的 `tenants:`。子樹裡 exporter 只讀
     `_defaults.yaml` 的 `defaults:`（`parseDefaultsBytes`），其他 `_` 檔不讀；
     本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡是「手動」（對該子樹跑）。
     """
@@ -517,7 +518,8 @@ def section_owner(name, section, plane="root"):
     if block in ("defaults", "optional_overrides"):
         if is_defaults_name(base):
             return OWNER_MANUAL if nested else OWNER_TOOL
-        return OWNER_MANUAL if base.startswith("_") else OWNER_EXPORTER
+        # #1676: 非載體（`_` 前綴或租戶檔）的這兩個區塊 exporter 都剝除。
+        return OWNER_EXPORTER
     if base.startswith("_"):
         return OWNER_EXPORTER if _in_subtree(name, plane) else OWNER_MANUAL
     if block == "profiles":
@@ -534,6 +536,9 @@ def exporter_drop_reason(name, section, plane="root"):
     if _in_subtree(name, plane) and _base_of(name).startswith("_"):
         return (f"的 {block} 區塊 exporter 不讀（子樹 `_defaults.yaml` 只讀 "
                 f"defaults 區塊），本工具不寫入")
+    if block in ("defaults", "optional_overrides") and _base_of(name).startswith("_"):
+        return (f"的 {block} 區塊 exporter 會丟棄（只從 defaults 載體讀，#1676；"
+                f"exporter 會 WARN），本工具不寫入")
     return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
@@ -549,9 +554,6 @@ def manual_reason(name, section, key, val, config_dir):
         subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
                 f"`--config-dir {subtree} --plane subtree`：{where}")
-    if block in ("defaults", "optional_overrides"):
-        return (f"非 defaults 載體，本工具不寫入；exporter 會把 root 層任何 `_` "
-                f"開頭檔的 defaults／optional_overrides 併進全域，需手動處理：{where}")
     if block == "profiles":
         return f"`_` 前綴檔的 `profiles:` 區塊本工具射程外，請手動移除：{where}"
     return (f"本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，請手動移除："
@@ -691,9 +693,10 @@ def out_of_reach(entries, plane="root"):
 def defaults_carriers(config_dir):
     """conf.d 這一層所有 defaults 載體（`_defaults.yaml`／`.yml`，任意大小寫）。
 
-    exporter 兩種拼法都併進 defaults chain（`config_hierarchy.go` 的
-    `scanDirHierarchicalWithMetrics`），所以寫入端要列舉掃描看得見的同一組。
-    平面讀取，`warn_nested` 具名子目錄。
+    exporter 每個目錄只讀一個載體（#1674：`.yaml` 拼法勝過 `.yml`，見
+    `_lib_confd.select_defaults_carrier`），其餘拼法會被 WARN 且不被任何平面
+    讀取。這裡仍列舉全部拼法、從每一個移除：沒被讀的那個一旦另一個被刪掉就會
+    變成載體，留著舊 key 等於埋一個會復活的閾值。平面讀取，`warn_nested` 具名子目錄。
     """
     base = Path(config_dir)
     warn_nested(base, tool="deprecate_rule")
@@ -891,7 +894,8 @@ def main():
     carriers_here = defaults_carriers(base)
 
     # 載體體檢跑在任何寫入之前。root 平面的母體是這一層所有 `_` 前綴檔（exporter
-    # 把它們的平台區塊全部併進全域）；本輪自己要刪的 key 不算殘留；空值只警告；
+    # 把每個都解碼成 ThresholdConfig；#1676 起非載體的 defaults 雖不生效，解碼失敗
+    # 仍讓整檔連同 profiles 一起丟掉）；本輪自己要刪的 key 不算殘留；空值只警告；
     # exporter 讀不進去的（blocking）讓整輪降級為預覽。租戶檔的警告與平面無關。
     planned = {k for m in args.metrics for k in metric_pattern_keys(m)}
     health = {}

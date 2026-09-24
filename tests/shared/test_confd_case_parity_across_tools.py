@@ -776,12 +776,13 @@ def _write_custom_alerts_tree(root: pathlib.Path, *, upper: bool) -> None:
         "    params:\n"
         "      threshold: 50\n",
         encoding="utf-8")
-    # A SECOND carrier spelling in the same directory. ⛔ Without it,
-    # `_dir_defaults_alerts` assigning instead of accumulating is invisible:
-    # blind review measured a `critical` rule declared in `_defaults.yaml`
-    # being discarded wholesale because `_defaults.yml` sat beside it, and
-    # a one-carrier fixture called that green. Both spellings are chain
-    # carriers to the exporter, so both must contribute.
+    # A SECOND carrier spelling in the same directory. ⛔ Without it, which
+    # carrier `_dir_defaults_alerts` reads is invisible. Blind review once
+    # measured a `critical` rule in `_defaults.yaml` discarded because
+    # `_defaults.yml` sat beside it (the last file overwrote); the fix then
+    # merged BOTH. Since #1674 every plane reads ONE carrier per directory —
+    # the `.yaml` spelling (`select_defaults_carrier`) — so this file's
+    # `_custom_alerts` must NOT contribute, and the `.yaml`'s must.
     second = "_DEFAULTS.YML" if upper else "_defaults.yml"
     (root / second).write_text(
         "_custom_alerts:\n"
@@ -820,14 +821,14 @@ def test_custom_alerts_loader_sees_both_casings(
         "comparison below cannot detect anything — fix the fixture "
         "before trusting this test"
     )
-    # ⛔ Vacuity guard, part two: BOTH platform carriers must have
-    # contributed. A single-carrier result would make the accumulate-vs-
-    # overwrite bug in `_dir_defaults_alerts` unobservable, which is
-    # exactly how it survived its first review round.
+    # ⛔ Vacuity guard, part two: the SELECTED carrier contributed and the
+    # other spelling did not (#1674). Reading the `.yml` instead, or merging
+    # both, is red here — each is a way `_dir_defaults_alerts` can disagree
+    # with the chain the exporter and describe_tenant read.
     recipes = {i[1].get("recipe") for i in inst_lower if isinstance(i[1], dict)}
-    assert {"platform_baseline", "platform_second_carrier"} <= recipes, (
-        f"both `_defaults.yaml` and `_defaults.yml` are chain carriers and "
-        f"must both contribute their `_custom_alerts`; got {sorted(recipes)}"
+    assert "platform_baseline" in recipes and "platform_second_carrier" not in recipes, (
+        f"one carrier per directory: `_defaults.yaml` is read and "
+        f"`_defaults.yml` beside it is not (#1674); got {sorted(recipes)}"
     )
 
     def _summary(instances):

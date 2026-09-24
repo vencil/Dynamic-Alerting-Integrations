@@ -191,5 +191,34 @@
     "source_file": "tenants.yaml",
     "source_hash": "12125e7113d19eee",
     "tenant_id": "tenant-sib"
+  },
+  {
+    "defaults_chain": [
+      "carrier/_defaults.yaml"
+    ],
+    "effective_config": {
+      "cpu_pct": 50
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "5fa35ba41e70b280",
+    "scenario": "carrier-selection-pair",
+    "source_file": "carrier/tenants.yaml",
+    "source_hash": "379658e2755990b4",
+    "tenant_id": "tenant-pair"
+  },
+  {
+    "defaults_chain": [
+      "carrier/_defaults.yaml",
+      "carrier/sub2/_DEFAULTS.YML"
+    ],
+    "effective_config": {
+      "cpu_pct": 95
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "29d84f7a59dfc313",
+    "scenario": "carrier-selection-sub",
+    "source_file": "carrier/sub2/tenants.yaml",
+    "source_hash": "5b7cedf58a0f498a",
+    "tenant_id": "tenant-sub"
   }
 ]

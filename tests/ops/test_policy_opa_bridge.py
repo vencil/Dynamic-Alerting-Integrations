@@ -143,6 +143,17 @@ class TestLoadDefaults:
                             lambda p: {"mysql_connections": 80})
         assert pob.load_defaults(str(tmp_path)) == {"mysql_connections": 80}
 
+    def test_reads_the_selected_carrier_not_a_hardcoded_name(self, tmp_path):
+        """#1674: a root holding only `_defaults.yml` gave OPA no defaults,
+        because the path was joined as `_defaults.yaml`; and with a pair the
+        exporter reads the `.yaml`."""
+        (tmp_path / "_defaults.yml").write_text(
+            "defaults:\n  cpu_pct: 70\n", encoding="utf-8")
+        assert pob.load_defaults(str(tmp_path)) == {"defaults": {"cpu_pct": 70}}
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        assert pob.load_defaults(str(tmp_path)) == {"defaults": {"cpu_pct": 50}}
+
     def test_non_dict_returns_empty(self, tmp_path, monkeypatch):
         f = tmp_path / "_defaults.yaml"
         f.write_text("x", encoding="utf-8")

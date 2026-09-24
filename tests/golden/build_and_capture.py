@@ -48,8 +48,12 @@ def reset(scenario: str) -> Path:
     describe_tenant's recursive scan, so it can change a fixture's merge result
     while every assertion keeps passing. Measured: an orphan sub-directory
     carrying its own `_defaults.yaml` and an extra tenant left the suite green.
-    The `.yml`/`.yaml` pair is the sharp version — Python reads both, Go keeps
-    one. Prefer the clean-rebuild command below over trusting this function.
+    A stray `_defaults.yml` is no longer the sharp version it was (Python used
+    to merge both spellings, Go kept one): since #1674 both sides read ONE
+    carrier per directory, pinned by the `carrier-selection` scenario below.
+    But a stray carrier in a directory that had none is still read by both,
+    and nothing here would notice. Prefer the clean-rebuild command below over
+    trusting this function.
 
     For a clean rebuild, run this from Dev Container (NTFS side):
         docker exec -w /workspaces/vibe-k8s-lab/tests/golden vibe-dev-container \\
@@ -310,6 +314,56 @@ _routing_defaults:
     mysql_connections: "70"
 """)
 
+
+# -------------------------------------------------------------------------
+# Scenario 10: ONE defaults carrier per directory (#1674, B8)
+#
+# Two measurements from main 98d2184e, in one tree:
+#   pair         `_defaults.yaml` + `_defaults.yml` in one directory:
+#                describe_tenant merged BOTH while the exporter's chain read
+#                the `.yaml` only — so merged_hash differed for every tenant
+#                under that directory.
+#   subtree      `sub2/_DEFAULTS.YML`: describe_tenant put it in the chain,
+#                the exporter's chain (exact lower-case names) did not.
+# Both sides now select with one rule (`_lib_confd.select_defaults_carrier`,
+# Go `SelectDefaultsCarriers`): a `.yaml` spelling beats `.yml`, case-folded.
+# The Go end (config_golden_parity_test.go ScannerChainOrder / MergedHash)
+# reads the same golden.json rows, so a chain or hash drift on either side
+# is red. Tenant bodies are empty: every effective key is inherited, so the
+# chain alone decides the hash.
+#
+# ⚠️ Written as a `carrier/` SUBTREE of the mixed-mode tree (whose root has
+# no defaults file), not as its own conf.d root — the null-body precedent: a
+# new root must be pinned by check_threshold_reachability's floors, and
+# neither existing mixed-mode tenant's chain passes through `carrier/`, so no
+# existing golden row moves. The ROOT-level pair (which also moves the flat
+# plane's global Defaults) is pinned on the Go side by
+# app/config_defaults_carrier_test.go.
+# -------------------------------------------------------------------------
+def s_carrier_selection():
+    d = reset("mixed-mode") / "carrier"
+    # ONE key per file, on purpose: every defaults key here is counted by
+    # check_threshold_reachability's artifact-key floor, whose headroom note
+    # moves with it. One key is enough — reading the `.yml` instead shows up
+    # as cpu_pct 90, and merging both shows up in `defaults_chain`, which
+    # both legs assert.
+    write(d / "_defaults.yaml", """defaults:
+  cpu_pct: 50
+""")
+    write(d / "_defaults.yml", """defaults:
+  cpu_pct: 90
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-pair: {}
+""")
+    write(d / "sub2" / "_DEFAULTS.YML", """defaults:
+  cpu_pct: 95
+""")
+    write(d / "sub2" / "tenants.yaml", """tenants:
+  tenant-sub: {}
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -322,6 +376,8 @@ SCENARIOS = [
     ("null-body", "tenant-null-body", s_null_body),         # same fixture dir, own file
     ("metadata-skipped", "tenant-meta", s_metadata_skipped),
     ("wrapper-siblings", "tenant-sib", s_wrapper_siblings),
+    ("carrier-selection-pair", "tenant-pair", s_carrier_selection),  # 2 tenants, 1 tree
+    ("carrier-selection-sub", "tenant-sub", None),
 ]
 
 
@@ -366,6 +422,8 @@ def main() -> int:
         "null-body": "opt-out-null-threshold",
         "metadata-skipped": "metadata-skipped",
         "wrapper-siblings": "wrapper-siblings",
+        "carrier-selection-pair": "mixed-mode",
+        "carrier-selection-sub": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:

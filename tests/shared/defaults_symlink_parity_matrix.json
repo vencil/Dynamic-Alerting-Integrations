@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Go-vs-Python parity for defaults carriers that are SYMLINKS (#1674 round 2).",
+    "Each tree is built in a temp dir by BOTH sides: Go asserts pkg/config",
+    "ResolveEffective's merged_hash (the exporter's chain rule), Python asserts",
+    "describe_tenant's. Neither reads the other's source; both assert this table.",
+    "The carrier belongs to the directory that HOLDS THE ENTRY (Go's WalkDir never",
+    "follows a link), whatever the link points at. Measured on main 531286eb:",
+    "t1's root tenant got Python chain [] vs Go [_defaults.yaml]; after the first",
+    "#1674 commit t2's sub tenant got Python ['sub/_defaults.yaml'] (08c2671b...)",
+    "vs Go [_defaults.yaml, sub/_defaults.yaml] (14c3219b...).",
+    "chain_len is compared, not chain strings: Go reports the link path, Python",
+    "the resolved path, by long-standing design of each tool."
+  ],
+  "trees": [
+    {
+      "name": "t1-root-carrier-is-a-link-into-a-subdir",
+      "files": {
+        "sub/base.yaml": "defaults:\n  cpu_pct: 50\n  mem_pct: 1\n",
+        "root-tenant.yaml": "tenants:\n  troot: {}\n",
+        "sub/t.yaml": "tenants:\n  tsub1: {}\n"
+      },
+      "symlinks": {"_defaults.yaml": "sub/base.yaml"},
+      "expect": {
+        "troot": {"chain_len": 1, "effective_config": {"cpu_pct": 50, "mem_pct": 1}, "merged_hash": "1f629ddb4dd7ee0f"},
+        "tsub1": {"chain_len": 1, "effective_config": {"cpu_pct": 50, "mem_pct": 1}, "merged_hash": "1f629ddb4dd7ee0f"}
+      }
+    },
+    {
+      "name": "t2-root-link-plus-subtree-carrier",
+      "files": {
+        "sub/base.yaml": "defaults:\n  cpu_pct: 50\n  mem_pct: 1\n",
+        "sub/_defaults.yaml": "defaults:\n  cpu_pct: 90\n",
+        "sub/t.yaml": "tenants:\n  tsub: {}\n"
+      },
+      "symlinks": {"_defaults.yaml": "sub/base.yaml"},
+      "expect": {
+        "tsub": {"chain_len": 2, "effective_config": {"cpu_pct": 90, "mem_pct": 1}, "merged_hash": "c06205e05e84655a"}
+      }
+    }
+  ]
+}

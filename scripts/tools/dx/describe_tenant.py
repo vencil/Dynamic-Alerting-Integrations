@@ -33,7 +33,10 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
+    readable_carriers,
+    select_defaults_carrier,
     unusable_config_entries,
+    warn_multi_carrier,
     unusable_reason,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -237,14 +240,45 @@ class ConfDScanner:
         # #1588: matched by the shared predicate, not by two literal names.
         # `_DEFAULTS.YAML` measured as invisible here while the exporter
         # merged it into every downstream tenant.
-        by_dir: dict[Path, list[Path]] = {}
+        # (entry as listed, its resolved path), grouped by the directory that
+        # HOLDS THE ENTRY. ⛔ Both halves are what Go's walker does (WalkDir
+        # never follows a link): the carrier is selected by the entry's name
+        # and belongs to the entry's directory, while the chain and the JSON
+        # keep reporting the resolved path as they always did.
+        #   - selecting on the resolved name made
+        #     `_defaults.yaml -> sub/platform-base.yaml` select nothing and
+        #     crash the run;
+        #   - grouping by the RESOLVED parent moved that link's level into
+        #     `sub/`, so a root tenant lost it and a `sub/` tenant saw only one
+        #     of its two levels — a different merged_hash from the exporter
+        #     (both from blind review of #1674; the root-tenant half predates
+        #     it). Pinned by tests/shared/defaults_symlink_parity_matrix.json.
+        listed: dict[Path, list[tuple[Path, Path]]] = {}
         for dp in entries:
             if dp.is_file() and is_defaults_name(dp.name):
-                resolved = dp.resolve()
-                defaults_files[str(resolved)] = _load_yaml(dp)
-                by_dir.setdefault(resolved.parent, []).append(resolved)
-        for paths in by_dir.values():
-            paths.sort()  # two spellings in one dir resolve deterministically
+                listed.setdefault(dp.parent.resolve(), []).append((dp, dp.resolve()))
+        # #1674 (B8): ONE carrier per directory, chosen by the rule every
+        # plane shares (`select_defaults_carrier`). Before, a directory with
+        # `_defaults.yaml` + `_defaults.yml` put BOTH into the chain and
+        # merged them, while the exporter's chain read one and its flat root
+        # `Defaults` let the `.yml` overwrite — three answers for one tree.
+        # A second spelling is a misconfiguration, so it is named, not merged.
+        #
+        # Candidates are the carriers the exporter's walker KEEPS: an entry
+        # it cannot read is logged and dropped there, so it is dropped here
+        # before selecting (`readable_carriers`), and named on stderr.
+        by_dir: dict[Path, list[Path]] = {}
+        for d in sorted(listed):
+            readable, unreadable = readable_carriers(dp for dp, _ in listed[d])
+            for bad, exc in unreadable:
+                print(f"WARNING: skipped {bad} — cannot read: {exc}", file=sys.stderr)
+            chosen = select_defaults_carrier(readable)
+            if chosen is None:
+                continue
+            warn_multi_carrier(d, readable)
+            resolved = dict(listed[d])[chosen]
+            defaults_files[str(resolved)] = _load_yaml(chosen)
+            by_dir[d] = [resolved]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 
