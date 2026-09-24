@@ -51,21 +51,14 @@
 
 ⛔ **這支擋的是「產物不合法」，一律在寫出產物之前；它不是內容政策。**
 檔名能不能當 key 由 `configmap_key_problem`（轉寫自 `IsConfigMapKey`）在
-呼叫 kubectl 之前回答。⚠️ **那一層是訊息品質，不是守衛**——實測真 kubectl
-會自己點名 `db b.yaml` 這類名字並印出 regex，拿掉它也不會讓任何缺陷靜默
-通過（rc 仍非零、產物仍不寫）。它買到的是「一次列出全部」（kubectl 只印第
-一個）與 `=`、`,` **兩**類——只有這兩類 kubectl 的訊息裡找不到那個檔名。
-⚠️ `"` **不算在內**（前一版把它併進去，那半沒有量過）：kubectl 把整個
-`--from-file` 引數連同檔名原樣回印在 flag 解析錯誤裡，名字是在的，我方只
-是改說那是不合法的 key。逐格量測寫在該函式的 docstring。
+呼叫 kubectl 之前回答。它買到的是「一次列出全部」與「kubectl 從未被呼叫」，
+兩者由 `TestFileNamesThatCannotBeConfigMapKeys` 釘住。本層不對 kubectl 的
+訊息作任何宣稱。
 
 ⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成**讀回即將寫出的那份
 manifest**（`kubectl` 的 stdout，`_write_atomically` 還沒發生）：
 `measure_artifact` 把 manifest 的 key 集合與長度，和我方 `carriers`
-的意圖對帳，總位元組也在**已 parse 的產物**上量。round 3 的量測是這樣長
-的——`--from-file` 的值先過 pflag `readAsCSV` 才輪到 `ParseFileSource`，
-所以只轉寫最內層的守衛對路徑裡的 `,` 與 `"` 完全看不見；再補一層就再冒一
-層。對帳問的是「產物是不是這棵樹」，kubectl 換 parser 也不影響。
+的意圖對帳，總位元組也在**已 parse 的產物**上量。對帳問的是「產物是不是這棵樹」，kubectl 換 parser 也不影響。
 
 ⚠️ **量得到與量不到的界線**：`--config-dir` 底下**讀不到**的 config-named
 entry（斷鏈 symlink、同名目錄）不會讓這支紅，但一定**逐個具名**在 stderr
@@ -144,13 +137,6 @@ _MAX_CONFIGMAP_BYTES = 1024 * 1024
 
 # ── what the ARTIFACT has to say back (#1796, second half) ───────────
 #
-# ⛔ REMOVED here: `from_file_source_problem`, which transcribed kubectl's
-# `ParseFileSource` and counted `=`. It was one layer short — `--from-file`
-# is a pflag `StringSliceVar`, so `readAsCSV` splits the value first and a
-# path holding `,` or `"` became fabricated sources with the transcription
-# silent. **The cost of removing it**: a `--config-dir` holding `=` is no
-# longer named by US; kubectl still refuses and the run still fails, but its
-# message blames "key names or file paths" and names neither.
 # `measure_artifact` below asks the question no parser change can move.
 #
 # ⛔ `kubectl apply -f` — the client-side apply the deployment doc teaches —
@@ -210,28 +196,14 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
 
     ⚠️ It does NOT compare the value BYTES, only their count: that would
     assert a YAML round-trip through kubectl's emitter and this loader is
-    the identity — and it is NOT. Measured against kubectl v1.31.0, a value
-    holding U+0085 (NEL) comes back one byte shorter: the loader normalises
-    it to a plain newline. ⚠️ U+2028 / U+2029 were measured in the same run
-    and came back UNCHANGED, so the rule is not "exotic characters" — it is
-    one measured character. A length mismatch therefore has a second cause
+    the identity — and it is NOT. A length mismatch therefore has a second cause
     with nothing to do with the path; `main` names both.
 
-    ⛔ **NOT GUARDED HERE, and this is the cost of a withdrawal.** The round
-    before this one added two arms that turned `data`/`binaryData` coming
-    back as a non-mapping, and a carrier vanishing before the `stat()`
-    below, into sentences. Both are withdrawn: the counterfactual says they
-    changed neither of the two things that matter. Measured end to end, a
-    kubectl emitting `data: notamapping`, and a kubectl that deletes the
-    carrier it just read, each give **rc 1 with no artifact written** with
-    the arms AND without them — the only difference is a readable sentence
-    versus an `AttributeError` / `FileNotFoundError` traceback. Neither
-    input class can pass silently, so neither arm was a guard (D-01), and
-    nothing asserted either of them: reverting both left the whole test
-    file green (65 passed, 1 skipped). ⚠️ What that costs is real: those
-    two inputs now end in a traceback, which is "could not measure" wearing
-    rc 1, the same code a measured disagreement uses. It was already so
-    before that round, and it is so again.
+    ⛔ **NOT GUARDED HERE.** `data`/`binaryData` coming back as a
+    non-mapping, and a carrier vanishing before the `stat()` below, end in
+    an `AttributeError` / `FileNotFoundError` traceback with no artifact
+    written: "could not measure" wearing rc 1, the same code a measured
+    disagreement uses.
     """
     try:
         doc = _lib_io.safe_load(manifest)
@@ -399,10 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_VIOLATION
 
-    # #1796. Name them one by one. ⚠️ NOT because kubectl stays silent — it
-    # names `db b.yaml` itself (measured; see `configmap_key_problem`). What
-    # it will not do is get past the FIRST offender, and for `=` and `,` its
-    # message holds no file name at all.
+    # #1796. Name them one by one.
     illegal = [(p.name, why) for p in carriers
                if (why := configmap_key_problem(p.name)) is not None]
     if illegal:
@@ -504,11 +473,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         for line in disagreements:
             print(f"  {line}", file=sys.stderr)
-        # ⛔ TWO causes, not one. This message used to assert the first and
-        # offer only its remedy; a value holding U+0085 under a path with
+        # ⛔ TWO causes, not one. A value holding U+0085 under a path with
         # none of those characters lands here too, and "move the tree"
-        # reproduces the failure exactly (measured against kubectl v1.31.0:
-        # 34 bytes on disk, 33 in the manifest).
+        # reproduces the failure exactly.
         print(
             f"       Two different things land here:\n"
             f"       1) ARGUMENT layer — a `,`, a `\"` or an `=` in "
@@ -520,10 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             f"       2) CONTENT layer — the key set is right and only a "
             f"LENGTH differs. Then the path is innocent and moving the tree "
             f"changes nothing: the value did not survive kubectl's YAML "
-            f"emitter and this loader byte for byte. The one measured case "
-            f"is U+0085 (NEL), normalised to a plain newline on the way "
-            f"back; ⚠️ U+2028 and U+2029 were measured too and came back "
-            f"unchanged, so do not read this as 'any exotic character'.\n"
+            f"emitter and this loader byte for byte.\n"
             f"       -> diff the manifest's value against the file itself, "
             f"not the path: `kubectl create configmap ... --dry-run=client "
             f"-o yaml` and compare that key's value with the carrier.",

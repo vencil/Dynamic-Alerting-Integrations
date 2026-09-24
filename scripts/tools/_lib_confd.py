@@ -801,43 +801,10 @@ def _name_bytes(name: str) -> bytes:
 def configmap_key_problem(name: str) -> str | None:
     """Why `name` cannot be a ConfigMap key, or `None` if it can.
 
-    ⛔ **MESSAGE QUALITY, not a guard.** The sentence that used to stand
-    here — "handing it to `kubectl` produces an error that never names the
-    file" — was FALSE, and it was the premise for keeping this function.
-    Re-measured per class, `--from-file="<name>=<abs path>" -n monitoring
-    --dry-run=client -o yaml` against a real kubectl v1.31.0 (sha256
-    `7c27adc6…2437`), every row rc 1:
-
-        db b.yaml          "db b.yaml" is not a valid key name for a
-                           ConfigMap: … regex … '[-._a-zA-Z0-9]+'   NAMED
-        db-a (copy).yaml   same shape                               NAMED
-        ..hidden.yaml      "..hidden.yaml" … must not start with '..'
-                                                                    NAMED
-        db=a.yaml          key names or file paths cannot contain '='
-                                                        names NOTHING
-        db,a.yaml          error reading db: no such file or directory
-                                     names `db`, a fragment that is not a
-                                     file; the real name never appears
-        db"a.yaml          invalid argument "db\"a.yaml=<path>" for
-                           "--from-file" flag: parse error on line 1,
-                           column 3: bare " in non-quoted-field
-                                     NAMED — the whole argument, file name
-                                     included, is echoed back verbatim
-        two bad names      only the FIRST is printed
-
-    ⛔ So what this buys is narrow and none of it is "a defect would pass
-    silently": all offending names at once, a refusal before the
-    subprocess, and the only by-name answer for **`=` and `,`** — two
-    classes, not three. ⚠️ `"` is NOT one of them, however it reads in the
-    earlier prose: pflag echoes the argument, so the name is right there;
-    what this layer adds for `"` is only that the refusal says "illegal
-    ConfigMap key" instead of a CSV parse error at a column number. (All
-    three are split by `readAsCSV` / `ParseFileSource` before
-    `IsConfigMapKey` ever runs — that part held.) Without this function
-    kubectl still exits non-zero and `_write_atomically` is never reached.
-    DROPPING the file instead of refusing would be the silent one (#1603's
+    ⛔ DROPPING the file instead of refusing would be the silent failure (#1603's
     shape) — hence "rename it" or "leave it out on purpose", never
-    "skip it".
+    "skip it". This function makes no claim about what kubectl's own
+    message says.
 
     ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
     POSIX; Python hands it back with the undecodable ones smuggled in as

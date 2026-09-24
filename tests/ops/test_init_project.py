@@ -1968,6 +1968,28 @@ class TestKustomizeBaseEnumeratesConfd:
             # Must-fire control in the same tree: the legal one survives.
             assert 't-ok.yml' in files
 
+    def test_every_illegal_name_is_named_in_one_run(self, capsys):
+        """All offending names in ONE run, each named and each left out.
+
+        ⚠️ This path never calls kubectl (it writes a kustomize base), so
+        "refused before the subprocess" is not one of its properties and is
+        not asserted here."""
+        bad = ['a=b.yaml', 'db b.yaml']
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = os.path.join(tmp, 'conf.d')
+            os.makedirs(conf)
+            for n in (*bad, 't-ok.yml'):
+                with open(os.path.join(conf, n), 'w', encoding='utf-8') as fh:
+                    fh.write('tenants: {}\n')
+            capsys.readouterr()
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            err = capsys.readouterr().err
+            files = _kust_files(tmp)
+            for name in bad:
+                assert f"{name!r} cannot be a ConfigMap key" in err, (name, err)
+                assert name not in files
+            assert 't-ok.yml' in files
+
     def test_illegal_name_leaves_the_cli_at_rc_0(self):
         """Post-write finding: a notice, not a failure (see the docstring)."""
         import subprocess
