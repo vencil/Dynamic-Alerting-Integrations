@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIPESTATUS read in a file that never relaxes errexit (TRK-382 / #1845).
+"""PIPESTATUS read where errexit and pipefail are on and never relaxed (TRK-382 / #1845).
 
 Under ``set -e`` + ``set -o pipefail`` a non-zero pipeline terminates the
 script on the pipeline line, so a later ``${PIPESTATUS[...]}`` read is
@@ -28,6 +28,9 @@ whole file ⇒ a silent miss. So every doubt is resolved toward loud:
 - **Relaxing is read narrow**: only a line that *starts* with ``set``;
   its arguments end at ``;`` ``&`` ``|`` ``#`` and option parsing ends at
   ``--`` / ``-`` (``set -- +e`` sets a positional parameter, not a flag).
+  A ``set`` cut off by a single ``&`` or ``|`` (``set +e &``,
+  ``set +e | cat``) runs in a subshell and relaxes nothing in the script;
+  ``&&`` / ``||`` keep it in the current shell and still count.
   A relaxing ``set`` anywhere else (``foo; set +e``, ``if set +e``) is not
   seen — an over-report, not a miss.
 
@@ -171,6 +174,8 @@ def _relaxes(line: str) -> bool:
         return False
     rest = line[m.end():]
     end = _ARG_END.search(rest)
+    if end and end.group() in "&|" and rest[end.end():end.end() + 1] != end.group():
+        return False  # backgrounded or piped: runs in a subshell
     toks = (rest[:end.start()] if end else rest).split()
     for i, tok in enumerate(toks):
         if tok in ("--", "-"):

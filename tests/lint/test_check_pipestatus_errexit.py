@@ -112,6 +112,7 @@ def test_workflow_run_block_is_scanned_like_a_script():
     # over-rejection direction: the relaxing flag need not come first
     "set -e +o pipefail", "set -o pipefail +e", "set -u +o errexit",
     "  set +e  # relaxed for the loop below", "set +e;",
+    "set +e && true", "set +e || true",  # && / || stay in the current shell
 ])
 def test_relaxed_file_is_not_flagged(relax):
     text = f"set -euo pipefail\n{relax}\nx | y\nrc=${{PIPESTATUS[0]}}\nset -e\n"
@@ -151,6 +152,9 @@ def test_comment_mentions_are_not_reads():
     "true  # set +e",     # only in a trailing comment
     "set -o pipefail; +e",  # +e belongs to no `set` after the separator
     "set +x",             # relaxes xtrace, not errexit
+    "set +e &",           # backgrounded: the subshell relaxes, the script does not
+    "set +e | cat",       # piped: same
+    "set +e |& cat",
     "set +f",             # both exist in the live tree
 ])
 def test_not_a_relaxation_does_not_clear_the_file(line):
@@ -274,6 +278,18 @@ def test_ground_truth_split_cluster_arms_both():
                         "[[ -o errexit && -o pipefail ]] && echo both"],
                        capture_output=True, text=True, timeout=30)
     assert p.stdout.strip() == "both"
+
+
+@pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
+@pytest.mark.parametrize("relax, relaxed", [
+    ("set +e &", False), ("set +e | cat", False),
+    ("set +e && true", True), ("set +e || true", True),
+])
+def test_ground_truth_subshell_set_does_not_relax(relax, relaxed):
+    script = f"set -euo pipefail\n{relax}\nwait\nfalse | cat\necho reached\n"
+    p = subprocess.run([_BASH, "-c", script], capture_output=True, text=True, timeout=30)
+    assert ("reached" in p.stdout) is relaxed
+    assert lint._relaxes(relax) is relaxed
 
 
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")

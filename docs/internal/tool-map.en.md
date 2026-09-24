@@ -216,7 +216,7 @@ lang: en
 | `check_orphan_recordings.py` | Orphan recording-rule gate — every recording rule must have a consumer somewhere in the platform (TRK-339 WS2a / #1200). |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
-| `check_pipestatus_errexit.py` | PIPESTATUS read in a file that never relaxes errexit (TRK-382 / #1845). |
+| `check_pipestatus_errexit.py` | PIPESTATUS read where errexit and pipefail are on and never relaxed (TRK-382 / #1845). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
