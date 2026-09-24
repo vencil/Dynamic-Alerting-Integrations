@@ -108,8 +108,9 @@ _DEFAULTS_KEEPING_STANDARD = frozenset({"standard", "all"})
 # safety proof — the honest claim is "someone reviewed this key once", and even
 # that is conditional: `build-tags` is here because tenant-api needs it, yet
 # enrolling a tag that some file NEGATES (`//go:build !x`) drops that file from
-# the corpus, which is the very shape this module exists to catch. No file in
-# the tree carries a negated constraint today.
+# the corpus, which is the very shape this module exists to catch. The one
+# negated constraint in the tree is `!unix` (exporter internal/testutil's
+# non-unix stub, #1969); `unix` is `default-build`, never enrolled.
 # An accept-set rather than a denylist because the harmful set is open; kept
 # wide enough that the ordinary knobs stay usable, because a guard that reds on
 # `timeout:` is a guard that gets deleted.

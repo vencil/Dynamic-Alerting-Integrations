@@ -1,4 +1,4 @@
-//go:build !(linux || darwin)
+//go:build !unix
 
 package testutil
 
@@ -8,8 +8,8 @@ import (
 )
 
 // AgeSymlink skips the calling test: setting a symlink's own mtime needs
-// lutimes, which this helper only wires on linux and darwin. See the
-// linux/darwin build of this function for why the tests need it.
+// lutimes, which this helper only wires on unix. See the
+// unix build of this function for why the tests need it.
 func AgeSymlink(t testing.TB, path string, age time.Duration) {
 	t.Helper()
 	_ = age
