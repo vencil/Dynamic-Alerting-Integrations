@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // ============================================================
@@ -1280,16 +1282,9 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 // it together with the flat cache, applying the subtree defaults the
 // CURRENT hierarchy state (already installed by the caller) declares.
 //
-// A file carries bytes only when its hash moved against the prior, so for
-// a file without bytes the parsed partial from the previous commit is
-// reused when its hash is unchanged — the walker's prior IS the tree of
-// that previous commit (see flatScanState.tree), which is what makes the
-// reuse sound. A `_`-prefixed file that is unchanged but has no cached
-// partial (it failed to parse last time, or it is a nested platform file
-// this plane never caches) is re-read and re-judged, so its ERROR/WARN and
-// its parse-failure count fire again exactly as on a cold load. A tenant
-// file is never re-judged here: the walker parses it (#1957) and has already
-// logged and counted a failure on this scan (TreeFile.ParseFailed).
+// The build itself is config.BuildFlatConfig (pkg/config/flat_build.go,
+// #1988), which documents the prior-partial reuse; this method supplies the
+// manager's prior flat cache and hierarchy snapshot and does the commit.
 func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
@@ -1299,89 +1294,6 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	priorHashes := m.flat.hashes
 	priorConfigs := m.flat.configs
 	m.mu.RUnlock()
-
-	// The root carrier the chain selects (#1674). Computed before the loop:
-	// an unselected root carrier is ignored on every plane, so it is not even
-	// parsed here, let alone merged or cached.
-	rootCarrier := rootCarrierKey(scan, m.getLogger())
-
-	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
-	for _, name := range scan.Keys {
-		if isUnselectedRootCarrier(name, rootCarrier) {
-			continue
-		}
-		f := scan.Files[name]
-		// ⛔ THE WALKER ALREADY JUDGED IT (#1957). A tenant file whose one
-		// decode failed was logged and counted by the walker on THIS scan;
-		// re-reading it here would count it twice per scan (the historical
-		// double count for syntax errors) and log it twice.
-		if f.ParseFailed {
-			continue
-		}
-		// ⛔ THE WALKER ALREADY DECODED IT (#1957). A tenant file this scan
-		// parsed comes with its ThresholdConfig in scan.Partials, decoded by
-		// the same config.ParseConfigFile parsePartialConfig calls — so the
-		// walker's tenant set and this plane's are one verdict, and the bytes
-		// are not decoded twice.
-		if partial, ok := scan.Partials[name]; ok {
-			applyBoundaryRules(name, &partial, m.getLogger())
-			fileConfigs[name] = partial
-			continue
-		}
-		fullPath := filepath.Join(m.path, name)
-		data := f.Data
-		if data == nil {
-			if priorHashes[name] == f.Hash {
-				if partial, ok := priorConfigs[name]; ok {
-					fileConfigs[name] = partial
-					continue
-				}
-			}
-			// Unchanged-but-uncached, or a prior the walker did not have:
-			// read from disk and take the ordinary path below.
-			var rerr error
-			data, rerr = os.ReadFile(fullPath)
-			if rerr != nil {
-				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
-				continue
-			}
-		}
-		// ⛔ A nested `_` file is scanned (change detection must see it) but
-		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
-		// is ONE global map with no subtree scope, and the merge is
-		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
-		// after the root's and would re-price every tenant in the tree,
-		// including tenants in unrelated subtrees. Measured; see
-		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
-		//
-		// ⛔ NOT `parsePartialConfig`, BUT NOT SILENT EITHER. Running the full
-		// parse here logs `ERROR: skip unparseable defaults/profiles file …`
-		// for a tree that is entirely valid: `Defaults` is
-		// `map[string]float64`, so a subtree defaults file in the SCHEDULE
-		// form (`{default: "90", overrides: […]}`) — which the hierarchical
-		// plane accepts and `/effective` renders — cannot decode into it.
-		// Skipping outright, though, dropped the parse-failure counter and the
-		// ERROR for files that are GENUINELY broken (measured: a nested
-		// `_defaults.yaml` containing `defaults: [this is not a map` scored 0
-		// on the counter and produced no ERROR — a severity downgrade the
-		// recursion introduced). The probe below separates the two: a syntax
-		// error is still counted and still loud; content this plane simply
-		// does not want is skipped in silence. (#1569 blind review.)
-		if isNestedPlatformFile(name) {
-			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
-			continue
-		}
-		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
-		if !ok {
-			continue
-		}
-		applyBoundaryRules(name, &partial, m.getLogger())
-		fileConfigs[name] = partial
-	}
-
-	// Merge all partials
-	merged := mergePartialConfigs(fileConfigs)
-	merged.ApplyProfiles()
 
 	// #1521 second half: the caller just installed the inheritance graph this
 	// scan produced, so each tenant's L1..Ln defaults can be materialised into
@@ -1394,7 +1306,19 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	}
 	parsedDefaults := m.hierarchy.parsedDefaults
 	m.mu.RUnlock()
-	n, unreachable := applySubtreeDefaults(&merged, m.path, tenantDefaults, parsedDefaults)
+	built, err := config.BuildFlatConfig(scan, config.FlatBuildInput{
+		Root:           m.path,
+		PriorHashes:    priorHashes,
+		PriorConfigs:   priorConfigs,
+		TenantDefaults: tenantDefaults,
+		ParsedDefaults: parsedDefaults,
+		Obs:            scanObserverFor(m.getMetrics()),
+		Logger:         m.getLogger(),
+	})
+	if err != nil {
+		return err
+	}
+	merged, fileConfigs, n, unreachable := built.Config, built.FileConfigs, built.SubtreeFilled, built.Unreachable
 	if n > 0 {
 		m.getLogger().Printf(
 			"INFO: applied %d inherited subtree default(s) to the collector config "+
@@ -1466,20 +1390,7 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	// noOp falls back to "unknown". Parse failures are logged-and-skipped
 	// (not fatal — same policy as logMergeSkip above) so one broken
 	// defaults file can't poison the rest of the cache.
-	newParsedDefaults := make(map[string]map[string]any, len(defaults))
-	for dp := range defaults {
-		b, rerr := os.ReadFile(dp)
-		if rerr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
-			continue
-		}
-		parsed, perr := parseDefaultsBytes(b)
-		if perr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
-			continue
-		}
-		newParsedDefaults[dp] = parsed
-	}
+	newParsedDefaults := config.ParseDefaultsFiles(defaults, m.getLogger())
 
 	m.mu.Lock()
 	// Only flip hierarchicalMode on once we've seen a _defaults.yaml

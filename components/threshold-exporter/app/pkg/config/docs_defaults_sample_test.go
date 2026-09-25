@@ -27,7 +27,7 @@ package config
 // the failure is file-GLOBAL — one bad scalar takes the whole `defaults:` block
 // down with it — and how loudly it fails depends on which consumer reads it:
 //
-//   - The exporter's own scanner IS loud: parsePartialConfig (flat_scanner.go)
+//   - The exporter's own scanner IS loud: parsePartialConfig (flat_build.go)
 //     emits `metrics.IncParseFailure` plus an ERROR log naming the file.
 //   - mergeTenantConfig (merge_tenant.go) still DISCARDS the failed decode and
 //     carries on with zero platform defaults, and still exports no metric for

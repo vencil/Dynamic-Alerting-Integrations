@@ -193,7 +193,7 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 // `_defaults.yaml` overwriting the root one for EVERY tenant in the tree.
 //
 // ⛔ Why the test above is blind to it: the flat merge is last-writer-wins
-// over sorted keys (`flat_scanner.go`: `sort.Strings(names)` then
+// over sorted keys (`pkg/config/flat_build.go`: `sort.Strings(names)` then
 // `merged.Defaults[k] = v`), and with relative-path keys `_defaults.yaml`
 // (`_` = 0x5F) sorts BEFORE `nested/_defaults.yaml` (`n` = 0x6E) — the subtree
 // value lands last and wins globally. Both tenants in the fixture above carry

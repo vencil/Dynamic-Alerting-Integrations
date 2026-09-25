@@ -59,7 +59,7 @@ var hiddenAxisCorpus = map[string]string{
 	// ⛔ A cell where the WALKER ITSELF is wrong (#1674): its classifier folds
 	// case and files this into `defaults`, while `collectDefaultsChain` probes
 	// only the two lowercase literals — a carrier that reaches nobody's chain.
-	// `ResolveEffective`, `describe_tenant.py` and `flat_scanner.go` all include
+	// `ResolveEffective`, `describe_tenant.py` and `BuildFlatConfig` all include
 	// it; the walker is the only excluder of four readers. It is here because the
 	// cousin reproduces the fault faithfully, which is what parity means: a fix
 	// applied to only one of the two turns this test red. Not an endorsement.
