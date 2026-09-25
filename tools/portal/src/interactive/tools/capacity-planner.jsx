@@ -1,7 +1,5 @@
 ---
 title: "Capacity Planner"
-tags: [capacity, planning, estimation]
-audience: [platform-engineer]
 version: v2.9.0
 lang: en
 related: [architecture-quiz, rule-pack-matrix, dependency-graph]

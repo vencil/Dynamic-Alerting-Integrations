@@ -72,15 +72,10 @@ WHAT THIS GUARD DOES **NOT** BUY
   gets ``conf.d/`` + CI files "and nothing else"; that was false, and false in a
   way this very PR should have caught, because the same PR taught
   ``_preview_files`` about the exception. GitOps Native Mode
-  (``config_source='git'``) writes ``kustomize/overlays/gitops/`` for ANY deploy
-  method. Measured: ``--deploy helm|argocd --config-source git`` produces
-  exactly those two files and NO ``kustomize/base/`` — while the overlay they
-  contain declares ``resources: [../../base]``. That is a dangling reference and
-  ``kustomize build`` cannot resolve it. ⚠️ The dry-run/actual set-equality test
-  added in this PR does NOT catch that: both sides contain the same two files,
-  so it pins the broken combination as correct. Tracked with the rest of the
-  product-level gaps below; the assertion this file makes is about the two
-  file-lists agreeing, never about the files being usable.
+  (``config_source='git'``) wrote ``kustomize/overlays/gitops/`` for ANY deploy
+  method, including a dangling ``resources: [../../base]`` under helm/argocd;
+  even under kustomize its git-sync patch targeted a Deployment the tree never
+  contained. That mode is refused since #1349, so the exception is gone.
 
   Back to the argocd branch: it gets no Application manifest, and no
   ``kustomize/overlays/prod`` for one to point at (the tree
@@ -1008,10 +1003,8 @@ def _runs_under(name: str, event: str, jobs: dict, label: str,
 # guards in section 5b grade the same artifact a third way (against the file
 # tree that was actually written). Three faces, no shared source of error.
 #
-# ⚠️ These are the sets for the CLI's DEFAULT `--config-source configmap`. GitOps
-# Native Mode widens `kustomize` back in under every `--deploy` (it writes
-# `kustomize/overlays/gitops/`) and is pinned by its own test below, not here —
-# the fixture this table grades does not pass `--config-source`.
+# ⚠️ `configmap` is the only `--config-source` since #1349 withdrew GitOps
+# Native Mode, which used to widen `kustomize` back in under every `--deploy`.
 _CLI_TRIGGER_TREES: dict[str, tuple[str, ...]] = {
     # base + overlays are written, and the apply step builds overlays/prod.
     "kustomize": ("conf.d", "kustomize", "rule-packs"),
@@ -3857,25 +3850,16 @@ def _files_written(root: Path) -> set[str]:
     }
 
 
-@pytest.mark.parametrize(
-    "config_source,git_repo",
-    [("configmap", ""), ("git", "https://git.example.invalid/ops.git")],
-    ids=["configmap", "gitops"],
-)
 @pytest.mark.parametrize("ci,deploy", MATRIX)
 def test_dry_run_preview_matches_what_run_init_writes(
-    tmp_path, ci, deploy, config_source, git_repo,
+    tmp_path, ci, deploy,
 ) -> None:
     """``--dry-run`` must list exactly the files the real run writes.
 
-    The ``gitops`` axis is not decoration: GitOps Native Mode (run_init step 3b)
-    writes ``kustomize/overlays/gitops/{kustomization,git-sync-patch}.yaml``
-    for ANY --deploy value, and ``_preview_files`` had no branch for it.
-    Measured before the fix: the preview understated every gitops run by two
-    files, one of them a Deployment patch — a user who ran --dry-run to see
-    whether init would touch ``kustomize/`` was told it would not, and then it
-    did. Equality, not containment: an over-promise (a path previewed but never
-    created) is the same defect pointed the other way.
+    Equality, not containment: an over-promise (a path previewed but never
+    created) is the same defect as an under-promise, pointed the other way.
+    (This used to carry a ``gitops`` axis: GitOps Native Mode wrote two files
+    ``_preview_files`` once forgot. That mode is refused since #1349.)
 
     ⛔ The preview is taken BEFORE the write, and that ordering is now
     load-bearing rather than incidental. Since #1357 one artifact — the root
@@ -3897,8 +3881,6 @@ def test_dry_run_preview_matches_what_run_init_writes(
         "tenants": ["db-a"],
         "namespace": "monitoring",
         "da_tools_image": "ghcr.io/vencil/da-tools:latest",
-        "config_source": config_source,
-        "git_repo": git_repo,
     }
 
     for phase in ("greenfield", "brownfield"):
@@ -3930,8 +3912,8 @@ def test_dry_run_preview_matches_what_run_init_writes(
             "empties."
         )
         assert preview == actual, (
-            f"`da-tools init --ci {ci} --deploy {deploy}` (config_source="
-            f"{config_source}, {phase}) previews a different file set than it "
+            f"`da-tools init --ci {ci} --deploy {deploy}` ({phase}) previews "
+            f"a different file set than it "
             f"writes.\n"
             f"  previewed but never created: {sorted(preview - actual)}\n"
             f"  created but never previewed: {sorted(actual - preview)}\n"
@@ -6374,9 +6356,8 @@ def test_no_github_filter_entry_watches_a_tree_that_is_never_there(
     argocd write no `kustomize/` tree — an entry that can never fire, and one
     that told a helm reader their mode was kustomize-related. An entry earns its
     place by the tree being WRITTEN by this run or NAMED by a job; nothing else
-    counts, which is also why the fix could not just delete it (GitOps Native
-    Mode writes `kustomize/overlays/gitops/` under every `--deploy` — pinned
-    separately below).
+    counts. (GitOps Native Mode used to write `kustomize/overlays/gitops/` under
+    every `--deploy`; it is refused since #1349.)
     """
     root = generated[(ci, deploy)]
     path = root / _GH_WORKFLOW
@@ -6454,72 +6435,6 @@ def test_no_gitlab_changes_entry_watches_a_tree_that_is_never_there(
         f"({sorted(named)})."
     )
 
-
-@pytest.mark.parametrize("ci,deploy", MATRIX)
-def test_gitops_native_mode_keeps_the_kustomize_overlay_in_both_filters(
-    tmp_path, ci, deploy
-) -> None:
-    """⛔ The correction issue 1473 did not have, measured rather than reasoned.
-
-    The ticket says `--deploy helm` / `--deploy argocd` write no `kustomize/`
-    tree and concludes `kustomize/**` is dead there. That holds only at the
-    default `--config-source`: GitOps Native Mode (`--config-source git` with a
-    `--git-repo`) writes `kustomize/overlays/gitops/{kustomization,
-    git-sync-patch}.yaml` for EVERY `--deploy` (`run_init` step 3b). Dropping
-    the entry on `deploy_method` alone would have swapped issue 1473's dead
-    entry for a MISSING one, aimed at exactly the customers who took the GitOps
-    path — the same defect, other direction.
-
-    So this asserts the BEHAVIOUR on the files that mode really writes, not the
-    presence of a string.
-    """
-    target = tmp_path / f"gitops-{ci}-{deploy}"
-    target.mkdir()
-    created = ip.run_init(
-        {
-            "ci": ci,
-            "deploy": deploy,
-            "rule_packs": ["mariadb"],
-            "tenants": ["db-a"],
-            "namespace": "monitoring",
-            "da_tools_image": ip.DA_TOOLS_IMAGE,
-            "config_source": "git",
-            "git_repo": "https://gitops.invalid/tenant-config.git",
-        },
-        str(target),
-    )
-    overlay = sorted(
-        Path(f).relative_to(target).as_posix() for f in created
-        if "kustomize/overlays/gitops/" in Path(f).as_posix()
-    )
-    assert overlay, (
-        "GitOps Native Mode wrote no `kustomize/overlays/gitops/` file, so this "
-        "assertion describes nothing. If step 3b moved, re-derive it — do not "
-        "delete the test."
-    )
-
-    if ci in _EMITS_GITHUB:
-        workflow = yaml.safe_load(
-            (target / _GH_WORKFLOW).read_text(encoding="utf-8"))
-        filters = _gh_trigger_paths(workflow)
-        missed = [o for o in overlay
-                  if not any(_gha_path_matches(f, o) for f in filters)]
-        assert not missed, (
-            f"--deploy {deploy} --config-source git: `on.paths` ({filters}) "
-            f"does not match the git-sync overlay this run wrote ({missed}). A "
-            "customer editing their own sync patch would trigger nothing."
-        )
-    if ci in _EMITS_GITLAB:
-        pipeline = yaml.safe_load(
-            (target / _GL_PIPELINE).read_text(encoding="utf-8"))
-        changes = _gl_change_paths(pipeline)
-        missed = [o for o in overlay
-                  if not any(_gitlab_changes_matches(c, o) for c in changes)]
-        assert not missed, (
-            f"--deploy {deploy} --config-source git: no `changes:` entry "
-            f"({changes}) matches the git-sync overlay this run wrote "
-            f"({missed})."
-        )
 
 
 def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:

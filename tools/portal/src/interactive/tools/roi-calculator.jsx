@@ -1,7 +1,5 @@
 ---
 title: "ROI Calculator"
-tags: [roi, cost, adoption, evaluation]
-audience: [maintainer]
 version: v2.9.0
 lang: en
 related: [capacity-planner, health-dashboard, alert-simulator]

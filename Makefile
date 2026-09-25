@@ -896,27 +896,6 @@ recipe-status-json: ## 從 shape.py RECIPE_STATUS 生成 recipe-status.json（AD
 recipe-status-json-check: ## 驗證 committed recipe-status.json 與 shape.py RECIPE_STATUS 同步（#741 #6 drift gate）
 	@python3 ./scripts/tools/dx/gen_recipe_status_json.py --check
 
-.PHONY: jsx-extract
-jsx-extract: ## 拆 JSX dep（PR-2d pattern）— 用法：make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager [SYMBOLS=A,B] [DRY_RUN=1] [FORCE=1]
-	@if [ -z "$(KIND)" ] || [ -z "$(NAME)" ] || [ -z "$(PARENT)" ]; then \
-		echo "Usage: make jsx-extract KIND=<fixture|util|hook|component|view> NAME=<symbol> PARENT=<orchestrator>"; \
-		echo ""; \
-		echo "Examples:"; \
-		echo "  make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager"; \
-		echo "  make jsx-extract KIND=component NAME=FooBar PARENT=tenant-manager"; \
-		echo "  make jsx-extract KIND=fixture NAME=demo-bars PARENT=tenant-manager SYMBOLS=DEMO_BARS,DEMO_BAR_GROUPS"; \
-		echo "  make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager DRY_RUN=1  # preview only"; \
-		echo ""; \
-		echo "PARENT is the orchestrator's filename without .jsx (e.g. 'tenant-manager' for docs/interactive/tools/tenant-manager.jsx)."; \
-		echo "Auto-updates the orchestrator's front-matter 'dependencies: [...]' AND the 'const X = window.__X;' import block."; \
-		exit 1; \
-	fi
-	@python3 ./scripts/tools/dx/scaffold_jsx_dep.py \
-		--kind $(KIND) --name $(NAME) --parent $(PARENT) \
-		$(if $(SYMBOLS),--symbols $(SYMBOLS)) \
-		$(if $(DRY_RUN),--dry-run) \
-		$(if $(FORCE),--force)
-
 .PHONY: lint-extract
 lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerplate codified）— 用法：make lint-extract NAME=foo_bar KIND=text DESCRIPTION="..." FILES='^docs/.*\.md$$' [DRY_RUN=1] [FORCE=1] [NO_HOOK=1]
 	@if [ -z "$(NAME)" ] || [ -z "$(KIND)" ] || [ -z "$(DESCRIPTION)" ]; then \

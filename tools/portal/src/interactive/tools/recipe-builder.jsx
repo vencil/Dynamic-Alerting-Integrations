@@ -1,7 +1,5 @@
 ---
 title: "Custom Alert Recipe Builder"
-tags: [custom-alert, recipe, builder, adr-024, s6b]
-audience: [tenant, sre, platform-engineer]
 version: v2.9.0
 lang: en
 related: [alert-builder, tenant-manager, threshold-calculator, simulate-preview]

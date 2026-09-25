@@ -1,7 +1,5 @@
 ---
 title: "Prometheus Query Tester"
-tags: [PromQL, testing, recording rules]
-audience: [platform-engineer, domain-expert]
 version: v2.9.0
 lang: en
 related: [rule-pack-detail, schema-explorer, migration-simulator]

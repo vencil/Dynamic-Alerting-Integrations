@@ -1,7 +1,5 @@
 ---
 title: "Threshold Heatmap"
-tags: [threshold, visualization, heatmap, metrics, distribution]
-audience: [platform-engineer, domain-expert, sre]
 version: v2.9.0
 lang: en
 related: [rule-pack-matrix, capacity-planner, multi-tenant-comparison]

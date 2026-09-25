@@ -1,7 +1,5 @@
 ---
 title: "Master Onboarding — Dual Entry"
-tags: [onboarding, dual-entry, dispatcher, import, greenfield, c-3]
-audience: [platform-engineer, sre, tenant]
 version: v2.9.0
 lang: en
 related: [cicd-setup-wizard, deployment-wizard, onboarding-checklist, tenant-manager, alert-simulator]

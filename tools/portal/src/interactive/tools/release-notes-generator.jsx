@@ -1,7 +1,5 @@
 ---
 title: "Release Notes Generator"
-tags: [release, changelog, automation, communication]
-audience: [maintainer]
 version: v2.9.0
 lang: en
 related: [deployment-wizard, health-dashboard, platform-health]

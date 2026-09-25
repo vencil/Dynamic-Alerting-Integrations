@@ -1,7 +1,5 @@
 ---
 title: "RBAC Setup Wizard"
-tags: [rbac, authorization, security, setup, wizard]
-audience: ["platform-engineer", "sre"]
 version: v2.9.0
 lang: en
 related: [config-lint, tenant-manager, self-service-portal]

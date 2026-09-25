@@ -558,23 +558,9 @@ def _ssot_pilot(tmp: Path) -> list[str]:
     return ["--directory", "docs/pilot", "--execute", "--dry-run"]
 
 
-def _jsx_orchestrator(tmp: Path) -> list[str]:
-    # ⚠️ scaffold_jsx_dep 目前找的是 `docs/interactive/tools/<parent>.jsx`，
-    # 但 JSX 已搬到 `tools/portal/src/interactive/tools/`，所以在真的 repo 上
-    # 每次呼叫都 rc=2（已寫回 issue #1454）。fixture 放在它**現在**去找的位置，
-    # 量的是它的 dry-run 守衛，不是替那條過期路徑背書。
-    orch = _sb(tmp, "docs/interactive/tools/probe-tool.jsx")
-    orch.parent.mkdir(parents=True, exist_ok=True)
-    orch.write_text(
-        "---\ntitle: Probe\ndependencies: [\n  \"probe-tool/hooks/useExisting.js\"\n]\n---\n"
-        "const useExisting = window.__useExisting;\n\nexport default function P() {}\n",
-        encoding="utf-8")
-    return ["--kind", "hook", "--name", "useDryRunProbe", "--parent", "probe-tool",
-            "--dry-run"]
-
 
 def _stale_tool_registry_outputs(tmp: Path) -> list[str]:
-    """讓三個寫入守衛（flow map / hub / JSX frontmatter）各有東西可寫。"""
+    """讓兩個寫入守衛（flow map / hub）各有東西可寫。"""
     _edit(_sb(tmp, "docs/assets/jsx-loader.html"),
           "'wizard': '../getting-started/wizard.jsx'",
           "'wizard': '../stale/wizard.jsx'")
@@ -584,34 +570,8 @@ def _stale_tool_registry_outputs(tmp: Path) -> list[str]:
                  r'data-audience="stale"\1', text, count=1)
     assert new != text, "fixture 前提不成立：hub 裡找不到 wizard 卡片"
     hub.write_text(new, encoding="utf-8", newline="\n")
-    # sync_frontmatter 讀 `tools/portal/src/<registry file>`（與
-    # check_tool_registry_jsx_parity 同一個 JSX_ROOT）。registry 裡每一條都要
-    # 解析得到：有任何一條缺檔，工具就判「同步不完整」而 exit 1，寫入對照的
-    # exit 0 就量不到（PR #1966）。其餘條目放沒有 frontmatter 的佔位檔，工具會
-    # 略過它們，所以寫入只落在 wizard 上。
-    registry = _sb(tmp, "docs/assets/tool-registry.yaml").read_text(encoding="utf-8")
-    files = re.findall(r"^\s+file:\s*(\S+)\s*$", registry, re.MULTILINE)
-    assert "getting-started/wizard.jsx" in files, "fixture 前提不成立：registry 裡沒有 wizard"
-    for rel in files:
-        stub = _sb(tmp, f"tools/portal/src/{rel}")
-        stub.parent.mkdir(parents=True, exist_ok=True)
-        stub.write_text("export default function T() {}\n", encoding="utf-8")
-    jsx = _sb(tmp, "tools/portal/src/getting-started/wizard.jsx")
-    jsx.parent.mkdir(parents=True, exist_ok=True)
-    jsx.write_text("---\ntitle: Wizard\naudience: [nobody]\ntags: [stale]\n---\n"
-                   "export default function W() {}\n", encoding="utf-8")
-    return ["--sync-frontmatter", "--dry-run"]
-
-
-def _fixable_doc_links(tmp: Path) -> list[str]:
-    # ⚠️ fix_doc_links 的 DOCS_DIR 是 `lint/../../docs` = `scripts/docs`（搬進
-    # lint/ 時少了一層 `..`），所以在真的 repo 上每次呼叫都 rc=2（已寫回
-    # issue #1454）。fixture 放在它**現在**去找的位置。
-    adr = _sb(tmp, "scripts/docs/adr")
-    adr.mkdir(parents=True, exist_ok=True)
-    (adr / "001-a.md").write_text("# A\n\nsee [B](adr/002-b.md)\n", encoding="utf-8")
-    (adr / "002-b.md").write_text("# B\n", encoding="utf-8")
     return ["--dry-run"]
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -844,10 +804,6 @@ RECIPES: list[Recipe] = [
       lambda t, s: _reword_repo(t),
       cwd="gitrepo", env=lambda t: dict(_GIT_ENV), write_control=True),
 
-    R("scaffold_jsx_dep",
-      lambda t, s: _jsx_orchestrator(t),
-      sandbox=(), cwd="repo", write_control=True),
-
     R("scaffold_lint",
       lambda t, s: ["--name", "dry_run_probe", "--kind", "text",
                     "--description", "dry-run gate probe", "--dry-run"],
@@ -865,10 +821,6 @@ RECIPES: list[Recipe] = [
     # 零寫入」，不是某個守衛。`--run`（真的跑 pytest）不在這條的範圍。
     R("verify_diff",
       lambda t, s: ["scripts/tools/dx/bump_docs.py", "--ack-external", "--dry-run"]),
-
-    R("fix_doc_links",
-      lambda t, s: _fixable_doc_links(t),
-      sandbox=(), cwd="repo", write_control=True),
 ]
 
 
@@ -894,7 +846,9 @@ def test_recipe_table_covers_every_dry_run_tool():
 
 # 每個子目錄各有幾支宣告 --dry-run 的工具。分目錄釘而不是釘總數：總數不變
 # 但一支從 ops/ 搬到 dx/ 也是範圍變動，應該被看見。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 15, "lint": 1}
+# lint 目錄原本有 1 支（fix_doc_links），dx 原本 15 支；fix_doc_links 與
+# scaffold_jsx_dep 在 issue #1454 退役後，lint 目錄沒有宣告 --dry-run 的工具。
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 14}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():

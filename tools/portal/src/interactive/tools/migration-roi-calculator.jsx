@@ -1,7 +1,5 @@
 ---
 title: "Migration ROI Calculator"
-tags: [migration, roi, promql, conversion]
-audience: [maintainer]
 version: v2.9.0
 lang: en
 related: [roi-calculator, operator-setup-wizard, migration-simulator]

@@ -426,8 +426,9 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
 
 # ── #1337 follow-up: the CUSTOMER-DELIVERED scan face ───────────────────────
 # Everything above is about images WE install. `da-tools init` writes a FOURTH
-# class into a CUSTOMER's repo — the GitLab apply stage's runner image and the
-# git-sync sidecar/init container — and those sat in no automated view of a
+# class into a CUSTOMER's repo — the GitLab apply stage's runner image (and,
+# until GitOps Native Mode was withdrawn in #1349, the git-sync sidecar/init
+# container) — and those sat in no automated view of a
 # registry at all. Not by decision, by three independent misses that each read
 # as deliberate scoping until checked against the question:
 #   * the extractor's SOURCE_GLOBS cover `helm/` and `k8s/`, never `scripts/`;
@@ -451,18 +452,21 @@ _DELIVERED_PIN_SOURCE = "scripts/tools/ops/init_project.py"
 # one of those would shrink in lockstep with the thing it is guarding — the
 # exact triviality `test_the_three_selfbuilt_build_lists_agree` had to relocate
 # its own floor away from. Lowering this has to be a deliberate edit.
-# ⚠️ 5 until #1351 retired `--deploy argocd`: the delivered set was
-# kubectl + helm + argocd + git-sync + the tool image. ⛔ This floor is the
-# anti-vacuity half of the coverage guard, so it moves only when a delivered
-# ref is deliberately removed — never to clear a red.
-_DELIVERED_PRODUCT_FLOOR = 4
+# ⚠️ 5 until #1351 retired `--deploy argocd` (kubectl + helm + argocd + git-sync
+# + the tool image), then 4 until #1349 withdrew GitOps Native Mode and with it
+# git-sync: the delivered set is now kubectl + helm + the tool image. ⛔ This
+# floor is the anti-vacuity half of the coverage guard, so it moves only when a
+# delivered ref is deliberately removed — never to clear a red.
+_DELIVERED_PRODUCT_FLOOR = 3
 
 # Shape of a concrete image ref, applied to SCALARS of the generated YAML rather
 # than to key names — so it sees the ref wherever the generator happens to put
-# it. Today that is two structurally different places: an `image:` value in the
-# kustomize git-sync patch, and a `variables:` entry (DA_HELM_IMAGE: ...) in the
-# GitLab pipeline, where the job's own `image:` line is only `$DA_HELM_IMAGE`.
-# A key-name rule would have seen one of those and missed the other.
+# it. Today that is two structurally different places: an `env:` / `variables:`
+# entry (DA_HELM_IMAGE: ...) in the generated pipelines, where the job's own
+# `image:` line is only `$DA_HELM_IMAGE`, and the command string inside the
+# pre-commit snippet's `entry:`. (It used to include an `image:` value in the
+# kustomize git-sync patch, withdrawn in #1349.) A key-name rule would see one
+# of those and miss the other.
 #
 # ⛔ ALL THREE DIGEST FORMS, not just `:tag`. The first draft ended in a
 # mandatory `:tag`, which made `repo@sha256:…`, `repo:tag@sha256:…` and
@@ -616,8 +620,8 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
 
     All three deploy methods, because the apply image is chosen per method (only
     the kustomize tree carries alpine/k8s, only the helm tree alpine/helm, and so
-    on), and `config_source='git'` because the git-sync overlay is emitted on no
-    other path. Returns (refs, files_walked, scalars_checked) so the caller can
+    on). (`config_source='git'` used to be needed here because the git-sync
+    overlay was emitted on no other path; that mode is withdrawn, #1349.) Returns (refs, files_walked, scalars_checked) so the caller can
     fail on a walk that collapsed rather than on an empty result that looks calm.
 
     ⚠️ Honest boundary: only YAML products are parsed. A ref that a future
@@ -694,12 +698,6 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
                 # green for the wrong reason. Read from the generator so a bump
                 # of the tool tag flows here without an edit.
                 "da_tools_image": ip.DA_TOOLS_IMAGE,
-                # git-sync only reaches a customer on this path.
-                "config_source": "git",
-                "git_repo": "https://example.com/r.git",
-                "git_branch": "main",
-                "git_path": "conf.d",
-                "git_period": 60,
             }, tmp)
             for path in sorted(Path(tmp).rglob("*")):
                 if not path.is_file():
@@ -833,8 +831,8 @@ def test_every_ref_a_generated_customer_repo_carries_is_scanned() -> None:
     `test_delivered_matrix_equals_the_customer_pin_table` compares the matrix to
     the pin table. That is only a coverage guarantee while every delivered ref
     goes THROUGH the pin table — and nothing structurally forces that. A ref
-    hardcoded straight into a generator function (`_gen_gitlab_ci`,
-    `_gen_git_sync_deployment`, or the next generator someone adds) ships to a
+    hardcoded straight into a generator function (`_gen_gitlab_ci`, or the
+    next generator someone adds) ships to a
     customer while both sides of that equality stay in perfect agreement. This is
     the same failure #1302 was: two sets derived from one blind source.
 
@@ -1551,7 +1549,7 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
             )
 
 
-@pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "GIT_SYNC_IMAGE"])
+@pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "DA_TOOLS_IMAGE"])
 def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -> None:
     """⛔ The PER-SOURCE emptiness guard, pinned by counter-example.
 
@@ -2051,10 +2049,13 @@ def test_nothing_in_this_module_reads_the_pin_table_at_import_time() -> None:
 
 
 @pytest.mark.parametrize("blank", ["'   '", "None", "0"])
-def test_a_blank_git_sync_image_is_refused_too(tmp_path, blank: str) -> None:
+def test_a_blank_second_source_is_refused_too(tmp_path, blank: str) -> None:
     """The second source needs the same normalization, and had none of its own.
 
-    ⛔ The existing half-empty parametrization sets `GIT_SYNC_IMAGE = ""`, which
+    (The second source was `GIT_SYNC_IMAGE` until #1349 withdrew GitOps Native
+    Mode; it is now `DA_TOOLS_IMAGE`, which carries the same normalization.)
+
+    ⛔ The existing half-empty parametrization sets the source to `""`, which
     the pre-existing falsiness check already caught — so the normalization line
     added alongside the member-level filter was covered by nothing. Mutation
     proof: deleting it outright left the suite green. A whitespace-only value
@@ -2066,13 +2067,13 @@ def test_a_blank_git_sync_image_is_refused_too(tmp_path, blank: str) -> None:
     killed by the whitespace case alone. Saying otherwise would repeat the
     over-generalisation this file keeps correcting.
     """
-    root = _fake_pin_root(tmp_path, f"\n\nGIT_SYNC_IMAGE = {blank}\n")
-    mod = _load_extractor(f"_extractor_git_sync_{_slug(blank)}")
+    root = _fake_pin_root(tmp_path, f"\n\nDA_TOOLS_IMAGE = {blank}\n")
+    mod = _load_extractor(f"_extractor_da_tools_{_slug(blank)}")
 
     with pytest.raises(SystemExit) as excinfo:
         mod.delivered_refs(root)
-    assert "GIT_SYNC_IMAGE" in str(excinfo.value), (
-        f"a {blank} GIT_SYNC_IMAGE exited without naming it: {excinfo.value}")
+    assert "DA_TOOLS_IMAGE" in str(excinfo.value), (
+        f"a {blank} DA_TOOLS_IMAGE exited without naming it: {excinfo.value}")
 
 
 def test_the_blank_pin_guard_still_lets_the_real_table_through(tmp_path) -> None:

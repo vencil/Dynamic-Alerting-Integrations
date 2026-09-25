@@ -32,9 +32,9 @@ skip。``test_ci_runs_this_module_with_the_pinned_kustomize`` 從 ci.yml 解析�
 --------
 * 只驗到 `kustomize build`，不驗 `kubectl apply`（沒有 cluster）。
 * symlink 路徑只在 POSIX 跑：README 的 `ln -s` 本來就是 POSIX 指令。
-* gitops overlay 的 git-sync patch 目前**打不到任何東西**（見
-  ``test_gitops_overlay_actually_adds_git_sync``）：strict xfail 記錄現況，
-  修好而沒拿掉標記會轉紅。
+* gitops overlay（``--config-source git``）已撤下（issue #1349）：它的 git-sync
+  patch 以 ``Deployment/threshold-exporter`` 為目標，而這棵樹只有 ConfigMap，
+  kustomize 把它當成 no-op。拒絕行為由 ``tests/ops/test_init_project.py`` 釘。
 """
 from __future__ import annotations
 
@@ -253,41 +253,26 @@ def test_the_readme_setup_is_load_bearing(kustomize, tmp_path):
     assert proc.returncode != 0, "raw generated tree builds without the README setup"
 
 
-@pytest.mark.parametrize("overlay,extra", [
-    ("dev", ()),
-    ("prod", ()),
-    ("gitops", ("--config-source", "git", "--git-repo",
-                "https://example.invalid/alerting-config.git")),
-])
-def test_every_generated_overlay_builds(overlay, extra, kustomize, tmp_path):
-    root, out = _generate(tmp_path, *extra)
+OVERLAYS = ("dev", "prod")
+
+
+def test_the_overlays_under_test_are_all_the_overlays_init_writes(tmp_path):
+    """下面那條只 build ``OVERLAYS``；init 若多產一個 overlay 而沒人補上 build
+    驗收，它就會像 gitops overlay 那樣帶著 no-op patch 出貨（issue #1349）。"""
+    _root, out = _generate(tmp_path)
+    written = {d.name for d in (out / "kustomize" / "overlays").iterdir() if d.is_dir()}
+    assert written == set(OVERLAYS), written
+
+
+@pytest.mark.parametrize("overlay", OVERLAYS)
+def test_every_generated_overlay_builds(overlay, kustomize, tmp_path):
+    root, out = _generate(tmp_path)
     _setup_symlinks(out)
     overlay_dir = out / "kustomize" / "overlays" / overlay
     assert overlay_dir.is_dir(), f"init did not generate overlays/{overlay}"
     _assert_built(_run([kustomize, "build", "--load-restrictor",
                         "LoadRestrictionsNone", str(overlay_dir)], root), out)
 
-
-@pytest.mark.xfail(strict=True, reason=(
-    "overlays/gitops patches Deployment/threshold-exporter, but its only "
-    "resource is ../../base (the ConfigMap) — kustomize applies a patch whose "
-    "target matches nothing as a silent no-op, so the build is rc=0 with no "
-    "git-sync anywhere (issue #1349)"))
-def test_gitops_overlay_actually_adds_git_sync(kustomize, tmp_path):
-    root, out = _generate(tmp_path, "--config-source", "git", "--git-repo",
-                          "https://example.invalid/alerting-config.git")
-    _setup_symlinks(out)
-    proc = _run([kustomize, "build", "--load-restrictor", "LoadRestrictionsNone",
-                 str(out / "kustomize" / "overlays" / "gitops")], root)
-    assert proc.returncode == 0, proc.stderr[-800:]
-    docs = [d for d in yaml.safe_load_all(proc.stdout) if d]
-    deploys = [d for d in docs if d.get("kind") == "Deployment"]
-    containers = [c.get("name") for d in deploys
-                  for key in ("containers", "initContainers")
-                  for c in d["spec"]["template"]["spec"].get(key) or []]
-    assert any("git-sync" in (n or "") for n in containers), (
-        f"no git-sync container in the gitops overlay output; kinds="
-        f"{[d.get('kind') for d in docs]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
