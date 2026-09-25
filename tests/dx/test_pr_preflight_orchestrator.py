@@ -29,6 +29,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import pr_preflight as pp  # noqa: E402
+from _preflight_checks import stub_checks  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -283,54 +284,25 @@ class TestClassifyCIFailures:
 # ---------------------------------------------------------------------------
 class TestMainOrchestrator:
     def _stub_all_checks(self, monkeypatch, fail_check=None, warn_check=None):
-        """Replace every check_* in pr_preflight with a stub.
+        """Stub every check; everything but `fail_check` / `warn_check` PASSes.
 
-        `fail_check` (str): name of the check whose stub returns FAIL.
-        `warn_check` (str): name of the check whose stub returns WARN.
-        Everything else returns PASS.
+        Both name the check FUNCTION (`"check_conflict"`), not a label.
+        ⛔ Anything the stubs miss must not run silently: while they are in
+        place, starting a process fails the test.
         """
-        check_specs = [
-            ("check_branch_identity", "Branch identity"),
-            ("check_behind_main", "Behind main"),
-            ("check_conflict", "Conflict"),
-            ("check_local_hooks", "Local hooks"),
-            ("check_scope_drift", "Scope drift"),
-            # Was missing despite the docstring's "every check_*": with a
-            # shallow CI clone `origin/main..HEAD` is empty so the real check
-            # degraded to SKIP and the omission stayed invisible. Once the job
-            # takes full history the real check runs against the
-            # GitHub-generated PR merge commit — not a conventional commit —
-            # and the orchestrator test fails for reasons that have nothing to
-            # do with orchestration.
-            ("check_commit_scope_range", "Commit scope"),
-            ("check_ci_status", "CI status"),
-            ("check_pr_mergeable", "PR mergeable"),
-        ]
-        for fn_name, label in check_specs:
-            if label == fail_check:
-                status = pp.Status.FAIL
-                msg = "stubbed-fail"
-            elif label == warn_check:
-                status = pp.Status.WARN
-                msg = "stubbed-warn"
-            else:
-                status = pp.Status.PASS
-                msg = "stubbed-pass"
-            # check_ci_status / check_pr_mergeable / check_local_hooks take
-            # args; wrap accordingly. (check_local_hooks grew a keyword-only
-            # `run_precommit` in #1811.)
-            if fn_name in {"check_ci_status", "check_pr_mergeable", "check_local_hooks"}:
-                monkeypatch.setattr(
-                    pp, fn_name,
-                    lambda *a, _label=label, _status=status, _msg=msg, **kw:
-                        pp.CheckResult(_label, _status, _msg),
-                )
-            else:
-                monkeypatch.setattr(
-                    pp, fn_name,
-                    lambda _label=label, _status=status, _msg=msg:
-                        pp.CheckResult(_label, _status, _msg),
-                )
+        chosen = {fail_check: pp.Status.FAIL, warn_check: pp.Status.WARN}
+        names = stub_checks(
+            monkeypatch, pp, lambda n: chosen.get(n, pp.Status.PASS)
+        )
+        # A name that matches nothing would quietly turn the case into all-pass.
+        assert {fail_check, warn_check} - {None} <= set(names)
+
+        def _no_process(*a, **kw):
+            raise AssertionError(
+                f"a process was started while every check is stubbed: {a[:1]}"
+            )
+
+        monkeypatch.setattr(_subprocess, "Popen", _no_process)
 
     def _stub_repo_root_and_marker(self, monkeypatch, tmp_path):
         """Avoid touching real git state: stub repo-root + marker writers."""
@@ -361,8 +333,8 @@ class TestMainOrchestrator:
     @pytest.mark.parametrize(
         "kwargs, want_rc",
         [({}, 0),
-         ({"warn_check": "Behind main"}, 0),
-         ({"fail_check": "Conflict"}, 1)],
+         ({"warn_check": "check_behind_main"}, 0),
+         ({"fail_check": "check_conflict"}, 1)],
         ids=["all-pass", "warn-only", "fail"],
     )
     def test_exit_code_follows_the_report_not_a_flag(
@@ -373,6 +345,28 @@ class TestMainOrchestrator:
         self._stub_all_checks(monkeypatch, **kwargs)
         cli_argv("pr_preflight.py")
         assert pp.main() == want_rc
+
+    def test_a_process_started_outside_the_checks_fails_the_test(
+        self, monkeypatch, tmp_path, cli_argv
+    ):
+        """#1953 — a step of `main()` that is not a `check_*` is not stubbed.
+
+        When it starts a real process, the test must go red instead of green.
+        """
+        self._stub_repo_root_and_marker(monkeypatch, tmp_path)
+        self._stub_all_checks(monkeypatch)
+        monkeypatch.setattr(
+            pp.PreflightReport, "print_summary",
+            lambda self: pp.run(["git", "--version"]),
+        )
+        cli_argv("pr_preflight.py")
+        with pytest.raises(AssertionError, match="a process was started"):
+            pp.main()
+
+    def test_a_stub_rejects_a_call_the_real_check_would_reject(self, monkeypatch):
+        self._stub_all_checks(monkeypatch)
+        with pytest.raises(TypeError):
+            pp.check_conflict("an argument the real check does not take")
 
     def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
         """⛔ `--ci` 已刪（#1472）：加回來不會讓上面三格轉紅。"""

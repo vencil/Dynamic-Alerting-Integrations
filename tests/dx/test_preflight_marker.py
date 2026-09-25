@@ -11,7 +11,6 @@ and the bash gate script via subprocess with synthetic stdin + env.
 """
 from __future__ import annotations
 
-import ast
 import importlib.util
 import os
 import shutil
@@ -20,6 +19,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from _preflight_checks import stub_checks
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PY_SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "pr_preflight.py"
@@ -436,42 +437,9 @@ class TestFailPathClearRadius:
     _OTHER_A = "a" * 40
     _OTHER_B = "b" * 40
 
-    @staticmethod
-    def _checks_main_calls():
-        """Every `check_*(...)` call in `main()`, derived — ⛔ never listed.
-
-        A check this misses is not stubbed and really runs: network, `gh`, or a
-        300s `pre-commit --all-files`. So match the call itself, not how its
-        result travels to `report.add(...)`.
-        """
-        tree = ast.parse(_PY_SCRIPT.read_text(encoding="utf-8"))
-        main_fn = next(
-            n for n in ast.walk(tree)
-            if isinstance(n, ast.FunctionDef) and n.name == "main"
-        )
-        names = {
-            node.func.id
-            for node in ast.walk(main_fn)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id.startswith("check_")
-        }
-        # ⛔ Must-fire control: an AST walk that silently yields nothing would
-        # stub nothing and let every check run for real — "could not read the
-        # source" must not look like "there are no checks".
-        assert "check_branch_identity" in names, (
-            f"derivation found no known check (got {sorted(names)}) — the "
-            "shape of main() changed and this test is measuring nothing"
-        )
-        return names
-
     def _drive(self, mod, monkeypatch, wt, status):
         """Run main() from inside `wt` with every check forced to `status`."""
-        for name in self._checks_main_calls():
-            monkeypatch.setattr(
-                mod, name,
-                lambda *a, _n=name, **kw: mod.CheckResult(_n, status, "stubbed"),
-            )
+        stub_checks(monkeypatch, mod, lambda _n: status)
         monkeypatch.setattr(mod, "find_repo_root", lambda: wt)
         monkeypatch.setattr(os, "chdir", lambda p: None)
         monkeypatch.setattr(sys, "argv", ["pr_preflight.py"])
