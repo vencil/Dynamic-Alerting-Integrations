@@ -17,6 +17,15 @@ import pytest
 import yaml
 
 import patch_config as pc  # noqa: E402
+from _patch_config_fake import FakeCluster  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _signals_reset():
+    """apply keeps its signal handlers to the end of the process (see
+    patch_config._Signals); give later tests the caller's handlers back."""
+    yield
+    pc.SIGNALS.reset()
 
 
 class TestGetCurrentValue:
@@ -454,33 +463,20 @@ class TestDiffPreviewExtended:
 # ---------------------------------------------------------------------------
 
 class TestApplyPatch:
-    """apply_patch() 測試。"""
+    """apply_patch() 測試（寫後驗收另見 test_patch_config_verify.py）。"""
 
-    @mock.patch("patch_config.run_cmd")
-    @mock.patch("patch_config.os.remove")
-    def test_legacy_mode(self, mock_rm, mock_run):
-        mock_run.return_value = ""
-        cm_data = {
-            "data": {
-                "config.yaml": yaml.dump({"tenants": {"db-a": {"cpu": "80"}}}),
-            }
-        }
-        pc.apply_patch(cm_data, "legacy", "db-a", "cpu", "90")
-        mock_run.assert_called_once()
-        mock_rm.assert_called_once()
-
-    @mock.patch("patch_config.run_cmd")
-    @mock.patch("patch_config.os.remove")
-    def test_multifile_mode(self, mock_rm, mock_run):
-        mock_run.return_value = ""
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    cpu: '80'",
-            }
-        }
-        pc.apply_patch(cm_data, "multi-file", "db-a", "cpu", "90")
-        mock_run.assert_called_once()
+    @pytest.mark.parametrize("mode,data", [
+        ("legacy", {"config.yaml": yaml.dump({"tenants": {"db-a": {"cpu": "80"}}})}),
+        ("multi-file", {"_defaults.yaml": "defaults: {}",
+                        "db-a.yaml": "tenants:\n  db-a:\n    cpu: '80'"}),
+    ])
+    def test_writes_the_tenant_key_once(self, mode, data):
+        cluster = FakeCluster(data)
+        with mock.patch("patch_config.run_cmd", side_effect=cluster):
+            pc.apply_patch({"data": data}, mode, "db-a", "cpu", "90")
+        assert len(cluster.patches) == 1
+        (key, text), = cluster.patches[0]["data"].items()
+        assert yaml.safe_load(text)["tenants"]["db-a"]["cpu"] == "90"
 
 
 # ---------------------------------------------------------------------------
@@ -515,25 +511,20 @@ class TestMainCLI:
         out = json.loads(capsys.readouterr().out)
         assert out["changed"] is True
 
-    @mock.patch("patch_config.run_cmd")
-    def test_json_without_diff_is_caller_error(self, mock_run, capsys):
-        """`--json` 無 `--diff` → exit 2、stdout 一份 envelope、什麼都不套用。
-
-        `mock_run.assert_not_called()` 釘住「沒有套用」，不只是 exit code。
-        """
-        with mock.patch("sys.argv", [
-            "patch_config.py", "--json", "db-a", "cpu", "90",
-        ]):
-            with pytest.raises(SystemExit) as exc_info:
-                pc.main()
-
-        assert exc_info.value.code == 2          # EXIT_CALLER_ERROR
+    def test_json_without_diff_applies_and_prints_one_envelope(self, capsys):
+        """`--json` 無 `--diff` 是 apply：stdout 恰好一份 envelope，其餘走 stderr。"""
+        cluster = FakeCluster({"_defaults.yaml": "defaults: {}",
+                               "db-a.yaml": "tenants:\n  db-a:\n    cpu: 80"})
+        with mock.patch("patch_config.run_cmd", side_effect=cluster), \
+                mock.patch("sys.argv", ["patch_config.py", "--json",
+                                        "db-a", "cpu", "90"]):
+            pc.main()
         captured = capsys.readouterr()
         doc = json.loads(captured.out)
-        assert (doc["status"], doc["reason"]) == ("caller_error",
-                                                  "json_requires_diff")
-        assert "--diff" in captured.err          # 錯誤訊息說明矛盾何在
-        mock_run.assert_not_called()             # ⇒ kubectl 沒被叫，什麼都沒套用
+        assert (doc["status"], doc["exit_code"], doc["written"]) == (
+            "applied", 0, True)
+        assert "Success" in captured.err
+        assert len(cluster.patches) == 1
 
     @pytest.mark.parametrize("flag", ["--js", "--j"])
     @mock.patch("patch_config.run_cmd")
@@ -546,15 +537,11 @@ class TestMainCLI:
         assert json.loads(capsys.readouterr().out)["reason"] == "bad_arguments"
         mock_run.assert_not_called()
 
-    @mock.patch("patch_config.os.remove")
-    @mock.patch("patch_config.run_cmd")
-    def test_apply_mode(self, mock_run, mock_rm, capsys):
-        cm_json = '{"data":{"_defaults.yaml":"defaults: {}","db-a.yaml":"tenants:\\n  db-a:\\n    cpu: 80"}}'
-        mock_run.side_effect = [cm_json, ""]  # first call: get, second: patch
-
-        with mock.patch("sys.argv", [
-            "patch_config.py", "db-a", "cpu", "90",
-        ]):
+    def test_apply_mode(self, capsys):
+        cluster = FakeCluster({"_defaults.yaml": "defaults: {}",
+                               "db-a.yaml": "tenants:\n  db-a:\n    cpu: 80"})
+        with mock.patch("patch_config.run_cmd", side_effect=cluster), \
+                mock.patch("sys.argv", ["patch_config.py", "db-a", "cpu", "90"]):
             pc.main()
         out = capsys.readouterr().out
         assert "Success" in out
@@ -986,15 +973,13 @@ class TestDiffBeforeAndChanged:
                                "default")["changed"] is True
         assert pc.patch_multifile(cm, "tenant-x", "cpu", "default") is not None
 
-    @mock.patch("patch_config.os.remove")
-    @mock.patch("patch_config.run_cmd")
-    def test_apply_writes_despite_an_unparseable_defaults_key(self, mock_run, _rm):
-        cm = _cm(**{"_defaults.yaml": "defaults: [unclosed\n",
-                    "tenant-x.yaml": _T})
-        mock_run.side_effect = [json.dumps(cm), ""]
-        with mock.patch("sys.argv", ["patch_config.py", "tenant-x", "cpu", "9"]):
+    def test_apply_writes_despite_an_unparseable_defaults_key(self):
+        cluster = FakeCluster({"_defaults.yaml": "defaults: [unclosed\n",
+                               "tenant-x.yaml": _T})
+        with mock.patch("patch_config.run_cmd", side_effect=cluster), \
+                mock.patch("sys.argv", ["patch_config.py", "tenant-x", "cpu", "9"]):
             pc.main()
-        assert mock_run.call_count == 2
+        assert len(cluster.patches) == 1
 
 
     @pytest.mark.parametrize("defaults,tenant,value", [

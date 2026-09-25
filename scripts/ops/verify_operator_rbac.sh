@@ -155,6 +155,11 @@ for verb in update patch; do
   assert_denied "${verb} pods/ephemeralcontainers in ${PLATFORM_NS}" "$verb" pods --subresource=ephemeralcontainers -n "$PLATFORM_NS"
 done
 
+# NOT asserted either way: `get pods/proxy` (+ `list pods`). patch-config's apply
+# needs them to verify a write on every threshold-exporter pod (#1950) — for the
+# platform-admin identity that runs it, not for this operator. Scope and why it
+# is not port-forward: docs/cross-tenant-configmap-hardening.md §2.2.
+
 echo
 if [ "$fail" -ne 0 ]; then
   echo "RESULT: FAIL — operator RBAC grants at least one dangerous write (see VIOLATION lines)."

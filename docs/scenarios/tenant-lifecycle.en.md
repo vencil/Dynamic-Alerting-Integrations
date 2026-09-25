@@ -234,7 +234,8 @@ Common operations:
 
 ```bash
 # 1. Enable silent mode (during maintenance): positional <tenant> <key> <value>; the key is _silent_mode
-#    Patches the ConfigMap directly via hot-reload, bypassing GitOps
+#    Patches the ConfigMap directly via hot-reload, bypassing GitOps; waits for every exporter pod to reload and verifies, rolling back otherwise (exit codes: cli-reference §patch-config)
+#    ⚠️ A key starting with `_` is checked only for other tenants and parse failures: this tenant's own series changes are just listed on stderr, so a mistake (a wrong `_profile`, say) is not rolled back automatically
 #    ⚠️ Replace expires with this maintenance window's end (a future RFC3339 UTC time); 2099 is only a stand-in so the line works as pasted
 da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-12-31T23:59:59Z"}'
 #    If no expiry is needed, use a scalar instead: warning / critical / all (never ends on its own; clear it manually)

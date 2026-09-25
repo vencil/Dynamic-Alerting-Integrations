@@ -1886,17 +1886,22 @@ ConfigMap partial update tool with preview (--diff) and direct application suppo
 **Syntax**
 
 ```bash
-python3 scripts/tools/ops/patch_config.py [--diff [--json]] <tenant> <metric> <value>
+python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespace NS] [--exporter-selector LABELS] [--exporter-port PORT] [--reload-timeout SECONDS] [--poll-interval SECONDS] <tenant> <metric> <value>
 ```
 
-Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubectl` on PATH and a working kubeconfig. `<value>` is a concrete value, `default` (delete the tenant's key) or `disable`.
+Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubectl` on PATH and a working kubeconfig. `<value>` is a concrete value, `default` (delete the tenant's key) or `disable`. Apply (no `--diff`) also needs `list pods` and `get pods/proxy` in the exporter's namespace (why, and what that grants: [Cross-tenant ConfigMap hardening §2.2](cross-tenant-configmap-hardening.en.md)).
 
 **Options**
 
 | Parameter | Description |
 |-----------|-------------|
 | `--diff` | Preview only, apply nothing |
-| `--json` | Print the preview as JSON; requires `--diff` |
+| `--json` | stdout carries one JSON document: the preview under `--diff`, apply's outcome otherwise; all other output goes to stderr |
+| `--exporter-namespace` | Namespace of the exporter pods apply verifies on (default from the chart) |
+| `--exporter-selector` | Label selector of those pods (default from the chart) |
+| `--exporter-port` | Container port name or number of their HTTP listener (default from the chart) |
+| `--reload-timeout` | Deadline (seconds) that ends the wait for reloads, checked between polling passes |
+| `--poll-interval` | Seconds between reads of `Last reload` meanwhile |
 
 **Locating the tenant**: the key patched is **the one** YAML key in `threshold-config` whose `tenants:` mapping declares the tenant (whatever its name, casing or `.yml` spelling), and the patch is written back to that key. The `_defaults` key is matched in any casing, `.yaml` or `.yml`. When no key declares the tenant, a concrete value creates `<tenant>.yaml` in the multi-file layout and goes into `config.yaml` in the legacy layout. `default` is a no-op when the tenant does not set that metric (exit `0`), as is a value the target already holds as its source text; a tenant block it leaves empty is kept.
 
@@ -1904,9 +1909,11 @@ Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubec
 
 **Refused (exit `2`, nothing written)**: two or more keys declaring the tenant; no readable key declaring the tenant while some key cannot be read (the message names those keys); a merge key `<<` on the path being read; a ConfigMap whose `data` is not a mapping; two `_defaults` keys, or neither a `_defaults` nor a `config.yaml` key; a tenant block that is not a mapping; a key to rewrite that declares more than one tenant (except `config.yaml` in the legacy layout); a key to create that starts with `.` or `_`. ⚠️ The rewrite re-serialises the key's other values with YAML 1.1 types and drops its comments.
 
+**Post-write verification (apply)**: new bytes equal to the key's current bytes ⇒ nothing is written or waited for, exit `0`. Otherwise it first reads each pod's `/api/v1/config` `Last reload` and `/metrics` through `kubectl get --raw …/pods/<pod>:<port>/proxy/…` (GET only) on every Running pod not being deleted, patches, waits until every pod's `Last reload` changes, then compares every `user_*` series and `da_config_parse_failure_total` on each pod. For a key starting with `_` (`_silent_mode`, `_profile`, ...) the target tenant's own series are not judged, only listed on stderr (and in `--json`). A mismatch, a timeout, an unreachable pod on the way, Ctrl-C / SIGTERM or an unexpected error after the write ⇒ the old bytes are patched back (a key that did not exist is removed) and it exits non-zero; if the patch call itself fails, the ConfigMap is re-read to tell whether it landed. The exact rules and known residuals: `patch-config --help`.
+
 **`--diff`**: `changed` is apply's own verdict — `false` when apply would send no patch. Under `--json`, `before.value` is the source text (`null` for null, the YAML text for a mapping or sequence).
 
-**`--json`**: stdout is one JSON document on every terminal path; `--json --help` exits `0` with `status: "help"`. On exit `2` it carries the preview keys with empty values plus `status: "caller_error"` and `reason` (`json_requires_diff` / `bad_arguments` / `configmap_shape` / `kubectl_failed` / `unexpected_error`).
+**`--json`**: stdout is one JSON document on every terminal path (except when stdout is closed, or a signal ends the process before anything is written); `--json --help` exits `0` with `status: "help"`. On exit `2` it carries the preview keys with empty values plus `status: "caller_error"` and `reason` (`bad_arguments` / `configmap_shape` / `kubectl_failed` / `unexpected_error`). Apply's document keeps the preview keys (`before` / `after` are `null`) and adds `status` (`no-op` / `applied` / `verify-failed-rolled-back` / `timeout` / `unreachable` / `rollback-failed` / `interrupted-rolled-back` / `error-rolled-back` / `state-unknown`), `exit_code`, `written` (the ConfigMap holds the new bytes as it exits; `null` when unknown), `rolled_back`, `message`, and `pods.<pod>` with `problems` / `warnings` / `target_changes` (the target tenant's changed series; `before` / `after` `null` means absent).
 
 **Examples**
 
@@ -1914,14 +1921,21 @@ Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubec
 python3 scripts/tools/ops/patch_config.py --diff db-a mysql_connections 100
 python3 scripts/tools/ops/patch_config.py --diff --json db-a mysql_connections 100 | jq .changed
 python3 scripts/tools/ops/patch_config.py db-a mysql_connections 100
+python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq .status
 ```
 
 **Exit Codes**
 
 | Code | Description |
 |------|-------------|
-| `0` | Success, including a `default` no-op |
-| `2` | Caller error: `kubectl` could not run or exited non-zero (e.g. not on PATH, cluster unreachable, ConfigMap missing, no permission), any refusal above, `--json` without `--diff` (refuses to apply), arguments argparse rejects, or an unexpected exception |
+| `0` | Success (verified on every exporter pod), including a `default` or same-bytes no-op |
+| `1` | Post-write verification failed (another tenant's series changed, the target tenant changed beyond the bound, a new parse failure, ...); rolled back |
+| `2` | Caller error, **nothing written**: `kubectl` could not run or exited non-zero (e.g. not on PATH, cluster unreachable, ConfigMap missing, no permission), any refusal above, arguments argparse rejects, or an unexpected exception |
+| `3` | Some pod had not reloaded when `--reload-timeout` ran out; rolled back |
+| `4` | Exporter unreachable (no pod matches the selector, pods/proxy failed, an unexpected response shape): before the write nothing was written, after it the write was rolled back |
+| `5` | The rollback itself failed: the ConfigMap may still hold the new bytes; fix it by hand |
+| `6` | Ctrl-C / SIGTERM or an unexpected error after the write; rolled back (interrupted before the write, it ends as it normally would, nothing written) |
+| `7` | What the ConfigMap now holds cannot be told (not readable, or neither version); check it by hand |
 
 ---
 

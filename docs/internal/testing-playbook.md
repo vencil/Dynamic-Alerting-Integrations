@@ -200,6 +200,7 @@ da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用
 
 **認可例外**（非 0/1/2 純式）——改動須連帶遷移文件 + CHANGELOG：
 - `diag_pr_ci.py`：`0/1/2/3`，exit 3 = `EXIT_NETWORK_BLOCKED`（api.github.com 不可達 → 換 host），[windows-mcp-playbook](windows-mcp-playbook.md) trap #64 載明。
+- `patch_config.py` apply：`1` = 寫後驗收失敗（已回滾），另有 ≥3 的結束碼區分寫入前後的其他結果，對照表在 [cli-reference](../cli-reference.md) §patch-config（#1950）。
 - `tenant-verify`：**倒置契約** `2` = 驗證失敗（finding）、`1` = usage/IO error，[cli-reference](../cli-reference.md) §tenant-verify + [rollback runbook](../scenarios/incremental-migration-playbook.md) checklist 第 6 項載明（事故中以 exit 2 判 mismatch）。
 - bad-flag-exit-2 gate 的 2 個豁免（`check_aria_references.py` / `axe_lite_static.py`）：positional-path CLI，未知 flag 被當路徑 → uncaught FileNotFoundError → exit 1；於 `INVALID_ARG_EXIT2_EXEMPT` 明文列管。
 

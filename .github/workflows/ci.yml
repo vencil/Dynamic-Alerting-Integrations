@@ -1283,6 +1283,11 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #1950: tests/ops/test_patch_config_exporter.py builds the real
+      # threshold-exporter and runs patch-config's post-write verification and
+      # rollback against it. Gated on `go` (shutil.which); this job sets Go up
+      # below, so a missing binary is a failure, not a skip.
+      VIBE_REQUIRE_GO: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1308,6 +1313,16 @@ jobs:
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
         uses: azure/setup-helm@v4
+
+      # Go for the one pytest file that builds threshold-exporter (see
+      # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
+      # way guard-defaults-impact.yml / release.yaml do.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -1638,6 +1653,11 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #1950: tests/ops/test_patch_config_exporter.py builds the real
+      # threshold-exporter and runs patch-config's post-write verification and
+      # rollback against it. Gated on `go` (shutil.which); this job sets Go up
+      # below, so a missing binary is a failure, not a skip.
+      VIBE_REQUIRE_GO: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1663,6 +1683,16 @@ jobs:
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
         uses: azure/setup-helm@v4
+
+      # Go for the one pytest file that builds threshold-exporter (see
+      # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
+      # way guard-defaults-impact.yml / release.yaml do.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py

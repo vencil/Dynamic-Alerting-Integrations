@@ -226,7 +226,7 @@ Next steps:
     ],
     flags: [
       { name: '--diff', label: t('差異預覽（不套用）', 'Diff preview (do not apply)'), required: false, type: 'checkbox' },
-      { name: '--json', label: t('JSON 輸出（需 --diff）', 'JSON output (requires --diff)'), required: false, type: 'checkbox' }
+      { name: '--json', label: t('JSON 輸出（預覽或套用結果）', 'JSON output (preview or apply result)'), required: false, type: 'checkbox' }
     ]
   },
   'explain-route': {

@@ -235,7 +235,8 @@ Dynamic Alerting 提供 Normal / Silent / Maintenance 三態運營模式，均�
 
 ```bash
 # 1. 啟用靜默模式（維護期間）：位置參數 <tenant> <key> <value>，key 是 _silent_mode
-#    直接 patch ConfigMap、走 hot-reload，不經 GitOps
+#    直接 patch ConfigMap、走 hot-reload，不經 GitOps；會等每個 exporter pod reload 並驗收，不合即回滾（結束碼見 cli-reference §patch-config）
+#    ⚠️ `_` 開頭的 key 只驗其他租戶與 parse failure：本租戶 series 的增減只列在 stderr，寫錯（例如 `_profile`）不會自動回滾
 #    ⚠️ 把 expires 換成本次維護的結束時間（未來的 RFC3339 UTC）；2099 只是讓整行照抄也能生效的示意值
 da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-12-31T23:59:59Z"}'
 #    不需要期限時可改用 scalar：warning / critical / all（不會自動結束，須手動解除）
