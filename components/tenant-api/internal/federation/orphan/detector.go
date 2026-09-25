@@ -3,7 +3,6 @@ package orphan
 import (
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -14,8 +13,9 @@ import (
 
 // federationSubsetDir is the conf.d subdirectory holding per-tenant
 // federation metric-subset files (ADR-020 IV-2e): the subset for tenant
-// X lives at conf.d/_federation/X.yaml.
-const federationSubsetDir = "_federation"
+// X lives at conf.d/_federation/X.yaml (or X.yml — any spelling
+// confd.TenantIDFromFile accepts, #1698).
+const federationSubsetDir = confd.FederationSubsetDirName
 
 // orphanedTokens / orphanedSubsets hold the most recent Detector
 // scan result, exposed to the /metrics handler via OrphanCounts. They
@@ -91,10 +91,18 @@ func scanKnownTenants(configDir string) (map[string]struct{}, error) {
 }
 
 // scanSubsetTenants returns the tenant ids that have a federation subset
-// file conf.d/_federation/<id>.yaml. A missing _federation directory is
+// file under conf.d/_federation/. A missing _federation directory is
 // not an error — it just means no tenant has configured a subset yet.
+//
+// Each id appears ONCE however many spellings claim it (#1698): the
+// orphan gauge counts tenants, and `<id>.yaml` beside `<id>.yml` is one
+// tenant, not two orphans. Such an id is also logged — the read and
+// write handlers refuse it with 409 (confd.ErrAmbiguousTenantFile), and
+// this periodic scan is the only place an operator hears about it
+// without first tripping over the 409. Observe-only, like the rest of
+// the detector: nothing is renamed or deleted.
 func scanSubsetTenants(configDir string) ([]string, error) {
-	dir := filepath.Join(configDir, federationSubsetDir)
+	dir := confd.FederationSubsetDir(configDir)
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -103,12 +111,24 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
+	files := make(map[string][]string)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		if id, ok := confd.TenantIDFromFile(e.Name()); ok {
+		id, ok := confd.TenantIDFromFile(e.Name())
+		if !ok {
+			continue
+		}
+		if len(files[id]) == 0 {
 			out = append(out, id)
+		}
+		files[id] = append(files[id], e.Name())
+	}
+	for _, id := range out {
+		if len(files[id]) > 1 {
+			slog.Warn("federation subset: more than one file claims one tenant; GET/PUT on its subset return 409 until one is removed",
+				"tenant", id, "files", files[id])
 		}
 	}
 	return out, nil

@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -99,4 +101,18 @@ func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) 
 	w := httptest.NewRecorder()
 	wrapped.ServeHTTP(w, req)
 	return w
+}
+
+// federationSubsetPath is the path a NEW subset for tenantID gets — the
+// default `<id>.yaml` spelling inside the _federation/ directory the
+// production resolver scans. Tests plant fixtures through it so the
+// directory and the default name are derived from the same confd helpers
+// production uses, rather than hand-copied. It is a test helper since
+// #1698: production no longer joins a fixed name on the read side — it
+// resolves the tenant's actual file (confd.ResolveTenantFile) — so a file
+// planted here is exactly what the reader picks for an addressable id.
+// For an unaddressable id it is simply the join a predicate-less reader
+// would have opened, which is what the sink-guard tests need.
+func federationSubsetPath(configDir, tenantID string) string {
+	return filepath.Join(confd.FederationSubsetDir(configDir), confd.DefaultTenantFileName(tenantID))
 }

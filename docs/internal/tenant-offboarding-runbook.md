@@ -21,7 +21,7 @@ updated_at: 2026-05-19
 | 殘留物 | 存放處 | 不清會怎樣 |
 |---|---|---|
 | **federation token records** | `tenant-federation-store` ConfigMap（runtime state，ADR-020 Posture B）| token 在密碼學上仍合法、gateway 仍會驗過 —— 殭屍憑證，直到 4h TTL 到期 |
-| **federation subset 檔** | `conf.d/_federation/<tenant>.yaml`（per-tenant 指標子集，ADR-020 IV-2e）| 孤兒設定檔永久殘留；若日後 tenant id 被重用，會變成意外的既存狀態 |
+| **federation subset 檔** | `conf.d/_federation/<tenant>.yaml`（或 `.yml`；per-tenant 指標子集，ADR-020 IV-2e）| 孤兒設定檔永久殘留；若日後 tenant id 被重用，會變成意外的既存狀態 |
 
 風險等級 **低**：殭屍 token 對已刪租戶注入 `{tenant="X"}` 只會回空集（無 live 資料外洩），且受 gateway per-token / per-tenant 限流約束 —— 屬 offboarding-completeness / 合規問題。但「低」不等於「可略過」：稽核（SOC 2 / ISO 27001）會檢查 offboarding 流程是否完整。
 
@@ -56,12 +56,15 @@ curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
 ### 2. 移除 federation subset 檔
 
 ```sh
-git rm conf.d/_federation/<tenant>.yaml   # 若該檔存在
+ls conf.d/_federation/ | grep -i -E '^<tenant>\.(yaml|yml)$'   # 先看實際檔名
+git rm conf.d/_federation/<上一步列出的每個檔名>
 ```
 
 並非每個租戶都有 subset 檔（只有曾經設定過 federation 指標子集的租戶才有）。檔案不存在就跳過。
 
-> **平台 whitelist（`_federation_policy.yaml`）不要動** —— 那是平台層級的、不隨單一租戶 offboarding 改變。只刪 per-tenant 的 `_federation/<tenant>.yaml`。
+⚠️ **副檔名不一定是 `.yaml`**：`<tenant>.yml`、`<tenant>.YAML` 之類的拼法 tenant-api 一律視為該租戶的 subset 檔（讀、寫、孤兒偵測同一套規則，[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)），所以只 `git rm <tenant>.yaml` 可能漏刪。上面的 `grep -i` 會連主檔名的大小寫一起放寬，多列出的 `DB-A.yaml` 之類**不是**這個租戶的檔（tenant id 比對大小寫敏感）——只刪主檔名與 `<tenant>` 完全相同的。同一租戶若列出兩個檔，兩個都刪。
+
+> **平台 whitelist（`_federation_policy.yaml`）不要動** —— 那是平台層級的、不隨單一租戶 offboarding 改變。只刪 per-tenant 的 `_federation/<tenant>.{yaml,yml}`。
 
 ### 3. 移除租戶設定檔（offboarding 本身）
 
@@ -74,7 +77,7 @@ git rm conf.d/<tenant>.yaml
 ### 4. 驗證
 
 - `GET /api/v1/federation/tokens?tenant_id=<tenant>` 回空陣列。
-- `conf.d/_federation/<tenant>.yaml` 與 `conf.d/<tenant>.yaml` 都已不在 repo。
+- `conf.d/_federation/` 與 `conf.d/` 底下都已沒有主檔名為 `<tenant>` 的 `.yaml`／`.yml` 檔（任何副檔名大小寫）。
 - 等過最終一致性窗口後（見下），舊 token 打 gateway 應回 `403`。
 
 ## Federation 撤銷的最終一致性（合規用語）
@@ -88,9 +91,10 @@ git rm conf.d/<tenant>.yaml
 
 ## 殘留偵測（passive detector 安全網）
 
-tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federation token 或 `_federation/<tenant>.yaml` subset 檔的母租戶已不在 conf.d，就：
+tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federation token 或 `_federation/<tenant>.{yaml,yml}` subset 檔的母租戶已不在 conf.d，就：
 
-- 噴一條 `slog` **WARN** log（列出孤兒 token id / 孤兒 subset 檔）。
+- 噴一條 `slog` **WARN** log（列出孤兒 token id / 孤兒 subset 檔的租戶 id）。
+- 同一租戶在 `_federation/` 下有兩個拼法的檔（例如 `<tenant>.yaml` 與 `<tenant>.yml`）時，另噴一條 WARN 列出這些檔名——此時該租戶的 `GET`／`PUT /api/v1/tenants/{id}/federation` 會回 `409`，要人工刪掉其中一個。孤兒 gauge 對這種租戶只算一次。
 - 更新 `/metrics` 的 `tenant_api_federation_orphaned_tokens` / `tenant_api_federation_orphaned_subset_files` gauge。
 
 偵測器**只觀測、不自動撤銷、不自動刪檔** —— 它是「人忘了跑本 runbook」的安全網，不是替代品。看到該 metric > 0 或該 WARN log，就回到本 runbook 把對應租戶補清乾淨。

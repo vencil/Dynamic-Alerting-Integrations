@@ -108,6 +108,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **federation subset 存成 `<id>.yml` 時，`GET /api/v1/tenants/{id}/federation` 回空子集、PUT 在旁邊另建 `<id>.yaml`（tenant-api；[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)）**：`conf.d/_federation/` 的孤兒偵測器接受 `.yaml`/`.yml`（副檔名不分大小寫），讀取與寫入端卻硬寫 `<id>.yaml`。於是讀取端對 `.yml` 租戶回 `200 {"metrics":[]}`，PUT 則新建第二個檔、舊檔留著且無人讀。本次把 [#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673) 的 `confd.ResolveTenantFile` / `TenantFilePathForWrite` 原樣套到 `_federation/` 目錄：讀取解析**實際**檔案（不存在仍是空子集），寫入寫回**既有**檔案（只有全新 subset 才用 `<id>.yaml`）。
+  - **同一租戶兩種拼法並存 → 409**，GET 與 PUT 皆然、不寫任何檔；對映與租戶平面 `GET`／`PUT /tenants/{id}` 的 `ErrAmbiguousTenantFile` 相同。孤兒偵測器對這種租戶只計一次（先前算 2）並噴 WARN 列出檔名，仍只觀測。
+  - ⚠️ **行為變更**：`_federation/` 下同時有 `<id>.yaml` 與 `<id>.yml` 的租戶，GET 先前回 `200` 與 `.yaml` 那份內容、PUT 只改 `.yaml`，現在兩者都回 `409`，須在 git 刪掉其中一個。OpenAPI spec 的 GET 補上 `409`。`tenant_api_federation_orphaned_subset_files` 的 HELP 改為「以租戶計」（名稱不變）。
+  - offboarding runbook 改為先列出實際檔名再 `git rm`。
+
 - **pre-push 攔截橫幅的「去哪裡跑 preflight」改為：推送的樹就在該 commit 且乾淨時就地跑，否則在自己的暫存 worktree 跑；皆不移動你推送的 shell（dx；[#1952](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1952)）**：`require_preflight_pass.sh` 原本以空白切 `git worktree list` 的輸出、依分支名挑樹、印出時不加引號，指令會 `cd` 走你的 shell 或 `checkout` 你的樹。路徑含空白或 `$` 時可能落到前綴目錄、含引號時無法執行；挑中的樹可能停在別顆 commit、是髒的、或屬於別的 session；以相對 refspec（`HEAD~1:x`）推送時，照做後重推會從移動後的位置重讀、指到另一顆 commit。現在不再挑選其他樹：推送的樹 HEAD 即被推 commit 且已追蹤檔案乾淨時印 `(cd <頂層> && make pr-preflight)`；其餘（含 `git status` 失敗、判不出乾淨時）一律印在本次推送專屬的暫存 worktree 跑的單行指令：該行結束時移除暫存 worktree（中斷時不會），以 preflight 的結束碼離開，`add` 失敗時不移除任何東西。路徑皆為絕對並以 `printf %q` 引用。
 - **portal 的 silent mode 說明與範例改依 schema，playground 不再對 `_silent_mode` 下結論（portal；[#1988](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1988)）**：playground 原本把合法的 `warning` / `critical` / `all` 判為錯誤，`{enabled: true}` 這類 exporter 不會靜音的寫法反而通過。現在 playground 不檢查 `_silent_mode`，驗證通過時會註明此鍵不在檢查範圍。Schema Explorer 改從 `docs/schemas/tenant-config.schema.json` 的定義顯示接受的值，並有測試在 schema 變動而 portal 沒跟上時失敗。playground 範例、tenant-manager 的「靜默模式 YAML」、glossary 與 deployment-wizard 的提示改為 schema 接受的寫法或改指向 Schema Explorer；tenant-manager 原本產出沒有任何元件讀取的 ConfigMap，改為每個租戶一段 `_silent_mode`。加引號的鍵（如 `"_silent_mode":`、`"_routing":`）改依本名驗證。
 
