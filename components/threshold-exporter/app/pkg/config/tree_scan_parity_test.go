@@ -28,8 +28,10 @@ package config
 // which flipped the symlinked-root, null-body, hidden-scope and
 // duplicate-plus-innocent rows to agree. B8 (#1674) made every chain read
 // one carrier selection (SelectDefaultsCarriers over the case-folded
-// defaults set), which flipped the two upper-case _DEFAULTS.YAML rows; only
-// the scalar-body row stays diverge, until #1957. Every row pins the CURRENT observation
+// defaults set), which flipped the two upper-case _DEFAULTS.YAML rows; #1957
+// made the walker judge each file by the full decode (ParseConfigFile), which
+// flipped the scalar-body row — no row is diverge now. Every row pins the
+// CURRENT observation
 // of all three planes exactly — for the walker that includes which files it
 // kept (Files) and which it classified as defaults (Defaults), so a change to
 // its skip or classification rules is red even when no chain moves:
@@ -486,16 +488,46 @@ func parityCases() []parityCase {
 				return root
 			},
 			queries: []string{"tsc", "tok"},
-			expect:  "diverge",
-			owner:   "P, #1957 (unified parse: the walker counts a tenant whose body the full parse rejects)",
+			// Was diverge until #1957 (unified parse): the walker's lighter
+			// decode registered tsc, RESOLVE then failed "not in file" and
+			// SCOPE failed whole. The walker now judges a.yaml by the full
+			// decode (ParseConfigFile), which rejects it, so tsc is absent
+			// on every plane — as it always was on /metrics.
+			expect: "agree",
 			want: parityObs{
-				walkerTenants: "[tok tsc]",
+				walkerTenants: "[tok]",
 				walkerFiles:   "[a.yaml b.yaml]",
 				walkerDefs:    "[]",
-				walker:        map[string]string{"tsc": "chain=[]", "tok": "chain=[]"},
-				resolve:       map[string]string{"tsc": `ERR: tenant "tsc" not in file`, "tok": "chain=[]"},
-				walkerScope:   "[tok tsc]",
-				scope:         `ERR: resolve tenant "tsc": tenant "tsc" not in file`,
+				walker:        map[string]string{"tsc": "NOTFOUND", "tok": "chain=[]"},
+				resolve:       map[string]string{"tsc": "NOTFOUND", "tok": "chain=[]"},
+				walkerScope:   "[tok]",
+				scope:         "[tok]",
+			},
+		},
+		{
+			// M5: a tenant file whose sibling `defaults:` block has the wrong
+			// shape. Agree before #1957 too, on the OTHER answer: the lighter
+			// decode never looked past `tenants:`, so all three planes here
+			// had tm (chain=[]) while the exporter's flat plane — not a plane
+			// of this test — dropped the file. Pinned so moving the walker off
+			// the full decode is red here, not only in the exporter.
+			name: "tenant beside a defaults block of the wrong shape",
+			build: func(t *testing.T, root string) string {
+				parityWrite(t, filepath.Join(root, "a.yaml"),
+					"defaults:\n  cpu:\n    nested: map\ntenants:\n  tm:\n    cpu: \"66\"\n")
+				parityWrite(t, filepath.Join(root, "b.yaml"), "tenants:\n  tok: {}\n")
+				return root
+			},
+			queries: []string{"tm", "tok"},
+			expect:  "agree",
+			want: parityObs{
+				walkerTenants: "[tok]",
+				walkerFiles:   "[a.yaml b.yaml]",
+				walkerDefs:    "[]",
+				walker:        map[string]string{"tm": "NOTFOUND", "tok": "chain=[]"},
+				resolve:       map[string]string{"tm": "NOTFOUND", "tok": "chain=[]"},
+				walkerScope:   "[tok]",
+				scope:         "[tok]",
 			},
 		},
 		{

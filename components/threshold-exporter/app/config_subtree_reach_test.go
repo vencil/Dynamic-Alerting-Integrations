@@ -248,19 +248,22 @@ func TestASymlinkedConfigRootStillLoads(t *testing.T) {
 // "gauge 0 / no ERROR", which is exactly the state of an audit that never
 // runs.
 //
-// The fixture is a divergence that #1521's recursion does NOT close, so this
-// stays meaningful now that depth is no longer a cause: `Defaults` is
-// `map[string]float64`, so a `defaults:` block of the wrong shape makes
-// `parsePartialConfig` discard the WHOLE file including its `tenants:`, while
-// the hierarchical walker reads the same file for its `tenants:` declarations
-// and registers them. Measured on this fixture: `cfg.Tenants` empty,
-// `hierarchy.tenantSources` = [t-bad].
+// The fixture is the one cause the audit still has (#1957 removed the
+// other): a key that exists ONLY in a subtree `_defaults.yaml`, which
+// /effective reports and the collector can never emit. Until #1957 this test
+// used a tenant file whose `defaults:` block failed the flat parse while the
+// walker's lighter parse still registered its tenant; with one decode that
+// tenant is absent from both planes (TestOneTenantSet_ColdLoad), so it can
+// no longer arm the audit.
 func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 50\n")
-	writeTestYAML(t, filepath.Join(dir, "bad.yaml"),
-		"defaults:\n  mysql_connections:\n    nested: map\ntenants:\n  t-bad:\n    mysql_connections: \"66\"\n")
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  redis_evicted_keys: 100\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t-bad.yaml"),
+		"tenants:\n  t-bad:\n    mysql_connections: \"66\"\n")
 
 	m := NewConfigManager(dir)
 	defer m.Close()
@@ -269,10 +272,14 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 	logged := captureLoad(t, m)
 
 	// Precondition, asserted rather than assumed: the fixture really does
-	// produce the split. Without this a broken fixture reads as a pass.
-	if _, visible := m.GetConfig().Tenants["t-bad"]; visible {
-		t.Fatalf("fixture no longer diverges — the flat loader kept t-bad, so this " +
-			"test cannot say anything about the audit")
+	// produce an undeliverable key. Without this a broken fixture reads as a
+	// pass.
+	m.mu.RLock()
+	keys := m.hierarchy.unreachableInherited["t-bad"]
+	m.mu.RUnlock()
+	if len(keys) != 1 || keys[0] != "redis_evicted_keys" {
+		t.Fatalf("fixture no longer produces a subtree-only key (unreachable = %v), so this "+
+			"test cannot say anything about the audit", keys)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
 		t.Fatalf("da_config_hierarchy_divergent_tenants = %v, want 1 — the audit did "+

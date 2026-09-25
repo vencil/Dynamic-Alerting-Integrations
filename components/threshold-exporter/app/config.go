@@ -652,6 +652,15 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
 	for _, name := range reparse {
+		// The walker's decode of this file, when it parsed one (#1957; see
+		// commitFlatFrom). A changed or added tenant file always has one
+		// unless its parse failed: its hash moved against the prior, so the
+		// walker could not carry it.
+		if partial, ok := scan.Partials[name]; ok {
+			applyBoundaryRules(name, &partial, m.getLogger())
+			newConfigs[name] = partial
+			continue
+		}
 		fullPath := filepath.Join(m.path, name)
 		data, ok := dataCache[name]
 		if !ok {
@@ -755,24 +764,30 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// divergence ERROR naming the departed tenant while the merged config was
 	// correct.
 	//
-	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT, NOT BY
-	// TENANT ABSENCE. Cause (a)'s TRUE positive is a file that still exists and
-	// failed to parse; pruning on "the tenant is gone from the merged config"
-	// would delete exactly that case, which is the one this audit exists for.
+	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT.
 	// `newHashes` says whether the file is still on disk and `newConfigs` says
 	// whether it parsed this round (upstream deletes the entry when it did
 	// not), so:
 	//
 	//	gone from disk                 → prune (operator deleted the file)
 	//	on disk, parsed, no longer declares the tenant → prune (operator deleted the tenant)
-	//	on disk, did NOT parse         → KEEP, so cause (a) still fires
+	//	on disk, did NOT parse         → keep exactly while the merged config keeps it
+	//
+	// ⛔ THE THIRD ROW FOLLOWS THE MERGED CONFIG, NOT THE FILE (#1957). A file
+	// that fails the one decode (config.ParseConfigFile) declares no tenant on
+	// the walker's verdict, and a full load drops its tenants from BOTH planes.
+	// This path may instead keep them in the merged config — patchTenants'
+	// "keep the last good values" on the tenant-only branch — or drop them —
+	// the full-rebuild branch. Whichever it did, /effective must answer for
+	// the same tenant set /metrics serves: before #1957 this row was "KEEP,
+	// so cause (a) still fires", i.e. the rule deliberately MADE the two
+	// planes disagree so the divergence audit could report it.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
-	// tenant absent from `tenantSources` is never audited at all, which is the
-	// silent direction of the same asymmetry. Never OVERWRITES an existing
-	// attribution — where the two scanners disagree about which file owns a
-	// tenant, the hierarchical one is the authority the audit is written
-	// against.
+	// tenant absent from `tenantSources` is invisible to /effective while
+	// /metrics serves it. Never OVERWRITES an existing attribution — where
+	// the two disagree about which file owns a tenant (a duplicate the fast
+	// path accepts), the hierarchical one stands.
 	refreshTenantSources := func() {
 		scanRoot := absScanRoot(m.path)
 		scanKey := func(absPath string) (string, bool) {
@@ -801,6 +816,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 				if _, declared := partial.Tenants[tid]; !declared {
 					continue // the file parsed and no longer names this tenant
 				}
+			} else if _, served := merged.Tenants[tid]; !served {
+				continue // the file failed to parse and the merged config dropped it
 			}
 			next[tid] = src
 		}
@@ -1283,6 +1300,16 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 			continue
 		}
 		f := scan.Files[name]
+		// ⛔ THE WALKER ALREADY DECODED IT (#1957). A tenant file this scan
+		// parsed comes with its ThresholdConfig in scan.Partials, decoded by
+		// the same config.ParseConfigFile parsePartialConfig calls — so the
+		// walker's tenant set and this plane's are one verdict, and the bytes
+		// are not decoded twice.
+		if partial, ok := scan.Partials[name]; ok {
+			applyBoundaryRules(name, &partial, m.getLogger())
+			fileConfigs[name] = partial
+			continue
+		}
 		fullPath := filepath.Join(m.path, name)
 		data := f.Data
 		if data == nil {

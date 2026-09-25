@@ -311,9 +311,17 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 			continue
 		}
 
-		// Tenant file: parse `tenants:` block. Lightweight shape
-		// matching ScanDirTree's parseTenantDecls — full config
-		// re-parsed by computeMergedHash on demand.
+		// Tenant file: parse `tenants:` block. Lightweight shape — full
+		// config re-parsed by computeMergedHash on demand.
+		//
+		// ⚠️ NO LONGER THE WALKER'S DECODE. Since #1957 ScanDirTree judges a
+		// tenant file with the full ParseConfigFile, so a file whose body
+		// the full decode rejects (a scalar tenant body, a `defaults:` block
+		// of the wrong shape) is dropped there but still registers its
+		// tenants here. Deliberately left out of #1957: here a parse error
+		// is a hard error (the simulate caller gets a 400), so switching
+		// decodes changes which payloads simulate refuses — a behaviour
+		// decision of its own, not a side effect of unifying the walker.
 		var doc struct {
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
