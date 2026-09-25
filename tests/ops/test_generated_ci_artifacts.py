@@ -312,6 +312,7 @@ from __future__ import annotations
 import ast
 import functools
 import itertools
+import difflib
 import json
 import os
 import re
@@ -1065,7 +1066,7 @@ def _cli_gh_uses(deploy: str) -> list[str]:
 # assertions: each leg was graded against its OWN transcription, so both were
 # green while watching different trees and running different steps. The preview
 # is now held to `_cli_gh_triggers` / `_cli_gh_uses`, i.e. to what
-# `da-tools init` writes, and section 9 compares the two artifacts directly.
+# `da-tools init` writes, and section 7 compares the two artifacts as whole files.
 
 _GH_JOB_EVENTS = {
     "validate": {"pull_request", "push", "workflow_dispatch"},
@@ -3724,7 +3725,10 @@ def test_portal_preview_workflow_passes_actionlint(tmp_path, deploy) -> None:
 def test_portal_preview_top_level_shape(tmp_path, deploy) -> None:
     """Binary-free counterpart of the test above (see the YAML-1.1 `on:` note)."""
     workflow = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
-    assert set(workflow) == {"name", True, "jobs", "permissions"}, (
+    # `env:` is here since #1351 ruling (a): the preview declares DA_TOOLS_IMAGE
+    # / CONFIG_DIR / MONITORING_NS the way the artifact does. Section 7 holds
+    # the whole file equal; this is the binary-free floor of the same claim.
+    assert set(workflow) == {"name", True, "env", "jobs", "permissions"}, (
         f"unexpected top-level keys in the portal preview for deploy={deploy}: "
         f"{sorted(map(str, workflow))}"
     )
@@ -7291,379 +7295,153 @@ def test_the_cli_spells_the_da_tools_image_exactly_once() -> None:
 
 
 # ============================================================
-# ── 7. The two generators held to EACH OTHER, not to two copies
-#      of one expectation (#1351 待辦 2) ──
+# ── 7. The two generators held to EACH OTHER: the whole file (#1351) ──
 # ============================================================
 #
-# Sections 3 and 4 pin each leg to a literal: `_EXPECTED_GH_TOP_LEVEL` /
-# `_EXPECTED_GH_JOBS` for the CLI, an inline set for the portal preview. Those
-# catch "this leg drifted from its spec" and are not redundant with what is
-# below — but they share one blind spot, and it is the one a person actually
-# walks into: change a generator, watch its own test go red, update that test's
-# expectation, green. Two expectations edited one at a time never disagree with
-# each other, so nothing says the two ARTIFACTS diverged.
+# owner ruling (a) on #1351 (2026-09-25): the wizard's GitHub preview is the
+# complete, paste-ready file `da-tools init --ci github` writes. So the gate is
+# no longer a set of axes — job set, top-level keys, trigger trees, step
+# NAMES, apply flags, apply runtime — each with its own declared exception
+# (`env:` and `name:` at the top level, step BODIES out of scope). It is the
+# file itself: the preview must EQUAL `run_init()`'s output, byte for byte,
+# comments included.
 #
-# ⛔ This section compares the two artifacts directly, so "update the
-# expectation" cannot be done in one leg. Measured on the TOP-LEVEL axis, which
-# is where two separate literals actually exist: giving the preview a
-# `concurrency:` key AND updating section 4's inline set to match — the full
-# "update the expectation" move — leaves every other test in this file green and
-# reds only the assertion below.
+# ⛔ Why bytes and not parsed YAML. The last divergence this ticket measured
+# before the ruling was inside a `run:` body — the preview's blast-radius step
+# had no "conf.d does not exist in this commit" refusal, so a moved config
+# directory produced a report saying "no changes" on every run — and a
+# comparison that ignores bodies (as the old step-name gate did) cannot see
+# that. Parsed-YAML equality would see bodies but not the YAML comments the
+# customer reads as documentation of their own pipeline, and those drift the
+# same way: two hand-kept copies, each edited one at a time.
 #
-# ⚠️ The JOB-NAME half is belt-and-braces, not new coverage, and saying so is
-# the point of this note. Job names already come from ONE shared source:
-# `_GH_JOB_EVENTS` / `_GH_JOB_NEEDS` are passed to `_assert_job_event_reachability`
-# for BOTH legs, so there is no second expectation to quietly update. Measured:
-# renaming the preview's `validate` job and updating section 4's inline job set
-# with it still reds `test_portal_preview_job_event_gating`. The equality is kept
-# because it is the literal floor #1351 待辦 2 asks for and it costs one line —
-# but it is not what this section buys.
+# ⚠️ ONE line is the wizard's own and is removed before comparing: the
+# floating-tag note (`… can be repointed at different code …`). It is a
+# function of the image the customer typed, which the CLI does not judge, and
+# it is a YAML comment on its own line directly above `jobs:`. The removal is
+# exact, not a filter: that line must appear at most once, at that position,
+# and must appear for a mutable reference — otherwise "removed the note" could
+# silently mean "removed nothing" or "removed something else".
 #
-# ⚠️ What this does NOT buy at all: it does not reduce the divergence, it
-# declares it. The two hand-kept generators remain two. #1351's other branch
-# (converge to one template) was decided against; this is the gate that decision
-# requires.
-
-# The ONE top-level key the legs are allowed to differ on, and the direction.
-# It is the `env:` 區塊 row of #1351's own divergence table: the CLI declares
-# DA_TOOLS_IMAGE / CONFIG_DIR / MONITORING_NS there and refers to them as
-# `${{ env.… }}`, the preview inlines the image instead. Closing that row is a
-# change to what customers are shown, so it is a product decision tracked
-# separately — NOT something this test may quietly absorb by widening.
+# The GitLab leg has no YAML preview in the wizard — only the root shell's
+# `include:` snippet, shown as a literal in the JSX — so its comparison is the
+# include test at the end of this section.
 #
-# ⛔ Exact set, not `<=`. A subset form would pass when the CLI silently lost
-# `env:` (every `${{ env.DA_TOOLS_IMAGE }}` in the shipped workflow resolving to
-# empty, which is a broken pipeline in the customer's repo, not a tidy-up).
-_DECLARED_TOP_LEVEL_ONLY_IN_CLI = {"env"}
+# ⚠️ What this does NOT buy: it does not make the generators one. The preview
+# is still a transcription (#1351 待辦 1 decided against one template); this
+# is the gate that makes any drift between the two a red test instead of a
+# quiet difference.
+
+_PIN_NOTE_MARKER = "can be repointed at different code without this file changing"
 
 
-@_needs_node
-@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
-def test_the_two_generators_agree_on_the_workflow_skeleton(
-        generated, tmp_path, deploy) -> None:
-    """Job set equal; top-level keys equal except one declared difference."""
-    cli = yaml.safe_load(
-        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
-    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
-
-    # Anti-vacuity first: an empty-vs-empty comparison is not agreement, and
-    # both `jobs` blocks failing to parse would satisfy every `==` below.
-    assert cli.get("jobs"), f"the CLI workflow for deploy={deploy} has no jobs"
-    assert portal.get("jobs"), f"the portal preview for deploy={deploy} has no jobs"
-
-    assert set(cli["jobs"]) == set(portal["jobs"]), (
-        f"the two customer-CI generators disagree on the job set for "
-        f"deploy={deploy}:\n"
-        f"  CLI    (scripts/tools/ops/init_project.py): {sorted(cli['jobs'])}\n"
-        f"  portal (cicd-setup-wizard/utils/generators.js): "
-        f"{sorted(portal['jobs'])}\n"
-        f"A job that exists in one and not the other is a customer being shown "
-        f"a pipeline they will not get. Fix the generator — updating one leg's "
-        f"own expectation is what this test exists to stop."
+def _without_pin_note(preview: str, *, expect_note: bool) -> str:
+    """Drop the wizard's floating-tag note — exactly that line, or fail."""
+    lines = preview.split("\n")
+    hits = [i for i, line in enumerate(lines) if _PIN_NOTE_MARKER in line]
+    if not expect_note:
+        assert hits == [], (
+            f"the preview carries a floating-tag note for an image it should "
+            f"call immutable: {[lines[i] for i in hits]}"
+        )
+        return preview
+    assert len(hits) == 1, (
+        f"expected exactly one floating-tag note line in the preview, found "
+        f"{len(hits)}; removing 'the note' is only well-defined for one"
     )
-
-    extra_in_portal = set(portal) - set(cli)
-    assert extra_in_portal == set(), (
-        f"the portal preview grew top-level key(s) the CLI artifact does not "
-        f"have for deploy={deploy}: {sorted(map(str, extra_in_portal))}. Either "
-        f"the CLI leg needs the same key, or the preview is promising structure "
-        f"`da-tools init` does not write."
+    i = hits[0]
+    assert lines[i].startswith("# "), f"the note is not a YAML comment: {lines[i]!r}"
+    assert i + 1 < len(lines) and lines[i + 1] == "jobs:", (
+        f"the note must sit directly above `jobs:`, found it above "
+        f"{lines[i + 1] if i + 1 < len(lines) else '<end of file>'!r}"
     )
-
-    extra_in_cli = set(cli) - set(portal)
-    assert extra_in_cli == _DECLARED_TOP_LEVEL_ONLY_IN_CLI, (
-        f"the declared top-level difference changed for deploy={deploy}: got "
-        f"{sorted(map(str, extra_in_cli))}, declared "
-        f"{sorted(_DECLARED_TOP_LEVEL_ONLY_IN_CLI)}.\n"
-        f"⛔ Widening this set is how a new divergence gets absorbed as if it "
-        f"were always intended. A NEW key here means the two generators just "
-        f"drifted; a MISSING one means the CLI dropped a block the shipped "
-        f"workflow refers to. Neither is fixed by editing the constant."
-    )
+    return "\n".join(lines[:i] + lines[i + 1:])
 
 
-# ============================================================
-# ── 9. Drift gate INSIDE the jobs (#1351 後續待辦) ──
-# ============================================================
-#
-# Section 8 pins the workflow SKELETON: the job set and the top-level keys. That
-# is the axis #1351 待辦 2 literally asked for, and the ticket's own re-audit
-# then recorded what it does not buy: "它釘的是 top-level key 集合與 job 名稱
-# 集合——恰好是兩腿唯一一致的那一軸". Measured on `6ed6f40e`, with section 8
-# green, the two generators still disagreed about:
-#
-#   * WHICH TREES START THE PIPELINE. CLI: three trees, derived per deploy
-#     method (#1473). Preview: `['conf.d/**']` for all three. A customer reading
-#     the preview concludes that editing a rule pack runs nothing — the preview
-#     UNDER-reported the artifact's coverage, which is the direction that makes
-#     people add a second pipeline to cover a gap that was never there.
-#   * EVERY ONE of the nine job × deploy step lists. The preview omitted the
-#     blast-radius PR comment (the output a reviewer actually decides on), the
-#     custom-rule lint, the kustomize dry-run and the Prometheus reload.
-#   * THE DEPLOY COMMANDS. `argocd app sync --force` in the preview against
-#     `--prune --timeout 300` in the artifact. ⛔ Not wording: `--prune` deletes
-#     resources git no longer declares, `--force` overwrites on apply. Neither
-#     implies the other, so a customer who planned around the preview planned
-#     around a different deployment.
-#
-# ⛔ Compared ARTIFACT to ARTIFACT, never against a list kept here. A
-# transcription of the expected step names in this file is a third hand-kept
-# copy — the failure shape #1351 exists to record — and it would go green by
-# being edited. The only literals below are the two things that are genuinely
-# statements about this repo's decisions: the declared exceptions.
-#
-# ⚠️ What this section still does NOT buy: the BODY of each step. Names,
-# triggers, deploy flags and the apply job's container are compared; the shell
-# inside a `run:` is not. Two steps can share a name and differ in what they
-# execute, and this file cannot tell you they do.
-
-# The workflow-level keys and values the two legs are ALLOWED to differ on,
-# because they are the two faces of #1351's `env:` row, which is a product
-# decision tracked on that ticket rather than drift:
-#
-#   * the CLI declares `env:` (DA_TOOLS_IMAGE / CONFIG_DIR / MONITORING_NS) and
-#     refers to them as `${{ env.… }}`; the preview inlines the values;
-#   * the workflow `name:` differs (`Dynamic Alerting` vs `… CI/CD`).
-#
-# Section 8 already pins the `env:` half as an exact set. This constant exists so
-# the step-sequence comparison below can say, in one place, that it deliberately
-# grades NAMES rather than bodies — the `${{ env.… }}` vs inlined-value
-# difference lives inside the bodies.
-_STEP_BODIES_ARE_NOT_COMPARED = (
-    "the `env:` row of #1351: the CLI refers to ${{ env.DA_TOOLS_IMAGE }} / "
-    "${{ env.CONFIG_DIR }} / ${{ env.MONITORING_NS }} where the preview inlines "
-    "the value, so the two legs' step BODIES differ by construction"
-)
-
-
-def _step_identities(job_body: dict) -> list[str]:
-    """Name each step the way a reader of the file would.
-
-    An unnamed step is identified by what it runs (`uses:`), because that is the
-    only thing on the line — a checkout step appearing in one leg and not the
-    other is exactly the argocd difference #1351 recorded, and `<unnamed>` for
-    both would have hidden it.
-    """
-    out = []
-    for step in job_body.get("steps") or []:
-        if step.get("name"):
-            out.append(step["name"])
-        elif step.get("uses"):
-            out.append(f"uses:{step['uses']}")
-        else:
-            out.append("<neither name nor uses>")
-    return out
-
-
-def _on_block(workflow: dict) -> dict:
-    """Read `on:`, which PyYAML gives us as the boolean True.
-
-    ⛔ Not `workflow.get("on")`. YAML 1.1 resolves the bare key `on` to True, so
-    the obvious spelling reads None here and every comparison of two Nones below
-    would pass on two workflows that trigger on nothing.
-
-    ⚠️ This file already carried the same read inline in several places, written
-    as `workflow.get(True) or workflow.get("on") or {}` — fail-OPEN, which is
-    what this one deliberately is not. Those sites are left alone rather than
-    re-pointed here: swapping a `{}` fallback for an assertion changes what
-    those tests do when the read fails, and auditing that is not this change.
-    """
-    block = workflow.get(True, workflow.get("on"))
-    assert isinstance(block, dict), (
-        f"could not read the `on:` block; got {block!r}. If PyYAML stopped "
-        f"resolving the bare `on` key to True this helper needs updating — but "
-        f"do not make it return {{}}, which would make every trigger "
-        f"comparison vacuous."
-    )
-    return block
-
-
-def _trigger_paths(workflow: dict) -> dict[str, list[str]]:
-    on = _on_block(workflow)
-    return {ev: sorted((on.get(ev) or {}).get("paths") or [])
-            for ev in ("pull_request", "push")}
-
-
-# Long options only, and the VALUE is dropped (`--timeout 300` and
-# `--timeout 5m` are the same flag). ⛔ Short options are deliberately not
-# collected: `-n monitoring` vs `-n ${{ env.MONITORING_NS }}` is the declared
-# `env:` difference, and including `-f` / `-n` here would red this gate for the
-# one reason it must not.
-_LONG_FLAG_RE = re.compile(r"(?<![\w-])(--[a-zA-Z][\w-]*)")
-
-
-def _apply_flags(job_body: dict) -> set[str]:
-    """Every long option the apply job's shell actually passes."""
-    scripts = " ".join(
-        step["run"] for step in (job_body.get("steps") or [])
-        if isinstance(step.get("run"), str)
-    )
-    # Comment lines carry prose that names flags ("this workflow sets
-    # fetch-depth: 0", "--load-restrictor: conf.d files are symlinked"), and the
-    # two legs word their comments differently on purpose. Grade what runs.
-    code = "\n".join(
-        line for line in scripts.splitlines()
-        if not line.lstrip().startswith("#")
-    )
-    return set(_LONG_FLAG_RE.findall(code))
-
-
-@_needs_node
-@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
-def test_the_two_generators_agree_on_which_trees_start_the_pipeline(
-        generated, tmp_path, deploy) -> None:
-    """A preview that watches fewer trees than the artifact is a false claim."""
-    cli = yaml.safe_load(
-        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
-    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
-
-    cli_paths = _trigger_paths(cli)
-    portal_paths = _trigger_paths(portal)
-
-    # Anti-vacuity: two empty filters are not agreement. A workflow with no
-    # `paths:` runs on every change, which is a different pipeline, not a match.
-    for leg, paths in (("CLI", cli_paths), ("portal", portal_paths)):
-        for ev, value in paths.items():
-            assert value, (
-                f"the {leg} leg declares no `on.{ev}.paths` for deploy="
-                f"{deploy}, so this comparison would grade nothing"
-            )
-
-    assert cli_paths == portal_paths, (
-        f"the two customer-CI generators watch different trees for deploy="
-        f"{deploy}:\n"
-        f"  CLI    (scripts/tools/ops/init_project.py, _ci_trigger_trees): "
-        f"{cli_paths}\n"
-        f"  portal (cicd-setup-wizard/utils/generators.js, "
-        f"_cicdTriggerTrees): {portal_paths}\n"
-        f"⛔ Both directions are customer-visible and neither is loud. A tree "
-        f"the preview omits reads as 'editing that does not run CI'; a tree "
-        f"only the preview names promises runs the artifact never starts. Fix "
-        f"the generator whose set is wrong — the trees follow from which paths "
-        f"a job in THAT workflow reads (#1473)."
+def _assert_same_file(cli_text: str, preview: str, label: str) -> None:
+    assert cli_text.strip(), f"the CLI wrote an empty workflow ({label})"
+    if preview == cli_text:
+        return
+    diff = "".join(difflib.unified_diff(
+        cli_text.splitlines(keepends=True), preview.splitlines(keepends=True),
+        fromfile="da-tools init (scripts/tools/ops/init_project.py)",
+        tofile="wizard preview (cicd-setup-wizard/utils/generators.js)", n=2))
+    pytest.fail(
+        f"the wizard's GitHub preview is not the file `da-tools init` writes "
+        f"({label}):\n{diff[:6000]}\n"
+        f"⛔ The preview is labelled `.github/workflows/dynamic-alerting.yaml` "
+        f"and is the file the customer pastes (#1351 ruling (a)). Update "
+        f"cicdGenerateGitHubActionsPreview from a fresh run_init() render — "
+        f"do not loosen this comparison."
     )
 
 
 @_needs_node
 @pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
-def test_the_two_generators_agree_on_each_jobs_step_sequence(
+def test_the_wizard_preview_is_the_file_init_writes(
         generated, tmp_path, deploy) -> None:
-    """Same steps, same order, in every job — the axis #1351 asked for.
+    """Default settings: the preview, minus its one note line, IS the artifact."""
+    cli_text = (generated[("github", deploy)] / _GH_WORKFLOW).read_text(
+        encoding="utf-8")
+    preview = _load_portal_preview(tmp_path, deploy)
+    _assert_same_file(
+        cli_text,
+        # The default image is `:latest`, which is mutable, so the note must
+        # be there — and its absence would be its own defect.
+        _without_pin_note(preview, expect_note=True),
+        f"deploy={deploy}, default image",
+    )
 
-    Names and order only; bodies are out of scope for the reason recorded in
-    ``_STEP_BODIES_ARE_NOT_COMPARED``.
-    """
-    cli = yaml.safe_load(
-        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
-    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
 
-    # The job SET is section 8's assertion; this reads it as a precondition so a
-    # missing job produces that test's message rather than a KeyError here.
-    assert set(cli["jobs"]) == set(portal["jobs"])
-
-    for job in sorted(cli["jobs"]):
-        cli_steps = _step_identities(cli["jobs"][job])
-        portal_steps = _step_identities(portal["jobs"][job])
-        assert cli_steps, (
-            f"the CLI's `{job}` job has no steps for deploy={deploy}"
-        )
-        assert portal_steps, (
-            f"the portal preview's `{job}` job has no steps for deploy={deploy}"
-        )
-        assert cli_steps == portal_steps, (
-            f"the two customer-CI generators disagree on what the `{job}` job "
-            f"DOES for deploy={deploy}:\n"
-            f"  only in the CLI artifact : "
-            f"{[s for s in cli_steps if s not in portal_steps]}\n"
-            f"  only in the portal preview: "
-            f"{[s for s in portal_steps if s not in cli_steps]}\n"
-            f"  CLI    : {cli_steps}\n"
-            f"  portal : {portal_steps}\n"
-            f"⛔ A step in the artifact and not the preview is CI the customer "
-            f"was not told they get (#1351 measured the blast-radius PR "
-            f"comment missing that way); a step only in the preview is CI they "
-            f"were promised and will not get. Note that {_STEP_BODIES_ARE_NOT_COMPARED}, "
-            f"so making the names agree is the floor, not the whole job."
-        )
+# Two images the wizard's own tests treat as the boundary of its note: a foreign
+# version tag (mutable — a registry we cannot speak for) and a digest (the one
+# reference that cannot be repointed).
+_CUSTOM_IMAGES = [
+    ("registry.internal/da-tools:v1", True),
+    ("registry.internal/da-tools@sha256:" + "0" * 64, False),
+]
 
 
 @_needs_node
 @pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
-def test_the_two_generators_agree_on_the_deploy_commands(
-        generated, tmp_path, deploy) -> None:
-    """The apply job's long options must match — they are the deployment.
+@pytest.mark.parametrize(("image", "mutable"), _CUSTOM_IMAGES)
+def test_a_custom_image_reaches_both_files_the_same_way(
+        tmp_path, deploy, image, mutable) -> None:
+    """`--da-tools-image X` and the wizard's image field must write one file.
 
-    ⛔ The row this exists for is `argocd app sync --prune --timeout 300` against
-    `--force`: both parse, both are plausible, and a reader cannot tell from
-    either one that the other exists. Flag NAMES, not values, so the declared
-    `env:` difference (`-n monitoring` vs `-n ${{ env.MONITORING_NS }}`) cannot
-    red this.
+    ⛔ Not redundant with the default case. At the default both legs could be
+    spelling the same literal independently; a custom value is what proves the
+    preview threads the wizard's field to the same ONE place (`env:
+    DA_TOOLS_IMAGE`) that the CLI threads its flag to.
     """
-    cli = yaml.safe_load(
-        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
-    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
-
-    cli_flags = _apply_flags(cli["jobs"]["apply"])
-    portal_flags = _apply_flags(portal["jobs"]["apply"])
-
-    assert cli_flags, (
-        f"read no long option out of the CLI's apply job for deploy={deploy} — "
-        f"either the deploy command lost its flags or this reader stopped "
-        f"matching them, and a reader that cannot fail is not a check"
+    target = tmp_path / "init"
+    target.mkdir()
+    ip.run_init(
+        {
+            "ci": "github",
+            "deploy": deploy,
+            "rule_packs": ["mariadb"],
+            "tenants": ["tenant-x"],
+            "namespace": "monitoring",
+            "da_tools_image": image,
+        },
+        str(target),
     )
-    assert cli_flags == portal_flags, (
-        f"the two customer-CI generators deploy differently for deploy="
-        f"{deploy}:\n"
-        f"  only in the CLI artifact  : {sorted(cli_flags - portal_flags)}\n"
-        f"  only in the portal preview: {sorted(portal_flags - cli_flags)}\n"
-        f"⛔ These are semantics, not wording. `--prune` deletes resources the "
-        f"repository no longer declares; `--force` overwrites on apply; "
-        f"`--load-restrictor` decides whether kustomize will follow the "
-        f"symlinks `init` writes into kustomize/base/ at all. A customer who "
-        f"planned around the preview planned around a different deployment."
+    cli_text = (target / _GH_WORKFLOW).read_text(encoding="utf-8")
+    assert f"DA_TOOLS_IMAGE: {image}\n" in cli_text, (
+        "the CLI did not write the requested image into its env block, so the "
+        "comparison below would not be about the image at all"
     )
-
-
-@_needs_node
-@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
-def test_the_two_generators_agree_on_the_apply_jobs_runtime(
-        generated, tmp_path, deploy) -> None:
-    """Same `container:` — including a pinned image neither leg may own alone.
-
-    deploy=argocd runs its apply job inside the argocd CLI image because
-    `ubuntu-latest` carries no `argocd` binary (the job exited 127 before the
-    pin). That pin now exists in both generators, which is the shape #1880
-    closed for the da-tools image: compared leg-to-leg rather than each against
-    a constant, so neither copy can be bumped alone.
-    """
-    cli = yaml.safe_load(
-        (generated[("github", deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
-    portal = yaml.safe_load(_load_portal_preview(tmp_path, deploy))
-
-    cli_container = cli["jobs"]["apply"].get("container")
-    portal_container = portal["jobs"]["apply"].get("container")
-
-    assert cli_container == portal_container, (
-        f"the apply job runs in a different runtime in the two generators for "
-        f"deploy={deploy}:\n"
-        f"  CLI    : {cli_container}\n"
-        f"  portal : {portal_container}\n"
-        f"A `container:` in one leg only means one of the two ships a job that "
-        f"cannot find its own binary (exit 127), or a stale image pin."
+    preview = _call_portal(
+        tmp_path,
+        "cicdGenerateGitHubActionsPreview",
+        {"deploy": deploy, "tenants": [], "packs": [], "daToolsImage": image},
     )
-
-    if deploy == "argocd":
-        assert cli_container and cli_container.get("image"), (
-            "deploy=argocd stopped pinning an image for its apply job. "
-            "`ubuntu-latest` ships no `argocd`, so the equality above would "
-            "then be two Nones agreeing that both legs are broken."
-        )
-        assert cli_container["image"] == ip.ARGOCD_CLI_IMAGE, (
-            f"the generated workflow's argocd image "
-            f"({cli_container['image']}) is no longer the constant "
-            f"`ARGOCD_CLI_IMAGE` ({ip.ARGOCD_CLI_IMAGE}) — a second literal "
-            f"crept into the template."
-        )
+    _assert_same_file(
+        cli_text,
+        _without_pin_note(preview, expect_note=mutable),
+        f"deploy={deploy}, image={image}",
+    )
 
 
 # ⛔ ONE literal path string, for the reason stated at the top of this file:
@@ -7737,9 +7515,9 @@ def test_the_wizard_include_snippet_names_the_pipeline_the_cli_writes(
 # rejects with `invalid choice`. The reverse (a method the CLI accepts but the
 # wizard never offers) is quieter still: nobody finds it.
 #
-# ⚠️ This is the option LIST, not the generated YAML. Section 9 compares what the
+# ⚠️ This is the option LIST, not the generated YAML. Section 7 compares what the
 # two generators PRODUCE for a given method; this asks whether they agree on
-# which methods exist at all — the axis above every assertion in section 9,
+# which methods exist at all — the axis above every assertion in section 7,
 # because a method missing from both lists produces no cells and pytest reports
 # an empty parametrize as a pass.
 
@@ -8131,8 +7909,8 @@ def test_the_delivered_action_pins_track_the_platforms_own(
 def test_the_wizard_preview_pins_track_the_platforms_own(tmp_path, deploy) -> None:
     """And so does the copy-me YAML the wizard puts on screen.
 
-    ⛔ Held separately from the CLI leg even though section 9 compares the two
-    artifacts step by step. That comparison is what makes them agree; this is
+    ⛔ Held separately from the CLI leg even though section 7 compares the two
+    artifacts byte for byte. That comparison is what makes them agree; this is
     what makes agreeing on a STALE pin insufficient — two generators moved in
     lockstep is still two majors behind.
     """

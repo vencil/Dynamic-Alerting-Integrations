@@ -33,6 +33,59 @@ const baseConfig = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+// Since #1351 ruling (a) the preview IS the file `da-tools init` writes, and
+// that file names the image once, in `env:`, and refers to it everywhere else
+// as this expression. Anything below that locates "the image" in a command
+// looks for THIS token — the literal registry name no longer appears there.
+const IMAGE_REF = '${{ env.DA_TOOLS_IMAGE }}';
+
+// Every `docker run` command in a workflow, continuation lines included. A
+// shell comment that merely mentions `docker run` is not a command.
+const dockerRuns = (yaml: string): string[] => {
+  const lines = yaml.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/\bdocker run\b/.test(lines[i]) || lines[i].trim().startsWith('#')) continue;
+    const cmd = [lines[i]];
+    while (lines[i].trimEnd().endsWith('\\') && i + 1 < lines.length) {
+      i += 1;
+      cmd.push(lines[i]);
+    }
+    out.push(cmd.join('\n'));
+  }
+  return out;
+};
+
+// The value of `env: DA_TOOLS_IMAGE:` — the one place the image is spelled.
+const envImage = (yaml: string): string | null => {
+  const m = yaml.match(/^env:\n(?: {2}\S.*\n)*? {2}DA_TOOLS_IMAGE: (.+)$/m);
+  return m ? m[1] : null;
+};
+
+// #1495's rule for ONE `docker run` command: a writable mount (`-v` without
+// `:ro`) needs `--user $(id -u):$(id -g)` placed before the image, or the
+// container (uid 10001) cannot write into the runner's checkout. Returns the
+// violations; an empty list is a pass.
+//
+// ⛔ A command whose image token cannot be found is itself a violation, not a
+// skip. The previous form compared `indexOf('--user')` against
+// `indexOf('ghcr.io/vencil/da-tools')`, and once the preview started naming
+// the image through `env:` that second index would have been -1 — making
+// "--user before the image" unsatisfiable-looking yet never evaluated, because
+// no writable mount existed to reach it. A tripwire that goes blind the day
+// the output changes shape is the failure #1351 ruled on.
+const writableMountViolations = (cmd: string): string[] => {
+  const mounts = [...cmd.matchAll(/-v ("[^"]*"|\S+)/g)].map((m) => m[1].replace(/^"|"$/g, ''));
+  const writable = mounts.filter((m) => !m.endsWith(':ro'));
+  if (writable.length === 0) return [];
+  const imageAt = cmd.indexOf(IMAGE_REF);
+  if (imageAt === -1) return [`cannot find ${IMAGE_REF} in a command with writable mount(s) ${writable.join(', ')}`];
+  const userAt = cmd.indexOf('--user $(id -u):$(id -g)');
+  if (userAt === -1) return [`writable mount(s) without --user: ${writable.join(', ')}`];
+  if (userAt > imageAt) return [`--user after the image, where docker passes it to the container: ${writable.join(', ')}`];
+  return [];
+};
+
 describe('cicdGenerateInitCommand', () => {
   it('always starts with "da-tools init"', () => {
     expect(cicdGenerateInitCommand(baseConfig())).toMatch(/^da-tools init/);
@@ -187,35 +240,40 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
     expect(step).toContain('generate-routes --config-dir /data/conf.d --validate');
     expect(step).not.toMatch(/generate-routes[^\n]* -o /);
     expect(step).not.toContain('/data/output');
-    expect(step).not.toContain('--user');
+    // The command, not the step: the artifact's shell comment in this step
+    // explains why there is no `--user` override, and names the flag to do so.
+    const cmds = dockerRuns(step);
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).not.toContain('--user');
     expect(yaml).not.toContain('/data/output');
   });
 
   it('runs every container that mounts something writable as the runner', () => {
-    // Derived, not enumerated: the rule #1495 established is "a writable
-    // mount needs --user ahead of the image"; a whole-file `toContain` would
-    // pass on a step that lost the flag. Walk every `docker run` block: any
-    // `-v` without `:ro` must be accompanied by `--user` placed before the
-    // image reference. Today the preview has no such block (the row above),
-    // so this is the tripwire for the next writable mount someone adds.
-    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    const blocks = yaml.split('docker run').slice(1)
-      .map((b) => b.slice(0, b.indexOf('\n\n') === -1 ? undefined : b.indexOf('\n\n')));
-    expect(blocks.length).toBeGreaterThan(0);
-    for (const b of blocks) {
-      // ⛔ The optional quote is load-bearing, not tidying. The preview now
-      // quotes every `-v` argument (the artifact does, for the
-      // directory-with-spaces reason #1454 C hit), and without `"?` here every
-      // mount matched as the 3-character string `-v "${{` — which ends in
-      // neither `:ro` nor anything else, so all of them counted as WRITABLE and
-      // this check reported a failure about mounts that are read-only. A reader
-      // that misreads every line is not a stricter check.
-      const mounts = b.match(/-v "?(?:\$\{\{ github\.workspace \}\}|\S)[^ \\\n]*/g) ?? [];
-      const writable = mounts.filter((m) => !m.replace(/"$/, '').endsWith(':ro'));
-      if (writable.length === 0) continue;
-      expect(b, `writable mount without --user: ${writable.join(', ')}`).toContain('--user $(id -u):$(id -g)');
-      expect(b.indexOf('--user')).toBeLessThan(b.indexOf('ghcr.io/vencil/da-tools'));
+    // Derived, not enumerated: walk every `docker run` command and apply
+    // #1495's rule to each. Today no command mounts anything writable (the
+    // row above), so this is the tripwire for the next one someone adds — and
+    // the test after this one proves the tripwire can still fire.
+    const runs = dockerRuns(cicdGenerateGitHubActionsPreview(baseConfig()));
+    expect(runs.length).toBeGreaterThan(0);
+    for (const cmd of runs) {
+      expect(cmd, 'every docker run must name the image through env:').toContain(IMAGE_REF);
+      expect(writableMountViolations(cmd), cmd).toEqual([]);
     }
+  });
+
+  it('has a tripwire that still fires on the shape the preview now has', () => {
+    // The rule above passes vacuously on today's output, so its teeth are
+    // shown here, on commands written in the preview's own form.
+    const ro = '-v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro"';
+    const rw = '-v "${{ github.workspace }}/.output:/data/output"';
+    const user = '--user $(id -u):$(id -g)';
+    const run = (...parts: string[]) => ['docker run --rm', ...parts].join(' \\\n  ');
+    expect(writableMountViolations(run(ro, IMAGE_REF, 'lint'))).toEqual([]);
+    expect(writableMountViolations(run(user, rw, IMAGE_REF, 'x'))).toEqual([]);
+    expect(writableMountViolations(run(rw, IMAGE_REF, 'x'))).toHaveLength(1);
+    expect(writableMountViolations(run(rw, IMAGE_REF, user, 'x'))).toHaveLength(1);
+    // The blind spot the old `indexOf(literal)` form had: no findable image.
+    expect(writableMountViolations(run(user, rw, 'ghcr.io/vencil/da-tools:latest', 'x'))).toHaveLength(1);
   });
 
   it('keeps the tenant config mounted read-only in every step', () => {
@@ -223,10 +281,12 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
     // access to their conf.d — these steps only read it. Dropping `:ro`
     // survived both suites, and it is the kind of edit that looks like
     // tidying: the command still works, so nothing goes red until something
-    // writes there.
-    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    const mounts = yaml.match(/-v "?\$\{\{ github\.workspace \}\}\/conf\.d:[^ \\"]*/g) ?? [];
-    expect(mounts.length).toBeGreaterThan(0);
+    // writes there. Identified by the CONTAINER side, because the host side is
+    // `${{ env.CONFIG_DIR }}` (and `.output/base/…` for the diff's baseline).
+    const mounts = dockerRuns(cicdGenerateGitHubActionsPreview(baseConfig()))
+      .flatMap((cmd) => [...cmd.matchAll(/-v ("[^"]*"|\S+)/g)].map((m) => m[1].replace(/^"|"$/g, '')))
+      .filter((m) => /:\/data\/conf\.d(?:\.base)?(?::|$)/.test(m));
+    expect(mounts.length).toBeGreaterThanOrEqual(3);
     for (const m of mounts) {
       expect(m).toMatch(/:ro$/);
     }
@@ -344,9 +404,14 @@ describe('cicdGenerateFileTree', () => {
 });
 
 describe('cicdGenerateGitHubActionsPreview', () => {
-  it('returns a string starting with "name: Dynamic Alerting CI/CD"', () => {
+  it('carries the workflow name `da-tools init` writes', () => {
+    // #1351 ruling (a): the preview is the artifact, header comment included,
+    // so the name is the artifact's (`Dynamic Alerting`), not the preview's
+    // old `… CI/CD`. tests/ops/test_generated_ci_artifacts.py holds the whole
+    // file equal to a real run_init(); this is the node-free floor.
     const out = cicdGenerateGitHubActionsPreview(baseConfig());
-    expect(out).toMatch(/^name: Dynamic Alerting CI\/CD/);
+    expect(out).toMatch(/^# Dynamic Alerting CI\/CD Pipeline\n/);
+    expect(out).toMatch(/\nname: Dynamic Alerting\n/);
   });
 
   it('watches the trees the chosen deploy method actually reads (#1351/#1473)', () => {
@@ -365,15 +430,23 @@ describe('cicdGenerateGitHubActionsPreview', () => {
       const out = cicdGenerateGitHubActionsPreview(baseConfig({ deploy }));
       expect(out).toContain('pull_request:');
       expect(out).toContain('push:');
-      const lines = out.split('\n').filter((l) => l.trim().startsWith('paths:'));
-      // Both events, one rendered list: a single `paths:` line would mean the
-      // push leg lost its filter and now runs on every push.
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toBe(lines[1]);
-      return lines[0].trim();
+      // Block-style lists now, as the artifact writes them: collect the
+      // `- '…'` items under each `paths:` key.
+      const lines = out.split('\n');
+      const lists = lines.flatMap((l, i) => {
+        if (l.trim() !== 'paths:') return [];
+        const items: string[] = [];
+        for (let j = i + 1; j < lines.length && /^\s+- '/.test(lines[j]); j += 1) items.push(lines[j].trim());
+        return [items.join(' ')];
+      });
+      // Both events, one rendered list: a single `paths:` would mean the push
+      // leg lost its filter and now runs on every push.
+      expect(lists).toHaveLength(2);
+      expect(lists[0]).toBe(lists[1]);
+      return lists[0];
     };
-    expect(paths('kustomize')).toBe("paths: ['conf.d/**', 'kustomize/**', 'rule-packs/**']");
-    expect(paths('helm')).toBe("paths: ['conf.d/**', 'environments/**', 'rule-packs/**']");
+    expect(paths('kustomize')).toBe("- 'conf.d/**' - 'kustomize/**' - 'rule-packs/**'");
+    expect(paths('helm')).toBe("- 'conf.d/**' - 'environments/**' - 'rule-packs/**'");
   });
 
   it('declares a validate job on ubuntu-latest', () => {
@@ -466,24 +539,28 @@ describe('da-tools image is configurable (#1351)', () => {
   });
 
   it('carries a custom image into EVERY docker run in the workflow preview', () => {
-    // Derived, not counted: a `toContain` would pass while two of the three
-    // steps kept the hardcoded reference. Walk the blocks and require each to
-    // name the configured image and nothing else.
+    // Derived, not counted: a `toContain` would pass while one step kept a
+    // hardcoded reference. The artifact's shape is "spelled once in env:,
+    // referenced everywhere else", so require exactly that: env holds the
+    // configured image, every docker run refers to it, and no other registry
+    // reference is left in the file.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal/da-tools:v1' }));
-    const blocks = yaml.split('docker run').slice(1);
-    expect(blocks.length).toBeGreaterThan(0);
-    for (const b of blocks) {
-      expect(b).toContain('registry.internal/da-tools:v1');
+    expect(envImage(yaml)).toBe('registry.internal/da-tools:v1');
+    const runs = dockerRuns(yaml);
+    expect(runs.length).toBeGreaterThan(0);
+    for (const cmd of runs) {
+      expect(cmd).toContain(IMAGE_REF);
     }
     expect(yaml).not.toContain('ghcr.io/vencil/da-tools');
   });
 
   it('keeps the default in the preview when nothing is configured', () => {
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    const blocks = yaml.split('docker run').slice(1);
-    expect(blocks.length).toBeGreaterThan(0);
-    for (const b of blocks) {
-      expect(b).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    expect(envImage(yaml)).toBe(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    const runs = dockerRuns(yaml);
+    expect(runs.length).toBeGreaterThan(0);
+    for (const cmd of runs) {
+      expect(cmd).toContain(IMAGE_REF);
     }
   });
 });
@@ -532,10 +609,12 @@ describe('a reference we cannot vouch for is called out (#1351, review on #1880)
 
   it('places the note where it cannot break the workflow header', () => {
     // It has to survive `yaml.safe_load` and actionlint in the customer's
-    // repo, so it sits on its own line directly above `jobs:` — the same spot
-    // the CLI leg declares DA_TOOLS_IMAGE in.
+    // repo, so it sits on its own line directly above `jobs:`, just below the
+    // `env:` block that declares DA_TOOLS_IMAGE. It is the ONE line the
+    // preview adds to what `da-tools init` writes; the Python drift gate
+    // removes exactly this line, at exactly this position, before comparing.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
-    expect(yaml).toMatch(/^name: Dynamic Alerting CI\/CD/);
+    expect(yaml).toMatch(/\nname: Dynamic Alerting\n/);
     expect(yaml).toMatch(/\n# \S[^\n]*can be repointed[^\n]*\njobs:\n/);
   });
 });
