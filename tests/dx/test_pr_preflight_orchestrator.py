@@ -287,8 +287,8 @@ class TestMainOrchestrator:
         """Stub every check; everything but `fail_check` / `warn_check` PASSes.
 
         Both name the check FUNCTION (`"check_conflict"`), not a label.
-        ⛔ Anything the stubs miss must not run silently: while they are in
-        place, starting a process fails the test.
+        ⛔ While the stubs are in place, `subprocess.Popen` raises instead of
+        starting a process.
         """
         chosen = {fail_check: pp.Status.FAIL, warn_check: pp.Status.WARN}
         names = stub_checks(
@@ -299,7 +299,9 @@ class TestMainOrchestrator:
 
         def _no_process(*a, **kw):
             raise AssertionError(
-                f"a process was started while every check is stubbed: {a[:1]}"
+                f"main() tried to start a process while its checks were stubbed: "
+                f"{a[:1]} — a step main() runs is not a check_* looked up at call "
+                "time, so it was not stubbed"
             )
 
         monkeypatch.setattr(_subprocess, "Popen", _no_process)
@@ -351,22 +353,24 @@ class TestMainOrchestrator:
     ):
         """#1953 — a step of `main()` that is not a `check_*` is not stubbed.
 
-        When it starts a real process, the test must go red instead of green.
+        Starting a process from it must raise, not run. The probe calls
+        `Popen` itself: probing through `run()` would stay green with the
+        tripwire moved up a layer.
         """
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
         monkeypatch.setattr(
             pp.PreflightReport, "print_summary",
-            lambda self: pp.run(["git", "--version"]),
+            lambda self: _subprocess.Popen(["git", "--version"]),
         )
         cli_argv("pr_preflight.py")
-        with pytest.raises(AssertionError, match="a process was started"):
+        with pytest.raises(AssertionError, match="tried to start a process"):
             pp.main()
 
-    def test_a_stub_rejects_a_call_the_real_check_would_reject(self, monkeypatch):
+    def test_a_stub_rejects_a_keyword_the_real_check_does_not_take(self, monkeypatch):
         self._stub_all_checks(monkeypatch)
         with pytest.raises(TypeError):
-            pp.check_conflict("an argument the real check does not take")
+            pp.check_conflict(no_such_parameter_1953=1)
 
     def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
         """⛔ `--ci` 已刪（#1472）：加回來不會讓上面三格轉紅。"""

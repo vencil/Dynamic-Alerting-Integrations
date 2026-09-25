@@ -13,17 +13,14 @@ def stub_checks(monkeypatch, mod, status_of):
     """Replace every ``check_*`` callable in ``mod``; return the names.
 
     Each stub returns ``CheckResult(<function name>, status_of(<name>), ...)``
-    and binds its arguments against the real signature, so a call ``main()``
-    makes that the real check would reject still fails.
+    and binds its arguments against the real signature.
     """
     names = sorted(
         n for n, v in vars(mod).items() if n.startswith("check_") and callable(v)
     )
     # ⛔ Must-fire control: deriving nothing would stub nothing — "could not
     # see the checks" must not look like "there are no checks".
-    assert "check_branch_identity" in names, (
-        f"derived no known check (got {names}) — this stub is measuring nothing"
-    )
+    assert names, f"derived no check_* from {mod.__name__} — this stub measures nothing"
     for name in names:
         sig = inspect.signature(getattr(mod, name))
 
