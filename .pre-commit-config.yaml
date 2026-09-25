@@ -978,7 +978,9 @@ repos:
 
       - id: check-doc-freshness
         name: Check document freshness (>90 days = stale)
-        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --ci
+        # Same bug as check-doc-reading-time above: the tool defines `--check`,
+        # never `--ci`, so the old entry made argparse exit 2 on every run.
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --check
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
