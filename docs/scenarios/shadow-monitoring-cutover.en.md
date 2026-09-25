@@ -349,7 +349,7 @@ python3 scripts/tools/ops/diagnose.py db-a
 |-------|-----|
 | New rules not loaded by Prometheus | Confirm ConfigMap reload completed, wait 1–2 eval intervals |
 | Alertmanager route still intercepts | Verify shadow route fully removed |
-| Tenant in silent/maintenance mode | Wait for `_state_silent_mode: expires` to elapse |
+| Tenant in silent/maintenance mode | Wait for `expires` to elapse for automatic recovery, or clear it manually |
 | Threshold set too high | Use `baseline_discovery.py` to re-suggest thresholds |
 
 ### Scenario 3: Need Immediate Rollback

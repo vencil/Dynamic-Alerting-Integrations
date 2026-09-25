@@ -153,7 +153,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   `scaffold_tenant.py` / `da-tools scaffold` — interactively or via CLI generates new tenant YAML configuration templates.
 
 **Sentinel Alert**
-:   Sentinel alert pattern. The exporter produces a flag metric (e.g., `_silent_mode: 1`), a corresponding sentinel recording rule triggers an alert, and Alertmanager inhibit rules suppress target alerts. This is the core mechanism for the three-state model.
+:   Sentinel alert pattern. Driven by tenant config (e.g., `_silent_mode`), the exporter produces a flag metric (e.g., `user_silent_mode{target_severity="warning"} 1`), a corresponding sentinel recording rule triggers an alert, and Alertmanager inhibit rules suppress target alerts. This is the core mechanism for the three-state model.
 
 **Severity Dedup (Severity Deduplication)**
 :   When critical and warning alerts coexist for the same metric, Alertmanager `inhibit_rules` (not PromQL) suppress warnings, ensuring TSDB retains complete data.

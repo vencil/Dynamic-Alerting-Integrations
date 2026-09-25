@@ -233,13 +233,25 @@ Dynamic Alerting provides Normal / Silent / Maintenance three-state operational 
 Common operations:
 
 ```bash
-# Enable silent mode (during maintenance)
-da-tools patch-config --tenant db-product-01 --set '_state_silent_mode.enabled=true' --set '_state_silent_mode.expires=2026-03-20T23:59:59Z'
+# 1. Enable silent mode (during maintenance): positional <tenant> <key> <value>; the key is _silent_mode
+#    Patches the ConfigMap directly via hot-reload, bypassing GitOps
+#    ⚠️ Replace expires with this maintenance window's end (a future RFC3339 UTC time); 2099 is only a stand-in so the line works as pasted
+da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-12-31T23:59:59Z"}'
+#    If no expiry is needed, use a scalar instead: warning / critical / all (never ends on its own; clear it manually)
+#    da-tools patch-config db-product-01 _silent_mode warning
 
-# Verify current mode
+# 2. Verify current mode (after the exporter reloads and Prometheus scrapes; returns maintenance if the tenant is also in maintenance)
 da-tools diagnose db-product-01
-# Output: operational_mode: silent
+# Output includes: "operational_mode": "silent:all" (silent:warning / silent:critical when only one severity is muted;
+# with no active silence the operational_mode field is omitted from the output)
 
+# 3. Maintenance done: clear silent mode early
+da-tools patch-config db-product-01 _silent_mode disable
+```
+
+⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it only logs a WARN (on every scrape) and treats the silence as having **no expiry** — it will not end on its own. If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Known defect: once `expires` passes on a `target: all` silence that carries a `reason`, the whole `/metrics` endpoint returns HTTP 500 ([#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)); do not combine them until it is fixed. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
+
+```bash
 # Scheduled maintenance windows (CronJob auto-creates Alertmanager silences)
 da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```

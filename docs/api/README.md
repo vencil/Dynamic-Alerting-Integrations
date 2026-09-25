@@ -91,18 +91,17 @@ user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
 
 #### `user_silent_mode` - 租戶靜音模式
 
-表示租戶是否處於靜音模式（所有警示暫時靜音）。
+租戶的靜音模式生效中時才發出，每個被靜音的嚴重度一筆（`target_severity`），值恆為 `1`。靜音期間告警照常觸發（TSDB 有紀錄），只是通知被 Alertmanager inhibit 攔下。下例 `db-b` 設了 `_silent_mode: all`，`db-a` 沒設所以沒有這個 series。
 
 ```
-# HELP user_silent_mode Tenant silent mode status
+# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
 # TYPE user_silent_mode gauge
-user_silent_mode{tenant="db-a"} 0
-user_silent_mode{tenant="db-b"} 1
+user_silent_mode{target_severity="critical",tenant="db-b"} 1
+user_silent_mode{target_severity="warning",tenant="db-b"} 1
 ```
 
 **值：**
-- `0`: 正常模式（靜音模式已停用）
-- `1`: 靜音模式已啟用（所有警示都被抑制）
+- `1`: 該嚴重度的通知靜音中。沒有 `0`——未靜音（或 `expires` 已過）的租戶／嚴重度不會出現這個 series
 
 #### `user_severity_dedup` - 嚴重度去重旗標
 
@@ -169,10 +168,10 @@ user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
 user_state_filter{tenant="db-a",alertname="HighMemory",metric_group="memory"} 1
 user_state_filter{tenant="db-b",alertname="HighCPU",metric_group="compute"} 0
 
-# HELP user_silent_mode Tenant silent mode status
+# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
 # TYPE user_silent_mode gauge
-user_silent_mode{tenant="db-a"} 0
-user_silent_mode{tenant="db-b"} 1
+user_silent_mode{target_severity="critical",tenant="db-b"} 1
+user_silent_mode{target_severity="warning",tenant="db-b"} 1
 
 # HELP user_severity_dedup Severity deduplication flag
 # TYPE user_severity_dedup gauge
