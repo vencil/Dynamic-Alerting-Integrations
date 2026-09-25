@@ -48,6 +48,8 @@ sys.path.insert(0, os.path.join(str(Path(__file__).parent), ".."))  # Repo subdi
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
+    DiffScanError,
+    diff_changed_paths,
     get_diff_added_lines,
     parse_bypass_tag,
     resolve_diff_base,
@@ -159,18 +161,10 @@ def iter_scan_targets(full_scan, base):
                 rel = os.path.relpath(filepath, REPO_ROOT)
                 yield filepath, rel
     else:
-        # Diff-only: ask git for changed files
-        try:
-            result = subprocess.run(
-                ['git', 'diff', '--name-only', base, '--diff-filter=AM'],
-                capture_output=True, text=True, cwd=str(REPO_ROOT),
-                check=True, timeout=10,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return
-        for rel in result.stdout.splitlines():
-            if not rel.strip():
-                continue
+        # Diff-only: ask git for changed files. A failed or timed-out git
+        # raises DiffScanError (#1987) -- it must not end the walk as if no
+        # file had changed.
+        for rel in diff_changed_paths(base, REPO_ROOT):
             fname = os.path.basename(rel)
             if fname in SKIP_FILES:
                 continue
@@ -246,7 +240,13 @@ def main():
     total_violations = 0
     files_with_violations = 0
 
-    for filepath, rel_path in iter_scan_targets(args.full_scan, base):
+    try:
+        targets = list(iter_scan_targets(args.full_scan, base))
+    except DiffScanError as e:
+        print(f'ERROR: {e}', file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
+    for filepath, rel_path in targets:
         if args.full_scan:
             violations = scan_file_full(filepath, fix=args.fix)
         else:
