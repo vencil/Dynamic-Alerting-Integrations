@@ -133,7 +133,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
-| `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--ci <platform>` or interactive mode |
+| `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--ci <platform> --tenants <list>` or interactive mode |
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
@@ -1257,7 +1257,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--ci` | CI/CD platform | `both` |
-| `--tenants` | Comma-separated tenant names | `db-a,db-b` (interactive mode) |
+| `--tenants` | Comma-separated tenant names. If `--ci` / `--rule-packs` / `--deploy` is given without `--tenants`: on a terminal stdin **only the tenant names are asked for** (no default; every other flag is used as given); off a terminal (CI, scripts) it is **rc 2 and nothing is written**, `--dry-run` included. init no longer fills in example tenants | none; the fully interactive mode (no flags) offers `db-a,db-b` as the prompt default |
 | `--rule-packs` | Comma-separated Rule Packs | `mariadb,kubernetes` (interactive mode) |
 | `--deploy` | Deployment method | `kustomize` |
 | `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |

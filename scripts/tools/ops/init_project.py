@@ -15,7 +15,8 @@ Generates:
 Usage:
   da-tools init                                   # Interactive mode
   da-tools init --ci github --tenants db-a,db-b   # Non-interactive
-  da-tools init --ci both --rule-packs mariadb,redis --deploy kustomize
+  da-tools init --ci both --rule-packs mariadb,redis --deploy kustomize \
+                --tenants db-a
 """
 from __future__ import annotations
 
@@ -109,8 +110,11 @@ _HELP = {
         'en': 'CI/CD platform: github, gitlab, both (default: both)',
     },
     'tenants': {
-        'zh': '逗號分隔的租戶名稱 (例如 db-a,db-b)',
-        'en': 'Comma-separated tenant names (e.g., db-a,db-b)',
+        'zh': ('逗號分隔的租戶名稱 (例如 db-a,db-b)。給了 --ci / --rule-packs / '
+               '--deploy 卻沒給它時：在終端機上只詢問租戶名稱，否則 rc 2'),
+        'en': ('Comma-separated tenant names (e.g., db-a,db-b). If --ci, '
+               '--rule-packs or --deploy is given without it: asked for on a '
+               'terminal, otherwise rc 2'),
     },
     'rule_packs': {
         'zh': '逗號分隔的 Rule Pack (例如 mariadb,redis,kubernetes)',
@@ -144,12 +148,12 @@ _HELP = {
         'zh': '''範例:
   %(prog)s                                                    # 互動模式
   %(prog)s --ci github --tenants db-a,db-b                    # GitHub Actions
-  %(prog)s --ci both --rule-packs mariadb,redis --deploy kustomize
+  %(prog)s --ci both --rule-packs mariadb,redis --deploy kustomize --tenants db-a
   %(prog)s --ci gitlab --tenants prod-db --deploy helm -o /path/to/repo''',
         'en': '''Examples:
   %(prog)s                                                    # Interactive mode
   %(prog)s --ci github --tenants db-a,db-b                    # GitHub Actions
-  %(prog)s --ci both --rule-packs mariadb,redis --deploy kustomize
+  %(prog)s --ci both --rule-packs mariadb,redis --deploy kustomize --tenants db-a
   %(prog)s --ci gitlab --tenants prod-db --deploy helm -o /path/to/repo''',
     },
 }
@@ -4760,8 +4764,75 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
         sys.exit(EXIT_VIOLATION)
 
 
+def _stdin_is_tty() -> bool:
+    """Whether stdin is an interactive terminal — the seam tests monkeypatch.
+
+    Only stdin is asked, because stdin is what the supplementary tenant prompt
+    reads (#1426); whether stdout is redirected does not change whether a
+    person can answer. A closed or replaced stdin (None, a pseudo-file without
+    a real fd) counts as "not a terminal" rather than raising.
+    """
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+# The flags that make a run non-interactive by themselves (#1426). `--tenants`
+# is one too, but it is the one this gate asks for, so it is not listed.
+_GENERATING_FLAGS = (('--ci', 'ci'), ('--rule-packs', 'rule_packs'),
+                     ('--deploy', 'deploy'))
+
+
+def _missing_tenants_refusal(given: list[str]) -> str:
+    """The rc-2 message for a generating flag without `--tenants` off a TTY."""
+    flags = ', '.join(given)
+    if _LANG == 'zh':
+        return (f"給了 {flags} 但沒有 --tenants，而 stdin 不是終端機，無法詢問"
+                f"租戶名稱（未寫入任何檔案）。請加上 --tenants <name>[,<name>...]"
+                f"；init 不會再自行填入範例租戶。")
+    return (f"{flags} given without --tenants, and stdin is not a terminal, so "
+            f"the tenant names cannot be asked for (nothing was written). Add "
+            f"--tenants <name>[,<name>...]; init no longer fills in example "
+            f"tenants.")
+
+
+def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
+    """Ask for the tenant names only — the one input a flagged run lacks (#1426).
+
+    ⛔ No default, on purpose: the bug this replaces was a silent
+    `db-a,db-b` landing in the customer's conf.d/ as if it were theirs. An
+    empty answer yields `[]`, which `_validate_config` refuses (rc 2, "at
+    least one tenant name is required") — no loop. EOF / Ctrl-C is rc 2 too;
+    nothing has been written at this point.
+    """
+    if _LANG == 'zh':
+        text = "輸入租戶名稱（逗號分隔；下次可直接用 --tenants 帶入）:"
+    else:
+        text = "Enter tenant names (comma-separated; you can pass --tenants next time):"
+    try:
+        raw = input(f"\n{text}\n> ")
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        parser.error("未讀到租戶名稱；請用 --tenants 帶入（未寫入任何檔案）"
+                     if _LANG == 'zh' else
+                     "no tenant names were read; pass --tenants "
+                     "(nothing was written)")
+    return [t.strip() for t in raw.split(',') if t.strip()]
+
+
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
-    """Build configuration from CLI args or interactive flow."""
+    """Build configuration from CLI args or interactive flow.
+
+    #1426: a generating flag (`--ci` / `--rule-packs` / `--deploy`) without
+    `--tenants` used to be filled in with the demo tenants `db-a,db-b`, which
+    then landed in conf.d/ and in "Next steps" as the customer's own. Now:
+    on a terminal only the tenant names are asked for (every other flag is
+    used as given); off a terminal it is rc 2 before anything is written —
+    `--dry-run` included, since its preview would show the invented tenants.
+    `--non-interactive` without `--tenants` stays rc 2 as before, and a run
+    with no flags at all is still the full interactive flow.
+    """
     if args.config_source == 'git' or any(
             getattr(args, a) is not None
             for a in ('git_repo', 'git_branch', 'git_path', 'git_period')):
@@ -4771,11 +4842,18 @@ def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
     if args.non_interactive or has_cli_args:
         if args.non_interactive and not args.tenants:
             parser.error("--non-interactive requires --tenants")
+        if args.tenants:
+            tenants = [t.strip() for t in args.tenants.split(',')]
+        elif _stdin_is_tty():
+            tenants = _prompt_missing_tenants(parser)
+        else:
+            parser.error(_missing_tenants_refusal(
+                [f for f, a in _GENERATING_FLAGS if getattr(args, a)]))
         return {
             'ci': args.ci or 'both',
             'deploy': args.deploy or 'kustomize',
             'rule_packs': [r.strip() for r in (args.rule_packs or 'mariadb,kubernetes').split(',')],
-            'tenants': [t.strip() for t in (args.tenants or 'db-a,db-b').split(',')],
+            'tenants': tenants,
             'namespace': args.namespace,
             'da_tools_image': args.da_tools_image,
         }
