@@ -102,7 +102,7 @@ your-repo/
 └── .da-init.yaml                # Init marker (for upgrade detection)
 ```
 
-⚠️ **On a repo that already has a `conf.d/`**: the tree above is a fresh repo. A tenant already declared by one of your files (judged by its `tenants:` keys — `db-c.yml`, `DB-C.YAML`, a multi-tenant file and subdirectories all count), and root defaults in another spelling (e.g. `_defaults.yml`), get no `<tenant>.yaml` / `_defaults.yaml` from init: it skips and names them, and refuses (rc 1, nothing written) when its own file already sits beside one. See the [CLI reference for `init`](../cli-reference.md#init).
+⚠️ **On a repo that already has a `conf.d/`**: the tree above is a fresh repo. A tenant already declared by one of your files (judged by its `tenants:` keys — `db-c.yml`, `DB-C.YAML`, a multi-tenant file and subdirectories all count), and root defaults in another spelling (e.g. `_defaults.yml`), get no `<tenant>.yaml` / `_defaults.yaml` from init: it skips and names them, and refuses (rc 1, nothing written) when its own file already sits beside one, or when a file naming a requested tenant is one the exporter rejects as a whole. See the [CLI reference for `init`](../cli-reference.en.md#init).
 
 #### Why GitLab gets two files
 

@@ -98,7 +98,7 @@ your-repo/
 └── .da-init.yaml                # 初始化標記（升級偵測用）
 ```
 
-⚠️ **在已有 `conf.d/` 的 repo 上**：上圖是全新 repo 的樣子。已由你既有檔案宣告的租戶（依 `tenants:` 的 key 判斷——`db-c.yml`、`DB-C.YAML`、多租戶檔、子目錄都算）與其他拼法的根 defaults（如 `_defaults.yml`），init 不會再產生 `<tenant>.yaml`／`_defaults.yaml`，會跳過並列出；init 自己的檔案已與它們並存時則拒絕（rc 1、不寫任何檔案）。詳見 [CLI 參考 `init`](../cli-reference.md#init)。
+⚠️ **在已有 `conf.d/` 的 repo 上**：上圖是全新 repo 的樣子。已由你既有檔案宣告的租戶（依 `tenants:` 的 key 判斷——`db-c.yml`、`DB-C.YAML`、多租戶檔、子目錄都算）與其他拼法的根 defaults（如 `_defaults.yml`），init 不會再產生 `<tenant>.yaml`／`_defaults.yaml`，會跳過並列出；init 自己的檔案已與它們並存、或某個提到要求租戶的檔會被 exporter 整份拒收時，則拒絕（rc 1、不寫任何檔案）。詳見 [CLI 參考 `init`](../cli-reference.md#init)。
 
 #### GitLab 為什麼是兩個檔案
 

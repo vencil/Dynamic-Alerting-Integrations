@@ -3254,6 +3254,299 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 # filename. A name-based test misses `team.yaml` (declares db-c, named
 # nothing like it) and misfires on a `db-c.yml` that declares someone else.
 
+#
+# ⛔ And "declares" is the EXPORTER's answer, not a plausible-looking parse.
+# The first version asked `yaml.safe_load` and got it wrong in both
+# directions (#1942 blind review F1): it MISSED declarations the exporter
+# makes (`on:` read as True, `007:` as 7, a stream with a second `---`
+# document raising) — so init wrote a duplicate — and it SAW declarations
+# the exporter rejects (a scalar tenant body, a duplicated key: the exporter
+# drops the whole file), so init skipped a tenant that then existed nowhere.
+# The exporter decodes the FIRST document with yaml.v3 into a typed struct
+# (`ThresholdConfig`, `tenants: map[string]map[string]ScheduledValue`) and a
+# file that fails that decode declares nothing on any plane.
+# `_exporter_verdict` answers from the YAML node tree instead, keys by their
+# raw text, and says "cannot tell" rather than guess. What keeps it honest is
+# `tests/shared/init_declaration_parity_matrix.json`: Go's half runs the
+# exporter's `ScanDirTree` over every row, Python's runs `_plan_confd`.
+#
+# ⛔ Fail-closed: a file that names a requested tenant but that the exporter
+# rejects — or that init cannot judge — refuses the run. Skipping would leave
+# the tenant declared nowhere; generating could make a duplicate.
+
+
+_YAML_NULL_TAG = 'tag:yaml.org,2002:null'
+_YAML_STR_TAG = 'tag:yaml.org,2002:str'
+_YAML_MERGE_TAG = 'tag:yaml.org,2002:merge'
+# Only these plain scalars are numbers to BOTH parsers. PyYAML is YAML 1.1 and
+# yaml.v3 is 1.2-ish: `1e3`, `0x1F`, `1_000`, `.5` resolve differently, so
+# anything else in a float/int field is "cannot tell", not a verdict.
+_PLAIN_INT_RE = re.compile(r'\A[-+]?[0-9]+\Z')
+_PLAIN_NUM_RE = re.compile(r'\A[-+]?[0-9]+(\.[0-9]+)?\Z')
+
+
+class _ExporterRejects(Exception):
+    """The exporter's decode of this file fails (it declares nothing)."""
+
+
+class _CannotTell(Exception):
+    """A shape init does not model; the exporter may accept or reject it."""
+
+
+class _Verdict(NamedTuple):
+    """`_exporter_verdict`'s answer for one tenant file."""
+
+    status: str
+    """'ok' (the exporter accepts it), 'reject' or 'unsure'."""
+
+    ids: list[str]
+    """'ok': the tenant ids it declares. Otherwise the ids it NAMES under
+    `tenants:` (raw key text), or [] when not even that is readable."""
+
+    reason: str
+    """Why it is not 'ok' (English, embedded in the operator message)."""
+
+
+def _is_null(node) -> bool:
+    return isinstance(node, yaml.ScalarNode) and node.tag == _YAML_NULL_TAG
+
+
+def _mapping_pairs(node) -> list:
+    """(key text, key node, value node) for a mapping, the way yaml.v3 sees it.
+
+    yaml.v3 refuses a mapping whose key text repeats (`mapping key "x"
+    already defined`) whenever it DECODES that mapping — into a struct, a
+    typed map or `interface{}` alike. Non-scalar keys and merge keys are
+    shapes init does not model.
+    """
+    pairs = []
+    seen: set[str] = set()
+    for k, v in node.value:
+        if not isinstance(k, yaml.ScalarNode):
+            raise _CannotTell('a mapping key is not a scalar')
+        if k.tag == _YAML_MERGE_TAG:
+            raise _CannotTell('a `<<` merge key')
+        if k.value in seen:
+            raise _ExporterRejects(f'key {k.value!r} is defined twice')
+        seen.add(k.value)
+        pairs.append((k.value, k, v))
+    return pairs
+
+
+def _check_any(node) -> None:
+    """A value yaml.v3 decodes into `interface{}` (re-serialised later)."""
+    if isinstance(node, yaml.MappingNode):
+        for _, _, v in _mapping_pairs(node):
+            _check_any(v)
+    elif isinstance(node, yaml.SequenceNode):
+        for item in node.value:
+            _check_any(item)
+
+
+def _check_scheduled_value(node) -> None:
+    """One key of a tenant body: `ScheduledValue.UnmarshalYAML`."""
+    if isinstance(node, yaml.ScalarNode):
+        return
+    if isinstance(node, yaml.SequenceNode):
+        _check_any(node)
+        return
+    if not isinstance(node, yaml.MappingNode):
+        raise _CannotTell('an unexpected node kind in a tenant body')
+    pairs = _mapping_pairs(node)
+    if 'default' not in {k for k, _, _ in pairs}:
+        _check_any(node)          # arbitrary mapping (`_routing:` ...)
+        return
+    for key, _, v in pairs:       # structured {default, overrides, ...}
+        if key in ('default', 'expires', 'reason'):
+            if not isinstance(v, yaml.ScalarNode):
+                raise _ExporterRejects(f'`{key}:` of a scheduled value is not '
+                                       f'a scalar')
+        elif key == 'overrides':
+            if _is_null(v):
+                continue
+            if not isinstance(v, yaml.SequenceNode):
+                raise _ExporterRejects('`overrides:` is not a list')
+            for item in v.value:
+                if _is_null(item):
+                    continue
+                if not isinstance(item, yaml.MappingNode):
+                    raise _ExporterRejects('an `overrides:` entry is not a '
+                                           'mapping')
+                for ik, _, iv in _mapping_pairs(item):
+                    if (ik in ('window', 'value')
+                            and not isinstance(iv, yaml.ScalarNode)):
+                        raise _ExporterRejects(f'`{ik}:` of an override is '
+                                               f'not a scalar')
+
+
+def _check_tenant_map(node, field: str) -> list[str]:
+    """`tenants:` / `profiles:` — map[string]map[string]ScheduledValue."""
+    if _is_null(node):
+        return []
+    if not isinstance(node, yaml.MappingNode):
+        raise _ExporterRejects(f'`{field}:` is not a mapping')
+    ids = []
+    for key, _, body in _mapping_pairs(node):
+        ids.append(key)
+        if _is_null(body):
+            continue
+        if not isinstance(body, yaml.MappingNode):
+            raise _ExporterRejects(f'the body of {field} entry {key!r} is not '
+                                   f'a mapping')
+        for _, _, v in _mapping_pairs(body):
+            _check_scheduled_value(v)
+    return ids
+
+
+def _check_number(node, field: str, pattern: re.Pattern) -> None:
+    if _is_null(node):
+        return
+    if not isinstance(node, yaml.ScalarNode):
+        raise _ExporterRejects(f'a `{field}:` value is not a number')
+    if node.style is None and pattern.match(node.value):
+        return
+    if node.style in ('"', "'") or node.tag == _YAML_STR_TAG and node.style:
+        raise _ExporterRejects(f'a `{field}:` value is a quoted string')
+    raise _CannotTell(f'a `{field}:` value {node.value!r} whose numeric '
+                      f'reading differs between YAML versions')
+
+
+def _check_root_field(key: str, node) -> None:
+    """The `ThresholdConfig` fields other than `tenants:`; others are ignored."""
+    if key == 'profiles':
+        _check_tenant_map(node, key)
+    elif key == 'defaults':
+        if _is_null(node):
+            return
+        if not isinstance(node, yaml.MappingNode):
+            raise _ExporterRejects('`defaults:` is not a mapping')
+        for _, _, v in _mapping_pairs(node):
+            _check_number(v, 'defaults', _PLAIN_NUM_RE)
+    elif key == 'max_metrics_per_tenant':
+        _check_number(node, key, _PLAIN_INT_RE)
+    elif key == 'optional_overrides':
+        if _is_null(node):
+            return
+        if not isinstance(node, yaml.SequenceNode) or not all(
+                isinstance(i, yaml.ScalarNode) for i in node.value):
+            raise _ExporterRejects('`optional_overrides:` is not a list of '
+                                   'scalars')
+    elif key == 'state_filters':
+        if _is_null(node):
+            return
+        if not isinstance(node, yaml.MappingNode):
+            raise _ExporterRejects('`state_filters:` is not a mapping')
+        for _, _, f in _mapping_pairs(node):
+            if _is_null(f):
+                continue
+            if not isinstance(f, yaml.MappingNode):
+                raise _ExporterRejects('a `state_filters:` entry is not a '
+                                       'mapping')
+            for fk, _, fv in _mapping_pairs(f):
+                if fk == 'reasons' and not _is_null(fv) and not (
+                        isinstance(fv, yaml.SequenceNode) and all(
+                            isinstance(i, yaml.ScalarNode)
+                            for i in fv.value)):
+                    raise _ExporterRejects('`reasons:` is not a list of '
+                                           'scalars')
+                if (fk in ('severity', 'default_state')
+                        and not isinstance(fv, yaml.ScalarNode)):
+                    raise _ExporterRejects(f'`{fk}:` is not a scalar')
+
+
+def _named_tenant_keys(root) -> list[str]:
+    """Raw key text under every top-level `tenants:` mapping, no judgement."""
+    ids: list[str] = []
+    if isinstance(root, yaml.MappingNode):
+        for k, v in root.value:
+            if (isinstance(k, yaml.ScalarNode) and k.value == 'tenants'
+                    and isinstance(v, yaml.MappingNode)):
+                ids += [kk.value for kk, _ in v.value
+                        if isinstance(kk, yaml.ScalarNode)]
+    return ids
+
+
+def _exporter_verdict(text: str) -> _Verdict:
+    """Would the exporter accept this tenant file, and whom does it declare?
+
+    Mirrors `pkg/config.ParseConfigFile` (yaml.v3 `Unmarshal` into
+    `ThresholdConfig`, first document only) as far as init models it, and
+    answers 'unsure' past that. ⛔ Keys are their RAW scalar text, never
+    PyYAML's typed reading: the exporter decodes them into `string`, so
+    `on:` is "on" and `007:` is "007".
+    """
+    try:
+        root = next(yaml.compose_all(text, Loader=yaml.SafeLoader), None)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, 'problem_mark', None)
+        where = f' at line {mark.line + 1}' if mark is not None else ''
+        return _Verdict('reject', [], f'it is not valid YAML{where}')
+    if root is None or _is_null(root):
+        return _Verdict('ok', [], '')
+    named = _named_tenant_keys(root)
+    try:
+        if not isinstance(root, yaml.MappingNode):
+            raise _ExporterRejects('the document is not a mapping')
+        ids: list[str] = []
+        for key, _, value in _mapping_pairs(root):
+            if key == 'tenants':
+                ids = _check_tenant_map(value, key)
+            else:
+                _check_root_field(key, value)
+    except _ExporterRejects as exc:
+        return _Verdict('reject', named, str(exc))
+    except _CannotTell as exc:
+        return _Verdict('unsure', named, str(exc))
+    return _Verdict('ok', ids, '')
+
+
+def _names_tenant_in_text(text: str, tenant: str) -> bool:
+    """Conservative: does `tenant` appear as a mapping KEY anywhere in `text`?
+
+    For a file init cannot even compose, so there is no node tree to ask.
+    Over-matching only costs a refusal; missing would cost a duplicate.
+    """
+    return re.search(r'^[ \t-]*["\']?' + re.escape(tenant) + r'["\']?[ \t]*:',
+                     text, re.MULTILINE) is not None
+
+
+def _case_variants(path: Path) -> list[str]:
+    """Entries beside `path` whose names differ from it ONLY in case (F4).
+
+    ⛔ `next(os.walk(parent))` is the directory's own listing — one level,
+    files, directories and dangling links alike — not a conf.d tenant scan;
+    it asks one question about one name. On a case-insensitive filesystem
+    (macOS, Windows) writing `db-c.yaml` would truncate an existing
+    `DB-C.YAML`; refusing on every filesystem keeps the behaviour the same
+    wherever the customer runs init.
+    """
+    parent = path.parent
+    if not parent.is_dir():
+        return []
+    try:
+        _, dirnames, filenames = next(os.walk(parent))
+    except StopIteration:
+        return []
+    want = path.name.lower()
+    return sorted(n for n in (*dirnames, *filenames)
+                  if n != path.name and n.lower() == want)
+
+
+class _Conflict(NamedTuple):
+    """One reason the run is refused (rendered by `_conflict_message`)."""
+
+    kind: str
+    """'duplicate' | 'defaults' | 'clobber' | 'unreadable' | 'case'."""
+
+    tenant: str
+    """The tenant concerned ('' for defaults / case)."""
+
+    files: list[str]
+    """Output-relative POSIX paths, the first one init's own when relevant."""
+
+    detail: str = ''
+    """'unreadable': "<status>: <reason>"; 'clobber': the tenant init keeps."""
+
 
 class _ConfdPlan(NamedTuple):
     """What this run will do to conf.d/, decided BEFORE any write."""
@@ -3268,16 +3561,26 @@ class _ConfdPlan(NamedTuple):
     """The customer's root defaults carriers in another spelling; non-empty
     means `_defaults.yaml` is NOT written."""
 
-    conflicts: list[tuple[str, list[str]]]
-    """(tenant id, or '' for the defaults carrier; the files involved).
-    Non-empty means the run is refused."""
+    conflicts: list[_Conflict]
+    """Non-empty means the run is refused, before any write."""
 
-    unparseable: list[str]
-    """Config files init could not read as YAML (so they declare nothing)."""
+    unreadable: dict[str, tuple[str, str]]
+    """Tenant files the exporter rejects or init cannot judge:
+    path -> (status, reason). Only WARNed unless they name a requested
+    tenant (then they are also in `conflicts`)."""
+
+    declared: dict[str, list[str]]
+    """EVERY tenant id -> the files declaring it, as the exporter would read
+    the tree (accepted files only). The parity matrix asserts this."""
 
     @property
     def write_defaults(self) -> bool:
         return not self.defaults_carriers
+
+    def nested_skipped(self) -> dict[str, list[str]]:
+        """Skipped tenants none of whose carriers sits at the conf.d root."""
+        return {t: files for t, files in self.skipped.items()
+                if all(Path(f).parent.as_posix() != 'conf.d' for f in files)}
 
 
 def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
@@ -3288,20 +3591,27 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     tenant declared in `conf.d/prod/db-c.yaml` counts exactly as the exporter
     counts it. `_`-prefixed files are control files and declare no tenant
     (`is_reserved_name`, the exporter's `strings.HasPrefix(name, "_")`).
-
-    ⚠️ A file whose YAML does not parse declares nothing here, because the
-    exporter logs and skips such a file too. It is recorded so the caller can
-    name it: init cannot tell whom it was MEANT to declare.
+    Each tenant file is judged by `_exporter_verdict` (see the section
+    comment above for why not `safe_load`).
 
     ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
-    `db-c.yaml`, and on a case-insensitive filesystem the two are the same
-    file, so treating it as init's own would overwrite the customer's.
+    `db-c.yaml`. And because the two ARE one file on a case-insensitive
+    filesystem, any path this run would write that has a case-only variant
+    beside it refuses the run (`_case_variants`) — on every filesystem.
+
+    ⚠️ Not handled, pending an owner ruling: init's own `conf.d/<t>.yaml`
+    that ALSO declares a tenant this run was NOT asked for is overwritten as
+    before, and that declaration is lost. Only the requested-tenant form of
+    it (below, 'clobber') is refused.
     """
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
+    requested = list(config['tenants'])
+    own_of = {conf_dir / f'{t}.yaml': t for t in requested}
     declared: dict[str, list[Path]] = {}
     root_defaults: list[Path] = []
-    unparseable: list[str] = []
+    unreadable: dict[str, tuple[str, str]] = {}
+    conflicts: list[_Conflict] = []
 
     def _rel(p: Path) -> str:
         return p.relative_to(out).as_posix()
@@ -3312,46 +3622,81 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
                 root_defaults.append(p)
             continue
         try:
-            doc = yaml.safe_load(p.read_text(encoding='utf-8'))
-        except (OSError, UnicodeDecodeError, yaml.YAMLError):
-            unparseable.append(_rel(p))
+            text = p.read_bytes().decode('utf-8')
+        except UnicodeDecodeError:
+            text = p.read_bytes().decode('utf-8', errors='replace')
+            verdict = _Verdict('unsure', [], 'it is not valid UTF-8')
+        except OSError as exc:
+            text = ''
+            verdict = _Verdict('unsure', [], f'it cannot be read ({exc})')
+        else:
+            verdict = _exporter_verdict(text)
+        if verdict.status == 'ok':
+            for tid in verdict.ids:
+                declared.setdefault(tid, []).append(p)
             continue
-        block = doc.get('tenants') if isinstance(doc, dict) else None
-        if isinstance(block, dict):
-            for tid in block:
-                declared.setdefault(str(tid), []).append(p)
+        unreadable[_rel(p)] = (verdict.status, verdict.reason)
+        named = set(verdict.ids)
+        if not named:
+            # No `tenants:` mapping to read keys from (the file does not
+            # compose, or is shaped otherwise): fall back to the text.
+            named = {t for t in requested if _names_tenant_in_text(text, t)}
+        # init's own path for tenant t is init's to rewrite (its semantics are
+        # unchanged), so naming t there blocks nothing.
+        for t in requested:
+            if t in named and own_of.get(p) != t:
+                conflicts.append(_Conflict(
+                    'unreadable', t, [_rel(p)],
+                    f'{verdict.status}: {verdict.reason}'))
 
+    blocked = {c.tenant for c in conflicts}
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}
-    conflicts: list[tuple[str, list[str]]] = []
-    for t in config['tenants']:
+    for t in requested:
+        if t in blocked:
+            continue
         own = conf_dir / f'{t}.yaml'
         decl = declared.get(t, [])
         others = [p for p in decl if p != own]
         if not others:
             generate.append(t)
         elif own in decl:
-            conflicts.append((t, [_rel(own)] + [_rel(p) for p in others]))
+            conflicts.append(_Conflict(
+                'duplicate', t, [_rel(own)] + [_rel(p) for p in others]))
         else:
             skipped[t] = [_rel(p) for p in others]
-    # ⛔ A tenant skipped BECAUSE of a file this run is about to overwrite
-    # (a customer `db-a.yaml` that also declares db-c, with both requested):
-    # the run would report "db-c is declared by conf.d/db-a.yaml" and then
-    # replace that very file, leaving db-c declared nowhere. Refused instead.
-    generated_paths = {conf_dir / f'{t}.yaml' for t in generate}
+    # ⛔ A requested tenant skipped BECAUSE of a file this run is about to
+    # overwrite (a customer `db-a.yaml` that also declares db-z, with both
+    # requested): the run would report "db-z is declared by conf.d/db-a.yaml"
+    # and then replace that very file, leaving db-z declared nowhere.
+    generated_paths = {conf_dir / f'{t}.yaml': t for t in generate}
     for t, files in list(skipped.items()):
-        clobbered = [f for f in files if out / f in generated_paths]
-        if clobbered:
-            del skipped[t]
-            conflicts.append((t, clobbered))
+        for f in files:
+            if out / f in generated_paths:
+                del skipped[t]
+                conflicts.append(_Conflict('clobber', t, [f],
+                                           generated_paths[out / f]))
+                break
 
     own_defaults = [p for p in root_defaults if p.name == '_defaults.yaml']
     other_defaults = [p for p in root_defaults if p.name != '_defaults.yaml']
     defaults_carriers = [_rel(p) for p in other_defaults]
     if other_defaults and own_defaults:
-        conflicts.append(('', [_rel(p) for p in own_defaults + other_defaults]))
-    return _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
-                      unparseable)
+        conflicts.append(_Conflict(
+            'defaults', '', [_rel(p) for p in own_defaults + other_defaults]))
+
+    plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
+                      unreadable,
+                      {t: [_rel(p) for p in ps] for t, ps in declared.items()})
+    # F4: every path this run would write, not only conf.d's — the preview is
+    # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
+    # pins it equal to the writes).
+    for f in _preview_files(config, output_dir, plan):
+        target = Path(f)
+        for variant in _case_variants(target):
+            conflicts.append(_Conflict(
+                'case', '', [_rel(target), _rel(target.parent / variant)]))
+    return plan
 
 
 def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool) -> list[str]:
@@ -3374,19 +3719,58 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool) -> list[str]:
     return lines
 
 
-def _report_plan(plan: _ConfdPlan) -> None:
-    """Name every file init left alone or could not read, on stderr."""
-    is_zh = _LANG == 'zh'
-    for f in plan.unparseable:
+def _nested_kustomize_lines(plan: _ConfdPlan, config: dict,
+                            is_zh: bool) -> list[str]:
+    """F3: a skipped tenant whose carrier cannot reach the flat ConfigMap.
+
+    `configMapGenerator.files` makes flat keys, so `conf.d/prod/db-c.yaml`
+    never becomes one. ⚠️ Pointing at `make configmap-assemble` would be no
+    remedy: that assembly is flat too (gitops-deployment.md §3, "組裝是扁平的").
+    """
+    if config.get('deploy') != 'kustomize':
+        return []
+    lines = []
+    for t, files in plan.nested_skipped().items():
+        carriers = ', '.join(files)
         if is_zh:
-            print(f"WARN: init_project: 無法以 YAML 解析 {f}，init 無法判斷它"
-                  f"宣告了哪些租戶，因此不把它算作任何租戶的宣告"
-                  f"（exporter 也會略過它）。", file=sys.stderr)
+            lines.append(
+                f"{t} 的載體 {carriers} 不在 conf.d 根目錄，不會進入本次產生的 "
+                f"kustomize ConfigMap（ConfigMap 的 key 是扁平的；"
+                f"`make configmap-assemble` 同樣只收頂層檔，見 "
+                f"docs/integration/gitops-deployment.md §3）。要經由這個 "
+                f"ConfigMap 部署 {t}，它的載體必須放在 conf.d 根目錄。")
         else:
-            print(f"WARN: init_project: {f} does not parse as YAML, so init "
-                  f"cannot tell which tenants it declares and counts it as "
-                  f"declaring none (the exporter skips it too).",
-                  file=sys.stderr)
+            lines.append(
+                f"{t}'s carrier {carriers} is below the conf.d root, so it is "
+                f"not in the kustomize ConfigMap this run generates "
+                f"(ConfigMap keys are flat; `make configmap-assemble` also "
+                f"takes top-level files only — see "
+                f"docs/integration/gitops-deployment.md §3). To deploy {t} "
+                f"through this ConfigMap its carrier has to sit at the conf.d "
+                f"root.")
+    return lines
+
+
+def _report_plan(plan: _ConfdPlan, config: dict) -> None:
+    """Name every file init left alone or could not judge, on stderr."""
+    is_zh = _LANG == 'zh'
+    blocking = {c.files[0] for c in plan.conflicts if c.kind == 'unreadable'}
+    for f, (status, reason) in plan.unreadable.items():
+        if f in blocking:
+            continue          # the refusal names it, with the same reason
+        if is_zh:
+            what = ('exporter 會拒收這個檔（整份不算任何宣告）'
+                    if status == 'reject' else
+                    'init 無法判斷 exporter 是否接受這個檔')
+            print(f"WARN: init_project: {f}：{what}——{reason}。它沒有提到"
+                  f"這次要求的租戶，所以不影響這次執行。", file=sys.stderr)
+        else:
+            what = ('the exporter rejects this file (it declares nothing)'
+                    if status == 'reject' else
+                    'init cannot tell whether the exporter accepts this file')
+            print(f"WARN: init_project: {f}: {what} — {reason}. It names none "
+                  f"of the tenants this run was asked for, so this run is "
+                  f"unaffected.", file=sys.stderr)
     notices = _plan_notice_lines(plan, is_zh)
     for line in notices:
         print(f"NOTE: init_project: {line}", file=sys.stderr)
@@ -3395,30 +3779,79 @@ def _report_plan(plan: _ConfdPlan) -> None:
             "init 不改寫非它產生的載體，上列檔案原封不動。" if is_zh else
             "init never rewrites a carrier it did not generate; the files "
             "above are left untouched."), file=sys.stderr)
+    for line in _nested_kustomize_lines(plan, config, is_zh):
+        print(f"WARN: init_project: {line}", file=sys.stderr)
+
+
+def _conflict_row(c: _Conflict, is_zh: bool) -> str:
+    """One refusal reason, with what to do about it."""
+    if c.kind == 'duplicate':
+        own, *others = c.files
+        return (f"租戶 {c.tenant} 同時由 {own}（init 會寫入的路徑）與 "
+                f"{', '.join(others)} 宣告；exporter 對同一租戶的兩份宣告會"
+                f"拒收整棵樹。請只留一份（合併成一個檔案）後重跑。"
+                if is_zh else
+                f"tenant {c.tenant} is declared by both {own} (a path init "
+                f"writes) and {', '.join(others)}; the exporter rejects a tree "
+                f"that declares a tenant twice. Keep one of them (merge into "
+                f"one file) and re-run.")
+    if c.kind == 'defaults':
+        own, *others = c.files
+        return (f"{own}（init 會寫入的路徑）與 {', '.join(others)} 並存於 "
+                f"conf.d 根目錄；同一目錄只會讀其中一個預設載體。請合併成一個"
+                f"檔案後重跑。"
+                if is_zh else
+                f"{own} (a path init writes) sits beside {', '.join(others)} "
+                f"at the conf.d root; only one defaults carrier per directory "
+                f"is read. Merge them into one file and re-run.")
+    if c.kind == 'clobber':
+        f = c.files[0]
+        return (f"init 會覆寫 {f}（它是租戶 {c.detail} 的 init 路徑），但這個"
+                f"檔也宣告了這次要求的租戶 {c.tenant}；覆寫後 {c.tenant} 將無處"
+                f"宣告。請把 {c.tenant} 的設定移到它自己的檔案，或從 --tenants "
+                f"拿掉 {c.detail}（init 就不會改寫 {f}），然後重跑。"
+                if is_zh else
+                f"init would overwrite {f} (its own path for tenant "
+                f"{c.detail}), but that file also declares {c.tenant}, which "
+                f"this run was asked for; after the overwrite {c.tenant} would "
+                f"be declared nowhere. Move {c.tenant}'s entry into a file of "
+                f"its own, or leave {c.detail} out of --tenants (so init does "
+                f"not rewrite {f}), then re-run.")
+    if c.kind == 'unreadable':
+        status, _, reason = c.detail.partition(': ')
+        f = c.files[0]
+        if is_zh:
+            what = ('exporter 會拒收這個檔、它不宣告任何租戶'
+                    if status == 'reject' else
+                    'init 無法判斷 exporter 是否接受這個檔')
+            return (f"{f} 提到了這次要求的租戶 {c.tenant}，但{what}（{reason}）。"
+                    f"跳過 {c.tenant} 會讓它無處宣告，產生 conf.d/{c.tenant}"
+                    f".yaml 又可能造成重複宣告。請先修好 {f} 再重跑。")
+        what = ('the exporter rejects this file, so it declares nothing'
+                if status == 'reject' else
+                'init cannot tell whether the exporter accepts this file')
+        return (f"{f} names {c.tenant}, which this run was asked for, but "
+                f"{what} ({reason}). Skipping {c.tenant} could leave it "
+                f"declared nowhere; generating conf.d/{c.tenant}.yaml could "
+                f"declare it twice. Fix {f} first, then re-run.")
+    # 'case'
+    own, existing = c.files
+    return (f"init 會寫入 {own}，但同一目錄已有只差大小寫的 {existing}；在不分"
+            f"大小寫的檔案系統（macOS、Windows）上寫入其中一個就會覆蓋另一個。"
+            f"請改名或移除 {existing} 後重跑。"
+            if is_zh else
+            f"init would write {own}, but {existing} already exists beside it "
+            f"— a name that differs only in case. On a case-insensitive "
+            f"filesystem (macOS, Windows) writing one overwrites the other. "
+            f"Rename or remove {existing}, then re-run.")
 
 
 def _conflict_message(plan: _ConfdPlan, is_zh: bool) -> str:
-    """The refusal text for a tree where init's own path meets another carrier."""
-    rows = []
-    for t, files in plan.conflicts:
-        what = (('平台預設' if is_zh else 'platform defaults') if not t
-                else (f'租戶 {t}' if is_zh else f'tenant {t}'))
-        rows.append(f"  - {what}: {', '.join(files)}")
-    if is_zh:
-        head = ("⛔ init 拒絕執行：conf.d 裡同一份宣告已經有兩個載體，"
-                "而其中一個是 init 會寫入的路徑：")
-        tail = ("   exporter 對同一租戶的兩份宣告會拒收整棵樹（duplicate tenant "
-                "ID），兩個預設載體則只讀其中一個。哪一份才是你的意圖不是 init "
-                "能替你決定的——請合併成一個檔案後重跑。\n"
-                "   未寫入任何檔案（含 .da-init.yaml）。")
-    else:
-        head = ("⛔ init refused: conf.d already carries these declarations "
-                "twice, and one of the carriers is a path init writes:")
-        tail = ("   The exporter rejects a tree that declares a tenant twice "
-                "(duplicate tenant ID), and reads only one of two defaults "
-                "carriers. Which file holds your intent is not init's call — "
-                "merge them into one file and re-run.\n"
-                "   Nothing was written (including .da-init.yaml).")
+    """The refusal text: every reason, then what was (not) written."""
+    head = ("⛔ init 拒絕執行：" if is_zh else "⛔ init refused:")
+    rows = [f"  - {_conflict_row(c, is_zh)}" for c in plan.conflicts]
+    tail = ("   未寫入任何檔案（含 .da-init.yaml）。" if is_zh else
+            "   Nothing was written (including .da-init.yaml).")
     return '\n'.join([head, *rows, tail])
 
 
@@ -3660,7 +4093,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     """
     is_zh = _LANG == 'zh'
     if plan is None:
-        plan = _ConfdPlan(list(config['tenants']), {}, [], [], [])
+        plan = _ConfdPlan(list(config['tenants']), {}, [], [], {}, {})
 
     print()
     print("=" * 60)
@@ -3703,6 +4136,8 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                       "left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
+    for line in _nested_kustomize_lines(plan, config, is_zh):
+        print(f"  ⚠️  {line}")
 
     # Show auto-enabled packs
     auto = _auto_enabled_rule_packs()
@@ -4418,6 +4853,8 @@ def _handle_dry_run(config: dict, output_dir: str,
                            "own files, left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
+    for line in _nested_kustomize_lines(plan, config, is_zh):
+        print(f"  ⚠️  {line}")
 
     # ⛔ `--dry-run` is the flag people use to answer "what will this do to my
     # repo", and it exits before `_print_summary` — which is the only place
@@ -4639,7 +5076,7 @@ def main():
     # and CI files included — and use that one answer for the preview, the
     # writes and the summary alike.
     plan = _plan_confd(config, output_dir)
-    _report_plan(plan)
+    _report_plan(plan, config)
     _refuse_conflicts(plan)
 
     if args.dry_run:
