@@ -10,7 +10,15 @@
     "#1674 commit t2's sub tenant got Python ['sub/_defaults.yaml'] (08c2671b...)",
     "vs Go [_defaults.yaml, sub/_defaults.yaml] (14c3219b...).",
     "chain_len is compared, not chain strings: Go reports the link path, Python",
-    "the resolved path, by long-standing design of each tool."
+    "the resolved path, by long-standing design of each tool.",
+    "#1967: a TENANT file that is a link belongs to the directory holding the",
+    "entry too (g: Python started the chain at the target's directory, main",
+    "b5534de1 chain 2 levels 08c2671b... vs Go 1 level 5fa35ba4...), and a target",
+    "outside conf.d (h: tenant file, k: carrier) crashed Python with ValueError.",
+    "Optional `conf_d`: the tree-root-relative directory handed to the tool as",
+    "conf.d (default: the tree root), so a tree can hold targets OUTSIDE conf.d.",
+    "`files` / `symlinks` keys are tree-root-relative; link targets are relative",
+    "to the link, as os.symlink takes them."
   ],
   "trees": [
     {
@@ -36,6 +44,46 @@
       "symlinks": {"_defaults.yaml": "sub/base.yaml"},
       "expect": {
         "tsub": {"chain_len": 2, "effective_config": {"cpu_pct": 90, "mem_pct": 1}, "merged_hash": "c06205e05e84655a"}
+      }
+    },
+    {
+      "name": "g-root-tenant-is-a-link-into-a-subdir",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "sub/_defaults.yaml": "defaults:\n  cpu_pct: 70\n",
+        "sub/_real.txt": "tenants:\n  tg: {}\n",
+        "sub/tc.yaml": "tenants:\n  tc: {}\n",
+        "sub/real.txt": "tenants:\n  tc2: {}\n"
+      },
+      "symlinks": {"tg.yaml": "sub/_real.txt", "sub/tc2.yaml": "real.txt"},
+      "expect": {
+        "tg": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
+        "tc": {"chain_len": 2, "effective_config": {"cpu_pct": 70}, "merged_hash": "08c2671bda3a8875"},
+        "tc2": {"chain_len": 2, "effective_config": {"cpu_pct": 70}, "merged_hash": "08c2671bda3a8875"}
+      }
+    },
+    {
+      "name": "h-tenant-link-target-outside-conf-d",
+      "conf_d": "conf.d",
+      "files": {
+        "conf.d/_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "hshared/th.yaml": "tenants:\n  th: {}\n"
+      },
+      "symlinks": {"conf.d/th.yaml": "../hshared/th.yaml"},
+      "expect": {
+        "th": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"}
+      }
+    },
+    {
+      "name": "k-carrier-link-target-outside-conf-d",
+      "conf_d": "conf.d",
+      "files": {
+        "shared/base.yaml": "defaults:\n  cpu_pct: 50\n",
+        "conf.d/tk.yaml": "tenants:\n  tk: {}\n"
+      },
+      "symlinks": {"conf.d/_defaults.yaml": "../shared/base.yaml"},
+      "expect": {
+        "tk": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"}
       }
     }
   ]

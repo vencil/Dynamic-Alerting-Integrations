@@ -170,6 +170,12 @@ class ConfDScanner:
         self.tenants: dict[str, dict] = {}           # tenant_id → raw config
         self.tenant_files: dict[str, Path] = {}       # tenant_id → file path
         self.defaults_chain: dict[str, list[Path]] = {}  # tenant_id → [L0, L1, ...] defaults paths
+        # #1967: the conf.d ENTRIES (as listed, not resolved) behind
+        # `tenant_files` / `defaults_chain`, index-aligned with the latter.
+        # Reporting falls back to them when a link points outside conf.d
+        # (`_report_path`), and --what-if takes a level's depth from them.
+        self._tenant_entries: dict[str, Path] = {}
+        self._defaults_chain_entries: dict[str, list[Path]] = {}
         self.defaults_data: dict[str, dict] = {}      # defaults path str → parsed defaults dict
         # #772: tenant_id → [(recipe, origin, is_own), ...] — the ADR-024 UNION
         # resolution of `_custom_alerts` from the compiler's own walker. Computed
@@ -267,7 +273,7 @@ class ConfDScanner:
         # Candidates are the carriers the exporter's walker KEEPS: an entry
         # it cannot read is logged and dropped there, so it is dropped here
         # before selecting (`readable_carriers`), and named on stderr.
-        by_dir: dict[Path, list[Path]] = {}
+        by_dir: dict[Path, list[tuple[Path, Path]]] = {}
         for d in sorted(listed):
             readable, unreadable = readable_carriers(dp for dp, _ in listed[d])
             for bad, exc in unreadable:
@@ -278,7 +284,7 @@ class ConfDScanner:
             warn_multi_carrier(d, readable)
             resolved = dict(listed[d])[chosen]
             defaults_files[str(resolved)] = _load_yaml(chosen)
-            by_dir[d] = [resolved]
+            by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 
@@ -294,8 +300,7 @@ class ConfDScanner:
                 continue
             for tid, tconfig in tenants_block.items():
                 self.tenants[tid] = _tenant_body(tconfig)
-                self.tenant_files[tid] = fp.resolve()
-                self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
+                self._record_tenant(tid, fp)
 
         for fp in _iter_confd_yaml(self.conf_d, (".yml",), entries):
             if is_reserved_name(fp.name):
@@ -309,13 +314,50 @@ class ConfDScanner:
             for tid, tconfig in tenants_block.items():
                 if tid not in self.tenants:
                     self.tenants[tid] = _tenant_body(tconfig)
-                    self.tenant_files[tid] = fp.resolve()
-                    self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
+                    self._record_tenant(tid, fp)
 
-    def _resolve_defaults_chain(self, tenant_file: Path) -> list[Path]:
-        """Walk from tenant file up to conf.d/ root, collecting _defaults.yaml at each level."""
-        chain: list[Path] = []
-        current = tenant_file.resolve().parent
+    def _record_tenant(self, tid: str, fp: Path) -> None:
+        """Record where tenant `tid` came from: conf.d entry `fp`."""
+        self.tenant_files[tid] = fp.resolve()
+        self._tenant_entries[tid] = fp
+        chain = self._resolve_defaults_chain(fp)
+        self.defaults_chain[tid] = [resolved for _entry, resolved in chain]
+        self._defaults_chain_entries[tid] = [entry for entry, _resolved in chain]
+
+    def _report_path(self, entry: Path, resolved: Path) -> str:
+        """The conf.d-relative path this tool REPORTS for one entry (#1967).
+
+        ⛔ The ONE rule every reported path goes through. A target inside
+        conf.d is reported by its resolved path — the long-standing design
+        (see tests/shared/defaults_symlink_parity_matrix.json `_comment`).
+        A target OUTSIDE conf.d has no conf.d-relative resolved path, so
+        `resolved.relative_to(conf_d)` raised ValueError and the whole run
+        died with a traceback; such an entry is reported by the entry (the
+        link) itself, which always lives under conf.d because `_scan` lists
+        entries from `self.conf_d`.
+        """
+        try:
+            return str(resolved.relative_to(self.conf_d))
+        except ValueError:
+            return str(entry.relative_to(self.conf_d))
+
+    def _resolve_defaults_chain(self, tenant_file: Path) -> list[tuple[Path, Path]]:
+        """Walk from tenant file up to conf.d/ root, collecting _defaults.yaml at each level.
+
+        Returns (entry, resolved) per level, L0 first.
+
+        ⛔ #1967: the walk starts at the directory that HOLDS THE ENTRY
+        `tenant_file`, not at its resolved parent — the same rule `_scan`
+        applies to defaults carriers (#1674), and what the exporter's walker
+        does (WalkDir never follows a link). `tg.yaml -> sub/_real.txt` is a
+        root tenant: starting from `sub/` gave it `sub/_defaults.yaml` too, a
+        different merged_hash from the exporter; a target outside conf.d
+        never reached `root` at all. `tenant_file` is an entry listed from
+        `self.conf_d` (already resolved), so its unresolved parents reach
+        `root` by `==`.
+        """
+        chain: list[tuple[Path, Path]] = []
+        current = tenant_file.parent
         root = self.conf_d
 
         while True:
@@ -396,11 +438,13 @@ class ConfDScanner:
 
         return {
             "tenant_id": tenant_id,
-            "source_file": str(self.tenant_files[tenant_id].relative_to(self.conf_d)),
+            "source_file": self._report_path(self._tenant_entries[tenant_id],
+                                             self.tenant_files[tenant_id]),
             "source_hash": source_h,
             "merged_hash": merged_h,
             "defaults_chain": [
-                str(p.relative_to(self.conf_d)) for p in chain
+                self._report_path(entry, p)
+                for entry, p in zip(self._defaults_chain_entries[tenant_id], chain)
             ],
             "effective_config": effective,
         }
@@ -602,6 +646,7 @@ def main() -> None:
 
         # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
         chain = scanner.defaults_chain[tid]
+        chain_entries = scanner._defaults_chain_entries[tid]
         chain_strs = [str(p) for p in chain]
         simulated_defaults_data = dict(scanner.defaults_data)
         simulated_defaults_data[str(what_if_path)] = what_if_data
@@ -617,8 +662,13 @@ def main() -> None:
                 # Insert sorted by depth so that outer (L0) precedes inner (L3)
                 inserted = False
                 simulated_chain = []
-                for dp in chain:
-                    dp_depth = len(dp.relative_to(scanner.conf_d).parts) - 1
+                # #1967: a level's depth is that of the directory HOLDING
+                # its entry (the level it occupies in the chain), not of the
+                # resolved target — which may sit elsewhere in conf.d, or
+                # outside it, where `relative_to` raised into the ValueError
+                # below and silently misfiled the what-if as append-external.
+                for dp, entry in zip(chain, chain_entries):
+                    dp_depth = len(entry.relative_to(scanner.conf_d).parts) - 1
                     if not inserted and what_if_depth < dp_depth:
                         simulated_chain.append(what_if_path)
                         inserted = True

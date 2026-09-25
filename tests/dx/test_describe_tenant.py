@@ -493,6 +493,87 @@ class TestWhatIf:
 
 
 # ---------------------------------------------------------------------------
+# Test: link targets outside conf.d (#1967)
+# ---------------------------------------------------------------------------
+
+class TestLinkTargetOutsideConfD:
+    """A tenant file or defaults carrier that links OUTSIDE conf.d.
+
+    The merged_hash side is pinned against Go by
+    tests/shared/defaults_symlink_parity_matrix.json (rows h / k); this class
+    pins the REPORTING rule at the CLI: such an entry is reported by the link's
+    own conf.d-relative path (its target has none), where before
+    `relative_to(conf_d)` raised ValueError out of the whole run. A target
+    inside conf.d keeps being reported by its resolved path.
+    """
+
+    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+
+    def _link(self, link, target):
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlinks unavailable here: {exc}")
+
+    def _run(self, conf_d, tenant, *extra):
+        return subprocess.run(
+            [sys.executable, self.DESCRIBE, tenant, "--conf-d", str(conf_d),
+             "--format", "json", *extra],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def test_tenant_link_outside_is_reported_by_the_link(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (tmp_path / "hshared").mkdir()
+        (tmp_path / "hshared" / "th.yaml").write_text("tenants:\n  th: {}\n", encoding="utf-8")
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        self._link(conf_d / "th.yaml", "../hshared/th.yaml")
+        r = self._run(conf_d, "th", "--show-sources")
+        assert r.returncode == 0 and "Traceback" not in r.stderr, r.stderr
+        out = json.loads(r.stdout)
+        assert out["source_file"] == "th.yaml"
+        assert out["defaults_chain"] == ["_defaults.yaml"]
+
+    def test_carrier_link_outside_is_reported_by_the_link(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (conf_d / "tk.yaml").write_text("tenants:\n  tk: {}\n", encoding="utf-8")
+        self._link(conf_d / "_defaults.yaml", "../shared/base.yaml")
+        r = self._run(conf_d, "tk", "--show-sources")
+        assert r.returncode == 0 and "Traceback" not in r.stderr, r.stderr
+        out = json.loads(r.stdout)
+        assert out["source_file"] == "tk.yaml"
+        assert out["defaults_chain"] == ["_defaults.yaml"]
+
+    def test_what_if_depth_of_an_outside_carrier_is_its_link_level(self, tmp_path):
+        # The root carrier links outside conf.d; a what-if one level down must
+        # be INSERTED after it. Taking the level from the resolved target made
+        # `relative_to` raise into the what-if's own ValueError handler and
+        # silently misfiled it as append-external.
+        conf_d = tmp_path / "conf.d"
+        (conf_d / "sub").mkdir(parents=True)
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (conf_d / "tk.yaml").write_text("tenants:\n  tk: {}\n", encoding="utf-8")
+        self._link(conf_d / "_defaults.yaml", "../shared/base.yaml")
+        whatif = conf_d / "sub" / "_whatif.yaml"
+        whatif.write_text("defaults:\n  mem_pct: 1\n", encoding="utf-8")
+        r = self._run(conf_d, "tk", "--what-if", str(whatif))
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["substitution_type"] == "insert"
+
+    def test_link_target_inside_conf_d_keeps_the_resolved_path(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "_real.txt").write_text("tenants:\n  tg: {}\n", encoding="utf-8")
+        self._link(tmp_path / "tg.yaml", "sub/_real.txt")
+        r = self._run(tmp_path, "tg", "--show-sources")
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["source_file"] == os.path.join("sub", "_real.txt")
+
+
+# ---------------------------------------------------------------------------
 # Test: _custom_alerts UNION inheritance (#772)
 # ---------------------------------------------------------------------------
 

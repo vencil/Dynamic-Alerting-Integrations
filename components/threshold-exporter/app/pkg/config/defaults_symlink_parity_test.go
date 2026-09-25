@@ -19,7 +19,11 @@ import (
 
 type symlinkParityMatrix struct {
 	Trees []struct {
-		Name     string            `json:"name"`
+		Name string `json:"name"`
+		// ConfD (optional, #1967): the tree-root-relative directory handed
+		// to ResolveEffective, so a tree can hold link targets outside
+		// conf.d. Empty = the tree root.
+		ConfD    string            `json:"conf_d"`
 		Files    map[string]string `json:"files"`
 		Symlinks map[string]string `json:"symlinks"`
 		Expect   map[string]struct {
@@ -58,8 +62,9 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 					t.Skipf("symlinks unavailable here (%v) — measured on Linux/macOS CI", err)
 				}
 			}
+			confD := filepath.Join(root, filepath.FromSlash(tree.ConfD))
 			for tenant, want := range tree.Expect {
-				ec, err := ResolveEffective(root, tenant)
+				ec, err := ResolveEffective(confD, tenant)
 				if err != nil {
 					t.Fatalf("%s: %v", tenant, err)
 				}

@@ -36,9 +36,12 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path) -> N
             os.symlink(target, tmp_path / link)
         except (OSError, NotImplementedError) as exc:
             pytest.skip(f"symlinks unavailable here: {exc}")
+    # #1967: `conf_d` (optional) names the directory handed over as conf.d,
+    # so a tree can hold link targets outside it. Absent = the tree root.
+    conf_d = tmp_path / tree.get("conf_d", ".")
     for tenant, want in tree["expect"].items():
         r = subprocess.run(
-            [sys.executable, str(DESCRIBE), tenant, "--conf-d", str(tmp_path),
+            [sys.executable, str(DESCRIBE), tenant, "--conf-d", str(conf_d),
              "--show-sources", "--format", "json"],
             capture_output=True, text=True, encoding="utf-8", timeout=120)
         assert r.returncode == 0, r.stderr
