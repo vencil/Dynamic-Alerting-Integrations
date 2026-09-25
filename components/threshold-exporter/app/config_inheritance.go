@@ -72,14 +72,16 @@ func computeMergedHash(
 	return config.ComputeMergedHash(tenantYAMLBytes, tenantID, defaultsChainYAML)
 }
 
-// parsedDefaults / parseDefaultsForMerge / computeMergedHashParsed: the
+// chainDefaults / parseChainDefaults / computeMergedHashParsed: the
 // parse-once form of computeMergedHash for a cold load (#1978) — see
-// config.ParsedDefaults.
-type parsedDefaults = config.ParsedDefaults
+// config.ParsedDefaults. Named for the merge CHAIN on purpose: it is not
+// the `hierarchy.parsedDefaults` cache (a map of plain defaults dicts), even
+// though a cold load fills that cache from these very parses.
+type chainDefaults = config.ParsedDefaults
 
-func parseDefaultsForMerge(b []byte) parsedDefaults { return config.ParseDefaultsForMerge(b) }
+func parseChainDefaults(b []byte) chainDefaults { return config.ParseDefaultsForMerge(b) }
 
-func computeMergedHashParsed(tenantYAMLBytes []byte, tenantID string, defaultsChain []parsedDefaults) (string, error) {
+func computeMergedHashParsed(tenantYAMLBytes []byte, tenantID string, defaultsChain []chainDefaults) (string, error) {
 	return config.ComputeMergedHashParsed(tenantYAMLBytes, tenantID, defaultsChain)
 }
 

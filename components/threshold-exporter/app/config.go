@@ -1482,6 +1482,13 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // merging in place so a partial install never leaves torn state visible
 // to the /effective read path.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
+	m.populateHierarchyStateWith(scan, newColdMergeInputs(scan))
+}
+
+// populateHierarchyStateWith is populateHierarchyStateFrom over the given
+// merge inputs — the seam through which a test observes the reads and
+// parses one cold load makes. `in` must come from newColdMergeInputs(scan).
+func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMergeInputs) {
 	tenants, defaults, graph := scan.Tenants, scan.Defaults, scan.InheritanceGraph()
 	if len(defaults) == 0 && len(tenants) == 0 {
 		// Empty tree or flat layout with no files we recognize. Don't
@@ -1490,7 +1497,6 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 		return
 	}
 
-	in := newColdMergeInputs(scan)
 	newMergedHashes := make(map[string]string, len(tenants))
 	for tid, srcPath := range tenants {
 		chain := graph.TenantDefaults[tid]
@@ -1541,13 +1547,20 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 type coldMergeInputs struct {
 	data     map[string][]byte // AbsPath → TreeFile.Data (files this scan read)
 	defaults map[string]*coldDefaultsEntry
+
+	// Test seams, nil in production (#1978 review): called once per disk
+	// read bytesOf falls back to and once per defaults parse. They live on
+	// THIS value, which one populateHierarchyStateWith call owns, so a
+	// parallel test observes only its own load (no process-global state).
+	onDiskRead func(absPath string)
+	onParse    func(absPath string)
 }
 
 // coldDefaultsEntry is one defaults file's read + parse, made once.
 type coldDefaultsEntry struct {
 	raw     []byte
 	readErr error
-	parsed  parsedDefaults
+	parsed  chainDefaults
 }
 
 func newColdMergeInputs(scan *treeScan) *coldMergeInputs {
@@ -1567,6 +1580,9 @@ func (in *coldMergeInputs) bytesOf(absPath string) ([]byte, error) {
 	if b, ok := in.data[absPath]; ok {
 		return b, nil
 	}
+	if in.onDiskRead != nil {
+		in.onDiskRead(absPath)
+	}
 	return os.ReadFile(absPath)
 }
 
@@ -1577,7 +1593,10 @@ func (in *coldMergeInputs) defaultsEntry(absPath string) *coldDefaultsEntry {
 	e := &coldDefaultsEntry{}
 	e.raw, e.readErr = in.bytesOf(absPath)
 	if e.readErr == nil {
-		e.parsed = parseDefaultsForMerge(e.raw)
+		e.parsed = parseChainDefaults(e.raw)
+		if in.onParse != nil {
+			in.onParse(absPath)
+		}
 	}
 	in.defaults[absPath] = e
 	return e
@@ -1600,7 +1619,7 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 	if err != nil {
 		return "", err
 	}
-	chain := make([]parsedDefaults, 0, len(defaultsChain))
+	chain := make([]chainDefaults, 0, len(defaultsChain))
 	for _, dp := range defaultsChain {
 		e := in.defaultsEntry(dp)
 		if e.readErr != nil {

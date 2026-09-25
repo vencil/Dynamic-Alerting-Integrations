@@ -402,3 +402,100 @@ func TestColdLoadBrokenDefaultsKeepsItsSignal(t *testing.T) {
 		t.Errorf("parsedDefaults = %v, want only the root file", parsed)
 	}
 }
+
+// TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce pins the
+// optimisation itself, which the equality tests above cannot see (a cold
+// load that re-read every file from disk, or re-parsed every defaults file
+// per tenant, computes the same hashes). Every tenant file and every
+// `_defaults.yaml` is rewritten AFTER the scan and BEFORE the merge: the
+// installed hashes must still be those of the scanned bytes, no file may be
+// read from disk, and each defaults file must be parsed exactly once.
+func TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := writeHierarchicalBenchFixtureContent(root, 300); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := newTestLogger()
+	scan, err := scanDirTree(root, nil, nil, logger)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	graph := scan.InheritanceGraph()
+
+	// The oracle's hashes, from disk while it still holds the scanned bytes.
+	oracle := NewConfigManager(root)
+	oracle.SetLogger(logger)
+	want := map[string]string{}
+	for tid, src := range scan.Tenants {
+		h, herr := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid])
+		if herr != nil {
+			t.Fatalf("oracle %s: %v", tid, herr)
+		}
+		want[tid] = h
+	}
+	wantRootDefaults, err := parseDefaultsBytes(scan.Files["_defaults.yaml"].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the tree under the scan. Each appended key lands in the
+	// document's last mapping (the tenant body / the defaults block), so
+	// every tenant's merged document changes.
+	for _, f := range scan.Files {
+		suffix := "    zz_after_scan: \"1\"\n"
+		if f.IsDefaults {
+			suffix = "  zz_after_scan: 1\n"
+		}
+		if werr := os.WriteFile(f.AbsPath, append(append([]byte{}, f.Data...), suffix...), 0o600); werr != nil {
+			t.Fatal(werr)
+		}
+	}
+	changed := 0
+	for tid, src := range scan.Tenants {
+		if h, _ := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid]); h != want[tid] {
+			changed++
+		}
+	}
+	if changed != len(scan.Tenants) {
+		t.Fatalf("the rewrite changed %d of %d tenants' disk hashes — the test would not see a disk read", changed, len(scan.Tenants))
+	}
+
+	var diskReads []string
+	parses := map[string]int{}
+	in := newColdMergeInputs(scan)
+	in.onDiskRead = func(p string) { diskReads = append(diskReads, p) }
+	in.onParse = func(p string) { parses[p]++ }
+	mgr := NewConfigManager(root)
+	mgr.SetLogger(logger)
+	mgr.populateHierarchyStateWith(scan, in)
+
+	if len(diskReads) != 0 {
+		t.Errorf("cold merge read %d file(s) from disk instead of the scan's bytes, e.g. %s", len(diskReads), diskReads[0])
+	}
+	if len(parses) != len(scan.Defaults) {
+		t.Errorf("parsed %d defaults files, want every one of the %d the scan found", len(parses), len(scan.Defaults))
+	}
+	for p, n := range parses {
+		if n != 1 {
+			t.Errorf("%s parsed %d times, want once", p, n)
+			break
+		}
+	}
+	mgr.mu.RLock()
+	got := mgr.hierarchy.mergedHashes
+	gotRoot := mgr.hierarchy.parsedDefaults[scan.Files["_defaults.yaml"].AbsPath]
+	mgr.mu.RUnlock()
+	if !reflect.DeepEqual(got, want) {
+		diff := 0
+		for tid := range want {
+			if got[tid] != want[tid] {
+				diff++
+			}
+		}
+		t.Errorf("%d of %d merged hashes are not those of the scanned bytes", diff, len(want))
+	}
+	if !reflect.DeepEqual(gotRoot, wantRootDefaults) {
+		t.Errorf("parsedDefaults[root] = %v, want the scanned bytes' %v", gotRoot, wantRootDefaults)
+	}
+}
