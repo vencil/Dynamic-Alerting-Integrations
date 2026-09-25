@@ -170,6 +170,38 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			wantScope: "domain", wantEffect: "shadowed",
 		},
 
+		{
+			// A carrier switch whose new carrier was also edited this tick:
+			// the joined .yml must be judged against the removed .yaml
+			// (90 → 90, no key changed), not against its own prior content
+			// (30 → 90), which would read as shadowed.
+			name: "no-op cosmetic: carrier switch where the joined .yml was also edited",
+			extra: func(t *testing.T, dir string) {
+				write("_defaults.yaml", "defaults:\n  cpu_pct: 50\n")(t, dir)
+				write("sub/_defaults.yml", "defaults:\n  cpu_pct: 30\n")(t, dir)
+				write("sub/t.yaml", "tenants:\n  t:\n    cpu_pct: \"10\"\n")(t, dir)
+			},
+			mutate: func(t *testing.T, dir string) {
+				remove("sub/_defaults.yaml")(t, dir)
+				write("sub/_defaults.yml", "defaults:\n  cpu_pct: 90\n")(t, dir)
+			},
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "cosmetic",
+		},
+		{
+			// A brand-new file (hash-visible, entered the defaults branch
+			// before #1964 too) whose every key the tenant overrides.
+			name: "no-op shadowed: add subtree _defaults.yaml whose keys the tenant overrides",
+			extra: func(t *testing.T, dir string) {
+				write("_defaults.yaml", "defaults:\n  cpu_pct: 50\n")(t, dir)
+				remove("sub/_defaults.yaml")(t, dir)
+				write("sub/t.yaml", "tenants:\n  t:\n    cpu_pct: \"10\"\n")(t, dir)
+			},
+			mutate:       write("sub/_defaults.yaml", "defaults:\n  cpu_pct: 50\n"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "shadowed",
+		},
+
 		// ── controls: hash-visible changes the old logic already handled ──
 		{
 			name:         "control: edit subtree _defaults.yaml content",
@@ -180,7 +212,8 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			name:         "control: add subtree _defaults.yaml where none existed",
 			extra:        remove("sub/_defaults.yaml"),
 			mutate:       write("sub/_defaults.yaml", "defaults:\n  cpu_pct: 70\n"),
-			wantReloaded: -1, wantNoOp: -1,
+			wantReloaded: 1, wantNoOp: 0,
+			wantScope: "domain", wantEffect: "applied",
 		},
 		{
 			name:         "control: co-located .yml with identical content, delete .yaml",
