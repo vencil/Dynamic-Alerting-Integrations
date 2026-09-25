@@ -1244,6 +1244,8 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 Initialize Dynamic Alerting integration skeleton in a customer repo. Generates CI/CD pipelines, conf.d/ directory, Kustomize overlays, and pre-commit configuration.
 
+In `conf.d/`, init owns only two kinds of path: `_defaults.yaml` and `<tenant>.yaml` at the **root**. A tenant already declared by **another file** of yours (judged by the keys of that file's `tenants:` mapping, not by its name — `db-c.yml`, `DB-C.YAML`, a multi-tenant `team.yaml` and files in subdirectories all count) is **skipped, and that file is left untouched**; stderr and the summary name it (e.g. "db-c is already declared by conf.d/db-c.yml — conf.d/db-c.yaml was not generated") and the exit code stays 0. Likewise `_defaults.yaml` is not written when the root already has a defaults carrier in another spelling (e.g. `_defaults.yml`). If init's own path **already** sits beside such a carrier (e.g. `db-c.yaml` and `db-c.yml` both declare db-c, or `_defaults.yaml` next to `_defaults.yml`), init **refuses with rc 1 and writes nothing** (`.da-init.yaml` included), under `--dry-run` too — the exporter rejects a tree that declares a tenant twice, and which file to keep is your call. A file that does not parse as YAML counts as declaring nothing, and is named in a WARN line on stderr.
+
 ```bash
 da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm>] [-o <dir>] [--non-interactive] [--dry-run] [--force]
 ```
@@ -1258,7 +1260,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--deploy` | Deployment method | `kustomize` |
 | `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |
 | `--dry-run` | Show files that would be generated without writing | — |
-| `--force` | Re-run in an initialised directory: **rewrites every generated file**, including `conf.d/_defaults.yaml` and each `conf.d/<tenant>.yaml` (hand edits are lost). ⚠️ **Exception: it never rewrites an existing root `.gitlab-ci.yml`** — that may be the customer's own pipeline, so it is left alone on every run (and there is therefore no in-tool way to regenerate it) | — |
+| `--force` | Re-run in an initialised directory: **rewrites every generated file**, including `conf.d/_defaults.yaml` and each `conf.d/<tenant>.yaml` (hand edits are lost). ⚠️ **Exception: it never rewrites an existing root `.gitlab-ci.yml`** — that may be the customer's own pipeline, so it is left alone on every run (and there is therefore no in-tool way to regenerate it); ⚠️ **nor any conf.d carrier init did not write**: tenants/defaults your other files declare are still skipped and named, and a coexisting pair is still refused (see above) | — |
 
 **Examples**
 

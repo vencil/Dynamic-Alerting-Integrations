@@ -3,7 +3,10 @@
 init_project.py — Bootstrap a Dynamic Alerting integration in a customer repo.
 
 Generates:
-  1. conf.d/ directory with _defaults.yaml + tenant stubs
+  1. conf.d/ directory with _defaults.yaml + tenant stubs — except a tenant
+     (or the defaults) another conf.d file already declares, which is
+     skipped and named; init refuses (rc 1, nothing written) when its own
+     file already sits beside such a carrier (#1942)
   2. CI/CD pipeline (GitHub Actions / GitLab CI / both)
   3. Kustomize overlays for ConfigMap generation
   4. .pre-commit-config.yaml snippet for shift-left validation
@@ -24,7 +27,7 @@ import shlex
 import sys
 import textwrap
 from datetime import datetime, timezone
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from pathlib import Path
 
@@ -46,6 +49,7 @@ from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     configmap_key_problem,
     is_defaults_name,
+    is_reserved_name,
     iter_config_files,
     printable_name,
     unusable_config_paths,
@@ -82,8 +86,16 @@ _LANG = detect_cli_lang()
 # ============================================================
 _HELP = {
     'description': {
-        'zh': '在客戶 repo 中初始化 Dynamic Alerting 整合骨架',
-        'en': 'Bootstrap a Dynamic Alerting integration in your repository',
+        # RawDescriptionHelpFormatter: line breaks are ours to place.
+        'zh': ('在客戶 repo 中初始化 Dynamic Alerting 整合骨架。\n\n'
+               'conf.d/ 裡 init 只寫根目錄的 _defaults.yaml 與 <tenant>.yaml；\n'
+               '已由你其他檔案宣告的租戶或預設會被跳過並列出，\n'
+               'init 自己的檔案已與之並存時拒絕執行（rc 1），不寫入任何檔案。'),
+        'en': ('Bootstrap a Dynamic Alerting integration in your repository.\n\n'
+               'In conf.d/ init writes only _defaults.yaml and <tenant>.yaml at\n'
+               'the root. A tenant or defaults carrier your other files already\n'
+               'declare is skipped and named; if init\'s own file already sits\n'
+               'beside one, init refuses (rc 1) and writes nothing.'),
     },
     'ci': {
         'zh': 'CI/CD 平台: github, gitlab, both (預設: both)',
@@ -905,8 +917,20 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     return rows
 
 
-def _gen_helm_values(tenants: list[str], rule_packs: list[str]) -> str:
+def _gen_helm_values(
+    tenants: list[str], rule_packs: list[str],
+    declared_elsewhere: Optional[dict[str, list[str]]] = None,
+) -> str:
     """Generate `environments/prod/values.yaml` — the file the helm apply reads.
+
+    `tenants` is the tenants whose `conf.d/<t>.yaml` this run GENERATES.
+    ⛔ A tenant another conf.d file already declares (#1942,
+    `declared_elsewhere`) gets no skeleton block: those example keys are the
+    ones init's stub carries, not the customer's file, and every block says
+    "the value from conf.d/<t>.yaml" — a file that does not exist for it. It
+    is NAMED instead, with the file to carry across from, in a comment
+    OUTSIDE the uncomment-me block, so following the fill-in instructions
+    cannot turn it into a live entry with made-up keys.
 
     ⛔ The file exists because the generated apply step already named it:
     `helm upgrade --install … -f environments/prod/values.yaml`, with no code
@@ -963,6 +987,16 @@ def _gen_helm_values(tenants: list[str], rule_packs: list[str]) -> str:
         skeleton_lines.append(
             f'  #         url: https://webhook.{tenant}.example.com/alerts')
     skeleton = '\n'.join(skeleton_lines)
+    existing_lines = ''
+    if declared_elsewhere:
+        rows = [f'#   {t}: carry across from {", ".join(files)}'
+                for t, files in declared_elsewhere.items()]
+        existing_lines = (
+            '#\n'
+            '# Tenants already declared by your own conf.d/ files — init did\n'
+            '# not generate them and lists no skeleton for them below; add\n'
+            '# their entries under `tenants:` from those files yourself:\n'
+            + '\n'.join(rows) + '\n')
 
     # ⛔ The `{skeleton}` placeholder sits at the template's OWN margin, so
     # `skeleton` must carry its own indentation for EVERY line including the
@@ -1006,11 +1040,11 @@ def _gen_helm_values(tenants: list[str], rule_packs: list[str]) -> str:
     # The keys listed are the ones your `conf.d/<tenant>.yaml` already
     # carries; copy across the values you want deployed. Until you do,
     # `helm upgrade` deploys the chart's defaults with NO tenant overrides.
-
+    {existing}
     thresholdConfig:
       tenants: {{}}
     {skeleton}
-    """).format(skeleton=skeleton)
+    """).format(skeleton=skeleton, existing=existing_lines)
 
 # ============================================================
 # CI/CD Pipeline Generators (GitHub Actions / GitLab CI)
@@ -2637,6 +2671,7 @@ def _gen_gitlab_ci(
 
 def _kustomize_carrier_files(
     tenants: list[str], conf_dir: Optional[Path] = None,
+    *, write_defaults: bool = True,
 ) -> list[str]:
     """Basenames of the conf.d files that become `threshold-config` keys.
 
@@ -2648,7 +2683,11 @@ def _kustomize_carrier_files(
     every conf.d reader in the family reported it present (#1911's shape).
 
     The set is the UNION of
-      * the carriers this run writes (`_defaults.yaml` + `<tenant>.yaml`), and
+      * the carriers this run writes (`_defaults.yaml` + `<tenant>.yaml`) —
+        `tenants` is the tenants it GENERATES and `write_defaults` whether it
+        writes `_defaults.yaml` (#1942: a carrier left to the customer is
+        listed through the enumeration below, under the customer's name,
+        never as an init-spelled file that does not exist), and
       * the config files already at the TOP LEVEL of `conf_dir`, enumerated by
         `_lib_confd.iter_config_files` (the exporter's own name rule: both
         spellings, any case, dotfiles skipped).
@@ -2659,8 +2698,11 @@ def _kustomize_carrier_files(
     ⚠️ Deduplicated by FILENAME only, never by tenant stem. `db-c.yml` and
     `db-c.yaml` side by side are two ConfigMap keys because they are two
     files; collapsing them here would hide that defect, not fix it. The same
-    holds for `_defaults.yml` next to the `_defaults.yaml` init always writes
-    (#1942): both are listed.
+    holds for two defaults spellings side by side: both are listed. (Since
+    #1942 `run_init` never CREATES either pair — it skips a tenant or
+    `_defaults.yaml` another carrier already covers, and refuses a tree where
+    its own path already sits beside one — so a pair seen here is one the
+    customer made.)
 
     Order: the defaults carrier(s) first, then plain sorted — deterministic,
     so a re-run over an unchanged tree regenerates byte-identical output.
@@ -2683,7 +2725,9 @@ def _kustomize_carrier_files(
         `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
         `IsConfigMapKey`, shared with `configmap_assemble`.
     """
-    names = {'_defaults.yaml'} | {f'{t}.yaml' for t in tenants}
+    names = {f'{t}.yaml' for t in tenants}
+    if write_defaults:
+        names.add('_defaults.yaml')
     if conf_dir is not None:
         warn_nested(conf_dir, tool='init_project')
         names |= {p.name for p in iter_config_files(conf_dir, recursive=False)}
@@ -2981,8 +3025,17 @@ def _gen_da_init_marker(
     deploy_method: str,
     rule_packs: list[str],
     tenants: list[str],
+    declared_elsewhere: Optional[dict[str, list[str]]] = None,
 ) -> str:
-    """Generate .da-init.yaml marker file."""
+    """Generate .da-init.yaml marker file.
+
+    `tenants` is the full `--tenants` list: after the run every one of them
+    is declared in conf.d/, whoever wrote the carrier. The ones init did NOT
+    write (#1942) are recorded under `tenants_declared_by_existing_files`,
+    with the customer's files, so nothing later reads `conf.d/<t>.yaml` as
+    init's for them. The key is absent when there are none, so a marker from
+    a fresh tree is unchanged.
+    """
     marker = {
         'version': '2.2.0',
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -2992,6 +3045,9 @@ def _gen_da_init_marker(
         'rule_packs': rule_packs,
         'tenants': tenants,
     }
+    if declared_elsewhere:
+        marker['tenants_declared_by_existing_files'] = {
+            t: list(files) for t, files in declared_elsewhere.items()}
     header = textwrap.dedent("""\
     # .da-init.yaml — Dynamic Alerting project marker
     # Do not edit manually. Used by da-tools for upgrade detection.
@@ -3171,11 +3227,219 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 
 
 # ============================================================
+# conf.d ownership (#1942)
+# ============================================================
+#
+# ⛔ init owns exactly two kinds of conf.d path: `conf.d/_defaults.yaml` and
+# `conf.d/<tenant>.yaml`, both at the conf.d ROOT, spelled exactly so. Before
+# #1942 it wrote them without looking at what else conf.d held, and the only
+# gate was the `.da-init.yaml` marker — which a repo that was never initialised
+# does not have. So on an existing conf.d a customer's `db-c.yml`, `DB-C.YAML`
+# or a multi-tenant `team.yaml` got a second carrier for the same tenant beside
+# it, rc 0, zero stderr lines, and the exporter then refused the WHOLE tree
+# (`duplicate tenant ID "db-c"`, tenants=0). A customer `_defaults.yml` got a
+# `_defaults.yaml` beside it, which the exporter reads instead — the
+# customer's defaults went dead in silence.
+#
+# The rule (owner ruling C on #1942), same shape as #1357's root
+# `.gitlab-ci.yml`: a carrier init did not write is never rewritten.
+#   * a tenant some OTHER file already declares  → skip it, say so, rc 0;
+#   * a root defaults carrier in another spelling → skip `_defaults.yaml`, same;
+#   * init's own path ALREADY sits beside such a carrier → refuse, rc 1,
+#     nothing written. The tree is already rejected by the exporter, and which
+#     of the two files is the customer's intent is not init's call to make.
+#
+# ⛔ "Declares" is decided by CONTENT — the keys of the file's `tenants:`
+# mapping, which is where the exporter takes a tenant id from — never by the
+# filename. A name-based test misses `team.yaml` (declares db-c, named
+# nothing like it) and misfires on a `db-c.yml` that declares someone else.
+
+
+class _ConfdPlan(NamedTuple):
+    """What this run will do to conf.d/, decided BEFORE any write."""
+
+    generate: list[str]
+    """Tenants whose `conf.d/<t>.yaml` this run writes, in `--tenants` order."""
+
+    skipped: dict[str, list[str]]
+    """Tenant -> the customer's files (output-relative POSIX) declaring it."""
+
+    defaults_carriers: list[str]
+    """The customer's root defaults carriers in another spelling; non-empty
+    means `_defaults.yaml` is NOT written."""
+
+    conflicts: list[tuple[str, list[str]]]
+    """(tenant id, or '' for the defaults carrier; the files involved).
+    Non-empty means the run is refused."""
+
+    unparseable: list[str]
+    """Config files init could not read as YAML (so they declare nothing)."""
+
+    @property
+    def write_defaults(self) -> bool:
+        return not self.defaults_carriers
+
+
+def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
+    """Decide which conf.d carriers this run may write (#1942).
+
+    One recursive `iter_config_files` walk — the exporter's name rule (both
+    spellings, any case, dot-entries skipped, subdirectories included) — so a
+    tenant declared in `conf.d/prod/db-c.yaml` counts exactly as the exporter
+    counts it. `_`-prefixed files are control files and declare no tenant
+    (`is_reserved_name`, the exporter's `strings.HasPrefix(name, "_")`).
+
+    ⚠️ A file whose YAML does not parse declares nothing here, because the
+    exporter logs and skips such a file too. It is recorded so the caller can
+    name it: init cannot tell whom it was MEANT to declare.
+
+    ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
+    `db-c.yaml`, and on a case-insensitive filesystem the two are the same
+    file, so treating it as init's own would overwrite the customer's.
+    """
+    out = Path(output_dir)
+    conf_dir = out / 'conf.d'
+    declared: dict[str, list[Path]] = {}
+    root_defaults: list[Path] = []
+    unparseable: list[str] = []
+
+    def _rel(p: Path) -> str:
+        return p.relative_to(out).as_posix()
+
+    for p in iter_config_files(conf_dir):
+        if is_reserved_name(p.name):
+            if p.parent == conf_dir and is_defaults_name(p.name):
+                root_defaults.append(p)
+            continue
+        try:
+            doc = yaml.safe_load(p.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            unparseable.append(_rel(p))
+            continue
+        block = doc.get('tenants') if isinstance(doc, dict) else None
+        if isinstance(block, dict):
+            for tid in block:
+                declared.setdefault(str(tid), []).append(p)
+
+    generate: list[str] = []
+    skipped: dict[str, list[str]] = {}
+    conflicts: list[tuple[str, list[str]]] = []
+    for t in config['tenants']:
+        own = conf_dir / f'{t}.yaml'
+        decl = declared.get(t, [])
+        others = [p for p in decl if p != own]
+        if not others:
+            generate.append(t)
+        elif own in decl:
+            conflicts.append((t, [_rel(own)] + [_rel(p) for p in others]))
+        else:
+            skipped[t] = [_rel(p) for p in others]
+    # ⛔ A tenant skipped BECAUSE of a file this run is about to overwrite
+    # (a customer `db-a.yaml` that also declares db-c, with both requested):
+    # the run would report "db-c is declared by conf.d/db-a.yaml" and then
+    # replace that very file, leaving db-c declared nowhere. Refused instead.
+    generated_paths = {conf_dir / f'{t}.yaml' for t in generate}
+    for t, files in list(skipped.items()):
+        clobbered = [f for f in files if out / f in generated_paths]
+        if clobbered:
+            del skipped[t]
+            conflicts.append((t, clobbered))
+
+    own_defaults = [p for p in root_defaults if p.name == '_defaults.yaml']
+    other_defaults = [p for p in root_defaults if p.name != '_defaults.yaml']
+    defaults_carriers = [_rel(p) for p in other_defaults]
+    if other_defaults and own_defaults:
+        conflicts.append(('', [_rel(p) for p in own_defaults + other_defaults]))
+    return _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
+                      unparseable)
+
+
+def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool) -> list[str]:
+    """One line per carrier this run leaves alone, in the run's language."""
+    lines: list[str] = []
+    if plan.defaults_carriers:
+        carriers = ', '.join(plan.defaults_carriers)
+        lines.append(
+            f"平台預設已由 {carriers} 承載，未產生 conf.d/_defaults.yaml"
+            if is_zh else
+            f"platform defaults are already carried by {carriers} — "
+            f"conf.d/_defaults.yaml was not generated")
+    for t, files in plan.skipped.items():
+        carriers = ', '.join(files)
+        lines.append(
+            f"{t} 已由 {carriers} 宣告，未產生 conf.d/{t}.yaml"
+            if is_zh else
+            f"{t} is already declared by {carriers} — conf.d/{t}.yaml was "
+            f"not generated")
+    return lines
+
+
+def _report_plan(plan: _ConfdPlan) -> None:
+    """Name every file init left alone or could not read, on stderr."""
+    is_zh = _LANG == 'zh'
+    for f in plan.unparseable:
+        if is_zh:
+            print(f"WARN: init_project: 無法以 YAML 解析 {f}，init 無法判斷它"
+                  f"宣告了哪些租戶，因此不把它算作任何租戶的宣告"
+                  f"（exporter 也會略過它）。", file=sys.stderr)
+        else:
+            print(f"WARN: init_project: {f} does not parse as YAML, so init "
+                  f"cannot tell which tenants it declares and counts it as "
+                  f"declaring none (the exporter skips it too).",
+                  file=sys.stderr)
+    notices = _plan_notice_lines(plan, is_zh)
+    for line in notices:
+        print(f"NOTE: init_project: {line}", file=sys.stderr)
+    if notices:
+        print("NOTE: init_project: " + (
+            "init 不改寫非它產生的載體，上列檔案原封不動。" if is_zh else
+            "init never rewrites a carrier it did not generate; the files "
+            "above are left untouched."), file=sys.stderr)
+
+
+def _conflict_message(plan: _ConfdPlan, is_zh: bool) -> str:
+    """The refusal text for a tree where init's own path meets another carrier."""
+    rows = []
+    for t, files in plan.conflicts:
+        what = (('平台預設' if is_zh else 'platform defaults') if not t
+                else (f'租戶 {t}' if is_zh else f'tenant {t}'))
+        rows.append(f"  - {what}: {', '.join(files)}")
+    if is_zh:
+        head = ("⛔ init 拒絕執行：conf.d 裡同一份宣告已經有兩個載體，"
+                "而其中一個是 init 會寫入的路徑：")
+        tail = ("   exporter 對同一租戶的兩份宣告會拒收整棵樹（duplicate tenant "
+                "ID），兩個預設載體則只讀其中一個。哪一份才是你的意圖不是 init "
+                "能替你決定的——請合併成一個檔案後重跑。\n"
+                "   未寫入任何檔案（含 .da-init.yaml）。")
+    else:
+        head = ("⛔ init refused: conf.d already carries these declarations "
+                "twice, and one of the carriers is a path init writes:")
+        tail = ("   The exporter rejects a tree that declares a tenant twice "
+                "(duplicate tenant ID), and reads only one of two defaults "
+                "carriers. Which file holds your intent is not init's call — "
+                "merge them into one file and re-run.\n"
+                "   Nothing was written (including .da-init.yaml).")
+    return '\n'.join([head, *rows, tail])
+
+
+def _refuse_conflicts(plan: _ConfdPlan) -> None:
+    """Exit EXIT_VIOLATION before any write when the plan has conflicts."""
+    if not plan.conflicts:
+        return
+    print(_conflict_message(plan, _LANG == 'zh'), file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+# ============================================================
 # Main orchestration
 # ============================================================
 
-def _preview_files(config: dict, output_dir: str) -> list[str]:
+def _preview_files(config: dict, output_dir: str,
+                   plan: Optional[_ConfdPlan] = None) -> list[str]:
     """Return list of file paths that would be created (without writing).
+
+    The conf.d half follows `_plan_confd` (#1942), exactly as `run_init` does:
+    a carrier the run leaves to the customer is not listed.
 
     Paths use POSIX separators (forward-slash) regardless of OS, since
     these strings are shown to the user as "what will be created" preview
@@ -3185,13 +3449,15 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
     out = Path(output_dir)
     paths: list[str] = []
     ci, deploy = config['ci'], config['deploy']
-    tenants = config['tenants']
+    if plan is None:
+        plan = _plan_confd(config, output_dir)
 
     def _add(p: Path) -> None:
         paths.append(p.as_posix())
 
-    _add(out / 'conf.d' / '_defaults.yaml')
-    for t in tenants:
+    if plan.write_defaults:
+        _add(out / 'conf.d' / '_defaults.yaml')
+    for t in plan.generate:
         _add(out / 'conf.d' / f'{t}.yaml')
     if ci in ('github', 'both'):
         _add(out / _GH_WORKFLOW_REL)
@@ -3239,8 +3505,15 @@ def _existing_files(output_dir: str) -> set[str]:
     return {str(p.resolve()) for p in root.rglob("*") if p.is_file()}
 
 
-def run_init(config: dict, output_dir: str) -> list[str]:
-    """Generate all files based on config. Returns list of created file paths."""
+def run_init(config: dict, output_dir: str,
+             plan: Optional[_ConfdPlan] = None) -> list[str]:
+    """Generate all files based on config. Returns list of created file paths.
+
+    `plan` is `_plan_confd(config, output_dir)`, taken before any write; the
+    CLI passes the one it already reported. A plan with conflicts raises
+    `ValueError` here before the first write, so a caller passing a config
+    dict cannot get the half-written tree the CLI refuses (#1942).
+    """
     created: list[str] = []
 
     ci = config['ci']
@@ -3260,18 +3533,26 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # that emits a repo-root-relative path. Empty for a root install, which is
     # every path in those templates' native shape.
     offset = _output_offset(output_dir)
+    if plan is None:
+        plan = _plan_confd(config, output_dir)
+    if plan.conflicts:
+        raise ValueError(_conflict_message(plan, is_zh=False))
 
     # ── 1. conf.d/ ─────────────────────────────────────────
+    # #1942: only the carriers the plan leaves to init. A tenant another file
+    # already declares, and `_defaults.yaml` when the customer's defaults are
+    # in another spelling, are never written — see `_plan_confd`.
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
 
-    _write_file(
-        str(conf_dir / '_defaults.yaml'),
-        _gen_defaults_yaml(rule_packs, namespace),
-        created,
-    )
+    if plan.write_defaults:
+        _write_file(
+            str(conf_dir / '_defaults.yaml'),
+            _gen_defaults_yaml(rule_packs, namespace),
+            created,
+        )
 
-    for tenant in tenants:
+    for tenant in plan.generate:
         _write_file(
             str(conf_dir / f'{tenant}.yaml'),
             _gen_tenant_yaml(tenant, rule_packs),
@@ -3319,7 +3600,8 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     if deploy == 'helm':
         _write_file(
             str(out / _HELM_VALUES_REL),
-            _gen_helm_values(tenants, rule_packs),
+            _gen_helm_values(plan.generate, rule_packs,
+                             declared_elsewhere=plan.skipped),
             created,
         )
 
@@ -3328,10 +3610,11 @@ def run_init(config: dict, output_dir: str) -> list[str]:
         # #1791: ONE enumeration feeds both files below. Taken here, after
         # step 1 wrote conf.d/, and unioned with the planned carriers inside
         # the helper, so the answer does not depend on that ordering.
-        carriers = _kustomize_carrier_files(tenants, conf_dir)
+        carriers = _kustomize_carrier_files(
+            plan.generate, conf_dir, write_defaults=plan.write_defaults)
         _write_file(
             str(kust_base / 'kustomization.yaml'),
-            _gen_kustomize_base(tenants, namespace, carriers),
+            _gen_kustomize_base(plan.generate, namespace, carriers),
             created,
         )
         _write_file(
@@ -3357,7 +3640,8 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 5. Marker file ─────────────────────────────────────
     _write_file(
         str(out / '.da-init.yaml'),
-        _gen_da_init_marker(ci, deploy, rule_packs, tenants),
+        _gen_da_init_marker(ci, deploy, rule_packs, tenants,
+                            declared_elsewhere=plan.skipped),
         created,
     )
 
@@ -3365,9 +3649,18 @@ def run_init(config: dict, output_dir: str) -> list[str]:
 
 
 def _print_summary(created: list[str], output_dir: str, config: dict,
-                   pre_existing: set[str] | None = None) -> None:
-    """Print post-init summary."""
+                   pre_existing: set[str] | None = None,
+                   plan: Optional[_ConfdPlan] = None) -> None:
+    """Print post-init summary.
+
+    `plan` is the `_plan_confd` result the run wrote from; `None` means the
+    run left nothing to the customer (every tenant and `_defaults.yaml`
+    generated). It is never re-derived here: after the writes the tree no
+    longer shows what the run found (#1942).
+    """
     is_zh = _LANG == 'zh'
+    if plan is None:
+        plan = _ConfdPlan(list(config['tenants']), {}, [], [], [])
 
     print()
     print("=" * 60)
@@ -3400,6 +3693,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print("     If any held hand-tuned thresholds, recover them from "
                   "version control (e.g. git checkout -- conf.d/).")
 
+    # #1942: what the run did NOT write, and why — the receipt for the skip
+    # notices already printed on stderr.
+    skip_lines = _plan_notice_lines(plan, is_zh)
+    if skip_lines:
+        print()
+        print("  " + ("未產生（已由你既有的檔案宣告，原封不動）：" if is_zh else
+                      "Not generated (already declared by your own files, "
+                      "left untouched):"))
+        for line in skip_lines:
+            print(f"  ↷ {line}")
+
     # Show auto-enabled packs
     auto = _auto_enabled_rule_packs()
     if auto:
@@ -3420,13 +3724,21 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print(f"  {step}. Create symlinks from conf.d/ to kustomize/base/")
         step += 1
 
+    # ⛔ Point at the file that carries the defaults. When the run skipped
+    # `_defaults.yaml` (#1942) that is the customer's own carrier; naming the
+    # init spelling would send them to a file that does not exist — or,
+    # created by hand, one that silently shadows theirs.
+    defaults_rel = (plan.defaults_carriers[0] if plan.defaults_carriers
+                    else 'conf.d/_defaults.yaml')
     if is_zh:
-        print(f"  {step}. 編輯 conf.d/_defaults.yaml — 調整平台預設閾值")
+        print(f"  {step}. 編輯 {defaults_rel} — 調整平台預設閾值")
     else:
-        print(f"  {step}. Edit conf.d/_defaults.yaml — adjust platform default thresholds")
+        print(f"  {step}. Edit {defaults_rel} — adjust platform default thresholds")
     step += 1
 
-    for t in config['tenants']:
+    # Only the tenants this run generated: a skipped tenant's carrier is the
+    # customer's own file, already listed above.
+    for t in plan.generate:
         if is_zh:
             print(f"  {step}. 編輯 conf.d/{t}.yaml — 設定租戶覆寫閾值與路由")
         else:
@@ -4059,7 +4371,8 @@ def _validate_config(config: dict) -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
 
-def _handle_dry_run(config: dict, output_dir: str) -> None:
+def _handle_dry_run(config: dict, output_dir: str,
+                    plan: Optional[_ConfdPlan] = None) -> None:
     """Handle --dry-run mode: preview files without writing.
 
     #1447: this is the only non-destructive way to see what `init` will do,
@@ -4068,12 +4381,19 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     the write. It listed the paths and nothing else, which meant
     `--dry-run --force` printed a screen of files about to be overwritten
     with no hint that any of them existed.
+
+    #1942: the preview follows the same `_plan_confd` the real run writes
+    from — a tree the real run refuses exits EXIT_VIOLATION here too, and a
+    carrier left to the customer is not listed but named, with the reason.
     """
     is_zh = _LANG == 'zh'
+    if plan is None:
+        plan = _plan_confd(config, output_dir)
+    _refuse_conflicts(plan)
     print("DRY RUN — " + ("以下檔案會被產生：" if is_zh else "The following files would be created:"))
     print()
     existing = _existing_files(output_dir)
-    files = _preview_files(config, output_dir)
+    files = _preview_files(config, output_dir, plan)
     overwritten = 0
     for f in files:
         rel = Path(f).relative_to(output_dir)
@@ -4090,6 +4410,14 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
         else:
             print(f"  ⚠️  {overwritten} of them already exist and would be "
                   f"replaced, with no backup.")
+    skip_lines = _plan_notice_lines(plan, is_zh)
+    if skip_lines:
+        print()
+        print("  " + ("不會產生（已由你既有的檔案宣告，原封不動）：" if is_zh
+                      else "Would NOT be generated (already declared by your "
+                           "own files, left untouched):"))
+        for line in skip_lines:
+            print(f"  ↷ {line}")
 
     # ⛔ `--dry-run` is the flag people use to answer "what will this do to my
     # repo", and it exits before `_print_summary` — which is the only place
@@ -4243,11 +4571,21 @@ def _build_parser() -> argparse.ArgumentParser:
     # true: the root `.gitlab-ci.yml` is never rewritten once it exists, on any
     # run, forced or not — it is the one artifact that may be the customer's
     # own pipeline. That also means there is no in-tool route to regenerate it.
+    # ⚠️ #1942 carved out the second: a tenant (or the defaults) that another
+    # conf.d file already declares is skipped and named, never given a second
+    # carrier — and init's own path already sitting beside such a file is
+    # refused, rc 1, before any write. `--force` does not lift either.
     parser.add_argument('--force', action='store_true',
                         help='Re-run in an initialised directory: REWRITES every '
                              'generated file, including conf.d/_defaults.yaml and '
                              'each conf.d/<tenant>.yaml (hand edits are lost). '
-                             'Does NOT rewrite an existing root .gitlab-ci.yml'
+                             'Does NOT rewrite an existing root .gitlab-ci.yml, '
+                             'nor any other conf.d file: a tenant or defaults '
+                             'carrier your own files already declare (db-c.yml, '
+                             'a multi-tenant file, _defaults.yml) is skipped and '
+                             'named; if init\'s own file already sits beside '
+                             'one, the run is refused (rc 1) and nothing is '
+                             'written'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -4256,7 +4594,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         else '在已初始化的目錄重跑：會「重寫所有產生的檔案」，'
                              '含 conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml'
                              '（手動調整會遺失）。不會重寫已存在的根目錄 '
-                             '.gitlab-ci.yml')
+                             '.gitlab-ci.yml，也不會改寫 conf.d 裡的其他檔案：'
+                             '已由你自己的檔案宣告的租戶或預設（db-c.yml、'
+                             '多租戶檔、_defaults.yml）會被跳過並列出；若 init '
+                             '自己的檔案已與之並存，則拒絕執行（rc 1），'
+                             '不寫入任何檔案')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')
@@ -4292,14 +4634,22 @@ def main():
 
     output_dir = str(Path(args.output_dir).resolve())
 
+    # #1942: decide what conf.d/ carriers this run may write BEFORE anything is
+    # written — the refusal below must leave the tree byte-identical, marker
+    # and CI files included — and use that one answer for the preview, the
+    # writes and the summary alike.
+    plan = _plan_confd(config, output_dir)
+    _report_plan(plan)
+    _refuse_conflicts(plan)
+
     if args.dry_run:
-        _handle_dry_run(config, output_dir)
+        _handle_dry_run(config, output_dir, plan)
 
     # Snapshot before generation: after the writes there is no way to tell an
     # overwrite from a fresh file (#1447).
     pre_existing = _existing_files(output_dir)
-    created = run_init(config, output_dir)
-    _print_summary(created, output_dir, config, pre_existing)
+    created = run_init(config, output_dir, plan)
+    _print_summary(created, output_dir, config, pre_existing, plan)
 
 
 if __name__ == "__main__":

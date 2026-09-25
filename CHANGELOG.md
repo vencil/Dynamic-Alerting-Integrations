@@ -98,6 +98,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **`da-tools init` 不再在客戶既有載體旁另造同一租戶的第二個載體（dx；[#1942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1942)）**：之前在已有 `conf.d/` 的 repo（沒有 `.da-init.yaml`，所以不帶 `--force` 也照寫）上跑 init，客戶已有 `db-c.yml`、`DB-C.YAML` 或宣告 db-c 的多租戶檔時，init 仍多寫一份 `db-c.yaml`，rc 0、stderr 零行，exporter 隨即以 `duplicate tenant ID` 拒收整棵樹；客戶的根 defaults 是 `_defaults.yml` 時，多寫的 `_defaults.yaml` 讓客戶那份靜默失效。現在 init 依檔案 `tenants:` 的 key（不看檔名、含子目錄）判斷：已由其他檔案宣告的租戶與其他拼法的根 defaults 一律跳過、原檔不動，stderr 與摘要逐一列出，rc 0；init 自己的路徑已與這類載體並存時拒絕執行、rc 1、不寫入任何檔案（`--dry-run` 同）。`--force` 仍會重生 init 自己的路徑。kustomize `files:` 改列客戶的載體，helm values 不為被跳過的租戶產生骨架，`.da-init.yaml` 以 `tenants_declared_by_existing_files` 記下它們。
+
 - **`check-doc-reading-time` 與 `check-doc-freshness` 兩支手動 hook 從來沒真的檢查過文件；`make pre-tag` 的 playbook 新鮮度不再印假的 ✅（lint、dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：兩支 hook 的 entry 都傳了 `--ci`，但兩支工具都不認得這個參數，argparse 每次都 exit 2，文件一份都沒被量過。現在改傳工具真正定義的 `--check`。`pre-tag` 呼叫的 `playbook-freshness-ll` 設計上只是提醒、不會擋，但結尾橫幅卻寫死「playbook-freshness ✅」，即使同一段輸出裡已經列出 ⛔ 過期條目；現在橫幅改為註明它是 advisory，要看上方輸出。
 
 - **nightly CVE 報告 delivered 桶的失敗成因說明不再經過 bash 解析（ci；[#1970](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1970)）**：`FAILURE_CAUSE_NOTE` 也會進 issue 內文，但它不是 `file_cve_report.sh` 的參數，#1355／#1932 的守衛看不到它；原本寫在 `run:` 的雙引號字串裡，日後寫進反引號、`$(` 或 `"` 就會被 bash 執行或切斷。現在散文放在該 step 的 `env:`（`DELIVERED_FAILURE_CAUSE_NOTE`），`run:` 只做 `export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"`。issue 內文不變。新增 `test_failure_cause_note_prose_is_not_shell_text`：report step 裡對 `FAILURE_CAUSE_NOTE` 的賦值只能引用 `env:` 的變數，且該值不得含 `${{`（Actions 會對它求值）。

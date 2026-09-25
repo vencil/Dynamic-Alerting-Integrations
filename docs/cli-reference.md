@@ -1146,6 +1146,8 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
+在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某租戶若已由你**其他檔案**宣告（依檔案 `tenants:` 的 key 判斷，不看檔名——`db-c.yml`、`DB-C.YAML`、宣告多個租戶的 `team.yaml`、子目錄裡的檔案都算），init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 已由 conf.d/db-c.yml 宣告，未產生」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。若 init 自己的路徑**已經**與這類載體並存（例如 `db-c.yaml` 與 `db-c.yml` 都宣告 db-c，或 `_defaults.yaml` 與 `_defaults.yml` 並存），init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同——exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定。YAML 解析失敗的檔案不算宣告，但會在 stderr 以 WARN 點名。
+
 ```bash
 da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm>] [-o <dir>] [--non-interactive] [--dry-run] [--force]
 ```
@@ -1160,7 +1162,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--deploy` | 部署方式 | `kustomize` |
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
 | `--dry-run` | 顯示會產生的檔案但不寫入 | — |
-| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑） | — |
+| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：已由你其他檔案宣告的租戶／defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明） | — |
 
 **範例**
 
