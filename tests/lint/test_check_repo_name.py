@@ -270,20 +270,18 @@ class TestDiffAware:
         assert len(violations) == 1
 
     def test_iter_scan_targets_diff_mode_uses_git_diff(self, tmp_path):
-        """Diff-only iter should call git diff --name-only and yield matching
-        files only."""
+        """Diff-only iter should list changed files via diff_changed_paths and
+        yield matching files only. (git's output format is the helper's
+        contract, tested in test_diff_scan_failure.py -- not mocked here.)"""
         # Create a few files in tmp
         (tmp_path / "a.md").write_text("test", encoding="utf-8")
         (tmp_path / "b.md").write_text("test", encoding="utf-8")
         (tmp_path / "c.txt").write_text("test", encoding="utf-8")  # not in scan exts
 
-        import subprocess
-        mock_result = subprocess.CompletedProcess(
-            args=["git", "diff"], returncode=0,
-            stdout="a.md\nc.txt\n",  # c.txt should be filtered out by extension
-        )
+        # c.txt should be filtered out by extension
         with patch.object(crn, "REPO_ROOT", tmp_path):
-            with patch.object(crn.subprocess, "run", return_value=mock_result):
+            with patch.object(crn, "diff_changed_paths",
+                              return_value=["a.md", "c.txt"]):
                 targets = list(crn.iter_scan_targets(
                     full_scan=False, base="origin/main",
                 ))

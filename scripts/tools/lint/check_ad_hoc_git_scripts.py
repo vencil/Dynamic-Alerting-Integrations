@@ -39,7 +39,8 @@ Bypass (per lint-policy.md §4):
 Exit:
   0 = no offenders (or bypass matched)
   1 = at least one script outside the allowlist
-  2 = diff base ref missing — fix CI workflow's fetch-depth or base ref
+  2 = diff base ref missing — fix CI workflow's fetch-depth or base ref —
+      or `git diff` against the base failed / timed out (never reported as OK)
 
 Configuration:
   * ALLOWLIST_DIRS: path prefixes (repo-relative, POSIX-style) that may hold
@@ -51,7 +52,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -61,6 +61,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
+    DiffScanError,
+    diff_changed_paths,
     parse_bypass_tag,
     resolve_diff_base,
 )
@@ -116,21 +118,11 @@ def scan_diff(repo: Path, base: str) -> list[Path]:
 
     Uses ``git diff --name-only --diff-filter=AM`` so deleted files don't
     trigger the lint (deleting an offender is the right move).
-    """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=AM", base],
-            capture_output=True, text=True, cwd=str(repo),
-            check=True, timeout=10,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return []
 
+    Raises ``DiffScanError`` when git fails or times out (#1987).
+    """
     offending: list[Path] = []
-    for rel in result.stdout.splitlines():
-        rel = rel.strip()
-        if not rel:
-            continue
+    for rel in diff_changed_paths(base, repo):
         # Only check Windows shell scripts
         if not any(rel.endswith(ext) for ext in EXTS):
             continue
@@ -193,7 +185,11 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
-        offenders = scan_diff(repo, base)
+        try:
+            offenders = scan_diff(repo, base)
+        except DiffScanError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
 
     if not offenders:
         print(

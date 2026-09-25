@@ -332,6 +332,8 @@ class TestWritableMountNeedsUser:
         (chr(92) * 2 + "srv" + chr(92) + "share:/data/output", True),  # UNC
         ("/cache", False),                            # 匿名 volume
         ("cache-vol:/data/output", False),            # 具名 volume
+        ("<output_dir>:/data/output", True),          # host 端整段是佔位符（#1495）
+        ("<config_dir>:/etc/config:rw", True),
     ])
     def test_bind_mount_domain_boundaries(self, spec, is_bind):
         assert mod._is_bind_mount(spec) is is_bind, spec
@@ -465,9 +467,11 @@ class TestPlaceholderIsFilteredPerSpec:
         issues = mod.check_writable_mount_has_user([p], tmp_path)
         assert len(issues) == 1, issues
         assert issues[0].check == "datools-writable-mount-without-user"
-        # 只點名判得動的那一個，不把佔位符寫進訊息
         assert "$(pwd)/out:/data/output" in issues[0].message
-        assert "<tenant>" not in issues[0].message
+        # #1495 之後，佔位符只在 host 端的掛載也被評分（它藏不住 `:ro`），
+        # 所以兩個都點名。「佔位符鄰居讓整塊消失」這個缺陷仍由上面的
+        # `len(issues) == 1` 與具體掛載被點名共同擋住。
+        assert "/srv/<tenant>/conf.d:/data/conf.d" in issues[0].message
 
     def test_control_the_same_concrete_mount_alone_is_flagged(self, tmp_path):
         p = self._doc(tmp_path, self._fenced(
@@ -476,11 +480,81 @@ class TestPlaceholderIsFilteredPerSpec:
             "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
 
-    def test_a_placeholder_only_command_stays_unjudged(self, tmp_path):
-        """誤紅方向的對照：全部不可判時仍然不可以報。"""
+    def test_a_placeholder_in_the_options_field_stays_unjudged(self, tmp_path):
+        """誤紅方向的對照：佔位符落在 options 欄時，它可能就是 `ro`，不可以報。"""
         p = self._doc(tmp_path, self._fenced(
             "docker run --rm",
-            "  -v /srv/<tenant>/out:/data/output",
+            "  -v $(pwd)/out:/data/output:<mode>",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_placeholder_in_the_container_path_stays_unjudged(self, tmp_path):
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:<container-path>",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    @pytest.mark.parametrize("spec", [
+        "<output_dir>:/data/output",          # host 端整段是佔位符
+        "/srv/<tenant>/out:/data/output",     # host 端嵌入佔位符
+        "<config_dir>:/etc/config:rw",
+    ])
+    def test_a_placeholder_only_in_the_host_field_is_judged(self, tmp_path, spec):
+        """⛔ counterfactual（#1495）：修改前這三格都回報 0 個 issue。
+
+        可不可寫由容器路徑與 options 欄決定，host 端的佔位符藏不住 `:ro`；
+        讀者照抄時會換成自己 uid 擁有的目錄，於是就是 PermissionError。
+        cli-reference.en.md 的 6 條 synopsis 就是靠這個跳過活下來的。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            f"  -v {spec}",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert [i.check for i in issues] == ["datools-writable-mount-without-user"], issues
+        assert spec in issues[0].message
+
+    @pytest.mark.parametrize("spec,expect", [
+        ("<output>:/data/output", True),
+        ("$(pwd)/out:/data/output", True),
+        ("<config_dir>:/etc/config:ro", False),
+    ])
+    def test_an_optional_bracketed_mount_is_read(self, tmp_path, spec, expect):
+        """⛔ counterfactual（#1495）：synopsis 用 `[-v …]` 標示選用掛載，
+        旗標 token 是 `[-v`。修改前它不被認得，整個掛載（連具體路徑也是）
+        從判定面消失。唯讀那格是誤紅方向的對照。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/conf.d:/etc/config:ro",
+            f"  [-v {spec}]",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert bool(issues) is expect, issues
+
+    @pytest.mark.parametrize("lines,expect", [
+        # --user correctly ahead of the image; the optional mount's value
+        # contains da-tools and must not be taken for the image.
+        (["  [-v $(pwd)/da-tools-out:/data/output]", "  --user=1000:1000",
+          "  ghcr.io/vencil/da-tools:v2.9.0 init"], []),
+        # control: the same mount, --user genuinely after the image.
+        (["  [-v $(pwd)/da-tools-out:/data/output]",
+          "  ghcr.io/vencil/da-tools:v2.9.0 init", "  --user=1000:1000"],
+         ["datools-user-flag-after-image"]),
+    ])
+    def test_an_optional_mount_value_is_not_taken_for_the_image(
+            self, tmp_path, lines, expect):
+        """⛔ counterfactual（#1495 review）：`_image_index` 原本不認得 `[-v`，
+        把掛載值當成 image，第一格誤報 `datools-user-flag-after-image`。"""
+        p = self._doc(tmp_path, self._fenced("docker run --rm", *lines))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert [i.check for i in issues] == expect, issues
+
+    def test_a_placeholder_named_volume_is_not_the_exclusion(self, tmp_path):
+        """具名 volume 的排除仍然成立：它寫成字面名稱，不是佔位符。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v da-tools-cache:/cache",
             "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 

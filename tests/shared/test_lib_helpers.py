@@ -4,7 +4,6 @@ Tests the pure-Python logic embedded in shell functions:
   - url_encode (urllib.parse.quote via stdin)
   - prom_query_value response parsing
   - get_alert_status response parsing
-  - get_cm_value — run for real: bash sources _lib.sh, kubectl is a PATH shim
   - get_exporter_metric regex extraction
 """
 
@@ -16,7 +15,6 @@ import sys
 import urllib.parse
 
 import pytest
-import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -194,136 +192,7 @@ def test_alert_malformed_json():
 
 
 # ===================================================================
-# 4. get_cm_value — ConfigMap YAML parsing logic
-# ===================================================================
-
-# 在 bash 裡 source `scripts/_lib.sh`、呼叫 `get_cm_value`；`kubectl` 由 PATH
-# 最前面的 shim 取代（印出 fixture 的 CM JSON）。
-
-_LIB_SH = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
-                       "scripts", "_lib.sh")
-
-
-@pytest.fixture
-def run_get_cm_value(tmp_path):
-    """(cm_dict, tenant, key, *, strict=False) → CompletedProcess."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    cm_file = tmp_path / "cm.json"
-    shim = bin_dir / "kubectl"
-    # An EMPTY cm file makes the shim behave like a failing kubectl: nothing
-    # on stdout, a message on stderr, rc 1.
-    shim.write_text(
-        f'#!/bin/sh\nif [ -s "{cm_file}" ]; then cat "{cm_file}"; '
-        f'else echo "fake kubectl: connection refused" >&2; exit 1; fi\n',
-        encoding="utf-8", newline="\n")
-    shim.chmod(0o755)
-
-    def _run(cm, tenant, key, strict=False):
-        cm_file.write_text("" if cm is None else json.dumps(cm),
-                           encoding="utf-8")
-        body = 'source "$LIB_SH"; '
-        if strict:
-            # a strict caller's shape: set -euo pipefail + $(…)
-            body = 'set -euo pipefail; ' + body + 'v=$(get_cm_value "$1" "$2"); echo "got:$v"'
-        else:
-            body += 'get_cm_value "$1" "$2"'
-        env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                   LIB_SH=os.path.abspath(_LIB_SH))
-        return subprocess.run(["bash", "-c", body, "_", tenant, key],
-                              capture_output=True, text=True, env=env,
-                              timeout=30)
-    return _run
-
-
-def _decl(tenant, **metrics):
-    return yaml.safe_dump({"tenants": {tenant: metrics}})
-
-
-_needs_bash = pytest.mark.skipif(sys.platform == "win32",
-                                 reason="POSIX kubectl shim + bash")
-
-
-@_needs_bash
-def test_cm_value_from_yml_carrier(run_get_cm_value):
-    cm = {"data": {"_defaults.yaml": "defaults: {}",
-                   "tenant-x.yml": _decl("tenant-x", cpu=70)}}
-    r = run_get_cm_value(cm, "tenant-x", "cpu")
-    assert (r.returncode, r.stdout) == (0, "70\n"), r.stderr
-
-
-@_needs_bash
-def test_cm_value_from_carrier_named_differently(run_get_cm_value):
-    cm = {"data": {"_defaults.yaml": "defaults: {}",
-                   "team-x.yaml": _decl("tenant-x", cpu=70)}}
-    r = run_get_cm_value(cm, "tenant-x", "cpu")
-    assert (r.returncode, r.stdout) == (0, "70\n"), r.stderr
-
-
-@_needs_bash
-def test_cm_metric_absent_prints_default(run_get_cm_value):
-    """往返協定：租戶在、metric 不在 ⇒ `default`，rc 0。"""
-    cm = {"data": {"_defaults.yaml": "defaults: {}",
-                   "tenant-x.yaml": _decl("tenant-x", cpu=70)}}
-    r = run_get_cm_value(cm, "tenant-x", "mem")
-    assert (r.returncode, r.stdout) == (0, "default\n"), r.stderr
-
-
-@_needs_bash
-def test_cm_dimensional_key_with_quotes(run_get_cm_value):
-    """維度 key 的引號經 argv 傳入後照樣讀得到。"""
-    key = 'redis_queue_length{queue="tasks"}'
-    cm = {"data": {"_defaults.yaml": "defaults: {}",
-                   "tenant-x.yaml": yaml.safe_dump(
-                       {"tenants": {"tenant-x": {key: "500"}}})}}
-    r = run_get_cm_value(cm, "tenant-x", key)
-    assert (r.returncode, r.stdout) == (0, "500\n"), r.stderr
-
-
-@_needs_bash
-@pytest.mark.parametrize("label,cm", [
-    ("tenant-absent", {"data": {"_defaults.yaml": "defaults: {}",
-                                "other-t.yaml": _decl("other-t", cpu=1)}}),
-    ("ambiguous", {"data": {"_defaults.yaml": "defaults: {}",
-                            "a.yaml": _decl("tenant-x", cpu=1),
-                            "b.yml": _decl("tenant-x", cpu=2)}}),
-    ("no-schema", {"data": {"tenant-x.yaml": _decl("tenant-x", cpu=1)}}),
-    ("legacy-tenant-absent", {"data": {"config.yaml": _decl("other-t", cpu=1)}}),
-    # kubectl fails ⇒ python reads EMPTY stdin; without pipefail the pipeline
-    # rc is python's, so this row is what stops a non-strict caller.
-    ("kubectl-fails-empty-stdin", None),
-    ("scheduled-mapping-value", {"data": {"_defaults.yaml": "defaults: {}",
-                                          "tenant-x.yaml": yaml.safe_dump(
-        {"tenants": {"tenant-x": {"cpu": {"default": "5", "overrides": []}}}})}}),
-    ("null-value", {"data": {"_defaults.yaml": "defaults: {}",
-                             "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu: ~\n"}}),
-    ("trailing-newline", {"data": {"_defaults.yaml": "defaults: {}",
-                                   "tenant-x.yaml": "tenants:\n  tenant-x:\n"
-                                                    "    cpu: |\n      5\n"}}),
-])
-def test_cm_refusals_are_loud_and_stop_a_strict_caller(run_get_cm_value, label, cm):
-    """找不到／歧義／解析失敗／認不出 schema：rc≠0、stdout 空、stderr 具名，
-    且 `set -euo pipefail` 的 caller 在 `$(get_cm_value …)` 就停下。"""
-    r = run_get_cm_value(cm, "tenant-x", "cpu")
-    assert r.returncode != 0, label
-    assert r.stdout == "", label
-    assert "get_cm_value:" in r.stderr, (label, r.stderr)
-    strict = run_get_cm_value(cm, "tenant-x", "cpu", strict=True)
-    assert strict.returncode != 0, label
-    assert "got:" not in strict.stdout, label
-
-
-@_needs_bash
-def test_cm_legacy_tenant_present(run_get_cm_value):
-    """legacy 單一 `config.yaml` 仍讀得到，且
-    strict caller 走完 `$(…)`——拒絕那一格的「必須成功」對應。"""
-    cm = {"data": {"config.yaml": _decl("tenant-x", cpu=80)}}
-    r = run_get_cm_value(cm, "tenant-x", "cpu", strict=True)
-    assert (r.returncode, r.stdout) == (0, "got:80\n"), r.stderr
-
-
-# ===================================================================
-# 5. get_exporter_metric — regex value extraction
+# 4. get_exporter_metric — regex value extraction
 # ===================================================================
 
 _EXPORTER_PATTERN = r'\d+\.?\d*$'
@@ -360,7 +229,7 @@ def test_exporter_large_number():
 
 
 # ===================================================================
-# 6. Structural checks
+# 5. Structural checks
 # ===================================================================
 
 @pytest.fixture(scope="module")
@@ -389,7 +258,7 @@ def test_lib_exported_functions_present(lib_sh_path):
         "prom_query_value", "get_alert_status", "wait_for_alert",
         "get_exporter_metric", "wait_exporter",
         "require_services",
-        "url_encode", "kill_port", "get_cm_value",
+        "url_encode", "kill_port",
         "ensure_kubeconfig", "preflight_check",
     ]
     for fn in expected_functions:

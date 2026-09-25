@@ -61,13 +61,13 @@ Exit codes
 ----------
 0 = all files OK (or bypass matched)
 1 = one or more .bat files have violations
-2 = diff base ref missing — fix CI workflow's fetch-depth or base ref
+2 = diff base ref missing — fix CI workflow's fetch-depth or base ref —
+    or `git diff` against the base failed / timed out (never reported as OK)
 """
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +77,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
+    DiffScanError,
+    diff_changed_paths,
     parse_bypass_tag,
     resolve_diff_base,
 )
@@ -158,19 +160,9 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
 
 def _diff_changed_bats(repo: Path, base: str) -> list[Path]:
     """Return scripts/ops/*.bat changed in current diff vs base."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=AM", base, "--",
-             "scripts/ops/*.bat"],
-            capture_output=True, text=True, cwd=str(repo),
-            check=True, timeout=10,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return []
     out: list[Path] = []
-    for rel in result.stdout.splitlines():
-        rel = rel.strip()
-        if rel and rel.endswith(".bat"):
+    for rel in diff_changed_paths(base, repo, ("scripts/ops/*.bat",)):
+        if rel.endswith(".bat"):
             full = repo / rel
             if full.is_file():
                 out.append(full)
@@ -223,7 +215,11 @@ def main() -> int:
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        bat_paths = _diff_changed_bats(repo, base)
+        try:
+            bat_paths = _diff_changed_bats(repo, base)
+        except DiffScanError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
 
     # Only apply the rule to scripts/ops/*.bat -- other .bat (e.g. dev-
