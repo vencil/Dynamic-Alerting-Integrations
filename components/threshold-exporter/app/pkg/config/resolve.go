@@ -251,8 +251,11 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 
 // isThresholdExpired reports whether a time-boxed threshold override (PREVENT
 // #656) has passed its `expires:` instant. A malformed expires fails OPEN (the
-// override is kept — mirrors ResolveMaintenanceExpiriesAt; ValidateTenantKeys
-// warns on it). Empty expires = a permanent override (never expires).
+// override is kept; ValidateTenantKeys warns on it). Empty expires = a
+// permanent override (never expires). ⚠️ This is NOT the rule silent mode /
+// maintenance follow: those fail CLOSED on a malformed expires (#2000 — the
+// setting is ignored, so nothing is muted). #2000 left this threshold path
+// fail-open on purpose; do not "align" the two without a new owner decision.
 func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 	if sv.Expiry == nil || sv.Expiry.Expires == "" {
 		return false
@@ -691,6 +694,8 @@ func canonicalLabelKey(custom, regex map[string]string) string {
 //
 // v1.7.0: _state_maintenance supports structured format with expires.
 // When expires is past, the filter is treated as disabled (maintenance auto-deactivates).
+// When expires is not RFC3339, the setting is ignored and the filter is not
+// emitted for that tenant (#2000: fail-closed — never mute without an end).
 //
 // Returns the list of enabled state filters to expose as Prometheus metrics.
 func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
@@ -735,8 +740,19 @@ func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFi
 					if parsed.Expires != "" {
 						t, err := time.Parse(time.RFC3339, parsed.Expires)
 						if err != nil {
-							log.Printf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v", parsed.Expires, tenant, err)
-							// Can't parse → treat as no expiry → still active
+							// #2000: fail-CLOSED. An unparseable expires means we
+							// cannot tell when the window ends, so the whole
+							// _state_maintenance setting is ignored (maintenance NOT
+							// active) instead of muting forever. Neither write path
+							// can stop a malformed value from landing here (tenant-api
+							// leaves structured expires to downstream; patch-config
+							// re-serialises RFC3339 as "YYYY-MM-DD HH:MM:SS+00:00"),
+							// so the exporter is the one choke point — and "noisier
+							// than intended" is the recoverable failure, "alerts
+							// silently lost" is not. Keep in sync with
+							// IsMaintenanceActive and ResolveMaintenanceExpiriesAt.
+							log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
+							continue
 						} else if now.After(t) {
 							continue // Expired → maintenance auto-deactivated
 						}
@@ -765,12 +781,21 @@ func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFi
 //
 // When expires is set and in the past (relative to `now`), the entry is marked Expired=true
 // and the sentinel metric should NOT be emitted (silent mode auto-deactivates).
+// When expires is set but is not RFC3339, the structured setting is ignored
+// entirely — no entry, so nothing is silenced (#2000: fail-closed).
 // The caller (collector) uses Expired entries to emit da_config_event instead.
 //
 // Returns one ResolvedSilentMode per tenant+severity combination.
 // "all" expands to two entries: one for "warning" and one for "critical".
 func (c *ThresholdConfig) ResolveSilentModes() []ResolvedSilentMode {
 	return c.ResolveSilentModesAt(time.Now())
+}
+
+// maintenanceExpiresIgnoredWarn is the one WARN text for an unparseable
+// _state_maintenance expires (#2000), shared by ResolveStateFiltersAt and
+// ResolveMaintenanceExpiriesAt so the two call sites cannot drift apart.
+func maintenanceExpiresIgnoredWarn(tenant, expires string, err error) string {
+	return fmt.Sprintf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _state_maintenance setting is IGNORED (maintenance not active) until it is fixed", expires, tenant, err)
 }
 
 // ResolveSilentModesAt is the time-parameterized version for testability.
@@ -803,11 +828,15 @@ func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMo
 			if parsed.Expires != "" {
 				t, err := time.Parse(time.RFC3339, parsed.Expires)
 				if err != nil {
-					log.Printf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v (expected RFC3339/ISO8601)", parsed.Expires, tenant, err)
-				} else {
-					expires = t
-					expired = now.After(t)
+					// #2000: fail-CLOSED — an unparseable expires drops the whole
+					// structured _silent_mode (no silent entry → notifications NOT
+					// suppressed) rather than silencing with no end. Same reasoning
+					// as the maintenance branch in ResolveStateFiltersAt.
+					log.Printf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", parsed.Expires, tenant, err)
+					continue
 				}
+				expires = t
+				expired = now.After(t)
 			}
 
 			entries := resolveSilentTarget(tenant, target, expires, parsed.Reason, expired)
@@ -895,7 +924,9 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []Resolved
 
 		t, err := time.Parse(time.RFC3339, parsed.Expires)
 		if err != nil {
-			log.Printf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v", parsed.Expires, tenant, err)
+			// #2000: the setting is ignored as a whole (ResolveStateFiltersAt
+			// drops it too), so there is no window to report as expired.
+			log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
 			continue
 		}
 
@@ -974,6 +1005,8 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 // IsMaintenanceActive checks if a structured _state_maintenance is currently active (not expired).
 // For scalar "enable" values (no expires), it always returns true.
 // For structured values with expires in the past, it returns false.
+// For structured values whose expires is not RFC3339, it returns false (#2000:
+// fail-closed — the setting is ignored, matching ResolveStateFiltersAt).
 func (c *ThresholdConfig) IsMaintenanceActive(tenant string, now time.Time) bool {
 	overrides, exists := c.Tenants[tenant]
 	if !exists {
@@ -1001,7 +1034,7 @@ func (c *ThresholdConfig) IsMaintenanceActive(tenant string, now time.Time) bool
 		if parsed.Expires != "" {
 			t, err := time.Parse(time.RFC3339, parsed.Expires)
 			if err != nil {
-				return true // can't parse → treat as no expiry → active
+				return false // #2000: fail-closed — unparseable expires ⇒ setting ignored ⇒ not active
 			}
 			return !now.After(t)
 		}

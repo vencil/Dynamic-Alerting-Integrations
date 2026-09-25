@@ -275,7 +275,7 @@
             "expires": {
               "type": "string",
               "title": "Expiration Timestamp (RFC3339)",
-              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Silent mode auto-expires at this time. Optional; omit for indefinite silent mode. A value the exporter cannot parse as RFC3339 (e.g. a date without time) only logs a WARN and is treated as no expiry.",
+              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Silent mode auto-expires at this time. Optional; omit for indefinite silent mode. A value the exporter cannot parse as RFC3339 (e.g. a quoted date without time) logs a WARN and the whole _silent_mode setting is ignored: nothing is silenced (#2000, fail-closed).",
               "format": "date-time",
               "examples": ["2026-03-13T12:00:00Z", "2026-04-01T06:00:00Z"]
             },
@@ -330,7 +330,7 @@
             "expires": {
               "type": "string",
               "title": "Expiration Timestamp (RFC3339)",
-              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance. A value the exporter cannot parse as RFC3339 (e.g. a date without time) only logs a WARN and is treated as no expiry.",
+              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance. A value the exporter cannot parse as RFC3339 (e.g. a quoted date without time) logs a WARN and the whole _state_maintenance setting is ignored: maintenance is not active (#2000, fail-closed).",
               "format": "date-time",
               "examples": ["2026-03-15T06:00:00Z", "2026-03-20T18:00:00Z"]
             },

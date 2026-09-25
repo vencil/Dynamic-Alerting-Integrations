@@ -26,7 +26,7 @@ The four root causes of alert fatigue and their corresponding solutions:
 | Warning + Critical duplicate alerts | **Severity Dedup** | Per-tenant inhibit_rules (`metric_group` pairing) | `_severity_dedup` |
 | Notification destination hardcoded centrally | **Alert Routing** | Per-tenant route + receiver (6 types) | `_routing` |
 
-Both Silent Mode and Maintenance Mode support structured object configuration, including `expires` (RFC3339, e.g. `"2026-04-01T00:00:00Z"`; if it cannot be parsed the exporter only logs a WARN and treats it as having no expiry) auto-expiry and `reason` field to prevent "set and forget".
+Both Silent Mode and Maintenance Mode support structured object configuration, including `expires` (RFC3339, e.g. `"2026-04-01T00:00:00Z"`; if it cannot be parsed the exporter logs a WARN and ignores the whole setting — nothing is silenced, maintenance does not take effect) auto-expiry and `reason` field to prevent "set and forget".
 
 > The table above is the **quick-reference view for the BYO integration context**. For the full alerting best practices (what to alert on → notification → action-layer idempotency), see the series: [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Beyond Actionable](../alerting-best-practices.en.md).
 
