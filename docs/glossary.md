@@ -153,7 +153,7 @@ lang: zh
 :   `scaffold_tenant.py` / `da-tools scaffold`——互動式或 CLI 模式產生新租戶的 YAML 配置模板。
 
 **Sentinel Alert**
-:   哨兵告警模式。exporter 產生 flag metric（如 `_silent_mode: 1`），對應的 sentinel recording rule 觸發 alert，再由 Alertmanager inhibit rule 抑制目標告警。這是三態模式的核心實現機制。
+:   哨兵告警模式。exporter 依租戶配置（如 `_silent_mode`）產生 flag metric（如 `user_silent_mode{target_severity="warning"} 1`），對應的 sentinel recording rule 觸發 alert，再由 Alertmanager inhibit rule 抑制目標告警。這是三態模式的核心實現機制。
 
 **Severity Dedup（嚴重度去重）**
 :   同一指標的 critical 與 warning 告警共存時，透過 Alertmanager `inhibit_rules`（非 PromQL）抑制 warning，確保 TSDB 保留完整數據。

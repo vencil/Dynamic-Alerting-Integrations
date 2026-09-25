@@ -500,19 +500,18 @@ tenants:
 
 Available `_silent_mode` values: `warning`, `critical`, `all`, `disable`. Unset defaults to Normal mode.
 
-**Auto-Expiry :** `_silent_mode` and `_state_maintenance` support structured objects (backward compatible with scalar strings) with `expires` ISO8601 timestamp. The Go engine checks `time.Now().After(expires)` to stop emitting sentinel metrics, automatically restoring alerts to normal. Expiry generates a transient gauge `da_config_event{event="silence_expired"}` with `TenantConfigEvent` alert rule for notification.
+**Auto-Expiry :** `_silent_mode` and `_state_maintenance` support structured objects (backward compatible with scalar strings) with an `expires` RFC3339 timestamp (e.g. `"2026-04-01T00:00:00Z"`; if the exporter cannot parse it, it only logs a WARN and treats it as having no expiry, so it never auto-expires). The Go engine checks `time.Now().After(expires)` to stop emitting sentinel metrics, automatically restoring alerts to normal. Expiry generates a transient gauge `da_config_event{event="silence_expired"}` with `TenantConfigEvent` alert rule for notification. Known defect: once `expires` passes on a `target: all` silence that carries a `reason`, the whole `/metrics` endpoint returns HTTP 500 ([#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)); do not combine them until it is fixed.
 
 ```yaml
 tenants:
   db-a:
     _silent_mode:
       target: "all"
-      expires: "2026-04-01T00:00:00Z"
-      reason: "Migration shadow monitoring period"
+      expires: "2099-12-31T23:59:59Z"
     _state_maintenance:
       target: "enable"   # state filters take enable/disable;
                          # "all" belongs to _silent_mode
-      expires: "2026-04-01T00:00:00Z"
+      expires: "2099-12-31T23:59:59Z"
       reason: "Scheduled maintenance window"
 ```
 

@@ -33,7 +33,7 @@ paths:
         **Metric Types:**
         - `user_threshold{tenant, alertname, metric_group, dimension_labels}`: Threshold values with multi-dimensional labels
         - `user_state_filter{tenant, alertname, metric_group}`: Alert suppression state (0=active, 1=suppressed)
-        - `user_silent_mode{tenant}`: Tenant silent mode status (0=normal, 1=silent)
+        - `user_silent_mode{tenant, target_severity}`: Emitted only while silent mode is active, one series per muted severity, value always 1 (alerts still fire; notifications are inhibited)
         - `user_severity_dedup{tenant, alertname}`: Severity deduplication flag
         - `tenant_metadata_info{tenant, metadata_labels}`: Tenant metadata key-value pairs as labels
         - `da_config_event{event_type}`: Configuration reload events (reload_count, last_reload_timestamp, error_count)
@@ -59,10 +59,10 @@ paths:
                 user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
                 user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
                 
-                # HELP user_silent_mode Tenant silent mode status
+                # HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
                 # TYPE user_silent_mode gauge
-                user_silent_mode{tenant="db-a"} 0
-                user_silent_mode{tenant="db-b"} 1
+                user_silent_mode{target_severity="critical",tenant="db-b"} 1
+                user_silent_mode{target_severity="warning",tenant="db-b"} 1
                 
                 # HELP user_severity_dedup Severity deduplication flag
                 # TYPE user_severity_dedup gauge

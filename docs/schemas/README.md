@@ -70,7 +70,7 @@ tenants:
     mysql_connections: "70"      # ← autocomplete suggests threshold values
     _silent_mode:                 # ← hover shows documentation
       target: "warning"           # ← schema validates against ["warning", "critical", "all"]
-      expires: "2026-03-13T12:00:00Z"  # ← schema enforces ISO 8601 format
+      expires: "2026-03-13T12:00:00Z"  # ← schema enforces RFC3339 (date-time) format
 ```
 
 ---

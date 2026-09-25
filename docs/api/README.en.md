@@ -91,18 +91,17 @@ user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
 
 #### `user_silent_mode` - Tenant Silent Mode
 
-Indicates whether a tenant is in silent mode (all alerts temporarily muted).
+Emitted only while a tenant's silent mode is active, one series per muted severity (`target_severity`); the value is always `1`. Alerts still fire during silence (TSDB records them) — only notifications are blocked by Alertmanager inhibit. In the example `db-b` has `_silent_mode: all`; `db-a` has none, so it has no series.
 
 ```
-# HELP user_silent_mode Tenant silent mode status
+# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
 # TYPE user_silent_mode gauge
-user_silent_mode{tenant="db-a"} 0
-user_silent_mode{tenant="db-b"} 1
+user_silent_mode{target_severity="critical",tenant="db-b"} 1
+user_silent_mode{target_severity="warning",tenant="db-b"} 1
 ```
 
 **Values:**
-- `0`: Normal mode (silent mode disabled)
-- `1`: Silent mode enabled (all alerts suppressed)
+- `1`: notifications for that severity are silenced. There is no `0` — a tenant/severity that is not silenced (or whose `expires` has passed) has no series
 
 #### `user_severity_dedup` - Severity Deduplication Flag
 
@@ -169,10 +168,10 @@ user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
 user_state_filter{tenant="db-a",alertname="HighMemory",metric_group="memory"} 1
 user_state_filter{tenant="db-b",alertname="HighCPU",metric_group="compute"} 0
 
-# HELP user_silent_mode Tenant silent mode status
+# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
 # TYPE user_silent_mode gauge
-user_silent_mode{tenant="db-a"} 0
-user_silent_mode{tenant="db-b"} 1
+user_silent_mode{target_severity="critical",tenant="db-b"} 1
+user_silent_mode{target_severity="warning",tenant="db-b"} 1
 
 # HELP user_severity_dedup Severity deduplication flag
 # TYPE user_severity_dedup gauge

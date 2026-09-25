@@ -274,8 +274,8 @@
             },
             "expires": {
               "type": "string",
-              "title": "Expiration Timestamp (ISO 8601)",
-              "description": "ISO 8601 UTC timestamp. Silent mode auto-expires at this time. Optional; omit for indefinite silent mode.",
+              "title": "Expiration Timestamp (RFC3339)",
+              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Silent mode auto-expires at this time. Optional; omit for indefinite silent mode. A value the exporter cannot parse as RFC3339 (e.g. a date without time) only logs a WARN and is treated as no expiry.",
               "format": "date-time",
               "examples": ["2026-03-13T12:00:00Z", "2026-04-01T06:00:00Z"]
             },
@@ -329,8 +329,8 @@
             },
             "expires": {
               "type": "string",
-              "title": "Expiration Timestamp (ISO 8601)",
-              "description": "ISO 8601 UTC timestamp. Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance.",
+              "title": "Expiration Timestamp (RFC3339)",
+              "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance. A value the exporter cannot parse as RFC3339 (e.g. a date without time) only logs a WARN and is treated as no expiry.",
               "format": "date-time",
               "examples": ["2026-03-15T06:00:00Z", "2026-03-20T18:00:00Z"]
             },
