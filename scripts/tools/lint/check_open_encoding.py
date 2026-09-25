@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-PR-2.5 (v2.8.0) root-caused ~30 Tier 1 test failures to ``open(path)`` calls
+PR-2.5 (v2.8.0) root-caused Tier 1 test failures to ``open(path)`` calls
 that never specified ``encoding='utf-8'``. On Windows / cp950 / shift_jis /
 non-UTF-8 Linux locales, the OS-default codec chokes on chinese-content
 YAML / Markdown / source files with ``UnicodeDecodeError``. Linux + Docker
@@ -27,17 +27,16 @@ Per-line ignore: append ``# open-encoding: ignore`` for cases where the
 file might legitimately be in OS-default encoding (rare — log reads from
 foreign tools, encoding-detection workflows, etc.).
 
-Severity model (mirrors check_subprocess_timeout.py)
-----------------------------------------------------
-PR-2.5 cleaned the test files containing actual Tier 1 failures (10 files,
-~33 sites) plus the CSV CRLF bug in production. ~80 sites remain across
-test files that don't currently exercise non-ASCII content — they're
-latent portability bugs but not blockers. So this lint ships warn-only:
+Severity model
+--------------
+- **default mode / --ci**: report violations, exit 0 (warn-only).
+- **--strict-open-encoding**: violations exit 1.
 
-- **default mode**: report violations to stdout, exit 0.
-- **--ci**: same — non-fatal, surfaces count for tracking.
-- **--ci --strict-open-encoding**: violations are fatal. Activate once
-  the remaining ~80 sites are cleaned (follow-up PR after v2.8.0).
+The pre-commit hook passes ``--strict-open-encoding`` plus explicit scan
+roots, so it blocks only under the roots it names; which roots those are
+lives in ``.pre-commit-config.yaml`` and nowhere else (#1984). A scan root
+that does not exist exits 2: a typo or a renamed directory would otherwise
+scan zero files and exit 0, indistinguishable from a clean tree.
 
 Usage
 -----
@@ -49,18 +48,16 @@ Usage
     # Specific paths
     python3 scripts/tools/lint/check_open_encoding.py path/to/file.py ...
 
-    # CI / pre-commit (warn-only)
-    python3 scripts/tools/lint/check_open_encoding.py --ci
-
-    # Future: post-cleanup hard gate
-    python3 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding
+    # Hard gate over explicit roots (what the pre-commit hook does)
+    python3 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding scripts
 
 Exit codes
 ----------
 ::
 
-    0 — no violations, OR --ci without --strict (warn-only)
-    1 — violations found AND --ci --strict-open-encoding
+    0 — no violations, OR violations without --strict-open-encoding
+    1 — violations found AND --strict-open-encoding
+    2 — a given scan path does not exist
 """
 from __future__ import annotations
 
@@ -77,7 +74,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -196,8 +193,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = args.paths or DEFAULT_PATHS
-    files = collect_files([Path(p) for p in paths])
+    paths = [Path(p) for p in (args.paths or DEFAULT_PATHS)]
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        for p in missing:
+            print(f"ERROR: scan path does not exist: {p}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    files = collect_files(paths)
 
     total_violations = 0
     by_file: dict[Path, list[tuple[int, str]]] = {}

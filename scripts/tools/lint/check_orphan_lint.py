@@ -25,16 +25,14 @@ repo-internal runner (the "被任一 runner 引用" reference graph from #717's 
   - ``Makefile``                       — a recipe target
   - ``.github/workflows/*.{yml,yaml}`` — a ``run:`` step
   - any sibling script under ``scripts/`` *outside* ``scripts/tools/lint/``
-    (e.g. ``dx/pr_preflight.py`` runs ``check_pr_scope_drift``,
-    ``dx/bump_playbook_versions.py`` runs ``check_playbook_freshness``,
-    ``dx/scan_component_health.py`` runs ``check_tool_registry_jsx_parity``)
+    (e.g. ``dx/pr_preflight.py`` runs ``check_pr_scope_drift``)
 
 Design note — broader than the two runners the #717 body names
 --------------------------------------------------------------
 The issue body names only pre-commit + ``validate_all`` as runners, but its Scope
 section says "只查『可執行 lint 是否被任一 runner 引用』的 repo-internal 引用圖".
-Honouring the literal two-runner list would false-flag 8 checks that legitimately
-run via Makefile / CI / a sibling script, forcing a static allowlist of 8 entries
+Honouring the literal two-runner list would false-flag checks that legitimately
+run via Makefile / CI / a sibling script, forcing a static allowlist of entries
 that are not actually orphans — a fail-open design (if such a check were later
 *removed* from CI, the allowlist would keep hiding it). The reference-graph model is
 self-maintaining instead: a check is live iff some runner still invokes it, and a
@@ -68,17 +66,18 @@ Allowlist
 A ``check_*.py`` that is intentionally standalone (manual-only, invoked by a human
 on demand, wired to no runner) may be listed in ``ALLOWLIST`` with a one-line
 justification. Helper modules are ``_``-prefixed (``_lib*.py`` / ``_lint_helpers.py``)
-and never match the ``check_*.py`` glob, so they need no allowlist entry. The
-allowlist is currently empty: every executable lint is wired to a runner.
+and never match the ``check_*.py`` glob, so they need no allowlist entry.
 
 Known limitation (accepted, like check_lint_toolchain_fit.py): detection is a
 word-boundary filename match against the runner corpus (see ``_is_referenced`` —
 not a bare substring, so ``disable_check_foo.py`` / a ``.pyc`` path no longer masks
 ``check_foo.py``). It is still a tripwire, not an airtight proof: a runner that
-builds the script name dynamically from pieces would slip through, and a
-commented-out invocation of the *exact* filename inside a *runner* file (not a lint
-file, which we already exclude) would still read as live. Both are rare; revisit if
-they ever happen in practice rather than reaching for an AST analyzer now.
+builds the script name dynamically from pieces would slip through, and ANY mention
+of the *exact* filename inside a *runner* file (not a lint file, which we already
+exclude) still reads as live — a comment, a docstring, or a usage hint printed by a
+sibling script under ``scripts/``. That second shape is not hypothetical: this
+docstring once cited two sibling scripts as invokers when each only named the check
+in a comment (#1984).
 
 Scope discipline (#717)
 -----------------------
