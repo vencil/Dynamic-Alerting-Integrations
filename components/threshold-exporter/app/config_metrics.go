@@ -180,7 +180,7 @@ func newConfigMetrics() *configMetrics {
 		}, []string{"tenant"}),
 		subtreeUndeliverableTenants: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_subtree_undeliverable_tenants",
-			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — a tenant present on /effective but absent from /metrics — can no longer occur because both planes judge files with one decode. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
+			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — one file decoded into different tenant sets by the two planes — is gone because both planes now judge a file with one decode. Known tenant-set exceptions that are NOT counted here: the incremental tenant-only reload keeping a broken file's last good tenants (#1980) and tenants declared in a _-prefixed file (#1982). SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}),
 	}
 }
@@ -237,12 +237,23 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called ONCE per failed file per scan (#1957): from the tree scan
-// (pkg/config parseTenantDecls, via config.ScanObserver) for a
-// non-_-prefixed tenant file the one decode (config.ParseConfigFile)
-// rejects — the flat plane reuses that verdict and does not count again —
-// and from the flat parse (parsePartialConfig) or the nested syntax probe
-// for a `_`-prefixed file, which the walker never parses. file_basename
+// basename. Call sites and the resulting unit (#1957):
+//   - the tree scan (pkg/config parseTenantDecls, via config.ScanObserver):
+//     a non-_-prefixed tenant file the one decode (config.ParseConfigFile)
+//     rejects — ONCE per scan; the flat plane reuses that verdict and does
+//     not count again;
+//   - the flat parse (parsePartialConfig) or the nested syntax probe
+//     (reportUnparseableNestedPlatformFile): a `_`-prefixed file, which the
+//     walker never parses — once per flat commit;
+//   - emitParseFailureSignal (config_debounce.go): a broken defaults file in
+//     a tenant's chain, ONCE PER AFFECTED TENANT on every merged_hash
+//     recompute — intentional, the count is the blast radius (a broken root
+//     `_defaults.yaml` above 3 tenants reads 4 after one cold Load; pinned by
+//     TestADefaultsParseFailureCountsOncePlusOncePerTenant).
+//
+// ⚠️ "Per scan" is not "per reload": a watch tick that detects a change scans
+// twice (detectChange, then the debounced reload), so a broken tenant file
+// moves the counter by 2 on such a tick. file_basename
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).

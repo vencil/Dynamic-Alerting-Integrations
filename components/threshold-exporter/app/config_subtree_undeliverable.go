@@ -12,8 +12,12 @@ package main
 //	            → GetConfig() → ThresholdCollector → /metrics
 //	scanDirTree → m.hierarchy.tenantSources → Resolve() → /effective
 //
-// Both planes therefore hold the same TENANTS. What they can still disagree
-// on is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
+// So the same file gets the same tenant verdict on both planes. (Not "both
+// planes hold the same tenants" unconditionally: the incremental tenant-only
+// reload keeps a now-broken file's last good tenants, which the stateless
+// readers — tenant-api, da-guard — cannot (#1980), and a `_`-prefixed file
+// declaring `tenants:` reaches /metrics but not /effective (#1982). Neither
+// is this audit's business.) What this audit reports is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
 // /effective resolves the tenant's inheritance chain and reports the value;
 // the collector cannot emit it, because it iterates the ROOT defaults and the
 // declared surface (`optional_overrides:`), and a nested `_` file feeds
@@ -30,9 +34,10 @@ package main
 // decoded only `tenants:` while the flat plane decoded the whole file, so a
 // file whose `defaults:` block (or a tenant body) failed the full decode was
 // dropped by one plane and kept by the other. #1957 made the walker judge
-// every file with config.ParseConfigFile — the flat plane's decode — so that
-// state is unreachable by construction, and cause (a) was removed rather than
-// kept as an alarm for something that can no longer happen. What remains is a
+// every file with config.ParseConfigFile — the flat plane's decode — so a
+// file's bytes no longer get two verdicts, and cause (a) was removed rather
+// than kept as an alarm for a state one decode cannot produce (the two
+// remaining exceptions above are not scanner disagreements). What remains is a
 // known, tracked delivery gap (#1976: deliver per-subtree scope, or reject such
 // a key at validation time), not a divergence between scanners.
 //

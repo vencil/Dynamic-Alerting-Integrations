@@ -711,7 +711,9 @@ func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
 // ⛔ THE ONE PLACE A TENANT FILE'S PARSE FAILURE IS REPORTED (#1957).
 // Returns (nil, _, true) for a file the decode rejects: logged in the flat
 // plane's historical wording (`WARN: skip unparseable file …`) and counted on
-// obs (when non-nil) exactly ONCE per scan. The flat plane reads
+// obs (when non-nil) exactly ONCE per scan (a watch tick that detects a
+// change scans twice; see package main's IncParseFailure for the defaults-
+// file unit, which differs). The flat plane reads
 // TreeFile.ParseFailed and neither re-logs nor re-counts — before #1957 a
 // syntax error was counted by both, and after the decode was unified a type
 // error would have been too. Returns (nil, cfg, false) for a valid file

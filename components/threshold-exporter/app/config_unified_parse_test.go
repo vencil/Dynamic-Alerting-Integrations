@@ -1,9 +1,13 @@
 package main
 
-// config_unified_parse_test.go — the exporter-side pins of #1957: /metrics and
-// /effective hold the SAME tenant set, because both are judged by one decode
-// (config.ParseConfigFile; the walker's verdict, handed to the flat plane
-// through TreeScan.Partials).
+// config_unified_parse_test.go — the exporter-side pins of #1957: the same
+// file content gets the same tenant verdict on /metrics and /effective,
+// because both are judged by one decode (config.ParseConfigFile; the walker's
+// verdict, handed to the flat plane through TreeScan.Partials). The one
+// exception on these paths — the incremental tenant-only reload keeping a
+// broken file's last good values, which the stateless readers cannot — is
+// pinned as-is by TestOneTenantSet_KnownException_IncrementalKeepsLastGood
+// (#1980). `_`-prefixed files declaring `tenants:` are out of scope (#1982).
 //
 // The per-file differential against a plain yaml.Unmarshal lives in
 // pkg/config/config_file_test.go. This file asks the question one level up,
@@ -15,6 +19,7 @@ package main
 // logger via SetLogger. No global swaps.
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -212,5 +217,84 @@ func TestAParseFailureIsCountedOncePerScan(t *testing.T) {
 				t.Errorf("one incremental reload counted x.yaml %v time(s), want 1", got)
 			}
 		})
+	}
+}
+
+// TestOneTenantSet_KnownException_IncrementalKeepsLastGood pins the ONE
+// place where "same file content ⇒ same verdict on every plane" does not hold
+// (#1980). A flat-mode incremental reload whose only change is a tenant file
+// that now fails the one decode takes patchTenants' tenant-only branch, which
+// KEEPS the file's last good values — a deliberate fail-safe (a typo must not
+// silence a tenant's alerts). The exporter's own /effective follows its
+// /metrics (refreshTenantSources). The stateless readers —
+// config.ResolveEffective (tenant-api) and config.ScopeEffective (da-guard) —
+// have no "last good" to keep: they judge the bytes on disk and answer 404.
+//
+// ⛔ This asserts the CURRENT divergent shape exactly, so a change to either
+// side (dropping the fail-safe, or giving the stateless readers a prior) goes
+// red here and has to move #1980 on purpose.
+func TestOneTenantSet_KnownException_IncrementalKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"tenant body is a scalar": "tenants:\n  t-x: \"70\"\n",
+		"syntax error":            "tenants:\n  t-x: {}\n  \tbroken: [\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "ok.yaml"), "tenants:\n  t-ok: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "x.yaml"), "tenants:\n  t-x:\n    mysql_connections: \"70\"\n")
+			m, _, _ := newAuditedManager(t, dir)
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			writeTestYAML(t, filepath.Join(dir, "x.yaml"), body)
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
+
+			// Exporter side: /metrics and its own /effective keep t-x.
+			if _, served := m.GetConfig().Tenants["t-x"]; !served {
+				t.Errorf("/metrics dropped t-x: the tenant-only branch no longer keeps last good values — update #1980")
+			}
+			if _, ok := m.Resolve("t-x"); !ok {
+				t.Errorf("exporter /effective (Resolve) dropped t-x; on this path it follows /metrics — update #1980")
+			}
+			// Stateless readers: not found.
+			if _, err := config.ResolveEffective(dir, "t-x"); !errors.Is(err, config.ErrTenantNotFound) {
+				t.Errorf("ResolveEffective(t-x) err = %v, want ErrTenantNotFound (the #1980 exception)", err)
+			}
+			scoped, err := config.ScopeEffective(dir, dir)
+			if err != nil {
+				t.Fatalf("ScopeEffective: %v", err)
+			}
+			var ids []string
+			for _, ec := range scoped.Tenants {
+				ids = append(ids, ec.TenantID)
+			}
+			if !reflect.DeepEqual(ids, []string{"t-ok"}) {
+				t.Errorf("ScopeEffective tenants = %v, want [t-ok] (the #1980 exception)", ids)
+			}
+		})
+	}
+}
+
+// TestADefaultsParseFailureCountsOncePlusOncePerTenant pins the OTHER unit of
+// da_config_parse_failure_total, so nobody reads "a tenant file is counted
+// once per scan" as universal: a broken ROOT `_defaults.yaml` in hierarchical
+// mode is counted once by the flat plane AND once per affected tenant by the
+// hierarchy's merged_hash computation (emitParseFailureSignal — intentional:
+// the count is the blast radius). Same value on origin/main before #1957.
+func TestADefaultsParseFailureCountsOncePlusOncePerTenant(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: {unclosed\n")
+	for _, id := range []string{"t-a", "t-b", "t-c"} {
+		writeTestYAML(t, filepath.Join(dir, id+".yaml"), "tenants:\n  "+id+": {}\n")
+	}
+	m, fresh, _ := newAuditedManager(t, dir)
+	_ = m.Load()
+	if got := parseFailureCount(fresh, "_defaults.yaml"); got != 4 {
+		t.Errorf("one cold Load counted _defaults.yaml %v time(s), want 4 (flat 1 + one per tenant 3)", got)
 	}
 }

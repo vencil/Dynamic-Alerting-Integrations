@@ -11,8 +11,9 @@ package main
 //
 // ⛔ Since #1957 a tenant that /effective serves and /metrics lacks is NOT
 // this audit's business any more: both planes judge a file with one decode,
-// so the two tenant sets are equal by construction (pinned by
-// config_unified_parse_test.go). The tests below that used to hand the audit
+// so the same bytes get the same tenant verdict (pinned by
+// config_unified_parse_test.go, together with the #1980 exception of the
+// incremental tenant-only reload). The tests below that used to hand the audit
 // "a tenant missing from cfg" now hand it "a tenant with a refused key".
 //
 // Injection discipline (CLAUDE.md §測試注入 Seam): metrics via SetMetrics

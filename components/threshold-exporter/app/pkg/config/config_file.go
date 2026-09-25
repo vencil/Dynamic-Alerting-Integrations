@@ -21,8 +21,20 @@ import "gopkg.in/yaml.v3"
 // or a sibling `defaults:` / `max_metrics_per_tenant:` block of the wrong
 // shape. Such a tenant resolved through /effective while /metrics never
 // served it, and the exporter's divergence gauge (cause "a", removed by
-// #1957) existed to report it after the fact. With one decode that state is
-// unreachable by construction.
+// #1957) existed to report it after the fact. With one decode the same file
+// content gets the same verdict on every plane.
+//
+// ⚠️ THAT IS A STATEMENT ABOUT ONE FILE'S BYTES, NOT "THE PLANES ALWAYS HOLD
+// THE SAME TENANTS". Two known exceptions, both pre-existing and tracked:
+//   - the exporter's incremental tenant-only reload (package main's
+//     patchTenants) KEEPS a now-rejected file's last good values on /metrics
+//     and the exporter's own /effective, while the stateless readers here
+//     (ResolveEffective → tenant-api, ScopeEffective → da-guard) have no
+//     prior and answer not-found — #1980, pinned by package main's
+//     TestOneTenantSet_KnownException_IncrementalKeepsLastGood;
+//   - a `_`-prefixed platform file declaring `tenants:` is never parsed for
+//     tenants by the walker, but the flat plane merges its `tenants:` block,
+//     so /metrics serves a tenant /effective does not know — #1982.
 //
 // Semantics are exactly a plain yaml.Unmarshal into ThresholdConfig — the
 // flat plane's historical decode — pinned against that oracle over a variant

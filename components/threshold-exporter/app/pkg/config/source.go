@@ -321,7 +321,8 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// tenants here. Deliberately left out of #1957: here a parse error
 		// is a hard error (the simulate caller gets a 400), so switching
 		// decodes changes which payloads simulate refuses — a behaviour
-		// decision of its own, not a side effect of unifying the walker.
+		// decision of its own, not a side effect of unifying the walker —
+		// tracked in #1981.
 		var doc struct {
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
