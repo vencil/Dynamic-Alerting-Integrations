@@ -3526,6 +3526,54 @@ def test_report_call_sites_pass_no_more_args_than_the_script_reads() -> None:
     )
 
 
+def test_failure_cause_note_prose_is_not_shell_text() -> None:
+    """FAILURE_CAUSE_NOTE reaches the issue body too, but not as a call argument
+    (#1970), so the call-site guards above never see it. Its prose must not be
+    shell text at all: the `run:` assignment may only copy a variable from
+    `env:`, where YAML — not bash — reads the prose.
+
+    Actions still evaluates `${{ }}` inside `env:` values, so that is the one
+    expansion left to keep out.
+    """
+    found = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.y*ml")):
+        wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                run = step.get("run")
+                if not isinstance(run, str) or REPORT_SH_NAME not in run:
+                    continue
+                # Actions precedence: step over job over workflow.
+                env = {
+                    **(wf.get("env") or {}),
+                    **(job.get("env") or {}),
+                    **(step.get("env") or {}),
+                }
+                where = f"{path.name}::{job_name}::{step.get('name') or '?'}"
+                for m in re.finditer(
+                    r"^\s*(?:export\s+)?FAILURE_CAUSE_NOTE=(.*)$",
+                    _strip_shell_comments(run),
+                    re.M,
+                ):
+                    ref = re.fullmatch(r'"\$\{?([A-Za-z_]\w*)\}?"', m.group(1).strip())
+                    assert ref and ref.group(1) in env, (
+                        f"{where}: FAILURE_CAUSE_NOTE is assigned shell text "
+                        f"({m.group(1)[:60]!r}…). Put the prose in env: "
+                        'and assign it as "$THAT_VAR", so bash never parses it.'
+                    )
+                    assert "${{" not in str(env[ref.group(1)]), (
+                        f"{where}: env {ref.group(1)} contains ${{{{ — Actions "
+                        "evaluates it as an expression."
+                    )
+                    found.append(where)
+    assert found, (
+        "no FAILURE_CAUSE_NOTE assignment found in any report step — if the "
+        "variable was renamed, this check now guards nothing"
+    )
+
+
 def test_remediation_text_names_only_real_components() -> None:
     """Remediation prose must not name a component the scan matrix no longer has.
 
