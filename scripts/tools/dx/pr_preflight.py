@@ -1470,9 +1470,9 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
 def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
     """查詢 PR mergeable 狀態。"""
     if pr_number:
-        cmd = ["gh", "pr", "view", str(pr_number), "--json", "mergeable,mergeStateStatus,reviewDecision"]
+        cmd = ["gh", "pr", "view", str(pr_number), "--json", "mergeable,mergeStateStatus,baseRefName"]
     else:
-        cmd = ["gh", "pr", "view", "--json", "mergeable,mergeStateStatus,reviewDecision"]
+        cmd = ["gh", "pr", "view", "--json", "mergeable,mergeStateStatus,baseRefName"]
 
     r = run(cmd, timeout=30)
     if r.returncode != 0:
@@ -1494,7 +1494,7 @@ def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
 
     mergeable = data.get("mergeable", "UNKNOWN")
     state = data.get("mergeStateStatus", "UNKNOWN")
-    review = data.get("reviewDecision", "")
+    base = data.get("baseRefName") or "<base>"
 
     if mergeable == "CONFLICTING":
         # WARN, not FAIL: this is GitHub's view of the *pushed* PR head,
@@ -1509,11 +1509,17 @@ def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
             f"GitHub 偵測到衝突（state={state}）— 若已在本地解衝突，push 後會重新判定",
         )
     if state == "BLOCKED":
-        reason = "需要 review approval" if review != "APPROVED" else "其他 branch protection rule"
+        # mergeStateStatus does not say WHICH rule blocks, so don't guess
+        # one (#1924: the old reviewDecision-based guess named review approval
+        # even where no review is required). Point at the settings.
         return CheckResult(
             "PR mergeable",
             Status.WARN,
-            f"BLOCKED — {reason}",
+            "BLOCKED — GitHub 未回報是哪條規則擋住",
+            detail=(
+                f"查 protection 設定：gh api repos/{{owner}}/{{repo}}/branches/{base}/protection\n"
+                f"查 rulesets：gh api repos/{{owner}}/{{repo}}/rules/branches/{base}"
+            ),
         )
     if mergeable == "MERGEABLE" and state == "CLEAN":
         return CheckResult("PR mergeable", Status.PASS, "可直接 merge")
