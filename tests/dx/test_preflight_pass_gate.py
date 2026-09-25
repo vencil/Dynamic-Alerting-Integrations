@@ -672,12 +672,13 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
+def _blocked(pushing_from: Path, sha: str, tmpdir: Path | None = None) -> subprocess.CompletedProcess:
     r = _run_gate(
         pushing_from, _refspec("held", sha),
         path_prepend=_make_fake_gh(pushing_from.parent / f"bin-{pushing_from.name}", state="OPEN"),
         # CDPATH: a `cd` that consults it prints the directory, doubling a captured path.
-        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(pushing_from.parent), "CDPATH": ".:/"},
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "CDPATH": ".:/",
+                   "TMPDIR": str(tmpdir or pushing_from.parent)},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
     return r
@@ -703,6 +704,7 @@ def test_pushing_a_clean_tree_at_the_pushed_commit_points_back_at_it(tmp_path: P
 
 @pytest.mark.parametrize("shape", [
     "another-tree-sits-at-the-pushed-commit", "pushing-tree-is-dirty", "pushing-older-commit",
+    "pushing-tree-status-fails",
 ])
 def test_otherwise_preflight_runs_in_a_throwaway_worktree(tmp_path: Path, shape: str):
     """#1952 — no other tree is reused: it may be dirty or someone else's. The
@@ -716,6 +718,11 @@ def test_otherwise_preflight_runs_in_a_throwaway_worktree(tmp_path: Path, shape:
         (wt / "a.txt").write_text("uncommitted\n")
     elif shape == "pushing-older-commit":
         pushing_from, sha = wt, shas[0]
+    elif shape == "pushing-tree-status-fails":
+        # A corrupt index: `status` fails, so cleanliness is unknown.
+        pushing_from = wt
+        index = Path(_git(wt, "rev-parse", "--git-path", "index").stdout.strip())
+        (index if index.is_absolute() else wt / index).write_bytes(b"not an index")
     before = (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout)
 
     head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path.parent)
@@ -752,6 +759,15 @@ def test_a_failed_add_removes_nothing(tmp_path: Path):
     assert r.returncode != 0
     assert (taken / "keep.txt").exists()
     assert str(taken) in _git(tmp_path, "worktree", "list", "--porcelain").stdout
+
+
+def test_the_throwaway_worktree_line_quotes_its_paths(tmp_path: Path):
+    """#1952 — a repository and a TMPDIR with spaces in them."""
+    repo, tmpdir = tmp_path / "repo x", tmp_path / "t d"
+    tmpdir.mkdir()
+    _, shas = _held_worktree(repo, "sibling wt", commits=2)
+    head, landed = _follow_the_hint(_blocked(repo, shas[0], tmpdir=tmpdir).stderr, tmp_path)
+    assert (head, landed.parent) == (shas[0], tmpdir.resolve())
 
 
 def test_a_bare_repository_pushing_its_head_gets_the_instruction(tmp_path: Path):

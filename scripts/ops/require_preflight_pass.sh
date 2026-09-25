@@ -234,8 +234,11 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # ⛔ One line, run in a subshell, absolute paths: the instruction must not move
 # the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
 # re-read from wherever that shell stands.
+# ⛔ A `status` that fails is not "clean": unknown must not pick the tree.
 _here=""
-if [ "$_missing_sha" = "$head_sha" ] && [ -z "$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+if [ "$_missing_sha" = "$head_sha" ] \
+    && _dirty="$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" \
+    && [ -z "$_dirty" ]; then
     _here="$(git rev-parse --show-toplevel 2>/dev/null)" || _here=""
 fi
 if [ -n "$_here" ]; then
