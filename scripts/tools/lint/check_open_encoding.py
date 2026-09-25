@@ -30,14 +30,16 @@ foreign tools, encoding-detection workflows, etc.).
 Severity model (mirrors check_subprocess_timeout.py)
 ----------------------------------------------------
 PR-2.5 cleaned the test files containing actual Tier 1 failures (10 files,
-~33 sites) plus the CSV CRLF bug in production. ~80 sites remain across
-test files that don't currently exercise non-ASCII content — they're
-latent portability bugs but not blockers. So this lint ships warn-only:
+~33 sites) plus the CSV CRLF bug in production. Sites remain in files
+that don't currently exercise non-ASCII content — latent portability bugs
+but not blockers. So this lint ships warn-only:
 
 - **default mode**: report violations to stdout, exit 0.
-- **--ci**: same — non-fatal, surfaces count for tracking.
+- **--ci**: same — non-fatal, surfaces count for tracking. ⚠️ So the
+  pre-commit hook that runs it NEVER blocks a commit: a new bare
+  ``open()`` is printed and the commit goes through (#1984).
 - **--ci --strict-open-encoding**: violations are fatal. Activate once
-  the remaining ~80 sites are cleaned (follow-up PR after v2.8.0).
+  this exits 0. Until then, its "Total:" line states the residue.
 
 Usage
 -----
