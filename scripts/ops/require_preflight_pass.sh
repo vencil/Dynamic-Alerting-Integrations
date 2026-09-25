@@ -261,17 +261,21 @@ fi
 # move the shell you push from, nor depend on its state. A relative refspec
 # (`git push origin HEAD~1:x`) is re-read from wherever that shell stands, so
 # an instruction that left it in another tree made the re-push name another
-# commit, and exit 0.
+# commit.
 if [ -n "$_other_wt" ]; then
     printf -v _other_wt_q '%q' "$_other_wt"
     _checkout_hint="    (cd ${_other_wt_q} && make pr-preflight)"
 else
     # No tree sits at the pushed commit: preflight it in a throwaway worktree.
     # The marker names the commit, so any tree may earn it.
-    _common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || _common="$git_dir"
+    # ⛔ Its path is unique to this push ($$): a shared one let a second paste,
+    # whose `add` failed, remove the first paste's tree mid-run.
+    # ⛔ Remove only what `add` created, and keep preflight's exit code.
+    _common="$(cd "$git_dir" && pwd)"
+    _tmp_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
     printf -v _common_q '%q' "$_common"
-    printf -v _tmp_wt_q '%q' "${TMPDIR:-/tmp}/preflight-${_missing_sha}"
-    _checkout_hint="    git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && (cd ${_tmp_wt_q} && make pr-preflight); git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
+    printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && { (cd ${_tmp_wt_q} && make pr-preflight); r=\$?; git -C ${_common_q} worktree remove --force ${_tmp_wt_q}; exit \$r; })"
 fi
 
 # No marker — block with actionable instructions.

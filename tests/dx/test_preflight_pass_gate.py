@@ -620,19 +620,26 @@ def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
     ⛔ The shell must end where it started: a relative refspec is re-read from
     there on the next push.
     """
-    lines = [ln.strip() for ln in stderr.splitlines() if "make pr-preflight" in ln]
-    assert len(lines) == 1, f"expected one instruction line: {stderr}"
-    probe = 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"'
-    script = lines[0].replace("make pr-preflight", probe) + '; printf "\\0after\\0%s" "$(pwd -P)"'
-    r = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
-    )
+    r = _paste_the_hint(stderr, cwd, 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"')
+    assert r.returncode == 0, f"the instruction failed: {r.stderr}"
     assert "\0probe\0" in r.stdout, f"the instruction did not reach the probe: {r.stderr}"
     head, landed, _ = r.stdout.split("\0probe\0", 1)[1].split("\0", 2)
     assert Path(r.stdout.split("\0after\0", 1)[1]) == cwd.resolve(), (
         "the instruction moved the shell you push from"
     )
     return head, Path(landed)
+
+
+def _paste_the_hint(stderr: str, cwd: Path, preflight: str) -> subprocess.CompletedProcess:
+    """Run the banner's one instruction line with `make pr-preflight` replaced
+    by `preflight`, then report where the shell ended; rc is the line's."""
+    lines = [ln.strip() for ln in stderr.splitlines() if "make pr-preflight" in ln]
+    assert len(lines) == 1, f"expected one instruction line: {stderr}"
+    script = (lines[0].replace("make pr-preflight", preflight)
+              + '; r=$?; printf "\\0after\\0%s" "$(pwd -P)"; exit $r')
+    return subprocess.run(  # subprocess-timeout: ignore
+        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
+    )
 
 
 def _held_worktree(tmp_path: Path, name: str, commits: int = 1,
@@ -745,9 +752,20 @@ def test_with_no_tree_at_the_pushed_commit_the_hint_leaves_yours_alone(tmp_path:
     head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path.parent)
 
     assert head == sha
+    assert landed.parent == tmp_path.parent.resolve(), "not under the gate's TMPDIR"
     assert (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout) == before
     assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
         "the clean-up line left the throwaway worktree registered"
+    )
+
+
+def test_a_failing_preflight_in_the_throwaway_worktree_fails_the_line_and_cleans_up(tmp_path: Path):
+    """#1952 — the line's exit code is preflight's, and its worktree goes either way."""
+    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    r = _paste_the_hint(_blocked(tmp_path, shas[0]).stderr, tmp_path, "false")
+    assert r.returncode != 0
+    assert _git(tmp_path, "worktree", "list", "--porcelain").stdout.count("worktree ") == 2, (
+        "the throwaway worktree outlived a failing preflight"
     )
 
 
@@ -764,8 +782,9 @@ def test_a_bare_repository_pushing_its_head_gets_the_instruction(tmp_path: Path)
         env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(tmp_path.parent)},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
-    head, _ = _follow_the_hint(r.stderr, bare)
+    head, landed = _follow_the_hint(r.stderr, bare)
     assert head == sha
+    assert str(landed) not in _git(bare, "worktree", "list", "--porcelain").stdout
 
 
 def test_an_empty_gh_answer_is_unknown_not_no_pr(tmp_path: Path):
