@@ -314,7 +314,9 @@ func pathOverriddenIn(node any, segs []string) bool {
 //  1. Aggregate dot-path keys that actually changed across every
 //     defaults file in the tenant's chain whose file hash moved, plus
 //     (#1964) every key set by a file in `removed` (left the chain) or
-//     `added` (joined it). nil removed/added = no membership change.
+//     `added` (joined it); a same-directory removal+addition (carrier
+//     switch) is diffed pairwise instead. nil removed/added = no
+//     membership change.
 //  2. If no key actually changed → cosmetic (comment-only / reorder /
 //     whitespace edit; common during operator formatter runs).
 //  3. Else parse the tenant's source YAML overrides; if every changed
@@ -359,19 +361,37 @@ func classifyDefaultsNoOpEffect(
 		}
 		allChanged = append(allChanged, changedDefaultsKeys(prev, next)...)
 	}
-	// #1964: chain-membership changes. A file that left the chain withdraws
-	// every key it set (prior parse vs empty); a file that joined applies
-	// every key it sets (empty vs new parse). A carrier switch in a
-	// co-located `.yaml`/`.yml` pair is covered as one removal plus one
-	// addition. A missing parse on the relevant side is skipped, the same
-	// cosmetic fallback as above.
+	// #1964: chain-membership changes. A removal and an addition in the
+	// same directory are a carrier switch (a co-located `.yaml`/`.yml`
+	// pair; the chain holds at most one carrier per directory, so the
+	// pairing is one-to-one) and are diffed against each other — an
+	// identical-content switch changes no key. An unpaired file that left
+	// the chain withdraws every key it set (prior parse vs empty); an
+	// unpaired file that joined applies every key it sets (empty vs new
+	// parse). A missing parse on either side is skipped, the same cosmetic
+	// fallback as above.
+	addedByDir := make(map[string]string, len(added))
+	for _, dp := range added {
+		addedByDir[filepath.Dir(dp)] = dp
+	}
 	empty := map[string]any{}
 	for _, dp := range removed {
-		if prev := priorParsed[dp]; prev != nil {
+		prev := priorParsed[dp]
+		if partner, ok := addedByDir[filepath.Dir(dp)]; ok {
+			delete(addedByDir, filepath.Dir(dp))
+			if next := newParsed[partner]; prev != nil && next != nil {
+				allChanged = append(allChanged, changedDefaultsKeys(prev, next)...)
+			}
+			continue
+		}
+		if prev != nil {
 			allChanged = append(allChanged, changedDefaultsKeys(prev, empty)...)
 		}
 	}
 	for _, dp := range added {
+		if _, unpaired := addedByDir[filepath.Dir(dp)]; !unpaired {
+			continue
+		}
 		if next := newParsed[dp]; next != nil {
 			allChanged = append(allChanged, changedDefaultsKeys(empty, next)...)
 		}

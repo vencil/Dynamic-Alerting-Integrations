@@ -146,6 +146,30 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			wantScope: "domain", wantEffect: "cosmetic",
 		},
 
+		{
+			// Carrier switch to identical content: no key changed, so even
+			// a tenant overriding every key must not read as shadowed.
+			name: "no-op cosmetic: carrier switch to identical .yml, tenant overrides all keys",
+			extra: func(t *testing.T, dir string) {
+				write("sub/_defaults.yml", "defaults:\n  cpu_pct: 90\n")(t, dir)
+				write("sub/t.yaml", "tenants:\n  t:\n    cpu_pct: \"10\"\n")(t, dir)
+			},
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "cosmetic",
+		},
+		{
+			// Carrier switch 90 → 30 on a key the tenant overrides.
+			name: "no-op shadowed: carrier switch to different .yml on a key the tenant overrides",
+			extra: func(t *testing.T, dir string) {
+				write("sub/_defaults.yml", "defaults:\n  cpu_pct: 30\n")(t, dir)
+				write("sub/t.yaml", "tenants:\n  t:\n    cpu_pct: \"10\"\n")(t, dir)
+			},
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "shadowed",
+		},
+
 		// ── controls: hash-visible changes the old logic already handled ──
 		{
 			name:         "control: edit subtree _defaults.yaml content",

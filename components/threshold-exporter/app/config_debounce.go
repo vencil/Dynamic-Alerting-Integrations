@@ -472,7 +472,8 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			// #1964: a chain-membership change whose merged_hash did not
 			// move lands here too. The classifier counts a file that left
 			// the chain as withdrawing every key it set and a file that
-			// joined as applying every key it sets, so a removal the
+			// joined as applying every key it sets — except a same-directory
+			// carrier switch, diffed old carrier vs new — so a removal the
 			// tenant overrides reads as shadowed and one another chain
 			// entry already supplies reads as cosmetic — same two effects,
 			// no new label.
