@@ -47,6 +47,7 @@ Network-free (uses --list), so it runs in the plain Python Tests CI job.
 from __future__ import annotations
 
 import ast
+import datetime
 import json
 import os
 import re
@@ -1547,6 +1548,96 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
                 "in the condition that owns no waiver file silently borrows "
                 "someone else's suppressions."
             )
+
+
+# OpenVEX status justifications (OPENVEX-SPEC.md), plus `risk_accepted` for the
+# weakest tier the waiver file's GOVERNANCE header allows. Trivy ignores this
+# key; it exists for review.
+_WAIVER_JUSTIFICATIONS = frozenset({
+    "component_not_present",
+    "vulnerable_code_not_present",
+    "vulnerable_code_not_in_execute_path",
+    "vulnerable_code_cannot_be_controlled_by_adversary",
+    "inline_mitigations_already_exist",
+    "risk_accepted",
+})
+
+
+def test_every_waiver_entry_has_expiry_and_justification() -> None:
+    """Every waiver entry must carry an `id`, a `statement`, a
+    `justification` from `_WAIVER_JUSTIFICATIONS` and an `expired_at` (#1933).
+
+    Trivy never expires an entry whose `expired_at` decodes to the zero time,
+    so without a real date the waiver is permanent. Trivy reads
+    `./.trivyignore` with no flag, so tracked `.trivyignore*` files are
+    checked too, not only the `trivyignores:` inputs.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", ":(glob)**/.trivyignore*"],
+        cwd=ROOT, capture_output=True, encoding="utf-8", timeout=60,
+    )
+    assert tracked.returncode == 0, tracked.stderr
+    registers = {p for p in tracked.stdout.split("\0") if p}
+    for path in sorted(WORKFLOWS_DIR.glob("*.y*ml")):
+        wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                expr = (step.get("with") or {}).get("trivyignores")
+                if not expr:
+                    continue
+                expr = str(expr)
+                if "${{" not in expr:
+                    # A plain list is all paths; trivy-action exits on a missing one,
+                    # and release.yaml only runs at tag time.
+                    missing = [p.strip() for p in expr.split(",") if p.strip() and not os.path.isfile(ROOT / p.strip())]
+                    assert not missing, f"{path.name}::{job_name}: trivyignores names missing file(s) {missing}"
+                names = re.findall(r"'([^']*)'", expr) + expr.split(",")
+                found = {n.strip() for n in names if n.strip() and os.path.isfile(ROOT / n.strip())}
+                assert found, (
+                    f"{path.name}::{job_name}: trivyignores {expr!r} names no file "
+                    "in this repo, so this check cannot read the waivers it applies"
+                )
+                registers |= found
+    assert registers, "no waiver file found — this check would pass vacuously"
+
+    def expires(value) -> bool:
+        if isinstance(value, str):
+            try:
+                value = datetime.datetime.fromisoformat(value)
+            except ValueError:
+                return False
+        return isinstance(value, datetime.date) and value.year > 1
+
+    bad = []
+    for rel in sorted(registers):
+        if not rel.endswith((".yaml", ".yml")):
+            bad.append(f"{rel} is a plain-text ignore file; use the YAML form with expired_at")
+            continue
+        doc = yaml.safe_load((ROOT / rel).read_text(encoding="utf-8"))
+        assert isinstance(doc, dict), f"{rel} does not load as a mapping: {doc!r}"
+        for kind, entries in doc.items():
+            for n, entry in enumerate(entries or []):
+                where = f"{rel}: {kind}[{n}]"
+                if not isinstance(entry, dict):
+                    bad.append(f"{where} is not a mapping: {entry!r}")
+                    continue
+                for key in ("id", "statement"):
+                    if not (isinstance(entry.get(key), str) and entry[key].strip()):
+                        bad.append(f"{where} has no {key}")
+                if entry.get("justification") not in _WAIVER_JUSTIFICATIONS:
+                    bad.append(
+                        f"{where} ({entry.get('id')!r}) justification "
+                        f"{entry.get('justification')!r} is not one of "
+                        f"{sorted(_WAIVER_JUSTIFICATIONS)}"
+                    )
+                if not expires(entry.get("expired_at")):
+                    bad.append(
+                        f"{where} ({entry.get('id')!r}) expired_at "
+                        f"{entry.get('expired_at')!r} never expires in Trivy"
+                    )
+    assert not bad, "Waiver entries missing required fields:\n  " + "\n  ".join(bad)
 
 
 @pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "DA_TOOLS_IMAGE"])

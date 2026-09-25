@@ -15,6 +15,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **Trivy 豁免條目必須帶到期日與 justification（ci；[#1933](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1933)）**：沒有真正到期日的豁免條目，Trivy 永遠不讓它過期。新增 `test_every_waiver_entry_has_expiry_and_justification`：每則條目要有 `id`、`statement`、`expired_at` 與 `justification`（允許值見該測試的 `_WAIVER_JUSTIFICATIONS`）；純文字的 `.trivyignore` 不接受。
+
 - **JSX 的 ARIA 參照改由 pre-commit 擋（lint、portal；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：新增 `aria-references-check` hook，對 `tools/portal/src/` 下被修改的 `.jsx` 執行 `check_aria_references.py`。`aria-labelledby`／`aria-describedby`／`aria-controls`／`aria-owns`／`htmlFor` 指向的 id 若不在同一個檔案內，就回 rc 1。這支工具原本已經存在，只是沒有任何閘門呼叫它。⚠️ 以 template literal 組出來的 id 只比對字面前綴，完全動態的參照無法驗證，只會計數，不會判違規。
 
 - **Go 測試讀的 repo 檔，現在由 CI 在執行當下核對 path filter（ci、tests；[#1399](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1399)）**：`go` filter 過去沒有覆蓋掃描器，每一條都能無聲刪除。現在每條 Go leg 經 `scripts/ops/go_testlog_exec.sh` 以 Go 自帶的 test log 記下實際開過的檔，再由 `scripts/ops/go_test_reads.py` 核對它們都在該 leg 的 gate 內，不在就紅；量不到時 exit 2。編譯輸入（`*.go`、go.mod、go.sum）改由 `tests/ops/test_go_filter_compile_inputs.py` 推導。首次量測找到一個活的缺口：`helm/tenant-api/values.yaml` 已補進 `go` filter。走訪整個目錄的讀取、`m.Run` 之前與子行程的讀取不在檢查範圍，見腳本 docstring。
