@@ -117,12 +117,16 @@ jobs:
               #     PR that only regenerated those fixtures ran the Python half
               #     — which passes by construction — while every Go leg skipped
               #     and `Go Tests (1.26)` reported PASS.
-              #     ⛔ No scanner DERIVES `go` entries from what Go tests READ
-              #     (python and portal have one each), so the entries here are
-              #     unpinned — only ci_flake_retry.py + tests/contract/** are.
               #     All three were found BY HAND, the third only after the first
-              #     two were "fixed": treat the class as open until #1399 lands
-              #     a scanner, not as closed because this list grew.
+              #     two were "fixed" — and a fourth (helm/tenant-api/values.yaml,
+              #     below) landed later with nobody noticing. Since #1399 each
+              #     Go leg checks this at run time instead: its tests run through
+              #     scripts/ops/go_testlog_exec.sh, and
+              #     scripts/ops/go_test_reads.py fails the leg if a test opened
+              #     a repo file its gate does not cover. What that check cannot see (walked
+              #     directories, reads before m.Run, child processes) is listed
+              #     in its docstring; compile inputs are
+              #     tests/ops/test_go_filter_compile_inputs.py's.
               - "tests/golden/**"
               - "tests/rulepacks/**"
               - "tests/dx/fixtures/**"
@@ -153,8 +157,19 @@ jobs:
               - "components/da-tools/**"
               - "k8s/03-monitoring/**"
               - "try-local/**"
+              #   - helm/tenant-api/values.yaml — TestShippedConfigLiteralsMatchTheCode
+              #     (tenant-api handler) compares the deployed body-size caps
+              #     with the Go defaults; a PR changing only the chart value
+              #     skipped the leg that would catch the drift. Found by
+              #     go_test_reads.py's first measurement (#1399).
+              - "helm/tenant-api/values.yaml"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
+              #   - the #1399 read check the Go legs run after their tests,
+              #     and the glob matcher it shares with the static scanners.
+              - "scripts/ops/go_testlog_exec.sh"
+              - "scripts/ops/go_test_reads.py"
+              - "scripts/ops/paths_filter_glob.py"
               - ".github/workflows/ci.yml"
             # Python Tests: pytest over tests/ + scripts/tools/ with real-
             # repo-tree reads well beyond *.py (grep-verified):
@@ -1975,8 +1990,14 @@ jobs:
         # masked by retry). Pass-through behavior is identical when all
         # tests pass on first try, which is the normal case.
         run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
-            go test ./... -race -count=1 -coverprofile=coverage.out
+            go test ./... -race -count=1 -coverprofile=coverage.out \
+            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-threshold-exporter --logs "$RUNNER_TEMP/go-testlog"
 
       - name: Upload coverage artifact
         if: always()
@@ -2036,8 +2057,11 @@ jobs:
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
         # (not a go.mod dependency). Only cmd/... and internal/... contain testable code.
         run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
-            go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
+            go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out \
+            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
 
       # #616: the forge_e2e real-forge E2E package is build-tag gated, so the
       # regular `go test ./...` above never compiles it. This step keeps it from
@@ -2046,7 +2070,14 @@ jobs:
       # real runs are the nightly GitLab CE workflow + scripts/ops/forge_e2e_run.sh.
       - name: Compile-check forge_e2e package (build-tag gated)
         working-directory: components/tenant-api
-        run: go test -tags forge_e2e -count=1 ./test/forgee2e/...
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test -tags forge_e2e -count=1 ./test/forgee2e/... \
+            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-tenant-api --logs "$RUNNER_TEMP/go-testlog"
 
       # TRK-221 (#226): Verify generated OpenAPI spec is in sync
       # with the swag annotations in handler/*. Drift = annotation
@@ -2144,7 +2175,19 @@ jobs:
 
       - name: Run Alertmanager inhibit-semantics tests
         working-directory: tests/alertmanager-inhibit
-        run: go test ./... -count=1
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Install pyyaml for the read-coverage check
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-am-inhibit --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-e2e-bench-receiver:
     name: Go Tests — e2e-bench receiver
@@ -2172,7 +2215,19 @@ jobs:
 
       - name: Run e2e-bench receiver unit tests
         working-directory: tests/e2e-bench/receiver
-        run: go test ./... -race -count=1
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test ./... -race -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Install pyyaml for the read-coverage check
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-e2e-bench-receiver --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-bench-filter:
     name: Go Tests — bench-filter
@@ -2202,7 +2257,19 @@ jobs:
 
       - name: Run bench-filter unit tests
         working-directory: scripts/tools/ops
-        run: go test ./... -count=1
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Install pyyaml for the read-coverage check
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-bench-filter --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests:
     # Aggregation gate for the split Go jobs above. The job name is kept

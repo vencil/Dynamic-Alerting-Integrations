@@ -101,6 +101,7 @@ two-ended way.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 import subprocess
 import sys
@@ -112,6 +113,10 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+_GLOB_SPEC = importlib.util.spec_from_file_location(
+    "paths_filter_glob", ROOT / "scripts" / "ops" / "paths_filter_glob.py")
+_GLOB = importlib.util.module_from_spec(_GLOB_SPEC)
+_GLOB_SPEC.loader.exec_module(_GLOB)
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PORTAL_TESTS = ROOT / "tools" / "portal" / "tests"
 # The config whose `include:` is what makes the line above true. Hard-coding a
@@ -2059,15 +2064,6 @@ GATED_LEGS = {
 # a silent majority — and a leg that STOPS being vacuous reds too, keeping this
 # list from rotting into a stale excuse.
 KNOWN_VACUOUS_LEGS = {
-    ("ci.yml", "go-tests-am-inhibit"):
-        "only `go test ./...` under working-directory: tests/alertmanager-"
-        "inhibit — its dependency is directory-shaped",
-    ("ci.yml", "go-tests-e2e-bench-receiver"):
-        "only `go test ./...` under working-directory: tests/e2e-bench/"
-        "receiver — directory-shaped, same as am-inhibit",
-    ("ci.yml", "go-tests-bench-filter"):
-        "only `go test ./...` under working-directory: scripts/tools/ops — "
-        "directory-shaped, same as am-inhibit",
     ("docs-ci.yaml", "doc-line-count"):
         "only `find docs rule-packs -name '*.md' | wc -l` — directory-shaped",
 }
@@ -2119,6 +2115,12 @@ PINNED_STEP_INPUTS = {
 TRACED_INDIRECT_INPUTS = {
     # check-links: the waiver list decides what that required check ENFORCES.
     ("docs-ci.yaml", "docs", ".doclinkignore"),
+    # The Go legs (#1399): the `-exec` wrapper is an argument to `go test`,
+    # not a command this scanner extracts; the glob matcher is imported by
+    # go_test_reads.py; flaky-tests.yaml is read by ci_flake_retry.py.
+    ("ci.yml", "go", "scripts/ops/go_testlog_exec.sh"),
+    ("ci.yml", "go", "scripts/ops/paths_filter_glob.py"),
+    ("ci.yml", "go", "flaky-tests.yaml"),
     # mkdocs-build: pass/fail is a two-way `comm` against this ledger, so
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
@@ -2328,60 +2330,13 @@ def _out_of_tree_reads() -> dict[str, list[str]]:
     return found
 
 
-SUFFIX_SEGMENT = re.compile(r"\*\.\w+$")
-
-
-def _covers(pattern: str, path: str) -> bool:
-    """Does a paths-filter pattern cover `path` (a file OR a directory)?
-
-    Segment matcher over the CLOSED alphabet the repo's filters actually use:
-    a literal, `**` (any run of segments, including none), and `*.ext`. That
-    set was not guessed — every pattern in every `dorny/paths-filter` block in
-    `.github/workflows/` was enumerated, and nothing else occurs. Within that
-    alphabet this is complete, not a half-built glob engine.
-
-    Anything OUTSIDE the alphabet (a bare `*`, `a*b`, `?`) returns False, i.e.
-    reports the path as uncovered. That is the loud direction: a new glob shape
-    surfaces as a filter-coverage failure a human must look at, rather than
-    being silently mis-matched.
-
-    ⛔ "False is loud" holds only for a POSITIVE pattern, because callers ask
-    `any(_covers(p, path) for p in patterns)` — one False narrows nothing. A
-    NEGATED pattern (`!x`) therefore fails the opposite way: it would be read as
-    the literal segment `"!x"`, return False, and be absorbed while the positive
-    patterns still say "covered", making an excluded path look included. That
-    is why negation is rejected in `_workflow_filters` rather than handled here;
-    do not "fix" it by teaching this function about `!`, which would still leave
-    the OR unable to express an override.
-
-    ⛔ This is the single disarm surface for every assertion in this module —
-    all of them are negative ("nothing uncovered"), so an over-permissive
-    `_covers` turns the whole file green and quiet.
-    `test_covers_matches_only_the_shapes_in_use` pins both directions; keep it
-    that way.
-    """
-    return _match_segments(pattern.split("/"), path.split("/"))
-
-
-def _match_segments(pat: list[str], parts: list[str]) -> bool:
-    if not pat:
-        return not parts
-    head, rest = pat[0], pat[1:]
-    if head == "**":
-        # `**` absorbs any number of segments, including zero — so
-        # `docs/**` covers `docs` itself and `a/**/*.md` covers `a/x.md`.
-        return any(_match_segments(rest, parts[i:]) for i in range(len(parts) + 1))
-    if not parts:
-        return False
-    if SUFFIX_SEGMENT.fullmatch(head):
-        suffix = head[len("*"):]
-        if not (parts[0].endswith(suffix) and parts[0] != suffix):
-            return False
-    elif "*" in head or "?" in head:
-        return False  # outside the modelled alphabet — fail loud
-    elif parts[0] != head:
-        return False
-    return _match_segments(rest, parts[1:])
+# The matcher itself lives in scripts/ops/paths_filter_glob.py so the Go legs'
+# runtime read check (#1399) uses the SAME definition of "covered" without
+# importing this pytest module. Its docstring carries the ⛔ notes that used
+# to sit here; the pins below still exercise it through these names.
+SUFFIX_SEGMENT = _GLOB.SUFFIX_SEGMENT
+_covers = _GLOB.covers
+_match_segments = _GLOB.match_segments
 
 
 def test_covers_matches_only_the_shapes_in_use() -> None:
@@ -3387,6 +3342,7 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "ci.yml": {
         ("go", "scripts/ops/ci_flake_retry.py"),
         ("go", "tests/contract/**"),
+        ("go", "scripts/ops/go_test_reads.py"),
         ("portal", "scripts/tools/lint/check_portal_bundle_size.py"),
         ("python", "requirements/**"),
         ("python", "scripts/**"),
