@@ -442,7 +442,7 @@ def test_a_marker_on_head_does_not_vouch_for_a_different_pushed_commit(
     r = _run_gate(
         tmp_path, _refspec("feat/p", feat_sha),
         path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
-        env_extra={"GIT_PREFLIGHT_STRICT": "1"},
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(tmp_path.parent)},
     )
     assert r.returncode == 1, (
         "an unverified commit was approved because an unrelated commit had a "
@@ -613,23 +613,25 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
 
 
 def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
-    """Run the banner's instruction as printed, `make pr-preflight` swapped for
-    a probe, plus its clean-up line when there is one; return (HEAD,
-    directory) where the instruction lands."""
-    lines = [ln.strip() for ln in stderr.splitlines()]
-    at = [i for i, ln in enumerate(lines) if ln.endswith("make pr-preflight")]
-    assert len(at) == 1, f"expected one instruction line: {stderr}"
-    step = lines[at[0]][: -len("make pr-preflight")]
-    script = step + 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"'
-    cleanup = [ln for ln in lines[at[0] + 1:at[0] + 3] if ln.startswith("cd - &&")]
-    if cleanup:
-        script += " && " + cleanup[0]
+    """Paste the banner's instruction into a shell standing in `cwd`, with
+    `make pr-preflight` swapped for a probe; return (HEAD, directory) where the
+    probe ran.
+
+    ⛔ The shell must end where it started: a relative refspec is re-read from
+    there on the next push.
+    """
+    lines = [ln.strip() for ln in stderr.splitlines() if "make pr-preflight" in ln]
+    assert len(lines) == 1, f"expected one instruction line: {stderr}"
+    probe = 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"'
+    script = lines[0].replace("make pr-preflight", probe) + '; printf "\\0after\\0%s" "$(pwd -P)"'
     r = subprocess.run(  # subprocess-timeout: ignore
         ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
     )
-    assert r.returncode == 0, f"the instruction does not run: {r.stderr}"
-    # `git worktree add` prints to stdout too.
+    assert "\0probe\0" in r.stdout, f"the instruction did not reach the probe: {r.stderr}"
     head, landed, _ = r.stdout.split("\0probe\0", 1)[1].split("\0", 2)
+    assert Path(r.stdout.split("\0after\0", 1)[1]) == cwd.resolve(), (
+        "the instruction moved the shell you push from"
+    )
     return head, Path(landed)
 
 
@@ -666,7 +668,7 @@ def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
     r = _run_gate(
         pushing_from, _refspec("held", sha),
         path_prepend=_make_fake_gh(pushing_from.parent / f"bin-{pushing_from.name}", state="OPEN"),
-        env_extra={"GIT_PREFLIGHT_STRICT": "1"},
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(pushing_from.parent)},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
     return r
@@ -718,10 +720,9 @@ def test_the_hint_enters_the_tree_already_at_the_pushed_commit(tmp_path: Path, s
     "nested-without-its-git-file",
 ])
 def test_with_no_tree_at_the_pushed_commit_the_hint_leaves_yours_alone(tmp_path: Path, shape: str):
-    """#1952 — no tree sits at the pushed commit, so the instruction makes one.
-
-    The tree you push from is dirty and must stay where it is: a relative
-    refspec is re-read from it on the next push.
+    """#1952 — no tree sits at the pushed commit, so the instruction makes one,
+    leaves the tree you push from where it is, and cleans up after itself.
+    Followed from outside the repository: `git -C <tree> push` is one way in.
     """
     if shape == "nested-without-its-git-file":
         # Its directory is still there, inside the main checkout: entering it
@@ -739,17 +740,32 @@ def test_with_no_tree_at_the_pushed_commit_the_hint_leaves_yours_alone(tmp_path:
         shutil.rmtree(wt)
     else:
         (wt / ".git").unlink()
-    (tmp_path / "a.txt").write_text("uncommitted\n")
     before = (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout)
 
-    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path.parent)
 
     assert head == sha
     assert (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout) == before
-    assert (tmp_path / "a.txt").read_text() == "uncommitted\n"
     assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
         "the clean-up line left the throwaway worktree registered"
     )
+
+
+def test_a_bare_repository_pushing_its_head_gets_the_instruction(tmp_path: Path):
+    """#1952 — a bare repository has no toplevel; asking for one must not end
+    the gate before it prints anything."""
+    _init_git(tmp_path)
+    bare = tmp_path.parent / f"bare-{tmp_path.name}.git"
+    assert _git(tmp_path, "clone", "-q", "--bare", str(tmp_path), str(bare)).returncode == 0
+    sha = _git(bare, "rev-parse", "HEAD").stdout.strip()
+    r = _run_gate(
+        bare, _refspec("held", sha),
+        path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(tmp_path.parent)},
+    )
+    assert r.returncode == 1, f"stderr={r.stderr}"
+    head, _ = _follow_the_hint(r.stderr, bare)
+    assert head == sha
 
 
 def test_an_empty_gh_answer_is_unknown_not_no_pr(tmp_path: Path):

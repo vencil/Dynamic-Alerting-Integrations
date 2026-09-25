@@ -229,14 +229,14 @@ fi
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # Point at a worktree whose HEAD IS the pushed commit — preflight marks HEAD.
 # The pushing tree itself first, by its own toplevel: the push may come from
-# elsewhere (`git -C <tree> push`), so "run it here" is not an instruction,
-# and a moved tree is listed under its old path.
+# elsewhere (`git -C <tree> push`), and a moved tree is listed under its old
+# path.
 # ⛔ Not the worktree holding the branch: it may sit at another commit.
 # ⛔ Decide per record: `prunable` comes after `HEAD`. `-z`: a path may contain
 # a newline (#1952).
 _other_wt=""
 if [ "$_missing_sha" = "$head_sha" ]; then
-    _other_wt="$(git rev-parse --show-toplevel 2>/dev/null)"
+    _other_wt="$(git rev-parse --show-toplevel 2>/dev/null)" || _other_wt=""
 fi
 _wt_path=""
 _wt_head=""
@@ -257,20 +257,21 @@ if [ -z "$_other_wt" ]; then
     done < <(git worktree list --porcelain -z 2>/dev/null)
 fi
 
+# ⛔ One line, run in a subshell, absolute paths only: the instruction must not
+# move the shell you push from, nor depend on its state. A relative refspec
+# (`git push origin HEAD~1:x`) is re-read from wherever that shell stands, so
+# an instruction that left it in another tree made the re-push name another
+# commit, and exit 0.
 if [ -n "$_other_wt" ]; then
     printf -v _other_wt_q '%q' "$_other_wt"
-    _checkout_hint="    cd ${_other_wt_q} && make pr-preflight"
+    _checkout_hint="    (cd ${_other_wt_q} && make pr-preflight)"
 else
-    # ⛔ By SHA, not by branch name: `git push HEAD~1:refs/heads/x` and
-    # `git push other:refs/heads/x` name a commit no branch here points at.
-    # ⛔ In a throwaway worktree, not by moving the tree you push from: a
-    # relative refspec re-read after `checkout --detach` names another commit
-    # (the re-push then says "Everything up-to-date"), and a dirty tree cannot
-    # be checked out at all. The marker names the commit, so any tree may
-    # earn it.
-    _checkout_hint="    P=\$(mktemp -d) && git worktree add --detach \"\$P\" ${_missing_sha} && cd \"\$P\" && make pr-preflight
-  then, before pushing again:
-    cd - && git worktree remove --force \"\$P\""
+    # No tree sits at the pushed commit: preflight it in a throwaway worktree.
+    # The marker names the commit, so any tree may earn it.
+    _common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || _common="$git_dir"
+    printf -v _common_q '%q' "$_common"
+    printf -v _tmp_wt_q '%q' "${TMPDIR:-/tmp}/preflight-${_missing_sha}"
+    _checkout_hint="    git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && (cd ${_tmp_wt_q} && make pr-preflight); git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
 fi
 
 # No marker — block with actionable instructions.
