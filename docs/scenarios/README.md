@@ -60,7 +60,7 @@ flowchart LR
 
 | 場景 | 適用角色 | 摘要 |
 |------|---------|------|
-| [驗證場景與平台行為](verified-scenarios.md) | Platform Engineer, SRE | 企業級 E2E + Unit/Integration 測試矩陣、三態模式驗證、HA 故障切換驗證 |
+| [驗證場景與平台行為](verified-scenarios.md) | Platform Engineer, SRE | 核心場景 A–F 各由哪個測試或 lint 守、覆蓋缺口、`max by` 防 HA 翻倍 |
 
 ## 相關資源
 

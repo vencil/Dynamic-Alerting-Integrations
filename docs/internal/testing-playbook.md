@@ -43,7 +43,7 @@ lang: zh
 | 2 | Helm field-manager conflict | 見 [Windows-MCP Playbook → Helm 防衝突](windows-mcp-playbook.md#helm-upgrade-防衝突) |
 | 3 | ConfigMap volume 更新延遲 30-90s | hot-reload 驗證需等 45+ 秒 |
 | 4 | Metrics label 順序 (`component,metric,severity,tenant`) | grep 用 `metric=.*tenant=`，不要反過來 |
-| 5 | 場景測試殘留值 | 測試前用 `patch_config.py` 恢復預設，負載測試用 `make load-cleanup` |
+| 5 | 手動改值／demo 殘留值 | 測試前用 `patch_config.py` 恢復預設，負載測試用 `make load-cleanup` |
 
 ## Projected Volume 架構
 
@@ -146,9 +146,9 @@ threshold-exporter 多 replica 時，每個 Pod 匯出相同 `user_threshold`。
 | AntiAffinity | `kubectl get deploy ... -o jsonpath='{.spec.template.spec.affinity}'` | 含 `podAntiAffinity` |
 | RollingUpdate | `kubectl get deploy ... -o jsonpath='{.spec.strategy}'` | `maxUnavailable: 0` |
 
-### HA 故障切換 (Scenario F)
+### HA 故障切換
 
-Kill Pod → 驗證：1) PDB 保護 1 Pod Running；2) Alert 持續不中斷；3) 閾值不翻倍。
+Kill Pod 後「PDB 保住 1 Pod、alert 不中斷」**沒有自動化覆蓋**；「閾值不翻倍」由 `scripts/tools/lint/check_ha_threshold_aggregation.py` 靜態守（現況與缺口見 [驗證場景](../scenarios/verified-scenarios.md)）。
 
 `helm upgrade` 後 replicas 可能被覆蓋 → `kubectl scale deploy threshold-exporter -n monitoring --replicas=2`。
 
@@ -217,16 +217,12 @@ da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用
 | sysbench (16 threads) | `mysql_global_status_slow_queries` | 運行中 | — | `MariaDBHighSlowQueries` |
 | composite | connections AND cpu | — | — | `MariaDBSystemBottleneck` |
 
-## Demo & Scenario 工作流
+## Demo 工作流
 
 | 指令 | 行為 | 耗時 |
 |------|------|------|
 | `make demo` | scaffold → migrate → diagnose → check_alert → patch_config → baseline_discovery | ~45s |
 | `make demo-full` | 上述 + composite load → alerts FIRING → cleanup → resolved | ~5min |
-| `make test-scenario-a ARGS=--with-load` | 真實連線負載觸發 MariaDBHighConnections | ~3min |
-| `make test-scenario-b ARGS=--with-load` | 真實 CPU 壓力觸發 PodContainerHighCPU | ~3min |
-| `make test-scenario-e` | Multi-tenant 隔離（閾值修改 + disable metric） | ~3min |
-| `make test-scenario-f` | HA 故障切換（Kill Pod → 恢復 → 不翻倍） | ~4min |
 
 ## 程式碼品質規範
 

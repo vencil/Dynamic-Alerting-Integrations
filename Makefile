@@ -155,30 +155,6 @@ federation-e2e: ## ADR-020 IV-2j (#516) federation request-path E2E — docker-c
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
 
-.PHONY: test-scenario-a
-test-scenario-a: ## Scenario A 測試: 動態閾值 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-a.sh $(TENANT) $(ARGS)
-
-.PHONY: test-scenario-b
-test-scenario-b: ## Scenario B 測試: 弱環節檢測 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-b.sh $(TENANT) $(ARGS)
-
-.PHONY: test-scenario-c
-test-scenario-c: ## Scenario C 測試: 狀態字串比對
-	@./tests/scenario-c.sh $(TENANT)
-
-.PHONY: test-scenario-d
-test-scenario-d: ## Scenario D 測試: 維護模式 / 複合警報 / 多層嚴重度
-	@./tests/scenario-d.sh $(TENANT)
-
-.PHONY: test-scenario-e
-test-scenario-e: ## Scenario E 測試: 多租戶隔離 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-e.sh $(ARGS)
-
-.PHONY: test-scenario-f
-test-scenario-f: ## Scenario F 測試: HA 故障切換 (Kill Pod → 恢復 → 閾值不翻倍)
-	@./tests/scenario-f.sh $(TENANT)
-
 .PHONY: demo
 demo: ## 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
 	@bash ./scripts/demo.sh --skip-load
