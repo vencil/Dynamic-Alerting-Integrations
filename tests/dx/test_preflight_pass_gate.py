@@ -455,13 +455,10 @@ def test_a_marker_on_head_does_not_vouch_for_a_different_pushed_commit(
         "the banner must name the commit that is actually missing a marker, "
         f"not the one the pusher is standing on. stderr={r.stderr}"
     )
-    # ⛔ By sha, not by branch name: `git checkout <remote-branch>` either does
-    # not exist locally, points at a different commit, or exits 128 when that
-    # branch is checked out in another worktree.
-    assert f"git checkout --detach {feat_sha}" in r.stderr, (
-        "the recovery instruction must reach green: running preflight where "
-        f"the pusher stands re-marks the wrong commit. stderr={r.stderr}"
-    )
+    # The recovery instruction must reach the pushed commit, not re-mark the
+    # one the pusher stands on.
+    head, _ = _follow_the_hint(r.stderr, tmp_path)
+    assert head == feat_sha
 
 
 def test_every_pushed_commit_needs_its_own_marker_not_just_one(
@@ -617,18 +614,23 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
 
 def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
     """Run the banner's instruction as printed, `make pr-preflight` swapped for
-    a probe; return (HEAD, directory) where it lands."""
-    lines = [ln.strip() for ln in stderr.splitlines()
-             if ln.rstrip().endswith("make pr-preflight")]
-    assert len(lines) == 1, f"expected one instruction line: {stderr}"
-    step = lines[0][: -len("make pr-preflight")]
+    a probe, plus its clean-up line when there is one; return (HEAD,
+    directory) where the instruction lands."""
+    lines = [ln.strip() for ln in stderr.splitlines()]
+    at = [i for i, ln in enumerate(lines) if ln.endswith("make pr-preflight")]
+    assert len(at) == 1, f"expected one instruction line: {stderr}"
+    step = lines[at[0]][: -len("make pr-preflight")]
+    script = step + 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"'
+    cleanup = [ln for ln in lines[at[0] + 1:at[0] + 3] if ln.startswith("cd - &&")]
+    if cleanup:
+        script += " && " + cleanup[0]
     r = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", "-c", step + "git rev-parse HEAD && pwd -P"],
-        cwd=cwd, capture_output=True, text=True,
+        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
     )
     assert r.returncode == 0, f"the instruction does not run: {r.stderr}"
-    head, landed = r.stdout.split("\n", 1)
-    return head, Path(landed[:-1])  # `pwd` ends with one newline
+    # `git worktree add` prints to stdout too.
+    head, landed, _ = r.stdout.split("\0probe\0", 1)[1].split("\0", 2)
+    return head, Path(landed)
 
 
 def _held_worktree(tmp_path: Path, name: str, commits: int = 1,
@@ -641,25 +643,23 @@ def _held_worktree(tmp_path: Path, name: str, commits: int = 1,
         parent = tmp_path.parent / f"wts-{tmp_path.name}"
         (parent / "sibling").mkdir(parents=True)
     wt = parent / name
+    assert _git(tmp_path, "worktree", "add", "-q", "-b", "held", str(wt), "main").returncode == 0
+    shas = []
+    for i in range(commits):
+        assert _git(wt, "commit", "-q", "--allow-empty", "-m", f"held {i}").returncode == 0
+        shas.append(_git(wt, "rev-parse", "HEAD").stdout.strip())
+    return wt, shas
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
     }
-    assert subprocess.run(  # subprocess-timeout: ignore
-        ["git", "-C", str(tmp_path), "worktree", "add", "-q", "-b", "held", str(wt), "main"],
-        capture_output=True, text=True, env=env,
-    ).returncode == 0
-    shas = []
-    for i in range(commits):
-        assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "-C", str(wt), "commit", "-q", "--allow-empty", "-m", f"held {i}"],
-            capture_output=True, text=True, env=env,
-        ).returncode == 0
-        shas.append(subprocess.run(  # subprocess-timeout: ignore
-            ["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True,
-        ).stdout.strip())
-    return wt, shas
+    return subprocess.run(  # subprocess-timeout: ignore
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env,
+    )
 
 
 def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
@@ -690,32 +690,66 @@ def test_the_hint_lands_in_the_worktree_at_the_pushed_commit(tmp_path: Path, nam
 
 
 @pytest.mark.parametrize("shape", [
-    "held-at-a-later-commit", "worktree-dir-gone", "locked-and-gone",
-    "nested-without-its-git-file", "pushed-from-another-tree",
+    "pushed-from-another-tree", "pushing-tree-was-moved", "prunable-entry-listed-first",
 ])
-def test_following_the_hint_reaches_the_pushed_commit(tmp_path: Path, shape: str):
-    """#1952 — following the instruction ends on the pushed commit."""
+def test_the_hint_enters_the_tree_already_at_the_pushed_commit(tmp_path: Path, shape: str):
+    """#1952 — a tree whose HEAD is the pushed commit is where the `cd` goes."""
+    wt, (sha,) = _held_worktree(tmp_path, "sibling wt")
+    pushing_from = tmp_path
+    if shape == "pushed-from-another-tree":
+        pushing_from = wt  # `git -C <wt> push` from a shell in the main checkout
+    elif shape == "pushing-tree-was-moved":
+        # Still a working tree; `git worktree list` shows it, prunable, at its
+        # old path.
+        moved = wt.parent / "moved"
+        wt.rename(moved)
+        wt = pushing_from = moved
+    else:
+        # Worktrees are listed by path: this one comes before `sibling wt`.
+        gone = wt.parent / "a-gone"
+        assert _git(tmp_path, "worktree", "add", "-q", "--detach", str(gone), "main").returncode == 0
+        shutil.rmtree(gone)
+    head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path)
+    assert (head, landed) == (sha, wt.resolve())
+
+
+@pytest.mark.parametrize("shape", [
+    "held-at-a-later-commit", "worktree-dir-gone", "locked-and-gone",
+    "nested-without-its-git-file",
+])
+def test_with_no_tree_at_the_pushed_commit_the_hint_leaves_yours_alone(tmp_path: Path, shape: str):
+    """#1952 — no tree sits at the pushed commit, so the instruction makes one.
+
+    The tree you push from is dirty and must stay where it is: a relative
+    refspec is re-read from it on the next push.
+    """
     if shape == "nested-without-its-git-file":
         # Its directory is still there, inside the main checkout: entering it
         # lands in the main checkout's HEAD.
         wt, shas = _held_worktree(tmp_path, "sibling wt", parent=tmp_path / ".wt")
     else:
         wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
-    sha, pushing_from = shas[-1], tmp_path
+    sha = shas[-1]
     if shape == "held-at-a-later-commit":
         sha = shas[0]
     elif shape == "worktree-dir-gone":
         shutil.rmtree(wt)
     elif shape == "locked-and-gone":
-        subprocess.run(["git", "-C", str(tmp_path), "worktree", "lock", str(wt)],  # subprocess-timeout: ignore
-                       check=True)
+        assert _git(tmp_path, "worktree", "lock", str(wt)).returncode == 0
         shutil.rmtree(wt)
-    elif shape == "nested-without-its-git-file":
+    else:
         (wt / ".git").unlink()
-    else:  # `git -C <wt> push` from a shell standing in the main checkout
-        pushing_from = wt
-    head, _ = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path)
+    (tmp_path / "a.txt").write_text("uncommitted\n")
+    before = (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout)
+
+    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+
     assert head == sha
+    assert (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout) == before
+    assert (tmp_path / "a.txt").read_text() == "uncommitted\n"
+    assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
+        "the clean-up line left the throwaway worktree registered"
+    )
 
 
 def test_an_empty_gh_answer_is_unknown_not_no_pr(tmp_path: Path):

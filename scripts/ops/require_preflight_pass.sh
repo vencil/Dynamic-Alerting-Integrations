@@ -228,13 +228,16 @@ fi
 
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # Point at a worktree whose HEAD IS the pushed commit — preflight marks HEAD.
-# The current worktree is a candidate too: the push may come from elsewhere
-# (`git -C <tree> push`), so "run it here" is not an instruction.
+# The pushing tree itself first, by its own toplevel: the push may come from
+# elsewhere (`git -C <tree> push`), so "run it here" is not an instruction,
+# and a moved tree is listed under its old path.
 # ⛔ Not the worktree holding the branch: it may sit at another commit.
-# ⛔ Decide per record: `prunable` comes after `HEAD`. A prunable entry, or a
-# directory that is not there, cannot be entered. `-z`: a path may contain a
-# newline (#1952).
+# ⛔ Decide per record: `prunable` comes after `HEAD`. `-z`: a path may contain
+# a newline (#1952).
 _other_wt=""
+if [ "$_missing_sha" = "$head_sha" ]; then
+    _other_wt="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
 _wt_path=""
 _wt_head=""
 _wt_prunable=0
@@ -243,24 +246,31 @@ _wt_pick() {
         _other_wt="$_wt_path"
     fi
 }
-while IFS= read -r -d '' _wt_line; do
-    case "$_wt_line" in
-        "worktree "*) _wt_path="${_wt_line#worktree }"; _wt_head=""; _wt_prunable=0 ;;
-        "HEAD "*) _wt_head="${_wt_line#HEAD }" ;;
-        prunable|"prunable "*) _wt_prunable=1 ;;
-        "") _wt_pick; [ -n "$_other_wt" ] && break ;;
-    esac
-done < <(git worktree list --porcelain -z 2>/dev/null)
+if [ -z "$_other_wt" ]; then
+    while IFS= read -r -d '' _wt_line; do
+        case "$_wt_line" in
+            "worktree "*) _wt_path="${_wt_line#worktree }"; _wt_head=""; _wt_prunable=0 ;;
+            "HEAD "*) _wt_head="${_wt_line#HEAD }" ;;
+            prunable|"prunable "*) _wt_prunable=1 ;;
+            "") _wt_pick; [ -n "$_other_wt" ] && break ;;
+        esac
+    done < <(git worktree list --porcelain -z 2>/dev/null)
+fi
 
 if [ -n "$_other_wt" ]; then
     printf -v _other_wt_q '%q' "$_other_wt"
     _checkout_hint="    cd ${_other_wt_q} && make pr-preflight"
 else
-    # ⛔ By SHA, not by branch name. `git push <old-sha>:refs/heads/x` and
-    # `git push HEAD:refs/heads/other-name` both name a remote branch that
-    # either does not exist locally or does not point at the commit being
-    # pushed — so `git checkout <branch>` marks the wrong commit, or fails.
-    _checkout_hint="    git checkout --detach ${_missing_sha} && make pr-preflight"
+    # ⛔ By SHA, not by branch name: `git push HEAD~1:refs/heads/x` and
+    # `git push other:refs/heads/x` name a commit no branch here points at.
+    # ⛔ In a throwaway worktree, not by moving the tree you push from: a
+    # relative refspec re-read after `checkout --detach` names another commit
+    # (the re-push then says "Everything up-to-date"), and a dirty tree cannot
+    # be checked out at all. The marker names the commit, so any tree may
+    # earn it.
+    _checkout_hint="    P=\$(mktemp -d) && git worktree add --detach \"\$P\" ${_missing_sha} && cd \"\$P\" && make pr-preflight
+  then, before pushing again:
+    cd - && git worktree remove --force \"\$P\""
 fi
 
 # No marker — block with actionable instructions.
