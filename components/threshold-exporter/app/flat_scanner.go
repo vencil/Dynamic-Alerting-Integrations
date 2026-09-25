@@ -97,14 +97,21 @@ func isNestedPlatformFile(key string) bool {
 // then went too far the other way: a file with real syntax damage stopped
 // incrementing `parse_failure` and stopped logging at all. A syntax-only probe
 // answers the right question — the same one `ERROR:` has always meant here.
-func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) {
+//
+// Returns the probe's decode and ok=true when the file is syntactically
+// fine, so reportNestedPlatformTenants can inspect it WITHOUT a second
+// parse (a separate decode there measured +10k allocs / +1.4 MiB per
+// DiffAndReload_Hierarchical_1000 reload — every nested carrier parsed
+// twice on every full load, #1982 bench gate).
+func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) (any, bool) {
 	var probe any
 	err := yaml.Unmarshal(data, &probe)
 	if err == nil {
-		return // syntactically fine; its content simply is not for this plane
+		return probe, true // syntactically fine; its content simply is not for this plane
 	}
 	metrics.IncParseFailure(filepath.Base(fullPath))
 	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+	return nil, false
 }
 
 // parsePartialConfig decodes one config file's bytes with the ONE decode,
@@ -331,18 +338,26 @@ func reportPlatformOrphans(configs map[string]ThresholdConfig, exists map[string
 // inheritance chain reads only a carrier's `defaults:` — so without this the
 // tenant values in it vanish with no log at all. Behaviour is unchanged: the
 // block is still dropped; it is just no longer silent. A syntactically
-// broken file is reportUnparseableNestedPlatformFile's to report, so a
-// decode failure here says nothing.
-func reportNestedPlatformTenants(name string, data []byte, logger *log.Logger) {
-	var probe struct {
-		Tenants map[string]yaml.Node `yaml:"tenants"`
-	}
-	if err := yaml.Unmarshal(data, &probe); err != nil || len(probe.Tenants) == 0 {
+// broken file is reportUnparseableNestedPlatformFile's to report; this
+// takes THAT function's decode (`probe`) and never parses on its own.
+func reportNestedPlatformTenants(name string, probe any, logger *log.Logger) {
+	doc, ok := probe.(map[string]any)
+	if !ok {
 		return
 	}
-	ids := make([]string, 0, len(probe.Tenants))
-	for tid := range probe.Tenants {
-		ids = append(ids, tid)
+	var ids []string
+	switch tenants := doc["tenants"].(type) {
+	case map[string]any:
+		for tid := range tenants {
+			ids = append(ids, tid)
+		}
+	case map[any]any: // a non-string key somewhere in the mapping
+		for tid := range tenants {
+			ids = append(ids, fmt.Sprint(tid))
+		}
+	}
+	if len(ids) == 0 {
+		return
 	}
 	sort.Strings(ids)
 	logger.Printf("WARN: tenants: block in nested platform file %s ignored (tenants %s) — "+

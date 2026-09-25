@@ -710,8 +710,9 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		// error is still counted and still loud; content this plane simply
 		// does not want is skipped in silence. (#1569 blind review.)
 		if isNestedPlatformFile(name) {
-			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
-			reportNestedPlatformTenants(fullPath, data, m.getLogger())
+			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger()); ok {
+				reportNestedPlatformTenants(fullPath, probe, m.getLogger())
+			}
 			delete(newConfigs, name)
 			continue
 		}
@@ -1462,8 +1463,9 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		// error is still counted and still loud; content this plane simply
 		// does not want is skipped in silence. (#1569 blind review.)
 		if isNestedPlatformFile(name) {
-			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
-			reportNestedPlatformTenants(fullPath, data, m.getLogger())
+			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger()); ok {
+				reportNestedPlatformTenants(fullPath, probe, m.getLogger())
+			}
 			continue
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
