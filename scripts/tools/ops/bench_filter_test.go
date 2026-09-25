@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"go/build"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,8 +51,9 @@ const cpuHeader = "cpu: AMD EPYC 7763 64-Core Processor\n"
 // TestFilterKeepsExactlyTheRetainedLines pins the whole output of one stream
 // rather than a list of lines that must survive: for the shapes this fixture
 // carries, keeping one that used to be dropped reds as loudly as dropping one
-// that used to be kept. Shapes absent from the fixture are not covered — the
-// build-output event is the measured example (#1872 decides that one).
+// that used to be kept. Shapes absent from the fixture are not covered. The
+// diag stream is pinned whole the same way: it carries the build-output
+// events and nothing else, and none of them reach out (#1872).
 func TestFilterKeepsExactlyTheRetainedLines(t *testing.T) {
 	in := strings.Join([]string{
 		// Non-JSON lines take the text-level fallback.
@@ -67,7 +69,10 @@ func TestFilterKeepsExactlyTheRetainedLines(t *testing.T) {
 		// Fractional ns/op: what a sub-microsecond benchmark emits, and what
 		// analyze_bench_history.py's own regex accepts.
 		`{"Action":"output","Package":"example.com/x","Test":"BenchmarkFast","Output":"BenchmarkFast-16   \t     100\t         6.570 ns/op\n"}`,
+		// go1.24+: compile diagnostics as events, and bench.err.log is empty.
+		`{"Action":"build-output","ImportPath":"example.com/y","Output":"# example.com/y\n"}`,
 		`{"Action":"build-output","ImportPath":"example.com/y","Output":"./y.go:3:9: syntax error\n"}`,
+		`{"Action":"build-fail","ImportPath":"example.com/y"}`,
 		`{"Action":"output","Package":"example.com/x","Output":"PASS\n"}`,
 		`{"Action":"output","Package":"example.com/x","Output":"ok  \texample.com/x\t12.345s\n"}`,
 		`{"Action":"pass","Package":"example.com/x","Elapsed":12.345}`,
@@ -93,10 +98,13 @@ func TestFilterKeepsExactlyTheRetainedLines(t *testing.T) {
 		"FAIL\n" +
 		"FAIL\texample.com/y\t0.01s\n"
 
-	var out strings.Builder
-	readErr, writeErr := filter(strings.NewReader(in), &out)
+	var out, diag strings.Builder
+	readErr, writeErr := filter(strings.NewReader(in), &out, &diag)
 	if readErr != nil || writeErr != nil {
 		t.Fatalf("filter errors: read=%v write=%v", readErr, writeErr)
+	}
+	if got, want := diag.String(), "# example.com/y\n./y.go:3:9: syntax error\n"; got != want {
+		t.Errorf("diag mismatch\n got: %q\nwant: %q", got, want)
 	}
 	if !strings.Contains(out.String(), cpuHeader) {
 		t.Errorf("the cpu: header was dropped; analyze_bench_history.py --trend-watch " +
@@ -124,7 +132,7 @@ func TestFilterReturnsReadAndWriteErrors(t *testing.T) {
 	// first case — which any ceiling satisfies — would still be here.
 	t.Run("line at the 16 MiB ceiling", func(t *testing.T) {
 		var out strings.Builder
-		readErr, writeErr := filter(strings.NewReader(oversized(16*1024*1024)), &out)
+		readErr, writeErr := filter(strings.NewReader(oversized(16*1024*1024)), &out, io.Discard)
 		if !errors.Is(readErr, bufio.ErrTooLong) || writeErr != nil {
 			t.Fatalf("want read=%v write=<nil>, got read=%v write=%v", bufio.ErrTooLong, readErr, writeErr)
 		}
@@ -134,7 +142,7 @@ func TestFilterReturnsReadAndWriteErrors(t *testing.T) {
 	})
 	t.Run("line just under the ceiling", func(t *testing.T) {
 		var out strings.Builder
-		readErr, writeErr := filter(strings.NewReader(oversized(16*1024*1024-1)), &out)
+		readErr, writeErr := filter(strings.NewReader(oversized(16*1024*1024-1)), &out, io.Discard)
 		if readErr != nil || writeErr != nil {
 			t.Fatalf("want no errors, got read=%v write=%v", readErr, writeErr)
 		}
@@ -144,7 +152,7 @@ func TestFilterReturnsReadAndWriteErrors(t *testing.T) {
 	})
 	t.Run("output refuses writes", func(t *testing.T) {
 		in := `{"Action":"output","Output":` + jsonString(cpuHeader) + "}\n"
-		readErr, writeErr := filter(strings.NewReader(in), refusingWriter{})
+		readErr, writeErr := filter(strings.NewReader(in), refusingWriter{}, io.Discard)
 		if readErr != nil || writeErr == nil {
 			t.Fatalf("want read=<nil> write=non-nil, got read=%v write=%v", readErr, writeErr)
 		}

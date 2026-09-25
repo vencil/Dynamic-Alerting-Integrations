@@ -542,13 +542,13 @@ workflow_dispatch 跑完後讀 step summary，決定要不要 tag。
 > COUNT=3 make go-bench-clean             # 覆寫 -count
 > ```
 >
-> 產出：`bench.out.txt`（僅 `goos:` / `goarch:` / `pkg:` / `cpu:` / `BenchmarkX ns/op` / `PASS` / `FAIL` 行）、`bench.err.log`（compile / setup 失敗，成功跑時為空——見下）、`bench.raw.jsonl`（`go test -json` 原 event stream 供 debug）。
+> 產出：`bench.out.txt`（僅 `goos:` / `goarch:` / `pkg:` / `cpu:` / `BenchmarkX ns/op` / `PASS` / `FAIL` 行）、`bench.err.log`（`go test` 的 fd 2，成功跑時為空——見下）、`bench.raw.jsonl`（`go test -json` 原 event stream 供 debug）。
 >
 > 底層實作：`go test -bench ... -json <args>` → `bench_filter.go` 解析 JSON event，只保留「benchmark result pattern」+ 「suite header/summary」。
 >
 > ⚠️ **`-json` 並不是把 stdout/stderr 分流**（本行原文如此敘述，是錯的）。`cmd/go` 把測試 binary 的 stdout **與 stderr** 一起餵給 test2json，所以 `log.Printf`（乃至直接寫 `os.Stderr`）的輸出會以 `{"Action":"output"}` event 出現在 **stdout 的 JSON 串流裡**，不會落到 fd 2。實測 go1.23.12：呼叫 `log.Println` 的 benchmark 產出 `bench.err.log` **0 bytes**、stdout 6 個對應 event。
 >
-> ⚠️ **編譯／setup 失敗會不會進 `bench.err.log`，取決於 Go 版本**，本行原文寫的「那真的會進」只在舊 toolchain 成立：go1.23.12 實測 fd 2 得 47 bytes，而 go1.24.7 / go1.25.1 實測是 **0 bytes**（TRK-381 / [#1771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1771)；build 失敗改以 JSON event 走 stdout）。⇒ **err.log 是空的不代表擷取壞掉**，在 go1.24+ 連編譯錯誤都是空的；那些情況要讀 `bench.raw.jsonl`，或 `bench.out.txt` 裡仍保留的 `FAIL … [setup failed]` 行。
+> ⚠️ **編譯失敗的診斷落在哪裡取決於 Go 版本**：go1.24+ 的 `bench.err.log` 連編譯錯誤都是空的，診斷由 `bench_filter.go` 印到 stderr（[#1872](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1872)）。各版本的當前語意以 `bench_wrapper.sh` 檔頭為 SSOT，不在本檔複述。
 >
 > ⛔ 本行原文括號裡的「`bench_wrapper.sh` 的 exit code 1 就指向它」**是假的**，已刪：那個 `exit 1` 是 `set -euo pipefail` 下的死碼，從來沒有執行過（TRK-381）。exit code 與 err.log 的**當前**語意以 `scripts/tools/ops/bench_wrapper.sh` 檔頭為 SSOT，不在本檔複述。
 >
