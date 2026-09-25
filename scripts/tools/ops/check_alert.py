@@ -84,9 +84,9 @@ if __name__ == "__main__":
                        help_text="Prometheus Query API URL "
                                  "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
-    # #452 Track C: this tool emits JSON by design (consumers like
-    # tests/scenarios/scenario-d.sh parse stdout as JSON). --json is the
-    # default and is accepted explicitly so the documented
+    # #452 Track C: this tool emits JSON by design (callers parse stdout
+    # as JSON). --json is the default and is accepted explicitly so the
+    # documented
     # `da-tools check-alert ... --json | jq` idiom works and matches the
     # convention required of new subcommands (see dev-rules.md).
     parser.add_argument("--json", action="store_true", default=True,

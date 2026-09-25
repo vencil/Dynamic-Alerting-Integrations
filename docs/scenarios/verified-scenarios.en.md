@@ -13,7 +13,7 @@ lang: en
 >
 > **Related**: [Architecture & Design](../architecture-and-design.en.md) · [Benchmarks](../benchmarks.en.md) · [Scenario Guide Index](README.md)
 
-This document shows how the platform **behaves** under key scenarios and that those behaviors are **end-to-end verified** — maturity evidence for evaluators and SREs. The CI commands and benchmark inventory are an internal QA record (see [Coverage overview](#coverage-overview)).
+This document shows how the platform **behaves** under key scenarios, and **which automated mechanism actually guards each behavior — and where nothing does yet** — maturity evidence for evaluators and SREs. The CI commands and benchmark inventory are an internal QA record (see [Coverage overview](#coverage-overview)).
 
 ## Maintenance Mode & Composite Alerts
 
@@ -37,16 +37,34 @@ Composite alerts (AND logic) and multi-tier severity (Critical auto-downgrade to
 
 ## Core Verified Scenarios
 
-Six core scenarios are all **end-to-end verified** (inside a K8s cluster, from a config change through to alert firing/resolution):
-
-| Scenario | Platform guarantee (E2E-verified) | Why it matters |
-|----------|-----------------------------------|----------------|
+| Scenario | Platform guarantee | Why it matters |
+|----------|--------------------|----------------|
 | **A — Dynamic thresholds** | Tenant threshold changes take effect immediately, no restart | Self-service tuning without an ops ticket |
 | **B — Weakest-link detection** | Alerts fire on the "worst" value across nodes / metrics | One bad node is caught, not diluted by averaging |
 | **C — Three-state control** | A metric that has a platform default can be custom / default / disable (a declared key has nothing to inherit — only "set it" or "stay silent") | Precise control over each alert's switch and threshold |
 | **D — Maintenance mode** | Auto-silence during the window, auto-recover on expiry | Planned maintenance doesn't spam, and you can't forget to re-enable |
 | **E — Multi-tenant isolation** | Changing tenant A's config **never** affects tenant B | The foundation of multi-tenant safety |
 | **F — HA failover** | Service continues when a Pod dies; aggregate value doesn't double | High availability + data correctness |
+
+### What guards each guarantee
+
+These guarantees are **not** guarded by a single end-to-end test in a K8s cluster; they are split across tests and lints at different layers (Go tests live in `components/threshold-exporter/app/`, promtool rule tests in `tests/rulepacks/`):
+
+| Scenario | Guarding mechanism |
+|----------|--------------------|
+| **A** | Config hot-reload: `watchloop_test.go`, `config_symlink_reload_test.go`. The exporter → Prometheus → rule-pack fire chain (**static** config, no value change): `try-local/smoke.sh`, run on a daily schedule; the exporter is the published image pinned in `try-local/docker-compose.yaml`, not the current tree (the rule packs are), and it only checks that some critical alert is firing |
+| **B** | Only "max across containers within one pod": the mixed-pod case in `rule-pack-kubernetes-cpu-node-share_test.yaml` |
+| **C** | `TestResolve_ThreeState` in `config_resolve_test.go` |
+| **D** | Maintenance silencing: `rule-pack-mariadb-threads_test.yaml`, plus the lint `scripts/tools/lint/check_maintenance_symmetry.py`, which checks that no arm of a two-arm alert drops its maintenance clause; expiry recovery: `config_silent_mode_test.go`; multi-tier severity: `TestConfigManager_LoadDir_CriticalSuffix` in `config_loaddir_test.go` |
+| **E** | Config-resolution layer only, and as a single-config, one-pass resolution snapshot (no "change A, then check B"): `TestResolve_ThreeState` asserts that different per-tenant overrides or `disable` do not affect each other; `TestResolveStateFilters_PerTenantDisable` covers only a state filter's `disable` |
+| **F** | No double-counting: the lint `scripts/tools/lint/check_ha_threshold_aggregation.py` (every aggregation of `user_threshold` must use `max`) |
+
+**Gaps (no automated coverage today)**:
+
+- Changing a threshold on a live cluster and watching the alert flip firing ↔ resolved (the end-to-end form of A and E).
+- Taking the worst value across multiple pods / nodes of one tenant (the cross-pod half of B).
+- Service continuing after a Pod is killed, with the PDB keeping at least one Pod (the failover half of F).
+- `MariaDBHighConnections`, `MariaDBSystemBottleneck` (composite alert) and `ContainerImagePullFailure` have no firing test; they are listed under `uncovered` in `tests/rulepacks/vmalert_coverage_baseline.yaml`.
 
 The most important design proof and the end-to-end lifecycle are expanded below.
 
@@ -57,9 +75,7 @@ threshold-exporter runs HA with 2 replicas; both Pods emit the same `user_thresh
 - ✅ `max(5, 5) = 5` (correct)
 - ❌ With `sum by(tenant)`: `5 + 5 = 10` (doubled, wrong)
 
-Scenario F kills one Pod and verifies the aggregate is still 5; after a replacement Pod starts, the series count returns to 2 but the aggregate stays 5 — directly proving that choosing **`max` over `sum`** is correct as Pod count changes, the key rationale of the HA design (see [Architecture & Design §High Availability](../architecture-and-design.en.md#4-high-availability-design)).
-
-Multi-tenant isolation (Scenario E) is verified along two dimensions: **E1 threshold-change isolation** (lower db-a's threshold → only db-a fires; db-b's threshold and state are completely unaffected) and **E2 disable isolation** (set one db-a metric to `disable` → it vanishes from the exporter; db-b's same metric still emits normally).
+However the Pod count changes, `max` returns the same value — the rationale for choosing **`max` over `sum`** in the HA design (see [Architecture & Design §High Availability](../architecture-and-design.en.md#4-high-availability-design)).
 
 ## End-to-End Lifecycle (demo-full)
 
@@ -96,7 +112,7 @@ sequenceDiagram
 
 ## Coverage Overview
 
-- **6 core scenarios** (A–F) are all **end-to-end verified** (`make test-scenario-*` running inside a real K8s cluster).
+- For what guards **core scenarios A–F** and where the gaps are, see "What guards each guarantee" above.
 - **Unit / integration tests** cover the enterprise feature domains: Silent Mode, Severity Dedup, Config-driven Routing, Per-rule Overrides, Cardinality Guard, Schema Validation, Migration Engine, Shadow Monitoring Cutover, Policy-as-Code, Alert Quality Scoring, and more.
 - **Tier 2 performance benchmarks** (1000–5000 tenant hot-path latency / memory / goroutines) give empirical grounding for SLO and sharding decisions — see [Benchmarks](../benchmarks.en.md) for the numbers.
 - The CI pipeline runs the full test suite on **every PR**.

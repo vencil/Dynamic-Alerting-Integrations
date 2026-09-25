@@ -7,7 +7,7 @@ purpose: |
   深入內容（factory 清單、E2E 矩陣、CI job 細節、debug 流程）請看 doc-map：
     - docs/internal/test-map.md       — 目錄結構 + factory inventory + marker 表
     - docs/internal/testing-playbook.md — 排錯手冊（CI flake / Go race / Playwright timeout）
-    - docs/internal/test-coverage-matrix.md — E2E 場景 × 功能域覆蓋矩陣
+    - docs/internal/test-coverage-matrix.md — 功能域覆蓋矩陣 + benchmark 對照
 audience: [contributors, ai-agent]
 lang: zh
 ---
@@ -29,7 +29,7 @@ tests/
 ├── fixtures/                     # Python 共用測試資料
 ├── golden/                       # Golden file 比對基準
 ├── snapshots/                    # JSON 快照（help 全文 .snap 已改結構契約）
-└── scenarios/                    # Shell 場景腳本（make test-scenario-* 入口）
+└── scenarios/                    # 手動跑的 shell 工具腳本（bash 直接跑，無 make／CI 入口）
 ```
 
 Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
@@ -82,7 +82,6 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 要鎖視覺回歸（pixel-diff baseline）?  → tests/e2e/visual.spec.ts（Ubuntu CI 才能產基線）
 要單元測試 portal JSX 元件邏輯?       → tools/portal/tests/<Component>.test.tsx（Vitest，ESM Option C / monorepo restructure 後）
 測試前端跨工具效能 / 頁面載入?         → tests/e2e-bench/
-測試需要真實 DB / Prometheus / docker? → tests/scenarios/ + Makefile target
 ```
 
 如果不確定就放 `tests/shared/`，PR review 時再 relocate。
