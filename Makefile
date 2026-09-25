@@ -652,7 +652,7 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
-	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness (advisory — read its output above; it never blocks)"
 	@echo "  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."

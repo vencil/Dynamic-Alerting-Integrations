@@ -15,6 +15,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **JSX 的 ARIA 參照改由 pre-commit 擋（lint、portal；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：新增 `aria-references-check` hook，對 `tools/portal/src/` 下被修改的 `.jsx` 執行 `check_aria_references.py`。`aria-labelledby`／`aria-describedby`／`aria-controls`／`aria-owns`／`htmlFor` 指向的 id 若不在同一個檔案內，就回 rc 1。這支工具原本已經存在，只是沒有任何閘門呼叫它。⚠️ 以 template literal 組出來的 id 只比對字面前綴，完全動態的參照無法驗證，只會計數，不會判違規。
+
 - **Go 測試讀的 repo 檔，現在由 CI 在執行當下核對 path filter（ci、tests；[#1399](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1399)）**：`go` filter 過去沒有覆蓋掃描器，每一條都能無聲刪除。現在每條 Go leg 經 `scripts/ops/go_testlog_exec.sh` 以 Go 自帶的 test log 記下實際開過的檔，再由 `scripts/ops/go_test_reads.py` 核對它們都在該 leg 的 gate 內，不在就紅；量不到時 exit 2。編譯輸入（`*.go`、go.mod、go.sum）改由 `tests/ops/test_go_filter_compile_inputs.py` 推導。首次量測找到一個活的缺口：`helm/tenant-api/values.yaml` 已補進 `go` filter。走訪整個目錄的讀取、`m.Run` 之前與子行程的讀取不在檢查範圍，見腳本 docstring。
 
 - **errexit＋pipefail 下讀 `PIPESTATUS` 改由 pre-commit 擋（lint；[#1845](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1845)）**：新增 `check_pipestatus_errexit.py`。檔案的非註解行開了 errexit 與 pipefail、整份沒有任何 `set +e`／`set +o errexit`／`set +o pipefail`，卻有一行讀 `PIPESTATUS` ⇒ 報違規；這是 TRK-376／TRK-381 的形狀：未受保護的讀取在管線失敗時根本跑不到。⛔ 這是**檔案級文字判定**，不判可達性，所以比實際缺陷寬；確認可達的讀取在同一行加 `# pipestatus-ok: <why>` 豁免（理由內容無法驗證）。讀不到母體、不是 git repo、檔案讀不進來一律 rc 2。判不準時一律往「誤紅」那邊倒：開啟旗標讀得寬、放寬只認行首的 `set`。已知漏判（heredoc 裡行首的 `set +e`、檔案級放寬、GitHub Actions `shell: bash` 隱含的旗標）寫在工具 docstring，各有測試釘住。
@@ -93,6 +95,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
 
 ### Fixed
+
+- **`check-doc-reading-time` 與 `check-doc-freshness` 兩支手動 hook 從來沒真的檢查過文件；`make pre-tag` 的 playbook 新鮮度不再印假的 ✅（lint、dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：兩支 hook 的 entry 都傳了 `--ci`，但兩支工具都不認得這個參數，argparse 每次都 exit 2，文件一份都沒被量過。現在改傳工具真正定義的 `--check`。`pre-tag` 呼叫的 `playbook-freshness-ll` 設計上只是提醒、不會擋，但結尾橫幅卻寫死「playbook-freshness ✅」，即使同一段輸出裡已經列出 ⛔ 過期條目；現在橫幅改為註明它是 advisory，要看上方輸出。
 
 - **nightly CVE 報告 delivered 桶的失敗成因說明不再經過 bash 解析（ci；[#1970](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1970)）**：`FAILURE_CAUSE_NOTE` 也會進 issue 內文，但它不是 `file_cve_report.sh` 的參數，#1355／#1932 的守衛看不到它；原本寫在 `run:` 的雙引號字串裡，日後寫進反引號、`$(` 或 `"` 就會被 bash 執行或切斷。現在散文放在該 step 的 `env:`（`DELIVERED_FAILURE_CAUSE_NOTE`），`run:` 只做 `export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"`。issue 內文不變。新增 `test_failure_cause_note_prose_is_not_shell_text`：report step 裡對 `FAILURE_CAUSE_NOTE` 的賦值只能引用 `env:` 的變數，且該值不得含 `${{`（Actions 會對它求值）。
 
