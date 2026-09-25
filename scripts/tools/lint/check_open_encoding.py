@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-PR-2.5 (v2.8.0) root-caused ~30 Tier 1 test failures to ``open(path)`` calls
+PR-2.5 (v2.8.0) root-caused Tier 1 test failures to ``open(path)`` calls
 that never specified ``encoding='utf-8'``. On Windows / cp950 / shift_jis /
 non-UTF-8 Linux locales, the OS-default codec chokes on chinese-content
 YAML / Markdown / source files with ``UnicodeDecodeError``. Linux + Docker
@@ -29,8 +29,8 @@ foreign tools, encoding-detection workflows, etc.).
 
 Severity model (mirrors check_subprocess_timeout.py)
 ----------------------------------------------------
-PR-2.5 cleaned the test files containing actual Tier 1 failures (10 files,
-~33 sites) plus the CSV CRLF bug in production. Sites remain in files
+PR-2.5 cleaned the test files containing actual Tier 1 failures plus the
+CSV CRLF bug in production. Sites remain in files
 that don't currently exercise non-ASCII content — latent portability bugs
 but not blockers. So this lint ships warn-only:
 

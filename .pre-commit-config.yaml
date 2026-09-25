@@ -943,7 +943,7 @@ repos:
         files: ^(scripts|components/da-tools|tests)/.*\.py$
         # Warn-only because latent sites remain in test files that
         # don't currently exercise non-ASCII content (no failing tests).
-        # PR-2.5 cleaned the 33 sites + 15 subprocess.run sites that
+        # PR-2.5 cleaned the open() and subprocess.run sites that
         # were causing actual UnicodeDecodeError on cp950 / shift_jis /
         # POSIX-locale dev hosts. Flip to --strict-open-encoding once
         # `check_open_encoding.py --ci --strict-open-encoding` exits 0.
