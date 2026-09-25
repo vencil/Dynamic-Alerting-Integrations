@@ -240,19 +240,35 @@ func (c *ThresholdCollector) collectStateFilters(ch chan<- prometheus.Metric, cf
 // operators. The metric is emitted as long as the expired config YAML remains —
 // once the tenant removes or updates the config, this metric disappears (stale
 // marker). Shared by the three collect* expiry sites via emitConfigEvent.
+//
+// ⛔ Every series in this family must carry a distinct label set: two series
+// with equal labels do not degrade one event, they fail the whole Gather and
+// /metrics answers 500 for every tenant (#2003). Uniqueness is therefore held
+// by the labels themselves, never by the free-text reason:
+//   - silence_expired     — one per (tenant, target_severity); `target: all`
+//     expands to warning + critical, which share the tenant's reason.
+//   - maintenance_expired — one per tenant (a single _state_maintenance key).
+//   - threshold_expired   — one per (tenant, metric key); the key is encoded
+//     into reason (see collectThresholdExpiries).
+//
+// target_severity is part of ONE label schema for all three events, not a
+// silence-only extra: maintenance/threshold events set it to "", and in the
+// Prometheus data model an empty label value is the same as the label being
+// absent, so `by (target_severity)` / `{target_severity=""}` behave uniformly.
 var configEventDesc = prometheus.NewDesc(
 	"da_config_event",
-	"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
-	[]string{"tenant", "event", "reason"},
+	"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and empty for other events.",
+	[]string{"tenant", "event", "reason", "target_severity"},
 	nil,
 )
 
 // emitConfigEvent sends one da_config_event series (value 1) for an expired
 // timed config. Consolidates the three collect* expiry sites that emit the same
-// {tenant,event,reason} shape; a NewConstMetric failure is logged and skipped
-// (never fatal to the scrape).
-func emitConfigEvent(ch chan<- prometheus.Metric, tenant, event, reason string) {
-	m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0, tenant, event, reason)
+// {tenant,event,reason,target_severity} shape; a NewConstMetric failure is
+// logged and skipped (never fatal to the scrape). targetSeverity is "" for
+// events that are not scoped to a severity.
+func emitConfigEvent(ch chan<- prometheus.Metric, tenant, event, reason, targetSeverity string) {
+	m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0, tenant, event, reason, targetSeverity)
 	if err != nil {
 		log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", tenant, err)
 		return
@@ -277,7 +293,7 @@ func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg
 			if reason == "" {
 				reason = "silent_mode expired for " + sm.TargetSeverity
 			}
-			emitConfigEvent(ch, sm.Tenant, "silence_expired", reason)
+			emitConfigEvent(ch, sm.Tenant, "silence_expired", reason, sm.TargetSeverity)
 			continue
 		}
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
@@ -301,7 +317,7 @@ func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Met
 		if reason == "" {
 			reason = "maintenance_mode expired"
 		}
-		emitConfigEvent(ch, me.Tenant, "maintenance_expired", reason)
+		emitConfigEvent(ch, me.Tenant, "maintenance_expired", reason, "")
 	}
 }
 
@@ -310,8 +326,9 @@ func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Met
 // fail-safed back to the platform default in resolveBaseRows; this event lets a
 // cleanup PR remove the stale conf.d YAML and gives operators visibility. The
 // metric key is encoded into the reason so each (tenant, metric) event is a
-// distinct da_config_event series (the label set is {tenant,event,reason}, so a
-// shared user reason on two metrics would otherwise collide into one series).
+// distinct da_config_event series (target_severity is "" here, so reason is the
+// only label that tells two metrics apart; a shared user reason on two metrics
+// would otherwise collide and fail the Gather — see configEventDesc).
 func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig, now time.Time) {
 	for _, te := range cfg.ResolveThresholdExpiriesAt(now) {
 		if !te.Expired {
@@ -321,7 +338,7 @@ func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metri
 		if te.Reason != "" {
 			reason = te.MetricKey + ": " + te.Reason
 		}
-		emitConfigEvent(ch, te.Tenant, "threshold_expired", reason)
+		emitConfigEvent(ch, te.Tenant, "threshold_expired", reason, "")
 	}
 }
 

@@ -36,7 +36,7 @@ paths:
         - `user_silent_mode{tenant, target_severity}`: Emitted only while silent mode is active, one series per muted severity, value always 1 (alerts still fire; notifications are inhibited)
         - `user_severity_dedup{tenant, alertname}`: Severity deduplication flag
         - `tenant_metadata_info{tenant, metadata_labels}`: Tenant metadata key-value pairs as labels
-        - `da_config_event{event_type}`: Configuration reload events (reload_count, last_reload_timestamp, error_count)
+        - `da_config_event{tenant, event, reason, target_severity}`: Timed config expiry event, value always 1 (event: silence_expired / maintenance_expired / threshold_expired; target_severity is set only for silence_expired, empty otherwise)
       operationId: getMetrics
       tags:
         - Metrics
@@ -73,11 +73,6 @@ paths:
                 # TYPE tenant_metadata_info info
                 tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
                 tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
-                
-                # HELP da_config_event Configuration event counter
-                # TYPE da_config_event counter
-                da_config_event{event_type="reload_success"} 42
-                da_config_event{event_type="reload_error"} 2
                 
                 # EOF
       x-code-samples:
