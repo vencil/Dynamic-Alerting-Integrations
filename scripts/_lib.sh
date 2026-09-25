@@ -8,7 +8,6 @@
 #   顏色/日誌   — log, warn, err, info
 #   路徑常數     — SCRIPT_DIR, PROJECT_ROOT, K8S_DIR, CLUSTER_NAME
 #   基礎工具     — ensure_kubeconfig, kill_port, url_encode, preflight_check
-#   ConfigMap    — get_cm_value
 #   Port-forward — setup_port_forwards, cleanup_port_forwards
 #   Prometheus   — prom_query_value, get_alert_status, wait_for_alert
 #   Exporter     — get_exporter_metric, wait_exporter
@@ -63,21 +62,6 @@ url_encode() {
   else
     echo "$1" | sed 's/ /%20/g; s/{/%7B/g; s/}/%7D/g; s/=/%3D/g; s/"/%22/g; s/~/%7E/g'
   fi
-}
-
-# --- 讀取 ConfigMap 中某 tenant 的某 metric 當前值 ---
-# Usage: get_cm_value <tenant> <metric_key>
-# 本體是 patch_config.py 的 shell_get_cm_value。印 `default` = 租戶存在但沒設
-# 這個 metric（與 patch_config 的往返協定）。
-_LIB_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-get_cm_value() {
-  local t=$1 key=$2
-  kubectl get configmap threshold-config -n monitoring -o json | python3 -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import patch_config
-sys.exit(patch_config.shell_get_cm_value(sys.stdin.read(), sys.argv[2], sys.argv[3]))
-' "${_LIB_SH_DIR}/tools/ops" "${t}" "${key}"
 }
 
 # --- 前置檢查 ---
