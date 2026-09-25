@@ -47,6 +47,7 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     overlay_platform_tenants,
     resolve_defaults_file,
+    unselected_carriers,
     unusable_config_paths,
     unusable_reason,
     warn_nested,
@@ -145,8 +146,14 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     # hand-rolled copy. `iter_config_files` already applies `_is_config`
     # (suffix + not hidden) and, on the `recursive=False` branch, `is_file()`
     # — the three checks that used to sit inline here.
-    for entry in iter_config_files(base, recursive=False):
+    listed = list(iter_config_files(base, recursive=False))
+    # The unselected carrier spelling is read by no plane (#1674): its
+    # `tenants:` block must not reach the per-tenant merge either.
+    skip = unselected_carriers(listed)
+    for entry in listed:
         fname = entry.name
+        if fname in skip:
+            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
@@ -338,8 +345,14 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     entries: list = []
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
-    for entry in iter_config_files(base, recursive=False):
+    listed = list(iter_config_files(base, recursive=False))
+    # The unselected carrier spelling is read by no plane (#1674): its
+    # `tenants:` block must not reach the per-tenant merge either.
+    skip = unselected_carriers(listed)
+    for entry in listed:
         fname = entry.name
+        if fname in skip:
+            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}

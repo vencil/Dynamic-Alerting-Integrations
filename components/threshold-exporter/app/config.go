@@ -851,9 +851,23 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// Existence is THIS scan's verdict, on both branches (see
 	// declaredTenantIDs): the patch branch can orphan a platform entry too,
 	// by removing the only tenant file that declared the tenant.
+	//
+	// ⛔ ON THE PATCH BRANCH, "EXISTS" IS WHAT THIS RELOAD WILL SERVE. A
+	// tenant file that fails to parse keeps its tenants' last good values
+	// there (patchTenants' fail-safe, #1980), platform-supplied keys
+	// included; the scan has no declaration for it, so without this the
+	// orphan WARN named a tenant the same commit kept serving with the
+	// platform value. The full-rebuild branch drops such a tenant, so there
+	// the scan's verdict alone is right.
 	exists := tenantExistenceFor(newConfigs, scan)
+	patchBranch := isTenantOnlyChange(changed, added, removed) && m.config != nil
+	if patchBranch && exists != nil {
+		for _, tid := range m.failSafeHeldTenants(newHashes, newConfigs) {
+			exists[tid] = struct{}{}
+		}
+	}
 	reportPlatformOrphans(newConfigs, exists, m.getLogger())
-	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
+	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
 		// case. prev is read under the lock; patchTenants is otherwise pure.
@@ -889,6 +903,39 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		tree:    scan,
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
+}
+
+// failSafeHeldTenants lists the tenants the patch branch keeps serving on
+// last good values: attributed (tenantSources) to a file that is still on
+// disk (newHashes) but did not parse this round (absent from newConfigs) —
+// the "on disk, did NOT parse" row refreshTenantSources keeps. Read from
+// the attribution BEFORE this reload refreshes it, because that is the
+// population m.config (the patch's prev) was built for.
+func (m *ConfigManager) failSafeHeldTenants(newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
+	scanRoot := absScanRoot(m.path)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.config == nil {
+		return nil
+	}
+	var out []string
+	for tid, src := range m.hierarchy.tenantSources {
+		rel, err := filepath.Rel(scanRoot, filepath.Clean(src))
+		if err != nil {
+			continue
+		}
+		key := filepath.ToSlash(rel)
+		if _, onDisk := newHashes[key]; !onDisk {
+			continue
+		}
+		if _, parsed := newConfigs[key]; parsed {
+			continue
+		}
+		if _, served := m.config.Tenants[tid]; served {
+			out = append(out, tid)
+		}
+	}
+	return out
 }
 
 // diffFileHashes compares the previous and current per-file hash maps and

@@ -497,3 +497,20 @@ class TestPlatformTenantBlock:
         warns = [ln for ln in capsys.readouterr().err.splitlines()
                  if "tenants.tx" in ln]
         assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
+
+    def test_unselected_carrier_spelling_is_not_read(self, tmp_path):
+        """`_defaults.yaml` + `_defaults.yml`: only the selected `.yaml` is
+        read by any plane (#1674). Merging every root file let the unread
+        `.yml` override it (blind review: 61/good before, 62/bad after)."""
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n"
+            "tenants:\n  tx:\n    mysql_connections: '61'\n    _profile: good\n",
+            encoding="utf-8")
+        (tmp_path / "_defaults.yml").write_text(
+            "defaults:\n  mysql_connections: 80\n"
+            "tenants:\n  tx:\n    mysql_connections: '62'\n    _profile: bad\n",
+            encoding="utf-8")
+        (tmp_path / "tx.yaml").write_text("tenants:\n  tx: {}\n", encoding="utf-8")
+        chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+        assert chain["resolved"]["mysql_connections"] == "61"
+        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "good"

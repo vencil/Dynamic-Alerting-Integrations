@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -31,6 +32,7 @@ from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
     overlay_platform_tenants,
+    unselected_carriers,
     warn_nested,
 )
 
@@ -64,7 +66,12 @@ def _collect_data(config_dir: str) -> dict:
     unreadable: list[str] = []
     unreadable_files: list[str] = []
     entries: list[tuple[str, object, dict]] = []
+    # The unselected carrier spelling is read by no plane (#1674); its
+    # `tenants:` block used to reach tenant_ids / profile_refs here.
+    skip = unselected_carriers(Path(config_dir, f) for f in files)
     for fname in files:
+        if fname in skip:
+            continue
         path = os.path.join(config_dir, fname)
         # #1654 blind review: a lint isolates per file — one unreadable
         # file is one ERROR finding, the other files are still checked

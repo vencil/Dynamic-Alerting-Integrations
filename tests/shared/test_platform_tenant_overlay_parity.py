@@ -30,7 +30,9 @@ MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.jso
 # read as absent turns a row into one that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "expect"}
-EXPECT_KEYS = {"metric", "dedup", "group_wait"}
+# `metric` / `exporter_dedup` / `silent_mode` are the Go half's columns;
+# this half asserts `dedup` / `group_wait` and only pins the key set of the rest.
+EXPECT_KEYS = {"metric", "dedup", "group_wait", "exporter_dedup", "silent_mode"}
 
 
 def test_matrix_is_not_vacuous() -> None:

@@ -183,6 +183,19 @@ class TestCollectData:
         data = _collect_data(config_dir)
         assert data['profile_refs'] == {'tx': 'from-platform'}
 
+    def test_unselected_carrier_spelling_is_not_read(self, config_dir):
+        # Only the selected `_defaults.yaml` is read by any plane (#1674);
+        # the `.yml` spelling sorts after it and used to win here.
+        _write(config_dir, '_defaults.yaml', {
+            'tenants': {'tx': {'_routing_profile': 'good'}}})
+        _write(config_dir, '_defaults.yml', {
+            'tenants': {'tx': {'_routing_profile': 'bad'},
+                        'ty': {'_routing_profile': 'bad'}}})
+        _write(config_dir, 'tx.yaml', {'tenants': {'tx': {}}})
+        _write(config_dir, 'ty.yaml', {'tenants': {'ty': {}}})
+        data = _collect_data(config_dir)
+        assert data['profile_refs'] == {'tx': 'good'}
+
     def test_platform_file_cannot_create_a_tenant(self, config_dir):
         _write(config_dir, '_defaults.yaml', {
             'tenants': {'tx': {'_routing_profile': 'from-platform'}}})

@@ -61,6 +61,7 @@ __all__ = [
     "config_stem",
     "configmap_key_problem",
     "declared_tenant_ids",
+    "unselected_carriers",
     "overlay_platform_tenants",
     "defaults_files_in",
     "has_yaml_extension",
@@ -278,6 +279,25 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
         return yaml_spelling[-1]
     yml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yml"]
     return yml_spelling[0] if yml_spelling else None
+
+
+def unselected_carriers(entries: "Iterable[Path]") -> "set[str]":
+    """Names of the READABLE defaults carriers among *entries* (one
+    directory's listing) that the chain does NOT select.
+
+    Every plane ignores such a file WHOLE (#1674) — the exporter never parses
+    it, so its `tenants:` block reaches nothing either. A reader that feeds
+    every root file into a per-tenant merge must skip these, or the unread
+    `_defaults.yml` overrides the selected `_defaults.yaml` (#1982 blind
+    review: a flat reader got the wrong file's value). Composed from
+    `readable_carriers` + `select_defaults_carrier` so the choice is the one
+    every plane makes; an UNREADABLE carrier is not in the result — the
+    caller's own read books it as skipped, as before.
+    """
+    readable, _unreadable = readable_carriers(
+        p for p in entries if is_defaults_name(Path(p).name))
+    chosen = select_defaults_carrier(readable)
+    return {p.name for p in readable if chosen is None or p.name != chosen.name}
 
 
 def readable_carriers(carriers: "Iterable[Path]"
@@ -1181,25 +1201,36 @@ def tenant_carriers(
 
 
 def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
-    """Tenant ids some TENANT file declares anywhere in the tree — i.e. the
-    tenants that EXIST, on the exporter walker's rule.
+    """Tenant ids some TENANT file declares anywhere in the tree: the keys of
+    the FIRST YAML document's `tenants:` mapping in every non-`_` config file.
 
-    The walker (`pkg/config/tree_scan.go`) recurses, skips dot-prefixed
-    entries, never reads a `_`-prefixed file for tenants, and takes the keys
-    of each remaining file's `tenants:` mapping. This is that rule over
-    `iter_config_files` (the same recursion and hidden-entry skips) and
-    `is_reserved_name`, so a flat reader can ask "does this tenant exist"
-    without inventing a second answer — a tenant declared only in
-    `team-a/tx.yaml` exists even for a reader that routes only the root.
+    The ENUMERATION is the exporter walker's (`pkg/config/tree_scan.go`):
+    recurse, skip dot-prefixed entries, never read a `_`-prefixed file for
+    tenants — `iter_config_files` + `is_reserved_name`. So a flat reader can
+    ask "does this tenant exist" with the tree the exporter sees: a tenant
+    declared only in `team-a/tx.yaml` exists even for a reader that routes
+    only the root.
 
-    ⚠️ Lenient where the walker is strict: the walker decodes each file with
-    the full `ParseConfigFile` and a file that decode rejects (a tenant body
-    that is a list, a `defaults:` of the wrong shape) declares NOTHING,
-    while this only needs a `tenants:` mapping. A file that does not parse
-    as YAML at all, or cannot be read, declares nothing here either; naming
-    it is the calling reader's own job (it has its own record of skipped
-    files). ``yaml`` is imported lazily: the rest of this module is pure name
-    predicates.
+    The DECODE is deliberately NOT the walker's, and the difference is
+    stated rather than hidden:
+
+    * Only the first document counts, as with yaml.v3's `Unmarshal` — a file
+      holding `tenants: {tx: {}}` then `---` declares tx on both sides (a
+      single-document `safe_load` raised on it and stripped tx as an orphan).
+      A failure AFTER the first document does not matter here.
+    * A file the exporter's full decode REJECTS (a duplicate key, a tenant
+      body that is not a mapping, a `defaults:` of the wrong shape) still
+      declares its tenants here. On the exporter side such a tenant does not
+      exist, its platform values do not reach `/metrics`, and the exporter
+      counts a parse failure for the file; the routing plane may still keep
+      the platform's routing values for it, as before this existed. Mirroring
+      the Go decoder here would be an unbounded differential (#1942), so the
+      rule is "first document's `tenants:` keys", named as such.
+
+    A file that does not parse as YAML at all, or cannot be read, declares
+    nothing; naming it is the calling reader's own job (it has its own record
+    of skipped files). ``yaml`` is imported lazily: the rest of this module
+    is pure name predicates.
     """
     import yaml  # lazy: see above
 
@@ -1209,7 +1240,9 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
+                # First document only; the generator is not advanced past
+                # it, so a later document's error cannot drop this one.
+                data = next(yaml.safe_load_all(fh), None)
         except Exception:  # noqa: BLE001 — declares nothing; see docstring
             continue
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):

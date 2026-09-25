@@ -167,7 +167,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    `_namespaces` / `_metadata` / `_routing_profile` 六個，`effective` 逐位元組不動、exporter
    零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**，那三個具名鍵也一樣：新增
    任何 `_` 前綴鍵時請用上面那條判準，不要用這些名字反推。
-   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective` 所在的 walker 平面尚未實作這一層（[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective` 所在的 walker 平面尚未實作這一層（[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
 2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。**
 
@@ -211,7 +211,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | `_custom_alerts` | `compile_custom_alerts.py --check` 的輸出（⚠️ 見下方警告） |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`，**diff 前後的完整輸出** |
 
-   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective` 所在的 walker 平面尚未實作這一層（[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective` 所在的 walker 平面尚未實作這一層（[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
    ⚠️ **`compile_custom_alerts.py` 的輸出路徑不跟著 `--config-dir` 走**（`out_path = repo / OUT_REL`，
    錨在 repo 上）。這句話原本接的是「所以拿它試跑別棵樹會覆蓋出貨檔」——**該後果自

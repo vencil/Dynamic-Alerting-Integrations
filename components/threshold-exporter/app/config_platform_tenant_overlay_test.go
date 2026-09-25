@@ -20,7 +20,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,9 +50,11 @@ type overlayMatrix struct {
 		Name   string            `json:"name"`
 		Files  map[string]string `json:"files"`
 		Expect map[string]struct {
-			Metric    *float64 `json:"metric"`
-			Dedup     *string  `json:"dedup"`
-			GroupWait *string  `json:"group_wait"`
+			Metric        *float64 `json:"metric"`
+			Dedup         *string  `json:"dedup"`      // Python routing plane
+			GroupWait     *string  `json:"group_wait"` // Python routing plane
+			ExporterDedup *string  `json:"exporter_dedup"`
+			SilentMode    *string  `json:"silent_mode"`
 		} `json:"expect"`
 	} `json:"trees"`
 }
@@ -117,6 +123,55 @@ func servedValue(m *ConfigManager, tenant string) (float64, bool) {
 	return 0, false
 }
 
+// exporterDedup is the exporter's resolved _severity_dedup for a tenant:
+// "enable" when ResolveSeverityDedup lists it, "disable" when the tenant is
+// configured but unlisted, nil when the tenant is absent.
+func exporterDedup(m *ConfigManager, tenant string) *string {
+	cfg := m.GetConfig()
+	if _, ok := cfg.Tenants[tenant]; !ok {
+		return nil
+	}
+	mode := "disable"
+	for _, d := range cfg.ResolveSeverityDedup() {
+		if d.Tenant == tenant {
+			mode = d.Mode
+		}
+	}
+	return &mode
+}
+
+// exporterSilentMode is the sorted, comma-joined target severities
+// ResolveSilentModes yields for a tenant ("" = none), nil when absent.
+func exporterSilentMode(m *ConfigManager, tenant string) *string {
+	cfg := m.GetConfig()
+	if _, ok := cfg.Tenants[tenant]; !ok {
+		return nil
+	}
+	var targets []string
+	for _, s := range cfg.ResolveSilentModes() {
+		if s.Tenant == tenant {
+			targets = append(targets, s.TargetSeverity)
+		}
+	}
+	sort.Strings(targets)
+	joined := strings.Join(targets, ",")
+	return &joined
+}
+
+func sameOptString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func showOpt(s *string) string {
+	if s == nil {
+		return "<absent>"
+	}
+	return strconv.Quote(*s)
+}
+
 func assertServed(t *testing.T, m *ConfigManager, where, tenant string, want *float64) {
 	t.Helper()
 	got, ok := servedValue(m, tenant)
@@ -141,6 +196,16 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 			mgr, _ := newOverlayManager(t, dir)
 			for tenant, want := range tree.Expect {
 				assertServed(t, mgr, tree.Name, tenant, want.Metric)
+				// ⛔ Not the metric alone: every per-tenant value the
+				// exporter resolves goes through the same merge, and a
+				// table that checks one threshold would stay green if a
+				// reserved key took a different path.
+				if got := exporterDedup(mgr, tenant); !sameOptString(got, want.ExporterDedup) {
+					t.Errorf("%s: %s exporter _severity_dedup = %s, want %s", tree.Name, tenant, showOpt(got), showOpt(want.ExporterDedup))
+				}
+				if got := exporterSilentMode(mgr, tenant); !sameOptString(got, want.SilentMode) {
+					t.Errorf("%s: %s exporter _silent_mode = %s, want %s", tree.Name, tenant, showOpt(got), showOpt(want.SilentMode))
+				}
 			}
 			// No tenant the table does not name is served — otherwise an
 			// orphan row passes by checking only the tenants it lists.
@@ -285,6 +350,153 @@ func TestPlatformTenantOverlaySurvivesReload(t *testing.T) {
 				if got != st.orphan {
 					t.Errorf("%s/%s: orphan WARN emitted=%v, want %v; log:\n%s", rname, st.name, got, st.orphan, buf.String())
 				}
+			}
+		})
+	}
+}
+
+// servedSnapshot is every (tenant → overlayMetricKey value) /metrics
+// carries, plus the tenants /effective answers for among `probe`.
+type servedSnapshot struct {
+	values    map[string]float64
+	effective map[string]bool
+}
+
+func snapshotServed(m *ConfigManager, probe []string) servedSnapshot {
+	snap := servedSnapshot{values: map[string]float64{}, effective: map[string]bool{}}
+	for tenant := range m.GetConfig().Tenants {
+		v, ok := servedValue(m, tenant)
+		if !ok {
+			v = -1 // configured, no row for the key
+		}
+		snap.values[tenant] = v
+	}
+	for _, tid := range probe {
+		_, found := m.Resolve(tid)
+		snap.effective[tid] = found
+	}
+	return snap
+}
+
+// TestPlatformTenantOverlayReloadMatchesFreshLoad is the reload-vs-Load
+// differential for the two ways a tenant leaves a tenant file that STAYS on
+// disk — `tenants: {}` and re-declaring it as another tenant — while a
+// platform file still names it. After every step the reloaded manager must
+// serve exactly what a fresh Load of the same tree serves, and /effective
+// must answer for the same tenants (an orphan: not found).
+//
+// Each half of the fix is pinned by it, measured by removing it: the
+// `tenantExists` condition in patchTenants' changed-file loop (without it
+// the platform entry kept the deleted tenant alive after an incremental
+// reload) and the `_`-file skip in refreshTenantSources (without it
+// /effective answered for the orphan, attributed to `_defaults.yaml`).
+func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
+	t.Parallel()
+	const platform = "defaults:\n  mysql_connections: 80\n" +
+		"tenants:\n  tx:\n    mysql_connections: \"60\"\n"
+	probe := []string{"tx", "tw", "ty"}
+	steps := []struct {
+		name, body string
+	}{
+		{"tenant-emptied", "tenants: {}\n"},
+		{"tenant-renamed", "tenants:\n  tw:\n    mysql_connections: \"75\"\n"},
+		{"tenant-back", "tenants:\n  tx:\n    mysql_connections: \"70\"\n"},
+		{"tenant-emptied-again", "tenants: {}\n"},
+	}
+	reloaders := map[string]func(m *ConfigManager) error{
+		"IncrementalLoad": func(m *ConfigManager) error { return m.IncrementalLoad() },
+		"diffAndReload": func(m *ConfigManager) error {
+			_, _, err := m.diffAndReload()
+			return err
+		},
+	}
+	for rname, reload := range reloaders {
+		t.Run(rname, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeOverlayTree(t, dir, map[string]string{
+				"_defaults.yaml": platform,
+				"TX.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
+				"ty.yaml":        "tenants:\n  ty: {}\n",
+			})
+			m, _ := newOverlayManager(t, dir)
+			for i, st := range steps {
+				writeTestYAML(t, filepath.Join(dir, "TX.yaml"), st.body)
+				touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
+				if err := reload(m); err != nil {
+					t.Fatalf("%s/%s: %v", rname, st.name, err)
+				}
+				fresh, _ := newOverlayManager(t, dir)
+				got, want := snapshotServed(m, probe), snapshotServed(fresh, probe)
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("%s/%s: reloaded %+v, fresh Load %+v", rname, st.name, got, want)
+				}
+				// The differential alone would pass if BOTH sides kept the
+				// orphan; state the expected answer too.
+				if strings.HasPrefix(st.name, "tenant-emptied") {
+					if _, served := got.values["tx"]; served || got.effective["tx"] {
+						t.Errorf("%s/%s: orphan tx still served=%v effective=%v", rname, st.name, served, got.effective["tx"])
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestPlatformOrphanWarnFollowsWhatIsServed: a tenant file that turns
+// unparseable keeps its tenant on the last good values on the incremental
+// patch path (the fail-safe, #1980) — platform-supplied keys included. The
+// orphan WARN must not then claim the platform entry is ignored while the
+// same commit serves it. Two trees: one with the defaults carrier (the
+// IncrementalLoad patch path) and a flat one whose per-tenant platform
+// values live in `_profiles.yaml` (no carrier — diffAndReload delegates to
+// incrementalLoadFrom there too).
+func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		platform string
+		body     string
+		reloader string
+	}{
+		{"carrier/IncrementalLoad", "_defaults.yaml",
+			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n", "IncrementalLoad"},
+		{"flat-profiles/IncrementalLoad", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", "IncrementalLoad"},
+		{"flat-profiles/diffAndReload", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", "diffAndReload"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeOverlayTree(t, dir, map[string]string{
+				tc.platform: tc.body,
+				"tx.yaml":   "tenants:\n  tx:\n    redis_x: \"1\"\n",
+				"ty.yaml":   "tenants:\n  ty: {}\n",
+			})
+			m, buf := newOverlayManager(t, dir)
+			if got := m.GetConfig().Tenants["tx"]["mysql_connections"].Default; got != "60" {
+				t.Fatalf("load: tx mysql_connections=%q, want the platform's 60", got)
+			}
+			buf.Reset()
+			writeTestYAML(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx: [1\n")
+			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
+			var err error
+			if tc.reloader == "IncrementalLoad" {
+				err = m.IncrementalLoad()
+			} else {
+				_, _, err = m.diffAndReload()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ov, served := m.GetConfig().Tenants["tx"]
+			if !served || ov["mysql_connections"].Default != "60" || ov["redis_x"].Default != "1" {
+				t.Fatalf("fail-safe not in effect (served=%v, %v) — this test's premise is gone", served, ov)
+			}
+			if lines := logLinesWith(buf.String(), orphanAnchor); len(lines) != 0 {
+				t.Errorf("tx is still served with the platform value, yet: %q", lines)
 			}
 		})
 	}
