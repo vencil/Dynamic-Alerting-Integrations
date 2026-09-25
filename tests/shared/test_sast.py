@@ -105,21 +105,18 @@ def _short_path(path):
 
 
 # ============================================================
-# 1. open() 必須帶 encoding
+# 1. 原始碼不得帶 BOM（open() 的 encoding 不在本檔，見下方 docstring）
 # ============================================================
-
-# 允許的 encoding 值
-_ALLOWED_ENCODINGS = {"utf-8", "utf-8-sig"}
-
-# 排除模式：以 "rb" / "wb" 開啟的二進位模式不需要 encoding
-_BINARY_MODE_RE = re.compile(r'["\'][rwax]+b["\']')
 
 
 class TestOpenEncoding:
-    """SAST 規則 1：open() 的 encoding，以及原始碼不得帶 BOM。
+    """SAST 規則 1：原始碼不得帶 BOM（掃 `_TRACKED_PY`，理由見 `_tracked_py` 上方）。
 
-    ⚠️ 兩者掃描面不同：encoding 掃 `_PY_FILES`（`scripts/tools/`），BOM 掃
-    `_TRACKED_PY`（全部 tracked `.py`）。理由見 `_tracked_py` 上方。
+    ⛔ 規則 1 的另一半「open() 必須帶 encoding」**不在本檔**：由 pre-commit
+    `open-encoding-audit`（`scripts/tools/lint/check_open_encoding.py`）強制，
+    只認 builtin `open()`。本檔原本有第二份判定器（任何 `x.open(...)` 都算），
+    兩份各錯一邊，owner 裁決只留 hook 的判定（#1992）：`Path.open`、
+    `read_text`／`write_text` 因此沒有靜態判定在守，另案處理。
     """
 
     def test_the_reader_strips_a_bom_so_the_other_rules_can_see_the_file(self, tmp_path):
@@ -128,7 +125,7 @@ class TestOpenEncoding:
         剝除的效果在這棵樹上**不可觀察**：BOM 檔一個都沒有，而下面那條規則正是
         要讓它永遠沒有。實測拿掉剝除 ⇒ 2305 passed rc=0，什麼都不會響。
         ⇒ 唯一能釘住它的是自己造一個帶 BOM 的檔餵給 reader。少了這一格，
-        「剝除」這一層是純粹的裝飾——而它的靜默失效會讓六條規則重新變瞎。
+        「剝除」這一層是純粹的裝飾——而它的靜默失效會讓其餘規則重新變瞎。
         ⚠️ 兩個方向都釘：BOM 要被剝掉，而檔案其餘內容一個位元組都不能動。
         """
         body = "import os\nprint(os.name)\n"
@@ -190,61 +187,6 @@ class TestOpenEncoding:
             "**靜默跳過**這個檔（#1632）。⚠️ 本模組其餘規則已不在此列——"
             "同一顆 commit 的 `_read_source` 會剝掉它，所以它們現在看得見"
             "這個檔。修法：把它存成不帶 BOM 的 UTF-8。"
-        )
-
-    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
-    def test_open_has_encoding(self, py_file):
-        """每個 open() 呼叫（非二進位模式）必須包含 encoding 參數。"""
-        source = _read_source(py_file)
-        try:
-            tree = ast.parse(source, filename=py_file)
-        except SyntaxError:
-            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
-            return
-
-        violations = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            # 偵測 open(...) 呼叫
-            func = node.func
-            is_open = False
-            if isinstance(func, ast.Name) and func.id == "open":
-                is_open = True
-            elif isinstance(func, ast.Attribute) and func.attr == "open":
-                is_open = True
-
-            if not is_open:
-                continue
-
-            # 檢查是否為二進位模式
-            line = source.splitlines()[node.lineno - 1] if node.lineno <= len(source.splitlines()) else ""
-            if _BINARY_MODE_RE.search(line):
-                continue
-
-            # 檢查 mode 參數（第二個位置參數或 keyword）
-            mode_val = None
-            if len(node.args) >= 2:
-                mode_arg = node.args[1]
-                if isinstance(mode_arg, ast.Constant):
-                    mode_val = mode_arg.value
-            for kw in node.keywords:
-                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                    mode_val = kw.value.value
-
-            if mode_val and "b" in str(mode_val):
-                continue  # 二進位模式，不需要 encoding
-
-            # 檢查 encoding 參數
-            has_encoding = any(kw.arg == "encoding" for kw in node.keywords)
-            if not has_encoding:
-                violations.append(
-                    f"L{node.lineno}: open() 缺少 encoding 參數"
-                )
-
-        assert not violations, (
-            f"{_short_path(py_file)} 有 {len(violations)} 個 open() 缺少 encoding:\n"
-            + "\n".join(f"  {v}" for v in violations)
         )
 
 

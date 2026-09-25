@@ -144,7 +144,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 | # | Rule | Detection Method | Severity |
 |---|------|---------|--------|
-| 1 | `open()` must include `encoding="utf-8"`; source must not start with a UTF-8 BOM | AST scan open() calls, exclude binary modes; BOM checked on the leading bytes | High |
+| 1 | `open()` must include `encoding="utf-8"`; source must not start with a UTF-8 BOM | BOM checked on the leading bytes (this file); `open()` encoding is enforced by the pre-commit `open-encoding-audit` hook (builtin `open()` only), not by this file | High |
 | 2 | `subprocess` forbids `shell=True` | AST scan subprocess.run/call/Popen keywords | Critical |
 | 3 | File write must pair with `os.chmod(0o600)` | Same-function write-open + chmod pair (advisory) | Medium |
 | 4 | Forbid `yaml.load()`, enforce `yaml.safe_load()` | **bandit B506** (`.github/workflows/security-audit.yaml`, hard-fail); the AST implementation in `tests/shared/test_sast.py` was removed in #1643 | Critical |

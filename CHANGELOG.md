@@ -25,6 +25,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Changed
 
+- **`open()` 的 encoding 規則只剩一份判定：pre-commit `open-encoding-audit`（tests、lint；[#1992](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1992)）**：`tests/shared/test_sast.py` 原本有第二份判定器，把任何 `x.open(...)` 都當成 `open()`，會誤判 `os.open`、`tarfile.open`；而 hook 只認 builtin `open()`，會漏掉 `Path.open`。兩份各錯一邊，owner 裁決走寧可漏判：刪掉 `test_open_has_encoding`，只留 hook 的判定，並手修 `tests/contract/run_contract_tests.py` 裡它獨有的那一個真違規（`Path.open`）。BOM 檢查不受影響。⚠️ `Path.open` 與 `read_text`／`write_text` 從此沒有靜態判定在守，改由執行期判定另案處理（[#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005)）。
+
 - **`open-encoding-audit` 由 warn-only 轉為阻擋，掃描範圍改以 hook 設定為準（lint；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：這支 hook 過去只帶 `--ci`，偵測到裸 `open()` 也回 0；而且沒有傳掃描根目錄，工具會退回自己的預設路徑，於是 `files:` 會觸發的部分檔案（例如 `scripts/ops/`）其實從來沒被掃過。現在 entry 帶 `--strict-open-encoding scripts components/da-tools tests`，掃描根目錄與 `files:` 對齊成同樣三棵樹，一有違規就擋下 commit；`tests/` 的既有殘量一併補上了 `encoding="utf-8"`。`check_open_encoding.py` 在傳入的掃描路徑不存在時改回 rc 2，並在 stderr 點名；先前會靜默掃 0 個檔、回 0。⚠️ 判定只認 builtin `open()`，`Path.open` 與 `read_text`／`write_text` 不在射程內（[#1992](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1992)）。
 
 - **preflight orchestrator 測試的 check stub 改由推導，不再手寫清單（dx 內部測試、無行為變更；[#1953](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1953)）**：`TestMainOrchestrator` 原以手寫清單 stub `main()` 的 check，清單漏掉的那支會在測試裡真的跑（`gh`、網路、`pre-commit --all-files`）而測試照綠。改為與 `TestFailPathClearRadius` 共用 `tests/_preflight_checks.py`：從模組推導全部 `check_*`，stub 依真函式簽章綁定引數，fail／warn 以函式名指定而非 label。orchestrator 側另在 stub 在場時把 `subprocess` 模組的 `Popen` 屬性換成丟例外的函式。

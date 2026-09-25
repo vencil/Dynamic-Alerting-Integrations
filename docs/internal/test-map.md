@@ -209,7 +209,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_alert_quality.py` | alert_quality.py 警報品質評估 | v2.0.0 新功能，89.8% 覆蓋率 |
 | `ops/test_policy_engine.py` | policy_engine.py Policy-as-Code 引擎 | v2.0.0 新功能，94.0% 覆蓋率 |
 | `ops/test_cardinality_forecasting.py` | cardinality_forecasting.py 基數預測 | v2.0.0 新功能，93.5% 覆蓋率 |
-| `shared/test_sast.py` | 全倉庫 SAST 合規掃描（6 類；dev-rules §5 第 4 條自 #1643 起改由 bandit B506 強制，不在本檔） | encoding + BOM + shell + chmod + credentials + dangerous functions + stderr routing |
+| `shared/test_sast.py` | 全倉庫 SAST 合規掃描（6 類；dev-rules §5 第 4 條自 #1643 起改由 bandit B506 強制，不在本檔） | BOM + shell + chmod + credentials + dangerous functions + stderr routing（`open()` 的 encoding 由 pre-commit `open-encoding-audit` 守，不在本檔） |
 | `ops/test_migrate_ast.py` | migrate_rule AST 引擎 | |
 | `ops/test_migrate_v3.py` | migrate_rule v3 引擎 | |
 | `ops/test_blind_spot_discovery.py` | blind_spot_discovery.py 盲區掃描 | |
