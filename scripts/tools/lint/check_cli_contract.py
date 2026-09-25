@@ -15,7 +15,9 @@
 inline code span、manifest 的 ``command:``／``args:`` 清單（行尾 YAML 註解剝掉、整個容器的 key 收齊
 再判、清單行不再被 fenced 行載體重判）、shell 真的會執行的 ``sh -c "…"`` 字串（``-c`` 可在其他
 選項之後），以及 cli-reference 的選項表與結束碼表；裸 ``da-tools`` 只在命令位置或 ``docker run``
-的 image 位置才是主語。
+的 image 位置才是主語。portal CLI Playground（``cli-playground/{commands,engine}.js``）以 node 求值：
+用頁面自己的 ``buildCommand`` 把每個命令的參數與旗標全部填上後組出字串，連同 preview 首行一起判；
+沒有 node 時揭露為 NOT scored，``CLI_CONTRACT_REQUIRE_NODE=1``（CI）下則是硬錯。
 
 帳本 ``docs/internal/cli-contract-baseline.yaml`` 每列 (file, command, verdict, token, count, ticket)，
 比對是集合相等——少於 count 是 stale 硬錯、多出來的是新 finding、ticket 必須是 ``#NNNN``。
@@ -40,7 +42,10 @@ import os
 import re
 import runpy
 import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Iterator, NamedTuple
@@ -68,6 +73,14 @@ EXTRA_DOC_FILES = (
     "components/da-tools/app/QUICKSTART.md",
     "try-local/README.md",
 )
+# Carrier B (#1379 portal half): the CLI Playground's command catalog. Not read
+# as text — evaluated with node through the page's own `buildCommand`, so what
+# is judged is the exact string a user copies, not a regex guess at it.
+PORTAL_PLAYGROUND_DIR = REPO_ROOT / "tools/portal/src/interactive/tools/cli-playground"
+PORTAL_PLAYGROUND_FILES = ("commands.js", "engine.js")
+# Set in CI so a runner without node is a hard error, not a quiet disclosure.
+PORTAL_REQUIRE_ENV = "CLI_CONTRACT_REQUIRE_NODE"
+_JS_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.S)
 INLINE_IGNORE = "datools-cmd-ignore"
 VERDICTS = ("V0", "V1", "V2", "V3", "V4")
 _TICKET_RE = re.compile(r"^#\d+$")
@@ -1547,12 +1560,15 @@ def doc_files(repo_root: Path = REPO_ROOT) -> tuple[list[Path], list[str]]:
     return docs + present, missing
 
 
-def _unscanned_carriers(repo_root: Path = REPO_ROOT) -> int:
+def _unscanned_carriers(repo_root: Path = REPO_ROOT,
+                        scanned: frozenset[Path] = frozenset()) -> int:
     """Files outside this check's scan set that mention the da-tools binary."""
     n = 0
     for pattern in ("tools/portal/src/**/*.js", "tools/portal/src/**/*.jsx",
                     "scripts/**/*.sh", "try-local/**/*.sh"):
         for f in repo_root.glob(pattern):
+            if f.resolve() in scanned:
+                continue
             try:
                 if "da-tools" in f.read_text(encoding="utf-8", errors="ignore"):
                     n += 1
@@ -1570,7 +1586,107 @@ _STAT_KEYS = (
     "cmd_unparseable", "table_rows_positional", "table_rows_no_parser",
     "reference_sections_unmatched", "exit_tables_no_script",
     "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
-    "unscanned_carrier_files")
+    "unscanned_carrier_files", "portal_commands", "portal_unavailable")
+
+
+class PortalCommand(NamedTuple):
+    key: str        # the COMMANDS key (the subcommand the page offers)
+    kind: str       # "bare" / "docker" (built by buildCommand) or "preview"
+    line: int       # 1-based line of the key (or of the preview) in commands.js
+    cmd: str        # the command line exactly as the page shows it
+
+
+_PORTAL_DRIVER = """globalThis.window = {};
+const { COMMANDS } = await import(%(commands)s);
+const { buildCommand, initCommandState } = await import(%(engine)s);
+const out = [];
+for (const [key, c] of Object.entries(COMMANDS)) {
+  // Every arg and flag filled, every checkbox ticked: the widest command the
+  // page can produce for this key, so every flag it offers is judged.
+  const s = initCommandState(key);
+  for (const a of c.args) s.args[a.name] = 'ARG';
+  for (const f of c.flags) s.flags[f.name] = f.type === 'checkbox' ? true : 'VALUE';
+  for (const isDocker of [false, true]) {
+    out.push({ key, kind: isDocker ? 'docker' : 'bare', cmd: buildCommand({
+      isDocker, network: { network: '--network=host', prometheus: 'http://p:9090' },
+      selectedCommand: key, command: c, args: s.args, flags: s.flags }) });
+  }
+  const first = (c.preview || '').split('\\n')[0];
+  if (first) out.push({ key, kind: 'preview', cmd: first });
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def portal_commands(src_dir: Path = PORTAL_PLAYGROUND_DIR,
+                    node: str | None = None) -> tuple[list[PortalCommand], str | None]:
+    """Evaluate the CLI Playground catalog; return (commands, why-unavailable).
+
+    ``why-unavailable`` is set (and the list empty) only when node is not on
+    PATH — a condition the caller discloses or, under ``PORTAL_REQUIRE_ENV``,
+    treats as fatal. Anything else that stops the evaluation raises: a page
+    this check could not read is not a page with nothing wrong in it.
+    """
+    node = node or shutil.which("node")
+    if node is None:
+        return [], "node not on PATH"
+    source = (src_dir / "commands.js").read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        mods = {}
+        for name in PORTAL_PLAYGROUND_FILES:
+            text = (src_dir / name).read_text(encoding="utf-8")
+            # Blank the frontmatter out line-for-line so nothing shifts.
+            text = _JS_FRONTMATTER.sub(lambda m: "\n" * m.group(0).count("\n"), text, count=1)
+            text = text.replace("'./commands.js'", "'./commands.mjs'")
+            mod = Path(tmp) / name.replace(".js", ".mjs")
+            mod.write_text(text, encoding="utf-8")
+            mods[name] = json.dumps(mod.as_uri())
+        driver = _PORTAL_DRIVER % {"commands": mods["commands.js"],
+                                   "engine": mods["engine.js"]}
+        proc = subprocess.run([node, "--input-type=module", "-e", driver],
+                              capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"node could not evaluate the CLI Playground catalog "
+                           f"(rc={proc.returncode}): {proc.stderr.strip()[:500]}")
+    rows = json.loads(proc.stdout)
+    if not rows:
+        raise RuntimeError("the CLI Playground catalog evaluated to zero commands")
+    lines = source.splitlines()
+
+    def _line(pattern: str) -> int:
+        return next((i for i, ln in enumerate(lines, 1) if pattern in ln), 0)
+
+    out: list[PortalCommand] = []
+    for r in rows:
+        key_line = _line(f"'{r['key']}': {{")
+        line = key_line
+        if r["kind"] == "preview":
+            # The preview opens with a backtick on the key's `preview:` line.
+            line = next((i for i, ln in enumerate(lines[key_line:], key_line + 1)
+                         if ln.lstrip().startswith("preview:")), key_line)
+        out.append(PortalCommand(r["key"], r["kind"], line, r["cmd"]))
+    return out, None
+
+
+def scan_portal(portal: list[PortalCommand], rel: str, ctx: "_Ctx") -> list[Finding]:
+    """Judge each playground command line like a fenced one.
+
+    The bare and docker forms of one key carry the same flags, so a defect in
+    the catalog would be reported twice for one line; keep it once.
+    """
+    seen: set[tuple[int, str, str, str]] = set()
+    findings: list[Finding] = []
+    for pc in portal:
+        tokens = tokenize(_PROMPT.sub("", pc.cmd))
+        if tokens is None:
+            ctx.stats["cmd_unparseable"] += 1
+            continue
+        for f in judge_tokens(tokens, rel, pc.line, ctx, "portal_commands"):
+            k = (f.line, f.command, f.verdict, f.token)
+            if k not in seen:
+                seen.add(k)
+                findings.append(f)
+    return findings
 
 
 def _new_stats() -> dict[str, int]:
@@ -1593,6 +1709,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
          injected: set[str] | None = None,
          exit_codes: dict[str, ExitCodes] | None = None,
          repo_root: Path = REPO_ROOT,
+         portal: list[PortalCommand] | None = None,
          ) -> ScanResult:
     errors: list[str] = []
     fatal: list[str] = []
@@ -1625,6 +1742,31 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     findings: list[Finding] = []
     for doc in docs:
         findings += scan_commands(doc, _rel(doc, repo_root), ctx, errors)
+    portal_dir = repo_root / PORTAL_PLAYGROUND_DIR.relative_to(REPO_ROOT)
+    scanned_js: frozenset[Path] = frozenset()
+    if portal is None:
+        if portal_dir.is_dir():
+            try:
+                portal, unavailable = portal_commands(portal_dir)
+            except (RuntimeError, OSError, ValueError,
+                    subprocess.TimeoutExpired) as exc:
+                portal, unavailable = [], None
+                fatal.append(f"the CLI Playground carrier failed — this check saw "
+                             f"NONE of its commands: {exc}")
+            if unavailable is not None:
+                if os.environ.get(PORTAL_REQUIRE_ENV) == "1":
+                    fatal.append(f"{PORTAL_REQUIRE_ENV}=1 but the CLI Playground "
+                                 f"carrier cannot run: {unavailable}")
+                else:
+                    stats["portal_unavailable"] = 1
+        else:
+            portal = []
+            fatal.append(f"{_rel(portal_dir, repo_root)} not found — the CLI "
+                         f"Playground carrier has nothing to read; point "
+                         f"PORTAL_PLAYGROUND_DIR at its current path")
+    if portal:
+        findings += scan_portal(portal, _rel(portal_dir / "commands.js", repo_root), ctx)
+        scanned_js = frozenset((portal_dir / n).resolve() for n in PORTAL_PLAYGROUND_FILES)
     by_header: dict[tuple[str, ...], int] = {}
     per_doc: dict[str, dict[str, int]] = {}
     no_table: set[str] = set()
@@ -1659,7 +1801,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     if not stats["scored"]:
         fatal.append("0 judged tokens — every command, flag and exit code was "
                      "skipped, so this check compared nothing")
-    stats["unscanned_carrier_files"] = _unscanned_carriers(repo_root)
+    stats["unscanned_carrier_files"] = _unscanned_carriers(repo_root, scanned_js)
     return ScanResult(findings, stats, errors, fatal, by_header, per_doc)
 
 
@@ -1675,7 +1817,10 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     return [
         f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
         f"inline code spans, {s['cmd_manifest_argvs']} manifest args lists, "
-        f"{s['cmd_sh_c_strings']} `sh -c` strings",
+        f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
+        f"Playground command lines"
+        + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
+           if s["portal_unavailable"] else ""),
         f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
         f"argparse parser (guard/parser/batch-pr — their subcommands are "
         f"check_doc_datools_cmds' job), {s['cmd_script_not_in_map']} `python3 "
