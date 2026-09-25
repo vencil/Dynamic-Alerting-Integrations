@@ -75,6 +75,7 @@ All 5 Gates use **invariants** (not "alert counts match") — see §10.
 - Three-tier audit: A static (hard gate) / B live snapshot (soft) / C historical telemetry (bonus)
 - Dual output: **`.da/migration-state.json`** (machine-readable, drives later-phase automation) + Markdown summary (for PR description / human readers)
 - Schema: see [migration-state.md](../schemas/migration-state.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**)
+- ⚠️ **The Phase 0 analyzer that would run all three tiers and write `migration-state.json` is not implemented yet**: the schema is defined, the producer does not exist. Today Tier A is run check by check with existing tools (see the Checklist below); Tier B / C have no tool support
 
 ### Architect Narrative
 
@@ -119,28 +120,22 @@ When customers hear Phase 0 results, three reactions are common:
 <details>
 <summary>📋 Phase 0 Checklist (for the executor)</summary>
 
-- [ ] Run Tier A static audit
-  ```bash
-  da-tools onboard --analyze \
-      --output .da/migration-state.json \
-      --markdown-summary > migration-summary.md
-  ```
-- [ ] Paste the Markdown summary into the PR description (for reviewers)
-- [ ] Confirm Tier A hard gates pass:
-  - [ ] No orphan rules with syntax errors
-  - [ ] Every receiver has a corresponding routing entry
-  - [ ] Tenant ID naming is compatible with our schema (dev-rule #2)
-- [ ] **Optional** Tier B: run `ALERTS{}` snapshot against live Prom
-- [ ] **Optional** Tier C: historical queries against Thanos / VM long-retention
-- [ ] Commit `.da/migration-state.json` into the customer's GitOps repo
+- [ ] Run Tier A static audit (the analyzer that runs all three checks at once is not implemented; run each with existing tools — full commands in [troubleshooting-checklist §2.1](../integration/troubleshooting-checklist.en.md))
+  - [ ] PromQL syntax: `promtool check rules <rules-dir>/*.yaml` rc=0; if the VM dialect must be supported, `da-tools parser import --input <rules-file> --fail-on-ambiguous` rc=0 per file (§2.1.1)
+  - [ ] No tenant id hard-coded in PromQL (dev-rule #2): `grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <rules-dir>/` prints nothing, rc=1 (§2.1.2)
+  - [ ] Every rule has a routing entry: the `amtool config routes test` loop in §2.1.3 lists no alert landing on the fallback
+- [ ] Paste the results of the three checks into the PR description (for reviewers)
+- [ ] **Optional** Tier B: run `ALERTS{}` snapshot against live Prom (no tool support yet; query by hand)
+- [ ] **Optional** Tier C: historical queries against Thanos / VM long-retention (no tool support yet; query by hand)
+- [ ] `.da/migration-state.json`: the producer is not implemented and no tool writes it today; Gate 1 goes by the three checks above
 </details>
 
 ### Failure modes
-- "Tier A blocked on syntax error": common when hand-written PromQL uses VM-only functions → flagged by `da-parser --strict-promql`
+- "Tier A blocked on syntax error": common when hand-written PromQL uses VM-only functions → `da-tools parser import` marks it `dialect: metricsql` / `prom_compatible: false`, and `promtool check rules` fails to parse it
 - "Tier B can't pull `ALERTS{}`": Prom hasn't done alert evaluation for too long, or query timeouts → accept Tier A is sufficient to proceed
 
 ### Gate 1 → Phase 1
-**Pass condition**: all Tier A hard checks pass + `.da/migration-state.json` committed.
+**Pass condition**: all Tier A hard checks pass (the producer of `.da/migration-state.json` is not implemented; the three Checklist checks are the bar for now).
 
 ---
 
@@ -778,9 +773,9 @@ Each Phase lists known failure modes + hyper-realistic anchors.
 
 | Symptom | First-look triage | Anchor |
 |---|---|---|
-| **Tier A blocked on PromQL syntax error** | `da-parser --strict-promql --report` shows which files fail; usually hand-written PromQL using vmalert-only functions but the source is labelled prometheus | (e.g., customer mixes `histogram_quantile_bucket` (metricsql) with `histogram_quantile` (promql); da-parser dialect detector marks ambiguous) |
+| **Tier A blocked on PromQL syntax error** | `promtool check rules` shows which files fail, `da-tools parser import` shows each rule's `dialect`; usually hand-written PromQL using VM-only functions that has to run on Prometheus | (e.g., customer wrote `histogram_quantile_bucket` — neither dialect has that function; da-parser marks it ambiguous with `unsupported function`) |
 | **Tier A surfaces 100+ orphan rules** | Customer claims "those were silenced"; verify whether AM silencers are still active; cross-check Tier B snapshot for `silences[?] expires` | (e.g., a region's alert was silenced 5 years ago, the silence has long expired but the rule wasn't pruned → orphan report is a false positive) |
-| **Tier A catches hardcoded tenant IDs** | dev-rule #2 violation; `migration-state.json` lists every site; must fix before Phase 1 | (e.g., emergency hotfix left `instance="db-prod-1"` in PromQL; original author left the company; rationale lost) |
+| **Tier A catches hardcoded tenant IDs** | dev-rule #2 violation; grep lists every site (the analyzer that would list them is not implemented); must fix before Phase 1 | (e.g., emergency hotfix left `instance="db-prod-1"` in PromQL; original author left the company; rationale lost) |
 | **PrometheusRule CRD + raw rules.yaml dual-write** | Operator-migration leftover; manual reconcile when da-parser dedupe fails | (e.g., three-year-old Operator migration half-complete, `PrometheusRule` and `ConfigMap` coexist, current active source unclear) |
 | **Tier B `ALERTS{}` query timeout** | Prom hasn't GC'd in 5+ years or cardinality is too high; shrink the window with `ALERTS{}[1d]` or accept Tier B as missing | (e.g., 100k+ ALERTS series — full query times out at 30s; querying the last 24h yields ~2k series and works) |
 | **Tier C sources fragmentary (multi-region uses different logging stacks)** | Some regions use ELK, others Splunk → Tier C partial | (e.g., us-east has ELK with 5y retention, eu-west doesn't → Tier C covers only 50% of scope; accept and record in `migration-state.json` `tier_c.coverage`) |
@@ -864,7 +859,7 @@ Each Phase lists known failure modes + hyper-realistic anchors.
 
 #### Phase 0: Discovery — customer's mental model resets after seeing Tier A results (2 weeks)
 
-`da-tools onboard --analyze` runs, and Tier A's results force customer ops to confront "we actually don't know what we have":
+The Tier A checks run (this case study describes the target flow; the analyzer that would run them at once and write `migration-state.json` is not implemented, so in practice each check runs with the existing tools listed in the Checklist), and the results force customer ops to confront "we actually don't know what we have":
 
 - **380 rules** (customer thought ~250) — no-one has audited in 5 years; dead code piled up
 - **47 orphan rules** (rules committed but corresponding receiver no longer in AM) — 12 of them have PagerDuty tokens belonging to an employee who left 3 years ago; long expired
