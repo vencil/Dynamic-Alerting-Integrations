@@ -130,7 +130,6 @@ lang: zh
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
-| `scaffold_jsx_dep.py` | generate a tenant-manager-style JSX dep file |
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
@@ -251,7 +250,6 @@ lang: zh
 | `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |
 | `check_workload_closure_drift.py` | The workload closure is defined once; make every copy of it prove it agrees. |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
-| `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
 | `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |
 | `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |

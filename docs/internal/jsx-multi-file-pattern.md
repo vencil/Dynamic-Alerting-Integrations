@@ -124,15 +124,16 @@ the decomposed directory. This is **not enforced**. The lint cap
 goal — files between 400-1500 are fine, just consider further
 decomposition if a single piece keeps growing.
 
-## ⚠ Scaffold tool is legacy-era (do not use as-is)
+## Scaffold tool retired
 
-`scripts/tools/dx/scaffold_jsx_dep.py` (`make jsx-extract`, PR #160)
-still generates the LEGACY boilerplate: frontmatter `dependencies:`
-entries + `window.__X = X;` self-registration + `const X = window.__X;`
-orchestrator reads. Post-TRK-237 that last form is FATAL under
-`check_window_x_no_fallback.py`, and the `dependencies:` blocks it
-updates are vestigial (stripped at build time). Until the tool is
-reworked for ESM, extract by hand following the TL;DR above.
+`scripts/tools/dx/scaffold_jsx_dep.py` (`make jsx-extract`, PR #160) was
+retired in issue #1454. It generated the LEGACY boilerplate (frontmatter
+`dependencies:` + `window.__X = X;` self-registration + `const X =
+window.__X;` orchestrator reads, the last of which is FATAL under
+`check_window_x_no_fallback.py`) and still looked for orchestrators under
+the pre-TRK-242 `docs/interactive/tools/` path, so every call failed.
+An ESM extraction is a new file plus one relative `import` — follow the
+TL;DR above.
 
 ## Legacy background (jsx-loader dep-chain era)
 

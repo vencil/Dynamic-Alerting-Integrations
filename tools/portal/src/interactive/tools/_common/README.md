@@ -104,13 +104,10 @@ runtime meaning.
 4. Import it from consumers via relative ESM (above) and update the tree
    in this README.
 
-> ⚠ **Do not run `scaffold_jsx_dep.py` / `make jsx-extract`.** It still
-> emits the LEGACY boilerplate (`dependencies:` frontmatter +
-> `window.__X = X;` registration + `const X = window.__X;` reads) — the
-> last of which is now a FATAL `window-x-no-fallback-check` violation.
-> Extract by hand until the scaffold is reworked for ESM (see
-> `docs/internal/jsx-multi-file-pattern.md` § "Scaffold tool is
-> legacy-era").
+> The old scaffold (`scaffold_jsx_dep.py` / `make jsx-extract`) emitted
+> the LEGACY `window.__X` boilerplate and has been retired (see
+> `docs/internal/jsx-multi-file-pattern.md` § "Scaffold tool retired").
+> Extract by hand as above.
 
 ---
 
