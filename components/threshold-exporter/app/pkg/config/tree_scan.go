@@ -707,14 +707,19 @@ func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
 // the whole file is paid once: the flat plane reuses the result instead of
 // decoding the same bytes again.
 //
-// Returns (nil, _, true) for a file the decode rejects (logged, counted
-// when obs is non-nil) and (nil, cfg, false) for a valid file without
-// tenants (a commented-out placeholder, a file carrying only profiles, is
-// not an error).
+// ⛔ THE ONE PLACE A TENANT FILE'S PARSE FAILURE IS REPORTED (#1957).
+// Returns (nil, _, true) for a file the decode rejects: logged in the flat
+// plane's historical wording (`WARN: skip unparseable file …`) and counted on
+// obs (when non-nil) exactly ONCE per scan. The flat plane reads
+// TreeFile.ParseFailed and neither re-logs nor re-counts — before #1957 a
+// syntax error was counted by both, and after the decode was unified a type
+// error would have been too. Returns (nil, cfg, false) for a valid file
+// without tenants (a commented-out placeholder, a file carrying only
+// profiles, is not an error).
 func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log.Logger) (ids []string, cfg ThresholdConfig, failed bool) {
 	cfg, perr := ParseConfigFile(data)
 	if perr != nil {
-		logger.Printf("WARN: cannot parse %s: %v", absPath, perr)
+		logger.Printf("WARN: skip unparseable file %s: %v", absPath, perr)
 		if obs != nil {
 			// Basename, not full path, to cap label cardinality (A-8d).
 			obs.IncParseFailure(filepath.Base(absPath))

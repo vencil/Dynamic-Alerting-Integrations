@@ -236,10 +236,12 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called from the tree scan (pkg/config parseTenantDecls, via
-// config.ScanObserver) whenever
-// yaml.Unmarshal returns an error for a non-_-prefixed tenant file, and
-// from the flat parse (parsePartialConfig) for the same file. file_basename
+// basename. Called ONCE per failed file per scan (#1957): from the tree scan
+// (pkg/config parseTenantDecls, via config.ScanObserver) for a
+// non-_-prefixed tenant file the one decode (config.ParseConfigFile)
+// rejects — the flat plane reuses that verdict and does not count again —
+// and from the flat parse (parsePartialConfig) or the nested syntax probe
+// for a `_`-prefixed file, which the walker never parses. file_basename
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).

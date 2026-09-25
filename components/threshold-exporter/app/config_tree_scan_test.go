@@ -647,7 +647,7 @@ func TestScanDirTree_NilConfigMetrics(t *testing.T) {
 		if f := got.Files["broken.yaml"]; f == nil || !f.ParseFailed {
 			t.Errorf("broken.yaml must be kept and marked ParseFailed: %+v", f)
 		}
-		if !strings.Contains(buf.String(), "WARN: cannot parse") {
+		if !strings.Contains(buf.String(), "WARN: skip unparseable file") {
 			t.Errorf("parse failure must still be LOGGED with nil metrics; log:\n%s", buf.String())
 		}
 		if _, err := scan(filepath.Join(root, "missing"), logger); err == nil {

@@ -652,6 +652,13 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
 	for _, name := range reparse {
+		// Rejected by the walker on this scan: already logged and counted
+		// there (see commitFlatFrom). Dropped from the cache so the merge
+		// below treats it as the full load does.
+		if f := scan.Files[name]; f != nil && f.ParseFailed {
+			delete(newConfigs, name)
+			continue
+		}
 		// The walker's decode of this file, when it parsed one (#1957; see
 		// commitFlatFrom). A changed or added tenant file always has one
 		// unless its parse failed: its hash moved against the prior, so the
@@ -1275,10 +1282,12 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 // a file without bytes the parsed partial from the previous commit is
 // reused when its hash is unchanged — the walker's prior IS the tree of
 // that previous commit (see flatScanState.tree), which is what makes the
-// reuse sound. A file that is unchanged but has no cached partial (it
-// failed to parse last time, or it is a nested platform file this plane
-// never caches) is re-read and re-judged, so its ERROR/WARN and its
-// parse-failure count fire again exactly as on a cold load.
+// reuse sound. A `_`-prefixed file that is unchanged but has no cached
+// partial (it failed to parse last time, or it is a nested platform file
+// this plane never caches) is re-read and re-judged, so its ERROR/WARN and
+// its parse-failure count fire again exactly as on a cold load. A tenant
+// file is never re-judged here: the walker parses it (#1957) and has already
+// logged and counted a failure on this scan (TreeFile.ParseFailed).
 func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
@@ -1300,6 +1309,13 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 			continue
 		}
 		f := scan.Files[name]
+		// ⛔ THE WALKER ALREADY JUDGED IT (#1957). A tenant file whose one
+		// decode failed was logged and counted by the walker on THIS scan;
+		// re-reading it here would count it twice per scan (the historical
+		// double count for syntax errors) and log it twice.
+		if f.ParseFailed {
+			continue
+		}
 		// ⛔ THE WALKER ALREADY DECODED IT (#1957). A tenant file this scan
 		// parsed comes with its ThresholdConfig in scan.Partials, decoded by
 		// the same config.ParseConfigFile parsePartialConfig calls — so the

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -136,6 +137,80 @@ func TestOneTenantSet_FlatIncrementalReload(t *testing.T) {
 				t.Fatalf("IncrementalLoad: %v", err)
 			}
 			assertOneTenantSet(t, m, body, true)
+		})
+	}
+}
+
+// TestAParseFailureIsCountedOncePerScan pins da_config_parse_failure_total's
+// unit (#1957): one increment per failed tenant file per scan, whichever
+// plane consumes the scan. The walker judges the file and counts; the flat
+// plane reads TreeFile.ParseFailed and does not count again.
+//
+// ⛔ BOTH ERROR KINDS, because they double-counted for different reasons.
+// A syntax error was rejected by both decodes before #1957, so the walker
+// and the flat plane each counted it (2 per cold load). A type error (a
+// scalar tenant body) was accepted by the walker's lighter decode and
+// counted by the flat plane alone — until the decode was unified, after
+// which it too would have been counted by both.
+//
+// Each leg drives exactly ONE scan (a cold Load, one diffAndReload, one
+// IncrementalLoad), so the expected delta is 1. tickOnce is not used: a tick
+// is a detectChange scan plus a reload scan, i.e. two scans.
+func TestAParseFailureIsCountedOncePerScan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body, rewrite string }{
+		{"syntax error", "tenants:\n  t-x: [unclosed\n", "tenants:\n  t-x: [still unclosed\n"},
+		{"type error", "tenants:\n  t-x: \"70\"\n", "tenants:\n  t-x: \"71\"\n"},
+	} {
+		t.Run(tc.name+"/hierarchical cold load then reload", func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 50\n")
+			writeTestYAML(t, filepath.Join(dir, "ok.yaml"), "tenants:\n  t-ok: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "x.yaml"), tc.body)
+			m, fresh, logBuf := newAuditedManager(t, dir)
+
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := parseFailureCount(fresh, "x.yaml"); got != 1 {
+				t.Errorf("cold load counted x.yaml %v time(s), want 1", got)
+			}
+			if got := strings.Count(logBuf.String(), "skip unparseable file"); got != 1 {
+				t.Errorf("cold load logged x.yaml %d time(s), want 1:\n%s", got, logBuf.String())
+			}
+
+			logBuf.Reset()
+			if _, _, err := m.diffAndReload(); err != nil {
+				t.Fatalf("diffAndReload: %v", err)
+			}
+			if got := parseFailureCount(fresh, "x.yaml"); got != 2 {
+				t.Errorf("after one reload the count is %v, want 2 (one per scan)", got)
+			}
+			if got := strings.Count(logBuf.String(), "skip unparseable file"); got != 1 {
+				t.Errorf("the reload logged x.yaml %d time(s), want 1:\n%s", got, logBuf.String())
+			}
+		})
+		t.Run(tc.name+"/flat incremental reload of the broken file", func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "ok.yaml"), "tenants:\n  t-ok: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "x.yaml"), tc.body)
+			m, fresh, _ := newAuditedManager(t, dir)
+
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			before := parseFailureCount(fresh, "x.yaml")
+			// Still broken, different bytes: the incremental path takes it
+			// as a changed file.
+			writeTestYAML(t, filepath.Join(dir, "x.yaml"), tc.rewrite)
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
+			if got := parseFailureCount(fresh, "x.yaml") - before; got != 1 {
+				t.Errorf("one incremental reload counted x.yaml %v time(s), want 1", got)
+			}
 		})
 	}
 }
