@@ -168,11 +168,11 @@ container_cpu: "90"
 container_memory: "95"
 
 _state_maintenance:
-  expires: "2026-03-20T06:00:00Z"
+  expires: "2099-03-20T06:00:00Z"
 
 _silent_mode:
   target: "all"
-  expires: "2026-03-18T12:00:00Z"
+  expires: "2099-03-18T12:00:00Z"
 
 _routing:
   receiver_type: email
@@ -288,8 +288,8 @@ step "Three-state operations overview"
 info "staging-pg demonstrates all three operational states:"
 echo ""
 echo -e "  ${BOLD}Normal state:${NC}     prod-mariadb, prod-redis, prod-kafka, prod-oracle"
-echo -e "  ${YELLOW}Maintenance:${NC}     staging-pg (_state_maintenance expires 2026-03-20)"
-echo -e "  ${DIM}Silent mode:${NC}      staging-pg (_silent_mode expires 2026-03-18)"
+echo -e "  ${YELLOW}Maintenance:${NC}     staging-pg (_state_maintenance expires 2099-03-20)"
+echo -e "  ${DIM}Silent mode:${NC}      staging-pg (_silent_mode expires 2099-03-18)"
 echo ""
 info "In maintenance: alerts are eliminated at the PromQL layer (no firing, no TSDB record, no notification)."
 info "In silent mode: alerts still fire (TSDB records) but notifications are inhibited by Alertmanager."

@@ -98,6 +98,8 @@ your-repo/
 └── .da-init.yaml                # 初始化標記（升級偵測用）
 ```
 
+⚠️ **在已有 `conf.d/` 的 repo 上**：上圖是全新 repo 的樣子。可能已由你既有檔案宣告的租戶（依內容判斷，刻意寬鬆——`db-c.yml`、`DB-C.YAML`、多租戶檔、子目錄都算）與其他拼法的根 defaults（如 `_defaults.yml`），init 不會再產生 `<tenant>.yaml`／`_defaults.yaml`，會跳過並列出；init 不檢查 exporter 能否讀取那些檔，請用 `da-tools guard defaults-impact` 對你的 conf.d 確認（用法見下方連結）。init 自己的檔案已與具體提到同一租戶的檔並存時則拒絕（rc 1、不寫任何檔案）。詳見 [CLI 參考 `init`](../cli-reference.md#init)。
+
 #### GitLab 為什麼是兩個檔案
 
 GitHub Actions 會自動載入 `.github/workflows/` 底下**所有** workflow，所以那一份

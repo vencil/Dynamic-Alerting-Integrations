@@ -354,7 +354,7 @@ Within a GitOps workflow, tenants can self-manage the following settings in thei
 | `_critical` suffix | Multi-level severity | `mysql_connections_critical: "95"` |
 | `_routing` | Notification routing (6 receiver types) | `receiver: {type: "webhook", url: "..."}` |
 | `_routing.overrides[]` | Different receiver for specific alerts | `alertname: "..."`, `receiver: {type: "email", ...}` |
-| `_silent_mode` | Silent mode (TSDB records but no notify) | `{target: "all", expires: "2026-04-01T00:00:00Z"}` |
+| `_silent_mode` | Silent mode (TSDB records but no notify) | `{target: "all", expires: "2099-04-01T00:00:00Z"}` |
 | `_state_maintenance` | Maintenance mode (no firing) | Same as above, supports auto-expiration via `expires` |
 | `_severity_dedup` | Severity deduplication | `"enable"` (default) / `"disable"` |
 

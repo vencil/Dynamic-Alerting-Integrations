@@ -2027,9 +2027,25 @@ class TestKustomizeBaseEnumeratesConfd:
                 assert "'t-gone.yaml'" in err and 'broken symlink' in err
 
     def test_a_second_defaults_spelling_is_listed_not_collapsed(self):
-        """#1942's shape, pinned as-is: init always writes `_defaults.yaml`,
-        so a tree that already had `_defaults.yml` carries two defaults
-        carriers. Listing both keeps that visible; collapsing would hide it."""
+        """Two defaults spellings side by side are two keys, never collapsed.
+
+        Before #1942 `run_init` itself produced this pair (it wrote
+        `_defaults.yaml` next to a customer's `_defaults.yml`), and this test
+        pinned that shape as-is. Now the run leaves the customer's carrier
+        alone (see `test_init_project_existing_carriers.py`), so the pair
+        can only be the customer's own — the helper still lists both."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = ip.Path(tmp) / 'conf.d'
+            conf.mkdir()
+            (conf / '_defaults.yml').write_text('defaults: {}\n',
+                                                 encoding='utf-8')
+            files = ip._kustomize_carrier_files(['t-one'], conf)
+            assert files[:2] == ['_defaults.yaml', '_defaults.yml']
+
+    def test_a_skipped_defaults_carrier_is_listed_under_its_own_name(self):
+        """#1942: `_defaults.yaml` is not written beside the customer's
+        `_defaults.yml`, so `files:` names the customer's carrier and never
+        the file init did not write."""
         with tempfile.TemporaryDirectory() as tmp:
             conf = os.path.join(tmp, 'conf.d')
             os.makedirs(conf)
@@ -2038,7 +2054,9 @@ class TestKustomizeBaseEnumeratesConfd:
                 fh.write('defaults: {}\n')
             ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
             files = _kust_files(tmp)
-            assert files[:2] == ['_defaults.yaml', '_defaults.yml']
+            assert files[0] == '_defaults.yml'
+            assert '_defaults.yaml' not in files
+            assert not os.path.exists(os.path.join(conf, '_defaults.yaml'))
 
 
 # ============================================================

@@ -203,7 +203,7 @@
       "category": "advanced",
       "packs": ["mariadb"],
       "desc": { "zh": "展示如何設定臨時維護窗口、自動過期和靜默模式", "en": "Shows how to set up a temporary maintenance window with auto-expiry and silent mode." },
-      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# relaxed for the maintenance window (platform default 30, suggested critical tier 50)\nmysql_threads_running: \"50\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  target: \"all\"\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
+      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# relaxed for the maintenance window (platform default 30, suggested critical tier 50)\nmysql_threads_running: \"50\"\n\n_state_maintenance:\n  expires: \"2099-03-20T06:00:00Z\"\n\n_silent_mode:\n  target: \"all\"\n  expires: \"2099-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
     },
     {
       "id": "routing-profile",
