@@ -1,0 +1,69 @@
+{{- /*
+  Ingress (#2027). values.yaml carried a full `ingress:` block for a long time
+  with no template reading it — `ingress.enabled: true` rendered nothing and
+  `helm install` still exited 0.
+
+  ⛔ The backend is HARD-WIRED to the Service's `http` port (80 → oauth2-proxy
+  :4180) and is deliberately not configurable. The other Service port,
+  `api-internal` (8080), trusts injected X-Forwarded-Groups/Email identity
+  headers with no authentication; the NetworkPolicy exists precisely to keep
+  arbitrary callers off it (GHSA-3g2h-rf85-5rrv). An Ingress pointed there
+  would let anyone on the internet assert any identity, platform-admins
+  included.
+
+  ⇒ With oauth2Proxy.enabled=false nothing listens on 4180, so an Ingress would
+  only ever answer 502. Refuse to render it instead of shipping a dead route.
+*/ -}}
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.oauth2Proxy.enabled }}
+{{- fail "ingress.enabled=true requires oauth2Proxy.enabled=true: the Ingress backend is the authenticated `http` port (oauth2-proxy :4180), which has no listener without the sidecar. It is never pointed at the header-trusting api-internal port 8080 (GHSA-3g2h-rf85-5rrv)." }}
+{{- end }}
+{{- if not .Values.ingress.hosts }}
+{{- fail "ingress.enabled=true requires at least one entry in ingress.hosts: an Ingress with no rules and no default backend is rejected by the API server." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tenant-api.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- range . }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- with .secretName }}
+      secretName: {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- /* `--set ingress.hosts[0].host=x` replaces the whole list and drops
+                 `paths`; the API server rejects an empty http.paths, so a host
+                 given without paths serves `/` (Prefix). */}}
+          {{- range (.paths | default (list (dict "path" "/" "pathType" "Prefix"))) }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "tenant-api.name" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}
