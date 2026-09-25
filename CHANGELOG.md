@@ -96,6 +96,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **portal 的 silent mode 說明與範例改依 schema，playground 不再對 `_silent_mode` 下結論（portal；[#1988](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1988)）**：playground 原本把合法的 `warning` / `critical` / `all` 判為錯誤，`{enabled: true}` 這類 exporter 不會靜音的寫法反而通過。現在 playground 不檢查 `_silent_mode`，驗證通過時會註明此鍵不在檢查範圍。Schema Explorer 改從 `docs/schemas/tenant-config.schema.json` 的定義顯示接受的值，並有測試在 schema 變動而 portal 沒跟上時失敗。playground 範例、tenant-manager 的「靜默模式 YAML」、glossary 與 deployment-wizard 的提示改為 schema 接受的寫法或改指向 Schema Explorer；tenant-manager 原本產出沒有任何元件讀取的 ConfigMap，改為每個租戶一段 `_silent_mode`。加引號的鍵（如 `"_silent_mode":`、`"_routing":`）改依本名驗證。
+
 - **`check-doc-reading-time` 與 `check-doc-freshness` 兩支手動 hook 從來沒真的檢查過文件；`make pre-tag` 的 playbook 新鮮度不再印假的 ✅（lint、dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：兩支 hook 的 entry 都傳了 `--ci`，但兩支工具都不認得這個參數，argparse 每次都 exit 2，文件一份都沒被量過。現在改傳工具真正定義的 `--check`。`pre-tag` 呼叫的 `playbook-freshness-ll` 設計上只是提醒、不會擋，但結尾橫幅卻寫死「playbook-freshness ✅」，即使同一段輸出裡已經列出 ⛔ 過期條目；現在橫幅改為註明它是 advisory，要看上方輸出。
 
 - **nightly CVE 報告 delivered 桶的失敗成因說明不再經過 bash 解析（ci；[#1970](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1970)）**：`FAILURE_CAUSE_NOTE` 也會進 issue 內文，但它不是 `file_cve_report.sh` 的參數，#1355／#1932 的守衛看不到它；原本寫在 `run:` 的雙引號字串裡，日後寫進反引號、`$(` 或 `"` 就會被 bash 執行或切斷。現在散文放在該 step 的 `env:`（`DELIVERED_FAILURE_CAUSE_NOTE`），`run:` 只做 `export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"`。issue 內文不變。新增 `test_failure_cause_note_prose_is_not_shell_text`：report step 裡對 `FAILURE_CAUSE_NOTE` 的賦值只能引用 `env:` 的變數，且該值不得含 `${{`（Actions 會對它求值）。

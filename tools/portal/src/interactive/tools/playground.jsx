@@ -60,7 +60,9 @@ tenants:
     redis_evictions: "1000"
     redis_connected_clients: "5000"
     _silent_mode:
-      expires: "2026-03-13T00:00:00Z"
+      target: "warning"
+      expires: "2099-12-31T00:00:00Z"
+      reason: "Cache migration"
     _routing:
       receiver_type: "email"
       webhook_url: "mailto:ops@example.com"
@@ -412,6 +414,10 @@ export default function TenantYAMLPlayground() {
                 <div className="text-xs text-[color:var(--da-color-success)] mt-2">
                   {validation.summary.thresholds} {t('閾值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊鍵', 'special keys')} •
                   {validation.summary.routing === 'configured' ? t(' 已配置路由', ' routing configured') : t(' 未配置路由', ' no routing')}
+                </div>
+                {/* Constant, not parse-derived (#1988): the validator makes no claim about _silent_mode. */}
+                <div data-testid="silent-mode-not-checked" className="text-xs text-[color:var(--da-color-muted)] mt-2">
+                  {t('此處不檢查 _silent_mode；接受的寫法見 Schema Explorer。', '_silent_mode is not checked here; see Schema Explorer for accepted forms.')}
                 </div>
               </div>
             )}

@@ -90,3 +90,35 @@ describe('validateTenantConfig', () => {
     expect(validateTenantConfig(VALID).valid).toBe(true); // control: only the duration changed
   });
 });
+
+describe('_silent_mode is not judged by the playground (#1988)', () => {
+  // parseYAML is a lenient line parser; every verdict it gave on
+  // _silent_mode disagreed with the exporter on some input, so the rule was
+  // removed. These values are accepted by the exporter and the schema, and
+  // were errors under the removed rule.
+  const forms = ['warning', 'critical', 'all'];
+  for (const v of forms) {
+    it(`emits no error or warning for _silent_mode: ${JSON.stringify(v)}`, () => {
+      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connections: "70"\n    _silent_mode: ${v}`);
+      const all = [...r.errors, ...r.warnings];
+      expect(all.filter((m: any) => m.rule === '_silent_mode' || m.message.includes('_silent_mode'))).toEqual([]);
+      expect(r.errors).toEqual([]);
+    });
+  }
+
+  // A quoted key is the same key to the exporter (it silences warning for
+  // both); the parser strips the quote pair, so no rule sees `"_silent_mode"`.
+  for (const k of ['"_silent_mode"', "'_silent_mode'"]) {
+    it(`emits no message for the quoted key ${k}: warning`, () => {
+      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connections: "70"\n    ${k}: warning`);
+      expect([...r.errors, ...r.warnings].filter((m: any) => String(m.message).includes('_silent_mode'))).toEqual([]);
+      expect(parseYAML(`tenants:\n  db-a:\n    ${k}: warning`).data.tenants['db-a']).toHaveProperty('_silent_mode', 'warning');
+    });
+  }
+
+  // Block keys (value on the next lines) go through a second path; pin it too.
+  it('reads quoted block keys by their name', () => {
+    const r = parseYAML(`"tenants":\n  db-a:\n    "_routing":\n      receiver_type: "webhook"`);
+    expect(r.data.tenants['db-a']._routing).toEqual({ receiver_type: 'webhook' });
+  });
+});

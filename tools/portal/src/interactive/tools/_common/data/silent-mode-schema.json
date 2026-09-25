@@ -1,0 +1,70 @@
+{
+  "_comment": "VERBATIM copy of docs/schemas/tenant-config.schema.json :: definitions.silentMode (#1988), under `definition`. schema-explorer renders the _silent_mode entry from it. DO NOT hand-edit: tools/portal/tests/silent-mode-schema.drift.test.ts deep-equals `definition` against the live schema.",
+  "definition": {
+    "oneOf": [
+      {
+        "type": "string",
+        "title": "Silent Mode (Scalar, Backward Compatible)",
+        "description": "Legacy scalar format: 'warning', 'critical', 'all', or 'disable'. For new configs, prefer structured format with expires/reason.",
+        "enum": [
+          "warning",
+          "critical",
+          "all",
+          "disable"
+        ],
+        "examples": [
+          "warning",
+          "disable"
+        ]
+      },
+      {
+        "type": "object",
+        "title": "Silent Mode (Structured, v1.7.0+)",
+        "description": "Structured format with optional expiry and reason. Alerts fire but Alertmanager suppresses notifications. Distinct from maintenance mode which suppresses at PromQL level.",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "title": "Target Severity",
+            "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'.",
+            "enum": [
+              "warning",
+              "critical",
+              "all"
+            ]
+          },
+          "expires": {
+            "type": "string",
+            "title": "Expiration Timestamp (RFC3339)",
+            "description": "RFC3339 UTC timestamp (e.g. 2026-04-01T00:00:00Z). Silent mode auto-expires at this time. Optional; omit for indefinite silent mode. A value the exporter cannot parse as RFC3339 (e.g. a date without time) only logs a WARN and is treated as no expiry.",
+            "format": "date-time",
+            "examples": [
+              "2026-03-13T12:00:00Z",
+              "2026-04-01T06:00:00Z"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "Human-readable reason for silent mode. Optional; appears in observability logs.",
+            "examples": [
+              "Known noisy alert during migration",
+              "Suppressing until upgrade"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    ],
+    "examples": [
+      "warning",
+      {
+        "target": "warning",
+        "expires": "2026-03-13T12:00:00Z",
+        "reason": "Known noisy alert during migration"
+      }
+    ]
+  }
+}
