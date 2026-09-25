@@ -14,7 +14,9 @@ lang: zh
 
 ## 用途
 
-`da-tools onboard --analyze` 的 Phase 0 discovery 輸出。**Dual output**:
+> ⚠️ **產生端尚未實作。** 本 schema 已定義，但目前沒有任何 da-tools 子命令會寫出這份檔案（`da-tools onboard` 沒有 Phase 0 分析模式，issue 1381）。下文描述的是**目標設計**；在產生端實作之前，Tier A 各關改以既有工具逐項執行，見 [troubleshooting-checklist §2.1](../integration/troubleshooting-checklist.md)。唯一已實作、會讀 `.da/state/` 的工具是 `da-tools state-reconcile`，它只驗 `schema_version` 並從檔名重建 manifest，不讀其他欄位。
+
+Phase 0 分析器（尚未實作）的 discovery 輸出。**Dual output**:
 
 | 形式 | 路徑 | 給誰 |
 |---|---|---|
@@ -37,7 +39,7 @@ lang: zh
 {
   "schema_version": "1.0",
   "generated_at": "2026-05-10T14:00:00Z",
-  "generated_by": "da-tools onboard --analyze v2.8.0",
+  "generated_by": "<producer> <version>",
 
   "discovery": {
     "tier_a_static": {
@@ -136,7 +138,7 @@ lang: zh
 
 ### v2（v2.9 backlog）
 - Pydantic model 在 `components/da-tools/app/migration_state.py`
-- `da-tools onboard --analyze` import model + dump
+- Phase 0 分析器（尚未實作）import model + dump
 - CI hook：model schema → JSON Schema → 對比本 .md → drift fails
 - **本 .md 變成 generated artifact**（標 `<!-- AUTO-GENERATED, DO NOT EDIT -->`）
 
@@ -199,5 +201,5 @@ lang: zh
 
 ### Tools 慣例
 
-`da-tools onboard --analyze` 預設 `--output .da/state/<cluster-name>.json`（從 `--cluster-name` flag 推），不再 default 到 single file。客戶單 cluster 不指定也仍 work（fallback to `.da/state/default.json`）。
+目標設計：Phase 0 分析器（尚未實作）預設寫 `.da/state/<cluster-name>.json`，不再 default 到 single file；單 cluster 客戶不指定時 fallback 到 `.da/state/default.json`。已實作的是讀取端：`da-tools state-reconcile --state-dir .da/state/` 掃這個目錄、驗 `schema_version`、重建 `.da/manifest.json`。
 

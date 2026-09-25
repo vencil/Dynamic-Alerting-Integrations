@@ -1140,32 +1140,43 @@ grep -rE 'ALERTS\{|alert_count' grafana-dashboards/
 
 #### 2.1.1 PromQL syntax error（da-parser 失敗）
 
+> ⚠️ **會一次產出 `syntax_errors[]` 報告的 Tier A 分析器尚未實作**（[migration-state schema](../schemas/migration-state.md) 定義了欄位，但沒有工具會寫它）。在它實作之前，這一關用下面兩支既有工具逐檔檢查。
+
 **Symptom**：
-- `da-tools onboard --analyze` 結束 status != 0
-- 報告含 `syntax_errors[]` 非空
+- `promtool check rules` 印出 `FAILED:`、rc=1
+- `da-tools parser import --fail-on-ambiguous` 印出 `gate failed — N rule(s) failed parse (dialect=ambiguous)`、rc=1
 
 **Quick diagnosis**：
 
 ```bash
-# 1. 看哪些檔案 fail + 具體 line
-da-parser --strict-promql --report rules.yaml
-# expected output: 每個 fail 的 file:line + parser message
+# 1. Prometheus 方言：promtool 一次可吃多個檔（只吃 rule file 本體，
+#    PrometheusRule CR 要先取出 .spec）
+promtool check rules <rules-dir>/*.yaml
+# expected output: 每個 FAILED 的檔案列出 file:line:col + parser message；
+# rc=0 全過 / rc=1 至少一檔失敗
 
-# 2. 重現該 expr 的解析
-echo 'YOUR_EXPR_HERE' | promtool query parse
-# 或對 metricsql
-echo 'YOUR_EXPR_HERE' | metricsql parse
+# 2. 兩種方言一起看：da-parser 一次讀一個檔，輸出 JSON；
+#    兩邊都解析不了的規則標 dialect=ambiguous 並帶 analyze_error
+for f in <rules-dir>/*.yaml; do
+    out="/tmp/parsed-$(basename "$f" .yaml).json"
+    da-tools parser import --input "$f" --fail-on-ambiguous > "$out" ||
+        jq -r '.rules[] | select(.analyze_error) | "\(.source_rule_id)\t\(.analyze_error)"' "$out"
+done
+# expected output: 每條失敗規則一行 <file>#groups[i].rules[j] + 錯誤訊息
+
+# 3. 重現單一 expr 的解析
+promtool --experimental promql format 'YOUR_EXPR_HERE'
 ```
 
-**最常見原因**：**手寫 PromQL 用了 vmalert-only 函數但 source 標 prometheus**——例如 `histogram_quantile_bucket` 是 metricsql 獨有，promtool 解析會 fail。
+**最常見原因**：**手寫 PromQL 用了 VM-only 函數，但要跑在 Prometheus 上**——例如 `rollup_rate` 是 MetricsQL 獨有：da-parser 標 `dialect: metricsql`、`prom_compatible: false`，promtool 則直接 parse fail。
 
 **Fix 路徑**：
 
 | 情境 | 處理 |
 |---|---|
-| 客戶要持續支援 vanilla Prom + VM | 改寫 expr 為 standard PromQL（用 `histogram_quantile`） |
-| 客戶決定獨佔 VM | 在 da-parser 標 `dialect: metricsql`，跳過 strict promql check |
-| 規則本來就該 deprecate | 從 conf.d 拿掉、Tier A 就 pass |
+| 客戶要持續支援 vanilla Prom + VM | 改寫 expr 為 standard PromQL；以 `promtool check rules` rc=0 為準 |
+| 客戶決定獨佔 VM | 不以 promtool 為閘門，改用 `da-tools parser import --fail-on-ambiguous`（只擋兩種方言都解析不了的規則） |
+| 規則本來就該 deprecate | 從 conf.d 拿掉，上面兩支檢查自然 pass |
 
 **If not this**：
 - (a) typo（多 / 少括號）→ promtool 訊息會直接指出
@@ -1177,26 +1188,23 @@ echo 'YOUR_EXPR_HERE' | metricsql parse
 
 #### 2.1.2 Hardcoded tenant id（dev-rule #2 違反 / Tier A hard gate fail）
 
+> ⚠️ **會列出 `tenant_id_violations[]` 的 Tier A 分析器尚未實作**，da-tools 目前也沒有任何子命令會標出 PromQL 裡寫死的 tenant id（`da-tools parser import` 只判方言，這類規則照樣標成 `dialect: prom`）。在它實作之前，這一關靠 grep。
+
 **Symptom**：
-- `da-tools onboard --analyze` 結束 status != 0
-- 報告含 `tenant_id_violations[]` 非空
-- CI 在 `da-guard` schema 階段 fail
+- 下面的 grep 有命中（rc=0）
+- 某條 alert 只對一個 tenant fire，其他 tenant 同樣狀況卻沒有
 
 **Quick diagnosis**：
 
 ```bash
-# 1. 看 violation 列表
-da-tools onboard --analyze --output /tmp/state.json --markdown-summary | tee /tmp/summary.md
-jq '.discovery.tier_a_static.tenant_id_violations[]' /tmp/state.json
-# expected output: 每筆含 file:line + offending PromQL snippet
-
-# 2. 直接 grep conf.d / rules 找 tenant id literal
-grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
-grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
+# 直接 grep 規則與 conf.d 找 tenant id literal
+# rc=0 有命中 / rc=1 沒命中 / rc=2 路徑寫錯（不是「乾淨」）
+grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
 # 排除合法的 template / schema 條目
 ```
 
-**最常見原因**：**急救 hotfix 留下 `instance="db-prod-1"` 之類的 PromQL，原作者離職、rationale 失傳**——Tier A 直接抓出每處。
+**最常見原因**：**急救 hotfix 留下 `instance="db-prod-1"` 之類的 PromQL，原作者離職、rationale 失傳**。
 
 **Fix（依情境）**：
 
@@ -1218,22 +1226,22 @@ grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
 # 該檔案的 directory context 已隱含 tenant scope，PromQL 不需 hardcode
 
 # 情境 C：規則該 deprecate（hotfix 早不需要了）
-# 從 conf.d 拿掉、Tier A 自然 pass
+# 從 conf.d 拿掉，grep 自然不再命中
 ```
 
 **Fix 完驗證**：
 
 ```bash
-# 重跑 Tier A
-da-tools onboard --analyze --output /tmp/state.json
-jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
-# expected: 0
+# 重跑同一組 grep
+grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+# expected: 沒有輸出且 rc=1（rc=2 代表路徑寫錯，不算通過）
 ```
 
 **If not this**：
-- (a) violation 是 **legitimate 的 staging tenant id**（如 `staging-default`）→ 加進 da-tools allowlist；但這應該是少數
-- (b) 規則使用 dynamic pattern（`instance=~"db-prod-.*"`）但 da-tools 仍報 violation → 工具 false positive，開 issue 給 platform team
-- (c) violation 在 alert annotation 而非 expr → 可接受（annotation 是給 humans 看的不參與 routing）
+- (a) 命中的是 **legitimate 的 staging tenant id**（如 `staging-default`）→ 在 review 記錄保留理由；但這應該是少數
+- (b) 規則使用 dynamic pattern（`instance=~"db-prod-.*"`）→ 上面的 pattern 只比對 `=`，不會命中 `=~`；要一併檢查 regex 寫死就另外 grep `=~`
+- (c) 命中在 alert annotation 而非 expr → 可接受（annotation 是給 humans 看的不參與 routing）
 
 **Cross-ref**：
 - playbook §12 Phase 0: Tier A 抓到 hardcoded tenant id
@@ -1242,26 +1250,36 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 
 #### 2.1.3 Orphan rule（rule fire 但 AM 端無對應 route / receiver）
 
+> ⚠️ **會列出 `orphan_rules[]` 的 Tier A 分析器尚未實作**——目前沒有工具把規則檔與 AM routing tree 交叉比對。在它實作之前，用下面的 amtool 迴圈逐條比對。
+
 **Symptom**：
-- `da-tools onboard --analyze` 報告 `orphan_rules[]` 非空
-- Tier A 報出每 100 條規則平均 5-15 條 orphan
+- 下面的迴圈把某條 alert 解析到 routing tree 根節點的 fallback receiver
 - 客戶 ops 反應「我們這條 alert 怎麼從沒收過？」（往往是離職員工的舊 PagerDuty token / 解散的 Slack channel / 不存在的 webhook URL）
 
 **Quick diagnosis**：
 
 ```bash
-# 1. 看 orphan 列表
-da-tools onboard --analyze --output /tmp/state.json
-jq '.discovery.tier_a_static.orphan_rules[]' /tmp/state.json
-# expected output: 每筆含 {name, file, reason}
+# 1. 先看 routing tree 長什麼樣
+amtool config routes --config.file=alertmanager.yml
 
-# 2. 對每條 orphan 反查它應該指向哪個 receiver
-# 拿 alert 的 labels（severity / domain / tenant）對照 AM routing tree
+# 2. 規則檔裡每條 alert 帶它的靜態 labels 測 routing，列出落到 fallback 的
+DEFAULT=$(yq '.route.receiver' alertmanager.yml)
+yq '.groups[].rules[] | select(has("alert")) | ["alertname=" + .alert] + ((.labels // {}) | to_entries | map(.key + "=" + .value)) | join(" ")' <rules-file> |
+while read -r labels; do
+    recv=$(amtool config routes test --config.file=alertmanager.yml $labels)
+    if [ "$recv" = "$DEFAULT" ]; then echo "fallback: $labels -> $recv"; fi
+done | tee /tmp/orphans-before.txt
+# expected output: 每條落到 fallback 的 alert 一行
+# ⚠️ 這個迴圈只看得到規則檔上的靜態 labels：alert 若靠 series label
+#    （例如 metric 自帶的 tenant）路由，會被誤列；label 值含空白或
+#    {{ $labels.x }} 模板的規則要手動測（下一步）。
+
+# 3. 對可疑的那條帶上它實際會攜帶的 labels 再測一次
 amtool config routes test --config.file=alertmanager.yml \
     severity=critical alertname=<orphan-rule-name> tenant=<tenant>
 # expected for orphan: 走到 default fallback receiver 或 routing tree 末端的 catch-all
 
-# 3. 進一步：看該 receiver 是否真的工作（webhook URL 仍可達？token 仍有效？）
+# 4. 進一步：看該 receiver 是否真的工作（webhook URL 仍可達？token 仍有效？）
 amtool alert add alertname=test_orphan severity=critical \
     --alertmanager.url=http://<am>:9093
 # 觀察該 receiver 是否真的收到（PagerDuty incident? Slack message? email?）
@@ -1282,7 +1300,7 @@ route:
   routes:
     - matchers: [domain="<orphan-rule-domain>"]
       receiver: <appropriate-receiver>
-# AM reload，重跑 da-tools 驗證 orphan 列表縮短
+# AM reload，重跑上面的迴圈驗證 fallback 列表縮短
 
 # 形狀 2：Receiver 失效 → 修 receiver 或重新指派
 # 案例 A：PagerDuty token 過期 → 取得新 token、更新 AM secret
@@ -1294,25 +1312,23 @@ kubectl get secret am-pagerduty-token -o yaml
 
 # 形狀 3：規則本身該 prune → 從 conf.d / rules.yaml 拿掉
 git rm conf.d/<domain>/<region>/<deprecated-rule>.yaml
-# 走正常 PR 流程；da-tools 驗證 orphan 列表清掉
+# 走正常 PR 流程；重跑上面的迴圈驗證 fallback 列表清掉
 ```
 
 **Local 驗證**（避免 push CI fail 循環）：
 
 ```bash
-# 修完任一形狀後，local 重跑 Tier A
-da-tools onboard --analyze --output /tmp/state-after.json
-jq '.discovery.tier_a_static.orphan_rules | length' /tmp/state-after.json
+# 修完任一形狀後，local 重跑 Quick diagnosis 第 2 步的迴圈，
+# 把結尾的 tee 目標改成 /tmp/orphans-after.txt，再比對前後
+wc -l < /tmp/orphans-after.txt
 # expected: 0（或至少比修前少）
 
-# 比對前後 diff
-diff <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state.json | sort) \
-     <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state-after.json | sort)
+diff <(sort /tmp/orphans-before.txt) <(sort /tmp/orphans-after.txt)
 ```
 
 **If not this**：
 - (a) Orphan 列表大量集中在某 domain → domain owner 已離職 / team 解散，整個 domain 規則需要 ownership re-assignment 或整段 deprecate
-- (b) `da-tools onboard --analyze` 報 orphan 但 amtool routing test 顯示有 route → da-tools 邏輯與 AM matcher 評估有 gap，開 issue 給 platform team
+- (b) 迴圈報 fallback，但帶上實際 series labels（如 `tenant`）後 amtool 顯示有 route → 那條規則靠 series label 路由，不是 orphan；迴圈只看得到規則檔上的靜態 labels
 - (c) Orphan 規則正在 fire 但客戶 ops 不確定該 prune 還是修 → **不要 prune**！先補 route 到一個臨時 channel（如 platform team 的 audit channel）觀察 1 週、確認 alert 是否真的需要
 
 **Cross-ref**：
@@ -1477,12 +1493,13 @@ grep -lE '^<<<<<<< |^>>>>>>> |^=======' .da/state/*.json .da/manifest.json
 # 形狀 1：Git merge conflict 殘留
 # 解 conflict 走「以 automation 最新寫入為準」原則（state 是 derived data）
 git status .da/
-git checkout --theirs .da/state/*.json .da/manifest.json   # 取最新自動寫入版
-# 或對該 cluster 重跑 da-tools 重新生成
-da-tools onboard --analyze --cluster-name <cluster> \
-    --output .da/state/<cluster>.json
+git checkout --theirs .da/state/*.json   # 取最新自動寫入版
+# manifest 是 derived view：不要手解它的 conflict，從 state 檔重建
+da-tools state-reconcile --state-dir .da/state/
 # 重新 commit
 ```
+
+> ⚠️ **沒有工具能「對某個 cluster 重新產生 state 檔內容」**：會寫出 `discovery` / `current_state` 等欄位的 Phase 0 分析器尚未實作（見 [migration-state schema](../schemas/migration-state.md)）。`state-reconcile` 只驗 `schema_version` 並從檔名重建 manifest，不會補回 state 檔裡被丟掉的內容——解 conflict 時要保留的那一側請人工確認。
 
 > ✅ **2026-05-11 update — 工具已 ship**（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A 完成）。schema migration + manifest 重建統一為單一聲明式命令：
 >

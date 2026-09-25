@@ -1142,32 +1142,43 @@ grep -rE 'ALERTS\{|alert_count' grafana-dashboards/
 
 #### 2.1.1 PromQL syntax error (da-parser fails)
 
+> ⚠️ **The Tier A analyzer that would emit a `syntax_errors[]` report is not implemented yet** (the [migration-state schema](../schemas/migration-state.md) defines the field, but no tool writes it). Until it is, check file by file with the two existing tools below.
+
 **Symptom**:
-- `da-tools onboard --analyze` exits with status != 0
-- Report contains non-empty `syntax_errors[]`
+- `promtool check rules` prints `FAILED:` and exits 1
+- `da-tools parser import --fail-on-ambiguous` prints `gate failed — N rule(s) failed parse (dialect=ambiguous)` and exits 1
 
 **Quick diagnosis**:
 
 ```bash
-# 1. See which files fail and the specific lines
-da-parser --strict-promql --report rules.yaml
-# expected output: each failing file:line + parser message
+# 1. Prometheus dialect: promtool takes several files at once (plain rule
+#    files only; extract .spec from a PrometheusRule CR first)
+promtool check rules <rules-dir>/*.yaml
+# expected output: each FAILED file with file:line:col + parser message;
+# rc=0 all pass / rc=1 at least one file failed
 
-# 2. Reproduce parsing of that expr
-echo 'YOUR_EXPR_HERE' | promtool query parse
-# Or for metricsql
-echo 'YOUR_EXPR_HERE' | metricsql parse
+# 2. Both dialects: da-parser reads one file at a time and emits JSON;
+#    rules neither dialect can parse get dialect=ambiguous plus analyze_error
+for f in <rules-dir>/*.yaml; do
+    out="/tmp/parsed-$(basename "$f" .yaml).json"
+    da-tools parser import --input "$f" --fail-on-ambiguous > "$out" ||
+        jq -r '.rules[] | select(.analyze_error) | "\(.source_rule_id)\t\(.analyze_error)"' "$out"
+done
+# expected output: one line per failing rule, <file>#groups[i].rules[j] + error
+
+# 3. Reproduce parsing of a single expr
+promtool --experimental promql format 'YOUR_EXPR_HERE'
 ```
 
-**Most likely cause**: **hand-written PromQL uses vmalert-only functions but the source is labelled prometheus** — e.g. `histogram_quantile_bucket` is metricsql-only; promtool parsing fails.
+**Most likely cause**: **hand-written PromQL uses a VM-only function but has to run on Prometheus** — e.g. `rollup_rate` is MetricsQL-only: da-parser marks it `dialect: metricsql`, `prom_compatible: false`, and promtool fails to parse it.
 
 **Fix paths**:
 
 | Situation | Treatment |
 |---|---|
-| Customer wants continued support for vanilla Prom + VM | Rewrite expr as standard PromQL (use `histogram_quantile`) |
-| Customer decides VM-exclusive | Mark `dialect: metricsql` in da-parser; skip strict promql check |
-| Rule should be deprecated anyway | Remove from `conf.d`; Tier A passes |
+| Customer wants continued support for vanilla Prom + VM | Rewrite expr as standard PromQL; `promtool check rules` rc=0 is the bar |
+| Customer decides VM-exclusive | Don't gate on promtool; use `da-tools parser import --fail-on-ambiguous` instead (blocks only rules neither dialect can parse) |
+| Rule should be deprecated anyway | Remove from `conf.d`; both checks above then pass |
 
 **If not this**:
 - (a) typo (extra / missing parenthesis) → promtool message will point it out
@@ -1179,26 +1190,23 @@ echo 'YOUR_EXPR_HERE' | metricsql parse
 
 #### 2.1.2 Hardcoded tenant id (dev-rule #2 violation / Tier A hard gate fail)
 
+> ⚠️ **The Tier A analyzer that would list `tenant_id_violations[]` is not implemented yet**, and no da-tools subcommand flags a tenant id hard-coded in PromQL today (`da-tools parser import` only classifies dialect; such rules still come out `dialect: prom`). Until it is, this gate is a grep.
+
 **Symptom**:
-- `da-tools onboard --analyze` exits with status != 0
-- Report contains non-empty `tenant_id_violations[]`
-- CI fails in `da-guard` schema stage
+- The grep below has hits (rc=0)
+- An alert fires for one tenant only, while other tenants in the same condition stay silent
 
 **Quick diagnosis**:
 
 ```bash
-# 1. View the violation list
-da-tools onboard --analyze --output /tmp/state.json --markdown-summary | tee /tmp/summary.md
-jq '.discovery.tier_a_static.tenant_id_violations[]' /tmp/state.json
-# expected output: each record contains file:line + offending PromQL snippet
-
-# 2. Directly grep conf.d / rules for tenant id literals
-grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
-grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
+# Grep rules and conf.d for tenant id literals
+# rc=0 hits / rc=1 no hits / rc=2 wrong path (NOT "clean")
+grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
 # Exclude legitimate template / schema entries
 ```
 
-**Most likely cause**: **emergency hotfix left `instance="db-prod-1"`-style PromQL behind; original author left, rationale lost** — Tier A catches every instance.
+**Most likely cause**: **emergency hotfix left `instance="db-prod-1"`-style PromQL behind; original author left, rationale lost**.
 
 **Fix (by situation)**:
 
@@ -1220,22 +1228,22 @@ grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' conf.d/ rules/
 # The file's directory context implies tenant scope; PromQL doesn't need hardcoding
 
 # Situation C: rule should be deprecated (hotfix is no longer needed)
-# Remove from conf.d; Tier A naturally passes
+# Remove from conf.d; the grep stops hitting
 ```
 
 **Post-fix verification**:
 
 ```bash
-# Re-run Tier A
-da-tools onboard --analyze --output /tmp/state.json
-jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
-# expected: 0
+# Re-run the same greps
+grep -rnE 'instance\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
+# expected: no output and rc=1 (rc=2 means a wrong path, which is not a pass)
 ```
 
 **If not this**:
-- (a) Violation is a **legitimate staging tenant id** (e.g. `staging-default`) → add to da-tools allowlist; but should be the minority
-- (b) Rule uses a dynamic pattern (`instance=~"db-prod-.*"`) but da-tools still reports violation → tool false positive; open issue with platform team
-- (c) Violation is in alert annotation, not expr → acceptable (annotations are for humans and don't participate in routing)
+- (a) The hit is a **legitimate staging tenant id** (e.g. `staging-default`) → record the rationale in review; but should be the minority
+- (b) Rule uses a dynamic pattern (`instance=~"db-prod-.*"`) → the patterns above only match `=`, not `=~`; grep for `=~` separately if hard-coded regexes matter too
+- (c) The hit is in an alert annotation, not expr → acceptable (annotations are for humans and don't participate in routing)
 
 **Cross-ref**:
 - playbook §12 Phase 0: Tier A catches hardcoded tenant IDs
@@ -1244,26 +1252,38 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 
 #### 2.1.3 Orphan rule (rule fires but AM has no matching route / receiver)
 
+> ⚠️ **The Tier A analyzer that would list `orphan_rules[]` is not implemented yet** — no tool cross-checks rule files against the AM routing tree today. Until it is, compare rule by rule with the amtool loop below.
+
 **Symptom**:
-- `da-tools onboard --analyze` report's `orphan_rules[]` is non-empty
-- Tier A reports an average of 5–15 orphans per 100 rules
+- The loop below resolves an alert to the routing tree's root fallback receiver
 - Customer ops says "this alert — why have we never received it?" (usually an old PagerDuty token from an ex-employee / a dissolved Slack channel / a non-existent webhook URL)
 
 **Quick diagnosis**:
 
 ```bash
-# 1. View the orphan list
-da-tools onboard --analyze --output /tmp/state.json
-jq '.discovery.tier_a_static.orphan_rules[]' /tmp/state.json
-# expected output: each record contains {name, file, reason}
+# 1. First look at the routing tree
+amtool config routes --config.file=alertmanager.yml
 
-# 2. For each orphan, look up which receiver it should target
-# Use the alert's labels (severity / domain / tenant) against AM's routing tree
+# 2. Test routing for every alert in the rule file with its static labels;
+#    list the ones that land on the fallback
+DEFAULT=$(yq '.route.receiver' alertmanager.yml)
+yq '.groups[].rules[] | select(has("alert")) | ["alertname=" + .alert] + ((.labels // {}) | to_entries | map(.key + "=" + .value)) | join(" ")' <rules-file> |
+while read -r labels; do
+    recv=$(amtool config routes test --config.file=alertmanager.yml $labels)
+    if [ "$recv" = "$DEFAULT" ]; then echo "fallback: $labels -> $recv"; fi
+done | tee /tmp/orphans-before.txt
+# expected output: one line per alert that lands on the fallback
+# ⚠️ The loop only sees the static labels in the rule file: an alert routed
+#    by a series label (e.g. a tenant label carried by the metric) is listed
+#    falsely; rules whose label values contain spaces or {{ $labels.x }}
+#    templates need a manual test (next step).
+
+# 3. For a suspect, re-test with the labels it will actually carry
 amtool config routes test --config.file=alertmanager.yml \
     severity=critical alertname=<orphan-rule-name> tenant=<tenant>
 # expected for orphan: lands on the default fallback receiver or the catch-all at the routing tree's tail
 
-# 3. Going further: check whether that receiver actually works (is the webhook URL reachable? is the token still valid?)
+# 4. Going further: check whether that receiver actually works (is the webhook URL reachable? is the token still valid?)
 amtool alert add alertname=test_orphan severity=critical \
     --alertmanager.url=http://<am>:9093
 # Observe whether the receiver actually receives it (PagerDuty incident? Slack message? email?)
@@ -1284,7 +1304,7 @@ route:
   routes:
     - matchers: [domain="<orphan-rule-domain>"]
       receiver: <appropriate-receiver>
-# AM reload; re-run da-tools to confirm the orphan list shrinks
+# AM reload; re-run the loop above to confirm the fallback list shrinks
 
 # Shape 2: receiver dead → fix the receiver or reassign
 # Case A: PagerDuty token expired → get a new token; update the AM secret
@@ -1296,25 +1316,23 @@ kubectl get secret am-pagerduty-token -o yaml
 
 # Shape 3: rule itself should be pruned → remove from conf.d / rules.yaml
 git rm conf.d/<domain>/<region>/<deprecated-rule>.yaml
-# Follow normal PR flow; da-tools confirms orphan list shrinks
+# Follow normal PR flow; re-run the loop above to confirm the fallback list clears
 ```
 
 **Local validation** (avoid the push-CI-fail loop):
 
 ```bash
-# After fixing any shape, re-run Tier A locally
-da-tools onboard --analyze --output /tmp/state-after.json
-jq '.discovery.tier_a_static.orphan_rules | length' /tmp/state-after.json
+# After fixing any shape, re-run the loop from Quick diagnosis step 2 locally,
+# with the trailing tee pointed at /tmp/orphans-after.txt, then compare
+wc -l < /tmp/orphans-after.txt
 # expected: 0 (or at least less than before)
 
-# Compare before/after diff
-diff <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state.json | sort) \
-     <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state-after.json | sort)
+diff <(sort /tmp/orphans-before.txt) <(sort /tmp/orphans-after.txt)
 ```
 
 **If not this**:
 - (a) Orphan list is heavily concentrated in one domain → the domain owner has left / team disbanded; the whole domain's rules need ownership re-assignment or full deprecation
-- (b) `da-tools onboard --analyze` reports orphan but amtool routing test shows a route → there's a gap between da-tools logic and AM matcher evaluation; open issue with platform team
+- (b) The loop reports a fallback, but amtool shows a route once the real series labels (e.g. `tenant`) are added → the rule is routed by a series label and is not an orphan; the loop only sees the static labels in the rule file
 - (c) Orphan rule is currently firing and the customer ops isn't sure whether to prune or fix → **don't prune!** First add a temporary route to a temporary channel (e.g. platform team audit channel); observe for 1 week to confirm whether the alert is actually needed
 
 **Cross-ref**:
@@ -1481,12 +1499,13 @@ grep -lE '^<<<<<<< |^>>>>>>> |^=======' .da/state/*.json .da/manifest.json
 # Shape 1: leftover Git merge conflict
 # Resolve via the "trust the latest automation write" principle (state is derived data)
 git status .da/
-git checkout --theirs .da/state/*.json .da/manifest.json   # take the latest automation-written version
-# Or for that cluster re-run da-tools to regenerate
-da-tools onboard --analyze --cluster-name <cluster> \
-    --output .da/state/<cluster>.json
+git checkout --theirs .da/state/*.json   # take the latest automation-written version
+# The manifest is a derived view: don't hand-resolve its conflict, rebuild it from the state files
+da-tools state-reconcile --state-dir .da/state/
 # Re-commit
 ```
+
+> ⚠️ **No tool can "regenerate a cluster's state file contents"**: the Phase 0 analyzer that would write `discovery` / `current_state` and the other fields is not implemented yet (see the [migration-state schema](../schemas/migration-state.md)). `state-reconcile` only checks `schema_version` and rebuilds the manifest from file names; it does not restore content dropped from a state file — confirm by hand which side of the conflict to keep.
 
 > ✅ **2026-05-11 update — tool shipped** ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A done). Schema migration + manifest rebuild are unified as one declarative command:
 >
