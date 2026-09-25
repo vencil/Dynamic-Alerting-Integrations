@@ -153,6 +153,18 @@ _VALUE_FLAGS = frozenset({
 })
 
 
+def _unbracket(tok: str) -> str:
+    """`[-v` → `-v`: a synopsis marks an optional mount as `[-v <spec>]`.
+
+    ⛔ Shared by `_mounts` and `_image_index` on purpose. When only `_mounts`
+    knew it, `_image_index` read `[-v` as a bare operand and took the mount
+    VALUE (`$(pwd)/da-tools-out:/data/output]`, which contains da-tools) as the
+    image — so a correctly-placed `--user` was reported as coming after it
+    (issue 1495 review). One predicate, two readers.
+    """
+    return tok[1:] if tok in ("[-v", "[--volume") else tok
+
+
 def _image_index(toks: List[str]) -> "int | None":
     """Index of the IMAGE token — the first bare operand after `docker run`.
 
@@ -172,7 +184,7 @@ def _image_index(toks: List[str]) -> "int | None":
     i += 1
     operands = []
     while i < len(toks):
-        t = toks[i]
+        t = _unbracket(toks[i])
         if t in _VALUE_FLAGS:
             i += 2
             continue
@@ -322,7 +334,7 @@ def _mounts(flat: str) -> List[str]:
         # mount in cli-reference.en.md from the judged set — including the
         # writable ones this rule exists for (issue 1495). The closing `]` is
         # already stripped from the operand below.
-        t = t[1:] if t in ("[-v", "[--volume") else t
+        t = _unbracket(t)
         if t in ("-v", "--volume") and i + 1 < len(toks):
             out.append(toks[i + 1].strip("\"'").rstrip("\\,;)]\"'"))
         elif t.startswith(("--volume=", "-v=")):

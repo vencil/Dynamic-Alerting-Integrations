@@ -88,7 +88,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
-- **`cli-reference.en.md` 六條會寫檔的 `docker run` synopsis 補上 `--user`，守衛也開始評分它們（docs、lint；[#1495](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1495)）**：generate-routes、scaffold、migrate、offboard、deprecate、onboard 的語法區塊有可寫掛載卻沒帶 `--user`，照抄後在客戶自己的目錄裡會以 `PermissionError` 失敗。守衛原本漏掉它們有兩個原因：host 端寫成 `<output_dir>` 這類佔位符時整個跳過，以及 `[-v …]` 選用掛載的旗標 token 是 `[-v`，根本沒被讀到。現在 `check_doc_datools_cmds` 會讀 `[-v`，也評分佔位符只出現在 host 端的掛載（可不可寫由容器路徑與 options 決定，佔位符藏不住 `:ro`）。佔位符落在容器路徑或 options 欄時仍然跳過，具名 volume 的排除不變。
+- **`cli-reference.en.md` 六條會寫檔的 `docker run` synopsis 補上 `--user`，守衛也開始評分它們（docs、lint；[#1495](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1495)）**：generate-routes、scaffold、migrate、offboard、deprecate、onboard 的語法區塊有可寫掛載卻沒帶 `--user`。image 以 uid 10001 執行，照抄後只要掛進來的 host 目錄不允許這個 uid 寫入（客戶自己 checkout 的目錄通常是這種情況），就會以 `PermissionError` 失敗。守衛原本漏掉它們有兩個原因：host 端寫成 `<output_dir>` 這類佔位符時整個跳過，以及 `[-v …]` 選用掛載的旗標 token 是 `[-v`，根本沒被讀到。現在 `check_doc_datools_cmds` 會讀 `[-v`，也評分佔位符只出現在 host 端的掛載（可不可寫由容器路徑與 options 決定，佔位符藏不住 `:ro`）。佔位符落在容器路徑或 options 欄時仍然跳過，具名 volume 的排除不變。
 
 - **文件、demo 與 portal 不再教 `validate-config --ci`（docs、portal、dx；[#1380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1380)）**：這個旗標不存在，照抄會 rc=2。剩下的 13 處全部移除：遷移劇本、動手實驗練習 3、速查表、`demo-showcase.sh`，以及 CLI Playground 的預覽與 checkbox。`validate-config` 的結束碼本身就適合 CI 使用（有檢查項 fail 時回 1），想要報告檔的地方改用 `--json`。練習 3 與 Playground 原本附的「預期輸出」是捏造的，已換成實跑結果。demo 原本用 `|| true` 吞掉 rc=2 之後仍宣告「驗證完成」，現在會讀結束碼，工具沒跑起來時直接中止。帳本的 4 列 #1380 已移除。drift-detect、evaluate-policy、state-reconcile 的 `--ci` 是真的旗標，保留不動。
 

@@ -532,6 +532,24 @@ class TestPlaceholderIsFilteredPerSpec:
         issues = mod.check_writable_mount_has_user([p], tmp_path)
         assert bool(issues) is expect, issues
 
+    @pytest.mark.parametrize("lines,expect", [
+        # --user correctly ahead of the image; the optional mount's value
+        # contains da-tools and must not be taken for the image.
+        (["  [-v $(pwd)/da-tools-out:/data/output]", "  --user=1000:1000",
+          "  ghcr.io/vencil/da-tools:v2.9.0 init"], []),
+        # control: the same mount, --user genuinely after the image.
+        (["  [-v $(pwd)/da-tools-out:/data/output]",
+          "  ghcr.io/vencil/da-tools:v2.9.0 init", "  --user=1000:1000"],
+         ["datools-user-flag-after-image"]),
+    ])
+    def test_an_optional_mount_value_is_not_taken_for_the_image(
+            self, tmp_path, lines, expect):
+        """⛔ counterfactual（#1495 review）：`_image_index` 原本不認得 `[-v`，
+        把掛載值當成 image，第一格誤報 `datools-user-flag-after-image`。"""
+        p = self._doc(tmp_path, self._fenced("docker run --rm", *lines))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert [i.check for i in issues] == expect, issues
+
     def test_a_placeholder_named_volume_is_not_the_exclusion(self, tmp_path):
         """具名 volume 的排除仍然成立：它寫成字面名稱，不是佔位符。"""
         p = self._doc(tmp_path, self._fenced(
