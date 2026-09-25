@@ -468,8 +468,9 @@ repos:
         additional_dependencies: ['pyyaml']
         # ⛔ Trigger surface ⊇ scan surface (same reasoning as doc-datools-cmds
         # above): docs, the landing pages, the CLI contract under scripts/tools/
-        # and entrypoint.py, and the ledger are all files this gate reads.
-        files: ^(docs/.*\.md|docs/internal/cli-contract-baseline\.yaml|components/da-tools/(README\.md|app/(QUICKSTART\.md|entrypoint\.py))|try-local/README\.md|scripts/tools/.*\.py)$
+        # and entrypoint.py, the ledger, and the CLI Playground catalog + engine
+        # (evaluated with node, #1379 portal half) are all files this gate reads.
+        files: ^(docs/.*\.md|docs/internal/cli-contract-baseline\.yaml|components/da-tools/(README\.md|app/(QUICKSTART\.md|entrypoint\.py))|try-local/README\.md|scripts/tools/.*\.py|tools/portal/src/interactive/tools/cli-playground/(commands|engine)\.js)$
 
       - id: design-token-usage
         name: Design token compliance (JSX)

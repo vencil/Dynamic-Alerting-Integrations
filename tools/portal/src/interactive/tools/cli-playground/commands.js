@@ -153,7 +153,7 @@ Next steps:
       { name: 'input', label: t('輸入規則文件', 'Input Rules File'), required: true, placeholder: '/path/to/rules.yaml' }
     ],
     flags: [
-      { name: '--output', label: t('輸出目錄', 'Output Directory'), required: false, placeholder: '/tmp/migrated' },
+      { name: '--output-dir', label: t('輸出目錄', 'Output Directory'), required: false, placeholder: '/tmp/migrated' },
       { name: '--dry-run', label: t('試運行', 'Dry Run'), required: false, type: 'checkbox' },
       { name: '--triage', label: t('分類模式', 'Triage Mode'), required: false, type: 'checkbox' }
     ]
@@ -216,11 +216,17 @@ Next steps:
     label: 'patch-config',
     description: t('部分更新 ConfigMap，包含預覽 (--diff) 和應用', 'Partial ConfigMap update with preview (--diff) and apply'),
     category: t('配置生成', 'Configuration Generation'),
-    args: [],
+    // issue 1379: this used to offer --namespace / --configmap / --dry-run,
+    // none of which patch_config.py declares (rc=2), and no positionals, which
+    // it requires. The argparse is `tenant metric_key value [--diff] [--json]`.
+    args: [
+      { name: 'tenant', label: t('租戶 ID', 'Tenant ID'), required: true, placeholder: 'e.g., db-a' },
+      { name: 'metric_key', label: t('指標鍵', 'Metric Key'), required: true, placeholder: 'e.g., mysql_connections' },
+      { name: 'value', label: t('新值（或 default / disable）', "New value (or 'default' / 'disable')"), required: true, placeholder: 'e.g., 80' }
+    ],
     flags: [
-      { name: '--namespace', label: t('Kubernetes 命名空間', 'Kubernetes Namespace'), required: true, placeholder: 'monitoring' },
-      { name: '--configmap', label: t('ConfigMap 名稱', 'ConfigMap Name'), required: true, placeholder: 'alertmanager-config' },
-      { name: '--dry-run', label: t('試運行 / 差異預覽', 'Dry Run / Diff Preview'), required: false, type: 'checkbox' }
+      { name: '--diff', label: t('差異預覽（不套用）', 'Diff preview (do not apply)'), required: false, type: 'checkbox' },
+      { name: '--json', label: t('JSON 輸出（需 --diff）', 'JSON output (requires --diff)'), required: false, type: 'checkbox' }
     ]
   },
   'explain-route': {
@@ -311,7 +317,7 @@ Mapping draft (YAML):
     flags: [
       { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: true, placeholder: 'http://localhost:9090' },
       { name: '--tenant', label: t('租戶 ID', 'Tenant ID'), required: false, placeholder: 'db-a' },
-      { name: '--lookback', label: t('回溯時間', 'Lookback Duration'), required: false, placeholder: '7d' },
+      { name: '--period', label: t('分析期間', 'Analysis Period'), required: false, placeholder: '30d' },
       { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]
   },

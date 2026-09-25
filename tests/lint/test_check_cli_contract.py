@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -127,14 +129,17 @@ def _fence(*lines: str, lang: str = "bash") -> str:
 
 def _scan(tmp_path: Path, docs: list[Path] | None = None,
           reference: Path | None = None, exit_codes=None, parsers=None,
-          command_map=None):
+          command_map=None, portal=None):
     if exit_codes is None:
         exit_codes = {"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)}
+    # `portal=[]` by default: a synthetic tree has no CLI Playground, and the
+    # real one is not what these tests are about (see TestPortalCarrier).
     return mod.scan(parsers=PARSERS if parsers is None else parsers,
                     command_map=COMMAND_MAP if command_map is None else command_map,
                     docs=docs if docs is not None else [],
                     reference_docs=(reference or _reference(tmp_path),),
-                    injected=INJECTED, exit_codes=exit_codes, repo_root=tmp_path)
+                    injected=INJECTED, exit_codes=exit_codes, repo_root=tmp_path,
+                    portal=[] if portal is None else portal)
 
 
 def _open(findings):
@@ -705,7 +710,7 @@ class TestV4ExitCodeTable:
         b = _reference(tmp_path, exit_table=table, name="b.md")
         r = mod.scan(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
                      reference_docs=(a, b), injected=INJECTED, exit_codes=opaque,
-                     repo_root=tmp_path)
+                     repo_root=tmp_path, portal=[])
         assert r.stats["exit_undecidable_scripts"] == 1
 
     def test_a_section_with_a_parser_but_no_exit_table_is_disclosed(self, tmp_path):
@@ -1199,6 +1204,161 @@ class TestSubstitutionsExemptionsAndShells:
         assert _open(r.findings) == [] and r.stats["ignored"] == 1 and r.errors == []
 
 
+# ---------------------------------------------------------------------------
+_NODE = shutil.which("node")
+_needs_node = pytest.mark.skipif(_NODE is None, reason="node not on PATH")
+_PLAYGROUND = REPO_ROOT / "tools/portal/src/interactive/tools/cli-playground"
+
+
+def _pc(key, cmd, kind="bare", line=1):
+    return mod.PortalCommand(key, kind, line, cmd)
+
+
+class TestPortalCarrier:
+    """#1379 portal half: the CLI Playground catalog, judged as the page builds it."""
+
+    def test_three_identical_checkboxes_only_one_is_wrong(self, tmp_path):
+        """⛔ The control #1380 left behind: `--ci` on three commands, only
+        one parser lacks it. The verdict must follow the parser, not the text."""
+        def parser(with_ci):
+            ap = argparse.ArgumentParser(prog="x")
+            ap.add_argument("--config-dir")
+            if with_ci:
+                ap.add_argument("--ci", action="store_true")
+            return mod._model(ap)
+        parsers = {"vc": parser(False), "dd": parser(True), "ep": parser(True)}
+        r = _scan(tmp_path, parsers=parsers,
+                  command_map={k: f"{k}.py" for k in parsers},
+                  portal=[_pc(k, f"da-tools {k} --config-dir x --ci") for k in parsers])
+        assert _open(r.findings) == [("V1", "vc", "--ci")]
+        assert r.stats["portal_commands"] == 3
+
+    def test_bare_and_docker_forms_of_one_key_are_one_finding(self, tmp_path):
+        r = _scan(tmp_path, portal=[
+            _pc("widget", "da-tools widget --nope", line=7),
+            _pc("widget", "docker run --rm ghcr.io/vencil/da-tools:v2.9.0 widget --nope",
+                kind="docker", line=7)])
+        assert _open(r.findings) == [("V1", "widget", "--nope")]
+        assert r.findings[0].line == 7
+
+    def test_a_preview_prompt_is_judged(self, tmp_path):
+        r = _scan(tmp_path, portal=[_pc("widget", "$ da-tools widget --nope", kind="preview")])
+        assert _open(r.findings) == [("V1", "widget", "--nope")]
+
+    def test_a_missing_playground_is_fatal_not_silent(self, tmp_path):
+        r = mod.scan(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
+                     reference_docs=(_reference(tmp_path),), injected=INJECTED,
+                     exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
+                     repo_root=tmp_path)
+        assert any("CLI Playground carrier has nothing to read" in e for e in r.fatal)
+
+    @staticmethod
+    def _fake_node(tmp_path, body):
+        """A stand-in for node that fails in a chosen way (POSIX shell script)."""
+        exe = tmp_path / "fake-node"
+        exe.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8", newline="\n")
+        exe.chmod(0o755)
+        return str(exe)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stand-in for node")
+    @pytest.mark.parametrize("body,needle", [
+        ("echo 'SyntaxError: boom' >&2; exit 3", "rc=3"),
+        ("printf '[]'", "zero commands"),
+    ])
+    def test_a_node_that_runs_but_fails_is_fatal_not_silent(
+            self, tmp_path, monkeypatch, body, needle):
+        """⛔ node present but the catalog cannot be evaluated (a syntax error in
+        commands.js, an empty catalog) is not "nothing to report": the carrier
+        saw none of the page, so the scan must end rc=2, not green."""
+        node = self._fake_node(tmp_path, body)
+        with pytest.raises(RuntimeError, match=needle):
+            mod.portal_commands(_PLAYGROUND, node=node)
+        # …and scan() turns that into a FATAL, never a clean result.
+        root = tmp_path / "repo"
+        rel = mod.PORTAL_PLAYGROUND_DIR.relative_to(mod.REPO_ROOT)
+        (root / rel).mkdir(parents=True)
+        for name in mod.PORTAL_PLAYGROUND_FILES:
+            (root / rel / name).write_text((_PLAYGROUND / name).read_text(
+                encoding="utf-8"), encoding="utf-8", newline="\n")
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: node)
+        r = mod.scan(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
+                     reference_docs=(_reference(tmp_path),), injected=INJECTED,
+                     exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
+                     repo_root=root)
+        assert any("CLI Playground carrier failed" in e and needle in e
+                   for e in r.fatal), r.fatal
+        assert r.stats["portal_commands"] == 0
+
+    def test_no_node_is_disclosed_or_fatal_under_the_require_env(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+        assert mod.portal_commands(_PLAYGROUND) == ([], "node not on PATH")
+        root = tmp_path / "repo"
+        rel = mod.PORTAL_PLAYGROUND_DIR.relative_to(mod.REPO_ROOT)
+        (root / rel).mkdir(parents=True)
+        kw = dict(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
+                  reference_docs=(_reference(tmp_path),), injected=INJECTED,
+                  exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
+                  repo_root=root)
+        monkeypatch.delenv(mod.PORTAL_REQUIRE_ENV, raising=False)
+        quiet = mod.scan(**kw)
+        assert quiet.stats["portal_unavailable"] == 1
+        assert not any("CLI Playground" in e for e in quiet.fatal)
+        assert "CLI Playground NOT scored" in mod._not_scored_lines(quiet.stats)[0]
+        monkeypatch.setenv(mod.PORTAL_REQUIRE_ENV, "1")
+        loud = mod.scan(**kw)
+        assert any(mod.PORTAL_REQUIRE_ENV in e for e in loud.fatal)
+
+    @_needs_node
+    def test_the_real_catalog_is_built_by_the_pages_own_engine(self):
+        """Anti-vacuity: every key yields a bare and a docker line, and the
+        docker line is the image form the page really emits."""
+        rows, why = mod.portal_commands(_PLAYGROUND)
+        assert why is None
+        keys = {r.key for r in rows}
+        assert len(keys) >= 10, keys
+        for k in keys:
+            kinds = {r.kind for r in rows if r.key == k}
+            assert {"bare", "docker"} <= kinds, (k, kinds)
+        src = (_PLAYGROUND / "commands.js").read_text(encoding="utf-8").splitlines()
+        for r in rows:
+            assert r.line >= 1 and f"'{r.key}'" in src[r.line - 1] or r.kind == "preview"
+        assert any(r.kind == "docker" and "ghcr.io/vencil/da-tools:" in r.cmd for r in rows)
+
+    @_needs_node
+    def test_every_offered_flag_and_preview_reaches_the_judge(self, tmp_path):
+        """⛔ A clean catalog cannot tell a driver that judges every flag from one
+        that judges some: both report nothing. Measured: a driver that left the
+        checkboxes unticked, or dropped the preview line, stayed green on every
+        other test. So list the catalog independently of the gate's driver and
+        require each offered flag in the bare line and each preview as a row."""
+        stripped = mod._JS_FRONTMATTER.sub(
+            lambda m: "\n" * m.group(0).count("\n"),
+            (_PLAYGROUND / "commands.js").read_text(encoding="utf-8"), count=1)
+        module = tmp_path / "commands.mjs"
+        module.write_text(stripped, encoding="utf-8")
+        listing = subprocess.run(
+            [_NODE, "--input-type=module", "-e",
+             "globalThis.window = {};\n"
+             f"const {{ COMMANDS }} = await import({json.dumps(module.as_uri())});\n"
+             "process.stdout.write(JSON.stringify(Object.fromEntries("
+             "Object.entries(COMMANDS).map(([k, c]) => [k, {flags: c.flags.map(f => f.name),"
+             " preview: (c.preview || '').split('\\n')[0]}]))));"],
+            capture_output=True, text=True, timeout=60)
+        assert listing.returncode == 0, listing.stderr
+        catalog = json.loads(listing.stdout)
+        rows, _ = mod.portal_commands(_PLAYGROUND)
+        bare = {r.key: r.cmd.split() for r in rows if r.kind == "bare"}
+        previews = {r.key: r.cmd for r in rows if r.kind == "preview"}
+        assert set(bare) == set(catalog)
+        for key, spec in catalog.items():
+            missing = [f for f in spec["flags"] if f not in bare[key]]
+            assert not missing, f"{key}: flags never judged {missing}"
+            if spec["preview"]:
+                assert previews.get(key) == spec["preview"], key
+        assert any(spec["preview"] for spec in catalog.values())
+
+
 @pytest.fixture(scope="module")
 def result():
     r = mod.scan()
@@ -1239,6 +1399,12 @@ class TestRealRepo:
                    for f in result["findings"]), (
             "the `docker run <image ref>` continuation carrier stopped seeing "
             "cli-reference.en.md maintenance-scheduler (#1513)")
+
+    @_needs_node
+    def test_the_portal_carrier_judged_the_real_playground(self, result):
+        """With node present the real catalog must be judged, not disclosed."""
+        assert result["stats"]["portal_commands"] > 0
+        assert result["stats"]["portal_unavailable"] == 0
 
     @pytest.mark.parametrize("command,flag,pattern", [
         ("offboard", "--config-dir", r"offboard[^\n]*--config-dir"),

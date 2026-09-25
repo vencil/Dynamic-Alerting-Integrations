@@ -84,6 +84,9 @@ jobs:
               - "components/da-tools/README.md"
               - "components/da-tools/app/QUICKSTART.md"
               - "try-local/README.md"
+              # cli_contract 的 CLI Playground 載體（以 node 求值 catalog 與 engine，#1379）
+              - "tools/portal/src/interactive/tools/cli-playground/commands.js"
+              - "tools/portal/src/interactive/tools/cli-playground/engine.js"
               - "scripts/tools/lint/**/*.sh"
               # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
@@ -457,6 +460,10 @@ jobs:
           pip install pyyaml promql-parser croniter -c requirements/ci-constraints.txt
 
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)
+        env:
+          # cli_contract evaluates the CLI Playground catalog with node (#1379).
+          # Here a missing node must be a hard error, not a quiet "NOT scored".
+          CLI_CONTRACT_REQUIRE_NODE: "1"
         run: |
           python scripts/tools/validate_all.py \
             --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \

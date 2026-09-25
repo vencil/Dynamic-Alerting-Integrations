@@ -525,6 +525,8 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
     # longer falls through to "run everything" (see _selection_outcome).
     ".pre-commit-config.yaml": [],
     "components/": ["versions", "cli_coverage", "cli_contract"],
+    # cli_contract evaluates the CLI Playground catalog + engine with node (#1379).
+    "tools/portal/src/interactive/tools/cli-playground/": ["cli_contract"],
     "mkdocs.yml": ["versions"],
 }
 
