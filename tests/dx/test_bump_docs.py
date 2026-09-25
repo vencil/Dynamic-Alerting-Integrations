@@ -128,7 +128,7 @@ class TestApplyRulesCheckOnly:
             assert "UPDATE" in statuses
 
             # File should NOT be modified in check mode
-            with open(test_file, 'r') as f:
+            with open(test_file, 'r', encoding="utf-8") as f:
                 content = f.read()
             assert "0.1.0" in content
 
@@ -177,7 +177,7 @@ class TestApplyRulesWrite:
             assert "UPDATE" in statuses
 
             # File should be modified
-            with open(test_file, 'r') as f:
+            with open(test_file, 'r', encoding="utf-8") as f:
                 content = f.read()
             assert "0.3.0" in content
             assert "0.1.0" not in content
@@ -201,7 +201,7 @@ class TestApplyRulesWrite:
             monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
             bump_docs.apply_rules(rules, "0.2.0", check_only=False)
 
-            with open(test_file, 'r') as f:
+            with open(test_file, 'r', encoding="utf-8") as f:
                 content = f.read()
             assert content.strip() == "0.2.0"
 

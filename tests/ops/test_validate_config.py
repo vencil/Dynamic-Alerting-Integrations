@@ -27,14 +27,14 @@ class TestYAMLSyntax:
 
     def test_valid_yaml_passes(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "test.yaml"), "w") as f:
+            with open(os.path.join(d, "test.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"t1": {"mysql_connections": "80"}}}, f)
             result = vc.check_yaml_syntax(d)
             assert result["status"] == vc.PASS
 
     def test_invalid_yaml_fails(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "bad.yaml"), "w") as f:
+            with open(os.path.join(d, "bad.yaml"), "w", encoding="utf-8") as f:
                 f.write("key: [unclosed")
             result = vc.check_yaml_syntax(d)
             assert result["status"] == vc.FAIL
@@ -48,7 +48,7 @@ class TestYAMLSyntax:
 
     def test_non_yaml_files_ignored(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "readme.txt"), "w") as f:
+            with open(os.path.join(d, "readme.txt"), "w", encoding="utf-8") as f:
                 f.write("not yaml")
             result = vc.check_yaml_syntax(d)
             assert result["status"] == vc.PASS
@@ -76,10 +76,10 @@ class TestSchemaCheck:
         """Config with unknown reserved key should warn."""
         with tempfile.TemporaryDirectory() as d:
             # Defaults file
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             # Tenant with unknown key
-            with open(os.path.join(d, "tenant-x.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-x.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-x": {
                     "_unknown_reserved": "foo"
                 }}}, f)
@@ -95,9 +95,9 @@ class TestRouteCheck:
     def test_valid_routing_passes(self):
         """Valid routing config should pass."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
                         "receiver": {"type": "webhook",
@@ -110,9 +110,9 @@ class TestRouteCheck:
     def test_no_routing_passes(self):
         """Config with no routing should pass (no routes generated)."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "mysql_connections": "70"
                 }}}, f)
@@ -199,12 +199,12 @@ class TestPolicyCheck:
         with tempfile.TemporaryDirectory() as d:
             # Create policy
             policy_path = os.path.join(d, "policy.yaml")
-            with open(policy_path, "w") as f:
+            with open(policy_path, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
             # Create config with matching webhook
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
                         "receiver": {"type": "webhook",
@@ -375,14 +375,14 @@ class TestProfilesCheck:
     def test_valid_profile_passes(self):
         """Well-formed profile with metric keys should pass."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"standard": {
                     "mysql_connections": 80,
                     "redis_memory_used_bytes": 4294967296,
                 }}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_profile": "standard"
                 }}}, f)
@@ -392,12 +392,12 @@ class TestProfilesCheck:
     def test_reserved_key_in_profile_warns(self):
         """Profile containing reserved keys should warn."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"bad-profile": {
                     "mysql_connections": 80,
                     "_routing": {"receiver": {"type": "webhook"}},
                 }}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.WARN
@@ -407,9 +407,9 @@ class TestProfilesCheck:
     def test_empty_profile_warns(self):
         """Empty profile should warn."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"empty-profile": {}}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.WARN
@@ -419,11 +419,11 @@ class TestProfilesCheck:
     def test_unknown_profile_ref_warns(self):
         """Tenant referencing non-existent profile should warn."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"standard": {"mysql_connections": 80}}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_profile": "nonexistent"
                 }}}, f)
@@ -435,9 +435,9 @@ class TestProfilesCheck:
     def test_no_profiles_file_passes(self):
         """Missing _profiles.yaml should still pass (no profiles defined)."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {"mysql_connections": "80"}}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.PASS
@@ -470,7 +470,7 @@ class TestPolicyDSL:
     def test_no_policies_defined(self):
         """Config with no _policies section should skip."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             result = vc.check_policy_dsl(d)
             assert result["status"] == vc.PASS
@@ -487,7 +487,7 @@ class TestPolicyDSL:
         the run silently, reported as `[PASS] policy_dsl`.
         """
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             result = vc.check_policy_dsl(d, "/nonexistent/policy.yaml")
             assert result["status"] == vc.FAIL
@@ -496,7 +496,7 @@ class TestPolicyDSL:
     def test_standalone_dsl_file_that_exists_is_loaded(self):
         """The case the old NAME claimed to cover, which nothing covered."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             dsl = os.path.join(d, "policies.yaml")
             with open(dsl, "w", encoding="utf-8") as f:
@@ -516,9 +516,9 @@ class TestProfilesExtended:
     def test_profile_not_a_mapping(self):
         """Profile value that's not a dict should warn."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"bad": "not-a-dict"}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.WARN
@@ -527,12 +527,12 @@ class TestProfilesExtended:
     def test_unknown_reserved_key_in_profile(self):
         """Profile with unknown reserved key should warn."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"p1": {
                     "mysql_connections": 80,
                     "_unknown_thing": "bad",
                 }}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.WARN
@@ -540,11 +540,11 @@ class TestProfilesExtended:
     def test_tenant_without_profile_ref(self):
         """Tenant without _profile doesn't cause issues."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"standard": {"cpu": 80}}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {"cpu": 70}}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.PASS
@@ -552,11 +552,11 @@ class TestProfilesExtended:
     def test_bare_tenant_yaml(self):
         """Tenant YAML without 'tenants' wrapper (bare format)."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"p1": {"cpu": 80}}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"_profile": "p1", "cpu": 70}, f)
             result = vc.check_profiles(d)
             assert result["status"] in (vc.PASS, vc.WARN)
@@ -568,11 +568,11 @@ class TestRoutesWithPolicy:
     def test_routes_with_policy(self):
         with tempfile.TemporaryDirectory() as d:
             policy_path = os.path.join(d, "policy.yaml")
-            with open(policy_path, "w") as f:
+            with open(policy_path, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
                         "receiver": {"type": "webhook",
@@ -586,11 +586,11 @@ class TestRoutesWithPolicy:
         """Route with domain not in allowlist produces warning."""
         with tempfile.TemporaryDirectory() as d:
             policy_path = os.path.join(d, "policy.yaml")
-            with open(policy_path, "w") as f:
+            with open(policy_path, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["allowed.com"]}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
                         "receiver": {"type": "webhook",
@@ -638,9 +638,9 @@ class TestMainCLI:
     def _make_config_dir(self, tmp_path):
         d = tmp_path / "conf.d"
         d.mkdir()
-        with open(d / "_defaults.yaml", "w") as f:
+        with open(d / "_defaults.yaml", "w", encoding="utf-8") as f:
             yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-        with open(d / "tenant-a.yaml", "w") as f:
+        with open(d / "tenant-a.yaml", "w", encoding="utf-8") as f:
             yaml.dump({"tenants": {"tenant-a": {
                 "mysql_connections": "70",
                 "_routing": {
@@ -711,7 +711,7 @@ class TestCustomRulesExtended:
             rp = os.path.join(d, "rule-packs")
             os.makedirs(rp)
             policy = os.path.join(d, "policy.yaml")
-            with open(policy, "w") as f:
+            with open(policy, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["example.com"]}, f)
 
             def mock_run(cmd, **kwargs):

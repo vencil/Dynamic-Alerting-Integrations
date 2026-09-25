@@ -89,7 +89,7 @@ def valid_config_dir():
             "global_threshold": 100,
             "alert_enabled": True,
         }
-        with open(os.path.join(tmpdir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(tmpdir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create tenant files (Dynamic Alerting flat key-value format)
@@ -105,9 +105,9 @@ def valid_config_dir():
             "_metadata": {"owner": "sre-team"},
         }
 
-        with open(os.path.join(tmpdir, "db-a.yaml"), "w") as f:
+        with open(os.path.join(tmpdir, "db-a.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(db_a, f)
-        with open(os.path.join(tmpdir, "db-b.yaml"), "w") as f:
+        with open(os.path.join(tmpdir, "db-b.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(db_b, f)
 
         yield tmpdir
@@ -302,7 +302,7 @@ class TestCheckLocal:
     def test_local_invalid_defaults_yaml(self, config_dir):
         """Invalid YAML in _defaults.yaml."""
         bad_yaml = "key: value\n  bad indentation:\n not aligned:"
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             f.write(bad_yaml)
 
         result = gc.check_local(config_dir)
@@ -314,11 +314,11 @@ class TestCheckLocal:
     def test_local_invalid_tenant_yaml(self, config_dir):
         """Invalid YAML in tenant file."""
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create bad tenant file
-        with open(os.path.join(config_dir, "db-a.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
             f.write("invalid: yaml\n  bad indent:")
 
         result = gc.check_local(config_dir)
@@ -333,12 +333,12 @@ class TestCheckLocal:
     def test_local_multiple_parse_errors(self, config_dir):
         """Multiple tenant files with YAML errors."""
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create multiple bad tenant files with actual syntax errors
         for fname in ["db-a.yaml", "db-b.yaml", "db-c.yaml"]:
-            with open(os.path.join(config_dir, fname), "w") as f:
+            with open(os.path.join(config_dir, fname), "w", encoding="utf-8") as f:
                 # Use invalid YAML: unclosed quotes
                 f.write("key: 'unclosed quote\nanother: value")
 
@@ -351,7 +351,7 @@ class TestCheckLocal:
     def test_local_empty_tenant_files(self, config_dir):
         """Only _defaults.yaml, no tenant files."""
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         result = gc.check_local(config_dir)
@@ -373,11 +373,11 @@ class TestCheckLocal:
         records that the hidden axis has no assertion at all.
         """
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create reserved-prefix file (should be ignored)
-        with open(os.path.join(config_dir, "_hidden.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_hidden.yaml"), "w", encoding="utf-8") as f:
             yaml.dump({"hidden": True}, f)
 
         result = gc.check_local(config_dir)
@@ -388,11 +388,11 @@ class TestCheckLocal:
     def test_local_ignores_non_yaml_files(self, config_dir):
         """Non-.yaml files are ignored."""
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create non-yaml file
-        with open(os.path.join(config_dir, "README.md"), "w") as f:
+        with open(os.path.join(config_dir, "README.md"), "w", encoding="utf-8") as f:
             f.write("# Config")
 
         result = gc.check_local(config_dir)
@@ -412,11 +412,11 @@ class TestCheckLocal:
     def test_local_tenant_file_only_internal_keys(self, config_dir):
         """Tenant file with only internal (_-prefixed) keys has 0 metrics."""
         defaults = {"mysql_connections": 80}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create tenant file with only internal keys
-        with open(os.path.join(config_dir, "db-a.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
             yaml.dump({"_routing": {"receiver_type": "slack"}, "_metadata": {"owner": "team"}}, f)
 
         result = gc.check_local(config_dir)
@@ -1244,7 +1244,7 @@ class TestErrorRecovery:
         os.makedirs(actual_dir)
 
         defaults = {"threshold": 100}
-        with open(os.path.join(actual_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(actual_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Create symlink
@@ -1258,7 +1258,7 @@ class TestErrorRecovery:
     def test_local_with_permission_error(self, config_dir):
         """Local check when directory is not readable."""
         defaults = {"threshold": 100}
-        with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
+        with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(defaults, f)
 
         # Mock Path.iterdir to raise OSError. (Earlier versions used
