@@ -27,19 +27,21 @@ passes and keeps what it wants, so its opens say nothing about what it depends
 on. Only the parent counts, not any ancestor: listing `a/` says nothing about a
 later direct read of `a/b/c`.
 
-⛔ Listing the REPO ROOT is the case that rule cannot contain: a walk from the
-root lists every directory, so from then on every read in that binary looks
-walked — including direct reads by unrelated tests that happen to run later.
-So a log that lists the root is refused (exit 2) unless its package is in
-ROOT_WALKERS, which names each such binary and why its blindness is accepted.
+⚠️ The cost of that rule: once a binary lists a directory, a later DIRECT read
+of one of its children looks walked too. A walk lists every directory below
+where it starts, so the blind area is the whole walked subtree. Only the
+largest case is refused: a log that lists the REPO ROOT exits 2 unless its
+package is in ROOT_WALKERS, which names each such binary and why its blindness
+is accepted. A walk of any smaller subtree (or a package listing its own
+directory) is NOT refused — its blind area is the first bullet below.
 
 `stat` lines never count: probing for `Makefile` to find the repo root is not
 depending on it.
 
 ⚠️ Blind spots, stated because a green run is read as a guarantee:
-  * every binary in ROOT_WALKERS is unchecked from its first root listing on;
-  * a file opened directly AND inside a directory the same binary had listed
-    earlier is classified as walked, i.e. not checked;
+  * a file opened directly after the same binary listed its directory is
+    classified as walked, i.e. not checked — for a ROOT_WALKERS binary that is
+    every file from its first root listing on;
   * reads before `m.Run` (package init, the start of a TestMain) and reads by
     child processes are not in the log;
   * a test skipped on the runner opens nothing, so its reads are not checked

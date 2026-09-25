@@ -89,13 +89,15 @@ def local_replacements(module: str, gomod: str) -> list[str]:
 
     Those modules are compiled as part of this one, so their sources are this
     leg's compile inputs too (tenant-api builds threshold-exporter this way).
+    Only the tested module's own go.mod counts: Go ignores `replace` in a
+    dependency's go.mod.
     """
     out = []
     for line in gomod.splitlines():
         _, arrow, target = line.partition("=>")
-        target = target.split("//", 1)[0].strip()
+        target = target.split("//", 1)[0].strip().split(" ")[0].strip('"`')
         if arrow and target.startswith((".", "/")):
-            out.append(posixpath.normpath(posixpath.join(module, target.split()[0])))
+            out.append(posixpath.normpath(posixpath.join(module, target)))
     return out
 
 
@@ -112,18 +114,12 @@ def compile_input_problems(legs: dict[str, str], gates: dict[str, list[str]],
             problems.append(f"{job} tests {wd}, which is in no tracked Go module")
             continue
         tested.add(mod)
-        built, todo = set(), [mod]
-        while todo:
-            m = todo.pop()
-            if m in built:
-                continue
-            built.add(m)
-            gomod = f"{m}/go.mod" if m else "go.mod"
-            for r in local_replacements(m, read(gomod)):
-                if r not in modules:
-                    problems.append(f"{m}/go.mod replaces a module with {r}, not a tracked module")
-                else:
-                    todo.append(r)
+        built = {mod}
+        for r in local_replacements(mod, read(f"{mod}/go.mod")):
+            if r in modules:
+                built.add(r)
+            else:
+                problems.append(f"{mod}/go.mod replaces a module with {r}, not a tracked module")
         inputs = sorted({f for m in built for f in compile_inputs(m, modules, tracked)})
         for f in inputs:
             if not any(_READS.covers(g, f) for g in gates[job]):
@@ -153,7 +149,8 @@ def test_every_go_leg_is_woken_by_changes_to_what_it_compiles() -> None:
 
 
 @pytest.mark.parametrize("case", [
-    "uncovered", "no-legs", "orphan-module", "leg-outside-module", "replaced-uncovered"])
+    "uncovered", "no-legs", "orphan-module", "leg-outside-module", "replaced-uncovered",
+    "replaced-by-untracked-dir"])
 def test_the_problem_finder_reports_degenerate_inputs(case: str) -> None:
     """The assertion above is negative, so its finder must be seen to fire."""
     tracked = frozenset({"zmod/go.mod", "zmod/a.go", "zmod/sub/b.go",
@@ -177,6 +174,8 @@ def test_the_problem_finder_reports_degenerate_inputs(case: str) -> None:
     elif case == "leg-outside-module":
         legs = {"leg": "zmod/sub", "stray": "znowhere"}
         gates["stray"] = ["**"]
-    else:
+    elif case == "replaced-uncovered":
         gates = {"leg": ["zmod/*.go", "**/go.mod", "zmod/sub/**"]}  # drops zlib/l.go
+    else:
+        gomods["zmod/go.mod"] = 'module zmod\nreplace zlib => "../zgone"\n'
     assert problems()

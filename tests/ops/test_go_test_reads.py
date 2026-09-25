@@ -134,10 +134,16 @@ def test_an_uncovered_direct_read_fails_and_names_the_file(tmp_path: Path, lines
 
 def test_a_ledgered_root_walker_is_exempt_and_nothing_else_is(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    # Zmakefile sits in the root and is uncovered: exempt, the listing hides it
+    # (rc 0, counted as walked); anywhere else the root listing is refused.
+    lines = [f"open {repo.as_posix()}", f"open {repo.as_posix()}/Zmakefile"]
     for pkg, want in ((LEDGERED, 0), ("zmod", 2)):
         logs = tmp_path / f"logs-{want}"
-        _log(logs, "a", repo / pkg, [f"open {repo.as_posix()}", "open ../zfix/other.json"])
-        assert _run(repo, logs).returncode == want, pkg
+        _log(logs, "a", repo / pkg, lines)
+        r = _run(repo, logs)
+        assert r.returncode == want, (pkg, r.stdout, r.stderr)
+        if want == 0:
+            assert "0 tracked file(s) opened directly, 1 reached by listing" in r.stdout
 
 
 @pytest.mark.parametrize("case", [
