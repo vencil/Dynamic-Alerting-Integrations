@@ -1257,7 +1257,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--ci` | CI/CD platform | `both` |
-| `--tenants` | Comma-separated tenant names. If `--ci` / `--rule-packs` / `--deploy` is given without `--tenants`: on a terminal stdin **only the tenant names are asked for** (no default; every other flag is used as given); off a terminal (CI, scripts) it is **rc 2 and nothing is written**, `--dry-run` included. init no longer fills in example tenants | none; the fully interactive mode (no flags) offers `db-a,db-b` as the prompt default |
+| `--tenants` | Comma-separated tenant names. If `--ci` / `--rule-packs` / `--deploy` is given without `--tenants`: on a terminal stdin **only the tenant names are asked for** (no default; every other flag is used as given); off a terminal (CI, scripts) it is **rc 2 and nothing is written**, `--dry-run` included. A `--tenants` that names no tenant (`''`, `' , '`) counts as not given. init no longer fills in example tenants | none; the fully interactive mode (no flags) offers `db-a,db-b` as the prompt default |
 | `--rule-packs` | Comma-separated Rule Packs | `mariadb,kubernetes` (interactive mode) |
 | `--deploy` | Deployment method | `kustomize` |
 | `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |

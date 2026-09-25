@@ -1159,7 +1159,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | 參數 | 說明 | 預設 |
 |------|------|------|
 | `--ci` | CI/CD 平台 | `both` |
-| `--tenants` | 逗號分隔的租戶名稱。給了 `--ci` / `--rule-packs` / `--deploy` 卻沒給 `--tenants` 時：stdin 是終端機就**只補問租戶名稱**（無預設值，其餘旗標照給的用）；不是終端機（CI、腳本）則 **rc 2、不寫入任何檔案**，`--dry-run` 亦同。init 不會再自行補上範例租戶 | 無；完全不帶旗標的互動模式提示預設為 `db-a,db-b` |
+| `--tenants` | 逗號分隔的租戶名稱。給了 `--ci` / `--rule-packs` / `--deploy` 卻沒給 `--tenants` 時：stdin 是終端機就**只補問租戶名稱**（無預設值，其餘旗標照給的用）；不是終端機（CI、腳本）則 **rc 2、不寫入任何檔案**，`--dry-run` 亦同。`--tenants` 給了但沒有任何名稱（`''`、`' , '`）視同未給。init 不會再自行補上範例租戶 | 無；完全不帶旗標的互動模式提示預設為 `db-a,db-b` |
 | `--rule-packs` | 逗號分隔的 Rule Pack | `mariadb,kubernetes`（互動模式） |
 | `--deploy` | 部署方式 | `kustomize` |
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |

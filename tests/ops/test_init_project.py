@@ -3716,6 +3716,79 @@ class TestMissingTenantsOnATerminal:
         monkeypatch.setattr(sys, 'stdin', _Closed())
         assert ip._stdin_is_tty() is False
 
+    @pytest.mark.parametrize('stdin_tty,stdout_tty', [(True, False), (False, True)],
+                             ids=['stdin-tty-stdout-redirected',
+                                  'stdin-redirected-stdout-tty'])
+    def test_the_tty_seam_asks_stdin_not_stdout(self, monkeypatch, stdin_tty,
+                                                stdout_tty):
+        """⛔ 補問讀的是 stdin，所以只有 stdin 算數。把 seam 改成讀
+        `sys.stdout.isatty()` 的突變原本全綠：`init --deploy helm > log`
+        在終端機上會被拒絕，而 `echo | init --deploy helm` 會去問一個讀不到
+        答案的提示。兩個方向各一列。"""
+        class _Stream:
+            def __init__(self, tty):
+                self._tty = tty
+
+            def isatty(self):
+                return self._tty
+
+        monkeypatch.setattr(sys, 'stdin', _Stream(stdin_tty))
+        monkeypatch.setattr(sys, 'stdout', _Stream(stdout_tty))
+        assert ip._stdin_is_tty() is stdin_tty
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    @pytest.mark.parametrize('flags', [(), ('--ci', 'github')],
+                             ids=['tenants-alone', 'with-ci'])
+    def test_an_empty_tenants_flag_is_asked_for_on_a_terminal(
+            self, monkeypatch, tmp_path, empty, flags):
+        """`--tenants ''` 是**給了**的旗標：不能掉進完整互動流程（那裡連按
+        Enter 會寫出範例的 db-a/db-b）。TTY 上只補問租戶一次。"""
+        out = tmp_path / 'repo'
+        prompts = self._drive(monkeypatch, out, [*flags, '--tenants', empty],
+                              ['acme'], tty=True)
+        assert len(prompts) == 1, prompts
+        assert '--tenants' in prompts[0] and 'db-a' not in prompts[0], prompts
+        assert self._tenant_files(out) == ['acme']
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    @pytest.mark.parametrize('flags', [(), ('--ci', 'github')],
+                             ids=['tenants-alone', 'with-ci'])
+    def test_an_empty_tenants_flag_off_a_terminal_is_a_caller_error(
+            self, monkeypatch, tmp_path, capsys, empty, flags):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, [*flags, '--tenants', empty], [],
+                        tty=False)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        # 點名的是「--tenants 是空的」，不是「沒給 --tenants」。
+        assert '--tenants is empty' in err, err
+        assert 'without --tenants' not in err, err
+        assert not out.exists()
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    def test_non_interactive_with_an_empty_tenants_flag_is_refused(
+            self, monkeypatch, tmp_path, capsys, empty):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out,
+                        ['--non-interactive', '--tenants', empty], [], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert '--non-interactive requires --tenants' in capsys.readouterr().err
+        assert not out.exists()
+
+    def test_a_list_with_some_names_keeps_its_blanks(self, monkeypatch,
+                                                     tmp_path, capsys):
+        """「空」只指一個名字都沒有。`a,,b` 仍交給 `_validate_config`，以
+        名稱不合法 rc 2 拒絕，不會被悄悄修成 `a,b`，也不會補問。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--tenants', 'db-x,,db-y'], [],
+                        tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert 'Invalid tenant names' in capsys.readouterr().err
+        assert not out.exists()
+
 
 class TestGitOpsNativeModeIsRefused:
     """GitOps Native Mode（`--config-source git`）已撤下（issue #1349）。
@@ -4820,7 +4893,12 @@ class TestTheCliLayerItself:
         ('--rule-packs', 'mariadb'),
         ('--ci', 'both', '--rule-packs', 'mariadb,redis', '--deploy', 'kustomize'),
         ('--deploy', 'helm', '--dry-run'),
-    ], ids=['deploy', 'ci', 'rule-packs', 'all-three', 'dry-run'])
+        # `--tenants ''` 單獨出現曾被當成「沒給旗標」而掉進完整互動流程，
+        # 在關閉的 stdin 上以 EOFError traceback rc 1 死掉。
+        ('--tenants', ''),
+        ('--ci', 'github', '--tenants', ' , '),
+    ], ids=['deploy', 'ci', 'rule-packs', 'all-three', 'dry-run',
+            'empty-tenants-alone', 'blank-tenants-with-ci'])
     def test_no_example_tenants_are_invented_off_a_terminal(self, extra):
         """⛔ #1426：原本這裡釘的是「`--ci github` 單獨呼叫會得到 db-a、db-b
         兩個租戶」——也就是把缺陷當成合約。那兩個是範例名稱，落進客戶的
@@ -4837,6 +4915,7 @@ class TestTheCliLayerItself:
             assert r.returncode == EXIT_CALLER_ERROR, (
                 r.returncode, r.stdout[-400:], r.stderr[-400:])
             assert '--tenants' in r.stderr, r.stderr[-600:]
+            assert 'Traceback' not in r.stderr, r.stderr[-600:]
             assert 'db-a' not in r.stdout, r.stdout[-600:]
             assert not out.exists(), sorted(
                 p.relative_to(out).as_posix() for p in out.rglob('*'))

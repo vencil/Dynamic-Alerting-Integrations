@@ -15,8 +15,7 @@ Generates:
 Usage:
   da-tools init                                   # Interactive mode
   da-tools init --ci github --tenants db-a,db-b   # Non-interactive
-  da-tools init --ci both --rule-packs mariadb,redis --deploy kustomize \
-                --tenants db-a
+  da-tools init --ci both --rule-packs mariadb,redis --deploy kustomize --tenants db-a
 """
 from __future__ import annotations
 
@@ -111,10 +110,10 @@ _HELP = {
     },
     'tenants': {
         'zh': ('逗號分隔的租戶名稱 (例如 db-a,db-b)。給了 --ci / --rule-packs / '
-               '--deploy 卻沒給它時：在終端機上只詢問租戶名稱，否則 rc 2'),
+               '--deploy 卻沒給它（或給了空值）時：在終端機上只詢問租戶名稱，否則 rc 2'),
         'en': ('Comma-separated tenant names (e.g., db-a,db-b). If --ci, '
-               '--rule-packs or --deploy is given without it: asked for on a '
-               'terminal, otherwise rc 2'),
+               '--rule-packs or --deploy is given without it (or it is empty): '
+               'asked for on a terminal, otherwise rc 2'),
     },
     'rule_packs': {
         'zh': '逗號分隔的 Rule Pack (例如 mariadb,redis,kubernetes)',
@@ -4784,8 +4783,22 @@ _GENERATING_FLAGS = (('--ci', 'ci'), ('--rule-packs', 'rule_packs'),
                      ('--deploy', 'deploy'))
 
 
-def _missing_tenants_refusal(given: list[str]) -> str:
-    """The rc-2 message for a generating flag without `--tenants` off a TTY."""
+def _missing_tenants_refusal(given: list[str], empty: bool = False) -> str:
+    """The rc-2 message for a run with no tenant names off a TTY.
+
+    `empty`: `--tenants` was given but names no tenant (`''`, `' , '`), which
+    is said as such rather than as "without --tenants" — the reader did type
+    the flag.
+    """
+    if empty:
+        if _LANG == 'zh':
+            return ("--tenants 是空的（沒有任何租戶名稱），而 stdin 不是終端機，"
+                    "無法詢問租戶名稱（未寫入任何檔案）。請寫成 --tenants "
+                    "<name>[,<name>...]；init 不會自行填入範例租戶。")
+        return ("--tenants is empty (it names no tenant), and stdin is not a "
+                "terminal, so the tenant names cannot be asked for (nothing "
+                "was written). Use --tenants <name>[,<name>...]; init does "
+                "not fill in example tenants.")
     flags = ', '.join(given)
     if _LANG == 'zh':
         return (f"給了 {flags} 但沒有 --tenants，而 stdin 不是終端機，無法詢問"
@@ -4838,17 +4851,27 @@ def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
             for a in ('git_repo', 'git_branch', 'git_path', 'git_period')):
         parser.error(_GIT_MODE_REFUSAL)
 
-    has_cli_args = args.ci or args.tenants or args.rule_packs or args.deploy
+    # ⛔ `is not None`, not truthiness: `--tenants ''` is a flag the caller
+    # GAVE. Read as falsy it fell through to the full interactive flow, where
+    # Enter-Enter-Enter wrote the demo `db-a,db-b` on a terminal and a closed
+    # stdin died on an EOFError traceback (rc 1).
+    tenants_given = args.tenants is not None
+    has_cli_args = args.ci or tenants_given or args.rule_packs or args.deploy
     if args.non_interactive or has_cli_args:
-        if args.non_interactive and not args.tenants:
-            parser.error("--non-interactive requires --tenants")
-        if args.tenants:
-            tenants = [t.strip() for t in args.tenants.split(',')]
-        elif _stdin_is_tty():
-            tenants = _prompt_missing_tenants(parser)
-        else:
-            parser.error(_missing_tenants_refusal(
-                [f for f, a in _GENERATING_FLAGS if getattr(args, a)]))
+        named = [t.strip() for t in (args.tenants or '').split(',')]
+        # "No tenant named" = nothing left once the blanks are dropped: `''`
+        # and `' , '` alike. A list with SOME names keeps its blanks, so
+        # `a,,b` still reaches `_validate_config` and is refused there.
+        if not any(named):
+            if args.non_interactive:
+                parser.error("--non-interactive requires --tenants")
+            if _stdin_is_tty():
+                named = _prompt_missing_tenants(parser)
+            else:
+                parser.error(_missing_tenants_refusal(
+                    [f for f, a in _GENERATING_FLAGS if getattr(args, a)],
+                    empty=tenants_given))
+        tenants = named
         return {
             'ci': args.ci or 'both',
             'deploy': args.deploy or 'kustomize',
