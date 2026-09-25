@@ -227,52 +227,25 @@ if [ "$_missing_found" = "0" ]; then
 fi
 
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
-# Point at a worktree whose HEAD IS the pushed commit — preflight marks HEAD.
-# The pushing tree itself first, by its own toplevel: the push may come from
-# elsewhere (`git -C <tree> push`), and a moved tree is listed under its old
-# path.
-# ⛔ Not the worktree holding the branch: it may sit at another commit.
-# ⛔ Decide per record: `prunable` comes after `HEAD`. `-z`: a path may contain
-# a newline (#1952).
-_other_wt=""
-if [ "$_missing_sha" = "$head_sha" ]; then
-    _other_wt="$(git rev-parse --show-toplevel 2>/dev/null)" || _other_wt=""
+# Where to run preflight. It marks HEAD and checks the working tree, so the
+# tree you push from qualifies only when its HEAD IS the pushed commit and its
+# tracked files are clean. Anything else gets a throwaway worktree: at that
+# commit, clean, and nobody else's (#1952).
+# ⛔ One line, run in a subshell, absolute paths: the instruction must not move
+# the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
+# re-read from wherever that shell stands.
+_here=""
+if [ "$_missing_sha" = "$head_sha" ] && [ -z "$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    _here="$(git rev-parse --show-toplevel 2>/dev/null)" || _here=""
 fi
-_wt_path=""
-_wt_head=""
-_wt_prunable=0
-_wt_pick() {
-    if [ "$_wt_head" = "$_missing_sha" ] && [ "$_wt_prunable" = 0 ] && [ -d "$_wt_path" ]; then
-        _other_wt="$_wt_path"
-    fi
-}
-if [ -z "$_other_wt" ]; then
-    while IFS= read -r -d '' _wt_line; do
-        case "$_wt_line" in
-            "worktree "*) _wt_path="${_wt_line#worktree }"; _wt_head=""; _wt_prunable=0 ;;
-            "HEAD "*) _wt_head="${_wt_line#HEAD }" ;;
-            prunable|"prunable "*) _wt_prunable=1 ;;
-            "") _wt_pick; [ -n "$_other_wt" ] && break ;;
-        esac
-    done < <(git worktree list --porcelain -z 2>/dev/null)
-fi
-
-# ⛔ One line, run in a subshell, absolute paths only: the instruction must not
-# move the shell you push from, nor depend on its state. A relative refspec
-# (`git push origin HEAD~1:x`) is re-read from wherever that shell stands, so
-# an instruction that left it in another tree made the re-push name another
-# commit.
-if [ -n "$_other_wt" ]; then
-    printf -v _other_wt_q '%q' "$_other_wt"
-    _checkout_hint="    (cd ${_other_wt_q} && make pr-preflight)"
+if [ -n "$_here" ]; then
+    printf -v _here_q '%q' "$_here"
+    _checkout_hint="    (cd ${_here_q} && make pr-preflight)"
 else
-    # No tree sits at the pushed commit: preflight it in a throwaway worktree.
-    # The marker names the commit, so any tree may earn it.
-    # ⛔ Its path is unique to this push ($$): a shared one let a second paste,
-    # whose `add` failed, remove the first paste's tree mid-run.
-    # ⛔ Remove only what `add` created, and keep preflight's exit code.
-    _common="$(cd "$git_dir" && pwd)"
-    _tmp_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
+    # ⛔ `&&` before the clean-up: a failed `add` (path already there) must not
+    # remove what is there. `$$` keeps two pushes' paths apart.
+    _common="$(CDPATH='' cd "$git_dir" && pwd)"
+    _tmp_root="$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
     printf -v _common_q '%q' "$_common"
     printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
     _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && { (cd ${_tmp_wt_q} && make pr-preflight); r=\$?; git -C ${_common_q} worktree remove --force ${_tmp_wt_q}; exit \$r; })"

@@ -20,6 +20,7 @@ GitHub remote.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -675,7 +676,8 @@ def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
     r = _run_gate(
         pushing_from, _refspec("held", sha),
         path_prepend=_make_fake_gh(pushing_from.parent / f"bin-{pushing_from.name}", state="OPEN"),
-        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(pushing_from.parent)},
+        # CDPATH: a `cd` that consults it prints the directory, doubling a captured path.
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(pushing_from.parent), "CDPATH": ".:/"},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
     return r
@@ -687,86 +689,69 @@ def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
      "sib\\ling", "sibling\nwt"],
     ids=["plain", "space", "quote", "dollar", "trailing-space", "backslash", "newline"],
 )
-def test_the_hint_lands_in_the_worktree_at_the_pushed_commit(tmp_path: Path, name: str):
+def test_pushing_a_clean_tree_at_the_pushed_commit_points_back_at_it(tmp_path: Path, name: str):
     """#1952 — the printed `cd` is executed, not substring-matched.
 
-    A plain directory `sibling` sits next to it: where a path cut at its space
-    or newline would land.
+    Pushed with `git -C <tree>` from a shell in the main checkout. A plain
+    directory `sibling` sits next to the tree: where a path cut at its space or
+    newline would land.
     """
     wt, (sha,) = _held_worktree(tmp_path, name)
-    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+    head, landed = _follow_the_hint(_blocked(wt, sha).stderr, tmp_path)
     assert (head, landed) == (sha, wt.resolve())
 
 
 @pytest.mark.parametrize("shape", [
-    "pushed-from-another-tree", "pushing-tree-was-moved", "prunable-entry-listed-first",
+    "another-tree-sits-at-the-pushed-commit", "pushing-tree-is-dirty", "pushing-older-commit",
 ])
-def test_the_hint_enters_the_tree_already_at_the_pushed_commit(tmp_path: Path, shape: str):
-    """#1952 — a tree whose HEAD is the pushed commit is where the `cd` goes."""
-    wt, (sha,) = _held_worktree(tmp_path, "sibling wt")
-    pushing_from = tmp_path
-    if shape == "pushed-from-another-tree":
-        pushing_from = wt  # `git -C <wt> push` from a shell in the main checkout
-    elif shape == "pushing-tree-was-moved":
-        # Still a working tree; `git worktree list` shows it, prunable, at its
-        # old path.
-        moved = wt.parent / "moved"
-        wt.rename(moved)
-        wt = pushing_from = moved
-    else:
-        # Worktrees are listed by path: this one comes before `sibling wt`.
-        gone = wt.parent / "a-gone"
-        assert _git(tmp_path, "worktree", "add", "-q", "--detach", str(gone), "main").returncode == 0
-        shutil.rmtree(gone)
-    head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path)
-    assert (head, landed) == (sha, wt.resolve())
-
-
-@pytest.mark.parametrize("shape", [
-    "held-at-a-later-commit", "worktree-dir-gone", "locked-and-gone",
-    "nested-without-its-git-file",
-])
-def test_with_no_tree_at_the_pushed_commit_the_hint_leaves_yours_alone(tmp_path: Path, shape: str):
-    """#1952 — no tree sits at the pushed commit, so the instruction makes one,
-    leaves the tree you push from where it is, and cleans up after itself.
+def test_otherwise_preflight_runs_in_a_throwaway_worktree(tmp_path: Path, shape: str):
+    """#1952 — no other tree is reused: it may be dirty or someone else's. The
+    tree you push from stays where it is, and the throwaway goes afterwards.
     Followed from outside the repository: `git -C <tree> push` is one way in.
     """
-    if shape == "nested-without-its-git-file":
-        # Its directory is still there, inside the main checkout: entering it
-        # lands in the main checkout's HEAD.
-        wt, shas = _held_worktree(tmp_path, "sibling wt", parent=tmp_path / ".wt")
-    else:
-        wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
-    sha = shas[-1]
-    if shape == "held-at-a-later-commit":
-        sha = shas[0]
-    elif shape == "worktree-dir-gone":
-        shutil.rmtree(wt)
-    elif shape == "locked-and-gone":
-        assert _git(tmp_path, "worktree", "lock", str(wt)).returncode == 0
-        shutil.rmtree(wt)
-    else:
-        (wt / ".git").unlink()
-    before = (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout)
+    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    pushing_from, sha = tmp_path, shas[-1]
+    if shape == "pushing-tree-is-dirty":
+        pushing_from = wt
+        (wt / "a.txt").write_text("uncommitted\n")
+    elif shape == "pushing-older-commit":
+        pushing_from, sha = wt, shas[0]
+    before = (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout)
 
-    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path.parent)
+    head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path.parent)
 
     assert head == sha
-    assert landed.parent == tmp_path.parent.resolve(), "not under the gate's TMPDIR"
-    assert (_git(tmp_path, "rev-parse", "HEAD").stdout, _git(tmp_path, "symbolic-ref", "HEAD").stdout) == before
+    assert landed.parent == pushing_from.parent.resolve(), "not under the gate's TMPDIR"
+    assert (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout) == before
     assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
-        "the clean-up line left the throwaway worktree registered"
+        "the throwaway worktree is still registered"
     )
 
 
 def test_a_failing_preflight_in_the_throwaway_worktree_fails_the_line_and_cleans_up(tmp_path: Path):
-    """#1952 — the line's exit code is preflight's, and its worktree goes either way."""
-    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
-    r = _paste_the_hint(_blocked(tmp_path, shas[0]).stderr, tmp_path, "false")
+    """#1952 — preflight runs, the line exits with its code, and the throwaway goes."""
+    _, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    ran = tmp_path.parent / "preflight-ran"
+    listed = _git(tmp_path, "worktree", "list", "--porcelain").stdout
+    r = _paste_the_hint(_blocked(tmp_path, shas[0]).stderr, tmp_path, f": > '{ran}'; exit 3")
+    assert (r.returncode, ran.exists()) == (3, True)
+    assert _git(tmp_path, "worktree", "list", "--porcelain").stdout == listed
+
+
+def test_a_failed_add_removes_nothing(tmp_path: Path):
+    """#1952 — the throwaway's path is already a worktree: `add` fails, and the
+    clean-up must not take that worktree with it."""
+    _, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    stderr = _blocked(tmp_path, shas[0]).stderr
+    taken = Path(re.search(r"worktree add --detach (\S+) ", stderr).group(1))
+    assert _git(tmp_path, "worktree", "add", "-q", "--detach", str(taken), "main").returncode == 0
+    (taken / "keep.txt").write_text("someone else's work\n")
+
+    r = _paste_the_hint(stderr, tmp_path, ":")
+
     assert r.returncode != 0
-    assert _git(tmp_path, "worktree", "list", "--porcelain").stdout.count("worktree ") == 2, (
-        "the throwaway worktree outlived a failing preflight"
-    )
+    assert (taken / "keep.txt").exists()
+    assert str(taken) in _git(tmp_path, "worktree", "list", "--porcelain").stdout
 
 
 def test_a_bare_repository_pushing_its_head_gets_the_instruction(tmp_path: Path):
