@@ -721,13 +721,13 @@ def test_otherwise_preflight_runs_in_a_throwaway_worktree(tmp_path: Path, shape:
     elif shape == "pushing-tree-status-fails":
         # A corrupt index: `status` fails, so cleanliness is unknown.
         pushing_from = wt
-        index = Path(_git(wt, "rev-parse", "--git-path", "index").stdout.strip())
-        (index if index.is_absolute() else wt / index).write_bytes(b"not an index")
+        Path(_git(wt, "rev-parse", "--git-path", "index").stdout.strip()).write_bytes(b"not an index")
     before = (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout)
 
     head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path.parent)
 
     assert head == sha
+    assert landed != pushing_from.resolve(), "ran in the tree you push from"
     assert landed.parent == pushing_from.parent.resolve(), "not under the gate's TMPDIR"
     assert (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout) == before
     assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
@@ -762,8 +762,8 @@ def test_a_failed_add_removes_nothing(tmp_path: Path):
 
 
 def test_the_throwaway_worktree_line_quotes_its_paths(tmp_path: Path):
-    """#1952 — a repository and a TMPDIR with spaces in them."""
-    repo, tmpdir = tmp_path / "repo x", tmp_path / "t d"
+    """#1952 — a repository and a TMPDIR whose names need quoting."""
+    repo, tmpdir = tmp_path / "repo x'$HOME", tmp_path / "t d$HOME"
     tmpdir.mkdir()
     _, shas = _held_worktree(repo, "sibling wt", commits=2)
     head, landed = _follow_the_hint(_blocked(repo, shas[0], tmpdir=tmpdir).stderr, tmp_path)
