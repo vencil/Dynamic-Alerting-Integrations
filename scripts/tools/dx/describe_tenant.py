@@ -344,14 +344,21 @@ class ConfDScanner:
     def entry_level(self, entry: Path) -> int | None:
         """The chain level of conf.d entry `entry`, or None outside conf.d.
 
-        ⛔ #1967: ONE rule for every level this tool computes — the chain's
-        carriers and the `--what-if` file alike. The level is that of the
-        directory HOLDING the entry, resolved (the same key `_scan` groups
-        carriers by, `dp.parent.resolve()`); the entry's own name is never
-        followed. Resolving the whole path instead put a link's level at its
-        target's directory: `_whatif.yaml -> ../o/w.yaml` came out as
-        append-external while an identical regular file was inserted, and
+        ⛔ #1967: ONE rule for the levels this tool computes — the chain's
+        carriers, and the `--what-if` file WHEN IT IS NOT an existing chain
+        carrier. The level is that of the directory HOLDING the entry,
+        resolved (the same key `_scan` groups carriers by,
+        `dp.parent.resolve()`), so a linked conf.d or a `..` in the spelling
+        lands on the real directory; the entry's own name is never followed.
+        Resolving the whole path instead put a link's level at its target's
+        directory: `_whatif.yaml -> ../o/w.yaml` came out as append-external
+        while an identical regular file was inserted, and
         `_x.yaml -> sub/deep/y.yaml` counted as level 2 instead of 0.
+
+        ⚠️ Not covered by this rule (pre-existing, unchanged): `--what-if`
+        decides `substitute` by comparing the RESOLVED what-if path with the
+        chain, so a what-if link pointing at an existing chain carrier
+        replaces that carrier rather than being placed at its own level.
         """
         holder = Path(os.path.realpath(entry.absolute().parent))
         try:

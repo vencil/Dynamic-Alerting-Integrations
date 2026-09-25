@@ -605,6 +605,39 @@ class TestLinkTargetOutsideConfD:
         assert out["substitution_type"] == "insert"
         assert out["merged_hash_changed"] is False, out
 
+    def _linked_conf_d_tree(self, tmp_path):
+        # conf.d is ITSELF a link (`c -> real`): the scanner resolves it, so a
+        # level must be computed against the holder's REAL directory, not the
+        # path spelling the caller typed.
+        real = tmp_path / "real"
+        (real / "sub").mkdir(parents=True)
+        (real / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (real / "sub" / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
+        (real / "sub" / "tw.yaml").write_text("tenants:\n  tw: {}\n", encoding="utf-8")
+        (real / "_w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        self._link(tmp_path / "c", "real")
+        return tmp_path / "c"
+
+    def _assert_root_level_insert(self, conf_d, whatif):
+        # `_w.yaml` is at the ROOT level, below `sub/_defaults.yaml` (70), so
+        # its 10 is overridden and the merged_hash does not move.
+        r = self._run(conf_d, "tw", "--what-if", whatif)
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        assert (out["substitution_type"], out["merged_hash_changed"]) == ("insert", False), out
+
+    def test_what_if_level_through_a_linked_conf_d(self, tmp_path):
+        # Without resolving the holder, `c/` is not under the resolved conf.d
+        # (`real/`) and the what-if was misfiled as append-external.
+        conf_d = self._linked_conf_d_tree(tmp_path)
+        self._assert_root_level_insert(conf_d, str(conf_d / "_w.yaml"))
+
+    def test_what_if_level_of_a_path_spelled_with_dotdot(self, tmp_path):
+        # `real/sub/../_w.yaml` is the root-level file; counted lexically its
+        # holder is two levels deep and it was inserted as the nearest level.
+        conf_d = self._linked_conf_d_tree(tmp_path)
+        self._assert_root_level_insert(conf_d, os.path.join(str(tmp_path), "real", "sub", "..", "_w.yaml"))
+
     def test_link_target_inside_conf_d_keeps_the_resolved_path(self, tmp_path):
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "_real.txt").write_text("tenants:\n  tg: {}\n", encoding="utf-8")
