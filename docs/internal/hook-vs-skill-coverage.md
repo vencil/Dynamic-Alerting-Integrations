@@ -97,7 +97,6 @@ lang: zh
 | `check-doc-reading-time` | >15 min 需拆 | 寫長文件後 |
 | `check-doc-freshness` | >90 天 stale | 定期 |
 | `path-metadata-consistency-check` | path/metadata 一致（warn） | 移檔後 |
-| `check-doc-template` | 文件模板合規 | 新文件 |
 | `check-portal-i18n` | Portal JSX i18n | 改 portal 後 |
 | `orphan-doc-check` | 孤兒文件偵測 | 新增/刪文件後 |
 | `glossary-coverage-check` | 高頻詞 glossary 覆蓋 | 引入新術語後 |

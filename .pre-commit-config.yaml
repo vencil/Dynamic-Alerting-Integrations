@@ -1001,14 +1001,6 @@ repos:
         files: ^components/threshold-exporter/config/conf\.d/.*\.ya?ml$
         stages: [manual]
 
-      - id: check-doc-template
-        name: Check document template compliance
-        entry: python3 -X utf8 scripts/tools/lint/check_doc_template.py
-        language: system
-        pass_filenames: false
-        files: ^docs/.*\.md$
-        stages: [manual]
-
       - id: check-portal-i18n
         name: Check Portal JSX i18n coverage
         entry: python3 -X utf8 scripts/tools/lint/check_portal_i18n.py --ci

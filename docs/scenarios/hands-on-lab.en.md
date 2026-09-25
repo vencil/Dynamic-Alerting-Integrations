@@ -151,11 +151,11 @@ container_cpu: "90"
 container_memory: "95"
 
 _state_maintenance:
-  expires: "2026-03-20T06:00:00Z"
+  expires: "2099-03-20T06:00:00Z"
 
 _silent_mode:
   target: warning        # required — which severities to silence (warning | critical | all | disable)
-  expires: "2026-03-18T12:00:00Z"
+  expires: "2099-03-18T12:00:00Z"
 
 _routing:
   receiver:

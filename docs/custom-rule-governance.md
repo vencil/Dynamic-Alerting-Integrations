@@ -67,7 +67,7 @@ tenants:
     # Silent Mode — TSDB 有紀錄但不通知（支援 auto-expiry）
     _silent_mode:
       target: "warning"
-      expires: "2026-04-01T00:00:00Z"
+      expires: "2099-04-01T00:00:00Z"
       reason: "Q1 效能調校期間"
 
     # Maintenance Mode — 完全不觸發 alert

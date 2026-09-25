@@ -92,6 +92,13 @@ tenants:
 | Other `_`-prefixed files (`_profiles.yaml`, `_defaults-multidb.yaml`, …) | `profiles`, `tenants` | `defaults` / `state_filters` / `optional_overrides` ignored + WARN log (#1676) |
 | Tenant files (`db-a.yaml`) | Only `tenants` | Other blocks automatically ignored + WARN log |
 
+**A platform file's `tenants:` block (#1982)**: `tenants:` in a root `_`-prefixed file is the **platform's default for an existing tenant**, not a second copy of the tenant's config:
+
+- **The tenant wins key by key, whatever the file names**: the platform value is applied first and the tenant file's (non-`_` file's) same key overrides it; a key the tenant file does not write keeps the platform value and is never reset to a default. A tenant file named `TX.yaml` or `0tx.yaml` (sorting before `_`) gives the same result as `tx.yaml`. The only exception is a platform-only enforcement mechanism (such as `_routing_enforced`), which does not go through this layer. "Whatever the file names" is about a tenant file versus a platform file only: when several platform files give the same key for the same tenant, the later one in file-name order still wins (unchanged from before).
+- **It cannot create a tenant**: a tenant that appears only in platform files, with no tenant file declaring it, is stripped from `/metrics` and from the routing generator, with a WARN naming the file and the tenant id. "The tenant exists" when a non-`_` file at any directory level declares it: the exporter decides from its own full decode of that file; the Python readers from the keys of `tenants:` in the file's **first YAML document**. For a tenant file the exporter rejects (a duplicate key, a tenant body that is not a mapping), the tenant does not exist on the exporter side, its platform values do not reach `/metrics`, and the exporter counts a parse failure for the file (on a cold load, a full rebuild and a hot reload of a tree with a defaults carrier; the incremental patch path keeps the tenant's last good values under the fail-safe, platform values included — see [#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)); the routing plane may still keep the platform's routing values for it (unchanged from before).
+- **Nested platform files are not read**: the `tenants:` block of a `_defaults.yaml` (or any `_` file) in a subdirectory is read by no plane; the exporter logs one named WARN (file + tenant ids) and still drops it.
+- ⚠️ The walker plane behind `/effective`, tenant-api and da-guard does not implement this layer yet (tracked in [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)): per-tenant values from a platform file currently reach `/metrics` and the routing generator only, and `/effective` does not show them.
+
 #### SHA-256 Hot-Reload
 
 Does not rely on file modification time (ModTime), but rather on **SHA-256 content hash**:
@@ -500,7 +507,7 @@ tenants:
 
 Available `_silent_mode` values: `warning`, `critical`, `all`, `disable`. Unset defaults to Normal mode.
 
-**Auto-Expiry :** `_silent_mode` and `_state_maintenance` support structured objects (backward compatible with scalar strings) with an `expires` RFC3339 timestamp (e.g. `"2026-04-01T00:00:00Z"`; if the exporter cannot parse it, it only logs a WARN and treats it as having no expiry, so it never auto-expires). The Go engine checks `time.Now().After(expires)` to stop emitting sentinel metrics, automatically restoring alerts to normal. Expiry generates a transient gauge `da_config_event{event="silence_expired"}` with `TenantConfigEvent` alert rule for notification.
+**Auto-Expiry :** `_silent_mode` and `_state_maintenance` support structured objects (backward compatible with scalar strings) with an `expires` RFC3339 timestamp (e.g. `"2099-04-01T00:00:00Z"`; if the exporter cannot parse it, it logs a WARN and **ignores the whole setting** — nothing is silenced, maintenance does not take effect, alerts keep notifying; [#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)). The Go engine checks `time.Now().After(expires)` to stop emitting sentinel metrics, automatically restoring alerts to normal. Expiry generates a transient gauge `da_config_event{event="silence_expired"}` with `TenantConfigEvent` alert rule for notification.
 
 ```yaml
 tenants:

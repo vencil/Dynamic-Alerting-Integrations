@@ -369,9 +369,10 @@ func BenchmarkMergePartialConfigs_100(b *testing.B) {
 	mgr := NewConfigManager(dir)
 	mgr.fullDirLoad()
 	configs := mgr.flat.configs
+	exists := tenantExistenceFor(configs, mgr.flat.tree)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		mergePartialConfigs(configs)
+		mergePartialConfigs(configs, exists)
 	}
 }
 
@@ -458,8 +459,9 @@ func BenchmarkMergePartialConfigs_1000(b *testing.B) {
 	mgr := NewConfigManager(dir)
 	mgr.fullDirLoad()
 	configs := mgr.flat.configs
+	exists := tenantExistenceFor(configs, mgr.flat.tree)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		mergePartialConfigs(configs)
+		mergePartialConfigs(configs, exists)
 	}
 }

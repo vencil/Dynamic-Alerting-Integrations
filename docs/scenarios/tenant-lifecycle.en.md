@@ -243,13 +243,13 @@ da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-1
 # 2. Verify current mode (after the exporter reloads and Prometheus scrapes; returns maintenance if the tenant is also in maintenance)
 da-tools diagnose db-product-01
 # Output includes: "operational_mode": "silent:all" (silent:warning / silent:critical when only one severity is muted;
-# with no active silence the operational_mode field is omitted from the output)
+# the operational_mode field appears only when an active maintenance or silence is found)
 
 # 3. Maintenance done: clear silent mode early
 da-tools patch-config db-product-01 _silent_mode disable
 ```
 
-⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it only logs a WARN (on every scrape) and treats the silence as having **no expiry** — it will not end on its own. If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
+⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it logs a WARN (on every scrape) and **ignores the whole setting** — nothing is silenced and alerts keep notifying ([#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)); always confirm with the `diagnose` in step 2 above that the tenant really entered silent mode. Common parse failures: a quoted date with no time (`"2099-12-31"`), or a space between date and time (`2099-12-31 23:59:59+00:00`). If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
 
 ```bash
 # Scheduled maintenance windows (CronJob auto-creates Alertmanager silences)
