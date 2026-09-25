@@ -80,17 +80,17 @@ func TestComputeMergedHashFromChainEqualsComputeMergedHash(t *testing.T) {
 
 func TestParseChainDefaultsReportsItsParse(t *testing.T) {
 	t.Parallel()
-	if pd := ParseChainDefaults([]byte("defaults:\n  cpu: 1\n")); pd.Err() != nil || !reflect.DeepEqual(pd.Block(), map[string]any{"cpu": 1}) {
-		t.Errorf("valid file: block %v err %v", pd.Block(), pd.Err())
+	if pd := ParseChainDefaults([]byte("defaults:\n  cpu: 1\n")); pd.err != nil || !reflect.DeepEqual(pd.block, map[string]any{"cpu": 1}) {
+		t.Errorf("valid file: block %v err %v", pd.block, pd.err)
 	}
-	if pd := ParseChainDefaults(nil); pd.Err() != nil || pd.Block() != nil {
-		t.Errorf("empty file: block %v err %v, want nil/nil", pd.Block(), pd.Err())
+	if pd := ParseChainDefaults(nil); pd.err != nil || pd.block != nil {
+		t.Errorf("empty file: block %v err %v, want nil/nil", pd.block, pd.err)
 	}
-	if pd := ParseChainDefaults([]byte("defaults: {unclosed\n")); pd.Err() == nil || pd.Block() != nil {
-		t.Errorf("broken file: block %v err %v, want nil block and an error", pd.Block(), pd.Err())
+	if pd := ParseChainDefaults([]byte("defaults: {unclosed\n")); pd.err == nil || pd.block != nil {
+		t.Errorf("broken file: block %v err %v, want nil block and an error", pd.block, pd.err)
 	}
 	var zero ChainDefaults
-	if zero.Err() != nil || zero.Block() != nil {
+	if zero.err != nil || zero.block != nil {
 		t.Error("zero value is not an empty file")
 	}
 }
@@ -108,10 +108,10 @@ func TestSharedParsedDefaultsIsNeverWritten(t *testing.T) {
 	chain := parseChain(chainSrc)
 	snapshot := make([]map[string]any, len(chain))
 	for i, pd := range chain {
-		if pd.Err() != nil {
-			t.Fatal(pd.Err())
+		if pd.err != nil {
+			t.Fatal(pd.err)
 		}
-		snapshot[i] = deepCopyMap(pd.Block())
+		snapshot[i] = deepCopyMap(pd.block)
 	}
 	tenantBodies := []string{
 		"    nested:\n      a: 100\n      deep:\n        x: [9]\n        z: 1\n",
@@ -136,8 +136,8 @@ func TestSharedParsedDefaultsIsNeverWritten(t *testing.T) {
 		}
 	}
 	for i, pd := range chain {
-		if !reflect.DeepEqual(pd.Block(), snapshot[i]) {
-			t.Errorf("chain[%d] was written by the merges:\n now  %#v\n was  %#v", i, pd.Block(), snapshot[i])
+		if !reflect.DeepEqual(pd.block, snapshot[i]) {
+			t.Errorf("chain[%d] was written by the merges:\n now  %#v\n was  %#v", i, pd.block, snapshot[i])
 		}
 	}
 }

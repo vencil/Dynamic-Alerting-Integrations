@@ -288,9 +288,10 @@ func computeEffectiveConfigBytesDetailed(
 // times). The zero value is an empty file.
 //
 // ⛔ Immutable once built: deepMerge deep-copies every override value it
-// takes, so merging never writes into Block(), and one ChainDefaults may be
-// shared by every tenant's chain. A caller that hands Block() on must keep
-// that promise too.
+// takes, so merging never writes into the parsed block, and one ChainDefaults
+// may be shared by every tenant's chain. The block stays unexported so no
+// caller outside this package can break that promise; inside it, the one
+// hand-off (defaultsDictOf → the parsedDefaults cache) is read-only.
 type ChainDefaults struct {
 	block map[string]any // nil: the document has no defaults mapping (skipped by the merge)
 	err   error          // the yaml.Unmarshal error, unwrapped
@@ -307,12 +308,6 @@ func ParseChainDefaults(b []byte) ChainDefaults {
 	}
 	return ChainDefaults{block: extractDefaultsBlock(normalizeYAMLToJSON(raw))}
 }
-
-// Block is the parsed defaults mapping (nil when there is none). Read-only.
-func (p ChainDefaults) Block() map[string]any { return p.block }
-
-// Err is the parse error of the file, or nil.
-func (p ChainDefaults) Err() error { return p.err }
 
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
 // parse ends it with `parse defaults[%d]: %w` — the error text
@@ -578,8 +573,9 @@ func ComputeMergedHash(
 // ComputeMergedHashFromChain is ComputeMergedHash over a defaults chain whose
 // files were already parsed by ParseChainDefaults (#1978). Same pipeline,
 // same errors, same 16-char value for the same bytes — the byte-input
-// function above is built on the same two halves (ParseChainDefaults,
-// mergeDefaultsChain), so this is not a second merge. It only skips the
+// function above shares both halves with it — ParseChainDefaults for the
+// parse and foldDefaults for the per-file fold (mergeDefaultsChain here,
+// computeEffectiveConfigBytesDetailed there) — so this is not a second merge. It only skips the
 // merged-defaults snapshot ComputeMergedHash computes and discards.
 func ComputeMergedHashFromChain(
 	tenantYAMLBytes []byte,

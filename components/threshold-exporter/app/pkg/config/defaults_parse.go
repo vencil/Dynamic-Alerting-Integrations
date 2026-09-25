@@ -7,13 +7,13 @@ import (
 
 // parseDefaultsBytes turns raw _defaults.yaml bytes into the same
 // shape that extractDefaultsBlock(normalizeYAMLToJSON(...)) produces
-// elsewhere in the codebase. Returns nil with no error for an empty
-// document (legacy flat configs may have empty/whitespace-only files).
+// elsewhere in the codebase. Returns an empty (non-nil) map with no error for
+// an empty document (legacy flat configs may have empty/whitespace-only files).
 //
 // The parse is the merge's own first half (ParseChainDefaults, #1978),
 // stopped before the merge step — we only need the parsed dict for
 // key-level diffing — so a cold load that already parsed a file for the
-// merge hands the same parse here (DefaultsDict) instead of a second one.
+// merge hands the same parse here (defaultsDictOf) instead of a second one.
 func parseDefaultsBytes(b []byte) (map[string]any, error) {
 	if isBlankDefaults(b) {
 		return map[string]any{}, nil
@@ -25,11 +25,11 @@ func parseDefaultsBytes(b []byte) (map[string]any, error) {
 // main's forwarder (config_defaults_diff.go).
 func ParseDefaultsBytes(b []byte) (map[string]any, error) { return parseDefaultsBytes(b) }
 
-// DefaultsDict is parseDefaultsBytes(b) given p = ParseChainDefaults(b)
+// defaultsDictOf is parseDefaultsBytes(b) given p = ParseChainDefaults(b)
 // already made: whitespace-only bytes are an empty map without being judged
 // (even when YAML rejects them, e.g. a stray tab), a syntax error is
 // returned, and a document without a defaults mapping is an empty map.
-func DefaultsDict(b []byte, p ChainDefaults) (map[string]any, error) {
+func defaultsDictOf(b []byte, p ChainDefaults) (map[string]any, error) {
 	if isBlankDefaults(b) {
 		return map[string]any{}, nil
 	}
@@ -67,7 +67,7 @@ func ParseDefaultsFiles(defaults map[string]bool, src DefaultsSource, logger *lo
 			logger.Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
 			continue
 		}
-		parsed, perr := DefaultsDict(b, pd)
+		parsed, perr := defaultsDictOf(b, pd)
 		if perr != nil {
 			logger.Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
 			continue
