@@ -227,23 +227,32 @@ if [ "$_missing_found" = "0" ]; then
 fi
 
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
-# Point at a worktree whose HEAD IS the pushed commit: preflight marks HEAD.
-# ⛔ Not the worktree holding the branch — it may sit at another commit.
-# ⛔ Skip entries whose directory is not there (prunable, or a path in the
-# other OS's form). `-z`: a path may contain spaces or newlines (#1952).
+# Point at a worktree whose HEAD IS the pushed commit — preflight marks HEAD.
+# The current worktree is a candidate too: the push may come from elsewhere
+# (`git -C <tree> push`), so "run it here" is not an instruction.
+# ⛔ Not the worktree holding the branch: it may sit at another commit.
+# ⛔ Decide per record: `prunable` comes after `HEAD`. A prunable entry, or a
+# directory that is not there, cannot be entered. `-z`: a path may contain a
+# newline (#1952).
 _other_wt=""
-_wt_cur=""
+_wt_path=""
+_wt_head=""
+_wt_prunable=0
+_wt_pick() {
+    if [ "$_wt_head" = "$_missing_sha" ] && [ "$_wt_prunable" = 0 ] && [ -d "$_wt_path" ]; then
+        _other_wt="$_wt_path"
+    fi
+}
 while IFS= read -r -d '' _wt_line; do
     case "$_wt_line" in
-        "worktree "*) _wt_cur="${_wt_line#worktree }" ;;
-        "HEAD $_missing_sha")
-            if [ -d "$_wt_cur" ]; then _other_wt="$_wt_cur"; break; fi ;;
+        "worktree "*) _wt_path="${_wt_line#worktree }"; _wt_head=""; _wt_prunable=0 ;;
+        "HEAD "*) _wt_head="${_wt_line#HEAD }" ;;
+        prunable|"prunable "*) _wt_prunable=1 ;;
+        "") _wt_pick; [ -n "$_other_wt" ] && break ;;
     esac
 done < <(git worktree list --porcelain -z 2>/dev/null)
 
-if [ "$_missing_sha" = "$head_sha" ]; then
-    _checkout_hint="    make pr-preflight"
-elif [ -n "$_other_wt" ]; then
+if [ -n "$_other_wt" ]; then
     printf -v _other_wt_q '%q' "$_other_wt"
     _checkout_hint="    cd ${_other_wt_q} && make pr-preflight"
 else

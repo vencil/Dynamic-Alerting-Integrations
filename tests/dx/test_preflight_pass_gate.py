@@ -627,17 +627,20 @@ def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
         cwd=cwd, capture_output=True, text=True,
     )
     assert r.returncode == 0, f"the instruction does not run: {r.stderr}"
-    head, landed = r.stdout.splitlines()
-    return head, Path(landed)
+    head, landed = r.stdout.split("\n", 1)
+    return head, Path(landed[:-1])  # `pwd` ends with one newline
 
 
-def _held_worktree(tmp_path: Path, name: str, commits: int = 1) -> tuple[Path, list[str]]:
-    """Main repo + a worktree `name` on branch `held` with `commits` commits
-    past main, next to a plain directory `sibling`. Returns (wt, shas)."""
+def _held_worktree(tmp_path: Path, name: str, commits: int = 1,
+                   parent: Path | None = None) -> tuple[Path, list[str]]:
+    """Main repo + a worktree `name` (under `parent`, default a directory next
+    to the repo that also holds a plain `sibling`) on branch `held`,
+    `commits` commits past main. Returns (wt, shas)."""
     _init_git(tmp_path)
-    root = tmp_path.parent / f"wts-{tmp_path.name}"
-    (root / "sibling").mkdir(parents=True)
-    wt = root / name
+    if parent is None:
+        parent = tmp_path.parent / f"wts-{tmp_path.name}"
+        (parent / "sibling").mkdir(parents=True)
+    wt = parent / name
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
@@ -659,10 +662,10 @@ def _held_worktree(tmp_path: Path, name: str, commits: int = 1) -> tuple[Path, l
     return wt, shas
 
 
-def _blocked(tmp_path: Path, sha: str) -> subprocess.CompletedProcess:
+def _blocked(pushing_from: Path, sha: str) -> subprocess.CompletedProcess:
     r = _run_gate(
-        tmp_path, _refspec("held", sha),
-        path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
+        pushing_from, _refspec("held", sha),
+        path_prepend=_make_fake_gh(pushing_from.parent / f"bin-{pushing_from.name}", state="OPEN"),
         env_extra={"GIT_PREFLIGHT_STRICT": "1"},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
@@ -671,31 +674,47 @@ def _blocked(tmp_path: Path, sha: str) -> subprocess.CompletedProcess:
 
 @pytest.mark.parametrize(
     "name",
-    ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME", "sibling ", "sib\\ling"],
-    ids=["plain", "space", "quote", "dollar", "trailing-space", "backslash"],
+    ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME", "sibling ",
+     "sib\\ling", "sibling\nwt"],
+    ids=["plain", "space", "quote", "dollar", "trailing-space", "backslash", "newline"],
 )
 def test_the_hint_lands_in_the_worktree_at_the_pushed_commit(tmp_path: Path, name: str):
     """#1952 — the printed `cd` is executed, not substring-matched.
 
-    `sibling` is the prefix a whitespace split cuts these names to, and an
-    existing directory: a truncated `cd` succeeds there.
+    A plain directory `sibling` sits next to it: where a path cut at its space
+    or newline would land.
     """
     wt, (sha,) = _held_worktree(tmp_path, name)
     head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
     assert (head, landed) == (sha, wt.resolve())
 
 
-@pytest.mark.parametrize("shape", ["held-at-a-later-commit", "worktree-dir-gone"])
+@pytest.mark.parametrize("shape", [
+    "held-at-a-later-commit", "worktree-dir-gone", "locked-and-gone",
+    "nested-without-its-git-file", "pushed-from-another-tree",
+])
 def test_following_the_hint_reaches_the_pushed_commit(tmp_path: Path, shape: str):
-    """#1952 — no worktree whose HEAD is the pushed commit is there to enter:
-    the branch's worktree has moved past it, or its directory is gone."""
-    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
-    if shape == "worktree-dir-gone":
-        shutil.rmtree(wt)
-        sha = shas[-1]
+    """#1952 — following the instruction ends on the pushed commit."""
+    if shape == "nested-without-its-git-file":
+        # Its directory is still there, inside the main checkout: entering it
+        # lands in the main checkout's HEAD.
+        wt, shas = _held_worktree(tmp_path, "sibling wt", parent=tmp_path / ".wt")
     else:
+        wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    sha, pushing_from = shas[-1], tmp_path
+    if shape == "held-at-a-later-commit":
         sha = shas[0]
-    head, _ = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+    elif shape == "worktree-dir-gone":
+        shutil.rmtree(wt)
+    elif shape == "locked-and-gone":
+        subprocess.run(["git", "-C", str(tmp_path), "worktree", "lock", str(wt)],  # subprocess-timeout: ignore
+                       check=True)
+        shutil.rmtree(wt)
+    elif shape == "nested-without-its-git-file":
+        (wt / ".git").unlink()
+    else:  # `git -C <wt> push` from a shell standing in the main checkout
+        pushing_from = wt
+    head, _ = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path)
     assert head == sha
 
 
