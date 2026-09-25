@@ -56,24 +56,24 @@ curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
 ### 2. 移除 federation subset 檔
 
 ```sh
-ls conf.d/_federation/ | grep -i -x -F -e '<tenant>.yaml' -e '<tenant>.yml'   # 先看實際檔名（固定字串比對，id 裡的 . 不是萬用字元）
-git rm conf.d/_federation/<上一步列出的每個檔名>
+find conf.d/_federation -maxdepth 1 -type f \( -name '<tenant>.[yY][aA][mM][lL]' -o -name '<tenant>.[yY][mM][lL]' \)   # 先看實際檔名
+git rm <上一步列出的每個路徑>
 ```
 
 並非每個租戶都有 subset 檔（只有曾經設定過 federation 指標子集的租戶才有）。檔案不存在就跳過。
 
-⚠️ **副檔名不一定是 `.yaml`**：`<tenant>.yml`、`<tenant>.YAML` 之類的拼法 tenant-api 一律視為該租戶的 subset 檔（讀、寫、孤兒偵測同一套規則，[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)），所以只 `git rm <tenant>.yaml` 可能漏刪。上面的 `grep -i` 會連主檔名的大小寫一起放寬，多列出的 `DB-A.yaml` 之類**不是**這個租戶的檔（tenant id 比對大小寫敏感）——只刪主檔名與 `<tenant>` 完全相同的。同一租戶若列出兩個檔，兩個都刪。
+⚠️ **副檔名不一定是 `.yaml`**：`<tenant>.yml`、`<tenant>.YAML` 之類的拼法 tenant-api 一律視為該租戶的 subset 檔（讀、寫、孤兒偵測同一套規則，[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)），所以只 `git rm <tenant>.yaml` 可能漏刪。上面的 `find` 刻意這樣比對：**主檔名大小寫必須與 `<tenant>` 完全相同**（tenant id 大小寫敏感，`DB-A.yaml` 是另一個租戶的檔，絕不能一起刪），**副檔名大小寫不拘**；`-name` 是 glob 而非 regex，id 裡的 `.` 不會變成萬用字元。同一租戶若列出兩個檔，兩個都刪。
 
 > **平台 whitelist（`_federation_policy.yaml`）不要動** —— 那是平台層級的、不隨單一租戶 offboarding 改變。只刪 per-tenant 的 `_federation/<tenant>.{yaml,yml}`。
 
 ### 3. 移除租戶設定檔（offboarding 本身）
 
 ```sh
-ls conf.d/ | grep -i -x -F -e '<tenant>.yaml' -e '<tenant>.yml'   # 先看實際檔名
-git rm conf.d/<上一步列出的每個檔名>
+find conf.d -maxdepth 1 -type f \( -name '<tenant>.[yY][aA][mM][lL]' -o -name '<tenant>.[yY][mM][lL]' \)   # 先看實際檔名
+git rm <上一步列出的每個路徑>
 ```
 
-租戶設定檔同樣可能是 `<tenant>.yml` 或大寫副檔名（tenant-api 與 threshold-exporter 都認，[#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673)）；直接 `git rm conf.d/<tenant>.yaml` 在這種租戶上會回 `pathspec did not match`。與步驟 2 同一個但書：`grep -i` 也放寬了主檔名大小寫，只刪主檔名與 `<tenant>` 完全相同的。
+租戶設定檔同樣可能是 `<tenant>.yml` 或大寫副檔名（tenant-api 與 threshold-exporter 都認，[#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673)）；直接 `git rm conf.d/<tenant>.yaml` 在這種租戶上會回 `pathspec did not match`。比對規則與步驟 2 相同：主檔名大小寫完全相同、副檔名大小寫不拘。
 
 步驟 2、3 在同一個 commit、走同一次 PR review。
 
