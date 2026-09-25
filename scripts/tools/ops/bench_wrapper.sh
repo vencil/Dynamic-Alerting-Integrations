@@ -15,7 +15,8 @@
 #   3. Writes:
 #        BENCH_OUT_DIR/bench.out.txt — clean benchmark results (stdout)
 #        BENCH_OUT_DIR/bench.err.log — go test's fd 2 (see below: compile
-#                                      errors land here only on go1.23)
+#                                      errors land here on go1.23, not on
+#                                      go1.24+)
 #        BENCH_OUT_DIR/bench.raw.jsonl — original -json event stream
 #
 #      On a SUCCESSFUL run bench.err.log is normally EMPTY — that is expected,

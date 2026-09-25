@@ -125,8 +125,11 @@ func keepLine(raw string) bool {
 // main passes os.Stderr, which bench_wrapper.sh leaves on the caller's
 // stderr. out stays byte-for-byte what it was: benchstat reads a
 // "key: value" line as configuration, so a diagnostic of that shape in out
-// would split the comparison. diag write errors are ignored — the same text
-// is in bench.raw.jsonl.
+// would split the comparison. diag write errors are not checked (the same
+// text is in bench.raw.jsonl), but a stderr that is a pipe whose reader has
+// gone ends the process with SIGPIPE (rc 141) as stdout would — and before
+// Flush, so bench.out.txt comes out empty. No caller reads the wrapper's
+// stderr through a pipe today; before #1872 this filter never wrote there.
 func filter(in io.Reader, out, diag io.Writer) (readErr, writeErr error) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)

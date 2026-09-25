@@ -72,6 +72,7 @@ func TestFilterKeepsExactlyTheRetainedLines(t *testing.T) {
 		// go1.24+: compile diagnostics as events, and bench.err.log is empty.
 		`{"Action":"build-output","ImportPath":"example.com/y","Output":"# example.com/y\n"}`,
 		`{"Action":"build-output","ImportPath":"example.com/y","Output":"./y.go:3:9: syntax error\n"}`,
+		`{"Action":"build-fail","ImportPath":"example.com/y"}`,
 		`{"Action":"output","Package":"example.com/x","Output":"PASS\n"}`,
 		`{"Action":"output","Package":"example.com/x","Output":"ok  \texample.com/x\t12.345s\n"}`,
 		`{"Action":"pass","Package":"example.com/x","Elapsed":12.345}`,
