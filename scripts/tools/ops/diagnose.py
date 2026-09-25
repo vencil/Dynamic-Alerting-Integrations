@@ -43,8 +43,11 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
+    declared_tenant_ids,
     iter_config_files,
+    overlay_platform_tenants,
     resolve_defaults_file,
+    unselected_carriers,
     unusable_config_paths,
     unusable_reason,
     warn_nested,
@@ -102,6 +105,30 @@ def run_cmd(cmd: list[str]) -> str | None:
 query_prometheus = query_prometheus_instant
 
 
+def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
+    """The tenant's own block, read the way the exporter reads it (#1982).
+
+    *entries* is every ``(fname, tenant, block)`` a root file offered for
+    *tenant*, in read order. A root platform (`_`) file's `tenants:` entry is
+    the platform's per-tenant DEFAULT: applied first, then the tenant file's
+    keys win, whatever either file is called — this used to take the FIRST
+    file in name order and stop, so `tx.yaml` (sorting after `_defaults.yaml`)
+    got the platform's value and `_profile` while `TX.yaml` got its own. A
+    platform entry for a tenant no tenant file declares is dropped: a platform
+    file cannot create a tenant. *announce* is False on the caller that
+    `check()` pairs with `resolve_inheritance_chain`, so the WARN prints once.
+    """
+    merged, orphans = overlay_platform_tenants(
+        entries, lambda: declared_tenant_ids(base))
+    if announce:
+        for fname, t in orphans:
+            print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(t))} "
+                  f"ignored — no tenant file declares tenant "
+                  f"'{safe_label(str(t))}'; a platform file can only provide "
+                  f"defaults for a tenant that already exists", file=sys.stderr)
+    return merged.get(tenant, {})
+
+
 def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     """Look up the _profile assignment for a tenant from config-dir YAML files.
 
@@ -114,12 +141,19 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
         return None
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
+    entries: list = []
     # #1469: the selection predicate is `_lib_confd`'s, not a fourth
     # hand-rolled copy. `iter_config_files` already applies `_is_config`
     # (suffix + not hidden) and, on the `recursive=False` branch, `is_file()`
     # — the three checks that used to sit inline here.
-    for entry in iter_config_files(base, recursive=False):
+    listed = list(iter_config_files(base, recursive=False))
+    # The unselected carrier spelling is read by no plane (#1674): its
+    # `tenants:` block must not reach the per-tenant merge either.
+    skip = unselected_carriers(listed)
+    for entry in listed:
         fname = entry.name
+        if fname in skip:
+            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
@@ -139,9 +173,10 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
             t_name = fname.rsplit(".", 1)[0]
             tenants = {t_name: raw}
         if tenant in tenants and isinstance(tenants[tenant], dict):
-            profile = tenants[tenant].get("_profile")
-            if profile and isinstance(profile, str):
-                return profile.strip()
+            entries.append((fname, tenant, tenants[tenant]))
+    profile = _tenant_block(tenant, entries, base, announce=False).get("_profile")
+    if profile and isinstance(profile, str):
+        return profile.strip()
     return None
 
 
@@ -307,11 +342,17 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         _skip_read_failure(defaults_path.name, e)
 
     # Find tenant config
-    tenant_overrides = {}
+    entries: list = []
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
-    for entry in iter_config_files(base, recursive=False):
+    listed = list(iter_config_files(base, recursive=False))
+    # The unselected carrier spelling is read by no plane (#1674): its
+    # `tenants:` block must not reach the per-tenant merge either.
+    skip = unselected_carriers(listed)
+    for entry in listed:
         fname = entry.name
+        if fname in skip:
+            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
@@ -329,8 +370,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             t_name = fname.rsplit(".", 1)[0]
             tenants = {t_name: raw}
         if tenant in tenants and isinstance(tenants[tenant], dict):
-            tenant_overrides = tenants[tenant]
-            break
+            entries.append((fname, tenant, tenants[tenant]))
+    tenant_overrides = _tenant_block(tenant, entries, base, announce=True)
 
     # Layer 2: Profile overlay
     profile_name = None

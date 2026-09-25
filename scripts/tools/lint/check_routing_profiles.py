@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -26,7 +27,14 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import YamlFileError, detect_cli_lang, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    declared_tenant_ids,
+    has_yaml_extension,
+    is_hidden_name,
+    overlay_platform_tenants,
+    unselected_carriers,
+    warn_nested,
+)
 
 _LANG = detect_cli_lang()
 
@@ -57,7 +65,13 @@ def _collect_data(config_dir: str) -> dict:
 
     unreadable: list[str] = []
     unreadable_files: list[str] = []
+    entries: list[tuple[str, object, dict]] = []
+    # The unselected carrier spelling is read by no plane (#1674); its
+    # `tenants:` block used to reach tenant_ids / profile_refs here.
+    skip = unselected_carriers(Path(config_dir, f) for f in files)
     for fname in files:
+        if fname in skip:
+            continue
         path = os.path.join(config_dir, fname)
         # #1654 blind review: a lint isolates per file — one unreadable
         # file is one ERROR finding, the other files are still checked
@@ -85,19 +99,27 @@ def _collect_data(config_dir: str) -> dict:
             if isinstance(dp, dict):
                 policies.update(dp)
 
-        # Tenant IDs + profile refs
+        # Tenant IDs + profile refs — collected here, resolved after the
+        # loop (#1982): platform file first, tenant file wins, whatever
+        # either is called; a platform file cannot create a tenant.
         tenants_block = data.get("tenants", {})
         if isinstance(tenants_block, dict):
             for tenant, overrides in tenants_block.items():
-                tenant_ids.add(tenant)
-                if isinstance(overrides, dict):
-                    ref = overrides.get("_routing_profile")
-                    if ref and isinstance(ref, str):
-                        profile_refs[tenant] = ref.strip()
+                entries.append((fname, tenant,
+                                overrides if isinstance(overrides, dict) else {}))
+
+    merged, platform_orphans = overlay_platform_tenants(
+        entries, lambda: declared_tenant_ids(config_dir))
+    for tenant, overrides in merged.items():
+        tenant_ids.add(tenant)
+        ref = overrides.get("_routing_profile")
+        if ref and isinstance(ref, str):
+            profile_refs[tenant] = ref.strip()
 
     return {
         "profiles": profiles,
         "policies": policies,
+        "platform_orphans": platform_orphans,
         "tenant_ids": tenant_ids,
         "profile_refs": profile_refs,
         "unreadable": unreadable,
@@ -133,6 +155,14 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     if tenants_unreadable:
         messages.append("INFO: tenant checks skipped: "
                         f"{', '.join(tenants_unreadable)} unreadable")
+
+    # Check 0 (#1982): a platform file naming a tenant no tenant file
+    # declares. The entry is already excluded from every check below.
+    for fname, tenant in data.get("platform_orphans", []):
+        messages.append(
+            f"WARN: {fname}: tenants.{tenant} ignored — no tenant file "
+            f"declares tenant '{tenant}'; a platform file can only provide "
+            f"defaults for a tenant that already exists")
 
     # Check 1: Profile references point to existing profiles
     # (needs the profile set — skipped when _routing_profiles.yaml is unreadable)

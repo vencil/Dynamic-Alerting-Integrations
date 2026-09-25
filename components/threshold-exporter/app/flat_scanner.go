@@ -97,14 +97,21 @@ func isNestedPlatformFile(key string) bool {
 // then went too far the other way: a file with real syntax damage stopped
 // incrementing `parse_failure` and stopped logging at all. A syntax-only probe
 // answers the right question — the same one `ERROR:` has always meant here.
-func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) {
+//
+// Returns the probe's decode and ok=true when the file is syntactically
+// fine, so reportNestedPlatformTenants can inspect it WITHOUT a second
+// parse (a separate decode there measured +10k allocs / +1.4 MiB per
+// DiffAndReload_Hierarchical_1000 reload — every nested carrier parsed
+// twice on every full load, #1982 bench gate).
+func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) (any, bool) {
 	var probe any
 	err := yaml.Unmarshal(data, &probe)
 	if err == nil {
-		return // syntactically fine; its content simply is not for this plane
+		return probe, true // syntactically fine; its content simply is not for this plane
 	}
 	metrics.IncParseFailure(filepath.Base(fullPath))
 	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+	return nil, false
 }
 
 // parsePartialConfig decodes one config file's bytes with the ONE decode,
@@ -210,12 +217,165 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	}
 }
 
-// mergePartialConfigs merges all cached partial configs in sorted filename order
-// via mergePartialInto: defaults/state_filters overwrite, tenants/profiles deep merge.
+// isPlatformKey reports whether a flat-cache key names a platform
+// (`_`-prefixed) file. Only ROOT platform files ever reach the flat merge —
+// nested ones are dropped before it (isNestedPlatformFile) — so inside
+// `configs` this is "a root platform file".
+func isPlatformKey(key string) bool { return strings.HasPrefix(scanKeyBase(key), "_") }
+
+// sortFlatMergeOrder sorts flat-cache keys into the ONE merge order every
+// flat path uses: platform files first, then tenant files, each group by
+// filename.
+//
+// ⛔ THE GROUPING IS THE SEMANTICS, NOT A TIE-BREAK. A platform file's
+// `tenants:` block is the platform's per-tenant DEFAULT; the tenant's own
+// file wins key by key, whatever either file is called. A plain filename
+// sort made that depend on ASCII: `tx.yaml` sorts after `_defaults.yaml` and
+// won, while `TX.yaml` / `0tx.yaml` sort before it and LOST — the platform's
+// 60 served over the tenant's 70 on /metrics, while /effective reported 70.
+//
+// Only Tenants are order-sensitive across the two groups: the boundary rules
+// strip defaults / state_filters / optional_overrides / profiles from tenant
+// files, so every other section is merged from platform files alone, in the
+// same relative order as before.
+//
+// ⚠️ Classified ONCE, then each group sorted with sort.Strings. A comparator
+// that called isPlatformKey per comparison measured 15-40% slower on
+// BenchmarkMergePartialConfigs_1000 than main's plain sort (blind review);
+// the stable partition keeps the cost at one pass plus the same sort.
+func sortFlatMergeOrder(names []string) {
+	n := 0
+	for i, name := range names {
+		if isPlatformKey(name) {
+			names[n], names[i] = names[i], names[n]
+			n++
+		}
+	}
+	sort.Strings(names[:n])
+	sort.Strings(names[n:])
+}
+
+// declaredTenantIDs is the set of tenants that EXIST: those some tenant
+// (non-`_`) file declares, on this scan's verdict.
+//
+// ⛔ THE WALKER'S ANSWER, NOT A SECOND ONE. TreeFile.TenantIDs is filled by
+// the walker's own decode (config.ParseConfigFile) for tenant files only —
+// `_` files are never parsed for tenants and a file whose decode failed
+// declares none — and carried across the mtime fast-path with the hash. So
+// "does tx exist" here is the question /effective's Locate answers from the
+// same walk. A platform file can supply defaults for a tenant in this set; it
+// cannot add one to it.
+func declaredTenantIDs(scan *treeScan) map[string]struct{} {
+	out := make(map[string]struct{}, len(scan.Files))
+	for key, f := range scan.Files {
+		if isPlatformKey(key) {
+			continue // never parsed for tenants; stated, not assumed
+		}
+		for _, tid := range f.TenantIDs {
+			out[tid] = struct{}{}
+		}
+	}
+	return out
+}
+
+// tenantExistenceFor returns declaredTenantIDs(scan) when some root platform
+// file in `configs` carries a `tenants:` block, and nil otherwise.
+//
+// ⛔ nil MEANS "NOTHING TO FILTER", and every consumer reads it that way
+// (mergePartialConfigs, patchTenants, reportPlatformOrphans). With no
+// platform `tenants:` entry in the merge, every tenant in it came from a
+// tenant file and therefore exists — so the set would answer "yes" to every
+// question asked of it. Not building it keeps the common tree (no platform
+// per-tenant block at all) off a 1000-entry map per reload, which the bench
+// gate charges to IncrementalLoad_1000_OneFileChanged.
+func tenantExistenceFor(configs map[string]ThresholdConfig, scan *treeScan) map[string]struct{} {
+	for name, partial := range configs {
+		if isPlatformKey(name) && len(partial.Tenants) > 0 {
+			return declaredTenantIDs(scan)
+		}
+	}
+	return nil
+}
+
+// reportPlatformOrphans WARNs once per (platform file, tenant) for every
+// tenant a root platform file's `tenants:` block names that no tenant file
+// declares. The merge drops those entries (mergePartialConfigs,
+// patchTenants); this is the sentence that says so. Called on every commit
+// that builds the flat config, never on a quiet tick, so it repeats once per
+// load/reload like the other boundary WARNs.
+func reportPlatformOrphans(configs map[string]ThresholdConfig, exists map[string]struct{}, logger *log.Logger) {
+	if exists == nil {
+		return // no platform `tenants:` entry at all (tenantExistenceFor)
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
+	names := make([]string, 0, len(configs))
+	for name := range configs {
+		if isPlatformKey(name) && len(configs[name].Tenants) > 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ids := make([]string, 0, len(configs[name].Tenants))
+		for tid := range configs[name].Tenants {
+			if _, ok := exists[tid]; !ok {
+				ids = append(ids, tid)
+			}
+		}
+		sort.Strings(ids)
+		for _, tid := range ids {
+			logger.Printf("WARN: tenants.%s in platform file %s ignored — no tenant file declares tenant %q; "+
+				"a platform file can only provide defaults for a tenant that already exists", tid, name, tid)
+		}
+	}
+}
+
+// reportNestedPlatformTenants WARNs when a NESTED platform file carries a
+// non-empty `tenants:` block. Its content never reaches any plane — the
+// flat merge drops nested `_` files whole (see isNestedPlatformFile) and the
+// inheritance chain reads only a carrier's `defaults:` — so without this the
+// tenant values in it vanish with no log at all. Behaviour is unchanged: the
+// block is still dropped; it is just no longer silent. A syntactically
+// broken file is reportUnparseableNestedPlatformFile's to report; this
+// takes THAT function's decode (`probe`) and never parses on its own.
+func reportNestedPlatformTenants(name string, probe any, logger *log.Logger) {
+	doc, ok := probe.(map[string]any)
+	if !ok {
+		return
+	}
+	var ids []string
+	switch tenants := doc["tenants"].(type) {
+	case map[string]any:
+		for tid := range tenants {
+			ids = append(ids, tid)
+		}
+	case map[any]any: // a non-string key somewhere in the mapping
+		for tid := range tenants {
+			ids = append(ids, fmt.Sprint(tid))
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	sort.Strings(ids)
+	logger.Printf("WARN: tenants: block in nested platform file %s ignored (tenants %s) — "+
+		"the tenants: block of a nested platform file is not read by any plane; "+
+		"only a root platform file can provide per-tenant defaults", name, strings.Join(ids, ", "))
+}
+
+// mergePartialConfigs merges all cached partial configs via mergePartialInto,
+// in sortFlatMergeOrder: platform files first, then tenant files.
+// defaults/state_filters overwrite, tenants/profiles deep merge — so a
+// tenant file's key beats the same key in a platform file's `tenants:`
+// block regardless of either filename. A platform file's entry for a tenant
+// not in `exists` (tenantExistenceFor; nil = nothing to filter) is dropped: a
+// platform file cannot create a tenant (reportPlatformOrphans says so).
 // An unselected root defaults carrier never reaches `configs` (#1674; see
 // isUnselectedRootCarrier), so every file merged here is one the chain reads
 // or a non-carrier the boundary rules have already judged.
-func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
+func mergePartialConfigs(configs map[string]ThresholdConfig, exists map[string]struct{}) ThresholdConfig {
 	// Pre-scan to estimate map capacities, avoiding rehash during merge.
 	// In directory mode each tenant file has exactly 1 tenant, so
 	// len(configs) is a reasonable upper bound for the Tenants map.
@@ -235,15 +395,28 @@ func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 		Profiles:     make(map[string]map[string]ScheduledValue),
 	}
 
-	// Sort filenames for deterministic merge order
 	names := make([]string, 0, len(configs))
 	for name := range configs {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sortFlatMergeOrder(names)
 
 	for _, name := range names {
-		mergePartialInto(&merged, configs[name])
+		partial := configs[name]
+		if exists != nil && isPlatformKey(name) && len(partial.Tenants) > 0 {
+			// ⛔ On a COPY of the struct with a filtered map: the cached
+			// partial in flat.configs keeps every entry, so a tenant file
+			// added later picks the platform's values up without the
+			// platform file being re-read.
+			kept := make(map[string]map[string]ScheduledValue, len(partial.Tenants))
+			for tid, ov := range partial.Tenants {
+				if _, ok := exists[tid]; ok {
+					kept[tid] = ov
+				}
+			}
+			partial.Tenants = kept
+		}
+		mergePartialInto(&merged, partial)
 	}
 
 	return merged
