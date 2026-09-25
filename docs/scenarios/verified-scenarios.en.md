@@ -61,12 +61,12 @@ These guarantees are **not** guarded by a single end-to-end test in a K8s cluste
 
 **Gaps (no automated coverage today)**:
 
-- Changing a threshold on a live cluster and watching the alert flip firing ↔ resolved (the end-to-end form of A and E).
+- Changing a threshold on a live cluster, or applying a real load and then clearing it, and watching the alert flip firing ↔ resolved (the end-to-end form of A and E, and the path described in the End-to-End Lifecycle section below).
 - Taking the worst value across multiple pods / nodes of one tenant (the cross-pod half of B).
 - Service continuing after a Pod is killed, with the PDB keeping at least one Pod (the failover half of F).
 - `MariaDBHighConnections`, `MariaDBSystemBottleneck` (composite alert) and `ContainerImagePullFailure` have no firing test; they are listed under `uncovered` in `tests/rulepacks/vmalert_coverage_baseline.yaml`.
 
-The most important design proof and the end-to-end lifecycle are expanded below.
+The most important design proof, and a description of the end-to-end lifecycle mechanism, are expanded below.
 
 ## Key Design Proof: `max by(tenant)` Prevents HA Double-Counting
 
@@ -77,37 +77,45 @@ threshold-exporter runs HA with 2 replicas; both Pods emit the same `user_thresh
 
 However the Pod count changes, `max` returns the same value — the rationale for choosing **`max` over `sum`** in the HA design (see [Architecture & Design §High Availability](../architecture-and-design.en.md#4-high-availability-design)).
 
-## End-to-End Lifecycle (demo-full)
+## End-to-End Lifecycle
 
-`make demo-full` showcases the full flow from tool validation to a real workload. The sequence diagram below describes the core path — how a real load fires an alert and how it auto-resolves after cleanup:
+The sequence diagram below is a **description of the mechanism**: how a real load fires an alert through the recording rule compared against `user_threshold`, and how it auto-resolves after cleanup. ⚠️ **No automated test verifies this firing → resolved path on a live cluster** (see the gap list above).
+
+To observe it manually on your own cluster, the entry points are:
+
+```bash
+make load-composite TENANT=<tenant>   # applies connections + sysbench OLTP together
+make load-cleanup                     # deletes load-generator Jobs / Pods in db-* namespaces
+```
+
+`TENANT` must be a MariaDB tenant whose namespace name equals the tenant name: the load targets `mariadb.<tenant>.svc`, and `load-cleanup` only scans namespaces starting with `db-`.
+
+In between, watch the alert state in Prometheus (`localhost:9090/alerts`). `for` only governs pending → firing; after cleanup, the alert resolves as soon as the next evaluation of the recording rule and alert rule no longer sees a value above the threshold (the rules set no `keep_firing_for`).
 
 ```mermaid
 sequenceDiagram
     participant Op as Operator
-    participant LG as Load Generator<br/>(connections + stress-ng)
+    participant LG as Load Generator<br/>(connections + sysbench)
     participant DB as MariaDB<br/>(db-a)
     participant TE as threshold-exporter
     participant PM as Prometheus
 
-    Note over Op: Step 1-5: scaffold / migrate / diagnose / check_alert / baseline
-
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
-    DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
+    DB-->>PM: mysql_global_status_threads_connected<br/>(connections above the threshold of 70)
     TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
 
-    Note over PM: Evaluate Recording Rule:<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:mysql_connections (70)
+    Note over PM: Evaluate Recording Rule:<br/>tenant:mysql_threads_connected:max<br/>> tenant:alert_threshold:mysql_connections (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
     Op->>LG: run_load.sh --cleanup
-    LG->>DB: Kill connections + stop stress-ng
-    DB-->>PM: mysql_threads_connected ≈ 5
+    LG->>DB: Delete load Jobs / Pods (connections + sysbench)
+    DB-->>PM: mysql_global_status_threads_connected<br/>(connections back below the threshold of 70)
 
-    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:mysql_connections (70)
+    Note over PM: tenant:mysql_threads_connected:max<br/>< tenant:alert_threshold:mysql_connections (70)
 
-    PM->>PM: Alert → RESOLVED (after for duration)
-    Note over Op: ✅ Full firing → resolved cycle verified
+    PM->>PM: Alert → RESOLVED (on the next evaluation that no longer sees a value above the threshold — for does not affect this step)
 ```
 
 ## Coverage Overview

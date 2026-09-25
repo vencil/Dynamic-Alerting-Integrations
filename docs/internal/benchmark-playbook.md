@@ -121,7 +121,7 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 
 ## Alertmanager Bench 注意事項
 
-- idle 狀態下 notification latency histogram 為空（無 alert 觸發）→ 需 `--under-load` 或 `make demo-full` 產生流量才有數據
+- idle 狀態下 notification latency histogram 為空（無 alert 觸發）→ 需 `--under-load` 或 `make load-composite TENANT=<tenant>` 產生流量才有數據（`TENANT` 須為 namespace 名稱等於 tenant 的 MariaDB tenant；結束後 `make load-cleanup` 刪除 `db-*` namespace 內的壓測 Job／Pod）
 - Alertmanager port-forward: `kubectl port-forward svc/alertmanager 9093:9093 -n monitoring`
 - 關鍵 metrics: `alertmanager_notification_latency_seconds`、`alertmanager_alerts_received_total`、`alertmanager_nflog_maintenance_errors_total`
 

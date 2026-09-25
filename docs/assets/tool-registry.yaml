@@ -805,8 +805,8 @@ tools:
   - walkthrough
   - interactive
   desc:
-    en: Interactive make demo walkthrough
-    zh: 互動式 make demo 導覽
+    en: Interactive platform workflow walkthrough (illustrative commands, simulated output, no cluster)
+    zh: 互動式平台工作流導覽（示意指令、模擬輸出、無需叢集）
   related:
   - wizard
   - cli-playground
