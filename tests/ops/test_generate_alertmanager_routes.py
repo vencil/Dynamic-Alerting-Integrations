@@ -456,6 +456,9 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
         assert "db-a" in routing
         assert routing["db-a"]["receiver"]["type"] == "email"
@@ -515,6 +518,9 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
         # channel is in the receiver dict (metadata, not AM config)
         assert routing["db-a"]["receiver"]["channel"] == "#alerts-db-a"
@@ -566,6 +572,9 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
         assert routing["db-a"]["receiver"]["to"] == ["db-a-team@example.com"]
 class TestValidateTenantKeys:
@@ -745,6 +754,9 @@ tenants:
   db-a:
     oracle_wait_time_rate: "5"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
         assert schema_warnings == []
 
@@ -1120,6 +1132,9 @@ tenants:
   db-a:
     _silence_mode: "warning"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
         assert len(schema_warnings) == 1
         assert "unknown reserved key" in schema_warnings[0]
@@ -1134,6 +1149,9 @@ tenants:
   db-a:
     postgres_connections: "60"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
         assert len(schema_warnings) == 1
         assert "not in defaults" in schema_warnings[0]
@@ -1148,12 +1166,18 @@ tenants:
   db-a:
     mysql_connections_critical: "90"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
         assert schema_warnings == []
 
     def test_state_prefix_valid(self, config_dir):
         """_state_* 前綴鍵有效。"""
         write_yaml(config_dir, "_defaults.yaml", "tenants:\n  db-a:\n    _state_maintenance: 'enable'\n")
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
         assert schema_warnings == []
 
@@ -1557,6 +1581,10 @@ tenants:
   db-b:
     mysql_connections: "80"
 """)
+        # #1982: a platform file only supplies defaults for a tenant a
+        # tenant file declares; it cannot create one.
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
+        write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b: {}\n")
         routing, dedup, _sw, enforced, _mc = load_tenant_configs(config_dir)
         assert enforced is not None
         routes, receivers, _ = generate_routes(

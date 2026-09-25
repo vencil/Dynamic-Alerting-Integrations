@@ -456,3 +456,44 @@ class TestCheck:
         assert out["status"] == "error"
         assert len(out["recent_logs"]) <= 3
         assert all("ERROR" in log for log in out["recent_logs"])
+
+
+# ============================================================
+# #1982: a root platform file's `tenants:` block
+# ============================================================
+
+class TestPlatformTenantBlock:
+    """The platform's per-tenant DEFAULT: the tenant file wins key by key,
+    whatever either file is called, and a platform file cannot create a
+    tenant. `tx.yaml` sorts AFTER `_defaults.yaml` and `TX.yaml` BEFORE it;
+    the reader used to take the first file in name order and stop, so the
+    two spellings gave opposite answers."""
+
+    _PLATFORM = ("defaults:\n  mysql_connections: 80\n"
+                 "tenants:\n  tx:\n    mysql_connections: '60'\n    _profile: p1\n")
+
+    @pytest.mark.parametrize("fname", ["tx.yaml", "TX.yaml", "0tx.yaml"])
+    def test_tenant_file_wins_whatever_its_name(self, tmp_path, fname):
+        (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
+        (tmp_path / fname).write_text(
+            "tenants:\n  tx:\n    mysql_connections: '70'\n    _profile: p2\n",
+            encoding="utf-8")
+        chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+        assert chain["resolved"]["mysql_connections"] == "70"
+        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "p2"
+
+    def test_platform_value_kept_when_tenant_file_is_silent(self, tmp_path):
+        (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
+        (tmp_path / "tx.yaml").write_text("tenants:\n  tx: {}\n", encoding="utf-8")
+        chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+        assert chain["resolved"]["mysql_connections"] == "60"
+        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "p1"
+
+    def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
+        (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
+        chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+        assert chain["resolved"]["mysql_connections"] == 80
+        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
+        warns = [ln for ln in capsys.readouterr().err.splitlines()
+                 if "tenants.tx" in ln]
+        assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns

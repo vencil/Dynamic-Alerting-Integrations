@@ -92,6 +92,13 @@ tenants:
 | Other `_`-prefixed files (`_profiles.yaml`, `_defaults-multidb.yaml`, …) | `profiles`, `tenants` | `defaults` / `state_filters` / `optional_overrides` ignored + WARN log (#1676) |
 | Tenant files (`db-a.yaml`) | Only `tenants` | Other blocks automatically ignored + WARN log |
 
+**A platform file's `tenants:` block (#1982)**: `tenants:` in a root `_`-prefixed file is the **platform's default for an existing tenant**, not a second copy of the tenant's config:
+
+- **The tenant wins key by key, whatever the file names**: the platform value is applied first and the tenant file's (non-`_` file's) same key overrides it; a key the tenant file does not write keeps the platform value and is never reset to a default. A tenant file named `TX.yaml` or `0tx.yaml` (sorting before `_`) gives the same result as `tx.yaml`. The only exception is a platform-only enforcement mechanism (such as `_routing_enforced`), which does not go through this layer.
+- **It cannot create a tenant**: a tenant that appears only in platform files, with no tenant file declaring it, is stripped from `/metrics` and from the routing generator, with a WARN naming the file and the tenant id. "The tenant exists" is decided as the walker decides it (a non-`_` file at any directory level declares it).
+- **Nested platform files are not read**: the `tenants:` block of a `_defaults.yaml` (or any `_` file) in a subdirectory is read by no plane; the exporter logs one named WARN (file + tenant ids) and still drops it.
+- ⚠️ The walker plane behind `/effective`, tenant-api and da-guard does not implement this layer yet (tracked in a separate issue): per-tenant values from a platform file currently reach `/metrics` and the routing generator only, and `/effective` does not show them.
+
 #### SHA-256 Hot-Reload
 
 Does not rely on file modification time (ModTime), but rather on **SHA-256 content hash**:
