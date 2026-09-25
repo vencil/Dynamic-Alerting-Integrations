@@ -212,9 +212,8 @@ _REFUSALS = [
     ("case-variant", {"DB-C.YAML": "tenants:\n  someone-else: {}\n"},
      ["init would write conf.d/db-c.yaml", "conf.d/DB-C.YAML",
       "differs only in case"]),
-    # init 讀不透的檔可能提及每一個要求的租戶，包括 init 自有檔已存在的
-    # db-a／db-b ⇒ 並存拒絕（不是 traceback）。
-    ("unreadable-beside-own", {"team.yaml": "tenants:\n  !!binary ZGItYw==: {}\n"},
+    # 具體提及（token）＋init 自有檔已存在 ⇒ 並存拒絕照舊。
+    ("concrete-beside-own", {"team.yaml": "tenants:\n  db-a: {}\n"},
      ["conf.d/db-a.yaml (a path init writes) already exists",
       "conf.d/team.yaml may also declare tenant db-a"]),
     # 第 2 輪 F4：只差大小寫的是**上層目錄**（`kustomize/` 之於 `Kustomize/`）。
@@ -244,6 +243,35 @@ def test_a_tree_init_cannot_safely_extend_is_refused(
     assert "init refused" in run.stderr
     for phrase in says:
         assert phrase in run.stderr, run.stderr
+
+
+def test_a_file_init_cannot_read_through_does_not_block_its_own_paths(
+        tmp_path):
+    """並存拒絕只在**具體**提及時觸發（為了不讓 init 造出新的重複，不是替客戶
+    驗證既有樹）。讀不透的檔（這裡是明確 tag）在自有檔已存在的租戶旁：init 照常
+    重寫自有檔、點名那個檔；沒有自有檔的要求租戶照舊跳過。"""
+    out = _brownfield(tmp_path)
+    conf = out / "conf.d"
+    own = conf / "db-a.yaml"
+    own.write_text(own.read_text(encoding="utf-8") + "\n# HAND-EDIT\n",
+                   encoding="utf-8")
+    theirs = _place(out, "team.yaml", "tenants:\n  !!binary ZGItYw==: {}\n")
+    before = theirs.read_bytes()
+
+    run = _run(out, RERUN_TENANTS)
+
+    assert run.returncode == 0, run.stderr[-800:]
+    assert "HAND-EDIT" not in own.read_text(encoding="utf-8")   # 重寫了
+    assert theirs.read_bytes() == before
+    for t in ("db-a", "db-b"):
+        assert (f"init cannot read conf.d/team.yaml through (it carries an "
+                f"explicit YAML tag); if it also declares {t}, it duplicates "
+                f"conf.d/{t}.yaml") in run.stderr, run.stderr
+    assert "da-tools guard defaults-impact" in run.stderr
+    assert "init cannot read conf.d/team.yaml through" in run.stdout
+    # db-c 沒有自有檔：(d) 照舊視為可能提及 ⇒ 跳過
+    assert "db-c may already be declared by conf.d/team.yaml" in run.stderr
+    assert not (conf / "db-c.yaml").exists()
 
 
 def test_the_clobber_refusal_does_not_claim_a_second_declaration(tmp_path):

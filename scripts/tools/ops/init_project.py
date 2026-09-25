@@ -3249,10 +3249,12 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 # write is never rewritten.
 #   * a tenant some OTHER file POSSIBLY mentions → skip it, say so, rc 0;
 #   * a root defaults carrier in another spelling → skip `_defaults.yaml`, same;
-#   * init's own path already exists while another file possibly mentions
-#     the same tenant, init would overwrite a file that mentions another
-#     requested tenant, or a path it would write has a case-only twin →
-#     refuse, rc 1, nothing written.
+#   * init's own path already exists while another file CONCRETELY mentions
+#     the same tenant (a key or token, not "cannot read it through"), init
+#     would overwrite a file that mentions another requested tenant, or a
+#     path it would write has a case-only twin → refuse, rc 1, nothing
+#     written. A file init cannot read through beside an existing own path
+#     is named, not refused (see `_plan_confd`).
 #
 # ⛔ init does NOT decide whether the exporter can read a file. Two rounds
 # tried — first a mirror of the exporter's decode, then a strict whitelist
@@ -3331,8 +3333,15 @@ def _tenant_keys_everywhere(text: str) -> set[str]:
     return keys
 
 
+class _ReadThroughFailed(Exception):
+    """(d): init cannot read this file through; it may mention anyone."""
+
+
 def _possible_mentions_unguarded(path: Path, requested: list[str]) -> set[str]:
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise _ReadThroughFailed(f'it cannot be read: {exc.strerror or exc}')
     texts = []
     for enc in _ENCODINGS:
         try:
@@ -3340,9 +3349,9 @@ def _possible_mentions_unguarded(path: Path, requested: list[str]) -> set[str]:
         except UnicodeDecodeError:
             continue
     if not texts:
-        return set(requested)                                   # (d)
+        raise _ReadThroughFailed('no text encoding decodes it')
     if any(_EXPLICIT_TAG_RE.search(t) for t in texts):
-        return set(requested)                                   # (d)
+        raise _ReadThroughFailed('it carries an explicit YAML tag')
     found: set[str] = set()
     for text in texts:
         found |= _tenant_keys_everywhere(text) & set(requested)   # (a)
@@ -3356,7 +3365,20 @@ def _possible_mentions_unguarded(path: Path, requested: list[str]) -> set[str]:
 
 
 def _possible_mentions(path: Path, requested: list[str]) -> set[str]:
-    """The requested tenants `path` could POSSIBLY declare (#1942, option 3).
+    """The requested tenants `path` could POSSIBLY declare (#1942, option 3);
+    `_mentions` with the (d) reason dropped."""
+    return _mentions(path, requested)[0]
+
+
+def _mentions(path: Path, requested: list[str]) -> tuple[set[str], str]:
+    """(the requested tenants `path` could POSSIBLY declare, why it is (d)).
+
+    The second element is '' for a CONCRETE answer — (a), (b) or (c) found
+    each tenant in the file — and the reason text when the answer is (d),
+    "every requested tenant, because init cannot read the file through".
+    The two are kept apart because they license different things: see the
+    coexistence rule in `_plan_confd`.
+
 
     The union of:
       (a) the keys of every `tenants:` mapping in every document PyYAML
@@ -3379,9 +3401,12 @@ def _possible_mentions(path: Path, requested: list[str]) -> set[str]:
     them must become "possibly mentions everything", never a traceback.
     """
     try:
-        return _possible_mentions_unguarded(path, requested)
-    except Exception:  # noqa: BLE001 — see docstring: any failure is (d)
-        return set(requested)
+        return _possible_mentions_unguarded(path, requested), ''
+    except _ReadThroughFailed as exc:
+        return set(requested), str(exc)
+    except Exception as exc:  # noqa: BLE001 — see docstring: any failure is (d)
+        return set(requested), f'judging it failed ({type(exc).__name__})'
+
 
 
 def _case_variants_along(out: Path, target: Path) -> list[tuple[str, str]]:
@@ -3454,6 +3479,10 @@ class _ConfdPlan(NamedTuple):
     possibly mentions. The parity matrix asserts it covers what the
     exporter reads."""
 
+    unverified: Optional[dict[str, list[tuple[str, str]]]] = None
+    """Tenant init DID (re)write at its own existing path although another
+    file (d)-possibly mentions it -> [(that file, why init cannot read it)]."""
+
     @property
     def write_defaults(self) -> bool:
         return not self.defaults_carriers
@@ -3492,6 +3521,7 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     root_defaults: list[Path] = []
     tenant_files: list[Path] = []
     mentions: dict[Path, set[str]] = {}
+    blanket: dict[Path, str] = {}          # (d) files -> why
     conflicts: list[_Conflict] = []
 
     def _rel(p: Path) -> str:
@@ -3503,18 +3533,32 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
                 root_defaults.append(p)
             continue
         tenant_files.append(p)
-        mentions[p] = _possible_mentions(p, requested)
+        mentions[p], why = _mentions(p, requested)
+        if why:
+            blanket[p] = why
 
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}
+    unverified: dict[str, list[tuple[str, str]]] = {}
     for t in requested:
         own = conf_dir / f'{t}.yaml'
         others = [p for p in tenant_files if p != own and t in mentions[p]]
+        concrete = [p for p in others if p not in blanket]
         if not others:
             generate.append(t)
-        elif own in mentions:
+        elif own in mentions and concrete:
             conflicts.append(_Conflict(
-                'duplicate', t, [_rel(own)] + [_rel(p) for p in others]))
+                'duplicate', t, [_rel(own)] + [_rel(p) for p in concrete]))
+        elif own in mentions:
+            # ⛔ Coexistence refuses only on a CONCRETE mention. Its purpose
+            # is that init never CREATES a duplicate — not that it validates
+            # the customer's tree. `own` already exists, so rewriting it adds
+            # no carrier: if a file init cannot read through (d) also
+            # declares t, that duplicate existed before this run. Refusing on
+            # (d) let one tagged or undecodable file block every re-run of
+            # every tenant that already has its init file. Named instead.
+            generate.append(t)
+            unverified[t] = [(_rel(p), blanket[p]) for p in others]
         else:
             skipped[t] = [_rel(p) for p in others]
     # ⛔ A requested tenant skipped BECAUSE of a file this run is about to
@@ -3538,7 +3582,8 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
             'defaults', '', [_rel(p) for p in own_defaults + other_defaults]))
 
     plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
-                      {_rel(p): sorted(ts) for p, ts in mentions.items()})
+                      {_rel(p): sorted(ts) for p, ts in mentions.items()},
+                      unverified)
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
@@ -3575,6 +3620,23 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
             f"read that file. Verify with `da-tools guard defaults-impact "
             f"--config-dir {conf_dir}` (it reads the tree the way the "
             f"exporter does; the file should be listed under Scanned files)")
+    return lines
+
+
+def _unverified_lines(plan: _ConfdPlan, is_zh: bool,
+                      conf_dir: str = 'conf.d') -> list[str]:
+    """One line per (d) file beside a tenant init rewrote at its own path."""
+    lines: list[str] = []
+    for t, pairs in (plan.unverified or {}).items():
+        for f, why in pairs:
+            lines.append(
+                f"無法讀透 {f}（{why}）；若它也宣告 {t}，會與 conf.d/{t}.yaml "
+                f"重複——請用 `da-tools guard defaults-impact --config-dir "
+                f"{conf_dir}` 確認"
+                if is_zh else
+                f"init cannot read {f} through ({why}); if it also declares "
+                f"{t}, it duplicates conf.d/{t}.yaml — check with `da-tools "
+                f"guard defaults-impact --config-dir {conf_dir}`")
     return lines
 
 
@@ -3622,6 +3684,8 @@ def _report_plan(plan: _ConfdPlan, config: dict, conf_dir: str) -> None:
             "init 不改寫非它產生的載體，上列檔案原封不動。" if is_zh else
             "init never rewrites a carrier it did not generate; the files "
             "above are left untouched."), file=sys.stderr)
+    for line in _unverified_lines(plan, is_zh, conf_dir):
+        print(f"NOTE: init_project: {line}", file=sys.stderr)
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"WARN: init_project: {line}", file=sys.stderr)
 
@@ -3963,6 +4027,9 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                       "left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
+    for line in _unverified_lines(plan, is_zh,
+                                  str(Path(output_dir) / 'conf.d')):
+        print(f"  ⚠️  {line}")
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"  ⚠️  {line}")
 
@@ -4681,6 +4748,9 @@ def _handle_dry_run(config: dict, output_dir: str,
                            "own files, left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
+    for line in _unverified_lines(plan, is_zh,
+                                  str(Path(output_dir) / 'conf.d')):
+        print(f"  ⚠️  {line}")
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"  ⚠️  {line}")
 
