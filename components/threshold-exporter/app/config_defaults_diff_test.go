@@ -340,7 +340,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenNoKeyChanged(t *testing.T) {
 	hashes := map[string]string{dp: "h-NEW"} // file hash moved (e.g. comment-only)
 
 	tenantYAML := []byte("tenants:\n  t1:\n    redis_connections: 50\n")
-	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes)
+	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes, nil, nil)
 	if got != "cosmetic" {
 		t.Errorf("expected cosmetic (no key actually changed), got %q", got)
 	}
@@ -357,7 +357,7 @@ func TestClassifyDefaultsNoOpEffect_ShadowedWhenTenantOverridesChangedKey(t *tes
 
 	// Tenant overrides mysql_connections → defaults change is shadowed.
 	tenantYAML := []byte("tenants:\n  t1:\n    mysql_connections: 999\n")
-	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes)
+	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes, nil, nil)
 	if got != "shadowed" {
 		t.Errorf("expected shadowed (tenant overrides mysql_connections), got %q", got)
 	}
@@ -373,7 +373,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenTenantSourceUnparseable(t *testi
 	hashes := map[string]string{dp: "h-NEW"}
 
 	tenantYAML := []byte("not: : valid: yaml: :\n")
-	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes)
+	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes, nil, nil)
 	if got != "cosmetic" {
 		t.Errorf("expected cosmetic (parse fallback), got %q", got)
 	}
@@ -391,7 +391,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenPriorParseMissing(t *testing.T) 
 	hashes := map[string]string{dp: "h-NEW"}
 
 	tenantYAML := []byte("tenants:\n  t1:\n    redis_connections: 50\n")
-	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes)
+	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes, nil, nil)
 	if got != "cosmetic" {
 		t.Errorf("expected cosmetic (cache miss fallback), got %q", got)
 	}
@@ -416,7 +416,7 @@ func TestClassifyDefaultsNoOpEffect_ShadowedAcrossMultipleChainEntries(t *testin
 	hashes := map[string]string{dp1: "h-NEW", dp2: "h-NEW"}
 
 	tenantYAML := []byte("tenants:\n  t1:\n    mysql_connections: 999\n    kafka_lag: 5000\n")
-	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes)
+	got := classifyDefaultsNoOpEffect(tenantYAML, "t1", chain, prior, now, hashes, priorHashes, nil, nil)
 	if got != "shadowed" {
 		t.Errorf("expected shadowed (tenant overrides both changed keys), got %q", got)
 	}

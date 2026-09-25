@@ -111,12 +111,52 @@ func defaultsPathLevel(path, root string) string {
 // to "unknown"; returns "" if no file in the chain actually changed
 // (caller should not enter the defaults-effect branch in that case).
 func widestChangedScope(chain []string, hashes, priorHashes map[string]string, root string) string {
+	return widestPathScope(hashChangedChainPaths(chain, hashes, priorHashes), root)
+}
+
+// hashChangedChainPaths returns the entries of `chain` whose hash moved
+// between the prior and current scan, in chain order.
+func hashChangedChainPaths(chain []string, hashes, priorHashes map[string]string) []string {
+	var changed []string
+	for _, p := range chain {
+		if hashes[p] != priorHashes[p] {
+			changed = append(changed, p)
+		}
+	}
+	return changed
+}
+
+// chainMembershipDelta returns the paths that left (in prev, not next) and
+// joined (in next, not prev) a tenant's defaults chain between two scans
+// (#1964), each in chain order.
+func chainMembershipDelta(prev, next []string) (removed, added []string) {
+	inPrev := make(map[string]bool, len(prev))
+	for _, p := range prev {
+		inPrev[p] = true
+	}
+	inNext := make(map[string]bool, len(next))
+	for _, p := range next {
+		inNext[p] = true
+	}
+	for _, p := range prev {
+		if !inNext[p] {
+			removed = append(removed, p)
+		}
+	}
+	for _, p := range next {
+		if !inPrev[p] {
+			added = append(added, p)
+		}
+	}
+	return removed, added
+}
+
+// widestPathScope returns the widest (smallest scopeRank) level among the
+// given defaults paths, or "" when paths is empty.
+func widestPathScope(paths []string, root string) string {
 	widest := ""
 	widestRank := 999
-	for _, p := range chain {
-		if hashes[p] == priorHashes[p] {
-			continue
-		}
+	for _, p := range paths {
 		lvl := defaultsPathLevel(p, root)
 		if r, ok := scopeRank[lvl]; ok && r < widestRank {
 			widestRank = r
@@ -272,7 +312,11 @@ func pathOverriddenIn(node any, segs []string) bool {
 // Logic:
 //
 //  1. Aggregate dot-path keys that actually changed across every
-//     defaults file in the tenant's chain whose file hash moved.
+//     defaults file in the tenant's chain whose file hash moved, plus
+//     (#1964) every key set by a file in `removed` (left the chain) or
+//     `added` (joined it); a same-directory removal+addition (carrier
+//     switch) is diffed pairwise instead. nil removed/added = no
+//     membership change.
 //  2. If no key actually changed → cosmetic (comment-only / reorder /
 //     whitespace edit; common during operator formatter runs).
 //  3. Else parse the tenant's source YAML overrides; if every changed
@@ -292,10 +336,18 @@ func classifyDefaultsNoOpEffect(
 	defaultsChain []string,
 	priorParsed, newParsed map[string]map[string]any,
 	hashes, priorHashes map[string]string,
+	removed, added []string,
 ) string {
 	var allChanged []string
+	// #1964: a file that joined the chain contributes its whole content
+	// (diffed against an empty map below), not its diff against whatever
+	// the same path held before it was selected — skip it here.
+	joined := make(map[string]bool, len(added))
+	for _, dp := range added {
+		joined[dp] = true
+	}
 	for _, dp := range defaultsChain {
-		if hashes[dp] == priorHashes[dp] {
+		if joined[dp] || hashes[dp] == priorHashes[dp] {
 			continue
 		}
 		prev := priorParsed[dp]
@@ -308,6 +360,41 @@ func classifyDefaultsNoOpEffect(
 			continue
 		}
 		allChanged = append(allChanged, changedDefaultsKeys(prev, next)...)
+	}
+	// #1964: chain-membership changes. A removal and an addition in the
+	// same directory are a carrier switch (a co-located `.yaml`/`.yml`
+	// pair; the chain holds at most one carrier per directory, so the
+	// pairing is one-to-one) and are diffed against each other — an
+	// identical-content switch changes no key. An unpaired file that left
+	// the chain withdraws every key it set (prior parse vs empty); an
+	// unpaired file that joined applies every key it sets (empty vs new
+	// parse). A missing parse on either side is skipped, the same cosmetic
+	// fallback as above.
+	addedByDir := make(map[string]string, len(added))
+	for _, dp := range added {
+		addedByDir[filepath.Dir(dp)] = dp
+	}
+	empty := map[string]any{}
+	for _, dp := range removed {
+		prev := priorParsed[dp]
+		if partner, ok := addedByDir[filepath.Dir(dp)]; ok {
+			delete(addedByDir, filepath.Dir(dp))
+			if next := newParsed[partner]; prev != nil && next != nil {
+				allChanged = append(allChanged, changedDefaultsKeys(prev, next)...)
+			}
+			continue
+		}
+		if prev != nil {
+			allChanged = append(allChanged, changedDefaultsKeys(prev, empty)...)
+		}
+	}
+	for _, dp := range added {
+		if _, unpaired := addedByDir[filepath.Dir(dp)]; !unpaired {
+			continue
+		}
+		if next := newParsed[dp]; next != nil {
+			allChanged = append(allChanged, changedDefaultsKeys(empty, next)...)
+		}
 	}
 	if len(allChanged) == 0 {
 		return "cosmetic"
