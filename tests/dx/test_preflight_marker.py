@@ -29,8 +29,7 @@ _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
 # TestGateScript invokes the require_preflight_pass.sh bash script as a
 # subprocess. Git Bash on Windows mangles `C:\path\file` argument
 # translation (similar to verify_release.sh), so the gate-script tests
-# can't run on Windows. Every other test in this module runs cross-platform;
-# this mark is the only thing that skips, and it is applied to one class.
+# can't run on Windows.
 _BASH_SCRIPT_SKIP = pytest.mark.skipif(
     sys.platform == "win32",
     reason="bash gate-script tests need POSIX path translation; "

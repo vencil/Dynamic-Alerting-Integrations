@@ -1,20 +1,5 @@
-"""Tests for pr_preflight.py orchestrator + uncovered helpers.
-
-Audit flagged the 7-check orchestration + exit-code aggregation as
-untested (38% coverage; sub-checks marker/msg-validator/pass-gate are
-covered separately by their own test files but the orchestrator itself
-isn't). This file fills the orchestrator-shaped gap.
-
-Covers:
-  - PreflightReport: has_failure / has_warning aggregation, print_summary
-  - validate_conventional_header: type/scope enum, length, format
-  - validate_commit_msg_body: post-header line-length + blank-line rule
-  - detect_commit_msg_bom: UTF-8 / UTF-16 LE/BE BOM detection + clean files
-  - _classify_ci_failures: A/B classification with mocked gh
-  - main() exit codes: --check-commit-msg / --check-pr-title fast paths,
-    --ci with passing/failing checks, --skip-hooks skips only the pre-commit
-    half of the hooks check (#1811)
-"""
+"""Tests for pr_preflight.py: the orchestrator `main()` and helpers without
+their own test file."""
 from __future__ import annotations
 
 import os
@@ -299,9 +284,7 @@ class TestMainOrchestrator:
 
         def _no_process(*a, **kw):
             raise AssertionError(
-                f"main() tried to start a process while its checks were stubbed: "
-                f"{a[:1]} — a step main() runs is not a check_* looked up at call "
-                "time, so it was not stubbed"
+                f"main() started a process with every check_* stubbed: {a} {kw}"
             )
 
         monkeypatch.setattr(_subprocess, "Popen", _no_process)
@@ -318,8 +301,6 @@ class TestMainOrchestrator:
         f = tmp_path / "msg"
         f.write_text("feat: ok\n", encoding="utf-8")
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
-        # Stub commitlint enum readers so check_commit_msg_file doesn't go
-        # through the full validation (we just want orchestrator dispatch).
         monkeypatch.setattr(pp, "check_commit_msg_file",
                             lambda path, repo_root: 0)
         cli_argv("pr_preflight.py", "--check-commit-msg", str(f))
@@ -348,12 +329,12 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py")
         assert pp.main() == want_rc
 
-    def test_a_process_started_outside_the_checks_fails_the_test(
+    def test_a_process_started_outside_the_checks_raises(
         self, monkeypatch, tmp_path, cli_argv
     ):
         """#1953 — a step of `main()` that is not a `check_*` is not stubbed.
 
-        Starting a process from it must raise, not run. The probe calls
+        Starting a process from it raises instead of running. The probe calls
         `Popen` itself: probing through `run()` would stay green with the
         tripwire moved up a layer.
         """
@@ -364,7 +345,7 @@ class TestMainOrchestrator:
             lambda self: _subprocess.Popen(["git", "--version"]),
         )
         cli_argv("pr_preflight.py")
-        with pytest.raises(AssertionError, match="tried to start a process"):
+        with pytest.raises(AssertionError, match="started a process"):
             pp.main()
 
     def test_a_stub_rejects_a_keyword_the_real_check_does_not_take(self, monkeypatch):
