@@ -35,13 +35,13 @@ assert len(_PY_FILES) >= 40, (
 
 
 # ── BOM 檢查的語料：全部 tracked `.py`，與上面的 `_PY_FILES` 分開 ──────────
-# ⛔ 分開是刻意的。`_PY_FILES` 是其餘六條規則的掃描面（`scripts/tools/`），動它
-# 等於一次改掉六條規則的範圍。而 BOM 的傷害面比那大得多：本規則訊息點名的
+# ⛔ 分開是刻意的。`_PY_FILES` 是本模組其餘規則的掃描面（`scripts/tools/`），動它
+# 等於一次改掉那些規則的範圍。而 BOM 的傷害面比那大得多：本規則訊息點名的
 # `subprocess-timeout-audit` 是 **FATAL** pre-commit hook，它的 `files:` 是
-# `^(scripts|components/da-tools|tests)/.*\.py$` ── 實測 606 個檔，其中 365 個
-# 落在 `scripts/tools/` 之外。只掃 `_PY_FILES` 等於守住它自己指的那道閘門的四成。
+# `^(scripts|components/da-tools|tests)/.*\.py$`，涵蓋 `scripts/tools/` 之外的
+# 大片檔案。只掃 `_PY_FILES` 守不住它自己點名的那道閘門。
 # ⚠️ 用 tracked 檔而不是 `os.walk`：untracked / gitignored 的檔不該讓 CI 紅。
-# ⚠️ 成本量過才擴的：讀 616 個檔的前 3 bytes 是 **0.05 秒**。
+# ⚠️ 成本量過才擴的：只讀每個檔的前 3 bytes。
 def _tracked_py():
     out = subprocess.run(
         ["git", "ls-files", "-z", "*.py"], cwd=REPO_ROOT, capture_output=True,
