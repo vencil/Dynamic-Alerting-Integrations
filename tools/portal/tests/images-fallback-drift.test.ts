@@ -6,8 +6,8 @@
  *      from docs/assets/platform-data.json (production path)
  *   2. baked-in inline mirror — offline / standalone fallback
  *
- * WHY THIS GATE EXISTS. The Deployment Profile Wizard emits these refs into a
- * values.yaml the customer copies out and applies. They lived as literals in
+ * WHY THIS GATE EXISTS. The Deployment Profile Wizard emits these refs into the
+ * per-chart values files (and notes) the customer copies out and applies. They lived as literals in
  * generators.js with no source of truth behind them and rotted to a v2.7.0-era
  * snapshot that survived every release: prom/prometheus v2.52.0 against a
  * shipped v3.13.1 (an entire MAJOR — and 2.x predates the Prometheus 3.0
@@ -119,53 +119,75 @@ describe('images offline fallback — drift gate vs platform-data.json', () => {
     // nothing ties either to the artifact a customer receives. Someone could
     // re-hardcode `prom/prometheus:v2.52.0` straight back into generators.js —
     // the exact regression this PR exists to undo — and every other test here
-    // would stay green. Rendering the real YAML is what closes that loop.
+    // would stay green. Rendering the real output is what closes that loop.
+    //
+    // Where each ref lands is decided by whether a chart in helm/ reads it:
+    //   - our own images → `image.repository` / `image.tag` of THAT chart's file
+    //   - Prometheus / Alertmanager / config-reloader → no chart here deploys
+    //     them, so they are named in the notes as the validated versions
+    //   - oauth2-proxy → pinned by the charts by tag + digest; a tag-only
+    //     override is the #1302 split-pin, so it must appear NOWHERE
     const { PLATFORM_IMAGES } = await import(MOD);
-    const { deployGenerateHelmValues } = await import(
+    const { deployGenerateHelmReleases } = await import(
       '../src/interactive/tools/deployment-wizard/utils/generators.js'
     );
-    const yaml: string = deployGenerateHelmValues({
+    const { releases, notes } = deployGenerateHelmReleases({
       tier: 'tier2',
       environment: 'production',
       tenantSize: 'medium',
       auth: 'github',
       packs: ['mariadb', 'redis'],
     });
+    const yamlOf = (chart: string) => releases.find((r: { chart: string }) => r.chart === chart).yaml as string;
+    const notesText = notes.map((n: { body: string }) => n.body).join('\n');
+    const CHART_OF: Record<string, string> = {
+      thresholdExporter: 'threshold-exporter', daPortal: 'da-portal', tenantApi: 'tenant-api',
+    };
+    const IN_NOTES = ['prometheus', 'alertmanager', 'configReloader'];
+    const NOWHERE = ['oauth2Proxy'];
+    // Every key must be routed somewhere: a new image key has to be placed deliberately.
+    expect(Object.keys(PLATFORM_IMAGES).sort()).toEqual(
+      [...Object.keys(CHART_OF), ...IN_NOTES, ...NOWHERE].sort(),
+    );
 
-    for (const [key, ref] of Object.entries(PLATFORM_IMAGES as Record<string, string>)) {
+    for (const [key, chart] of Object.entries(CHART_OF)) {
+      const ref = (PLATFORM_IMAGES as Record<string, string>)[key];
       const i = ref.lastIndexOf(':');
-      const repository = ref.slice(0, i);
-      const tag = ref.slice(i + 1);
-      expect(yaml, `${key} repository missing from rendered values.yaml`).toContain(repository);
-      expect(yaml, `${key} tag missing from rendered values.yaml`).toContain(tag);
+      const yaml = yamlOf(chart);
+      expect(yaml, `${key} repository missing from ${chart}`).toContain(`  repository: ${ref.slice(0, i)}\n`);
+      expect(yaml, `${key} tag missing from ${chart}`).toContain(`  tag: ${ref.slice(i + 1)}\n`);
       // Nothing may render blank — a stray `repository:` with no value is
       // valid YAML and silently unusable.
       expect(yaml).not.toContain('repository: \n');
       expect(yaml).not.toContain('tag: \n');
     }
-    // configReloader is emitted as one `image: <full ref>` line, not a
-    // repository/tag pair, so pin the whole ref for that one.
-    expect(yaml).toContain(`image: ${PLATFORM_IMAGES.configReloader}`);
+    for (const key of IN_NOTES) {
+      expect(notesText, `${key} missing from notes`).toContain((PLATFORM_IMAGES as Record<string, string>)[key]);
+    }
+    const allYaml = releases.map((r: { yaml: string }) => r.yaml).join('\n');
+    const oauthRepo = PLATFORM_IMAGES.oauth2Proxy.slice(0, PLATFORM_IMAGES.oauth2Proxy.lastIndexOf(':'));
+    expect(allYaml).not.toContain(oauthRepo);
   });
 
   it('never re-emits the refs this PR removed', async () => {
     // Regression pin on the concrete v2.7.0-era snapshot, including the ref
     // that does not exist on Docker Hub at all (missing quay.io/ prefix) and
     // the component that was replaced outright in #1251.
-    const { deployGenerateHelmValues } = await import(
+    const { deployGenerateHelmReleases } = await import(
       '../src/interactive/tools/deployment-wizard/utils/generators.js'
     );
-    const yaml: string = deployGenerateHelmValues({
+    const { releases, notes } = deployGenerateHelmReleases({
       tier: 'tier2', environment: 'production', tenantSize: 'medium',
       auth: 'github', packs: ['mariadb'],
     });
+    const everything = [...releases.map((r: { yaml: string }) => r.yaml), ...notes.map((n: { body: string }) => n.body)].join('\n');
     for (const dead of [
       'prom/prometheus:v2.52.0',
       'prom/alertmanager:v0.27.0',
       'jimmidyson/configmap-reload',
       'oauth2-proxy/oauth2-proxy:v7.6.0',
     ]) {
-      expect(yaml, `${dead} came back`).not.toContain(dead);
+      expect(everything, `${dead} came back`).not.toContain(dead);
     }
   });
 

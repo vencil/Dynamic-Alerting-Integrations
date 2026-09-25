@@ -23,7 +23,7 @@ dependencies: [
 import React, { useState, useMemo } from 'react';
 // TRK-230e: ESM imports.
 import { DEPLOY_STEPS as STEPS, DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS as OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS as RULE_PACKS } from './deployment-wizard/fixtures/wizard-defaults.js';
-import { deployGenerateHelmValues as generateHelmValues } from './deployment-wizard/utils/generators.js';
+import { deployGenerateHelmReleases as generateHelmReleases } from './deployment-wizard/utils/generators.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
@@ -39,7 +39,7 @@ export default function DeploymentWizard() {
     packs: [],
   });
   const [showOutput, setShowOutput] = useState(false);
-  const { copied, copy, reset } = useCopyToClipboard();
+  const { copied, copiedKey, copy, reset } = useCopyToClipboard();
   const [packWarning, setPackWarning] = useState(false);
 
   const steps = STEPS.map((s, i) => {
@@ -76,8 +76,9 @@ export default function DeploymentWizard() {
   };
 
   /* ── Copy to clipboard ── */
-  const helmValues = useMemo(() => generateHelmValues(config), [config]);
-  const handleCopy = () => copy(helmValues);
+  // One values file per chart (threshold-exporter; + da-portal / tenant-api
+  // for Tier 2), each copied on its own — they go to different `helm -f`.
+  const output = useMemo(() => generateHelmReleases(config), [config]);
 
   /* ── Summary before output ── */
   const summary = useMemo(() => ({
@@ -229,7 +230,7 @@ export default function DeploymentWizard() {
                             <div className="font-medium text-[color:var(--da-color-fg)]">{size.label}</div>
                             <div className="text-xs text-[color:var(--da-color-muted)] mt-2 space-y-1">
                               <div>{t('複製數', 'Replicas')}: exporter={size.replicas.exporter}, prometheus={size.replicas.prometheus}, alertmanager={size.replicas.alertmanager}</div>
-                              <div>{t('保留期', 'Retention')}: {size.retention} | {t('基數上限', 'Cardinality')}: {size.cardinality}</div>
+                              <div>{t('Prometheus 保留期', 'Prometheus retention')}: {size.retention}</div>
                             </div>
                           </div>
                           {config.tenantSize === size.id && <span className="text-[color:var(--da-color-accent)]"><span aria-hidden="true">✓</span></span>}
@@ -360,7 +361,7 @@ export default function DeploymentWizard() {
                     </div>
                   </div>
                   <p className="text-sm text-[color:var(--da-color-muted)] mt-6">
-                    {t('點擊「產生輸出」以查看完整的 Helm values。你可以複製內容到你的 values.yaml 檔案。', 'Click "Generate Output" below to see your complete Helm values. You can then copy it to your values.yaml file.')}
+                    {t('點擊「產生輸出」以查看每個 chart 各自的 Helm values 與安裝指令，以及不屬於 Helm 的設定該去哪裡改。', 'Click "Generate Output" below to see the Helm values and install command for each chart, plus where the settings that are not Helm values live.')}
                   </p>
                 </div>
               )}
@@ -398,28 +399,45 @@ export default function DeploymentWizard() {
               </button>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-[color:var(--da-color-surface-border)] overflow-hidden mb-6">
-              {/* ── Code display ── */}
-              <div className="bg-slate-900 text-slate-100 p-6 font-mono text-sm overflow-x-auto max-h-96">
-                <pre className="whitespace-pre-wrap break-words">{helmValues}</pre>
+            {/* ── One block per chart: each goes to its own `helm -f` ── */}
+            {output.releases.map(rel => (
+              <div key={rel.chart} className="bg-white rounded-xl shadow-sm border border-[color:var(--da-color-surface-border)] overflow-hidden mb-6">
+                <div className="px-6 py-3 border-b border-[color:var(--da-color-surface-border)] flex items-center justify-between">
+                  <h3 className="font-semibold text-[color:var(--da-color-fg)]">
+                    {rel.file} <span className="text-xs font-normal text-[color:var(--da-color-muted)]">({t('chart', 'chart')}: {rel.chart})</span>
+                  </h3>
+                  <button
+                    onClick={() => copy(rel.yaml, rel.chart)}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                      copied && copiedKey === rel.chart
+                        ? 'bg-green-500 text-white'
+                        : 'bg-[color:var(--da-color-accent)] text-white hover:bg-[color:var(--da-color-accent-hover)]'
+                    }`}
+                  >
+                    {copied && copiedKey === rel.chart ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製', 'Copy')}
+                  </button>
+                </div>
+                <div className="bg-slate-900 text-slate-100 p-6 font-mono text-sm overflow-x-auto max-h-96">
+                  <pre className="whitespace-pre-wrap break-words">{rel.yaml}</pre>
+                </div>
+                <div className="bg-[color:var(--da-color-surface-hover)] border-t border-[color:var(--da-color-surface-border)] px-6 py-3">
+                  <p className="text-xs text-[color:var(--da-color-muted)] mb-1">{t('存成上方檔名後執行：', 'Save as the file name above, then run:')}</p>
+                  <code className="text-xs break-all text-[color:var(--da-color-fg)]">{rel.install}</code>
+                </div>
               </div>
+            ))}
 
-              {/* ── Copy button ── */}
-              <div className="bg-[color:var(--da-color-surface-hover)] border-t border-[color:var(--da-color-surface-border)] p-4 flex items-center justify-between">
-                <p className="text-xs text-[color:var(--da-color-muted)]">
-                  {t('複製下方內容到你的 values.yaml 檔案', 'Copy the above content to your values.yaml file')}
-                </p>
-                <button
-                  onClick={handleCopy}
-                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                    copied
-                      ? 'bg-green-500 text-white'
-                      : 'bg-[color:var(--da-color-accent)] text-white hover:bg-[color:var(--da-color-accent-hover)]'
-                  }`}
-                >
-                  {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製', 'Copy')}
-                </button>
-              </div>
+            {/* ── Choices that are NOT Helm values: say where they live instead of emitting a key the chart ignores ── */}
+            <div className="bg-white rounded-xl shadow-sm border border-[color:var(--da-color-surface-border)] p-6 mb-6">
+              <h3 className="font-semibold text-[color:var(--da-color-fg)] mb-4">{t('不在上面 values 裡的設定', 'Settings that are not in the values above')}</h3>
+              <ul className="text-sm text-[color:var(--da-color-fg)] space-y-3">
+                {output.notes.map(note => (
+                  <li key={note.id}>
+                    <div className="font-medium">{note.title}</div>
+                    <div className="text-[color:var(--da-color-muted)]">{note.body}</div>
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {/* ── Next steps ── */}
@@ -429,7 +447,7 @@ export default function DeploymentWizard() {
                 <ol className="text-sm text-[color:var(--da-color-fg)] space-y-2">
                   <li className="flex gap-3">
                     <span className="font-bold text-[color:var(--da-color-accent)]">1.</span>
-                    <span>{t('複製上方 values 到你的 values.yaml 或 Helm chart 目錄', 'Copy the values above to your values.yaml or Helm chart directory')}</span>
+                    <span>{t('把每個區塊存成它標示的檔名（每個 chart 一份，不要合併）', 'Save each block under the file name shown on it (one file per chart — do not merge them)')}</span>
                   </li>
                   <li className="flex gap-3">
                     <span className="font-bold text-[color:var(--da-color-accent)]">2.</span>
@@ -441,7 +459,7 @@ export default function DeploymentWizard() {
                   </li>
                   <li className="flex gap-3">
                     <span className="font-bold text-[color:var(--da-color-accent)]">4.</span>
-                    <span>{t('使用 Helm 部署：helm install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter -f values.yaml -n monitoring', 'Deploy with Helm: helm install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter -f values.yaml -n monitoring')}</span>
+                    <span>{t('依每個區塊下方的指令執行 helm upgrade --install', 'Run the helm upgrade --install command shown under each block')}</span>
                   </li>
                 </ol>
               </div>

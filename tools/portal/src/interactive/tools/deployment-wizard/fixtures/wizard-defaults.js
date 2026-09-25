@@ -39,7 +39,7 @@ const DEPLOY_TIERS = [
     desc: t('純 GitOps：YAML + da-tools CLI + Helm values', 'Pure GitOps: YAML + da-tools CLI + Helm values'),
     features: [
       t('threshold-exporter × 2 (HA)', 'threshold-exporter × 2 (HA)'),
-      t('Prometheus + Alertmanager (Helm)', 'Prometheus + Alertmanager (Helm)'),
+      t('Prometheus + Alertmanager（自備，例如 kube-prometheus-stack）', 'Prometheus + Alertmanager (bring your own, e.g. kube-prometheus-stack)'),
       t('ConfigMap 管理告警規則', 'ConfigMap for alert rules'),
       t('無 Portal / API', 'No Portal / API'),
     ],
@@ -89,7 +89,6 @@ const DEPLOY_TENANT_SIZES = [
     icon: '1️⃣',
     replicas: { exporter: 1, prometheus: 1, alertmanager: 1 },
     retention: '7d',
-    cardinality: 500,
   },
   {
     id: 'medium',
@@ -97,7 +96,6 @@ const DEPLOY_TENANT_SIZES = [
     icon: '📊',
     replicas: { exporter: 2, prometheus: 2, alertmanager: 3 },
     retention: '14d',
-    cardinality: 2000,
   },
   {
     id: 'large',
@@ -105,7 +103,6 @@ const DEPLOY_TENANT_SIZES = [
     icon: '📈',
     replicas: { exporter: 3, prometheus: 3, alertmanager: 3 },
     retention: '30d',
-    cardinality: 5000,
   },
 ];
 

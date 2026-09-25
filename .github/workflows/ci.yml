@@ -388,6 +388,13 @@ jobs:
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
+              # The Deployment Profile Wizard's Vitest resolves every emitted
+              # values key against the target chart's templates (and lists
+              # helm/ to prove each target chart exists), so a chart-only PR
+              # that stops reading a key the wizard emits must not skip it.
+              - "helm/**"
+              # Same test checks each Rule Pack note names a shipped ConfigMap.
+              - "k8s/03-monitoring/configmap-rules-*.yaml"
               # ⛔ Same class as `requirements/**` in `python` above, found by
               # the same mechanical guard: this leg RUNS this script as its
               # bundle-size gate, and no other job executes it against the real

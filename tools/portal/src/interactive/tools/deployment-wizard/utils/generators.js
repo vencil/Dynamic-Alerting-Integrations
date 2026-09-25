@@ -1,18 +1,23 @@
 ---
-title: "Deployment Profile Wizard — Helm values generator"
+title: "Deployment Profile Wizard — per-chart Helm values generator"
 purpose: |
-  Single-function generator that emits a fully-rendered Helm values
-  YAML for the chosen tier + environment + tenant size + auth + Rule
-  Pack selection. Output is ready to copy-paste into the user's
-  values.yaml.
+  Emits one Helm values file PER CHART THIS REPO SHIPS (threshold-exporter;
+  plus da-portal + tenant-api for Tier 2), each with its own install command,
+  and a list of notes for the choices that are NOT Helm values.
 
-  Pre-PR-portal-10 lived inline in deployment-wizard.jsx as the
-  single largest helper (~290 LOC of YAML template). Splitting drops
-  it into the sibling subdirectory matching operator-setup-wizard
-  PR-portal-4 pattern.
+  ⛔ Every key emitted here must be one the target chart's templates read.
+  deployment-wizard-generators.test.ts resolves each emitted leaf against the
+  chart's `.Values.*` references and fails on any key the chart ignores. The
+  previous generator emitted an umbrella-chart shape (`thresholdExporter:`,
+  `prometheus:`, `alertmanager:`, `platform:` …) that no chart in helm/ has:
+  under its own `helm install threshold-exporter -f values.yaml` instruction
+  not one of its leaves was read, including three features that are not
+  Helm values at all (`configValidation`, `cardinalityGuard`, `tripleState`).
+  Those are explained as notes now — see deployGenerateHelmReleases().notes.
 
   Public API:
-    deployGenerateHelmValues(config)   build full Helm values YAML
+    deployGenerateHelmReleases(config)
+      → { releases: [{ chart, namespace, file, install, yaml }], notes: [{ id, title, body }] }
 
   Data deps (DEPLOY_TIERS / DEPLOY_ENVIRONMENTS / DEPLOY_TENANT_SIZES) are
   ESM-imported from ../fixtures/wizard-defaults.js — TRK-230z Wave 2 retired
@@ -25,295 +30,187 @@ import { DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENA
 // rotted to a v2.7.0-era snapshot, one of them to a ref that does not exist.
 import { PLATFORM_IMAGES, imageRepository, imageTag } from '../../_common/data/images.js';
 
-function deployGenerateHelmValues(config) {
-  const { tier, environment, tenantSize, auth, packs } = config;
-  const size = TENANT_SIZES.find(s => s.id === tenantSize);
-  const isTier2 = tier === 'tier2';
+const t = (zh, en) => (window.__t || ((_zh, e) => e))(zh, en);
 
-  let yaml = `# Generated Helm values for ${TIERS.find(t => t.id === tier)?.name}
-# Environment: ${ENVIRONMENTS.find(e => e.id === environment)?.label}
-# Tenant count: ${size?.label}
+const CHART_REPO = 'oci://ghcr.io/vencil/charts';
+
+// Per-environment container resources, keyed local / staging / production.
+const pick = (environment, local, staging, production) =>
+  environment === 'local' ? local : environment === 'staging' ? staging : production;
+
+function header(chart, config) {
+  const { tier, environment, tenantSize } = config;
+  return `# Helm values for chart: ${chart}
+# Profile: ${TIERS.find(x => x.id === tier)?.name} / ${ENVIRONMENTS.find(e => e.id === environment)?.label} / ${TENANT_SIZES.find(s => s.id === tenantSize)?.label}
 # Generated: ${new Date().toISOString().split('T')[0]}
-
-# ────────────────────────────────────────────────────────────────────
-# threshold-exporter Configuration
-# ────────────────────────────────────────────────────────────────────
-
-thresholdExporter:
-  replicaCount: ${size?.replicas.exporter || 2}
-  image:
-    repository: ${imageRepository('thresholdExporter')}
-    tag: ${imageTag('thresholdExporter')}
-    pullPolicy: IfNotPresent
-
-  resources:
-    requests:
-      cpu: ${environment === 'local' ? '100m' : environment === 'staging' ? '250m' : '500m'}
-      memory: ${environment === 'local' ? '128Mi' : environment === 'staging' ? '256Mi' : '512Mi'}
-    limits:
-      cpu: ${environment === 'local' ? '200m' : environment === 'staging' ? '500m' : '1000m'}
-      memory: ${environment === 'local' ? '256Mi' : environment === 'staging' ? '512Mi' : '1Gi'}
-
-  # Hot-reload SHA-256 validation
-  configValidation:
-    enabled: true
-    sha256: "" # Set after generating config
-
-  # Cardinality guard: per-tenant max metrics
-  cardinalityGuard:
-    enabled: true
-    maxPerTenant: ${size?.cardinality || 2000}
-
-  # Three-state operating modes: normal / silent / maintenance
-  tripleState:
-    enabled: true
-    defaultMode: normal
-
-prometheus:
-  replicaCount: ${size?.replicas.prometheus || 2}
-  image:
-    repository: ${imageRepository('prometheus')}
-    tag: ${imageTag('prometheus')}
-
-  resources:
-    requests:
-      cpu: ${environment === 'local' ? '250m' : environment === 'staging' ? '500m' : '1000m'}
-      memory: ${environment === 'local' ? '512Mi' : environment === 'staging' ? '1Gi' : '2Gi'}
-    limits:
-      cpu: ${environment === 'local' ? '500m' : environment === 'staging' ? '1000m' : '2000m'}
-      memory: ${environment === 'local' ? '1Gi' : environment === 'staging' ? '2Gi' : '4Gi'}
-
-  # Data retention based on tenant size
-  retention: "${size?.retention || '14d'}"
-
-  # Rule packs from ConfigMap + Projected Volume
-  ruleConfigMaps:
-    - name: platform-rules
-      key: rules.yaml
-    ${packs.length > 0 ? `# Auto-mounted rule packs via Projected Volume:\n    # ${packs.map(p => `- name: rules-${p}`).join('\n    # ')}` : ''}
-
-  # ServiceMonitor for threshold-exporter
-  serviceMonitor:
-    enabled: true
-    interval: 30s
-    scrapeTimeout: 10s
-
-alertmanager:
-  replicaCount: ${size?.replicas.alertmanager || 3}
-  image:
-    repository: ${imageRepository('alertmanager')}
-    tag: ${imageTag('alertmanager')}
-
-  resources:
-    requests:
-      cpu: ${environment === 'local' ? '100m' : environment === 'staging' ? '250m' : '500m'}
-      memory: ${environment === 'local' ? '128Mi' : environment === 'staging' ? '256Mi' : '512Mi'}
-    limits:
-      cpu: ${environment === 'local' ? '200m' : environment === 'staging' ? '500m' : '1000m'}
-      memory: ${environment === 'local' ? '256Mi' : environment === 'staging' ? '512Mi' : '1Gi'}
-
-  # Dynamic route generation + config reload sidecar
-  configReload:
-    enabled: true
-    image: ${PLATFORM_IMAGES.configReloader}
-
-  # Cluster mode for HA
-  clustering:
-    enabled: ${environment !== 'local' ? 'true' : 'false'}
-    peers:
-      enabled: ${environment !== 'local' ? 'true' : 'false'}
-
-# ────────────────────────────────────────────────────────────────────
-# Platform Common Settings
-# ────────────────────────────────────────────────────────────────────
-
-platform:
-  # Environment label for metric routing
-  environment: ${environment}
-
-  # Namespace isolation
-  namespaces:
-    monitoring: monitoring
-    # Add tenant namespaces as needed
-
-  # Logging level
-  logLevel: ${environment === 'production' ? 'warn' : 'info'}
-
-  # Bilingual support (zh/en annotations)
-  i18n:
-    enabled: true
-    defaultLanguage: en
-
-# ────────────────────────────────────────────────────────────────────
-# Tier 2: Portal + API Configuration
-# ────────────────────────────────────────────────────────────────────
-${isTier2 ? `
-daPortal:
-  enabled: true
-  replicaCount: ${environment === 'local' ? 1 : size?.replicas.exporter || 2}
-  image:
-    repository: ${imageRepository('daPortal')}
-    tag: ${imageTag('daPortal')}
-
-  resources:
-    requests:
-      cpu: ${environment === 'local' ? '100m' : '250m'}
-      memory: ${environment === 'local' ? '256Mi' : '512Mi'}
-    limits:
-      cpu: ${environment === 'local' ? '200m' : '500m'}
-      memory: ${environment === 'local' ? '512Mi' : '1Gi'}
-
-  # Portal ingress
-  ingress:
-    enabled: true
-    className: nginx
-    hosts:
-      - host: da-portal.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-
-tenantAPI:
-  enabled: true
-  replicaCount: ${environment === 'local' ? 1 : 2}
-  image:
-    repository: ${imageRepository('tenantApi')}
-    tag: ${imageTag('tenantApi')}
-
-  resources:
-    requests:
-      cpu: ${environment === 'local' ? '100m' : '250m'}
-      memory: ${environment === 'local' ? '128Mi' : '256Mi'}
-    limits:
-      cpu: ${environment === 'local' ? '200m' : '500m'}
-      memory: ${environment === 'local' ? '256Mi' : '512Mi'}
-
-  # RBAC hot-reload via atomic.Value
-  rbac:
-    enabled: true
-    cacheRefreshInterval: 30s
-
-  # Tenant API ingress
-  ingress:
-    enabled: true
-    className: nginx
-    hosts:
-      - host: api.dynamic-alerting.example.com
-        paths:
-          - path: /v1
-            pathType: Prefix
-
-oauth2Proxy:
-  enabled: true
-  replicaCount: ${environment === 'local' ? 1 : 2}
-  image:
-    repository: ${imageRepository('oauth2Proxy')}
-    tag: ${imageTag('oauth2Proxy')}
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 100m
-      memory: 128Mi
-
-  # OAuth2 provider configuration
-  config:
-    provider: "${auth || 'oidc'}"
-    ${auth === 'github' ? `oauth_url: "https://github.com/login/oauth/authorize"
-    token_url: "https://github.com/login/oauth/access_token"
-    user_info_url: "https://api.github.com/user"
-    scopes: ["user:email", "read:org"]` : auth === 'google' ? `oauth_url: "https://accounts.google.com/o/oauth2/v2/auth"
-    token_url: "https://oauth2.googleapis.com/token"
-    user_info_url: "https://www.googleapis.com/oauth2/v2/userinfo"
-    scopes: ["openid", "email", "profile"]` : auth === 'gitlab' ? `oauth_url: "https://gitlab.com/oauth/authorize"
-    token_url: "https://gitlab.com/oauth/token"
-    user_info_url: "https://gitlab.com/api/v4/user"
-    scopes: ["openid", "profile", "email"]` : `oauth_url: "https://your-keycloak.com/auth/realms/master/protocol/openid-connect/auth"
-    token_url: "https://your-keycloak.com/auth/realms/master/protocol/openid-connect/token"
-    user_info_url: "https://your-keycloak.com/auth/realms/master/protocol/openid-connect/userinfo"
-    scopes: ["openid", "profile", "email"]`}
-    client_id: "" # Set in secrets
-    client_secret: "" # Set in secrets
-
-  # Cookie configuration for session persistence
-  cookie:
-    domain: example.com
-    secure: true
-    httponly: true
-    samesite: Lax
-` : `
-# Tier 1: Portal and API disabled
-daPortal:
-  enabled: false
-
-tenantAPI:
-  enabled: false
-
-oauth2Proxy:
-  enabled: false
-`}
-
-# ────────────────────────────────────────────────────────────────────
-# Networking & Storage
-# ────────────────────────────────────────────────────────────────────
-
-persistence:
-  # Prometheus TSDB storage
-  prometheus:
-    enabled: true
-    storageClass: standard
-    size: ${environment === 'local' ? '5Gi' : environment === 'staging' ? '20Gi' : '100Gi'}
-
-  # Alertmanager state
-  alertmanager:
-    enabled: true
-    storageClass: standard
-    size: ${environment === 'local' ? '1Gi' : '5Gi'}
-
-networkPolicy:
-  enabled: ${environment === 'production' ? 'true' : 'false'}
-  ingressNamespaces:
-    - monitoring
-
-# ────────────────────────────────────────────────────────────────────
-# Observability & Debugging
-# ────────────────────────────────────────────────────────────────────
-
-monitoring:
-  # Prometheus scrape config for self-monitoring
-  prometheus:
-    enabled: true
-    interval: 60s
-
-  # Log aggregation hints
-  logging:
-    level: ${environment === 'production' ? 'warn' : 'info'}
-    format: json
-
-# ────────────────────────────────────────────────────────────────────
-# Security
-# ────────────────────────────────────────────────────────────────────
-
-rbac:
-  create: true
-
-serviceAccount:
-  create: true
-  name: threshold-exporter
-
-podSecurityPolicy:
-  enabled: ${environment === 'production' ? 'true' : 'false'}
-
-# Secrets for OAuth2 (if Tier 2)
-secrets:
-  ${isTier2 ? `oauth2:
-    clientId: "" # Fill from secrets manager
-    clientSecret: "" # Fill from secrets manager
-  ` : ''}# Add any additional secrets here
+# Every key below is read by this chart's templates; anything not listed keeps the chart default.
 `;
-  return yaml;
 }
 
-export { deployGenerateHelmValues };
+function imageBlock(key) {
+  return `image:
+  repository: ${imageRepository(key)}
+  tag: ${imageTag(key)}
+  pullPolicy: IfNotPresent`;
+}
+
+function thresholdExporterValues(config, size) {
+  const { environment } = config;
+  return `${header('threshold-exporter', config)}
+replicaCount: ${size?.replicas.exporter || 2}
+
+${imageBlock('thresholdExporter')}
+
+resources:
+  requests:
+    cpu: ${pick(environment, '50m', '100m', '250m')}
+    memory: ${pick(environment, '64Mi', '128Mi', '256Mi')}
+  limits:
+    cpu: ${pick(environment, '200m', '500m', '1000m')}
+    memory: ${pick(environment, '128Mi', '256Mi', '512Mi')}
+`;
+}
+
+function oauthProviderLines(auth) {
+  // oidcIssuerUrl is only read (via `with`) when non-empty; only OIDC needs it.
+  return auth === 'oidc'
+    ? `  provider: oidc
+  oidcIssuerUrl: "https://your-idp.example.com/realms/your-realm"  # replace`
+    : `  provider: ${auth || 'github'}`;
+}
+
+function daPortalValues(config) {
+  const { environment, auth } = config;
+  return `${header('da-portal', config)}
+replicaCount: ${pick(environment, 1, 2, 3)}
+
+${imageBlock('daPortal')}
+
+oauth2Proxy:
+  enabled: true
+${oauthProviderLines(auth)}
+  redirectUrl: "https://da-portal.example.com/oauth2/callback"  # replace with your host
+  cookieSecure: ${environment === 'local' ? 'false' : 'true'}
+  # Production: create the Secret yourself (client-id / client-secret / cookie-secret)
+  createSecret: ${environment === 'production' ? 'false' : 'true'}
+
+resources:
+  nginx:
+    requests:
+      cpu: ${pick(environment, '30m', '50m', '100m')}
+      memory: ${pick(environment, '64Mi', '64Mi', '128Mi')}
+    limits:
+      cpu: ${pick(environment, '100m', '200m', '500m')}
+      memory: ${pick(environment, '128Mi', '128Mi', '256Mi')}
+`;
+}
+
+function tenantApiValues(config) {
+  const { environment, auth } = config;
+  return `${header('tenant-api', config)}
+replicaCount: ${pick(environment, 1, 2, 2)}
+
+${imageBlock('tenantApi')}
+
+oauth2Proxy:
+  enabled: true
+${oauthProviderLines(auth)}
+  redirectUrl: "https://tenant-api.example.com/oauth2/callback"  # replace with your host
+  cookieSecure: ${environment === 'local' ? 'false' : 'true'}
+  createSecret: ${environment === 'production' ? 'false' : 'true'}
+
+resources:
+  tenantApi:
+    requests:
+      cpu: ${pick(environment, '50m', '100m', '250m')}
+      memory: ${pick(environment, '64Mi', '128Mi', '256Mi')}
+    limits:
+      cpu: ${pick(environment, '200m', '500m', '1000m')}
+      memory: ${pick(environment, '128Mi', '256Mi', '512Mi')}
+`;
+}
+
+function release(chart, namespace, yaml) {
+  const file = `values-${chart}.yaml`;
+  return {
+    chart,
+    namespace,
+    file,
+    install: `helm upgrade --install ${chart} ${CHART_REPO}/${chart} -n ${namespace} --create-namespace -f ${file}`,
+    yaml,
+  };
+}
+
+function deployNotes(config, size) {
+  const { tier, packs } = config;
+  const notes = [
+    {
+      id: 'prometheus-alertmanager',
+      title: t('Prometheus / Alertmanager 不是這些 chart 部署的', 'Prometheus / Alertmanager are not deployed by these charts'),
+      body: t(
+        `請用你既有的 Prometheus 堆疊（例如 kube-prometheus-stack）。此規模建議：Prometheus ×${size?.replicas.prometheus}、保留 ${size?.retention}；Alertmanager ×${size?.replicas.alertmanager}。平台驗證過的版本：${PLATFORM_IMAGES.prometheus}、${PLATFORM_IMAGES.alertmanager}、${PLATFORM_IMAGES.configReloader}。`,
+        `Use your existing Prometheus stack (e.g. kube-prometheus-stack). Suggested for this size: Prometheus ×${size?.replicas.prometheus}, retention ${size?.retention}; Alertmanager ×${size?.replicas.alertmanager}. Versions the platform is validated against: ${PLATFORM_IMAGES.prometheus}, ${PLATFORM_IMAGES.alertmanager}, ${PLATFORM_IMAGES.configReloader}.`,
+      ),
+    },
+    {
+      id: 'rule-packs',
+      title: t('Rule Pack 不是 Helm value', 'Rule Packs are not a Helm value'),
+      body: packs.length > 0
+        ? t(
+          `你選的 Rule Pack 以 ConfigMap 形式出貨，需掛進你的 Prometheus：${packs.map(p => `configmap-rules-${p}.yaml`).join('、')}（位於 k8s/03-monitoring/）。`,
+          `The Rule Packs you picked ship as ConfigMaps that your Prometheus must mount: ${packs.map(p => `configmap-rules-${p}.yaml`).join(', ')} (in k8s/03-monitoring/).`,
+        )
+        : t('未選 Rule Pack。Rule Pack 以 ConfigMap 形式出貨（k8s/03-monitoring/configmap-rules-*.yaml），需掛進你的 Prometheus。',
+          'No Rule Pack selected. Rule Packs ship as ConfigMaps (k8s/03-monitoring/configmap-rules-*.yaml) that your Prometheus must mount.'),
+    },
+    {
+      id: 'silent-mode',
+      title: t('靜默 / 維護模式是租戶設定，不是 Helm value', 'Silent / maintenance mode is tenant config, not a Helm value'),
+      body: t(
+        '三態模式逐租戶設定：在 conf.d 的租戶檔寫 `_silent_mode`（可帶 `expires`）或 `_state_maintenance: enable`。chart 沒有平台層級的「預設模式」開關。',
+        'The three-state mode is per tenant: set `_silent_mode` (optionally with `expires`) or `_state_maintenance: enable` in the tenant\'s conf.d file. The chart has no platform-wide "default mode" switch.',
+      ),
+    },
+    {
+      id: 'cardinality',
+      title: t('每租戶指標上限不可經 Helm 設定', 'The per-tenant metric cap is not configurable through Helm'),
+      body: t(
+        'chart 以 -config-dir 模式執行，此模式下 `max_metrics_per_tenant` 不生效，上限固定為內建的 500（見 ADR-017）。超限時 `da_tenant_metrics_over_limit` 會 > 0。',
+        'The chart runs the exporter in -config-dir mode, where `max_metrics_per_tenant` does not take effect; the cap is the built-in 500 (see ADR-017). When a tenant exceeds it, `da_tenant_metrics_over_limit` goes above 0.',
+      ),
+    },
+    {
+      id: 'hot-reload',
+      title: t('SHA-256 熱重載不需設定', 'SHA-256 hot-reload needs no configuration'),
+      body: t(
+        'exporter 內建以 SHA-256 偵測設定變更；檢查間隔是 `exporter.reloadInterval`（預設 30s）。沒有要填的 sha256 值。',
+        'The exporter detects config changes by SHA-256 on its own; the check interval is `exporter.reloadInterval` (default 30s). There is no sha256 value to fill in.',
+      ),
+    },
+  ];
+  if (tier === 'tier2') {
+    notes.push({
+      id: 'tier2-extra',
+      title: t('Tier 2：這些仍需你自己補', 'Tier 2: what you still need to add yourself'),
+      body: t(
+        `這兩個 chart 不含 Ingress template，請自建 Ingress 指向 service（da-portal 與 tenant-api 皆 port 80）。tenant-api 需另設 conf.d 來源（\`confDir\` / \`gitRepoUrl\`），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
+        `Neither chart ships an Ingress template — create your own Ingress pointing at the service (port 80 on both da-portal and tenant-api). tenant-api also needs its conf.d source (\`confDir\` / \`gitRepoUrl\`); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
+      ),
+    });
+  }
+  return notes;
+}
+
+function deployGenerateHelmReleases(config) {
+  const size = TENANT_SIZES.find(s => s.id === config.tenantSize);
+  const releases = [release('threshold-exporter', 'monitoring', thresholdExporterValues(config, size))];
+  if (config.tier === 'tier2') {
+    releases.push(release('da-portal', 'monitoring', daPortalValues(config)));
+    // tenant-api lives in its own namespace (#1004); da-portal's default
+    // portal.tenantApiUrl and NetworkPolicy egress already point there.
+    releases.push(release('tenant-api', 'tenant-api', tenantApiValues(config)));
+  }
+  return { releases, notes: deployNotes(config, size) };
+}
+
+export { deployGenerateHelmReleases };
