@@ -314,7 +314,7 @@ export default function TenantYAMLPlayground() {
           </div>
 
           {/* Results Scroll Area */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="flex-1 overflow-y-auto p-6 space-y-6" role="region" aria-label={t('驗證結果', 'Validation results')} tabIndex={0}>
             {/* Summary Stats */}
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
