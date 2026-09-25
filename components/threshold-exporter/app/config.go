@@ -1432,6 +1432,9 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // Every merged_hash is recomputed from disk. This is the cold-start
 // semantics; the incremental reuse of unchanged tenants lives in
 // classifyTenant, on the debounced path, and is not duplicated here.
+// ⚠️ recomputeMergedHash re-reads and re-parses each tenant file the walker
+// has just decoded in full (#1957; TreeScan.Partials) — the remaining
+// double parse of a hierarchical cold load, tracked in #1978.
 //
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than
