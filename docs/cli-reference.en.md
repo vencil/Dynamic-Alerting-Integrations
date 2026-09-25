@@ -1779,6 +1779,7 @@ Generate Alertmanager route + receiver + inhibit_rules fragment (or complete Con
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v <config_dir>:/etc/config:ro \
   [-v <output>:/data/output] \
   [-v <base_config>:/data/base.yaml:ro] \
@@ -1932,6 +1933,7 @@ Generate new tenant configuration (interactive or non-interactive).
 
 ```bash
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v <output_dir>:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
   scaffold [options]
@@ -2006,6 +2008,7 @@ Convert legacy Prometheus rules to dynamic format (AST engine).
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v <input_file>:/data/input.yml:ro \
   [-v <output_dir>:/data/output] \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -2172,6 +2175,7 @@ Offboard tenant configuration and related resources.
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v <config_dir>:/etc/config:rw \
   [-v <output>:/data/output] \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -2235,6 +2239,7 @@ Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_criti
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v <config_dir>:/etc/config:rw \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate <metric_keys...> --config-dir /etc/config [options]
@@ -2352,6 +2357,7 @@ Analyze existing Alertmanager or Prometheus config, output migration hints.
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v <config_file>:/data/config.yml:ro \
   [-v <output>:/data/output] \
   ghcr.io/vencil/da-tools:v2.9.0 \
