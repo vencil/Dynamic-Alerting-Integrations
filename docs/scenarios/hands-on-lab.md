@@ -146,11 +146,11 @@ pg_connections: "100"
 pg_replication_lag: "60"
 
 _state_maintenance:
-  expires: "2026-03-20T06:00:00Z"
+  expires: "2099-03-20T06:00:00Z"
 
 _silent_mode:
   target: warning        # 必填 —— 要靜音哪些嚴重度（warning | critical | all | disable）
-  expires: "2026-03-18T12:00:00Z"
+  expires: "2099-03-18T12:00:00Z"
 
 _routing:
   receiver:
