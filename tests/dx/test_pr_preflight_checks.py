@@ -690,27 +690,26 @@ class TestCheckPRMergeable:
         assert result.status == pp.Status.WARN
         assert "衝突" in result.message
 
-    def test_blocked_without_review_warns(self, monkeypatch):
+    @pytest.mark.parametrize("review", ["", "REVIEW_REQUIRED", "APPROVED"])
+    def test_blocked_names_no_rule(self, monkeypatch, review):
+        # #1924: BLOCKED does not say which rule blocks; the old message
+        # guessed "需要 review approval" from reviewDecision, which is ""
+        # on every PR of a repo that requires no review. Whatever
+        # reviewDecision says, the message must not name a rule.
         payload = {
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "BLOCKED",
-            "reviewDecision": "REVIEW_REQUIRED",
+            "reviewDecision": review,
+            "baseRefName": "release/v9",
         }
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(payload)))
         result = pp.check_pr_mergeable()
         assert result.status == pp.Status.WARN
-        assert "review approval" in result.message
-
-    def test_blocked_approved_means_other_protection(self, monkeypatch):
-        payload = {
-            "mergeable": "MERGEABLE",
-            "mergeStateStatus": "BLOCKED",
-            "reviewDecision": "APPROVED",
-        }
-        _stub_run_constant(monkeypatch, _cp(0, json.dumps(payload)))
-        result = pp.check_pr_mergeable()
-        assert result.status == pp.Status.WARN
-        assert "其他 branch protection" in result.message
+        assert "BLOCKED" in result.message
+        assert "review" not in result.message + result.detail
+        # The pointers must carry the PR's own base, not a fixed branch.
+        assert "branches/release/v9/protection" in result.detail
+        assert "rules/branches/release/v9" in result.detail
 
     def test_clean_mergeable_passes(self, monkeypatch):
         payload = {

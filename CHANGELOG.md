@@ -84,6 +84,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **`pr_preflight` 的 BLOCKED 不再猜原因（dx；[#1924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1924)）**：原本只要 `reviewDecision` 不是 `APPROVED` 就印「需要 review approval」；在不要求 review 的 repo 上這個理由不成立，照它去找 reviewer 解不了 BLOCKED。`mergeStateStatus` 不說是哪條規則擋住，所以現在只印 BLOCKED，並在下方給出讀 base branch 的 protection 與 rulesets 設定的 `gh api` 指令。仍是 WARN，exit code 不變。
+
 - **conf.d walker 與 `/metrics` 用同一份完整解析判定檔案（exporter、tenant-api、da-guard；[#1957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1957)）**：同一份檔案內容在各平面得到同一個租戶判定；完整解析拒收的檔案，其租戶在 `/effective`、da-guard、tenant-api 也不存在（404）。例外：exporter 增量 reload 只改到租戶檔時保留壞檔的最後正確值，無狀態的 tenant-api／da-guard 做不到而回 404（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）；`_` 開頭檔案的 `tenants:` 只進 `/metrics`（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）。租戶檔解析失敗每次掃描只計一次（watch 偵測到變更的 tick 掃兩次）；壞的 defaults 檔另外每個受影響租戶各計一次（刻意）。
 
 - **三支 dx 工具的 `--dry-run` 與 JSX 根修正（dx；[#1454](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1454) D 後續）**：`inject_related_docs --update --dry-run` 與 `migrate_conf_d --apply --dry-run` 原本照寫（`--dry-run` 從沒被讀過），改為 dry-run 優先並在 stderr 註明忽略了寫入旗標；零寫入閘門的 `KNOWN_DRY_RUN_WRITERS` 回到空的。`sync_tool_registry --sync-frontmatter` 改讀 `tools/portal/src/`（與 `check_tool_registry_jsx_parity` 同一個 JSX 根），原本讀 `docs/`、45 支全部靜默略過；一支都找不到時改為 exit 2，部分找不到時改為 exit 1（原本仍印成功並 exit 0）。⚠️ 改對之後它回報 11 筆 registry↔JSX frontmatter 不一致，本變更**未**套用。閘門的寫入對照另加 exit code 與 traceback 檢查，寫到一半就 crash 不再算成「前提成立」。
