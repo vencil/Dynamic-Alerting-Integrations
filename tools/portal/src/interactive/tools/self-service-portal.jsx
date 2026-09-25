@@ -1,7 +1,5 @@
 ---
 title: "Tenant Self-Service Portal"
-tags: [self-service, validation, routing, alerts, tenant]
-audience: ["platform-engineer", "domain-expert", "tenant"]
 version: v2.9.0
 lang: en
 related: [playground, config-lint, alert-simulator, schema-explorer]

@@ -1,7 +1,5 @@
 ---
 title: "Alert Noise Analyzer"
-tags: [alerts, noise, MTTA, MTTR, analysis]
-audience: ["platform", "domain-expert"]
 version: v2.9.0
 lang: en
 related: [alert-simulator, alert-timeline, health-dashboard]

@@ -65,6 +65,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Removed
 
+- **portal JSX frontmatter 的 `audience`／`tags` 與 `sync_tool_registry --sync-frontmatter` 旗標（dx、portal；[#1454](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1454)）**：49 支 JSX 各帶一份 audience／tags，但 portal build 會整段剝掉 frontmatter，repo 內沒有讀取端；那份副本的詞彙（`platform-engineer`、`domain-expert`）又與 registry 的封閉詞彙不同，已和 registry 分歧 11 處。現在 `docs/assets/tool-registry.yaml` 是唯一的來源，並由測試擋住副本被加回去。⚠️ `--sync-frontmatter` 旗標已移除，帶它呼叫會被 argparse 拒絕（exit 2）。重建的 `docs/assets/dist/` 只有 source map 的內嵌原始碼與一個共用 chunk 的雜湊改變。
 - **`fix_doc_links.py` 退役（lint；[#1454](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1454)）**：它把 docs 目錄算成 `scripts/docs`，在 repo 上每次呼叫都 rc=2，也沒有任何 Makefile／pre-commit／CI 呼叫它。路徑改對之後，它會透過 `docs/README-root.md` 這個 symlink 改寫根目錄 README（移除 56 個 `docs/` 前綴），而同一棵樹上 `check_doc_links.py --ci` 是 rc=0——它修的不是壞連結。連結正確性由 `check_doc_links.py` 把關。
 - **`scaffold_jsx_dep.py` 與 `make jsx-extract` 退役（dx；[#1454](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1454)）**：它仍在 TRK-242 之前的 `docs/interactive/tools/` 找 orchestrator，每次呼叫都 rc=2；就算路徑修好，產生的也是 `window.__X` 舊樣板，其中無 fallback 的讀法已被 `check_window_x_no_fallback.py` 判為 FATAL。ESM 拆分只需新增檔案加一行相對 `import`，步驟見 `docs/internal/jsx-multi-file-pattern.md`。
 

@@ -1,7 +1,5 @@
 ---
 title: "Interactive Glossary"
-tags: [glossary, reference, terms]
-audience: ["platform-engineer", "domain-expert", tenant]
 version: v2.9.0
 lang: en
 related: [schema-explorer, wizard, onboarding-checklist]

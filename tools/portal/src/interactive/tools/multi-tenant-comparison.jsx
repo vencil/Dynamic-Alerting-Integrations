@@ -1,7 +1,5 @@
 ---
 title: "Multi-Tenant Comparison"
-tags: [tenant, comparison, threshold, outlier, analysis]
-audience: ["platform", "domain-expert"]
 version: v2.9.0
 lang: en
 related: [capacity-planner, roi-calculator, alert-noise-analyzer]

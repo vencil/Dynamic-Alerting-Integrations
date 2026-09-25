@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter
+"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP
 
 從 tool-registry.yaml (單一真相源) 自動更新：
   1. docs/assets/jsx-loader.html 的 CUSTOM_FLOW_MAP 物件（tool key → component path）
   2. docs/interactive/index.html 的卡片 data-audience + 新卡片插入
-  3. JSX frontmatter 的 audience/tags（--sync-frontmatter）
+
+JSX frontmatter 不再帶 audience/tags（issue #1454）：portal build 會剝掉整段
+frontmatter，沒有任何讀取端，而那份副本用的詞彙又與 registry 的封閉詞彙
+（check_portal_audience_enum.py）不同。registry 是唯一的來源；原本的
+--sync-frontmatter 旗標隨之移除。
 
 Usage:
-    python3 scripts/tools/sync_tool_registry.py [--dry-run] [--verbose] [--sync-frontmatter]
+    python3 scripts/tools/sync_tool_registry.py [--dry-run] [--verbose] [--scan-appears-in]
 
 Flags:
     --dry-run            只顯示差異，不寫入檔案
     --verbose            顯示詳細過程
-    --sync-frontmatter   同步 registry audience/tags → JSX frontmatter
+    --scan-appears-in    掃描 markdown，比對實際 appears_in 與 registry
 
 Exit codes:
     0 = 同步完成（或 dry-run 無差異）
@@ -40,11 +44,6 @@ PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_PATH = PROJECT_ROOT / "docs" / "interactive" / "index.html"
 LOADER_PATH = PROJECT_ROOT / "docs" / "assets" / "jsx-loader.html"
-# Registry `file:` paths resolve under the portal source tree — the same root
-# check_tool_registry_jsx_parity.py uses. It used to be `docs/`, where no JSX
-# has lived since the portal move, so --sync-frontmatter silently skipped every
-# tool and reported "in sync" (issue #1454).
-JSX_ROOT = PROJECT_ROOT / "tools" / "portal" / "src"
 
 
 # ---------------------------------------------------------------------------
@@ -329,103 +328,6 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# JSX frontmatter sync
-# ---------------------------------------------------------------------------
-# Audience name mapping: registry uses short names, JSX uses long names
-_AUDIENCE_MAP = {
-    "platform": "platform-engineer",
-    "domain": "domain-expert",
-    "tenant": "tenant",
-}
-_AUDIENCE_REVERSE = {v: k for k, v in _AUDIENCE_MAP.items()}
-
-
-def sync_frontmatter(tools: list, dry_run: bool, verbose: bool):
-    """Sync registry audience/tags → JSX frontmatter.
-
-    Returns ``(changed, missing_keys)``, or **None** when not a single registry
-    entry resolved to a file — a wrong root, not an all-clear. A missing file is
-    always reported (not only under --verbose): skipping them quietly is how
-    this function once skipped all 45 and looked in sync. The caller must treat
-    a non-empty ``missing_keys`` as an incomplete sync, not as "in sync".
-    """
-    any_changed = False
-    found = 0
-    missing = []
-
-    for tool in tools:
-        key = tool["key"]
-        jsx_path = JSX_ROOT / tool.get("file", f"{key}.jsx")
-        if not jsx_path.exists():
-            print(f"  [frontmatter] {key}: file not found: {jsx_path}",
-                  file=sys.stderr)
-            missing.append(key)
-            continue
-        found += 1
-
-        content = jsx_path.read_text(encoding="utf-8")
-        fm_match = re.match(r"^(---\n)([\s\S]*?)\n(---)", content)
-        if not fm_match:
-            if verbose:
-                print(f"  [frontmatter] {key}: no frontmatter, skipping")
-            continue
-
-        fm_block = fm_match.group(2)
-        new_fm = fm_block
-        changes = []
-
-        # Sync audience
-        reg_audience = tool.get("audience", [])
-        jsx_audience = [_AUDIENCE_MAP.get(a, a) for a in reg_audience]
-        audience_line_re = re.compile(r"^(audience:\s*)\[([^\]]*)\]", re.MULTILINE)
-        am = audience_line_re.search(new_fm)
-        if am:
-            current = [a.strip().strip('"').strip("'") for a in am.group(2).split(",")]
-            current = [a for a in current if a]
-            if sorted(current) != sorted(jsx_audience):
-                quoted = ", ".join(f'"{a}"' if "-" in a else a for a in jsx_audience)
-                new_line = f"{am.group(1)}[{quoted}]"
-                new_fm = new_fm[: am.start()] + new_line + new_fm[am.end() :]
-                changes.append(f"audience: {current} → {jsx_audience}")
-
-        # Sync tags
-        reg_tags = tool.get("tags", [])
-        tags_line_re = re.compile(r"^(tags:\s*)\[([^\]]*)\]", re.MULTILINE)
-        tm = tags_line_re.search(new_fm)
-        if tm and reg_tags:
-            current_tags = [t.strip().strip('"').strip("'") for t in tm.group(2).split(",")]
-            current_tags = [t for t in current_tags if t]
-            if sorted(current_tags) != sorted(reg_tags):
-                tag_list = ", ".join(reg_tags)
-                new_line = f"{tm.group(1)}[{tag_list}]"
-                new_fm = new_fm[: tm.start()] + new_line + new_fm[tm.end() :]
-                changes.append(f"tags: {current_tags} → {reg_tags}")
-
-        if new_fm != fm_block:
-            if dry_run:
-                for c in changes:
-                    print(f"  [frontmatter] {key}: would update {c}")
-                any_changed = True
-            else:
-                new_content = content.replace(
-                    fm_match.group(0),
-                    f"{fm_match.group(1)}{new_fm}\n{fm_match.group(3)}",
-                )
-                jsx_path.write_text(new_content, encoding="utf-8", newline="\n")
-                for c in changes:
-                    print(f"  [frontmatter] {key}: updated {c}")
-                any_changed = True
-        elif verbose:
-            print(f"  [frontmatter] {key}: in sync")
-
-    if tools and not found:
-        print(f"ERROR: none of the {len(tools)} registry entries resolved under "
-              f"{JSX_ROOT} — wrong JSX root", file=sys.stderr)
-        return None
-    return any_changed, missing
-
-
-# ---------------------------------------------------------------------------
 # appears_in auto-scan
 # ---------------------------------------------------------------------------
 def scan_appears_in(tools: list, verbose: bool) -> dict:
@@ -457,18 +359,13 @@ def scan_appears_in(tools: list, verbose: bool) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    """CLI entry point: 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter."""
+    """CLI entry point: 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META."""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="Sync tool-registry.yaml → Hub + TOOL_META + JSX frontmatter"
+        description="Sync tool-registry.yaml → Hub + TOOL_META"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show changes only")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
-    parser.add_argument(
-        "--sync-frontmatter",
-        action="store_true",
-        help="Sync registry audience/tags → JSX frontmatter",
-    )
     parser.add_argument(
         "--scan-appears-in",
         action="store_true",
@@ -491,15 +388,6 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
     changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
 
-    changed_fm = False
-    missing_fm = []
-    if args.sync_frontmatter:
-        print()
-        print("=== Frontmatter Sync ===")
-        result = sync_frontmatter(tools, args.dry_run, args.verbose)
-        if result is None:
-            sys.exit(EXIT_CALLER_ERROR)
-        changed_fm, missing_fm = result
 
     if args.scan_appears_in:
         print()
@@ -523,16 +411,7 @@ def main():
         else:
             print(f"\n  {diffs} tool(s) have appears_in mismatches")
 
-    if missing_fm:
-        # A partial frontmatter sync is not "in sync" and not "complete": the
-        # entries whose JSX is missing were never compared.
-        print()
-        print(f"ERROR: frontmatter sync incomplete — {len(missing_fm)} registry "
-              f"entry/entries not found under {JSX_ROOT}: {', '.join(missing_fm)}",
-              file=sys.stderr)
-        sys.exit(EXIT_VIOLATION)
-
-    any_changed = changed_meta or changed_hub or changed_fm
+    any_changed = changed_meta or changed_hub
     if any_changed:
         print()
         if args.dry_run:

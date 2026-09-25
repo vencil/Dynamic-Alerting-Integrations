@@ -1,7 +1,5 @@
 ---
 title: "Access Report Dry-Run"
-tags: [rbac, audit, access, dry-run]
-audience: ["platform", "sre"]
 version: v2.9.0
 lang: en
 related: [tenant-manager, config-diff]

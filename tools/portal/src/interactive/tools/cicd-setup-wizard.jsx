@@ -1,7 +1,5 @@
 ---
 title: "CI/CD Setup Wizard"
-tags: [cicd, gitops, setup, wizard, adoption]
-audience: ["platform-engineer"]
 version: v2.9.0
 lang: en
 related: [self-service-portal, template-gallery, onboarding-checklist]

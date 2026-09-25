@@ -135,7 +135,7 @@ lang: zh
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Check tenant reserved-key drift across Schema / Go / Python. |
-| `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
+| `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 | `verify_diff.py` | diff-scoped Python test selector (rule mapping + fail-closed; testing-ROI W6-E MVP) |
 | `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
