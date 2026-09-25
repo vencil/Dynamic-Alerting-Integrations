@@ -14,7 +14,8 @@ package config
 // Two enumerators over one tree is the defect CLASS (#1911): every cell of
 // the skip rule — hidden dir, hidden file, extension case, `_` prefix,
 // symlinked root, walk error, empty tree — had to be kept equal by hand, and
-// the divergence audit (app/config_divergence.go) exists because it was not.
+// the scanner-divergence audit (#1521, retired by #1957) existed because it
+// was not.
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
 // ⛔ It is the only RECURSIVE conf.d walker in the exporter module's

@@ -534,10 +534,10 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 // ⛔ Hierarchy FIRST, then the flat commit — the reverse of the historical
 // order, for two reasons that both come from having one walk:
 //
-//   - installConfig hands the divergence audit the tenantSources standing
+//   - installConfig hands the commit-time audit the tenantSources standing
 //     in the commit's lock window. Committing the new config against the
-//     PREVIOUS tenantSources would report every tenant this tick deleted
-//     as divergent until the next commit.
+//     PREVIOUS tenantSources would judge this tick's refused keys against
+//     the previous population until the next commit.
 //   - commitFlatFrom materialises subtree defaults from the graph and the
 //     parsed defaults the manager holds; those must be this tick's, not
 //     the last one's, or a tenant added under a subtree would carry the

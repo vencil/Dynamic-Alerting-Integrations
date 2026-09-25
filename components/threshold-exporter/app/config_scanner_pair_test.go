@@ -206,8 +206,8 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 					"the two planes disagree about a tenant whose file failed the one decode (#1957)",
 					served, attributed)
 			}
-			if strings.Contains(logBuf.String(), divergenceAnchor) {
-				t.Errorf("a divergence ERROR for a state both planes agree on:\n%s", logBuf.String())
+			if strings.Contains(logBuf.String(), undeliverableAnchor) {
+				t.Errorf("an ERROR for a state both planes agree on:\n%s", logBuf.String())
 			}
 
 			// The sibling assertion: a tenant whose file is GONE must be pruned.
@@ -383,8 +383,8 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 				t.Fatalf("dup kept %q but a full reload of the same tree gives %q — "+
 					"the fast path is holding the value of a declaration that no longer exists", v, want)
 			}
-			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
-				t.Fatalf("a divergence ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
+			if strings.Contains(logBuf.String(), undeliverableAnchor) {
+				t.Fatalf("an undeliverable ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
 			}
 		})
 	}
@@ -426,7 +426,7 @@ func TestReclaimTenantFromMirrorsTheFullMergePrecedence(t *testing.T) {
 
 // publishedStateFingerprint renders everything a loader publishes that a
 // consumer can observe: the merged config, and the hierarchy state the
-// divergence audit reads. Paths are made root-relative so the two temp dirs
+// commit-time audit reads. Paths are made root-relative so the two temp dirs
 // compare equal.
 func publishedStateFingerprint(t *testing.T, m *ConfigManager, root string) string {
 	t.Helper()

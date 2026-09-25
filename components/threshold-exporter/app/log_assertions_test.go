@@ -53,7 +53,7 @@ import (
 	"testing"
 )
 
-const divergenceAnchor = "conf.d scanner divergence"
+const undeliverableAnchor = "conf.d subtree default undeliverable"
 
 // logLinesWith returns every line of logs containing anchor, in order.
 func logLinesWith(logs, anchor string) []string {

@@ -58,10 +58,11 @@ func captureLoad(t *testing.T, m *ConfigManager) string {
 // an `expires:` in a subtree defaults file was charged to every tenant under
 // it, blocking their writes. All four share one root cause — that field is a
 // flat global list with no subtree scope. Fixing it properly needs per-subtree
-// scope in `ThresholdConfig`, i.e. #1568.
+// scope in `ThresholdConfig` (or refusing such a key at validation time),
+// i.e. #1976.
 //
 // So the contract asserted here is: the value does NOT reach the output plane,
-// nothing is silently written anywhere, and the divergence audit NAMES the
+// nothing is silently written anywhere, and the undeliverable audit NAMES the
 // tenant and the key. Silence is the one outcome this ticket forbids.
 func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 	dir := t.TempDir()
@@ -87,7 +88,7 @@ func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 
 	// The half that is NOT delivered — and must not pretend to be.
 	if _, present := seriesFor(t, m, "t1", "evicted_keys"); present {
-		t.Errorf("a subtree-only key emitted a series; either #1568 landed or the " +
+		t.Errorf("a subtree-only key emitted a series; either #1976 landed or the " +
 			"global declared surface was widened again")
 	}
 	if _, leaked := m.GetConfig().Defaults["redis_evicted_keys"]; leaked {
@@ -105,14 +106,14 @@ func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 			"it, which also makes ValidateTenantKeys log `unknown key` every commit")
 	}
 	// ⛔ Not writing it is only acceptable BECAUSE of the next two assertions.
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1 — a tenant whose "+
-			"/effective value can never become a series is a divergence, and the gauge "+
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 1 {
+		t.Errorf("da_config_subtree_undeliverable_tenants = %v, want 1 — a tenant whose "+
+			"/effective value can never become a series is undeliverable, and the gauge "+
 			"reporting 0 here is the silence this ticket exists to remove", got)
 	}
 	line := logBuf.String()
-	if !strings.Contains(line, "conf.d scanner divergence") {
-		t.Fatalf("no divergence ERROR at all; log:\n%s", line)
+	if !strings.Contains(line, undeliverableAnchor) {
+		t.Fatalf("no undeliverable ERROR at all; log:\n%s", line)
 	}
 	for _, want := range []string{"t1", "redis_evicted_keys"} {
 		if !strings.Contains(line, want) {
@@ -192,8 +193,8 @@ func TestTheShallowestDefaultsFileIsNotMistakenForTheRoot(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1", got)
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 1 {
+		t.Errorf("da_config_subtree_undeliverable_tenants = %v, want 1", got)
 	}
 	line := logBuf.String()
 	if !strings.Contains(line, "mysql_connections") {
@@ -238,11 +239,10 @@ func TestASymlinkedConfigRootStillLoads(t *testing.T) {
 	}
 }
 
-// TestTheDivergenceAuditRunsOnEveryCommit pins the CALL SITE, which nothing
+// TestTheUndeliverableAuditRunsOnEveryCommit pins the CALL SITE, which nothing
 // did after round 1 inverted the polarity of the integration tests.
 //
-// ⛔ MEASURED: deleting `m.auditHierarchyDivergence(cfg, hierTenantSources,
-// logHeader)` from `installConfig`'s caller — the sole `m.config` assignment
+// ⛔ MEASURED (on its #1521 predecessor): deleting the audit call from `installConfig`'s caller — the sole `m.config` assignment
 // point, and therefore the only thing that makes the audit universal — left
 // the whole package GREEN. Every surviving Load-driven assertion expects
 // "gauge 0 / no ERROR", which is exactly the state of an audit that never
@@ -255,7 +255,7 @@ func TestASymlinkedConfigRootStillLoads(t *testing.T) {
 // walker's lighter parse still registered its tenant; with one decode that
 // tenant is absent from both planes (TestOneTenantSet_ColdLoad), so it can
 // no longer arm the audit.
-func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
+func TestTheUndeliverableAuditRunsOnEveryCommit(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 50\n")
@@ -281,8 +281,8 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 		t.Fatalf("fixture no longer produces a subtree-only key (unreachable = %v), so this "+
 			"test cannot say anything about the audit", keys)
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Fatalf("da_config_hierarchy_divergent_tenants = %v, want 1 — the audit did "+
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 1 {
+		t.Fatalf("da_config_subtree_undeliverable_tenants = %v, want 1 — the audit did "+
 			"not run on this commit", got)
 	}
 	// The gauge is the machine-readable half; the log is the half an operator
@@ -296,12 +296,12 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 	//
 	// ⚠️ NO BLAST-RADIUS NUMBER HERE ANY MORE. This said "reddens only this
 	// one", then "reddens 4 tests"; a reviewer got 11 or 3 depending on which
-	// line of `formatDivergenceLog` the constant replaced. A count is only
+	// line of `formatUndeliverableLog` the constant replaced. A count is only
 	// meaningful next to the exact mutation that produced it, and this comment
 	// is not the place to pin a mutation — so the claim is dropped rather than
 	// restated with a third number.
-	assertDivergenceLineNames(t, logged, "t-bad")
-	assertNoStaleRemediation(t, logged)
+	assertUndeliverableLineNames(t, logged, "t-bad")
+	assertStatesTheCurrentCause(t, logged)
 }
 
 // TestAnUppercaseExtensionAtTheRootStillEmits covers the case-insensitivity
@@ -433,12 +433,12 @@ func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 	}
 	// ⛔ ASSERTED ON THE DIVERGENCE LINE, NOT ANYWHERE IN THE LOG. Measured:
 	// with the reachability gate deleted outright this key is DELIVERED, no
-	// divergence ERROR fires at all — and a bare `Contains(log, key)` still
+	// undeliverable ERROR fires at all — and a bare `Contains(log, key)` still
 	// passed, because `ValidateTenantKeys` then logs
 	// `WARN: unknown key "redis_evicted_keys" not in defaults` for the very
 	// same key. The control was matching the symptom of the bug it was meant
 	// to rule out. (#1569 blind review.)
-	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
+	assertUndeliverableLineNames(t, logBuf.String(), "redis_evicted_keys")
 }
 
 // TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane pins that the shape
@@ -446,7 +446,7 @@ func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 //
 // ⛔ A `region: us-east` in a subtree `_defaults.yaml` is not a threshold and
 // must not appear anywhere on the collector plane — not in the tenant's map,
-// not on the declared surface, and NOT in the divergence report either.
+// not on the declared surface, and NOT in the undeliverable report either.
 // Reporting it would train operators to ignore the line: the audit's whole
 // value is that everything it names is genuinely a threshold that cannot fire.
 //
@@ -493,9 +493,9 @@ func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 	// The genuinely unreachable THRESHOLD key is reported — and it is what
 	// makes the assertions above discriminating, because it forces the
 	// reachability branch to run at all.
-	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1", got)
+	assertUndeliverableLineNames(t, logBuf.String(), "redis_evicted_keys")
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 1 {
+		t.Errorf("da_config_subtree_undeliverable_tenants = %v, want 1", got)
 	}
 	if logs := logBuf.String(); strings.Contains(logs, "invalid declared threshold") ||
 		strings.Contains(logs, "unknown key") {
@@ -589,7 +589,7 @@ func TestTheGaugeHelpStatesTheCurrentCause(t *testing.T) {
 	}
 	var help string
 	for _, fam := range families {
-		if fam.GetName() == "da_config_hierarchy_divergent_tenants" {
+		if fam.GetName() == "da_config_subtree_undeliverable_tenants" {
 			help = fam.GetHelp()
 		}
 	}
@@ -597,15 +597,21 @@ func TestTheGaugeHelpStatesTheCurrentCause(t *testing.T) {
 		t.Fatalf("gauge is not registered, so its HELP reaches no operator")
 	}
 	for _, stale := range []string{
+		// pre-#1521: directory depth
 		"the known cause is a tenant file in a conf.d sub-directory",
 		"move the tenant file to the conf.d root",
 		"is an OPEN defect",
+		// pre-#1957: cause (a), a tenant /effective has and /metrics lacks,
+		// and the "retire once production reads 0" guidance
+		"ABSENT from the merged config",
+		"parsed the same tree differently",
+		"retire once",
 	} {
 		if strings.Contains(help, stale) {
-			t.Errorf("HELP carries the pre-#1521 diagnosis %q", stale)
+			t.Errorf("HELP carries a retired diagnosis %q", stale)
 		}
 	}
-	for _, required := range []string{"recursively", "parse"} {
+	for _, required := range []string{"subtree _defaults.yaml", "root _defaults.yaml", "optional_overrides"} {
 		if !strings.Contains(strings.ToLower(help), required) {
 			t.Errorf("HELP no longer states the current cause — %q missing; got:\n%s", required, help)
 		}
@@ -714,7 +720,7 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 	}
 }
 
-// assertDivergenceLineNames checks a name appears in the divergence ERROR
+// assertUndeliverableLineNames checks a name appears in the undeliverable ERROR
 // itself, not merely somewhere in the log.
 //
 // ⛔ WHY THE DISTINCTION IS LOAD-BEARING. When the reachability gate is
@@ -722,9 +728,9 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 // printed at all — but `ValidateTenantKeys` then logs `unknown key "<name>"`
 // for the same key, so a whole-log `Contains` still matches. Measured: that
 // mutation left the assertion green with zero divergence output.
-func assertDivergenceLineNames(t *testing.T, logs, name string) {
+func assertUndeliverableLineNames(t *testing.T, logs, name string) {
 	t.Helper()
-	assertLogLineWith(t, logs, divergenceAnchor, name)
+	assertLogLineWith(t, logs, undeliverableAnchor, name)
 }
 
 // TestKeysServedByTheirOwnResolverAreNeverRefused covers the shapes the
@@ -772,12 +778,12 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 					"identical key in its own file gets it emitted; tenant map = %v",
 					tc.name, m.GetConfig().Tenants["t1"])
 			}
-			if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-				t.Errorf("%s: a deliverable key was reported as a divergence (gauge=%v); "+
+			if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
+				t.Errorf("%s: a deliverable key was reported as undeliverable (gauge=%v); "+
 					"the audit must only name thresholds that genuinely cannot fire", tc.name, got)
 			}
-			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
-				t.Errorf("%s: divergence ERROR on a healthy tree:\n%s", tc.name, logBuf.String())
+			if strings.Contains(logBuf.String(), undeliverableAnchor) {
+				t.Errorf("%s: undeliverable ERROR on a healthy tree:\n%s", tc.name, logBuf.String())
 			}
 		})
 	}
@@ -802,8 +808,8 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 			t.Errorf("the inherited `disable` did not take effect — the tenant's "+
 				"maintenance filter is back ON: %v", filters)
 		}
-		if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-			t.Errorf("a legitimate tree was reported as divergent (gauge=%v)", got)
+		if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
+			t.Errorf("a legitimate tree was reported as undeliverable (gauge=%v)", got)
 		}
 	})
 }
@@ -829,18 +835,18 @@ func TestTheReportAttributesEachKeyToItsOwnTenant(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 2 {
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 2 {
 		t.Errorf("gauge = %v, want 2 — it counts TENANTS, and two of them are "+
 			"affected by different keys", got)
 	}
 	var line string
 	for _, l := range strings.Split(logBuf.String(), "\n") {
-		if strings.Contains(l, "conf.d scanner divergence") {
+		if strings.Contains(l, undeliverableAnchor) {
 			line = l
 		}
 	}
 	if line == "" {
-		t.Fatalf("no divergence ERROR; log:\n%s", logBuf.String())
+		t.Fatalf("no undeliverable ERROR; log:\n%s", logBuf.String())
 	}
 	// ⛔ Each key must sit next to ITS OWN tenant. A report that names both
 	// keys but attributes them to one tenant passes a naive Contains check.
@@ -888,7 +894,7 @@ func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
+	assertUndeliverableLineNames(t, logBuf.String(), "redis_evicted_keys")
 
 	// Same tenant, same file path, DIFFERENT refused key.
 	logBuf.Reset()
@@ -897,7 +903,7 @@ func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	assertDivergenceLineNames(t, logBuf.String(), "kafka_lag_seconds")
+	assertUndeliverableLineNames(t, logBuf.String(), "kafka_lag_seconds")
 
 	// ...and an unchanged repeat still stays quiet, or the de-duplication that
 	// makes this line readable at all would be gone.
@@ -905,7 +911,7 @@ func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("third load: %v", err)
 	}
-	if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
+	if strings.Contains(logBuf.String(), undeliverableAnchor) {
 		t.Errorf("an unchanged repeat re-printed the ERROR:\n%s", logBuf.String())
 	}
 }
@@ -932,7 +938,7 @@ func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 1 {
 		t.Fatalf("precondition: gauge = %v, want 1", got)
 	}
 
@@ -942,7 +948,7 @@ func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
 	if err := m.IncrementalLoad(); err != nil {
 		t.Fatalf("IncrementalLoad: %v", err)
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
 		t.Errorf("gauge = %v after the tree was repaired through the incremental path — "+
 			"the audit is reporting a refused set from an earlier config", got)
 	}

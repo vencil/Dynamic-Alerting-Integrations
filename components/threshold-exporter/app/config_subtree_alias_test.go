@@ -51,11 +51,11 @@ func TestARetiredSpellingInASubtreeIsNotRefused(t *testing.T) {
 		t.Errorf("the inherited retired spelling did not reach the canonical series: "+
 			"got %v (present=%v), want 42; tenant map = %v", got, ok, m.GetConfig().Tenants["t1"])
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-		t.Errorf("a deliverable key was reported as a divergence (gauge=%v)", got)
+	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
+		t.Errorf("a deliverable key was reported as undeliverable (gauge=%v)", got)
 	}
-	if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
-		t.Errorf("divergence ERROR on a healthy tree:\n%s", logBuf.String())
+	if strings.Contains(logBuf.String(), undeliverableAnchor) {
+		t.Errorf("undeliverable ERROR on a healthy tree:\n%s", logBuf.String())
 	}
 }
 

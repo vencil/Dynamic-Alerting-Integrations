@@ -75,7 +75,7 @@ type hierarchyState struct {
 	// subtree defaults chain supplies but that NO emitter can iterate
 	// (absent from both `cfg.Defaults` and `cfg.OptionalOverrides`).
 	//
-	// ⛔ It lives HERE, next to tenantSources, so the divergence audit reads
+	// ⛔ It lives HERE, next to tenantSources, so the undeliverable audit reads
 	// both from one lock window. Reloads are not serialised, and pairing
 	// reload N's config with reload N+1's diagnosis is exactly the failure
 	// the tenantSources snapshot exists to prevent. (#1569)
@@ -126,10 +126,10 @@ type ConfigManager struct {
 	// rather than package-level so `t.Parallel()` tests do not share it.
 	afterCommitUnlock func()
 
-	// divergence tracks what the conf.d divergence audit last put in the
-	// log, so a persistent divergence is stated once per change instead of
-	// once per config commit. See config_divergence.go.
-	divergence divergenceLogState
+	// undeliverable tracks what the subtree-undeliverable audit last put in
+	// the log, so a persistent condition is stated once per change instead of
+	// once per config commit. See config_subtree_undeliverable.go.
+	undeliverable undeliverableLogState
 
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
@@ -269,7 +269,8 @@ func (m *ConfigManager) SetLogger(logger *log.Logger) {
 // as the FIRST statement after installConfig releases m.mu (#1521).
 //
 // ⛔ Test-only, and narrow on purpose. It exists to make one specific
-// regression observable: the divergence audit must compare the config it
+// regression observable: the commit-time audit (config_subtree_undeliverable.go,
+// the #1521 divergence audit until #1957) must judge the state it
 // just installed against the hierarchy AS IT STOOD IN THAT LOCK WINDOW,
 // not against whatever the live manager holds by the time the audit runs.
 // Adversarial review measured that moving that read back outside the lock
@@ -377,8 +378,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// path (Load, fullDirLoad, IncrementalLoad, and diffAndReload via
 	// installNewHierarchyState → fullDirLoad) is covered by construction
 	// rather than by remembering to add a call. Observability only: it
-	// never fails the commit — see config_divergence.go for why not.
-	m.auditHierarchyDivergence(cfg, hierTenantSources, unreachableInherited, logHeader)
+	// never fails the commit — see config_subtree_undeliverable.go for why not.
+	m.auditSubtreeUndeliverable(hierTenantSources, unreachableInherited, logHeader)
 }
 
 // installConfig performs the atomic swap under m.mu and RETURNS the
@@ -761,15 +762,13 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// The block above fixed `unreachableInherited` and named the risk —
 	// "the asymmetry between the two fields `installConfig` returns is exactly
 	// the kind that becomes live later". It already was. `tenantSources` is
-	// what `hierarchyDivergentTenants` ITERATES, so a tenant that leaves the
-	// tree lingers there, is found missing from the merged config, and is
-	// reported under cause (a): "its file was dropped while building that
-	// config ... look for the ERROR/WARN line naming that file". There is no
-	// such line, because nothing is broken — the operator deleted the tenant.
-	// Measured both ways it can leave: removing one of two root tenant files,
-	// and emptying a root file that stays on disk, each emitted a full
-	// divergence ERROR naming the departed tenant while the merged config was
-	// correct.
+	// the population /effective serves (and the one the commit-time audit
+	// iterates), so a tenant that leaves the tree lingered there — still
+	// resolvable while /metrics had dropped it. Until #1957 the audit then
+	// reported it as a scanner divergence pointing at a parse-failure line
+	// that did not exist, because nothing was broken: the operator deleted
+	// the tenant. Measured both ways it can leave: removing one of two root
+	// tenant files, and emptying a root file that stays on disk.
 	//
 	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT.
 	// `newHashes` says whether the file is still on disk and `newConfigs` says
@@ -1190,8 +1189,10 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
 	// it is deleted from `newConfigs` upstream, so `ok` is false and THIS
 	// file's tenants are left alone — today's fail-safe "keep the last good
-	// values". A full load drops them instead and the divergence audit shouts
-	// cause (a), so the two paths still disagree there; that difference is a
+	// values". A full load drops them instead (the walker rejects the file,
+	// #1957), so the two PATHS still disagree there — though on each path
+	// /effective follows /metrics (refreshTenantSources keeps such a tenant
+	// exactly while this merged config does). That difference is a
 	// deliberate behaviour question (silently keep stale values vs. stop a
 	// tenant's alerts on a typo), not something to settle inside a bug fix.
 	//
@@ -1260,9 +1261,10 @@ func (m *ConfigManager) fullDirLoad() error {
 // Order matters and is the reverse of what it looks like: the hierarchy
 // state goes in FIRST because installConfig hands the audit the
 // tenantSources standing in the commit's lock window. Committing the new
-// config against the previous tenantSources would report every tenant the
-// operator just deleted as divergent (it is still in the old sources and
-// absent from the new config) until the next commit.
+// config against the previous tenantSources would pair this commit's
+// refused keys with the previous population (and, until #1957 removed the
+// presence check, reported every tenant the operator just deleted as
+// divergent) until the next commit.
 func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 	if err := rejectDuplicateTenant(scan); err != nil {
 		return err
