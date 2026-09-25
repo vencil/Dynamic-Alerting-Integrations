@@ -485,6 +485,18 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # schedule always files; manual dispatch only when file_issue is checked.
           DO_FILE: ${{ github.event_name == 'schedule' || inputs.file_issue }}
+          # The customer-delivered bucket's failure-cause sentence. It lives here,
+          # not in run:, so bash never parses it (#1970). Not named
+          # FAILURE_CAUSE_NOTE itself: a step-level value would also reach the two
+          # calls above the delivered one, which must keep the script's default.
+          # Actions still evaluates ${{ }} expressions in this value.
+          DELIVERED_FAILURE_CAUSE_NOTE: >-
+            A leg that did not report means the ref could not be pulled or
+            scanned: either the tag is gone or was retagged away, or the registry
+            refused us (the Docker Hub refs are pulled anonymously, so a
+            shared-runner rate limit looks identical here — check the leg log
+            before treating it as a yank). Nothing was built, so there is no
+            build break to look for.
         run: |
           set -euo pipefail
           rc=0
@@ -549,7 +561,7 @@ jobs:
           # recognises, and the conservation guard reds with "named 3x, 2 call
           # sites recognised". The fix is to keep the call line in the shape the
           # parser reads, not to register an exemption for it.
-          export FAILURE_CAUSE_NOTE="A leg that did not report means the ref could not be pulled or scanned: either the tag is gone or was retagged away, or the registry refused us (the Docker Hub refs are pulled anonymously, so a shared-runner rate limit looks identical here — check the leg log before treating it as a yank). Nothing was built, so there is no build break to look for."
+          export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"
           bash scripts/ops/file_cve_report.sh frags-dl \
             nightly-cve-delivered \
             "🛡️ Nightly image scan — customer-delivered image CVEs on main" \
