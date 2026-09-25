@@ -501,3 +501,49 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 		})
 	}
 }
+
+// TestPlatformOrphanStaysOutAfterPlatformFileEdit: an orphan platform entry
+// must stay out of /metrics when the PLATFORM file itself is edited, which
+// sends IncrementalLoad down its full-rebuild branch
+// (mergePartialConfigs(newConfigs, exists)). Measured: passing nil there
+// put tx on /metrics while the WARN still said the entry was ignored, and
+// no other test noticed. Two trees: the defaults carrier, and a flat one
+// whose per-tenant block is in `_profiles.yaml`.
+func TestPlatformOrphanStaysOutAfterPlatformFileEdit(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, platform, body string }{
+		{"carrier", "_defaults.yaml",
+			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n"},
+		{"flat-profiles", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeOverlayTree(t, dir, map[string]string{
+				tc.platform: tc.body,
+				"ty.yaml":   "tenants:\n  ty: {}\n",
+			})
+			m, buf := newOverlayManager(t, dir)
+			if _, served := m.GetConfig().Tenants["tx"]; served {
+				t.Fatal("load: orphan tx served — premise broken")
+			}
+			buf.Reset()
+			writeTestYAML(t, filepath.Join(dir, tc.platform), tc.body+"    redis_x: \"1\"\n")
+			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatal(err)
+			}
+			if ov, served := m.GetConfig().Tenants["tx"]; served {
+				t.Errorf("after editing %s: orphan tx served with %v", tc.platform, ov)
+			}
+			if _, ok := m.GetConfig().Tenants["ty"]; !ok {
+				t.Error("control: ty vanished")
+			}
+			if lines := logLinesWith(buf.String(), orphanAnchor); len(lines) != 1 {
+				t.Errorf("want exactly one orphan WARN, got %d: %q", len(lines), lines)
+			}
+		})
+	}
+}

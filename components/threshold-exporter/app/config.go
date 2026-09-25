@@ -911,6 +911,10 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 // the "on disk, did NOT parse" row refreshTenantSources keeps. Read from
 // the attribution BEFORE this reload refreshes it, because that is the
 // population m.config (the patch's prev) was built for.
+//
+// ⚠️ A held tenant whose file is then DELETED is not listed (off disk), yet
+// the patch path keeps serving it — see the exception in patchTenants'
+// header and #2022.
 func (m *ConfigManager) failSafeHeldTenants(newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
 	scanRoot := absScanRoot(m.path)
 	m.mu.RLock()
@@ -1118,6 +1122,13 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 //     it even when a platform file's `tenants:` block still names it — a
 //     platform file cannot keep a tenant alive any more than it can create
 //     one, which is what the full rebuild does too.
+//     ⚠️ EXCEPT a tenant the fail-safe is holding: its file turned
+//     unparseable on an earlier reload and is now deleted. That file's
+//     partial left the cache when it failed to parse, so the removal pass
+//     below never sees the deletion and the tenant keeps being served —
+//     platform values included — while the orphan WARN (it is no longer in
+//     `exists`: the file is off disk) says the platform entry is ignored.
+//     Root cause predates this change (#2022); not fixed here.
 //   - a removed file's tenant is dropped only when this same reload did NOT
 //     re-introduce it via an added/changed file. A tenant relocating from a
 //     removed file into an added/changed file in the same reload must stay —
