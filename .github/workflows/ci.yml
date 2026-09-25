@@ -2456,7 +2456,9 @@ jobs:
   lint-docs:
     name: Lint Documentation
     runs-on: ubuntu-latest
-    needs: lint
+    # No `needs: lint` (#1398): this is a required check, and a job whose
+    # dependency failed reports `skipped`, which branch protection counts as a
+    # pass — so while `Lint` was red, `make lint-docs` had no CI run at all.
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

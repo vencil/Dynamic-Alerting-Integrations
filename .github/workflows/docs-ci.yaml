@@ -12,8 +12,13 @@
 # check with no reported status as permanently pending — blocking merge even
 # when every check that DID run is green (PR #928 / #957 both needed a
 # manual `--admin` bypass for this). A job that runs and is skipped via its
-# own `if:`, by contrast, reports `skipped`, which satisfies the
-# requirement. See detect-changes below.
+# own `if:`, by contrast, reports `skipped` — which also satisfies the
+# requirement, and that is the opposite problem: when detect-changes itself
+# fails, every gated job skips and the PR merges having checked nothing
+# (#1398). So the required NAMES belong to the `*-gate` jobs at the end of
+# this file, which always run and fail unless their leg succeeded or was
+# skipped because detect-changes said it was not needed; the legs themselves
+# are named `… — run`. See detect-changes below.
 #
 # head-blob-hygiene is the one job that intentionally stays unconditional
 # (see its own comment) — it's meant to catch historical blob corruption on
@@ -48,12 +53,14 @@ jobs:
   detect-changes:
     name: Detect Documentation Changes
     runs-on: ubuntu-latest
-    # push events keep today's behavior (every job in this workflow runs
-    # unconditionally on push to main) — only pull_request needs gating, so
-    # this job is a no-op (and downstream `if:` short-circuits) on push.
-    if: github.event_name == 'pull_request'
+    # Runs on every event so its result is `success` on push too — the
+    # `*-gate` jobs refuse anything else (#1398). Only the filter STEP is
+    # PR-only; off a PR the output is forced 'true', so on a push to main
+    # every gated job runs (the same shape as ci.yml's detect-changes).
+    # ⚠️ Before #1398 this job was skipped on push, so were all eight gated
+    # jobs behind it, and main never re-built the docs after a merge.
     outputs:
-      docs_changed: ${{ steps.filter.outputs.docs }}
+      docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
     steps:
       # No actions/checkout here: dorny/paths-filter's default REST-API mode
       # for pull_request events queries the changed-files list via the
@@ -61,6 +68,7 @@ jobs:
       # pull requests it's not necessary to checkout the code").
       - name: Filter changed paths
         id: filter
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
           filters: |
@@ -122,19 +130,15 @@ jobs:
               # (the pre-push strict hook is scoped to docs/mkdocs paths, so a
               # requirements-only push does not trigger it either). Without
               # this entry a bump of those pins touches no `docs` path, every
-              # gated leg reports `skipped`, and `all-checks` tolerates
-              # `skipped` unconditionally — it fails only on failure/cancelled,
-              # deliberately weaker than ci.yml's gate, which re-checks the
-              # detect output. So the bump merges with NO pre-merge doc-build
-              # signal at all — which is the whole point of a required check.
-              # (Every GATED leg reports `skipped`; `head-blob-hygiene` has no
-              # `if:` and reports success, which is why `all-checks` is green
-              # with nothing having built the docs.) The break then lands
-              # post-merge on this workflow's own push-to-main run — push has
-              # no top-level `paths:` and `mkdocs-build` gates on
-              # `event_name != 'pull_request' || …`, so it runs there — i.e.
-              # main goes red for everyone instead of the PR going red for its
-              # author.
+              # gated leg reports `skipped`, and the `*-gate` jobs accept a
+              # skip whenever `docs_changed` is not 'true' — correctly, since
+              # the filter said nothing relevant changed. So the bump merges
+              # with NO pre-merge doc-build signal at all, which is the whole
+              # point of a required check. The break then lands post-merge on
+              # this workflow's own push-to-main run (detect-changes forces
+              # `docs_changed` true off a PR, so `mkdocs-build` runs there) —
+              # i.e. main goes red for everyone instead of the PR going red for
+              # its author.
               #
               # Accepted cost: `docs` is ONE filter gating eight jobs, so a pin
               # bump now also runs the two that do not install from it —
@@ -148,10 +152,10 @@ jobs:
               - ".pre-commit-config.yaml"
 
   validate-mermaid:
-    name: Validate Mermaid Diagrams
+    name: Validate Mermaid Diagrams — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -204,10 +208,10 @@ jobs:
           python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 
   check-links:
-    name: Check Documentation Links
+    name: Check Documentation Links — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -267,10 +271,10 @@ jobs:
           python scripts/tools/lint/check_head_blob_hygiene.py --ci
 
   check-frontmatter:
-    name: Check Documentation Front Matter
+    name: Check Documentation Front Matter — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -301,10 +305,10 @@ jobs:
           python scripts/tools/dx/add_frontmatter.py --check --base-dir rule-packs/
 
   check-coverage:
-    name: Check Documentation Coverage
+    name: Check Documentation Coverage — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -339,10 +343,10 @@ jobs:
           python scripts/tools/dx/sync_glossary_abbr.py --check
 
   mkdocs-build:
-    name: MkDocs Build Verification
+    name: MkDocs Build Verification — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -373,10 +377,12 @@ jobs:
           bash scripts/tools/lint/mkdocs_strict_check.sh
 
   doc-line-count:
-    name: Documentation Line Count Monitor
+    name: Documentation Line Count Monitor — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.docs_changed == 'true'
+    # On a push `pull_request.base.sha` is empty, so `base` checks out the
+    # pushed commit itself and the delta is 0 — a no-op, not a failure.
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
@@ -400,10 +406,10 @@ jobs:
           fi
 
   drift-checks:
-    name: Drift Detection (validate_all.py)
+    name: Drift Detection (validate_all.py) — run
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -483,7 +489,7 @@ jobs:
     # Not a required status check, but without this gate it would now run
     # (downloading amtool/promtool/yq) on every PR once the workflow-level
     # `paths:` filter above is removed — this keeps today's cost profile.
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
+    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -520,55 +526,226 @@ jobs:
       - name: Run I-4 runbook smoke test
         run: bash scripts/tools/lint/smoke_test_i4_runbook.sh
 
-  all-checks:
-    name: All Documentation Checks
+  validate-mermaid-gate:
+    name: Validate Mermaid Diagrams
     runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, validate-mermaid]
+    # The REQUIRED check (#1398). `validate-mermaid` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
     if: always()
-    needs:
-      - validate-mermaid
-      - check-links
-      - head-blob-hygiene
-      - check-frontmatter
-      - check-coverage
-      - mkdocs-build
-      - drift-checks
-      - i4-runbook-smoke-test
     steps:
-      - name: Check results
+      - name: Verify mermaid validation succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.validate-mermaid.result }}
         run: |
-          echo "validate-mermaid: ${{ needs.validate-mermaid.result }}"
-          echo "check-links: ${{ needs.check-links.result }}"
-          echo "head-blob-hygiene: ${{ needs.head-blob-hygiene.result }}"
-          echo "check-frontmatter: ${{ needs.check-frontmatter.result }}"
-          echo "check-coverage: ${{ needs.check-coverage.result }}"
-          echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
-          echo "drift-checks: ${{ needs.drift-checks.result }}"
-          echo "i4-runbook-smoke-test: ${{ needs.i4-runbook-smoke-test.result }}"
-          # `cancelled` must fail like `failure` (mirrors the fail-closed
-          # semantics of ci.yml's "Python Tests (3.13)" aggregation gate). The
-          # previous form compared against "failure" only, so a job killed by
-          # the concurrency group or a dead runner reported `cancelled` and
-          # this required check went GREEN with that documentation leg never
-          # having run. `skipped` is deliberately still tolerated — these legs
-          # are path-gated by design and a skip is the intended no-op.
-          bad=0
-          for pair in \
-            "validate-mermaid:${{ needs.validate-mermaid.result }}" \
-            "check-links:${{ needs.check-links.result }}" \
-            "head-blob-hygiene:${{ needs.head-blob-hygiene.result }}" \
-            "check-frontmatter:${{ needs.check-frontmatter.result }}" \
-            "check-coverage:${{ needs.check-coverage.result }}" \
-            "mkdocs-build:${{ needs.mkdocs-build.result }}" \
-            "drift-checks:${{ needs.drift-checks.result }}" \
-            "i4-runbook-smoke-test:${{ needs.i4-runbook-smoke-test.result }}"; do
-            job="${pair%%:*}"; res="${pair#*:}"
-            if [[ "$res" == "failure" || "$res" == "cancelled" ]]; then
-              echo "::error::documentation check '$job' → $res"
-              bad=1
-            fi
-          done
-          if [[ "$bad" -ne 0 ]]; then
-            echo "::error::One or more documentation checks failed"
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "validate-mermaid: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
             exit 1
           fi
-          echo "All documentation checks passed"
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::validate-mermaid did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  check-links-gate:
+    name: Check Documentation Links
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, check-links]
+    # The REQUIRED check (#1398). `check-links` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the link check succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.check-links.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "check-links: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::check-links did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  check-frontmatter-gate:
+    name: Check Documentation Front Matter
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, check-frontmatter]
+    # The REQUIRED check (#1398). `check-frontmatter` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the front-matter check succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.check-frontmatter.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "check-frontmatter: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::check-frontmatter did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  check-coverage-gate:
+    name: Check Documentation Coverage
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, check-coverage]
+    # The REQUIRED check (#1398). `check-coverage` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the coverage check succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.check-coverage.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "check-coverage: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::check-coverage did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  mkdocs-build-gate:
+    name: MkDocs Build Verification
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, mkdocs-build]
+    # The REQUIRED check (#1398). `mkdocs-build` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the mkdocs build succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.mkdocs-build.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "mkdocs-build: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::mkdocs-build did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  doc-line-count-gate:
+    name: Documentation Line Count Monitor
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, doc-line-count]
+    # The REQUIRED check (#1398). `doc-line-count` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the line-count monitor succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.doc-line-count.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "doc-line-count: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::doc-line-count did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  drift-checks-gate:
+    name: Drift Detection (validate_all.py)
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, drift-checks]
+    # The REQUIRED check (#1398). `drift-checks` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify drift detection succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
+          RUN_RESULT: ${{ needs.drift-checks.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
+          echo "drift-checks: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::drift-checks did not succeed (result=$RUN_RESULT)"
+          exit 1

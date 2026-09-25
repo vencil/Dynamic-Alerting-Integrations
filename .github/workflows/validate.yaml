@@ -17,8 +17,13 @@
 # adding more paths to the filter list (see the filter's own comments below)
 # — which only delays the next PR shape that isn't on the list from hitting
 # the same wall. A job that runs and is skipped via its own `if:`, by
-# contrast, reports `skipped`, which satisfies the requirement. See
-# detect-changes below.
+# contrast, reports `skipped` — which also satisfies the requirement, and
+# that is the opposite problem: when detect-changes itself fails, every
+# job below skips and the PR merges having validated nothing (#1398). So
+# the required NAMES belong to the `*-gate` jobs at the end of this file,
+# which always run and fail unless their leg succeeded or was skipped
+# because detect-changes said it was not needed; the legs themselves are
+# named `… — run`. See detect-changes below.
 #
 # DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
 # `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
@@ -226,7 +231,7 @@ jobs:
   # "Go Tests (1.26)" are the required checks now.)
 
   go-lint:
-    name: Go Lint
+    name: Go Lint — run
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.validate_changed == 'true'
@@ -476,7 +481,7 @@ jobs:
         run: golangci-lint run ./...
 
   validate-config:
-    name: Validate Tenant Config & Routes
+    name: Validate Tenant Config & Routes — run
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.validate_changed == 'true'
@@ -543,7 +548,7 @@ jobs:
             --ci
 
   version-check:
-    name: Version Consistency
+    name: Version Consistency — run
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.validate_changed == 'true'
@@ -556,3 +561,99 @@ jobs:
       - run: python scripts/tools/dx/bump_docs.py --check
       - name: Count consistency (hooks / tools / rule packs / JSX)
         run: python scripts/tools/dx/bump_docs.py --sync-counts --check
+
+  go-lint-gate:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, go-lint]
+    # The REQUIRED check (#1398). `go-lint` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify go lint succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
+          RUN_RESULT: ${{ needs.go-lint.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
+          echo "go-lint: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::go-lint did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  validate-config-gate:
+    name: Validate Tenant Config & Routes
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, validate-config]
+    # The REQUIRED check (#1398). `validate-config` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify tenant config validation succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
+          RUN_RESULT: ${{ needs.validate-config.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
+          echo "validate-config: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::validate-config did not succeed (result=$RUN_RESULT)"
+          exit 1
+
+  version-check-gate:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [detect-changes, version-check]
+    # The REQUIRED check (#1398). `version-check` is path-gated, and a skipped
+    # required check reports Success — including when detect-changes itself
+    # failed and skipped everything below it. This job always runs and says
+    # which of those it was.
+    if: always()
+    steps:
+      - name: Verify the version check succeeded (or was path-skipped as not needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
+          RUN_RESULT: ${{ needs.version-check.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
+          echo "version-check: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
+            exit 0
+          fi
+          echo "::error::version-check did not succeed (result=$RUN_RESULT)"
+          exit 1
