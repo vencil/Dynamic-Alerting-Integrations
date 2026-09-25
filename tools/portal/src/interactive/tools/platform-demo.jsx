@@ -7,169 +7,43 @@ related: [wizard, cli-playground, onboarding-checklist]
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronRight, Play, RotateCcw, Zap } from 'lucide-react';
+import { DEMO_TRANSCRIPTS } from './platform-demo/fixtures/transcripts.js';
+import { CHARS_PER_TICK, transcriptChars, runDurationMs } from './platform-demo/utils/typing.js';
 
 const t = window.__t || ((zh, en) => en);
 
+// command / terminal / sample are recorded from real da-tools runs — see the
+// fixture's header for how they were captured and must be re-captured.
 const PHASE_CONFIG = [
   {
     id: 'scaffold',
-    title: t('Scaffold Tenant', 'Scaffold Tenant'),
-    description: t('Create demo-tenant.yaml with dynamic alerting config', 'Create demo-tenant.yaml with dynamic alerting config'),
-    command: 'da-tools scaffold --tenant demo-tenant --output-dir demo-out',
-    terminal: [
-      '$ da-tools scaffold --tenant demo-tenant --output-dir demo-out',
-      '',
-      '▶ Scaffold: demo-tenant',
-      '  Creating demo-out/demo-tenant.yaml...',
-      '  ✓ Applied defaults (3-state mode: Normal)',
-      '  ✓ Set replicas=2 (HA)',
-      '  ✓ Configured webhook domain policy',
-      '  ✓ Validated schema (18 keys)',
-      '',
-      'Output dir: demo-out/ → demo-tenant.yaml (847 bytes), _defaults.yaml, scaffold-report.txt',
-      'Status: SUCCESS',
-    ],
-    sample: `apiVersion: alertmanager.io/v1
-kind: TenantConfig
-metadata:
-  name: demo-tenant
-  namespace: db-a
-spec:
-  _replicas: 2
-  _state: normal
-  _routing_defaults:
-    group_wait: 10s
-    group_interval: 30s
-    receiver: webhook
-  receivers:
-    - name: webhook
-      webhook_configs:
-        - url: "https://incident.demo.local/hook"`,
+    title: t('建立租戶設定', 'Scaffold Tenant'),
+    description: t('以非互動模式產生 demo-tenant.yaml 與 _defaults.yaml（含 webhook 路由）', 'Generate demo-tenant.yaml and _defaults.yaml non-interactively (with webhook routing)'),
+    ...DEMO_TRANSCRIPTS.scaffold,
   },
   {
     id: 'migrate',
-    title: t('Migrate Rules', 'Migrate Rules'),
-    description: t('Convert legacy Prometheus rules to Dynamic Alerting format', 'Convert legacy Prometheus rules to Dynamic Alerting format'),
-    command: 'da-tools migrate --from legacy_rules.yaml --to rules.new.yaml',
-    terminal: [
-      '$ da-tools migrate --from legacy_rules.yaml --to rules.new.yaml',
-      '',
-      '▶ Migrate: Scanning legacy rules...',
-      '  Found 3 legacy rules:',
-      '    • HighMemoryUsage (severity: warning)',
-      '    • DiskSpaceAlert (severity: critical)',
-      '    • APILatencyWarning (severity: warning)',
-      '',
-      '  Converting HighMemoryUsage → MemoryUtilizationHigh',
-      '  ✓ Added _re label support for regex dimensions',
-      '  ✓ Mapped severity to 3-state model',
-      '  ✓ Generated sentinel alert pattern',
-      '',
-      '  Converting DiskSpaceAlert → DiskUtilizationCritical',
-      '  ✓ Added cardinality limits (500 per tenant)',
-      '',
-      '  Converting APILatencyWarning → APILatencySlow',
-      '  ✓ Applied duration thresholds',
-      '',
-      'Output: rules.new.yaml (1.2 KB)',
-      'Status: SUCCESS (3 rules migrated)',
-    ],
-    sample: `groups:
-  - name: demo-tenant-rules
-    rules:
-      - alert: MemoryUtilizationHigh
-        expr: node_memory_util > 85
-        for: 2m
-        annotations:
-          summary: "Memory > 85%"
-          _severity: warning`,
+    title: t('遷移規則', 'Migrate Rules'),
+    description: t('把傳統 Prometheus 警報規則轉成動態多租戶三件套（平台規則 + 租戶閾值）', 'Convert legacy Prometheus alert rules into the dynamic multi-tenant set (platform rules + tenant thresholds)'),
+    ...DEMO_TRANSCRIPTS.migrate,
   },
   {
     id: 'validate',
-    title: t('Validate Config', 'Validate Config'),
-    description: t('Comprehensive schema, routing, and policy validation', 'Comprehensive schema, routing, and policy validation'),
-    command: 'da-tools validate --config conf.d/ --policy policy.yaml',
-    terminal: [
-      '$ da-tools validate --config conf.d/ --policy policy.yaml',
-      '',
-      '▶ Validate: Running 4 checks...',
-      '  ✓ Schema check (18/18 keys valid)',
-      '    - _replicas: 2 (HA)',
-      '    - _state: normal',
-      '    - _routing_defaults: ok',
-      '',
-      '  ✓ Routing check (3 routes, 2 receivers)',
-      '    - webhook policy: fnmatch allowed',
-      '    - group_wait: 10s (5s–5m guardrail OK)',
-      '    - group_interval: 30s (5s–5m guardrail OK)',
-      '',
-      '  ✓ Policy check (webhook domain allowlist)',
-      '    - incident.demo.local: allowed',
-      '',
-      '  ✓ Version check',
-      '    - Platform: v2.1.0',
-      '    - Exporter: v2.1.0',
-      '',
-      'Status: ALL CHECKS PASSED',
-    ],
+    title: t('驗證設定', 'Validate Config'),
+    description: t('一站式驗證 conf.d/：YAML 語法、schema、路由、profile、policy DSL、租戶唯一性', 'One-stop validation of conf.d/: YAML syntax, schema, routes, profiles, policy DSL, tenant uniqueness'),
+    ...DEMO_TRANSCRIPTS.validate,
   },
   {
     id: 'routes',
-    title: t('Generate Routes', 'Generate Routes'),
-    description: t('Dynamic Alertmanager route/receiver/inhibit generation', 'Dynamic Alertmanager route/receiver/inhibit generation'),
-    command: 'da-tools generate-routes --config conf.d/ --output am-config.yaml',
-    terminal: [
-      '$ da-tools generate-routes --config conf.d/ --output am-config.yaml',
-      '',
-      '▶ Generate Routes: Processing tenants...',
-      '  ✓ demo-tenant',
-      '    - Routes: 3 (webhook × 1, email × 1, slack × 1)',
-      '    - Receivers: 2 (webhook, email)',
-      '    - Inhibit rules: 4',
-      '      • info + warning → inhibit',
-      '      • warning + critical → inhibit',
-      '      • sentinel + any → inhibit',
-      '',
-      '  Route tree:',
-      '    root (demo-tenant)',
-      '    ├─ webhook (priority: high)',
-      '    ├─ email (priority: normal)',
-      '    └─ escalation (priority: critical)',
-      '',
-      'Output: am-config.yaml (2.8 KB)',
-      'Status: SUCCESS',
-    ],
+    title: t('產生路由', 'Generate Routes'),
+    description: t('從租戶設定產生 Alertmanager route / receiver / inhibit 片段', 'Generate the Alertmanager route / receiver / inhibit fragment from tenant config'),
+    ...DEMO_TRANSCRIPTS.routes,
   },
   {
     id: 'baseline',
-    title: t('Baseline Discovery', 'Baseline Discovery'),
-    description: t('Discover metrics and suggest thresholds', 'Discover metrics and suggest thresholds'),
-    command: 'da-tools baseline --prometheus http://localhost:9090 --tenant demo-tenant',
-    terminal: [
-      '$ da-tools baseline --prometheus http://localhost:9090 --tenant demo-tenant',
-      '',
-      '▶ Baseline: Scanning prometheus...',
-      '  ✓ Connected to http://localhost:9090',
-      '',
-      '  Discovered 12 metrics:',
-      '    • node_memory_util (samples: 1200)',
-      '    • node_cpu_util (samples: 1200)',
-      '    • disk_utilization (samples: 600)',
-      '    • api_request_duration_seconds (samples: 4800)',
-      '    • http_requests_total (samples: 2400)',
-      '    • pg_connections_used (samples: 480)',
-      '',
-      '  Suggested thresholds (p95 / p99 / max):',
-      '  ┌────────────────────────┬──────┬──────┬──────┐',
-      '  │ Metric                 │ P95  │ P99  │ Max  │',
-      '  ├────────────────────────┼──────┼──────┼──────┤',
-      '  │ node_memory_util       │ 82%  │ 88%  │ 91%  │',
-      '  │ node_cpu_util          │ 75%  │ 85%  │ 92%  │',
-      '  │ api_request_duration_s │ 145ms│ 250ms│ 890ms│',
-      '  └────────────────────────┴──────┴──────┴──────┘',
-      '',
-      'Status: SUCCESS (12 metrics, 3 threshold suggestions)',
-    ],
+    title: t('基線探索', 'Baseline Discovery'),
+    description: t('觀測指標負載並建議閾值——此處數值取自本機 stub Prometheus，為合成資料，不是任何租戶的實測', 'Observe metric load and suggest thresholds — the values here come from a local stub Prometheus: synthetic, not measured on any tenant'),
+    ...DEMO_TRANSCRIPTS.baseline,
   },
 ];
 
@@ -314,11 +188,11 @@ function PhaseContent({ phase, isActive, isRunning, onRun, typingSpeed }) {
   useEffect(() => {
     if (!isRunning) { setTypingIdx(-1); return; }
     setTypingIdx(0);
-    const totalChars = phase.terminal.reduce((s, l) => s + l.length + 1, 0);
+    const totalChars = transcriptChars(phase.terminal);
     const id = setInterval(() => {
       setTypingIdx(prev => {
         if (prev >= totalChars) { clearInterval(id); return prev; }
-        return prev + 2; // 2 chars per tick for smooth progress
+        return prev + CHARS_PER_TICK;
       });
     }, typingSpeed || 20);
     return () => clearInterval(id);
@@ -384,7 +258,7 @@ export default function PlatformDemo() {
           setCurrentPhaseIdx(currentPhaseIdx + 1);
         }, 500);
       }
-    }, (currentPhase.terminal.length * typingSpeed + 1000));
+    }, runDurationMs(currentPhase.terminal, typingSpeed));
   }, [isRunning, completedPhases, currentPhase.id, autoPlay, currentPhaseIdx, typingSpeed]);
 
   const handleNext = useCallback(() => {
@@ -415,7 +289,7 @@ export default function PlatformDemo() {
         <div className="max-w-7xl mx-auto px-6 py-8">
           <h1 className="text-4xl font-bold text-slate-900">{t('平台展示', 'Platform Demo')}</h1>
           <p className="text-slate-600 mt-2 text-lg">
-            {t('導覽平台工作流（scaffold → migrate → validate → routes → baseline）— 示意指令、模擬輸出，無需叢集', 'A walkthrough of the platform workflow (scaffold → migrate → validate → routes → baseline) — illustrative commands, simulated output, no cluster required')}
+            {t('導覽平台工作流（scaffold → migrate → validate → routes → baseline）— 真實 da-tools 指令、預錄輸出（瀏覽器內重播），無需叢集', 'A walkthrough of the platform workflow (scaffold → migrate → validate → routes → baseline) — real da-tools commands, recorded output replayed in the browser, no cluster required')}
           </p>
         </div>
       </div>
@@ -516,7 +390,7 @@ export default function PlatformDemo() {
               <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-6 shadow-sm">
                 <h3 className="text-xl font-bold text-green-900">{t('展示完成!', 'Demo Complete!')}</h3>
                 <p className="text-green-800 mt-2">
-                  {t('您已走完整個平台工作流導覽（示意指令、模擬輸出）。', "You've walked through the entire platform workflow tour (illustrative commands, simulated output).")}
+                  {t('您已走完整個平台工作流導覽（真實指令、預錄輸出）。', "You've walked through the entire platform workflow tour (real commands, recorded output).")}
                 </p>
                 <div className="mt-4 space-y-2">
                   <p className="font-semibold text-green-900">{t('後續步驟:', 'Next Steps:')}</p>

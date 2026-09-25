@@ -805,8 +805,8 @@ tools:
   - walkthrough
   - interactive
   desc:
-    en: Interactive platform workflow walkthrough (illustrative commands, simulated output, no cluster)
-    zh: 互動式平台工作流導覽（示意指令、模擬輸出、無需叢集）
+    en: Interactive platform workflow walkthrough (real da-tools commands, recorded output, no cluster)
+    zh: 互動式平台工作流導覽（真實 da-tools 指令、預錄輸出、無需叢集）
   related:
   - wizard
   - cli-playground
