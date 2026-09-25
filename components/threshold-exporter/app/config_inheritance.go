@@ -72,6 +72,17 @@ func computeMergedHash(
 	return config.ComputeMergedHash(tenantYAMLBytes, tenantID, defaultsChainYAML)
 }
 
+// parsedDefaults / parseDefaultsForMerge / computeMergedHashParsed: the
+// parse-once form of computeMergedHash for a cold load (#1978) — see
+// config.ParsedDefaults.
+type parsedDefaults = config.ParsedDefaults
+
+func parseDefaultsForMerge(b []byte) parsedDefaults { return config.ParseDefaultsForMerge(b) }
+
+func computeMergedHashParsed(tenantYAMLBytes []byte, tenantID string, defaultsChain []parsedDefaults) (string, error) {
+	return config.ComputeMergedHashParsed(tenantYAMLBytes, tenantID, defaultsChain)
+}
+
 // computeSourceHash returns the 16-char source-file fingerprint.
 func computeSourceHash(tenantYAMLBytes []byte) string {
 	return config.ComputeSourceHash(tenantYAMLBytes)

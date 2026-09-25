@@ -2,10 +2,7 @@ package config
 
 import (
 	"log"
-	"os"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // parseDefaultsBytes turns raw _defaults.yaml bytes into the same
@@ -13,43 +10,64 @@ import (
 // elsewhere in the codebase. Returns nil with no error for an empty
 // document (legacy flat configs may have empty/whitespace-only files).
 //
-// This duplicates the pipeline used in computeEffectiveConfig but
-// stops before the merge step — we only need the parsed dict for
-// key-level diffing.
+// The parse is the merge's own first half (ParseDefaultsForMerge, #1978),
+// stopped before the merge step — we only need the parsed dict for
+// key-level diffing — so a cold load that already parsed a file for the
+// merge hands the same parse here (DefaultsDict) instead of a second one.
 func parseDefaultsBytes(b []byte) (map[string]any, error) {
-	if len(strings.TrimSpace(string(b))) == 0 {
+	if isBlankDefaults(b) {
 		return map[string]any{}, nil
 	}
-	var doc any
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, err
-	}
-	normalized := normalizeYAMLToJSON(doc)
-	block := extractDefaultsBlock(normalized)
-	if block == nil {
-		return map[string]any{}, nil
-	}
-	return block, nil
+	return ParseDefaultsForMerge(b).defaultsDict()
 }
 
 // ParseDefaultsBytes is the exported form of parseDefaultsBytes, for package
 // main's forwarder (config_defaults_diff.go).
 func ParseDefaultsBytes(b []byte) (map[string]any, error) { return parseDefaultsBytes(b) }
 
+// DefaultsDict is parseDefaultsBytes(b) given p = ParseDefaultsForMerge(b)
+// already made: whitespace-only bytes are an empty map without being judged
+// (even when YAML rejects them, e.g. a stray tab), a syntax error is
+// returned, and a document without a defaults mapping is an empty map.
+func DefaultsDict(b []byte, p ParsedDefaults) (map[string]any, error) {
+	if isBlankDefaults(b) {
+		return map[string]any{}, nil
+	}
+	return p.defaultsDict()
+}
+
+func isBlankDefaults(b []byte) bool { return len(strings.TrimSpace(string(b))) == 0 }
+
+func (p ParsedDefaults) defaultsDict() (map[string]any, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	if p.block == nil {
+		return map[string]any{}, nil
+	}
+	return p.block, nil
+}
+
+// DefaultsSource yields one defaults file's bytes and its ParseDefaultsForMerge
+// parse, or the error reading it. A cold load passes the source its merge
+// already filled (#1978), so the cache below and the merged_hash chains share
+// one read and one parse per file.
+type DefaultsSource func(absPath string) (raw []byte, parsed ParsedDefaults, err error)
+
 // ParseDefaultsFiles parses every defaults file of a scan (TreeScan.Defaults)
-// with parseDefaultsBytes, keyed by the same absolute path. A file that cannot
-// be read or parsed is logged and left out, so one broken defaults file cannot
-// poison the rest. Moved from package main's populateHierarchyStateFrom
-// (#1988); logger must be non-nil.
-func ParseDefaultsFiles(defaults map[string]bool, logger *log.Logger) map[string]map[string]any {
+// with parseDefaultsBytes' contract, keyed by the same absolute path. A file
+// that cannot be read or parsed is logged and left out, so one broken
+// defaults file cannot poison the rest. Moved from package main's
+// populateHierarchyStateFrom (#1988); src and logger must be non-nil.
+func ParseDefaultsFiles(defaults map[string]bool, src DefaultsSource, logger *log.Logger) map[string]map[string]any {
 	newParsedDefaults := make(map[string]map[string]any, len(defaults))
 	for dp := range defaults {
-		b, rerr := os.ReadFile(dp)
+		b, pd, rerr := src(dp)
 		if rerr != nil {
 			logger.Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
 			continue
 		}
-		parsed, perr := parseDefaultsBytes(b)
+		parsed, perr := DefaultsDict(b, pd)
 		if perr != nil {
 			logger.Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
 			continue
