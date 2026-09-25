@@ -861,9 +861,16 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// platform value. The full-rebuild branch drops such a tenant, so there
 	// the scan's verdict alone is right.
 	exists := tenantExistenceFor(newConfigs, scan)
-	patchBranch := isTenantOnlyChange(changed, added, removed) && m.config != nil
+	// ONE snapshot of the published config, read under the lock, serves the
+	// branch decision, the fail-safe lookup and the patch itself — the
+	// branch test used to read m.config outside the lock, and each consumer
+	// took its own read.
+	m.mu.RLock()
+	prev := m.config
+	m.mu.RUnlock()
+	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil
 	if patchBranch && exists != nil {
-		for _, tid := range m.failSafeHeldTenants(newHashes, newConfigs) {
+		for _, tid := range m.failSafeHeldTenants(prev, newHashes, newConfigs) {
 			exists[tid] = struct{}{}
 		}
 	}
@@ -871,10 +878,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
-		// case. prev is read under the lock; patchTenants is otherwise pure.
-		m.mu.RLock()
-		prev := m.config
-		m.mu.RUnlock()
+		// case. prev is the snapshot above; patchTenants is otherwise pure.
 		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed, exists)
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
@@ -916,13 +920,17 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 // ⚠️ A held tenant whose file is then DELETED is not listed (off disk), yet
 // the patch path keeps serving it — see the exception in patchTenants'
 // header and #2022.
-func (m *ConfigManager) failSafeHeldTenants(newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
+//
+// `prev` is the caller's snapshot of m.config — the same one the patch is
+// built from — so "still served" is judged against exactly that config.
+// tenantSources is still read under the lock here.
+func (m *ConfigManager) failSafeHeldTenants(prev *ThresholdConfig, newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
+	if prev == nil {
+		return nil
+	}
 	scanRoot := absScanRoot(m.path)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.config == nil {
-		return nil
-	}
 	var out []string
 	for tid, src := range m.hierarchy.tenantSources {
 		rel, err := filepath.Rel(scanRoot, filepath.Clean(src))
@@ -936,7 +944,7 @@ func (m *ConfigManager) failSafeHeldTenants(newHashes map[string]string, newConf
 		if _, parsed := newConfigs[key]; parsed {
 			continue
 		}
-		if _, served := m.config.Tenants[tid]; served {
+		if _, served := prev.Tenants[tid]; served {
 			out = append(out, tid)
 		}
 	}

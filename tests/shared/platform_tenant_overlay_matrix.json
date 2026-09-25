@@ -18,6 +18,8 @@
     "(ResolveSeverityDedup: enable/disable; ResolveSilentModes: sorted target",
     "severities joined by ',', '' = none); null = tenant absent from the exporter.",
     "Go asserts metric/exporter_dedup/silent_mode, Python dedup/group_wait.",
+    "A tenant file whose FIRST document does not parse declares nothing on either",
+    "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
     "The routing plane is flat by design, so a tenant declared only in a",
     "subdirectory has dedup null while it still EXISTS for platform-file purposes.",
     "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",
@@ -261,6 +263,30 @@
           "group_wait": null,
           "exporter_dedup": "disable",
           "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "no-existence-from-a-tenant-file-whose-first-document-does-not-parse",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "sub/tx.yaml": "tenants:\n  tx: [\n",
+        "ty.yaml": "tenants:\n  ty: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": null,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": null,
+          "silent_mode": null
+        },
+        "ty": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
         }
       }
     },

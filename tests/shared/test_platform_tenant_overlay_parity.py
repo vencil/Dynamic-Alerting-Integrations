@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 from _grar_parse import load_tenant_tree  # noqa: E402
-from _lib_confd import overlay_platform_tenants  # noqa: E402
+from _lib_confd import declared_tenant_ids, overlay_platform_tenants  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
@@ -109,3 +109,21 @@ def test_existence_is_not_consulted_when_no_platform_file_names_a_tenant() -> No
     merged, orphans = overlay_platform_tenants(
         [("tx.yaml", "tx", {"a": 1})], boom)
     assert merged == {"tx": {"a": 1}} and orphans == []
+
+
+def test_a_file_that_cannot_be_read_or_parsed_declares_nothing(tmp_path: Path) -> None:
+    """`declared_tenant_ids` skips a tenant file it cannot use rather than
+    raising: a first document that does not parse, and bytes that are not
+    UTF-8 (the read itself fails). Neither declares its tenant — the Go
+    walker rejects both too (the parse-failure row of the matrix pins the
+    first case against Go). A readable control in the same tree still counts.
+
+    ⚠️ The unreadable case is non-UTF-8 content, not `chmod 000`: this suite
+    runs as root in CI containers, where mode 000 does not stop a read, and a
+    dangling symlink or a directory named `*.yaml` never reaches this code —
+    `iter_config_files` drops both before the read.
+    """
+    (tmp_path / "broken.yaml").write_text("tenants:\n  tb: [\n", encoding="utf-8")
+    (tmp_path / "latin1.yaml").write_bytes(b"tenants:\n  tl: {}\n# caf\xe9\n")
+    (tmp_path / "ok.yaml").write_text("tenants:\n  tok: {}\n", encoding="utf-8")
+    assert declared_tenant_ids(tmp_path) == {"tok"}
