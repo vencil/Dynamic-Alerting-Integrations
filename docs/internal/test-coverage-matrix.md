@@ -72,6 +72,8 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 | `BenchmarkDiffAndReload_Hierarchical_1000_NoChange` | 2 | `diffAndReload` steady-state WatchLoop tick：hash diff → no-op fast path (1000 tenants) | v2.8.0 |
 | `BenchmarkDiffAndReload_Hierarchical_2000_NoChange` | 2 | 同上，2000 tenants | v2.8.0 |
 | `BenchmarkDiffAndReload_Hierarchical_5000_NoChange` | 2 | 同上，5000 tenants | v2.8.0 |
+| `BenchmarkDiffAndReload_Hierarchical_1000_NoChange_Warm` | 2 | 同 1000_NoChange，但 mtime 先設為一小時前、固定走 mtime fast-path。1000_NoChange 本身是雙峰（fixture 剛寫、2s mtime guard 內整棵重讀），此變體與下一列把兩種模式分開量（#1982） | v2.9.0+ |
+| `BenchmarkDiffAndReload_Hierarchical_1000_NoChange_Reread` | 2 | 同上，mtime 設在未來、固定整棵重讀（same-hash carry，不重 parse）（#1982） | v2.9.0+ |
 | `BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged` | 2 | `diffAndReload` 單一 tenant YAML 變更 → diff + targeted reload tail（fresh-dir variant） | v2.8.0 |
 | `BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000` | 2 | B-8：region-level `_defaults.yaml` 變更 → affected-tenants count via `b.ReportMetric` (1000 tenants) | v2.8.0 |
 | `BenchmarkBlastRadius_DefaultsChange_Hierarchical_2000` | 2 | 同上，2000 tenants | v2.8.0 |

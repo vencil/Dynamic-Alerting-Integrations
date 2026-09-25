@@ -28,8 +28,10 @@ from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
+    declared_tenant_ids,
     is_defaults_name,
     iter_config_files,
+    overlay_platform_tenants,
     readable_carriers,
     select_defaults_carrier,
     unusable_config_paths,
@@ -451,6 +453,9 @@ def _parse_config_files(config_dir: str) -> dict:
     # (`select_defaults_carrier`, over the carriers that can be read). Any
     # other carrier spelling is ignored WHOLE, as the exporter's flat plane
     # ignores it, and named once.
+    # #1982: every tenant entry of every root file, in read order, applied
+    # AFTER the loop — see `_apply_tenant_entries`.
+    tenant_entries: list[tuple[str, object, dict]] = []
     listed = list(iter_config_files(config_dir, recursive=False))
     readable, _unreadable = readable_carriers(
         p for p in listed if is_defaults_name(p.name))
@@ -613,9 +618,43 @@ def _parse_config_files(config_dir: str) -> dict:
                       f"{type(overrides).__name__} — that tenant is not "
                       f"loaded", file=sys.stderr)
                 continue
-            _parse_tenant_overrides(tenant, overrides, result)
+            tenant_entries.append((fname, tenant, overrides))
 
+    _apply_tenant_entries(config_dir, tenant_entries, result)
     return result
+
+
+def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
+    """Hand each tenant ONE merged block: platform file first, tenant file wins.
+
+    ⛔ THIS USED TO RUN PER FILE, AND THE FILENAME DECIDED WHO WON. A root
+    platform file's `tenants:` block is the platform's per-tenant default;
+    the tenant's own file overrides it key by key. Called once per file,
+    `_parse_tenant_overrides` let whichever file sorted LAST win — and it
+    treats a key the file does not write as that key's default, so a tenant
+    file silent on `_severity_dedup` RESET the platform's `disable` to
+    `enable`. Measured: platform `_severity_dedup: disable`, tenant file
+    `tx.yaml` silent → `enable`; the same tenant file named `TX.yaml` or
+    `0tx.yaml` (sorting before `_`) → `disable`. And `all_tenants` listed the
+    tenant once per file. The exporter's flat plane merges in the same order
+    (`sortFlatMergeOrder`), so the two planes agree whatever the file is called.
+
+    A platform entry for a tenant no tenant file declares (anywhere in the
+    tree — the walker's rule, `declared_tenant_ids`) is dropped and named: a
+    platform file cannot create a tenant.
+    """
+    merged, orphans = overlay_platform_tenants(
+        entries, lambda: declared_tenant_ids(config_dir))
+    for fname, tenant in orphans:
+        print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(tenant))} "
+              f"ignored — no tenant file declares tenant "
+              f"'{safe_label(str(tenant))}'; a platform file can only provide "
+              f"defaults for a tenant that already exists", file=sys.stderr)
+    # First-appearance order, as the per-file loop produced it.
+    for tenant in dict.fromkeys(t for _f, t, _o in entries):
+        if tenant not in merged:
+            continue  # an orphan, named above
+        _parse_tenant_overrides(tenant, merged[tenant], result)
 
 
 def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dict]:

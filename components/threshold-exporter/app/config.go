@@ -712,7 +712,9 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		// error is still counted and still loud; content this plane simply
 		// does not want is skipped in silence. (#1569 blind review.)
 		if isNestedPlatformFile(name) {
-			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
+			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger()); ok {
+				reportNestedPlatformTenants(fullPath, probe, m.getLogger())
+			}
 			delete(newConfigs, name)
 			continue
 		}
@@ -830,6 +832,15 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 			next[tid] = src
 		}
 		for key, partial := range newConfigs {
+			// ⛔ Tenant files only. A root platform file's `tenants:` block
+			// supplies per-tenant DEFAULTS and cannot attribute (or create)
+			// a tenant: before this, an entry naming a tenant no tenant file
+			// declares was attributed to `_defaults.yaml` here, so the
+			// incremental path made /effective answer for a tenant the full
+			// load never locates.
+			if isPlatformKey(key) {
+				continue
+			}
 			for tid := range partial.Tenants {
 				if _, known := next[tid]; known {
 					continue
@@ -840,17 +851,40 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		m.hierarchy.tenantSources = next
 	}
 
-	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
+	// Existence is THIS scan's verdict, on both branches (see
+	// declaredTenantIDs): the patch branch can orphan a platform entry too,
+	// by removing the only tenant file that declared the tenant.
+	//
+	// ⛔ ON THE PATCH BRANCH, "EXISTS" IS WHAT THIS RELOAD WILL SERVE. A
+	// tenant file that fails to parse keeps its tenants' last good values
+	// there (patchTenants' fail-safe, #1980), platform-supplied keys
+	// included; the scan has no declaration for it, so without this the
+	// orphan WARN named a tenant the same commit kept serving with the
+	// platform value. The full-rebuild branch drops such a tenant, so there
+	// the scan's verdict alone is right.
+	exists := tenantExistenceFor(newConfigs, scan)
+	// ONE snapshot of the published config, read under the lock, serves the
+	// branch decision, the fail-safe lookup and the patch itself — the
+	// branch test used to read m.config outside the lock, and each consumer
+	// took its own read.
+	m.mu.RLock()
+	prev := m.config
+	m.mu.RUnlock()
+	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil
+	if patchBranch && exists != nil {
+		for _, tid := range m.failSafeHeldTenants(prev, newHashes, newConfigs) {
+			exists[tid] = struct{}{}
+		}
+	}
+	reportPlatformOrphans(newConfigs, exists, m.getLogger())
+	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
-		// case. prev is read under the lock; patchTenants is otherwise pure.
-		m.mu.RLock()
-		prev := m.config
-		m.mu.RUnlock()
-		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed)
+		// case. prev is the snapshot above; patchTenants is otherwise pure.
+		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed, exists)
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
-		merged = mergePartialConfigs(newConfigs)
+		merged = mergePartialConfigs(newConfigs, exists)
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
 	// the else above, so the tenant-patch path published tenants exactly as
@@ -876,6 +910,47 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		tree:    scan,
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
+}
+
+// failSafeHeldTenants lists the tenants the patch branch keeps serving on
+// last good values: attributed (tenantSources) to a file that is still on
+// disk (newHashes) but did not parse this round (absent from newConfigs) —
+// the "on disk, did NOT parse" row refreshTenantSources keeps. Read from
+// the attribution BEFORE this reload refreshes it, because that is the
+// population m.config (the patch's prev) was built for.
+//
+// ⚠️ A held tenant whose file is then DELETED is not listed (off disk), yet
+// the patch path keeps serving it — see the exception in patchTenants'
+// header and #2022.
+//
+// `prev` is the caller's snapshot of m.config — the same one the patch is
+// built from — so "still served" is judged against exactly that config.
+// tenantSources is still read under the lock here.
+func (m *ConfigManager) failSafeHeldTenants(prev *ThresholdConfig, newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
+	if prev == nil {
+		return nil
+	}
+	scanRoot := absScanRoot(m.path)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []string
+	for tid, src := range m.hierarchy.tenantSources {
+		rel, err := filepath.Rel(scanRoot, filepath.Clean(src))
+		if err != nil {
+			continue
+		}
+		key := filepath.ToSlash(rel)
+		if _, onDisk := newHashes[key]; !onDisk {
+			continue
+		}
+		if _, parsed := newConfigs[key]; parsed {
+			continue
+		}
+		if _, served := prev.Tenants[tid]; served {
+			out = append(out, tid)
+		}
+	}
+	return out
 }
 
 // diffFileHashes compares the previous and current per-file hash maps and
@@ -919,8 +994,10 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 	return true
 }
 
-// indexTenantDeclarations maps each tenant to the sorted filenames declaring
-// it, built ONCE per reload.
+// indexTenantDeclarations maps each tenant to the filenames declaring it, in
+// sortFlatMergeOrder (platform files first — the order mergePartialConfigs
+// merges in, so reclaimTenantFrom's "later wins" is the tenant file's win),
+// built ONCE per reload.
 //
 // ⛔ THIS EXISTS BECAUSE THE OBVIOUS VERSION WAS QUADRATIC. `reclaimTenantFrom`
 // originally rescanned and re-sorted all of `newConfigs` per patched tenant.
@@ -937,7 +1014,7 @@ func indexTenantDeclarations(newConfigs map[string]ThresholdConfig) tenantDeclar
 	for name := range newConfigs {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sortFlatMergeOrder(names)
 
 	idx := tenantDeclarations{single: make(map[string]string, len(newConfigs))}
 	for _, name := range names {
@@ -1031,7 +1108,7 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 	overrides := make(map[string]ScheduledValue)
 	for _, name := range sources {
 		for k, v := range newConfigs[name].Tenants[tenant] {
-			overrides[k] = v // later filename wins, same as mergePartialInto
+			overrides[k] = v // later in sortFlatMergeOrder wins, same as mergePartialConfigs
 		}
 	}
 	return overrides, true
@@ -1046,8 +1123,23 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 // Two invariants keep this fast path equivalent to the full-rebuild path
 // (mergePartialConfigs + ApplyProfiles):
 //
-//   - changed+added are applied as one sorted filename sequence, mirroring
-//     mergePartialConfigs' own sort, so the last-writer is deterministic.
+//   - changed+added are applied as one sorted filename sequence, and each
+//     patched tenant is rebuilt from EVERY declaring file in
+//     sortFlatMergeOrder (reclaimTenantFrom), mirroring mergePartialConfigs,
+//     so the last-writer is deterministic and a tenant file beats a platform
+//     file's `tenants:` entry whatever either is called.
+//   - a tenant "survives" only while `exists` (tenantExistenceFor, this scan)
+//     holds it: removing the last tenant file that declares a tenant drops
+//     it even when a platform file's `tenants:` block still names it — a
+//     platform file cannot keep a tenant alive any more than it can create
+//     one, which is what the full rebuild does too.
+//     ⚠️ EXCEPT a tenant the fail-safe is holding: its file turned
+//     unparseable on an earlier reload and is now deleted. That file's
+//     partial left the cache when it failed to parse, so the removal pass
+//     below never sees the deletion and the tenant keeps being served —
+//     platform values included — while the orphan WARN (it is no longer in
+//     `exists`: the file is off disk) says the platform entry is ignored.
+//     Root cause predates this change (#2022); not fixed here.
 //   - a removed file's tenant is dropped only when this same reload did NOT
 //     re-introduce it via an added/changed file. A tenant relocating from a
 //     removed file into an added/changed file in the same reload must stay —
@@ -1072,7 +1164,7 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 // bookkeeping set nobody reads is a claim that the code does something it does
 // not. The move case is now answered by the index, which knows every file that
 // declares the tenant, not just the ones reparsed this round.
-func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
+func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string, exists map[string]struct{}) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults: prev.Defaults, // shared (immutable between patches)
 		// Shared for the same reason: the incremental path only re-parses the
@@ -1214,7 +1306,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
 				continue
 			}
-			if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
+			if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives && tenantExists(exists, tenant) {
 				merged.Tenants[tenant] = ov
 				continue
 			}
@@ -1226,7 +1318,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
+				if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives && tenantExists(exists, tenant) {
 					merged.Tenants[tenant] = ov
 				} else {
 					delete(merged.Tenants, tenant)
@@ -1235,6 +1327,17 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		}
 	}
 	return merged
+}
+
+// tenantExists reports whether a tenant is in the scan's existence set.
+// nil means no platform `tenants:` entry is in the merge (tenantExistenceFor),
+// so every tenant a surviving file declares came from a tenant file: yes.
+func tenantExists(exists map[string]struct{}, tenant string) bool {
+	if exists == nil {
+		return true
+	}
+	_, ok := exists[tenant]
+	return ok
 }
 
 // fullDirLoad performs a full directory load: ONE walk of the tree, then

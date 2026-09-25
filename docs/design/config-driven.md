@@ -94,6 +94,13 @@ tenants:
 | 其他 `_` 前綴檔（`_profiles.yaml`、`_defaults-multidb.yaml` …） | `profiles`, `tenants` | `defaults`／`state_filters`／`optional_overrides` 忽略 + WARN log（#1676） |
 | 租戶檔 (`db-a.yaml`) | 僅 `tenants` | 其他區塊自動忽略 + WARN log |
 
+**平台檔的 `tenants:` 區塊（#1982）**：根目錄 `_` 前綴檔裡的 `tenants:` 是「**平台對既有租戶的預設值**」，不是第二份租戶設定：
+
+- **租戶逐鍵贏，與檔名無關**：平台值先套、租戶檔（非 `_` 檔）的同名鍵後蓋；租戶檔沒寫的鍵保留平台值，不會被重設為預設。`TX.yaml`、`0tx.yaml` 這類排在 `_` 前面的檔名與 `tx.yaml` 結果相同。唯一的例外是平台專屬的強制機制（如 `_routing_enforced`），不走這一層。「與檔名無關」只指租戶檔對平台檔；多個平台檔對同一租戶的同一鍵給值時，仍依檔名排序、後者贏（與修正前相同）。
+- **不得建立租戶**：只在平台檔出現、沒有任何租戶檔宣告的租戶，從 `/metrics` 與路由產生器剝除，並印 WARN 點名檔案與租戶 id。「租戶存在」由任一層目錄的非 `_` 檔宣告：exporter 以它自己完整解析的結果判定；Python 讀取端以該檔**第一個 YAML 文件** `tenants:` 的 key 判定。exporter 拒收的租戶檔（如重複 key、租戶 body 不是 mapping），其租戶在 exporter 端不存在、平台值不上 `/metrics`，exporter 對該檔記 parse failure（冷載入、full rebuild 與帶 defaults 載體的熱重載如此；增量 patch 路徑依 fail-safe 保留該租戶最後的正確值，平台值也在內，見 [#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）；路由平面則仍可能保留平台給的路由設定（與修正前相同）。
+- **巢狀平台檔不讀**：子目錄裡 `_defaults.yaml` 等檔的 `tenants:` 不被任何平面讀取；exporter 會印一行具名 WARN（檔名＋租戶 id），行為維持丟棄。
+- ⚠️ `/effective`、tenant-api、da-guard 走的 walker 平面尚未實作這一層（[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019) 追蹤）：平台檔給的 per-tenant 值目前只出現在 `/metrics` 與路由產生器，`/effective` 看不到。
+
 #### SHA-256 熱重新加載 (Hot-Reload)
 
 不依賴檔案修改時間 (ModTime)，而是基於 **SHA-256 內容雜湊**：
@@ -481,7 +488,7 @@ tenants:
 
 可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`。未設定等同 Normal。
 
-**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2026-04-01T00:00:00Z"`；exporter 解析不了時只印 WARN、當成沒有期限，不會自動失效）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。已知缺陷：帶 `reason` 的 `target: all` 在 `expires` 到期後，整個 `/metrics` 會回 HTTP 500（[#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)）；修好前不要同時使用。
+**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2099-04-01T00:00:00Z"`；exporter 解析不了時只印 WARN、當成沒有期限，不會自動失效）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。已知缺陷：帶 `reason` 的 `target: all` 在 `expires` 到期後，整個 `/metrics` 會回 HTTP 500（[#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)）；修好前不要同時使用。
 
 ```yaml
 tenants:

@@ -73,7 +73,7 @@ func TestPatchTenantsCarriesOptionalOverrides(t *testing.T) {
 		Profiles:          map[string]map[string]ScheduledValue{},
 		Tenants:           map[string]map[string]ScheduledValue{"t1": {}},
 	}
-	got := patchTenants(prev, map[string]ThresholdConfig{}, map[string]ThresholdConfig{}, nil, nil, nil)
+	got := patchTenants(prev, map[string]ThresholdConfig{}, map[string]ThresholdConfig{}, nil, nil, nil, nil)
 	if len(got.OptionalOverrides) != 1 || got.OptionalOverrides[0] != "db2_log_usage_percent" {
 		t.Fatalf("incremental reload dropped the platform surface: %v", got.OptionalOverrides)
 	}

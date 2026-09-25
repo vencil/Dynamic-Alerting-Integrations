@@ -46,8 +46,12 @@ func scanKeyBase(key string) string { return config.ScanKeyBase(key) }
 
 func isNestedPlatformFile(key string) bool { return config.IsNestedPlatformFile(key) }
 
-func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) {
-	config.ReportUnparseableNestedPlatformFile(fullPath, data, scanObserverFor(metrics), logger)
+func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) (any, bool) {
+	return config.ReportUnparseableNestedPlatformFile(fullPath, data, scanObserverFor(metrics), logger)
+}
+
+func reportNestedPlatformTenants(name string, probe any, logger *log.Logger) {
+	config.ReportNestedPlatformTenants(name, probe, logger)
 }
 
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
@@ -58,8 +62,20 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	config.ApplyBoundaryRules(name, partial, logger)
 }
 
-func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
-	return config.MergePartialConfigs(configs)
+func mergePartialConfigs(configs map[string]ThresholdConfig, exists map[string]struct{}) ThresholdConfig {
+	return config.MergePartialConfigs(configs, exists)
+}
+
+func isPlatformKey(key string) bool { return config.IsPlatformKey(key) }
+
+func sortFlatMergeOrder(names []string) { config.SortFlatMergeOrder(names) }
+
+func tenantExistenceFor(configs map[string]ThresholdConfig, scan *treeScan) map[string]struct{} {
+	return config.TenantExistenceFor(configs, scan)
+}
+
+func reportPlatformOrphans(configs map[string]ThresholdConfig, exists map[string]struct{}, logger *log.Logger) {
+	config.ReportPlatformOrphans(configs, exists, logger)
 }
 
 func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {

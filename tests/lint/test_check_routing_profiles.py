@@ -162,6 +162,51 @@ class TestCollectData:
         assert 'db-x' in data['tenant_ids']
         assert 'db-x' not in data['profile_refs']
 
+    # #1982: a root platform file's `tenants:` block is the platform's
+    # per-tenant default — the tenant file wins whatever either is called
+    # (`TX.yaml` sorts BEFORE `_defaults.yaml`, the spelling that used to
+    # lose), and a platform file cannot create a tenant.
+    @pytest.mark.parametrize('fname', ['tx.yaml', 'TX.yaml', '0tx.yaml'])
+    def test_tenant_file_ref_beats_platform_ref(self, config_dir, fname):
+        _write(config_dir, '_defaults.yaml', {
+            'tenants': {'tx': {'_routing_profile': 'from-platform'}}})
+        _write(config_dir, fname, {
+            'tenants': {'tx': {'_routing_profile': 'from-tenant'}}})
+        data = _collect_data(config_dir)
+        assert data['profile_refs'] == {'tx': 'from-tenant'}
+        assert data['platform_orphans'] == []
+
+    def test_platform_ref_kept_when_tenant_file_is_silent(self, config_dir):
+        _write(config_dir, '_defaults.yaml', {
+            'tenants': {'tx': {'_routing_profile': 'from-platform'}}})
+        _write(config_dir, 'TX.yaml', {'tenants': {'tx': {'cpu_usage': '80'}}})
+        data = _collect_data(config_dir)
+        assert data['profile_refs'] == {'tx': 'from-platform'}
+
+    def test_unselected_carrier_spelling_is_not_read(self, config_dir):
+        # Only the selected `_defaults.yaml` is read by any plane (#1674);
+        # the `.yml` spelling sorts after it and used to win here.
+        _write(config_dir, '_defaults.yaml', {
+            'tenants': {'tx': {'_routing_profile': 'good'}}})
+        _write(config_dir, '_defaults.yml', {
+            'tenants': {'tx': {'_routing_profile': 'bad'},
+                        'ty': {'_routing_profile': 'bad'}}})
+        _write(config_dir, 'tx.yaml', {'tenants': {'tx': {}}})
+        _write(config_dir, 'ty.yaml', {'tenants': {'ty': {}}})
+        data = _collect_data(config_dir)
+        assert data['profile_refs'] == {'tx': 'good'}
+
+    def test_platform_file_cannot_create_a_tenant(self, config_dir):
+        _write(config_dir, '_defaults.yaml', {
+            'tenants': {'tx': {'_routing_profile': 'from-platform'}}})
+        _write(config_dir, 'ty.yaml', {'tenants': {'ty': {}}})
+        data = _collect_data(config_dir)
+        assert data['tenant_ids'] == {'ty'}
+        assert data['profile_refs'] == {}
+        assert data['platform_orphans'] == [('_defaults.yaml', 'tx')]
+        msgs = [m for m in validate(data) if 'tenants.tx' in m]
+        assert len(msgs) == 1 and msgs[0].startswith('WARN:'), msgs
+
 
 # ===========================================================================
 # validate tests
