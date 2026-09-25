@@ -13,9 +13,12 @@ import (
 // writing .git/objects makes the TempDir cleanup fail. See
 // testutil.DisableGitAutoMaintenance.
 func TestMain(m *testing.M) {
-	if err := testutil.DisableGitAutoMaintenance(); err != nil {
+	cleanup, err := testutil.DisableGitAutoMaintenance()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "TestMain:", err)
 		os.Exit(2)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
