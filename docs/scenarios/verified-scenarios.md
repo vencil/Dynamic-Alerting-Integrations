@@ -52,16 +52,17 @@ tenants:
 
 | 場景 | 守著它的機制 |
 |------|-------------|
-| **A** | 設定熱重載：`watchloop_test.go`、`config_symlink_reload_test.go`。exporter → Prometheus → rule pack 的觸發鏈（**靜態**設定、不改值）：`try-local/smoke.sh`，每日排程跑 |
-| **B** | 規則 pack promtool 測試：`rule-pack-kubernetes-cpu-node-share_test.yaml`、`rule-pack-kubernetes-cpu-throttle_test.yaml`、`rule-pack-kubernetes_test.yaml` |
-| **C** | `collector_test.go` 的 `TestCollector_StateFilter`；`config_resolve_test.go` 的 `TestResolve_ThreeState`、`TestResolveStateFilters_PerTenantDisable` |
+| **A** | 設定熱重載：`watchloop_test.go`、`config_symlink_reload_test.go`。exporter → Prometheus → rule pack 的觸發鏈（**靜態**設定、不改值）：`try-local/smoke.sh`，每日排程跑；exporter 是 `try-local/docker-compose.yaml` 釘的已發布映像、不是當前樹（rule pack 才是），且只檢查有任一 critical 告警在 firing |
+| **B** | 只有「同 pod 多 container 取最大」：`rule-pack-kubernetes-cpu-node-share_test.yaml` 的混合 pod 案例 |
+| **C** | `config_resolve_test.go` 的 `TestResolve_ThreeState` |
 | **D** | 維護靜音：`rule-pack-mariadb-threads_test.yaml`，以及檢查雙臂告警的 maintenance 子句沒有漏掉任一臂的 lint `scripts/tools/lint/check_maintenance_symmetry.py`；到期恢復：`config_silent_mode_test.go`；多層嚴重度：`config_loaddir_test.go` 的 `TestConfigManager_LoadDir_CriticalSuffix` |
-| **E** | 只在設定解析層：`TestResolveStateFilters_PerTenantDisable`、`TestResolve_ThreeState` 以多租戶設定斷言一個租戶的改值或 `disable` 不影響另一個 |
+| **E** | 只在設定解析層、且是單一設定的一次解析快照（沒有「改 A 後看 B」）：`TestResolve_ThreeState` 斷言各租戶不同的覆寫值或 `disable` 互不影響；`TestResolveStateFilters_PerTenantDisable` 只涵蓋 state filter 的 `disable` |
 | **F** | 聚合不翻倍：lint `scripts/tools/lint/check_ha_threshold_aggregation.py`（所有對 `user_threshold` 的聚合必須用 `max`） |
 
 **缺口（目前沒有自動化覆蓋）**：
 
 - 在 live 叢集改閾值、看 alert 翻轉 firing ↔ resolved（A、E 的端到端形態）。
+- 同租戶多 pod／多節點取最差值（B 的跨 pod 半邊）。
 - Kill Pod 後服務不中斷、PDB 保住至少一個 Pod（F 的故障切換半邊）。
 - `MariaDBHighConnections`、`MariaDBSystemBottleneck`（複合警報）、`ContainerImagePullFailure` 沒有觸發測試，列在 `tests/rulepacks/vmalert_coverage_baseline.yaml` 的 `uncovered`。
 

@@ -52,16 +52,17 @@ These guarantees are **not** guarded by a single end-to-end test in a K8s cluste
 
 | Scenario | Guarding mechanism |
 |----------|--------------------|
-| **A** | Config hot-reload: `watchloop_test.go`, `config_symlink_reload_test.go`. The exporter → Prometheus → rule-pack fire chain (**static** config, no value change): `try-local/smoke.sh`, run on a daily schedule |
-| **B** | Rule-pack promtool tests: `rule-pack-kubernetes-cpu-node-share_test.yaml`, `rule-pack-kubernetes-cpu-throttle_test.yaml`, `rule-pack-kubernetes_test.yaml` |
-| **C** | `TestCollector_StateFilter` in `collector_test.go`; `TestResolve_ThreeState` and `TestResolveStateFilters_PerTenantDisable` in `config_resolve_test.go` |
+| **A** | Config hot-reload: `watchloop_test.go`, `config_symlink_reload_test.go`. The exporter → Prometheus → rule-pack fire chain (**static** config, no value change): `try-local/smoke.sh`, run on a daily schedule; the exporter is the published image pinned in `try-local/docker-compose.yaml`, not the current tree (the rule packs are), and it only checks that some critical alert is firing |
+| **B** | Only "max across containers within one pod": the mixed-pod case in `rule-pack-kubernetes-cpu-node-share_test.yaml` |
+| **C** | `TestResolve_ThreeState` in `config_resolve_test.go` |
 | **D** | Maintenance silencing: `rule-pack-mariadb-threads_test.yaml`, plus the lint `scripts/tools/lint/check_maintenance_symmetry.py`, which checks that no arm of a two-arm alert drops its maintenance clause; expiry recovery: `config_silent_mode_test.go`; multi-tier severity: `TestConfigManager_LoadDir_CriticalSuffix` in `config_loaddir_test.go` |
-| **E** | Config-resolution layer only: `TestResolveStateFilters_PerTenantDisable` and `TestResolve_ThreeState` assert, on a multi-tenant config, that one tenant's value change or `disable` does not affect another |
+| **E** | Config-resolution layer only, and as a single-config, one-pass resolution snapshot (no "change A, then check B"): `TestResolve_ThreeState` asserts that different per-tenant overrides or `disable` do not affect each other; `TestResolveStateFilters_PerTenantDisable` covers only a state filter's `disable` |
 | **F** | No double-counting: the lint `scripts/tools/lint/check_ha_threshold_aggregation.py` (every aggregation of `user_threshold` must use `max`) |
 
 **Gaps (no automated coverage today)**:
 
 - Changing a threshold on a live cluster and watching the alert flip firing ↔ resolved (the end-to-end form of A and E).
+- Taking the worst value across multiple pods / nodes of one tenant (the cross-pod half of B).
 - Service continuing after a Pod is killed, with the PDB keeping at least one Pod (the failover half of F).
 - `MariaDBHighConnections`, `MariaDBSystemBottleneck` (composite alert) and `ContainerImagePullFailure` have no firing test; they are listed under `uncovered` in `tests/rulepacks/vmalert_coverage_baseline.yaml`.
 
