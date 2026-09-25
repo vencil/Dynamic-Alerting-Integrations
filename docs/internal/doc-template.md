@@ -143,9 +143,9 @@ A：...
 A：...
 ```
 
-### 2.8 相關資源（強制）
+### 2.8 相關資源（建議）
 
-**所有文件必須以「相關資源」section 結尾。**
+**建議**以「相關資源」section 結尾。⚠️ 這條沒有任何機制強制：原本負責的檢查工具 `check_doc_template.py` 從來沒有接上閘門，產生器 `inject_related_docs.py` 則會覆寫人工撰寫的段落，兩者都已退役（[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）。
 
 此 section 使用表格格式，列舉相關的文檔、工具、API 等資源。
 
@@ -275,7 +275,7 @@ rate(requests_total[5m]) > 100
 3. 設定 `lang: zh` 或 `lang: en`
 4. 選擇合適的 `audience` 標籤
 5. 填寫內容
-6. **確保有「相關資源」section**
+6. （建議）加上「相關資源」section
 7. 執行 `pre-commit run --all-files` 驗證
 
 過期或廢止的文件應：
@@ -288,32 +288,9 @@ rate(requests_total[5m]) > 100
 
 ## 5. 自動化檢查
 
-所有文件必須通過 `check_doc_template.py` lint 工具的檢查。
+frontmatter 是否存在，由 CI 的 `add_frontmatter.py --check`（`.github/workflows/docs-ci.yaml`）把關。它只檢查有沒有 frontmatter，不會逐欄驗證 `title`、`lang`。
 
-**檢查項目**：
-
-1. ✓ Frontmatter 存在（文件開頭 `---`）
-2. ✓ 必須欄位（`title`、`lang`）
-3. ✓ 相關資源 section 存在（`## 相關資源` 或 `## Related Resources`）
-4. ✓ 版本一致性（可選，當 `--check-version` 指定）
-
-**執行方式**：
-
-```bash
-# 檢查所有文件
-python3 scripts/tools/lint/check_doc_template.py
-
-# 檢查特定目錄
-python3 scripts/tools/lint/check_doc_template.py --docs-dir docs/getting-started/
-
-# 自動修復（附加缺失的相關資源 section）
-python3 scripts/tools/lint/check_doc_template.py --fix
-
-# 檢查版本一致性
-python3 scripts/tools/lint/check_doc_template.py --version v2.3.0 --check-version
-```
-
-**這支工具不檢查、但新文件一樣要過的三件事**：
+**新文件另外要過的三件事**：
 
 - **登錄**：新的 `docs/*.md` 要進 doc-map（`python3 scripts/tools/dx/generate_doc_map.py --generate --lang all`，`doc-map-check` hook 擋漂移）與 `mkdocs.yml` 的 `nav`（含 en locale 的 `nav_translations`）。`docs/internal/**` 不入 doc-map。
 - **雙語標題同步**：有 `.en.md` 配對的文件（`docs/internal/**` 以外），改 h2／h3 標題要在同一顆 commit 改 `.en.md`。⚠️ `bilingual-structure-check` 的 `files:` 只配 `.en.md`／`.zh.md`——只 staged 中文那一份時本地 hook 不會跑。

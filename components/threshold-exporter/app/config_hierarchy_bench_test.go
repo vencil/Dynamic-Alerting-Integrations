@@ -28,6 +28,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -358,6 +359,60 @@ func BenchmarkFullDirLoad_Hierarchical_1000(b *testing.B) {
 
 func BenchmarkDiffAndReload_Hierarchical_1000_NoChange(b *testing.B) {
 	benchDiffAndReloadHierarchicalNoChangeAtSize(b, 1000)
+}
+
+// ⚠️ THE BENCHMARK ABOVE IS BIMODAL, AND NOT BECAUSE OF THE CODE UNDER TEST.
+// Its fixture is written moments before the loop, so for the first
+// TreeScanMtimeGuard (2s) every tick re-reads and re-hashes all 1201 files
+// (~42.9k allocs/op); after that the mtime fast-path takes them (~33.3k).
+// Which one `go test -bench` reports depends on whether its ~1s round lands
+// before or after that 2s mark — a knife-edge of a few percent in ns/op.
+// Measured (#1982, merge-base aa020b88 vs head, -count=1 x10 interleaved):
+// merge-base 2 fast / 7 slow / 1 mixed, head 3 fast / 7 slow, identical
+// allocs within each mode. A reported +30% allocs on it can therefore be a
+// mode flip rather than a regression. The two pinned variants below hold
+// the mode fixed (mtimes set before the load), so each mode's cost can be
+// compared across revisions on its own.
+
+func benchDiffAndReloadHierarchicalPinned(b *testing.B, n int, mtime time.Time) {
+	b.Helper()
+	dir := buildDirConfigHierarchicalFresh(b, n)
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			return os.Chtimes(p, mtime, mtime)
+		}
+		return nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	silenceLogs(b)
+	mgr := NewConfigManager(dir)
+	if err := mgr.fullDirLoad(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := mgr.diffAndReload(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	reportResourceMetrics(b)
+}
+
+// ..._NoChange_Warm: every file older than the guard — the fast-path mode.
+func BenchmarkDiffAndReload_Hierarchical_1000_NoChange_Warm(b *testing.B) {
+	benchDiffAndReloadHierarchicalPinned(b, 1000, time.Now().Add(-time.Hour))
+}
+
+// ..._NoChange_Reread: mtimes in the future, so the guard never admits the
+// fast-path and every tick re-reads (same-hash carry, no re-parse).
+func BenchmarkDiffAndReload_Hierarchical_1000_NoChange_Reread(b *testing.B) {
+	benchDiffAndReloadHierarchicalPinned(b, 1000, time.Now().Add(time.Hour))
 }
 
 // BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged mutates a

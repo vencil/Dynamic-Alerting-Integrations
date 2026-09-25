@@ -60,6 +60,9 @@ __all__ = [
     "CONFIG_SUFFIXES",
     "config_stem",
     "configmap_key_problem",
+    "declared_tenant_ids",
+    "unselected_carriers",
+    "overlay_platform_tenants",
     "defaults_files_in",
     "has_yaml_extension",
     "is_defaults_name",
@@ -276,6 +279,25 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
         return yaml_spelling[-1]
     yml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yml"]
     return yml_spelling[0] if yml_spelling else None
+
+
+def unselected_carriers(entries: "Iterable[Path]") -> "set[str]":
+    """Names of the READABLE defaults carriers among *entries* (one
+    directory's listing) that the chain does NOT select.
+
+    Every plane ignores such a file WHOLE (#1674) — the exporter never parses
+    it, so its `tenants:` block reaches nothing either. A reader that feeds
+    every root file into a per-tenant merge must skip these, or the unread
+    `_defaults.yml` overrides the selected `_defaults.yaml` (#1982 blind
+    review: a flat reader got the wrong file's value). Composed from
+    `readable_carriers` + `select_defaults_carrier` so the choice is the one
+    every plane makes; an UNREADABLE carrier is not in the result — the
+    caller's own read books it as skipped, as before.
+    """
+    readable, _unreadable = readable_carriers(
+        p for p in entries if is_defaults_name(Path(p).name))
+    chosen = select_defaults_carrier(readable)
+    return {p.name for p in readable if chosen is None or p.name != chosen.name}
 
 
 def readable_carriers(carriers: "Iterable[Path]"
@@ -1176,3 +1198,98 @@ def tenant_carriers(
         else:
             invalid.append(stem)
     return TenantCarriers(sorted(tenants), invalid, unusable)
+
+
+def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
+    """Tenant ids some TENANT file declares anywhere in the tree: the keys of
+    the FIRST YAML document's `tenants:` mapping in every non-`_` config file.
+
+    The ENUMERATION is the exporter walker's (`pkg/config/tree_scan.go`):
+    recurse, skip dot-prefixed entries, never read a `_`-prefixed file for
+    tenants — `iter_config_files` + `is_reserved_name`. So a flat reader can
+    ask "does this tenant exist" with the tree the exporter sees: a tenant
+    declared only in `team-a/tx.yaml` exists even for a reader that routes
+    only the root.
+
+    The DECODE is deliberately NOT the walker's, and the difference is
+    stated rather than hidden:
+
+    * Only the first document counts, as with yaml.v3's `Unmarshal` — a file
+      holding `tenants: {tx: {}}` then `---` declares tx on both sides (a
+      single-document `safe_load` raised on it and stripped tx as an orphan).
+      A failure AFTER the first document does not matter here.
+    * A file the exporter's full decode REJECTS (a duplicate key, a tenant
+      body that is not a mapping, a `defaults:` of the wrong shape) still
+      declares its tenants here. On the exporter side such a tenant does not
+      exist, its platform values do not reach `/metrics`, and the exporter
+      counts a parse failure for the file; the routing plane may still keep
+      the platform's routing values for it, as before this existed. Mirroring
+      the Go decoder here would be an unbounded differential (#1942), so the
+      rule is "first document's `tenants:` keys", named as such.
+
+    A file that does not parse as YAML at all, or cannot be read, declares
+    nothing; naming it is the calling reader's own job (it has its own record
+    of skipped files). ``yaml`` is imported lazily: the rest of this module
+    is pure name predicates.
+    """
+    import yaml  # lazy: see above
+
+    ids: set[str] = set()
+    for path in iter_config_files(config_dir, recursive=True):
+        if is_reserved_name(path.name):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                # First document only; the generator is not advanced past
+                # it, so a later document's error cannot drop this one.
+                data = next(yaml.safe_load_all(fh), None)
+        except Exception:  # noqa: BLE001 — declares nothing; see docstring
+            continue
+        if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
+            # Keys as YAML gave them, not str()-ed: the flat readers key
+            # their tenants the same way, so membership must compare alike.
+            ids.update(data["tenants"])
+    return ids
+
+
+def overlay_platform_tenants(
+    entries: "Iterable[tuple[str, str, dict]]",
+    exists: "Callable[[], set[str]]",
+) -> "tuple[dict[str, dict], list[tuple[str, str]]]":
+    """Merge per-tenant blocks read from ROOT files: platform first, tenant wins.
+
+    *entries* is ``(fname, tenant, overrides)`` for every tenant entry a
+    reader took from a root file's ``tenants:`` block, in read order. A
+    `_`-prefixed *fname* is a PLATFORM file: its block is the platform's
+    per-tenant DEFAULT, applied first; every tenant-file entry is applied
+    after it, key by key — so the tenant wins whatever either file is called
+    (the exporter's `sortFlatMergeOrder`). A key the tenant file does not
+    write keeps the platform's value; it is never reset to a default.
+
+    A platform entry for a tenant *exists* does not contain is DROPPED and
+    returned in the second element as ``(fname, tenant)`` for the caller to
+    name: a platform file can only provide defaults for a tenant that
+    already exists. *exists* is a thunk so a tree whose platform files name
+    no tenant never pays for the recursive read behind it.
+
+    Returns ``({tenant: merged_overrides}, orphans)``; the merged dicts are
+    fresh (shallow) copies, and each tenant appears once.
+    """
+    platform: list[tuple[str, str, dict]] = []
+    owned: list[tuple[str, str, dict]] = []
+    for fname, tenant, overrides in entries:
+        (platform if is_reserved_name(os.path.basename(fname)) else owned
+         ).append((fname, tenant, overrides))
+    orphans: list[tuple[str, str]] = []
+    merged: dict[str, dict] = {}
+    known: "set[str] | None" = None
+    for fname, tenant, overrides in platform:
+        if known is None:
+            known = exists()
+        if tenant not in known:
+            orphans.append((fname, tenant))
+            continue
+        merged.setdefault(tenant, {}).update(overrides)
+    for _fname, tenant, overrides in owned:
+        merged.setdefault(tenant, {}).update(overrides)
+    return merged, orphans

@@ -244,13 +244,13 @@ da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-1
 # 2. 驗證目前模式（等 exporter reload 且 Prometheus scrape 之後；租戶同時在 maintenance 時回 maintenance）
 da-tools diagnose db-product-01
 # 輸出含："operational_mode": "silent:all"（只靜音單一嚴重度時為 silent:warning / silent:critical；
-# 沒有生效中的靜默時，輸出裡不會出現 operational_mode 這個欄位）
+# 只有查到生效中的維護或靜默時才會出現 operational_mode 這個欄位）
 
 # 3. 維護結束、提前解除靜默
 da-tools patch-config db-product-01 _silent_mode disable
 ```
 
-⚠️ `expires` 必須是完整的 RFC3339 時戳（含 `T` 與時區，如 `2099-12-31T23:59:59Z`，建議加引號）。exporter 解析不了時只印 WARN（每次 scrape 都會出現）、把它當成**沒有期限**——靜默不會自動結束。`expires` 已在過去 ⇒ 寫入後立即視為過期、不靜音，並發出 `da_config_event{event="silence_expired"}` 事件。已知缺陷：帶 `reason` 的 `target: all` 在 `expires` 到期後，整個 `/metrics` 會回 HTTP 500（[#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)）；修好前不要同時使用。`target:` 冒號後要留空白；JSON 寫法（`{"target": …}`）不會被認得。
+⚠️ `expires` 必須是完整的 RFC3339 時戳（含 `T` 與時區，如 `2099-12-31T23:59:59Z`，建議加引號）。exporter 解析不了時會印 WARN（每次 scrape 都會出現）並**忽略這筆設定**——不會靜音，告警照常通知（[#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)）；寫完務必用上方第 2 步的 `diagnose` 確認真的進入 silent。常見的解析失敗：只寫日期且加了引號（`"2099-12-31"`）、日期與時間以空白分隔（`2099-12-31 23:59:59+00:00`）。`expires` 已在過去 ⇒ 寫入後立即視為過期、不靜音，並發出 `da_config_event{event="silence_expired"}` 事件。`target:` 冒號後要留空白；JSON 寫法（`{"target": …}`）不會被認得。
 
 ```bash
 # 排程式維護窗口（CronJob 自動建立 Alertmanager silence）

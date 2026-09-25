@@ -26,7 +26,7 @@ lang: zh
 | Warning + Critical 重複告警 | **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | `_severity_dedup` |
 | 通知目的地寫死在中央 | **Alert Routing** | Per-tenant route + receiver（6 種 type） | `_routing` |
 
-Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`（RFC3339，如 `"2026-04-01T00:00:00Z"`；解析不了時只印 WARN、當成沒有期限）自動失效和 `reason` 欄位，防止「設了忘記關」。
+Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`（RFC3339，如 `"2099-04-01T00:00:00Z"`；解析不了時印 WARN 並忽略這筆設定——不靜音、maintenance 不生效）自動失效和 `reason` 欄位，防止「設了忘記關」。
 
 > 上表是 **BYO 整合情境的速查視角**。完整的告警最佳實務（該對什麼告警 → 通知 → 動作層冪等）見系列文章：[告警設計入門](../alerting-design-fundamentals.md) · [Actionable 之後](../alerting-best-practices.md)。
 

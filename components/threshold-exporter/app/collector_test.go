@@ -116,9 +116,9 @@ func TestCollector_Collect_ThresholdExpiry_EmitsEvent(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.
+# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and empty for other events.
 # TYPE da_config_event gauge
-da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",tenant="db-a"} 1
+da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
 `
 	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
 		t.Errorf("da_config_event mismatch: %v", err)
@@ -958,4 +958,41 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// #2003: a structured `_silent_mode: {target: all, reason: ...}` that has
+// expired expands to a warning and a critical entry sharing ONE reason. When the
+// event labels were {tenant,event,reason} those two series were identical, the
+// registry refused the Gather and /metrics answered 500 for every tenant. The
+// assertion is on the served HTTP status — a series count cannot tell a
+// deduplicated pair from a duplicate that Gather rejects later.
+func TestCollector_ConfigEvent_ExpiredSilenceAllWithReason_ServesMetrics(t *testing.T) {
+	t.Parallel()
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"tenant-x": {"_silent_mode": SV(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
+			"tenant-y": {"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
+			"tenant-z": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "incident"}}},
+		},
+	}
+	collector := NewThresholdCollector(newTestManager(cfg))
+
+	rec := httptest.NewRecorder()
+	collector.MetricsHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics status = %d, want 200; body: %.300s", rec.Code, rec.Body.String())
+	}
+
+	expected := `
+# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and empty for other events.
+# TYPE da_config_event gauge
+da_config_event{event="maintenance_expired",reason="window",target_severity="",tenant="tenant-y"} 1
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="tenant-x"} 1
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="tenant-x"} 1
+da_config_event{event="threshold_expired",reason="mysql_connections: incident",target_severity="",tenant="tenant-z"} 1
+`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
+		t.Errorf("da_config_event mismatch: %v", err)
+	}
 }

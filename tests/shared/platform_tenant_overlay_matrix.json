@@ -1,0 +1,326 @@
+{
+  "_comment": [
+    "Go-vs-Python parity for a ROOT platform file's `tenants:` block (#1982).",
+    "Semantics: that block is the platform's per-tenant DEFAULT. The tenant's own",
+    "file wins key by key whatever either file is called; a key the tenant file",
+    "does not write keeps the platform value; a platform file cannot create a",
+    "tenant (no tenant file declares it -> absent on both planes, WARN); a NESTED",
+    "platform file's `tenants:` block is read by no plane (exporter WARNs).",
+    "Go (config_platform_tenant_overlay_test.go) loads each tree through",
+    "NewConfigManager+Load and reads the resolved mysql_connections row (what",
+    "/metrics serves); Python (test_platform_tenant_overlay_parity.py) reads the",
+    "routing plane, _grar_parse.load_tenant_tree. Neither reads the other's",
+    "source; both assert this table.",
+    "expect.<tenant>: metric = mysql_connections on /metrics (null = tenant",
+    "absent); dedup = routing plane _severity_dedup (null = tenant absent there);",
+    "group_wait = routing plane merged group_wait (null = the plane builds no route for it).",
+    "exporter_dedup / silent_mode = what the exporter resolves for the tenant",
+    "(ResolveSeverityDedup: enable/disable; ResolveSilentModes: sorted target",
+    "severities joined by ',', '' = none); null = tenant absent from the exporter.",
+    "Go asserts metric/exporter_dedup/silent_mode, Python dedup/group_wait.",
+    "A tenant file whose FIRST document does not parse declares nothing on either",
+    "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
+    "The routing plane is flat by design, so a tenant declared only in a",
+    "subdirectory has dedup null while it still EXISTS for platform-file purposes.",
+    "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",
+    "c3 TX.yaml / 0tx.yaml served 60 (tx.yaml 70); c2-c5 tx.yaml gave dedup",
+    "enable (TX.yaml / 0tx.yaml disable)."
+  ],
+  "trees": [
+    {
+      "name": "control-tenant-file-only",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "control-platform-file-has-no-tenants-block",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "c1-declared-only-in-profiles-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "tenants:\n  tx:\n    mysql_connections: \"60\"\n",
+        "ty.yaml": "tenants:\n  ty: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": null,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": null,
+          "silent_mode": null
+        },
+        "ty": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "c1-declared-only-in-defaults-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n",
+        "ty.yaml": "tenants:\n  ty: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": null,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": null,
+          "silent_mode": null
+        },
+        "ty": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "c2-c5-platform-only-keys-tenant-file-tx.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "c2-c5-platform-only-keys-tenant-file-TX.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "TX.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "c2-c5-platform-only-keys-tenant-file-0tx.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "0tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "c3-same-key-both-files-tenant-file-tx.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n    _severity_dedup: enable\n    _silent_mode: critical\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "critical"
+        }
+      }
+    },
+    {
+      "name": "c3-same-key-both-files-tenant-file-TX.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "TX.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n    _severity_dedup: enable\n    _silent_mode: critical\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "critical"
+        }
+      }
+    },
+    {
+      "name": "c3-same-key-both-files-tenant-file-0tx.yaml",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "0tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n    _severity_dedup: enable\n    _silent_mode: critical\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "critical"
+        }
+      }
+    },
+    {
+      "name": "c4-nested-platform-file-tenants-block",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_connections: 70\ntenants:\n  tx:\n    mysql_connections: \"60\"\n  ty:\n    mysql_connections: \"50\"\n",
+        "sub/tx.yaml": "tenants:\n  tx: {}\n",
+        "tz.yaml": "tenants:\n  tz: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        },
+        "ty": {
+          "metric": null,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": null,
+          "silent_mode": null
+        },
+        "tz": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "existence-comes-from-a-nested-tenant-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "sub/tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "existence-from-the-first-document-of-a-multi-document-tenant-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "sub/tx.yaml": "tenants:\n  tx: {}\n---\nfoo: 1\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "warning"
+        }
+      }
+    },
+    {
+      "name": "no-existence-from-a-tenant-file-whose-first-document-does-not-parse",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
+        "sub/tx.yaml": "tenants:\n  tx: [\n",
+        "ty.yaml": "tenants:\n  ty: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": null,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": null,
+          "silent_mode": null
+        },
+        "ty": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "routing-platform-value-kept-when-tenant-file-is-silent",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: \"https://hooks.example.com/alerts\"\n  group_wait: \"30s\"\ntenants:\n  tx:\n    _routing:\n      group_wait: \"10s\"\n",
+        "TX.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "dedup": "enable",
+          "group_wait": "10s",
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    },
+    {
+      "name": "routing-tenant-file-wins-whatever-its-name",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: \"https://hooks.example.com/alerts\"\n  group_wait: \"30s\"\ntenants:\n  tx:\n    _routing:\n      group_wait: \"10s\"\n",
+        "0tx.yaml": "tenants:\n  tx:\n    _routing:\n      group_wait: \"20s\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": "20s",
+          "exporter_dedup": "enable",
+          "silent_mode": ""
+        }
+      }
+    }
+  ]
+}

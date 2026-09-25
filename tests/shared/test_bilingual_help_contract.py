@@ -63,8 +63,8 @@ HONEST BOUNDARIES
 * The en output is asserted *different from zh*, NOT CJK-free — bilingual
   content purity is a different lint's jurisdiction, not this gate's.
 * Only ``--help`` is gated. Runtime-message i18n (several ENGLISH_ONLY tools
-  wire ``detect_cli_lang`` for report strings only, e.g. operator_check.py,
-  check_doc_template.py) is out of scope here.
+  wire ``detect_cli_lang`` for report strings only, e.g. operator_check.py)
+  is out of scope here.
 * Windows hosts: children print CJK safely because tests/conftest.py forces
   ``PYTHONIOENCODING=utf-8`` into the inherited env (session autouse).
 """
@@ -215,7 +215,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_doc_k8s_refs.py": _R_LINT,
     "check_doc_links.py": _R_LINT,
     "check_doc_reading_time.py": _R_LINT_RT,
-    "check_doc_template.py": _R_LINT_RT,
     "check_env_bool_parsers.py": _R_LINT,
     "check_flaky_registry.py": _R_LINT,
     "check_frontmatter_versions.py": _R_LINT,
@@ -309,7 +308,6 @@ CHINESE_ONLY_HELP: dict[str, str] = {
     "generate_doc_map.py": _R_ZH,
     "generate_rule_pack_stats.py": _R_ZH,
     "generate_tool_map.py": _R_ZH,
-    "inject_related_docs.py": _R_ZH,
     "inject_waveform.py": _R_ZH,
     "migrate_ssot_language.py": _R_ZH,
     "pr_preflight.py": _R_ZH,
