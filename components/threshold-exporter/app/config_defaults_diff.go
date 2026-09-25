@@ -30,6 +30,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // scopeRank lets us pick the *widest* (= shallowest, smallest rank)
@@ -166,29 +168,9 @@ func widestPathScope(paths []string, root string) string {
 	return widest
 }
 
-// parseDefaultsBytes turns raw _defaults.yaml bytes into the same
-// shape that extractDefaultsBlock(normalizeYAMLToJSON(...)) produces
-// elsewhere in the codebase. Returns nil with no error for an empty
-// document (legacy flat configs may have empty/whitespace-only files).
-//
-// This duplicates the pipeline used in computeEffectiveConfig but
-// stops before the merge step — we only need the parsed dict for
-// key-level diffing.
-func parseDefaultsBytes(b []byte) (map[string]any, error) {
-	if len(strings.TrimSpace(string(b))) == 0 {
-		return map[string]any{}, nil
-	}
-	var doc any
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, err
-	}
-	normalized := normalizeYAMLToJSON(doc)
-	block := extractDefaultsBlock(normalized)
-	if block == nil {
-		return map[string]any{}, nil
-	}
-	return block, nil
-}
+// parseDefaultsBytes forwards to config.ParseDefaultsBytes
+// (pkg/config/defaults_parse.go, moved there in #1988).
+func parseDefaultsBytes(b []byte) (map[string]any, error) { return config.ParseDefaultsBytes(b) }
 
 // changedDefaultsKeys returns the dot-path keys whose values differ
 // between prev and next, recursing into nested maps. Each leaf

@@ -22,7 +22,7 @@ package main
 // the collector cannot emit it, because it iterates the ROOT defaults and the
 // declared surface (`optional_overrides:`), and a nested `_` file feeds
 // neither (applySubtreeDefaults refuses to widen either global list — see
-// config_subtree_defaults.go for the four defects that caused). Such a tenant
+// pkg/config/subtree_defaults.go for the four defects that caused). Such a tenant
 // shows a threshold on /effective that never becomes a series, so the alert
 // can never fire. That set — tenantID → undeliverable keys, the manager's
 // `unreachableInherited` — is what this file publishes, as the gauge

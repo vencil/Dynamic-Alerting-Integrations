@@ -550,7 +550,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// with the same "ERROR: skip unparseable defaults/profiles file".
 	logOutput := logBuf.String()
 	// ⛔ LOAD-BEARING, AND ANCHORED ON THE RIGHT EMITTER. Three lines in this
-	// log match the message class: one from `flat_scanner.go` and two from the
+	// log match the message class: one from `pkg/config/flat_build.go` and two from the
 	// per-tenant emitter in `config_debounce.go` that `recomputeMergedHash` —
 	// the subject of this test's name — actually drives. `assertLogLineWith`
 	// takes the FIRST match, so the first version of this assertion was
