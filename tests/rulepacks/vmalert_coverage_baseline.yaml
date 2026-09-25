@@ -72,7 +72,6 @@ uncovered:
   - NginxRequestRateSpike
   - NginxRequestRateSpikeCritical
   rule-pack-operational.yaml:
-  - TenantConfigEvent
   - TenantSeverityDedupEnabled
   - TenantSilentCritical
   - TenantSilentWarning

@@ -132,22 +132,16 @@ tenant_metadata_info{tenant="db-b",oncall="sre-team@example.com",alert_channel="
 
 **用途：** 在警示規則中動態注入 SLA 等級、團隊資訊或値班資訊。
 
-#### `da_config_event` - 設定事件計數
+#### `da_config_event` - 定時組態過期事件
 
-追蹤設定重新載入事件和錯誤。
+Gauge，值恆為 1。帶 `expires` 的組態過期後發出，組態被更新或移除後消失。Labels：`{tenant, event, reason, target_severity}`；`event` 為 `silence_expired` / `maintenance_expired` / `threshold_expired`。`target_severity` 只在 `silence_expired` 有值（`warning` / `critical`），其他事件為空值。
 
 ```
-# HELP da_config_event Configuration event counter
-# TYPE da_config_event counter
-da_config_event{event_type="reload_success"} 42
-da_config_event{event_type="reload_error"} 2
-da_config_event{event_type="config_hash_sha256"} 0x82a4d7c9f1e...
+# TYPE da_config_event gauge
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="db-b"} 1
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="db-b"} 1
+da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
 ```
-
-**事件類型：**
-- `reload_success`: 成功的設定重新載入次數
-- `reload_error`: 失敗的設定重新載入次數
-- `config_hash_sha256`: 當前設定的 SHA-256 雜湊值
 
 ### 完整範例
 
@@ -184,11 +178,6 @@ user_severity_dedup{tenant="db-b",alertname="HighDiskUsage"} 0
 # TYPE tenant_metadata_info info
 tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold",oncall="platform-team"} 1
 tenant_metadata_info{tenant="db-b",team="data",env="staging",sla_tier="silver",oncall="data-team"} 1
-
-# HELP da_config_event Configuration event counter
-# TYPE da_config_event counter
-da_config_event{event_type="reload_success"} 42
-da_config_event{event_type="reload_error"} 2
 
 # EOF
 ```
@@ -498,9 +487,6 @@ kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
 
 **解決方案：**
 ```bash
-# 檢查設定事件計數是否增加
-curl -s http://<pod-ip>:8080/metrics | grep da_config_event
-
 # 檢查 ConfigMap 的更新時間
 kubectl get configmap threshold-config -n monitoring -o wide
 
