@@ -82,8 +82,6 @@ ALLOWLIST: dict[str, str] = {
     # --- genuinely Python (registry / filesystem / toolchain) — Migratable=NO
     "check_tool_registry_jsx_parity.py":
         "registry↔filesystem parity (YAML SSOT vs .jsx existence), not a JS lint",
-    "check_portal_i18n.py":
-        "cross-references tool-registry.yaml; not pure single-file JS linting",
     "check_jsx_loader_compat.py":
         "validates against the custom JSX loader allowlist + babel; toolchain-coupled",
     "lint_jsx_babel.py":
@@ -106,8 +104,6 @@ ALLOWLIST: dict[str, str] = {
         "Migratable=YES(§8): module-scope `const X = window.__X` AST pattern",
     "check_undefined_tokens.py":
         "Migratable=YES(§8): --da-* token refs not defined in design-tokens.css",
-    "check_i18n_coverage.py":
-        "Migratable=YES(§8): i18n key coverage across JSX",
 }
 
 # This meta-lint itself contains the extension regex above → would self-flag.

@@ -93,13 +93,10 @@ lang: zh
 | `k8s-manifests-sast-check` | Container SAST L4：raw k8s manifest | 改 k8s/ 後（CI 硬閘） |
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
 | `translation-check` | 雙語結構一致 | 改外部面向 ZH 文件後 |
-| `i18n-coverage-check` | i18n 覆蓋報告 | 改 i18n 後 |
 | `check-doc-reading-time` | >15 min 需拆 | 寫長文件後 |
 | `check-doc-freshness` | >90 天 stale | 定期 |
 | `path-metadata-consistency-check` | path/metadata 一致（warn） | 移檔後 |
-| `check-portal-i18n` | Portal JSX i18n | 改 portal 後 |
 | `orphan-doc-check` | 孤兒文件偵測 | 新增/刪文件後 |
-| `glossary-coverage-check` | 高頻詞 glossary 覆蓋 | 引入新術語後 |
 | `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 

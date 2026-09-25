@@ -84,6 +84,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Removed
 
+- **`check_portal_i18n.py`、`check_glossary_coverage.py`、`check_i18n_coverage.py` 退役（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。三支都只掛在手動 stage。`check_portal_i18n` 回報的 4 筆全是誤判，故意植入 3 個寫死的英文字串也一個都沒抓到；`check_glossary_coverage` 回報的缺詞幾乎都是程式碼片段，例如 `.gitlab-ci.yml`、`max by`；`check_i18n_coverage` 是報表型，一律回 rc 0，它的 `--json`（說明寫「給 badge 用」）在 repo 內沒有任何讀取端。一併移除：三個 manual hook、`make lint-portal` 裡的 portal i18n 步驟、`check_lint_toolchain_fit` 的兩筆 allowlist、tool-map 條目，以及 `lint-policy.md`、`dev-rules.md`、`hook-vs-skill-coverage.md` 的對應段落。⚠️ 這次沒有補替代品：Portal JSX 寫死字串與術語表覆蓋率這兩項檢查，是直接拿掉。
+
 - **`check_doc_template.py` 與 `inject_related_docs.py` 退役；doc-template §2.8「相關資源」段落從強制改為建議（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。檢查工具只掛在手動 stage、從來沒有接上閘門，規則只寫在文件裡，實際上大多數文件都沒有這個段落。產生器 `--update` 會覆寫已經存在、由人手整理的「相關資源」段落，不能拿來補齊。frontmatter 是否存在，仍由 CI 的 `add_frontmatter.py --check` 把關。
 
 - **`scripts/demo.sh` 與 `make demo`／`make demo-full`（dx、docs；[#1989](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1989)）**：自工具搬進 `scripts/tools/<子目錄>/` 後 Step 1 即 rc 2，零 CI／排程呼叫端；就算修好路徑也沒有斷言，跳過步驟照樣 rc 0。⚠️ 公開文件 `verified-scenarios` 原本宣稱「✅ 完整 firing → resolved 週期驗證通過」，此宣稱不成立：該節改寫為機制說明（時序圖保留並對齊 `run_load.sh --type composite` 與 rule pack 的實際行為），「live 叢集上真實負載 firing → resolved 沒有自動化測試」併入既有缺口清單。手動觀察入口改為 `make load-composite TENANT=<tenant>` / `make load-cleanup`；`run_load.sh`、`make load-*`、`make demo-showcase` 保留。internal 文件、portal `platform-demo` 文案（改稱示意指令、模擬輸出）與 `tool-registry.yaml` 同步。

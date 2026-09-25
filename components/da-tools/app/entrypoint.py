@@ -437,9 +437,6 @@ _USAGE_EXAMPLES = (
 
 # Per-language labels/descriptions for the usage footer. Values are
 # tuples (examples_label, env_label, prometheus_url_line, da_lang_line).
-# Keeping the values as tuples — rather than per-language translated
-# string values — keeps this dict out of check_i18n_coverage's
-# language-keyed-string regex, so the i18n badge number stays stable.
 _USAGE_LABELS = {
     "zh": ("範例:", "環境變數:",
            "  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)",
