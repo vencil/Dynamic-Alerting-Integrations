@@ -3479,6 +3479,52 @@ def test_expansion_detector_is_not_vacuous() -> None:
         )
 
 
+def _report_sh_max_positional() -> int:
+    """Highest positional arg the script reads, DERIVED from its own reads.
+
+    Only top-level assignments count: the `$*` / `$@`
+    inside `gh_do` are that function's own arguments, and the `$1` / `$2` in the
+    awk program are awk fields.
+    """
+    positions = sorted(
+        int(n) for n in re.findall(r'^\w+="?\$\{?(\d+)', _report_sh(), re.M))
+    assert positions and positions == list(range(1, len(positions) + 1)), (
+        f"file_cve_report.sh positional reads are not a contiguous 1..N run: "
+        f"{positions} — the maximum below cannot be derived from them"
+    )
+    return positions[-1]
+
+
+def test_report_call_sites_pass_no_more_args_than_the_script_reads() -> None:
+    """Each call must reach the script as no more words than it reads (#1932).
+
+    Inside the double-quoted remediation a bare `"` does not print — it closes
+    the quoting, and the next unquoted space starts a new word. The script never
+    reads past its last positional, so everything after that split is dropped
+    with no error, `set -e` and `|| rc=1` stay silent, and the issue body ships
+    the prose cut off mid-sentence. The existing checks only had a floor
+    (`>= 6`), which an argument split into twelve words satisfies.
+
+    Counted on `_report_calls()`: shlex splits words the way bash does for
+    quoting.
+    """
+    maximum = _report_sh_max_positional()
+    calls = _report_calls()
+    assert calls, "no call sites parsed — this check would pass vacuously"
+    bad = [
+        (len(args), args[1] if len(args) > 1 else "?")
+        for args in calls
+        if len(args) > maximum
+    ]
+    assert not bad, (
+        f"file_cve_report.sh reads at most {maximum} positional args, but these "
+        f"call sites pass more (argc, label): {bad}\n"
+        "An argument split into extra words is cut off at the last one the script "
+        "reads — silently. Usually a literal \" inside a double-quoted argument: "
+        'escape it as \\" (the rendered text stays byte-identical).'
+    )
+
+
 def test_remediation_text_names_only_real_components() -> None:
     """Remediation prose must not name a component the scan matrix no longer has.
 
