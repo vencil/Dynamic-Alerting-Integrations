@@ -82,10 +82,10 @@ def _brownfield(tmp_path: Path) -> Path:
     return out
 
 
-def _place(out: Path, rel: str, body: str) -> Path:
+def _place(out: Path, rel: str, body) -> Path:
     p = out / "conf.d" / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(body, encoding="utf-8", newline="\n")
+    p.write_bytes(body if isinstance(body, bytes) else body.encode("utf-8"))
     return p
 
 
@@ -100,13 +100,12 @@ _SKIP_CASES = [
     ("C", "DB-C.YAML", _ONE, "db-c"),
     ("S", "prod/db-c.yaml", _ONE, "db-c"),
     # #1942 盲審 F1 的 1a：舊判定讀不到這些宣告、另造了 duplicate（矩陣列
-    # F1-1a-*，Go 端實測 exporter 接受且宣告該租戶）。
+    # F1-1a-*，Go 端實測 exporter 接受且宣告該租戶）。`on:`／`007:` 兩列在
+    # 白名單外（key 在 YAML 1.1 不讀成字串），改在下面的拒絕表。
     ("1a-trailing-doc", "team.yaml",
      '---\ntenants:\n  db-c:\n    mysql_connections: "80"\n---\n', "db-c"),
     ("1a-second-doc", "team.yaml", "tenants:\n  db-c: {}\n---\nfoo: 1\n",
      "db-c"),
-    ("1a-on", "team.yaml", "tenants:\n  on: {}\n", "on"),
-    ("1a-007", "team.yaml", "tenants:\n  007: {}\n", "007"),
 ]
 
 
@@ -166,11 +165,34 @@ _REFUSALS = [
     ("1b-duplicate-key", {"team.yaml": "tenants:\n  db-c: {}\n  db-c: {}\n"},
      ["conf.d/team.yaml names db-c", "defined twice"]),
     ("syntax-error", {"team.yaml": "tenants:\n  db-c: [unclosed\n"},
-     ["conf.d/team.yaml names db-c", "not valid YAML"]),
+     ["conf.d/team.yaml names db-c", "init cannot tell", "PyYAML cannot"]),
+    # 第 2 輪 F1／F2／F3：白名單外的形狀（矩陣 R2-* 列）一律「無法判定」，提到
+    # 要求的租戶就拒絕——不論 exporter 其實接受（多拒絕，允許）或拒收。
+    ("on-key", {"team.yaml": "tenants:\n  db-c: {}\n  on: {}\n"},
+     ["conf.d/team.yaml names db-c", "init cannot tell", "'on'"]),
+    ("trailing-tab", {"team.yaml": "tenants:\n  db-c:\n    note: x\t\n"},
+     ["conf.d/team.yaml names db-c", "tab character"]),
+    ("flow-tab", {"team.yaml": "tenants: {db-c:\t{}}\n"},
+     ["conf.d/team.yaml names db-c", "tab character"]),
+    ("json-tab", {"team.yaml": '{"tenants":\t{"db-c": {}}}\n'},
+     ["conf.d/team.yaml names db-c", "tab character"]),
+    ("explicit-tag", {"team.yaml": "tenants:\n  !!int db-c: {}\n"},
+     ["conf.d/team.yaml names db-c", "explicit tag"]),
+    ("int64-overflow", {"team.yaml": "max_metrics_per_tenant: "
+                        "99999999999999999999\ntenants:\n  db-c: {}\n"},
+     ["conf.d/team.yaml names db-c", "int64"]),
+    ("merge-key", {"team.yaml": 'base: &b {x: "1"}\ntenants:\n  db-c:\n'
+                   '    <<: *b\n'},
+     ["conf.d/team.yaml names db-c", "anchor or alias"]),
+    ("utf16", {"team.yaml": "\ufefftenants:\n  db-c: {}\n".encode("utf-16-le")},
+     ["conf.d/team.yaml names db-c", "not valid UTF-8"]),
     # F4：與 init 路徑只差大小寫的既有項目（內容宣告別人，所以不會被跳過）。
     ("case-variant", {"DB-C.YAML": "tenants:\n  someone-else: {}\n"},
      ["init would write conf.d/db-c.yaml", "conf.d/DB-C.YAML",
       "differs only in case"]),
+    # 第 2 輪 F4：只差大小寫的是**上層目錄**（`kustomize/` 之於 `Kustomize/`）。
+    ("case-variant-parent", {"../Kustomize/README.md": "theirs\n"},
+     ["init would write kustomize", "Kustomize", "differs only in case"]),
 ]
 
 
@@ -180,6 +202,9 @@ _REFUSALS = [
 def test_a_tree_init_cannot_safely_extend_is_refused(
         tmp_path, case, files, says, dry):
     out = _brownfield(tmp_path)
+    if case == "case-variant-parent":
+        import shutil
+        shutil.rmtree(out / "kustomize")
     for rel, body in files.items():
         _place(out, rel, body)
     before = _snapshot(out)
@@ -203,6 +228,35 @@ def test_the_clobber_refusal_does_not_claim_a_second_declaration(tmp_path):
     assert "twice" not in run.stderr and "merge them" not in run.stderr
     assert "db-z would be declared nowhere" in run.stderr
     assert "leave db-a out of --tenants" in run.stderr
+
+
+@pytest.mark.parametrize("body", [
+    "tenants:\n  db-x:\n    note: x\t\n",
+    "tenants: {db-x:\t{}}\n",
+    "\ufefftenants:\n  db-x: {}\n".encode("utf-16-le"),
+], ids=["tab", "flow-tab", "utf16"])
+def test_an_unsure_file_naming_no_requested_tenant_only_warns(tmp_path, body):
+    out = _brownfield(tmp_path)
+    _place(out, "other.yaml", body)
+    run = _run(out, RERUN_TENANTS)
+    assert run.returncode == 0, run.stderr[-800:]
+    assert ("conf.d/other.yaml: init cannot tell whether the exporter "
+            "accepts this file" in run.stderr
+            and "this run is unaffected" in run.stderr), run.stderr
+    assert (out / "conf.d" / "db-c.yaml").is_file()
+
+
+def test_a_case_twin_of_the_output_dirs_conf_d_is_refused(tmp_path):
+    """F4：`Conf.D/` 已存在、`conf.d/` 不存在——最後一層檔名比不出來。"""
+    out = tmp_path / "repo"
+    theirs = out / "Conf.D" / "db-x.yaml"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_text("tenants:\n  db-x: {}\n", encoding="utf-8")
+    before = _snapshot(out)
+    run = _run(out, "db-a")
+    assert run.returncode == 1, run.stderr[-800:]
+    assert _snapshot(out) == before
+    assert "init would write conf.d" in run.stderr and "Conf.D" in run.stderr
 
 
 def test_a_rejected_file_naming_no_requested_tenant_only_warns(tmp_path):

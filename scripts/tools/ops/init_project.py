@@ -3266,7 +3266,14 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 # (`ThresholdConfig`, `tenants: map[string]map[string]ScheduledValue`) and a
 # file that fails that decode declares nothing on any plane.
 # `_exporter_verdict` answers from the YAML node tree instead, keys by their
-# raw text, and says "cannot tell" rather than guess. What keeps it honest is
+# raw text, and says "cannot tell" rather than guess.
+# ⛔ Round two of the review found the mirror still wrong at its edges (tabs,
+# explicit tags, int64 overflow, UTF-16) — the PyYAML/yaml.v3 difference is
+# open-ended. So "the exporter accepts it" is now claimed ONLY inside one
+# strict whitelist (`_whitelist_violation`); outside it the answer is
+# "cannot tell", and a file that mentions a requested tenant anywhere
+# (`_text_mentions`) then refuses the run. Errors may only go the direction
+# of refusing too much. What keeps it honest is
 # `tests/shared/init_declaration_parity_matrix.json`: Go's half runs the
 # exporter's `ScanDirTree` over every row, Python's runs `_plan_confd`.
 #
@@ -3277,31 +3284,34 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 
 _YAML_NULL_TAG = 'tag:yaml.org,2002:null'
 _YAML_STR_TAG = 'tag:yaml.org,2002:str'
-_YAML_MERGE_TAG = 'tag:yaml.org,2002:merge'
+_YAML_INT_TAG = 'tag:yaml.org,2002:int'
+_YAML_TIMESTAMP_TAG = 'tag:yaml.org,2002:timestamp'
 # Only these plain scalars are numbers to BOTH parsers. PyYAML is YAML 1.1 and
 # yaml.v3 is 1.2-ish: `1e3`, `0x1F`, `1_000`, `.5` resolve differently, so
 # anything else in a float/int field is "cannot tell", not a verdict.
 _PLAIN_INT_RE = re.compile(r'\A[-+]?[0-9]+\Z')
 _PLAIN_NUM_RE = re.compile(r'\A[-+]?[0-9]+(\.[0-9]+)?\Z')
+_INT64_MIN, _INT64_MAX = -(2 ** 63), 2 ** 63 - 1
 
 
 class _ExporterRejects(Exception):
-    """The exporter's decode of this file fails (it declares nothing)."""
+    """Inside the whitelist, a shape the exporter's decode refuses."""
 
 
 class _CannotTell(Exception):
-    """A shape init does not model; the exporter may accept or reject it."""
+    """Outside the whitelist: init does not claim to know the exporter's answer."""
 
 
 class _Verdict(NamedTuple):
     """`_exporter_verdict`'s answer for one tenant file."""
 
     status: str
-    """'ok' (the exporter accepts it), 'reject' or 'unsure'."""
+    """'ok' (inside the whitelist, the exporter accepts it), 'reject' (inside
+    the whitelist, the exporter refuses it) or 'unsure' (anything else)."""
 
     ids: list[str]
-    """'ok': the tenant ids it declares. Otherwise the ids it NAMES under
-    `tenants:` (raw key text), or [] when not even that is readable."""
+    """'ok': the tenant ids it declares. Otherwise the raw key text under a
+    composable `tenants:` mapping, or []."""
 
     reason: str
     """Why it is not 'ok' (English, embedded in the operator message)."""
@@ -3312,20 +3322,12 @@ def _is_null(node) -> bool:
 
 
 def _mapping_pairs(node) -> list:
-    """(key text, key node, value node) for a mapping, the way yaml.v3 sees it.
-
-    yaml.v3 refuses a mapping whose key text repeats (`mapping key "x"
-    already defined`) whenever it DECODES that mapping — into a struct, a
-    typed map or `interface{}` alike. Non-scalar keys and merge keys are
-    shapes init does not model.
-    """
+    """(key text, key node, value node) of a mapping whose keys passed the
+    whitelist. yaml.v3 refuses a mapping whose key text repeats (`mapping key
+    "x" already defined`) whenever it DECODES that mapping."""
     pairs = []
     seen: set[str] = set()
     for k, v in node.value:
-        if not isinstance(k, yaml.ScalarNode):
-            raise _CannotTell('a mapping key is not a scalar')
-        if k.tag == _YAML_MERGE_TAG:
-            raise _CannotTell('a `<<` merge key')
         if k.value in seen:
             raise _ExporterRejects(f'key {k.value!r} is defined twice')
         seen.add(k.value)
@@ -3350,8 +3352,6 @@ def _check_scheduled_value(node) -> None:
     if isinstance(node, yaml.SequenceNode):
         _check_any(node)
         return
-    if not isinstance(node, yaml.MappingNode):
-        raise _CannotTell('an unexpected node kind in a tenant body')
     pairs = _mapping_pairs(node)
     if 'default' not in {k for k, _, _ in pairs}:
         _check_any(node)          # arbitrary mapping (`_routing:` ...)
@@ -3405,7 +3405,7 @@ def _check_number(node, field: str, pattern: re.Pattern) -> None:
         raise _ExporterRejects(f'a `{field}:` value is not a number')
     if node.style is None and pattern.match(node.value):
         return
-    if node.style in ('"', "'") or node.tag == _YAML_STR_TAG and node.style:
+    if node.style in ('"', "'"):
         raise _ExporterRejects(f'a `{field}:` value is a quoted string')
     raise _CannotTell(f'a `{field}:` value {node.value!r} whose numeric '
                       f'reading differs between YAML versions')
@@ -3454,6 +3454,84 @@ def _check_root_field(key: str, node) -> None:
                     raise _ExporterRejects(f'`{fk}:` is not a scalar')
 
 
+def _whitelist_violation(raw: bytes) -> tuple[Optional[str], object]:
+    """THE whitelist: (why the file is outside it, or None; its first node).
+
+    A file is inside only if ALL of these hold:
+      1. its bytes decode as strict UTF-8, with no BOM;
+      2. it contains no tab character anywhere;
+      3. its first YAML document composes (PyYAML), with no `%YAML`/`%TAG`
+         directive;
+      4. no node in that document carries an explicit tag (`!!str 5`,
+         `!foo`, `!!binary …`, a `!!int` key …) — so every node's tag is
+         the resolver's IMPLICIT reading of its text;
+      5. no anchor and no alias;
+      6. every mapping key is a scalar whose implicit reading is a string
+         (so no `<<` merge key, and no `on:` / `007:` / `true:` / `~:` key);
+      7. no scalar reads as a timestamp, and every plain decimal integer
+         fits in int64.
+    The field-by-field type checks in `_exporter_verdict` then run inside it.
+
+    ⛔ "Outside the whitelist ⇒ unsure" is DELIBERATE, and it is the whole
+    design. PyYAML and yaml.v3 disagree on an open-ended set of inputs —
+    tabs, tags, YAML 1.1 vs 1.2 scalars, integer width, encodings — and two
+    rounds of blind review each found new shapes where mirroring the
+    exporter case by case got it wrong. So init only claims the exporter's
+    answer where the two parsers are known to agree, and everywhere else it
+    says it cannot tell; the caller then refuses if the file names a
+    requested tenant. The error this can make is refusing a file the
+    exporter would accept (`test_init_declaration_parity.py` lists every
+    such matrix row); it must never be calling a file accepted that the
+    exporter rejects, or missing a declaration it makes.
+    """
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return 'it is not valid UTF-8', None
+    if text.startswith('﻿'):
+        return 'it starts with a byte-order mark', None
+    if '\t' in text:
+        return 'it contains a tab character', None
+    try:
+        events = []
+        for ev in yaml.parse(text, Loader=yaml.SafeLoader):
+            events.append(ev)
+            if isinstance(ev, yaml.DocumentEndEvent):
+                break
+        root = next(yaml.compose_all(text, Loader=yaml.SafeLoader), None)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, 'problem_mark', None)
+        where = f' at line {mark.line + 1}' if mark is not None else ''
+        return f'PyYAML cannot parse it{where}', None
+    for ev in events:
+        if isinstance(ev, yaml.DocumentStartEvent) and (ev.version or ev.tags):
+            return 'it has a %YAML / %TAG directive', None
+        if isinstance(ev, yaml.AliasEvent) or getattr(ev, 'anchor', None):
+            return 'it uses an anchor or alias', None
+        if isinstance(ev, yaml.NodeEvent) and getattr(ev, 'tag', None):
+            return f'it carries an explicit tag ({ev.tag})', None
+    stack = [root] if root is not None else []
+    while stack:
+        node = stack.pop()
+        if isinstance(node, yaml.MappingNode):
+            for k, v in node.value:
+                if not (isinstance(k, yaml.ScalarNode)
+                        and k.tag == _YAML_STR_TAG):
+                    what = k.value if isinstance(k, yaml.ScalarNode) else '…'
+                    return (f'key {what!r} does not read as a plain string '
+                            f'in every YAML version'), None
+                stack.append(v)
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+        elif isinstance(node, yaml.ScalarNode):
+            if node.tag == _YAML_TIMESTAMP_TAG:
+                return f'{node.value!r} reads as a timestamp', None
+            if (node.tag == _YAML_INT_TAG and _PLAIN_INT_RE.match(node.value)
+                    and not _INT64_MIN <= int(node.value) <= _INT64_MAX):
+                return f'the integer {node.value} does not fit in int64', None
+    return None, root
+
+
 def _named_tenant_keys(root) -> list[str]:
     """Raw key text under every top-level `tenants:` mapping, no judgement."""
     ids: list[str] = []
@@ -3466,21 +3544,18 @@ def _named_tenant_keys(root) -> list[str]:
     return ids
 
 
-def _exporter_verdict(text: str) -> _Verdict:
+def _exporter_verdict(raw: bytes) -> _Verdict:
     """Would the exporter accept this tenant file, and whom does it declare?
 
-    Mirrors `pkg/config.ParseConfigFile` (yaml.v3 `Unmarshal` into
-    `ThresholdConfig`, first document only) as far as init models it, and
-    answers 'unsure' past that. ⛔ Keys are their RAW scalar text, never
-    PyYAML's typed reading: the exporter decodes them into `string`, so
-    `on:` is "on" and `007:` is "007".
+    Answers 'ok' or 'reject' only INSIDE `_whitelist_violation`'s whitelist,
+    mirroring `pkg/config.ParseConfigFile` (yaml.v3 `Unmarshal` into
+    `ThresholdConfig`, first document only) field by field; outside it the
+    answer is 'unsure'. Keys are their raw scalar text, which inside the
+    whitelist is also the only reading either parser gives them.
     """
-    try:
-        root = next(yaml.compose_all(text, Loader=yaml.SafeLoader), None)
-    except yaml.YAMLError as exc:
-        mark = getattr(exc, 'problem_mark', None)
-        where = f' at line {mark.line + 1}' if mark is not None else ''
-        return _Verdict('reject', [], f'it is not valid YAML{where}')
+    outside, root = _whitelist_violation(raw)
+    if outside is not None:
+        return _Verdict('unsure', [], outside)
     if root is None or _is_null(root):
         return _Verdict('ok', [], '')
     named = _named_tenant_keys(root)
@@ -3500,36 +3575,65 @@ def _exporter_verdict(text: str) -> _Verdict:
     return _Verdict('ok', ids, '')
 
 
-def _names_tenant_in_text(text: str, tenant: str) -> bool:
-    """Conservative: does `tenant` appear as a mapping KEY anywhere in `text`?
+#: Characters that may continue a tenant id — a match flanked by one is part
+#: of a longer word, not a mention.
+_ID_CHAR = r'A-Za-z0-9_.\-'
 
-    For a file init cannot even compose, so there is no node tree to ask.
-    Over-matching only costs a refusal; missing would cost a duplicate.
+
+def _text_mentions(raw: bytes, tenant: str) -> bool:
+    """Does `tenant` appear as a token ANYWHERE in the file, in any encoding?
+
+    For a file init could not judge. ⛔ Conservative on purpose: block or
+    flow style, a JSON body, a quoted key, a comment — all count, and the
+    bytes are tried as UTF-8, UTF-8 with BOM, UTF-16 (BOM), UTF-16LE and
+    UTF-16BE, with a hit in ANY decoding counting. A decoding that fails is
+    simply skipped; if EVERY one fails the file counts as a possible
+    mention. Over-matching costs a refusal; a miss costs a duplicate.
     """
-    return re.search(r'^[ \t-]*["\']?' + re.escape(tenant) + r'["\']?[ \t]*:',
-                     text, re.MULTILINE) is not None
+    pattern = re.compile(rf'(?<![{_ID_CHAR}]){re.escape(tenant)}'
+                         rf'(?![{_ID_CHAR}])')
+    decoded = 0
+    for enc in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be'):
+        try:
+            text = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        decoded += 1
+        if pattern.search(text):
+            return True
+    return decoded == 0
 
 
-def _case_variants(path: Path) -> list[str]:
-    """Entries beside `path` whose names differ from it ONLY in case (F4).
+def _case_variants_along(out: Path, target: Path) -> list[tuple[str, str]]:
+    """(planned, existing) for every level of `target` below `out` whose name
+    has a case-only twin already on disk (#1942 F4).
 
-    ⛔ `next(os.walk(parent))` is the directory's own listing — one level,
-    files, directories and dangling links alike — not a conf.d tenant scan;
-    it asks one question about one name. On a case-insensitive filesystem
-    (macOS, Windows) writing `db-c.yaml` would truncate an existing
-    `DB-C.YAML`; refusing on every filesystem keeps the behaviour the same
-    wherever the customer runs init.
+    Walks from the output directory down: at each EXISTING directory on the
+    way it asks whether an entry there differs from the next path component
+    only in case — `Conf.D/` for `conf.d/`, `DB-C.YAML` for `db-c.yaml`.
+    Descends only through components that exist under their exact name.
+    ⛔ `next(os.walk(d))` is one directory's own listing (files, directories
+    and dangling links alike), not a conf.d tenant scan. On a
+    case-insensitive filesystem (macOS, Windows) the twin IS the path init
+    would write — or write into — so the run is refused on every
+    filesystem, which keeps the behaviour the same wherever it runs.
     """
-    parent = path.parent
-    if not parent.is_dir():
-        return []
-    try:
-        _, dirnames, filenames = next(os.walk(parent))
-    except StopIteration:
-        return []
-    want = path.name.lower()
-    return sorted(n for n in (*dirnames, *filenames)
-                  if n != path.name and n.lower() == want)
+    found: list[tuple[str, str]] = []
+    here = out
+    for part in target.relative_to(out).parts:
+        if not here.is_dir():
+            break
+        try:
+            _, dirnames, filenames = next(os.walk(here))
+        except StopIteration:
+            break
+        want = part.lower()
+        for name in sorted((*dirnames, *filenames)):
+            if name != part and name.lower() == want:
+                found.append(((here / part).relative_to(out).as_posix(),
+                              (here / name).relative_to(out).as_posix()))
+        here = here / part
+    return found
 
 
 class _Conflict(NamedTuple):
@@ -3596,8 +3700,10 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
 
     ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
     `db-c.yaml`. And because the two ARE one file on a case-insensitive
-    filesystem, any path this run would write that has a case-only variant
-    beside it refuses the run (`_case_variants`) — on every filesystem.
+    filesystem, the run is refused — on every filesystem — when any path it
+    would write has, at ANY level below the output directory, an existing
+    entry whose name differs only in case (`Conf.D/` for `conf.d/`,
+    `DB-C.YAML` for `db-c.yaml`; `_case_variants_along`).
 
     ⚠️ Not handled, pending an owner ruling: init's own `conf.d/<t>.yaml`
     that ALSO declares a tenant this run was NOT asked for is overwritten as
@@ -3622,25 +3728,25 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
                 root_defaults.append(p)
             continue
         try:
-            text = p.read_bytes().decode('utf-8')
-        except UnicodeDecodeError:
-            text = p.read_bytes().decode('utf-8', errors='replace')
-            verdict = _Verdict('unsure', [], 'it is not valid UTF-8')
+            raw = p.read_bytes()
         except OSError as exc:
-            text = ''
+            # Nothing to read, so nothing rules a mention out: every
+            # requested tenant counts as possibly named (fail-closed).
+            unreadable[_rel(p)] = ('unsure', f'it cannot be read ({exc})')
+            named = set(requested)
             verdict = _Verdict('unsure', [], f'it cannot be read ({exc})')
         else:
-            verdict = _exporter_verdict(text)
-        if verdict.status == 'ok':
-            for tid in verdict.ids:
-                declared.setdefault(tid, []).append(p)
-            continue
-        unreadable[_rel(p)] = (verdict.status, verdict.reason)
-        named = set(verdict.ids)
-        if not named:
-            # No `tenants:` mapping to read keys from (the file does not
-            # compose, or is shaped otherwise): fall back to the text.
-            named = {t for t in requested if _names_tenant_in_text(text, t)}
+            verdict = _exporter_verdict(raw)
+            if verdict.status == 'ok':
+                for tid in verdict.ids:
+                    declared.setdefault(tid, []).append(p)
+                continue
+            unreadable[_rel(p)] = (verdict.status, verdict.reason)
+            # The keys init could read, PLUS any token mention in the text —
+            # a flow mapping, a JSON body or another encoding hides keys
+            # from the node walk but not from this (`_text_mentions`).
+            named = set(verdict.ids) | {
+                t for t in requested if _text_mentions(raw, t)}
         # init's own path for tenant t is init's to rewrite (its semantics are
         # unchanged), so naming t there blocks nothing.
         for t in requested:
@@ -3691,11 +3797,12 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
+    seen: set[tuple[str, str]] = set()
     for f in _preview_files(config, output_dir, plan):
-        target = Path(f)
-        for variant in _case_variants(target):
-            conflicts.append(_Conflict(
-                'case', '', [_rel(target), _rel(target.parent / variant)]))
+        for pair in _case_variants_along(out, Path(f)):
+            if pair not in seen:
+                seen.add(pair)
+                conflicts.append(_Conflict('case', '', list(pair)))
     return plan
 
 
@@ -3836,14 +3943,15 @@ def _conflict_row(c: _Conflict, is_zh: bool) -> str:
                 f"declare it twice. Fix {f} first, then re-run.")
     # 'case'
     own, existing = c.files
-    return (f"init 會寫入 {own}，但同一目錄已有只差大小寫的 {existing}；在不分"
-            f"大小寫的檔案系統（macOS、Windows）上寫入其中一個就會覆蓋另一個。"
-            f"請改名或移除 {existing} 後重跑。"
+    return (f"init 會寫入 {own}，但同一層已有只差大小寫的 {existing}；在不分"
+            f"大小寫的檔案系統（macOS、Windows）上兩者是同一個路徑，寫入會"
+            f"落到（或覆蓋）它。請改名或移除 {existing} 後重跑。"
             if is_zh else
-            f"init would write {own}, but {existing} already exists beside it "
-            f"— a name that differs only in case. On a case-insensitive "
-            f"filesystem (macOS, Windows) writing one overwrites the other. "
-            f"Rename or remove {existing}, then re-run.")
+            f"init would write {own}, but {existing} already exists at that "
+            f"level — a name that differs only in case. On a case-insensitive "
+            f"filesystem (macOS, Windows) they are the same path, so the "
+            f"write would land in (or overwrite) it. Rename or remove "
+            f"{existing}, then re-run.")
 
 
 def _conflict_message(plan: _ConfdPlan, is_zh: bool) -> str:

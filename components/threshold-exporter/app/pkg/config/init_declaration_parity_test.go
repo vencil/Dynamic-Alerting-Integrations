@@ -12,6 +12,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -27,14 +28,17 @@ import (
 type initDeclParityMatrix struct {
 	Comment []string `json:"_comment"`
 	Trees   []struct {
-		Name         string              `json:"name"`
-		Files        map[string]string   `json:"files"`
+		Name  string            `json:"name"`
+		Files map[string]string `json:"files"`
+		// Bytes a JSON string cannot carry (a UTF-16 body), base64-encoded.
+		FilesBase64  map[string]string   `json:"files_base64"`
 		Declarations map[string][]string `json:"declarations"`
 		Rejected     []string            `json:"rejected"`
 		Conflict     *string             `json:"conflict"`
-		// Python-only (init may answer "cannot tell"); decoded so that
-		// DisallowUnknownFields still rejects a misspelt key.
-		InitUnsure []string `json:"init_unsure"`
+		// Python-only (file -> a tenant it names; init must answer "cannot
+		// tell"); decoded so that DisallowUnknownFields still rejects a
+		// misspelt key.
+		InitUnsure map[string]string `json:"init_unsure"`
 	} `json:"trees"`
 }
 
@@ -65,6 +69,13 @@ func TestInitDeclarationParityMatrix(t *testing.T) {
 			root := t.TempDir()
 			for rel, content := range tree.Files {
 				rootWrite(t, filepath.Join(root, filepath.FromSlash(rel)), content)
+			}
+			for rel, b64 := range tree.FilesBase64 {
+				data, err := base64.StdEncoding.DecodeString(b64)
+				if err != nil {
+					t.Fatalf("%s: bad base64: %v", rel, err)
+				}
+				rootWrite(t, filepath.Join(root, filepath.FromSlash(rel)), string(data))
 			}
 			scan, err := ScanDirTree(root, nil, nil, log.New(io.Discard, "", 0))
 			if err != nil {
