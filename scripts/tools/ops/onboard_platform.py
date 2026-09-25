@@ -1187,9 +1187,14 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
     if phase2_results:
         candidates, _, summary = phase2_results
         for c in candidates:
-            metric = c.get("alert", c.get("record", "")).lower()
+            # Candidates come from extract_threshold_candidates(): the metric
+            # is `metric_key` (None when unparseable). Reading "alert"/"record"
+            # here — keys a candidate never has — left db_types always empty
+            # (issue 1381). Prefix match, as blind_spot_discovery does: a
+            # substring test would let "es_" hit e.g. "node_bytes_total".
+            metric = (c.get("metric_key") or "").lower()
             for prefix, db_type in METRIC_PREFIX_DB_MAP.items():
-                if prefix in metric:
+                if metric.startswith(prefix):
                     # Associate with all known tenants
                     for t in hints["tenants"]:
                         hints["db_types"].setdefault(t, set()).add(db_type)

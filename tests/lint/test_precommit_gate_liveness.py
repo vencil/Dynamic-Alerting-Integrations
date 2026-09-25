@@ -60,6 +60,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _BAT = "scripts/ops/dx-run.bat"
+_ARIA_PROBE = "tools/portal/src/interactive/tools/zz_liveness_probe_aria.jsx"
 _GLOSSARY_ANCHOR = "**ADR (Architecture Decision Record)**"
 _GLOSSARY_PLANT = "**ZZQ (Zeta Zulu Quebec)**\n:   liveness probe term.\n\n" + _GLOSSARY_ANCHOR
 _AUDIENCE_ANCHOR = "  file: getting-started/wizard.jsx\n  audience:\n  - platform\n"
@@ -144,6 +145,10 @@ CASES = [
                           "def f(p):\n    return open(p).read()\n"),
          lambda r: _write(r, "scripts/tools/zz_liveness_probe_enc.py",
                           'def f(p):\n    return open(p, encoding="utf-8").read()\n')),
+    Case("aria-references-check",
+         lambda r: _write(r, _ARIA_PROBE, '<p aria-describedby="zz-probe-missing">x</p>\n'),
+         lambda r: _write(r, _ARIA_PROBE,
+                          '<p id="zz-probe-note">n</p>\n<p aria-describedby="zz-probe-note">x</p>\n')),
     Case("glossary-check",
          lambda r: _replace_once(r, "docs/glossary.md", _GLOSSARY_ANCHOR, _GLOSSARY_PLANT),
          _glossary_synced),
