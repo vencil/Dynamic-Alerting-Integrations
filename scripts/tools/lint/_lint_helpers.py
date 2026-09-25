@@ -564,6 +564,58 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
     return base
 
 
+class DiffScanError(RuntimeError):
+    """Raised when ``git diff`` itself fails or times out during a diff scan.
+
+    Distinct from ``DiffBaseMissingError``: that one is raised *before* the
+    scan, only on the resolve path. An explicit ``--diff-base`` skips that
+    check, and git can still fail on a ref that did resolve. Callers turn this
+    into ``EXIT_CALLER_ERROR`` — an empty file list here would read as "no
+    offenders" and print OK (#1987).
+    """
+
+
+def diff_changed_paths(base: str, cwd: Path, pathspecs: tuple = (),
+                       timeout: int = 10) -> List[str]:
+    """Return repo-relative paths Added/Modified in the working tree vs ``base``.
+
+    Runs ``git diff --name-only -z --diff-filter=AM <base> [-- <pathspecs>]``.
+    Deleted files are excluded on purpose: deleting an offender is the fix.
+
+    ``-z`` is load-bearing: without it git C-quotes any path with a non-ASCII
+    byte (``"_\\346\\270\\254.bat"``, per ``core.quotePath``), the caller's
+    suffix and ``is_file()`` checks miss it, and a staged violation reads as
+    clean. Paths are decoded with ``surrogateescape`` so a non-UTF-8 name
+    still round-trips to the file on disk.
+
+    ⛔ Raises ``DiffScanError`` on a non-zero git exit or a timeout. It never
+    returns ``[]`` for a failed scan — that is the #1987 shape, where "could
+    not measure" and "measured, nothing found" became the same output.
+    """
+    cmd = ["git", "diff", "--name-only", "-z", "--diff-filter=AM", base]
+    if pathspecs:
+        cmd += ["--", *pathspecs]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, cwd=str(cwd), check=True,
+            timeout=timeout,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b"").decode("utf-8", "replace").strip()
+        detail = stderr or f"exit {e.returncode}"
+        raise DiffScanError(
+            f"`git diff` against '{base}' failed, so the diff scan could not "
+            f"run: {detail}"
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise DiffScanError(
+            f"`git diff` against '{base}' timed out after {timeout}s, so the "
+            f"diff scan could not run"
+        ) from e
+    names = result.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return [name for name in names if name]
+
+
 _HUNK_HEADER_RE = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
 
 
