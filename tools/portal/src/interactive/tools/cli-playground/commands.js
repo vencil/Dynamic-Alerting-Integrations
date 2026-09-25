@@ -163,23 +163,42 @@ Next steps:
     description: t('一站式配置驗證：YAML + schema + routing + policy + versions', 'One-stop config validation: YAML + schema + routing + policy + versions'),
     category: t('文件系統工具', 'Filesystem Tools'),
     popular: true,
-    preview: `$ da-tools validate-config --config-dir conf.d/ --ci
+    // issue 1380: validate-config has no --ci flag (argparse rc=2). Its exit
+    // code is already CI-shaped — 0 unless a check fails (1) — so the preview
+    // is the bare call, and the output below is a real run's, not a mock-up.
+    preview: `$ da-tools validate-config --config-dir conf.d/
 
-Running validation suite...
+============================================================
+  validate-config — Unified Validation Report
+============================================================
 
-[✓] YAML syntax          3/3 files valid
-[✓] Schema validation    2 tenants, 0 unknown keys
-[✓] Threshold format     18 thresholds, all numeric strings
-[✓] Routing validation   2 receivers configured
-[✓] Duration guardrails  group_wait, repeat_interval in range
-[✓] Version consistency  v2.9.0
+[PASS] yaml_syntax
+       3 files parsed successfully
 
-All checks passed (6/6). Exit code: 0`,
+[PASS] schema
+       No schema warnings
+
+[PASS] routes
+       2 routes, 2 receivers, 2 inhibit_rules
+
+[PASS] profiles
+       2 tenants scanned, 0 profile refs, 0 profiles defined
+
+[PASS] policy_dsl
+       No _policies defined — skipped
+
+[PASS] tenant_uniqueness
+       2 tenant(s), each declared in exactly one file
+
+------------------------------------------------------------
+  Total: 6 checks | 6 pass | 0 warn | 0 fail
+------------------------------------------------------------
+  Result: PASS`,
     args: [],
     flags: [
       { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: true, placeholder: '/etc/config' },
       { name: '--policy', label: t('Webhook 域政策', 'Webhook Domain Policy'), required: false, placeholder: '*.example.com' },
-      { name: '--ci', label: t('CI 模式 (exit codes)', 'CI Mode (exit codes)'), required: false, type: 'checkbox' }
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]
   },
   'generate-routes': {

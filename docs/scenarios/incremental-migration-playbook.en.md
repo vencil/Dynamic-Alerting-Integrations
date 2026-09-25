@@ -443,10 +443,13 @@ After all domains migrated, validate all configs:
 ```bash
 da-tools validate-config \
   --config-dir conf.d/ \
-  --ci \
+  --json \
   > validation-report.json
 
-# Expected: all tenants status = PASS, cardinality violations = 0
+# Expected: exit code 0 (any failed check exits 1 — no extra flag needed).
+# validation-report.json is a list of checks, each shaped like
+#   {"check": "schema", "status": "pass", "details": [...]}
+# status is pass / warn / fail; the run passes when no check is fail.
 ```
 
 ### Step 4.3: Batch Diagnosis
@@ -490,7 +493,7 @@ If any test or trial tenants exist, remove them:
 ```bash
 find conf.d -name 'tenant-*.yaml'
 da-tools offboard --tenant test-domain-1
-da-tools validate-config --config-dir conf.d/ --ci
+da-tools validate-config --config-dir conf.d/
 ```
 
 ### Step 4.6: Update Documentation & Handover

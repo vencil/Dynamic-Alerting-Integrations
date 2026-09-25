@@ -443,10 +443,13 @@ cp scaffold_output/mariadb-prod.yaml conf.d/
 ```bash
 da-tools validate-config \
   --config-dir conf.d/ \
-  --ci \
+  --json \
   > validation-report.json
 
-# 預期：所有租戶 status = PASS，cardinality violations = 0
+# 預期：結束碼 0（任一檢查項 fail 時結束碼為 1，不需要另加旗標）。
+# validation-report.json 是一份檢查項清單，每一項形如
+#   {"check": "schema", "status": "pass", "details": [...]}
+# status 為 pass / warn / fail；沒有任何一項是 fail 才算通過。
 ```
 
 ### 步驟 4.3：批量診斷
@@ -490,7 +493,7 @@ kubectl create configmap prometheus-rules-cleaned \
 ```bash
 find conf.d -name 'tenant-*.yaml'
 da-tools offboard --tenant test-domain-1
-da-tools validate-config --config-dir conf.d/ --ci
+da-tools validate-config --config-dir conf.d/
 ```
 
 ### 步驟 4.6：更新文件與交接

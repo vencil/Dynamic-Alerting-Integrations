@@ -80,8 +80,6 @@ entries:
   - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--cluster-name", count: 1, ticket: "#1381"}
   - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
   - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V2, token: "--output", count: 5, ticket: "#1514"}
-  - {file: docs/scenarios/hands-on-lab.en.md, command: validate-config, verdict: V1, token: "--ci", count: 1, ticket: "#1380"}
-  - {file: docs/scenarios/hands-on-lab.md, command: validate-config, verdict: V1, token: "--ci", count: 1, ticket: "#1380"}
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: alert-quality, verdict: V1, token: "--lookback", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
@@ -97,7 +95,6 @@ entries:
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V1, token: "--prometheus-rules", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
   - {file: docs/scenarios/incremental-migration-playbook.en.md, command: shadow-verify, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: validate-config, verdict: V1, token: "--ci", count: 2, ticket: "#1380"}
   - {file: docs/scenarios/incremental-migration-playbook.md, command: alert-quality, verdict: V1, token: "--lookback", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
@@ -114,7 +111,6 @@ entries:
   - {file: docs/scenarios/incremental-migration-playbook.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
   - {file: docs/scenarios/incremental-migration-playbook.md, command: shadow-verify, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/incremental-migration-playbook.md, command: tenant, verdict: V0, token: "tenant", count: 1, ticket: "#1818"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: validate-config, verdict: V1, token: "--ci", count: 2, ticket: "#1380"}
   - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--analyze", count: 2, ticket: "#1381"}
   - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
   - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}

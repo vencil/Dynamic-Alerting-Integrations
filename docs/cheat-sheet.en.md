@@ -39,7 +39,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `patch-config` | ConfigMap partial update with preview (--diff) | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
 | `scaffold` | Generate new tenant config (interactive or non-interactive) | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
-| `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools validate-config --help` |
+| `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
 | `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
 | `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | --config-dir <PATH>, --execute, --plane {root,subtree} | `da-tools deprecate --help` |
 | `lint` | Check Custom Rule governance compliance (`custom_` prefix rules) | --strict, --json-output | `da-tools lint --help` |

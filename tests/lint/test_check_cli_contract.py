@@ -1222,7 +1222,7 @@ class TestRealRepo:
         """The gate must SEE the defects the content tickets describe, or a
         green tree proves only that it looked at nothing."""
         keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
-        for probe in [("V1", "validate-config", "--ci"),        # #1380
+        for probe in [("V1", "maintenance-scheduler", "--timezone"),  # #1513
                       ("V1", "onboard", "--analyze"),           # #1381
                       ("V2", "onboard", "--output"),            # #1514 class (abbreviation)
                       ("V3", "lint", "--strict"),               # #1619
@@ -1230,6 +1230,15 @@ class TestRealRepo:
             assert probe in keys, f"probe {probe} not measured; the whole run is void"
         assert any(f.file == "docs/schemas/migration-state.md" for f in result["findings"]), (
             "the inline-span carrier stopped seeing migration-state.md (#1381)")
+        # The `docker run … <image ref> \` continuation carrier. This used to be
+        # proven by #1380's hands-on-lab line, which is fixed now; the zh page
+        # writes this command as bare `da-tools`, so pin the EN file, or the
+        # bare form alone would keep the probe green with the carrier blind.
+        assert any(f.file == "docs/cli-reference.en.md"
+                   and (f.verdict, f.command, f.token) == ("V1", "maintenance-scheduler", "--timezone")
+                   for f in result["findings"]), (
+            "the `docker run <image ref>` continuation carrier stopped seeing "
+            "cli-reference.en.md maintenance-scheduler (#1513)")
 
     @pytest.mark.parametrize("command,flag,pattern", [
         ("offboard", "--config-dir", r"offboard[^\n]*--config-dir"),
