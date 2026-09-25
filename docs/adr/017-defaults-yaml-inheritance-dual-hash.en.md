@@ -182,7 +182,7 @@ implementation).
    byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
    **measurement, not a roster**, and so are the three named keys: when any new `_`-prefixed key
    appears, apply the test above rather than reasoning backwards from these names.
-   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names; a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); the walker plane behind `/effective` does not implement this layer yet.
+   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names; a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); the walker plane behind `/effective` does not implement this layer yet ([#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
 2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
 
@@ -232,7 +232,7 @@ implementation).
    | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
 
-   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names; a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); the walker plane behind `/effective` does not implement this layer yet.
+   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names; a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); the walker plane behind `/effective` does not implement this layer yet ([#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
    ⚠️ **`compile_custom_alerts.py`'s output path does not follow `--config-dir`**
    (`out_path = repo / OUT_REL`, anchored on the repository). This used to continue "so
