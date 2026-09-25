@@ -75,6 +75,7 @@ sequenceDiagram
 - 三層 tier audit：A 靜態（hard gate）/ B live snapshot（soft）/ C 歷史 telemetry（bonus）
 - 產出 dual：**`.da/migration-state.json`**（機器讀，後續 phase 自動化用）+ Markdown summary（給 PR description / 給人類）
 - Schema 詳見 [migration-state.md](../schemas/migration-state.md)
+- ⚠️ **會自動跑完三層並寫出 `migration-state.json` 的 Phase 0 分析器尚未實作**：schema 已定義，產生端還沒有。目前 Tier A 以既有工具逐項執行（見下方 Checklist），Tier B / C 沒有工具支援
 
 ### Architect Narrative
 
@@ -119,28 +120,22 @@ JSON (`.da/migration-state.json`) + Markdown summary 來自同一個 internal st
 <details>
 <summary>📋 Phase 0 Checklist（給 executor）</summary>
 
-- [ ] 跑 Tier A 靜態 audit
-  ```bash
-  da-tools onboard --analyze \
-      --output .da/migration-state.json \
-      --markdown-summary > migration-summary.md
-  ```
-- [ ] 把 Markdown summary 貼進 PR description（給 reviewer）
-- [ ] 確認 Tier A hard gates 通過：
-  - [ ] 沒 syntax error 的孤兒 rule
-  - [ ] 每個 receiver 都有對應 routing entry
-  - [ ] tenant id 命名與我們的 schema 相容（dev-rule #2）
-- [ ] **可選** Tier B：對活的 Prom 跑 `ALERTS{}` snapshot
-- [ ] **可選** Tier C：對 Thanos / VM-long-retention 跑歷史查詢
-- [ ] commit `.da/migration-state.json` 進 customer GitOps repo
+- [ ] 跑 Tier A 靜態 audit（一次跑完三關的分析器尚未實作，逐關用既有工具；各關的完整命令在 [troubleshooting-checklist §2.1](../integration/troubleshooting-checklist.md)）
+  - [ ] PromQL 語法：`promtool check rules <rules-dir>/*.yaml` rc=0；要支援 VM 方言則逐檔 `da-tools parser import --input <rules-file> --fail-on-ambiguous` rc=0（§2.1.1）
+  - [ ] tenant id 沒有寫死在 PromQL（dev-rule #2）：`grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <rules-dir>/` 沒有輸出、rc=1（§2.1.2）
+  - [ ] 每條規則都有對應 routing entry：§2.1.3 的 `amtool config routes test` 迴圈沒有列出落到 fallback 的 alert
+- [ ] 把上面三關的結果貼進 PR description（給 reviewer）
+- [ ] **可選** Tier B：對活的 Prom 跑 `ALERTS{}` snapshot（尚無工具支援，手動查詢）
+- [ ] **可選** Tier C：對 Thanos / VM-long-retention 跑歷史查詢（尚無工具支援，手動查詢）
+- [ ] `.da/migration-state.json`：產生端尚未實作，目前沒有工具會寫出它；Gate 1 以上面三關的結果為準
 </details>
 
 ### Failure modes
-- 「Tier A 卡在 syntax error」：常見於手寫 PromQL 用 VM-only 函數 → `da-parser --strict-promql` 標出
+- 「Tier A 卡在 syntax error」：常見於手寫 PromQL 用 VM-only 函數 → `da-tools parser import` 標出 `dialect: metricsql` / `prom_compatible: false`，`promtool check rules` 直接 parse fail
 - 「Tier B 拉不到 ALERTS{}」：Prom 太久沒 alert 評估 / 或 query timeout → 接受 Tier A 即可推進
 
 ### Gate 1 → Phase 1
-**通過條件**：Tier A 全 hard checks pass + `.da/migration-state.json` 已 commit。
+**通過條件**：Tier A 全 hard checks pass（`.da/migration-state.json` 的產生端尚未實作，目前以 Checklist 三關的結果為準）。
 
 ---
 
@@ -778,9 +773,9 @@ prod-rest         ✅       ✅       —        —        —
 
 | 症狀 | 第一手排查 | Anchor |
 |---|---|---|
-| **Tier A 卡在 PromQL syntax error** | `da-parser --strict-promql --report` 看哪些檔案 fail；常見是手寫 PromQL 用了 vmalert-only 函數但 source 標 prometheus | (e.g., 客戶混用 `histogram_quantile_bucket` (metricsql) 與 `histogram_quantile` (promql)，da-parser dialect detector 標 ambiguous) |
+| **Tier A 卡在 PromQL syntax error** | `promtool check rules` 看哪些檔案 fail，`da-tools parser import` 看每條規則的 `dialect`；常見是手寫 PromQL 用了 VM-only 函數但要跑在 Prometheus 上 | (e.g., 客戶寫了 `histogram_quantile_bucket`——兩種方言都沒有這個函數，da-parser 標 ambiguous 並帶 `unsupported function`) |
 | **Tier A 撈到 100+ orphan rules** | 客戶聲稱「那些是 silenced」；驗證 AM silencer 是否仍 active；Tier B snapshot 比對 `silences[?] expires` | (e.g., 5 年前 silenced 一個 region 的 alert，silence 早 expire 但 rule 沒 prune → orphan 結果 = false positive) |
-| **Tier A 抓到 hardcoded tenant id** | dev-rule #2 違反；migration-state.json 列出每處；Phase 1 之前必須 fix | (e.g., 急救 hotfix 留下 `instance="db-prod-1"` PromQL，原作者離職、rationale 失傳) |
+| **Tier A 抓到 hardcoded tenant id** | dev-rule #2 違反；grep 列出每處（自動列出的分析器尚未實作）；Phase 1 之前必須 fix | (e.g., 急救 hotfix 留下 `instance="db-prod-1"` PromQL，原作者離職、rationale 失傳) |
 | **PromRule CRD + 原始 rules.yaml 雙寫** | Operator 遷移過程留遺跡；da-parser dedupe 失敗時手動 reconcile | (e.g., 三年前 Operator 遷移半完成，PromRule 與 ConfigMap 並存，當前 active source 不明) |
 | **Tier B `ALERTS{}` 查詢 timeout** | Prom 5+ 年沒 GC 或 cardinality 過高；改縮窗口 `ALERTS{}[1d]` 或接受 Tier B 缺失 | (e.g., 100k+ ALERTS series 全量查 30s timeout，改近 24h 約 2k series 可查) |
 | **Tier C 來源不齊全（multi-region 各用不同 logging stack）** | 部分 region 用 ELK 部分用 Splunk → Tier C partial | (e.g., us-east 有 ELK 5y retention、eu-west 沒 → Tier C 只覆蓋 50% scope；接受並記入 migration-state.json `tier_c.coverage`) |
@@ -864,7 +859,7 @@ prod-rest         ✅       ✅       —        —        —
 
 #### Phase 0：Discovery — 客戶聽完 Tier A 結果腦袋先 reset 一次（2 週）
 
-`da-tools onboard --analyze` 跑下去，Tier A 結果讓客戶 ops 第一次正視「我們其實不知道自己有什麼」：
+Tier A 三關跑下去（本案例描述的是目標流程；會一次跑完並寫出 `migration-state.json` 的分析器尚未實作，實際以 Checklist 列的既有工具逐關執行），結果讓客戶 ops 第一次正視「我們其實不知道自己有什麼」：
 
 - **380 條規則**（客戶以為 ~250）—— 5 年來沒人 audit，dead code 累積
 - **47 條 orphan rule**（規則 commit 但對應 receiver 早不在 AM）—— 其中 12 條的 PagerDuty token 是 3 年前離職員工的個人 token，過期已久

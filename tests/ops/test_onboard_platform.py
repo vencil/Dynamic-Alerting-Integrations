@@ -32,6 +32,7 @@ from onboard_platform import (
     analyze_scrape_configs,
     scan_rule_files,
     write_outputs,
+    _build_onboard_hints,
     DEFAULT_TENANT_LABEL,
 )
 
@@ -498,6 +499,39 @@ class TestAnalyzeRuleFiles:
         path = write_yaml(config_dir, "cm.yaml", yaml.dump(cm, default_flow_style=False))
         candidates, _, summary = analyze_rule_files([path])
         assert summary["alert_rules"] == 1
+
+
+class TestBuildOnboardHintsDbTypes:
+    """onboard-hints.json 的 db_types 由 Phase 2 規則的 metric 前綴推得（issue 1381）。"""
+
+    @staticmethod
+    def _hints(config_dir, exprs, tenants=("tenant-x", "tenant-y")):
+        rules = [{"alert": f"A{i}", "expr": e, "labels": {"severity": "warning"}}
+                 for i, e in enumerate(exprs)]
+        path = write_yaml(config_dir, "rules.yaml",
+                          yaml.dump({"groups": [{"name": "g", "rules": rules}]}))
+        phase1 = ({t: {"receiver": {"type": "webhook"}} for t in tenants}, None)
+        return _build_onboard_hints(phase1, analyze_rule_files([path]), None)
+
+    def test_db_types_come_from_the_rule_metrics(self, config_dir):
+        """真實 Phase 2 輸出（鍵是 metric_key）要能推出 DB 類型，不能永遠是空的。"""
+        hints = self._hints(config_dir, [
+            "mysql_global_status_threads_connected > 100",
+            "sum(rate(redis_commands_processed_total[5m])) > 1000",
+        ])
+        assert hints["db_types"] == {"tenant-x": ["mariadb", "redis"],
+                                     "tenant-y": ["mariadb", "redis"]}
+
+    def test_prefix_not_substring(self, config_dir):
+        """`es_` 只比對開頭；node_bytes_total 不是 Elasticsearch。"""
+        hints = self._hints(config_dir, ["node_network_receive_bytes_total > 1e9"])
+        assert hints["db_types"] == {}
+
+    def test_unparseable_rule_is_skipped(self, config_dir):
+        """metric_key 為 None 的規則不影響其他規則的推斷。"""
+        hints = self._hints(config_dir, ["pg_up == 0", "vector(1)"])
+        assert hints["db_types"] == {"tenant-x": ["postgresql"],
+                                     "tenant-y": ["postgresql"]}
 
 
 class TestGenerateDefaultsFromCandidates:

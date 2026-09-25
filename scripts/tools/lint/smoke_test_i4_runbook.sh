@@ -279,22 +279,102 @@ echo
 echo "── §2.1.1 PromQL parse ──"
 assert_promql "§2.1.1 simple PromQL" 'mysql_up == 0'
 assert_promql "§2.1.1 with for clause" 'rate(http_requests_total[5m]) > 100'
+# Step 3 of the runbook reproduces a single expr; `promtool query parse`
+# (what it used to say) does not exist — issue 1381.
+if promtool --experimental promql format 'mysql_up == 0' > /dev/null 2>&1; then
+    echo -e "  ${GREEN}✅${NC} §2.1.1 promtool --experimental promql format"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}❌${NC} §2.1.1 promtool --experimental promql format"
+    FAIL=$((FAIL + 1))
+    FAILURES+=("§2.1.1 promtool --experimental promql format")
+fi
 
 # =============================================================================
 # §2.1.2 Hardcoded tenant id
 # =============================================================================
 echo
 echo "── §2.1.2 Tenant id violations ──"
-assert_jq "§2.1.2 .discovery.tier_a_static.tenant_id_violations[]" "$STATE_JSON" '.discovery.tier_a_static.tenant_id_violations[]'
-assert_jq "§2.1.2 .tenant_id_violations | length" "$STATE_JSON" '.discovery.tier_a_static.tenant_id_violations | length'
+# The runbook's gate here is grep (the analyzer that would emit
+# tenant_id_violations[] is not implemented — issue 1381). Check the
+# documented patterns hit a hard-coded literal (rc=0) and stay quiet on the
+# tenant-agnostic form (rc=1); rc=2 would mean the pattern itself is broken.
+T212=$(mktemp -d /tmp/i4-212.XXXXXX)
+printf '%s\n' "- expr: 'mysql_up{instance=\"db-prod-1\"} == 0'" "- expr: 'mysql_up{tenant=\"shop-prod\"} == 0'" > "$T212/bad.yaml"
+printf '%s\n' "- expr: 'mysql_up == 0'" "- expr: 'mysql_up{instance=~\"db-prod-.*\"} == 0'" > "$T212/good.yaml"
+for pat in 'instance\s*=\s*"[a-z0-9-]+"' 'tenant\s*=\s*"[a-z0-9-]+"'; do
+    grep -rnE "$pat" "$T212/bad.yaml" > /dev/null; bad_rc=$?
+    grep -rnE "$pat" "$T212/good.yaml" > /dev/null; good_rc=$?
+    if [ "$bad_rc" = 0 ] && [ "$good_rc" = 1 ]; then
+        echo -e "  ${GREEN}✅${NC} §2.1.2 grep $pat (hit rc=0, clean rc=1)"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}❌${NC} §2.1.2 grep $pat (hit rc=$bad_rc, clean rc=$good_rc; want 0 / 1)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("§2.1.2 grep $pat")
+    fi
+done
+rm -rf "$T212"
 
 # =============================================================================
 # §2.1.3 Orphan rule
 # =============================================================================
 echo
 echo "── §2.1.3 Orphan rule ──"
-assert_jq "§2.1.3 orphan_rules[]" "$STATE_JSON" '.discovery.tier_a_static.orphan_rules[]'
-assert_jq "§2.1.3 orphan_rules | length" "$STATE_JSON" '.discovery.tier_a_static.orphan_rules | length'
+# The runbook's gate here is a yq + `amtool config routes test` loop (the
+# analyzer that would emit orphan_rules[] is not implemented — issue 1381).
+# Run that loop verbatim against a fixture: exactly the unrouted alert must
+# be listed, the routed one and the recording rule must not.
+T213=$(mktemp -d /tmp/i4-213.XXXXXX)
+cat > "$T213/alertmanager.yml" <<'AMEOF'
+route:
+  receiver: default
+  routes:
+    - matchers: [tenant="shop-prod"]
+      receiver: shop-pager
+receivers:
+  - name: default
+  - name: shop-pager
+AMEOF
+cat > "$T213/rules.yaml" <<'RULEEOF'
+groups:
+- name: g
+  rules:
+  - alert: RoutedAlert
+    expr: mysql_up == 0
+    labels: {severity: critical, tenant: shop-prod}
+  - alert: OrphanAlert
+    expr: redis_up == 0
+    labels: {severity: warning}
+  - record: job:foo:rate5m
+    expr: rate(foo[5m])
+RULEEOF
+ORPHANS=$(cd "$T213" && {
+DEFAULT=$(yq '.route.receiver' alertmanager.yml)
+yq '.groups[].rules[] | select(has("alert")) | ["alertname=" + .alert] + ((.labels // {}) | to_entries | map(.key + "=" + .value)) | join(" ")' rules.yaml |
+while read -r labels; do
+    recv=$(amtool config routes test --config.file=alertmanager.yml $labels)
+    if [ "$recv" = "$DEFAULT" ]; then echo "fallback: $labels -> $recv"; fi
+done
+} 2>&1)
+if [ "$ORPHANS" = "fallback: alertname=OrphanAlert severity=warning -> default" ]; then
+    echo -e "  ${GREEN}✅${NC} §2.1.3 yq + amtool routes test loop lists exactly the unrouted alert"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}❌${NC} §2.1.3 yq + amtool routes test loop"
+    echo "      got: $ORPHANS"
+    FAIL=$((FAIL + 1))
+    FAILURES+=("§2.1.3 yq + amtool routes test loop")
+fi
+if (cd "$T213" && amtool config routes --config.file=alertmanager.yml > /dev/null 2>&1); then
+    echo -e "  ${GREEN}✅${NC} §2.1.3 amtool config routes (show tree)"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}❌${NC} §2.1.3 amtool config routes (show tree)"
+    FAIL=$((FAIL + 1))
+    FAILURES+=("§2.1.3 amtool config routes")
+fi
+rm -rf "$T213"
 assert_amtool "§2.1.3 amtool alert add syntax" "amtool alert add alertname=test_orphan severity=critical --alertmanager.url=http://nonexistent:9093 2>&1 || true"
 
 # =============================================================================

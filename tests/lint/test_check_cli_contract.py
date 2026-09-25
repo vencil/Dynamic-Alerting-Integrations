@@ -1383,13 +1383,18 @@ class TestRealRepo:
         green tree proves only that it looked at nothing."""
         keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
         for probe in [("V1", "maintenance-scheduler", "--timezone"),  # #1513
-                      ("V1", "onboard", "--analyze"),           # #1381
+                      ("V1", "onboard", "--legacy-config"),     # #1818
                       ("V2", "onboard", "--output"),            # #1514 class (abbreviation)
                       ("V3", "lint", "--strict"),               # #1619
                       ("V1", "shadow-verify", "--window")]:     # #1513, inline span only
             assert probe in keys, f"probe {probe} not measured; the whole run is void"
-        assert any(f.file == "docs/schemas/migration-state.md" for f in result["findings"]), (
-            "the inline-span carrier stopped seeing migration-state.md (#1381)")
+        # The inline-span carrier. This used to be proven by #1381's
+        # migration-state.md prose, which is fixed now; staged-adoption-guide
+        # writes shadow-verify only as `inline spans`, so pin that file.
+        assert any(f.file == "docs/scenarios/staged-adoption-guide.md"
+                   and (f.verdict, f.command, f.token) == ("V1", "shadow-verify", "--window")
+                   for f in result["findings"]), (
+            "the inline-span carrier stopped seeing staged-adoption-guide.md (#1513)")
         # The `docker run … <image ref> \` continuation carrier. This used to be
         # proven by #1380's hands-on-lab line, which is fixed now; the zh page
         # writes this command as bare `da-tools`, so pin the EN file, or the
