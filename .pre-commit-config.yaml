@@ -622,6 +622,15 @@ repos:
         # CI's unconditional --all-files run (CodeRabbit #1241).
         files: ^(tools/portal/(src|entries)/.*\.(js|jsx|ts|tsx)|docs/assets/[^/]+\.html|docs/interactive/.*\.html|components/da-portal/Dockerfile)$
 
+      - id: aria-references-check
+        name: "JSX aria-* references and htmlFor must point at an id in the same file"
+        entry: python3 -X utf8 scripts/tools/dx/check_aria_references.py
+        language: python
+        # The tool takes the files to check as arguments and exits 2 when
+        # given none; `files:` guarantees at least one.
+        pass_filenames: true
+        files: ^tools/portal/src/.*\.jsx$
+
       - id: structure-check
         name: Project structure enforcement
         entry: python3 -X utf8 scripts/tools/lint/check_structure.py --ci
@@ -958,7 +967,10 @@ repos:
 
       - id: check-doc-reading-time
         name: Check document reading time (>15 min = needs split)
-        entry: python3 -X utf8 scripts/tools/lint/check_doc_reading_time.py --ci
+        # `--check` is the flag this tool defines for exit 1 on findings. The
+        # entry used to pass `--ci`, which the tool never accepted: argparse
+        # exited 2 on every run, so the hook never checked a document.
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_reading_time.py --check
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -966,7 +978,9 @@ repos:
 
       - id: check-doc-freshness
         name: Check document freshness (>90 days = stale)
-        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --ci
+        # Same bug as check-doc-reading-time above: the tool defines `--check`,
+        # never `--ci`, so the old entry made argparse exit 2 on every run.
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --check
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
