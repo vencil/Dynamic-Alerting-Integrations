@@ -490,7 +490,7 @@ def test_collect_yaml_files():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create test files
         for name in ["a.yaml", "b.yml", "c.txt", "d.yaml"]:
-            with open(os.path.join(tmpdir, name), 'w') as f:
+            with open(os.path.join(tmpdir, name), 'w', encoding="utf-8") as f:
                 f.write("test")
         files = lint_custom_rules.collect_files([tmpdir])
         assert len(files) == 3  # a.yaml, b.yml, d.yaml

@@ -63,7 +63,7 @@ def main(rendered: str) -> None:
             }
         ]
     }
-    with open(f"{rendered}/jwks.json", "w", newline="\n") as fh:
+    with open(f"{rendered}/jwks.json", "w", newline="\n", encoding="utf-8") as fh:
         json.dump(jwks, fh, indent=2)
 
     print(f"[fed-e2e] generated throwaway keypair (kid={kid})")

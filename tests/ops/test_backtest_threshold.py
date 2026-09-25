@@ -184,10 +184,10 @@ class TestExtractChangesFromDirs:
         with tempfile.TemporaryDirectory() as current, \
              tempfile.TemporaryDirectory() as baseline:
             # Current: mysql_connections = 50
-            with open(os.path.join(current, "db-a.yaml"), "w") as f:
+            with open(os.path.join(current, "db-a.yaml"), "w", encoding="utf-8") as f:
                 f.write("mysql_connections: 50\n")
             # Baseline: mysql_connections = 70
-            with open(os.path.join(baseline, "db-a.yaml"), "w") as f:
+            with open(os.path.join(baseline, "db-a.yaml"), "w", encoding="utf-8") as f:
                 f.write("mysql_connections: 70\n")
 
             changes = bt.extract_changes_from_dirs(current, baseline)
@@ -201,9 +201,9 @@ class TestExtractChangesFromDirs:
         """_ 前綴的 key 應被忽略。"""
         with tempfile.TemporaryDirectory() as current, \
              tempfile.TemporaryDirectory() as baseline:
-            with open(os.path.join(current, "db-a.yaml"), "w") as f:
+            with open(os.path.join(current, "db-a.yaml"), "w", encoding="utf-8") as f:
                 f.write("_silent_mode: warning\nmysql_connections: 50\n")
-            with open(os.path.join(baseline, "db-a.yaml"), "w") as f:
+            with open(os.path.join(baseline, "db-a.yaml"), "w", encoding="utf-8") as f:
                 f.write("mysql_connections: 50\n")
 
             changes = bt.extract_changes_from_dirs(current, baseline)
@@ -213,7 +213,7 @@ class TestExtractChangesFromDirs:
         """_ 前綴的檔案應被忽略。"""
         with tempfile.TemporaryDirectory() as current, \
              tempfile.TemporaryDirectory() as baseline:
-            with open(os.path.join(current, "_defaults.yaml"), "w") as f:
+            with open(os.path.join(current, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 f.write("mysql_connections: 50\n")
             changes = bt.extract_changes_from_dirs(current, baseline)
             assert len(changes) == 0
@@ -223,7 +223,7 @@ class TestExtractChangesFromDirs:
         with tempfile.TemporaryDirectory() as current, \
              tempfile.TemporaryDirectory() as baseline:
             for d in [current, baseline]:
-                with open(os.path.join(d, "db-a.yaml"), "w") as f:
+                with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
                     f.write("mysql_connections: 50\n")
             changes = bt.extract_changes_from_dirs(current, baseline)
             assert len(changes) == 0
@@ -633,7 +633,7 @@ class TestCustomAlertDetection:
     `tenants: {<id>: {<metric>: <value>, _custom_alerts: [...]}}` 包裹格式。"""
 
     def _write(self, d, name, text):
-        with open(os.path.join(d, name), "w") as f:
+        with open(os.path.join(d, name), "w", encoding="utf-8") as f:
             f.write(text)
 
     _RECIPE_BLOCK = (

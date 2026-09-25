@@ -937,18 +937,14 @@ repos:
 
       - id: open-encoding-audit
         name: open() encoding= kwarg audit (PR-2.5 portability, FATAL)
-        entry: python3 -X utf8 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding scripts components/da-tools
+        entry: python3 -X utf8 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding scripts components/da-tools tests
         language: python
         pass_filenames: false
-        files: ^(scripts|components/da-tools)/.*\.py$
+        files: ^(scripts|components/da-tools|tests)/.*\.py$
         # The scan roots in `entry` and the `files:` filter must name the
         # same trees. Without roots the tool falls back to its own
         # DEFAULT_PATHS, which leave out scripts/ outside scripts/tools/ —
         # edits there would trigger this hook and never be scanned.
-        # tests/ is not a root yet: add it (to both lines) once
-        # `check_open_encoding.py --ci --strict-open-encoding tests` exits 0.
-        # A warn-only hook for it would add nothing: pre-commit shows the
-        # output of a passing hook only with `verbose: true`.
 
       - id: i18n-coverage-check
         name: i18n coverage report
