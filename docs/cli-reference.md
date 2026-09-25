@@ -1146,9 +1146,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
-在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某租戶若已由你**其他檔案**宣告（依檔案 `tenants:` 的 key 判斷，不看檔名——`db-c.yml`、`DB-C.YAML`、宣告多個租戶的 `team.yaml`、子目錄裡的檔案都算），init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 已由 conf.d/db-c.yml 宣告，未產生」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。若 init 自己的路徑**已經**與這類載體並存（例如 `db-c.yaml` 與 `db-c.yml` 都宣告 db-c，或 `_defaults.yaml` 與 `_defaults.yml` 並存），init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同——exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定。
-
-「宣告」怎麼判定：init 只在一個**嚴格白名單**內自己判斷 exporter 是否接受某個檔、宣告了誰——整份檔是不含 BOM 的 UTF-8、沒有任何 tab、沒有 `%YAML` 指示、沒有明確 tag（`!!str`、`!foo`…）、沒有 anchor／alias／`<<` merge、每個 key 在各 YAML 版本都讀成字串（所以 `on:`、`007:` 不算）、沒有 timestamp、整數都在 int64 內；白名單內才依 exporter 的解碼逐欄位判定（只讀第一個 YAML 文件、key 取原始文字；租戶 body 是純量、同一個 key 出現兩次、其他欄位型別錯誤的檔，exporter 會**整份拒收**）。白名單外一律視為「init 無法判定」，這是刻意的：兩種 YAML 實作的差異沒有邊界，init 寧可多拒絕，也不猜。exporter 會拒收或 init 無法判定的檔，只要以任何形式（block、flow、JSON、引號內、UTF-16 等編碼）提到這次要求的租戶，init 就**拒絕執行、rc 1、不寫入任何檔案**，並點名檔案與原因，請先改寫那個檔；沒提到要求租戶的，只在 stderr 以 WARN 點名。以下情形也會拒絕：init 要覆寫的 `conf.d/<t>.yaml` 同時宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`、`DB-C.YAML` 之於 `db-c.yaml`，在不分大小寫的檔案系統上是同一個路徑）。
+在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名，而且刻意寬鬆：檔中 `tenants:` 的 key、以及租戶 id 以獨立 token 出現在檔中任何位置（含引號內、註解、flow／JSON 寫法、UTF-16 等編碼、YAML escape 寫法如 `"db\x2dc"`）都算；讀不到、解不開或含明確 tag（`!!binary` 等）的檔視為可能提及每一個要求的租戶。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個檔可能也宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
 
 ⚠️ `--deploy kustomize` 時，被跳過的租戶若載體不在 `conf.d` 根目錄（例如 `conf.d/prod/db-c.yaml`），它**不會**進入產生的 ConfigMap（`configMapGenerator.files` 是扁平的；`make configmap-assemble` 同樣只收頂層檔，見 [GitOps 部署 §3](integration/gitops-deployment.md#3-configmap-assembly)），init 會在 stderr 與摘要 WARN 點名，rc 仍為 0。
 
@@ -1166,7 +1164,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--deploy` | 部署方式 | `kustomize` |
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
 | `--dry-run` | 顯示會產生的檔案但不寫入 | — |
-| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：已由你其他檔案宣告的租戶／defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明） | — |
+| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：可能已由你其他檔案宣告的租戶／其他拼法的 defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明） | — |
 
 **範例**
 

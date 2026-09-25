@@ -4,7 +4,8 @@ package config
 // tests/shared/init_declaration_parity_matrix.json (#1942 blind review F1):
 // which conf.d file declares which tenant, and which files the exporter's
 // decode rejects. The Python half is tests/shared/test_init_declaration_parity.py
-// (`da-tools init`'s `_plan_confd`). Neither side reads the other's source;
+// (`da-tools init`'s `_possible_mentions`, which must cover every tenant
+// this walker reads from a file). Neither side reads the other's source;
 // both assert the table, so a row written from a guess about the exporter
 // goes red HERE rather than shipping as init's rule.
 //
@@ -35,10 +36,6 @@ type initDeclParityMatrix struct {
 		Declarations map[string][]string `json:"declarations"`
 		Rejected     []string            `json:"rejected"`
 		Conflict     *string             `json:"conflict"`
-		// Python-only (file -> a tenant it names; init must answer "cannot
-		// tell"); decoded so that DisallowUnknownFields still rejects a
-		// misspelt key.
-		InitUnsure map[string]string `json:"init_unsure"`
 	} `json:"trees"`
 }
 
