@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -1286,6 +1287,39 @@ class TestPortalCarrier:
         for r in rows:
             assert r.line >= 1 and f"'{r.key}'" in src[r.line - 1] or r.kind == "preview"
         assert any(r.kind == "docker" and "ghcr.io/vencil/da-tools:" in r.cmd for r in rows)
+
+    @_needs_node
+    def test_every_offered_flag_and_preview_reaches_the_judge(self, tmp_path):
+        """⛔ A clean catalog cannot tell a driver that judges every flag from one
+        that judges some: both report nothing. Measured: a driver that left the
+        checkboxes unticked, or dropped the preview line, stayed green on every
+        other test. So list the catalog independently of the gate's driver and
+        require each offered flag in the bare line and each preview as a row."""
+        stripped = mod._JS_FRONTMATTER.sub(
+            lambda m: "\n" * m.group(0).count("\n"),
+            (_PLAYGROUND / "commands.js").read_text(encoding="utf-8"), count=1)
+        module = tmp_path / "commands.mjs"
+        module.write_text(stripped, encoding="utf-8")
+        listing = subprocess.run(
+            [_NODE, "--input-type=module", "-e",
+             "globalThis.window = {};\n"
+             f"const {{ COMMANDS }} = await import({json.dumps(module.as_uri())});\n"
+             "process.stdout.write(JSON.stringify(Object.fromEntries("
+             "Object.entries(COMMANDS).map(([k, c]) => [k, {flags: c.flags.map(f => f.name),"
+             " preview: (c.preview || '').split('\\n')[0]}]))));"],
+            capture_output=True, text=True, timeout=60)
+        assert listing.returncode == 0, listing.stderr
+        catalog = json.loads(listing.stdout)
+        rows, _ = mod.portal_commands(_PLAYGROUND)
+        bare = {r.key: r.cmd.split() for r in rows if r.kind == "bare"}
+        previews = {r.key: r.cmd for r in rows if r.kind == "preview"}
+        assert set(bare) == set(catalog)
+        for key, spec in catalog.items():
+            missing = [f for f in spec["flags"] if f not in bare[key]]
+            assert not missing, f"{key}: flags never judged {missing}"
+            if spec["preview"]:
+                assert previews.get(key) == spec["preview"], key
+        assert any(spec["preview"] for spec in catalog.values())
 
 
 @pytest.fixture(scope="module")
