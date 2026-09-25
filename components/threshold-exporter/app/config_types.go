@@ -22,6 +22,7 @@ type (
 	StateFilter               = config.StateFilter
 	ResolvedStateFilter       = config.ResolvedStateFilter
 	ResolvedSilentMode        = config.ResolvedSilentMode
+	OperationalStates         = config.OperationalStates
 	ResolvedMaintenanceExpiry = config.ResolvedMaintenanceExpiry
 	ResolvedThresholdExpiry   = config.ResolvedThresholdExpiry
 	RecurringSchedule         = config.RecurringSchedule

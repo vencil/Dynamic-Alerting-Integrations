@@ -750,7 +750,7 @@ func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFi
 							// so the exporter is the one choke point — and "noisier
 							// than intended" is the recoverable failure, "alerts
 							// silently lost" is not. Keep in sync with
-							// IsMaintenanceActive and ResolveMaintenanceExpiriesAt.
+							// ResolveMaintenanceExpiriesAt.
 							log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
 							continue
 						} else if now.After(t) {
@@ -1000,48 +1000,6 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 		}
 	}
 	return result
-}
-
-// IsMaintenanceActive checks if a structured _state_maintenance is currently active (not expired).
-// For scalar "enable" values (no expires), it always returns true.
-// For structured values with expires in the past, it returns false.
-// For structured values whose expires is not RFC3339, it returns false (#2000:
-// fail-closed — the setting is ignored, matching ResolveStateFiltersAt).
-func (c *ThresholdConfig) IsMaintenanceActive(tenant string, now time.Time) bool {
-	overrides, exists := c.Tenants[tenant]
-	if !exists {
-		return false
-	}
-	sv, exists := overrides["_state_maintenance"]
-	if !exists {
-		return false
-	}
-
-	val := strings.TrimSpace(sv.Default)
-	lower := strings.TrimSpace(strings.ToLower(val))
-
-	// Scalar "disable" — not active
-	if isDisabled(lower) || lower == "" {
-		return false
-	}
-
-	// Structured format with expires
-	if strings.Contains(val, "expires:") {
-		parsed := maintenanceModeStructured{}
-		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-			return false
-		}
-		if parsed.Expires != "" {
-			t, err := time.Parse(time.RFC3339, parsed.Expires)
-			if err != nil {
-				return false // #2000: fail-closed — unparseable expires ⇒ setting ignored ⇒ not active
-			}
-			return !now.After(t)
-		}
-	}
-
-	// Scalar "enable" or structured without expires — active
-	return true
 }
 
 // ResolveSeverityDedup resolves severity deduplication preferences for all tenants.
