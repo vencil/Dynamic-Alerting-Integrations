@@ -381,7 +381,7 @@ def main() -> int:
         # log write and every in-flight request hangs until the timeout.
         # (Bit us for real: the GET-only era stayed under the buffer.)
         server_log = workdir / "tenant-api.log"
-        log_fh = server_log.open("w")
+        log_fh = server_log.open("w", encoding="utf-8")
         proc = subprocess.Popen(
             [str(binary), "-addr", addr, "-config-dir", str(config_dir),
              "-rbac", str(rbac_path)],

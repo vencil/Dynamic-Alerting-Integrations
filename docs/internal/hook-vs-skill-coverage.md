@@ -112,7 +112,7 @@ lang: zh
 
 | Gate | 本地手動跑 | 涵蓋 | 何時該手動跑 |
 |---|---|---|---|
-| **AST SAST 契約**（`tests/shared/test_sast.py`） | `pytest tests/shared/test_sast.py` | `scripts/tools/` 全檔 AST（open-encoding / eval / 硬編碼機密等；`subprocess-timeout` 不在此，它是本機 hook） | 改 `scripts/tools/**` 後 |
+| **AST SAST 契約**（`tests/shared/test_sast.py`） | `pytest tests/shared/test_sast.py` | `scripts/tools/` 全檔 AST（eval / 硬編碼機密等）＋全部 tracked `.py` 的 BOM；`open()` encoding 與 `subprocess-timeout` 不在此，它們是本機 hook | 改 `scripts/tools/**` 後 |
 | **Python SAST（bandit）**（`security-audit.yaml`） | `bandit -c .bandit -r scripts/tools components/da-tools -ll -ii` | dev-rules §5 items 2/4/5/6；hard-fail 但未列 required check | 改 `scripts/tools/**` / `components/da-tools/**` 後 |
 | **工具 exit-code / bilingual-help 契約** | `pytest tests/shared/test_tool_exit_codes.py tests/shared/test_bilingual_help_contract.py` | da-tools exit 0/1/2（#452）、`--help` 雙語 | 改工具 CLI / help 後 |
 | **pre-commit hook 計數一致性** | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 hook 計數 | 增刪 pre-commit hook 後 |
