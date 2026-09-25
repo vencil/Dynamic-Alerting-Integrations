@@ -1,8 +1,8 @@
 package config
 
 // hierarchy_parsed_test.go — pins the parse-once merge API (#1978):
-// ComputeMergedHashParsed over ParseDefaultsForMerge must be ComputeMergedHash
-// (same hash, same error text) for every input shape, and a ParsedDefaults
+// ComputeMergedHashFromChain over ParseChainDefaults must be ComputeMergedHash
+// (same hash, same error text) for every input shape, and a ChainDefaults
 // shared by many merges must never be written by them.
 
 import (
@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-func parseChain(chain []string) []ParsedDefaults {
-	out := make([]ParsedDefaults, len(chain))
+func parseChain(chain []string) []ChainDefaults {
+	out := make([]ChainDefaults, len(chain))
 	for i, b := range chain {
-		out[i] = ParseDefaultsForMerge([]byte(b))
+		out[i] = ParseChainDefaults([]byte(b))
 	}
 	return out
 }
@@ -27,7 +27,7 @@ func toBytesChain(chain []string) [][]byte {
 	return out
 }
 
-func TestComputeMergedHashParsedEqualsComputeMergedHash(t *testing.T) {
+func TestComputeMergedHashFromChainEqualsComputeMergedHash(t *testing.T) {
 	t.Parallel()
 	const tenant = "tenants:\n  t1:\n    cpu: \"50\"\n    nested:\n      b: 2\n    list: [9]\n"
 	cases := []struct {
@@ -67,7 +67,7 @@ func TestComputeMergedHashParsedEqualsComputeMergedHash(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			want, wantErr := ComputeMergedHash([]byte(tc.tenant), tc.tid, toBytesChain(tc.chain))
-			got, gotErr := ComputeMergedHashParsed([]byte(tc.tenant), tc.tid, parseChain(tc.chain))
+			got, gotErr := ComputeMergedHashFromChain([]byte(tc.tenant), tc.tid, parseChain(tc.chain))
 			if got != want {
 				t.Errorf("hash %q, ComputeMergedHash %q", got, want)
 			}
@@ -78,18 +78,18 @@ func TestComputeMergedHashParsedEqualsComputeMergedHash(t *testing.T) {
 	}
 }
 
-func TestParseDefaultsForMergeReportsItsParse(t *testing.T) {
+func TestParseChainDefaultsReportsItsParse(t *testing.T) {
 	t.Parallel()
-	if pd := ParseDefaultsForMerge([]byte("defaults:\n  cpu: 1\n")); pd.Err() != nil || !reflect.DeepEqual(pd.Block(), map[string]any{"cpu": 1}) {
+	if pd := ParseChainDefaults([]byte("defaults:\n  cpu: 1\n")); pd.Err() != nil || !reflect.DeepEqual(pd.Block(), map[string]any{"cpu": 1}) {
 		t.Errorf("valid file: block %v err %v", pd.Block(), pd.Err())
 	}
-	if pd := ParseDefaultsForMerge(nil); pd.Err() != nil || pd.Block() != nil {
+	if pd := ParseChainDefaults(nil); pd.Err() != nil || pd.Block() != nil {
 		t.Errorf("empty file: block %v err %v, want nil/nil", pd.Block(), pd.Err())
 	}
-	if pd := ParseDefaultsForMerge([]byte("defaults: {unclosed\n")); pd.Err() == nil || pd.Block() != nil {
+	if pd := ParseChainDefaults([]byte("defaults: {unclosed\n")); pd.Err() == nil || pd.Block() != nil {
 		t.Errorf("broken file: block %v err %v, want nil block and an error", pd.Block(), pd.Err())
 	}
-	var zero ParsedDefaults
+	var zero ChainDefaults
 	if zero.Err() != nil || zero.Block() != nil {
 		t.Error("zero value is not an empty file")
 	}
@@ -125,7 +125,7 @@ func TestSharedParsedDefaultsIsNeverWritten(t *testing.T) {
 		for i, body := range tenantBodies {
 			tid := fmt.Sprintf("t%d", i)
 			tenant := []byte("tenants:\n  " + tid + ":\n" + body)
-			got, err := ComputeMergedHashParsed(tenant, tid, chain)
+			got, err := ComputeMergedHashFromChain(tenant, tid, chain)
 			if err != nil {
 				t.Fatalf("%s: %v", tid, err)
 			}

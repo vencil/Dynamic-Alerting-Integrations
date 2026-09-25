@@ -72,17 +72,17 @@ func computeMergedHash(
 	return config.ComputeMergedHash(tenantYAMLBytes, tenantID, defaultsChainYAML)
 }
 
-// chainDefaults / parseChainDefaults / computeMergedHashParsed: the
+// chainDefaults / parseChainDefaults / computeMergedHashFromChain: the
 // parse-once form of computeMergedHash for a cold load (#1978) — see
-// config.ParsedDefaults. Named for the merge CHAIN on purpose: it is not
+// config.ChainDefaults. Named for the merge CHAIN on purpose: it is not
 // the `hierarchy.parsedDefaults` cache (a map of plain defaults dicts), even
 // though a cold load fills that cache from these very parses.
-type chainDefaults = config.ParsedDefaults
+type chainDefaults = config.ChainDefaults
 
-func parseChainDefaults(b []byte) chainDefaults { return config.ParseDefaultsForMerge(b) }
+func parseChainDefaults(b []byte) chainDefaults { return config.ParseChainDefaults(b) }
 
-func computeMergedHashParsed(tenantYAMLBytes []byte, tenantID string, defaultsChain []chainDefaults) (string, error) {
-	return config.ComputeMergedHashParsed(tenantYAMLBytes, tenantID, defaultsChain)
+func computeMergedHashFromChain(tenantYAMLBytes []byte, tenantID string, defaultsChain []chainDefaults) (string, error) {
+	return config.ComputeMergedHashFromChain(tenantYAMLBytes, tenantID, defaultsChain)
 }
 
 // computeSourceHash returns the 16-char source-file fingerprint.

@@ -1469,7 +1469,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // 2 + (tenants below it) times and parsed 1 + (tenants below it) times —
 // the root file 1002 reads / 1001 parses — and recomputeMergedHash was ~68%
 // of fullDirLoad's CPU. The merged_hash is the same function of the same
-// bytes (config.ComputeMergedHashParsed shares its two halves with
+// bytes (config.ComputeMergedHashFromChain shares its two halves with
 // ComputeMergedHash), pinned by TestColdLoadMergedHashesMatchRecompute.
 // ⚠️ What remains: each tenant file is still YAML-decoded twice — once by
 // the walker into a typed ThresholdConfig (#1957; TreeScan.Partials) and
@@ -1604,7 +1604,7 @@ func (in *coldMergeInputs) defaultsEntry(absPath string) *coldDefaultsEntry {
 
 // defaultsSource is `in` as a config.DefaultsSource: the file's bytes, its
 // one chain parse, or the read error — for config.ParseDefaultsFiles.
-func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ParsedDefaults, error) {
+func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ChainDefaults, error) {
 	e := in.defaultsEntry(absPath)
 	return e.raw, e.parsed, e.readErr
 }
@@ -1627,7 +1627,7 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 		}
 		chain = append(chain, e.parsed)
 	}
-	h, mergeErr := computeMergedHashParsed(tenantBytes, tenantID, chain)
+	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}

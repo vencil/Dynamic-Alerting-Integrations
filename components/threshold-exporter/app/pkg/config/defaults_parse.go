@@ -10,7 +10,7 @@ import (
 // elsewhere in the codebase. Returns nil with no error for an empty
 // document (legacy flat configs may have empty/whitespace-only files).
 //
-// The parse is the merge's own first half (ParseDefaultsForMerge, #1978),
+// The parse is the merge's own first half (ParseChainDefaults, #1978),
 // stopped before the merge step — we only need the parsed dict for
 // key-level diffing — so a cold load that already parsed a file for the
 // merge hands the same parse here (DefaultsDict) instead of a second one.
@@ -18,18 +18,18 @@ func parseDefaultsBytes(b []byte) (map[string]any, error) {
 	if isBlankDefaults(b) {
 		return map[string]any{}, nil
 	}
-	return ParseDefaultsForMerge(b).defaultsDict()
+	return ParseChainDefaults(b).defaultsDict()
 }
 
 // ParseDefaultsBytes is the exported form of parseDefaultsBytes, for package
 // main's forwarder (config_defaults_diff.go).
 func ParseDefaultsBytes(b []byte) (map[string]any, error) { return parseDefaultsBytes(b) }
 
-// DefaultsDict is parseDefaultsBytes(b) given p = ParseDefaultsForMerge(b)
+// DefaultsDict is parseDefaultsBytes(b) given p = ParseChainDefaults(b)
 // already made: whitespace-only bytes are an empty map without being judged
 // (even when YAML rejects them, e.g. a stray tab), a syntax error is
 // returned, and a document without a defaults mapping is an empty map.
-func DefaultsDict(b []byte, p ParsedDefaults) (map[string]any, error) {
+func DefaultsDict(b []byte, p ChainDefaults) (map[string]any, error) {
 	if isBlankDefaults(b) {
 		return map[string]any{}, nil
 	}
@@ -38,7 +38,7 @@ func DefaultsDict(b []byte, p ParsedDefaults) (map[string]any, error) {
 
 func isBlankDefaults(b []byte) bool { return len(strings.TrimSpace(string(b))) == 0 }
 
-func (p ParsedDefaults) defaultsDict() (map[string]any, error) {
+func (p ChainDefaults) defaultsDict() (map[string]any, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -48,11 +48,11 @@ func (p ParsedDefaults) defaultsDict() (map[string]any, error) {
 	return p.block, nil
 }
 
-// DefaultsSource yields one defaults file's bytes and its ParseDefaultsForMerge
+// DefaultsSource yields one defaults file's bytes and its ParseChainDefaults
 // parse, or the error reading it. A cold load passes the source its merge
 // already filled (#1978), so the cache below and the merged_hash chains share
 // one read and one parse per file.
-type DefaultsSource func(absPath string) (raw []byte, parsed ParsedDefaults, err error)
+type DefaultsSource func(absPath string) (raw []byte, parsed ChainDefaults, err error)
 
 // ParseDefaultsFiles parses every defaults file of a scan (TreeScan.Defaults)
 // with parseDefaultsBytes' contract, keyed by the same absolute path. A file

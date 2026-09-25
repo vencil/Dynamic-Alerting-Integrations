@@ -256,12 +256,12 @@ func computeEffectiveConfigBytesDetailed(
 	tenantID string,
 	defaultsChainYAML [][]byte,
 ) (merged, mergedDefaults, tenantRaw map[string]any, err error) {
-	// Parse-and-fold one file at a time (no []ParsedDefaults: this is the
+	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
 	// debounced path's per-tenant call, and a slice per call was +1 alloc
 	// per re-merged tenant). A file after a broken one is never parsed.
 	merged = make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
-		if merged, err = foldDefaults(merged, i, ParseDefaultsForMerge(defBytes)); err != nil {
+		if merged, err = foldDefaults(merged, i, ParseChainDefaults(defBytes)); err != nil {
 			return nil, nil, nil, err
 		}
 	}
@@ -278,7 +278,7 @@ func computeEffectiveConfigBytesDetailed(
 	return merged, mergedDefaults, tenantRaw, nil
 }
 
-// ParsedDefaults is one defaults file taken through the FIRST half of the
+// ChainDefaults is one defaults file taken through the FIRST half of the
 // merge pipeline — yaml.Unmarshal, normalizeYAMLToJSON, extractDefaultsBlock
 // — exactly as computeEffectiveConfigBytesDetailed takes every chain entry
 // (that function is built on it, so the two cannot drift). It exists so a
@@ -288,36 +288,36 @@ func computeEffectiveConfigBytesDetailed(
 // times). The zero value is an empty file.
 //
 // ⛔ Immutable once built: deepMerge deep-copies every override value it
-// takes, so merging never writes into Block(), and one ParsedDefaults may be
+// takes, so merging never writes into Block(), and one ChainDefaults may be
 // shared by every tenant's chain. A caller that hands Block() on must keep
 // that promise too.
-type ParsedDefaults struct {
+type ChainDefaults struct {
 	block map[string]any // nil: the document has no defaults mapping (skipped by the merge)
 	err   error          // the yaml.Unmarshal error, unwrapped
 }
 
-// ParseDefaultsForMerge parses one defaults file's bytes for
-// ComputeMergedHashParsed. A syntax error is kept, not returned: it becomes
+// ParseChainDefaults parses one defaults file's bytes for
+// ComputeMergedHashFromChain. A syntax error is kept, not returned: it becomes
 // the tenant's merge error (`parse defaults[i]: …`, i being the file's index
 // in THAT tenant's chain) only when a chain containing the file is merged.
-func ParseDefaultsForMerge(b []byte) ParsedDefaults {
+func ParseChainDefaults(b []byte) ChainDefaults {
 	var raw any
 	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return ParsedDefaults{err: err}
+		return ChainDefaults{err: err}
 	}
-	return ParsedDefaults{block: extractDefaultsBlock(normalizeYAMLToJSON(raw))}
+	return ChainDefaults{block: extractDefaultsBlock(normalizeYAMLToJSON(raw))}
 }
 
 // Block is the parsed defaults mapping (nil when there is none). Read-only.
-func (p ParsedDefaults) Block() map[string]any { return p.block }
+func (p ChainDefaults) Block() map[string]any { return p.block }
 
 // Err is the parse error of the file, or nil.
-func (p ParsedDefaults) Err() error { return p.err }
+func (p ChainDefaults) Err() error { return p.err }
 
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
 // parse ends it with `parse defaults[%d]: %w` — the error text
 // emitParseFailureSignal (app) maps back to the file by that index.
-func mergeDefaultsChain(chain []ParsedDefaults) (map[string]any, error) {
+func mergeDefaultsChain(chain []ChainDefaults) (map[string]any, error) {
 	merged := make(map[string]any)
 	var err error
 	for i, pd := range chain {
@@ -331,7 +331,7 @@ func mergeDefaultsChain(chain []ParsedDefaults) (map[string]any, error) {
 // foldDefaults merges chain entry i into merged — the one step both the
 // byte-input merge and mergeDefaultsChain take, so their errors and results
 // cannot differ.
-func foldDefaults(merged map[string]any, i int, pd ParsedDefaults) (map[string]any, error) {
+func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]any, error) {
 	if pd.err != nil {
 		return nil, fmt.Errorf("parse defaults[%d]: %w", i, pd.err)
 	}
@@ -575,16 +575,16 @@ func ComputeMergedHash(
 	return mergedHashOf(merged)
 }
 
-// ComputeMergedHashParsed is ComputeMergedHash over a defaults chain whose
-// files were already parsed by ParseDefaultsForMerge (#1978). Same pipeline,
+// ComputeMergedHashFromChain is ComputeMergedHash over a defaults chain whose
+// files were already parsed by ParseChainDefaults (#1978). Same pipeline,
 // same errors, same 16-char value for the same bytes — the byte-input
-// function above is built on the same two halves (ParseDefaultsForMerge,
+// function above is built on the same two halves (ParseChainDefaults,
 // mergeDefaultsChain), so this is not a second merge. It only skips the
 // merged-defaults snapshot ComputeMergedHash computes and discards.
-func ComputeMergedHashParsed(
+func ComputeMergedHashFromChain(
 	tenantYAMLBytes []byte,
 	tenantID string,
-	defaultsChain []ParsedDefaults,
+	defaultsChain []ChainDefaults,
 ) (string, error) {
 	merged, err := mergeDefaultsChain(defaultsChain)
 	if err != nil {
