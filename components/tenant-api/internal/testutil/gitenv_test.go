@@ -1,100 +1,212 @@
 package testutil
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-// gitEnvKeys registers every variable DisableGitAutoMaintenance may touch with
-// t.Setenv, so the writes it makes through os.Setenv are rolled back after the
-// test instead of leaking into the rest of this test binary.
-func gitEnvKeys(t *testing.T, count string) {
+// unsetEnv removes key for the rest of the test and restores its previous
+// value (or absence) afterwards; t.Setenv alone can only set a value.
+func unsetEnv(t *testing.T, key string) {
 	t.Helper()
-	for i := 0; i < 4; i++ {
-		t.Setenv("GIT_CONFIG_KEY_"+strconv.Itoa(i), "")
-		t.Setenv("GIT_CONFIG_VALUE_"+strconv.Itoa(i), "")
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("GIT_CONFIG_COUNT", count)
 }
 
-func TestDisableGitAutoMaintenance_StartsAtZeroWhenUnset(t *testing.T) {
-	gitEnvKeys(t, "")
-	if err := DisableGitAutoMaintenance(); err != nil {
+// isolateGit points every place git looks for global config at this test's
+// own directories, so the host's config neither leaks in nor gets read by
+// accident, and registers GIT_CONFIG_GLOBAL so the os.Setenv that
+// DisableGitAutoMaintenance makes is rolled back after the test.
+func isolateGit(t *testing.T) (home string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	unsetEnv(t, "GIT_CONFIG_GLOBAL")
+	return home
+}
+
+// disable calls DisableGitAutoMaintenance and schedules its cleanup.
+func disable(t *testing.T) {
+	t.Helper()
+	cleanup, err := DisableGitAutoMaintenance()
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func git(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitGet returns what git reports for key in dir, "" when it is unset.
+func gitGet(t *testing.T, dir, key string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return ""
+		}
+		t.Fatalf("git config --get %s: %v", key, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func wantAllOff(t *testing.T, where string, get func(key string) string) {
+	t.Helper()
+	for _, kv := range gitAutoMaintenanceOff {
+		if got := get(kv[0]); got != kv[1] {
+			t.Errorf("%s: git sees %s = %q, want %q", where, kv[0], got, kv[1])
+		}
+	}
+}
+
+func TestDisableGitAutoMaintenance_GitReadsTheSettings(t *testing.T) {
+	isolateGit(t)
+	disable(t)
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	wantAllOff(t, "local repo", func(k string) string { return gitGet(t, dir, k) })
+}
+
+// The case that failed in CI: pushing to a bare remote over the local
+// transport makes git start receive-pack inside the remote, and receive-pack
+// runs its auto gc there while t.TempDir deletes it. git strips
+// GIT_CONFIG_COUNT/KEY_n/VALUE_n from the environment of that process, so the
+// settings must arrive some other way; the pre-receive hook runs in the same
+// environment as receive-pack and records what it sees.
+func TestDisableGitAutoMaintenance_RemoteSideOfALocalPushSeesTheSettings(t *testing.T) {
+	isolateGit(t)
+	disable(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	git(t, "init", "-q", "--bare", remote)
+	seen := filepath.Join(t.TempDir(), "seen")
+	var hook strings.Builder
+	hook.WriteString("#!/bin/sh\n: > '" + seen + "'\n")
+	for _, kv := range gitAutoMaintenanceOff {
+		hook.WriteString("printf '%s=%s\\n' " + kv[0] + " \"$(git config --get " + kv[0] + ")\" >> '" + seen + "'\n")
+	}
+	if err := os.WriteFile(filepath.Join(remote, "hooks", "pre-receive"), []byte(hook.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	work := t.TempDir()
+	git(t, "-C", work, "init", "-q")
+	git(t, "-C", work, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+		"commit", "-q", "--allow-empty", "-m", "c")
+	git(t, "-C", work, "push", "-q", remote, "HEAD:refs/heads/main")
+
+	b, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("pre-receive hook did not run: %v", err)
 	}
 	got := map[string]string{}
-	for _, k := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1"} {
-		got[k] = os.Getenv(k)
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		k, v, _ := strings.Cut(line, "=")
+		got[k] = v
 	}
-	want := map[string]string{
-		"GIT_CONFIG_COUNT": "2",
-		"GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
-		"GIT_CONFIG_KEY_1": "gc.auto", "GIT_CONFIG_VALUE_1": "0",
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s = %q, want %q", k, got[k], v)
-		}
-	}
+	wantAllOff(t, "receive-pack in the bare remote", func(k string) string { return got[k] })
 }
 
-// An entry the environment already carries must survive: overwriting
-// GIT_CONFIG_KEY_0 would silently drop a developer's or CI's own config.
-func TestDisableGitAutoMaintenance_AppendsAfterExistingEntries(t *testing.T) {
-	gitEnvKeys(t, "1")
-	t.Setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
-	t.Setenv("GIT_CONFIG_VALUE_0", "false")
-	if err := DisableGitAutoMaintenance(); err != nil {
-		t.Fatal(err)
-	}
-	if got := os.Getenv("GIT_CONFIG_COUNT"); got != "3" {
-		t.Fatalf("GIT_CONFIG_COUNT = %q, want 3", got)
-	}
-	if got := os.Getenv("GIT_CONFIG_KEY_0"); got != "core.autocrlf" {
-		t.Errorf("existing GIT_CONFIG_KEY_0 was overwritten: %q", got)
-	}
-	if got := os.Getenv("GIT_CONFIG_KEY_1"); got != "maintenance.auto" {
-		t.Errorf("GIT_CONFIG_KEY_1 = %q, want maintenance.auto", got)
-	}
-	if got := os.Getenv("GIT_CONFIG_KEY_2"); got != "gc.auto" {
-		t.Errorf("GIT_CONFIG_KEY_2 = %q, want gc.auto", got)
-	}
-}
-
-func TestDisableGitAutoMaintenance_RejectsAMalformedCount(t *testing.T) {
-	for _, bad := range []string{"abc", "-1"} {
-		gitEnvKeys(t, bad)
-		if err := DisableGitAutoMaintenance(); err == nil {
-			t.Errorf("GIT_CONFIG_COUNT=%q: want an error, got nil", bad)
-		}
-	}
-}
-
-// The unit tests above only check the variables we write. This one checks that
-// git itself reads them, which is what actually stops the background process.
-func TestDisableGitAutoMaintenance_GitReadsTheSettings(t *testing.T) {
-	gitEnvKeys(t, "")
-	if err := DisableGitAutoMaintenance(); err != nil {
-		t.Fatal(err)
+// A developer's or CI's own global config must keep working, and the
+// settings must override the same keys set there.
+func TestDisableGitAutoMaintenance_KeepsAnExistingGitConfigGlobal(t *testing.T) {
+	home := isolateGit(t)
+	user := filepath.Join(home, "user.gitconfig")
+	writeFile(t, user, "[user]\n\tname = From Global\n[gc]\n\tauto = 50\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", user)
+	disable(t)
+	if got := os.Getenv("GIT_CONFIG_GLOBAL"); got == user {
+		t.Fatalf("GIT_CONFIG_GLOBAL still names the user's file")
 	}
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	git(t, "-C", dir, "init", "-q")
+	if got := gitGet(t, dir, "user.name"); got != "From Global" {
+		t.Errorf("user.name = %q, want the value from the previous GIT_CONFIG_GLOBAL", got)
 	}
-	for key, want := range map[string]string{"maintenance.auto": "false", "gc.auto": "0"} {
-		out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
-		if err != nil {
-			t.Fatalf("git config --get %s: %v", key, err)
+	wantAllOff(t, "with a user GIT_CONFIG_GLOBAL", func(k string) string { return gitGet(t, dir, k) })
+}
+
+// With GIT_CONFIG_GLOBAL unset git reads both $XDG_CONFIG_HOME/git/config and
+// ~/.gitconfig. Whatever git reported before the call, it must report after.
+func TestDisableGitAutoMaintenance_KeepsXDGAndHomeConfig(t *testing.T) {
+	home := isolateGit(t)
+	writeFile(t, filepath.Join(home, "xdg", "git", "config"), "[x]\n\tboth = xdg\n\tonlyxdg = xdg\n")
+	writeFile(t, filepath.Join(home, ".gitconfig"), "[x]\n\tboth = home\n\tonlyhome = home\n")
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	keys := []string{"x.both", "x.onlyxdg", "x.onlyhome"}
+	before := map[string]string{}
+	for _, k := range keys {
+		before[k] = gitGet(t, dir, k)
+		if before[k] == "" {
+			t.Fatalf("baseline: git does not read %s from the test's global files", k)
 		}
-		if got := strings.TrimSpace(string(out)); got != want {
-			t.Errorf("git sees %s = %q, want %q", key, got, want)
+	}
+	disable(t)
+	for _, k := range keys {
+		if got := gitGet(t, dir, k); got != before[k] {
+			t.Errorf("%s = %q after the call, %q before", k, got, before[k])
 		}
+	}
+	wantAllOff(t, "with XDG and home config", func(k string) string { return gitGet(t, dir, k) })
+}
+
+// GIT_CONFIG_GLOBAL set to "" means git reads no global config; the call must
+// not bring ~/.gitconfig back.
+func TestDisableGitAutoMaintenance_EmptyGitConfigGlobalStaysEmpty(t *testing.T) {
+	home := isolateGit(t)
+	writeFile(t, filepath.Join(home, ".gitconfig"), "[x]\n\thome = home\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	disable(t)
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	if got := gitGet(t, dir, "x.home"); got != "" {
+		t.Errorf("x.home = %q: ~/.gitconfig was read although GIT_CONFIG_GLOBAL was empty", got)
+	}
+	wantAllOff(t, "with an empty GIT_CONFIG_GLOBAL", func(k string) string { return gitGet(t, dir, k) })
+}
+
+func TestDisableGitAutoMaintenance_CleanupRemovesTheFile(t *testing.T) {
+	isolateGit(t)
+	cleanup, err := DisableGitAutoMaintenance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := os.Getenv("GIT_CONFIG_GLOBAL")
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("config file %q missing before cleanup: %v", file, err)
+	}
+	cleanup()
+	if _, err := os.Stat(filepath.Dir(file)); !os.IsNotExist(err) {
+		t.Errorf("cleanup left %s behind (stat err = %v)", filepath.Dir(file), err)
 	}
 }
 
