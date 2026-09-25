@@ -1,20 +1,4 @@
-"""Tests for pr_preflight.py orchestrator + uncovered helpers.
-
-Audit flagged the 7-check orchestration + exit-code aggregation as
-untested (38% coverage; sub-checks marker/msg-validator/pass-gate are
-covered separately by their own test files but the orchestrator itself
-isn't). This file fills the orchestrator-shaped gap.
-
-Covers:
-  - PreflightReport: has_failure / has_warning aggregation, print_summary
-  - validate_conventional_header: type/scope enum, length, format
-  - validate_commit_msg_body: post-header line-length + blank-line rule
-  - detect_commit_msg_bom: UTF-8 / UTF-16 LE/BE BOM detection + clean files
-  - _classify_ci_failures: A/B classification with mocked gh
-  - main() exit codes: --check-commit-msg / --check-pr-title fast paths,
-    --ci with passing/failing checks, --skip-hooks skips only the pre-commit
-    half of the hooks check (#1811)
-"""
+"""Tests for pr_preflight.py."""
 from __future__ import annotations
 
 import os
@@ -29,6 +13,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import pr_preflight as pp  # noqa: E402
+from _preflight_checks import stub_checks  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -283,54 +268,26 @@ class TestClassifyCIFailures:
 # ---------------------------------------------------------------------------
 class TestMainOrchestrator:
     def _stub_all_checks(self, monkeypatch, fail_check=None, warn_check=None):
-        """Replace every check_* in pr_preflight with a stub.
+        """Stub every check; everything but `fail_check` / `warn_check` PASSes.
 
-        `fail_check` (str): name of the check whose stub returns FAIL.
-        `warn_check` (str): name of the check whose stub returns WARN.
-        Everything else returns PASS.
+        Both name the check FUNCTION (`"check_conflict"`), not a label.
+        ⛔ While the stubs are in place, `subprocess.Popen` raises instead of
+        starting a process.
         """
-        check_specs = [
-            ("check_branch_identity", "Branch identity"),
-            ("check_behind_main", "Behind main"),
-            ("check_conflict", "Conflict"),
-            ("check_local_hooks", "Local hooks"),
-            ("check_scope_drift", "Scope drift"),
-            # Was missing despite the docstring's "every check_*": with a
-            # shallow CI clone `origin/main..HEAD` is empty so the real check
-            # degraded to SKIP and the omission stayed invisible. Once the job
-            # takes full history the real check runs against the
-            # GitHub-generated PR merge commit — not a conventional commit —
-            # and the orchestrator test fails for reasons that have nothing to
-            # do with orchestration.
-            ("check_commit_scope_range", "Commit scope"),
-            ("check_ci_status", "CI status"),
-            ("check_pr_mergeable", "PR mergeable"),
-        ]
-        for fn_name, label in check_specs:
-            if label == fail_check:
-                status = pp.Status.FAIL
-                msg = "stubbed-fail"
-            elif label == warn_check:
-                status = pp.Status.WARN
-                msg = "stubbed-warn"
-            else:
-                status = pp.Status.PASS
-                msg = "stubbed-pass"
-            # check_ci_status / check_pr_mergeable / check_local_hooks take
-            # args; wrap accordingly. (check_local_hooks grew a keyword-only
-            # `run_precommit` in #1811.)
-            if fn_name in {"check_ci_status", "check_pr_mergeable", "check_local_hooks"}:
-                monkeypatch.setattr(
-                    pp, fn_name,
-                    lambda *a, _label=label, _status=status, _msg=msg, **kw:
-                        pp.CheckResult(_label, _status, _msg),
-                )
-            else:
-                monkeypatch.setattr(
-                    pp, fn_name,
-                    lambda _label=label, _status=status, _msg=msg:
-                        pp.CheckResult(_label, _status, _msg),
-                )
+        chosen = {fail_check: pp.Status.FAIL, warn_check: pp.Status.WARN}
+        names = stub_checks(
+            monkeypatch, pp, lambda n: chosen.get(n, pp.Status.PASS)
+        )
+        # A name that matches nothing would quietly turn the case into all-pass.
+        assert {fail_check, warn_check} - {None} <= set(names)
+
+        def _no_process(*a, **kw):
+            raise AssertionError(
+                f"main() started a process with every check_* stubbed: "
+                f"{a[:1] or kw.get('args')}"
+            )
+
+        monkeypatch.setattr(_subprocess, "Popen", _no_process)
 
     def _stub_repo_root_and_marker(self, monkeypatch, tmp_path):
         """Avoid touching real git state: stub repo-root + marker writers."""
@@ -344,8 +301,6 @@ class TestMainOrchestrator:
         f = tmp_path / "msg"
         f.write_text("feat: ok\n", encoding="utf-8")
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
-        # Stub commitlint enum readers so check_commit_msg_file doesn't go
-        # through the full validation (we just want orchestrator dispatch).
         monkeypatch.setattr(pp, "check_commit_msg_file",
                             lambda path, repo_root: 0)
         cli_argv("pr_preflight.py", "--check-commit-msg", str(f))
@@ -361,8 +316,8 @@ class TestMainOrchestrator:
     @pytest.mark.parametrize(
         "kwargs, want_rc",
         [({}, 0),
-         ({"warn_check": "Behind main"}, 0),
-         ({"fail_check": "Conflict"}, 1)],
+         ({"warn_check": "check_behind_main"}, 0),
+         ({"fail_check": "check_conflict"}, 1)],
         ids=["all-pass", "warn-only", "fail"],
     )
     def test_exit_code_follows_the_report_not_a_flag(
@@ -373,6 +328,30 @@ class TestMainOrchestrator:
         self._stub_all_checks(monkeypatch, **kwargs)
         cli_argv("pr_preflight.py")
         assert pp.main() == want_rc
+
+    def test_a_process_started_outside_the_checks_raises(
+        self, monkeypatch, tmp_path, cli_argv
+    ):
+        """#1953 — a step of `main()` that is not a `check_*` is not stubbed.
+
+        Starting a process from it raises instead of running. The probe calls
+        `Popen` itself: probing through `run()` would stay green with the
+        tripwire moved up a layer.
+        """
+        self._stub_repo_root_and_marker(monkeypatch, tmp_path)
+        self._stub_all_checks(monkeypatch)
+        monkeypatch.setattr(
+            pp.PreflightReport, "print_summary",
+            lambda self: _subprocess.Popen(["git", "--version"]),
+        )
+        cli_argv("pr_preflight.py")
+        with pytest.raises(AssertionError, match="started a process"):
+            pp.main()
+
+    def test_a_stub_rejects_a_keyword_the_real_check_does_not_take(self, monkeypatch):
+        self._stub_all_checks(monkeypatch)
+        with pytest.raises(TypeError):
+            pp.check_conflict(no_such_parameter_1953=1)
 
     def test_the_removed_ci_flag_is_rejected(self, monkeypatch, tmp_path, cli_argv, capsys):
         """⛔ `--ci` 已刪（#1472）：加回來不會讓上面三格轉紅。"""
