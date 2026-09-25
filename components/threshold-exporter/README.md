@@ -105,14 +105,14 @@
 | `da_config_reload_duration_seconds` | Histogram | 完整 reload 耗時（scan + parse + merge + commit） |
 | `da_config_scan_duration_seconds` | Histogram | 目錄掃描耗時 |
 | `da_config_debounce_batch_size` | Histogram | 每次 fire 吸收的 trigger 數（debounce 健康指標） |
-| `da_config_parse_failure_total{file_basename}` | Counter | YAML parse / 邊界違規次數（定位壞檔） |
+| `da_config_parse_failure_total{file_basename}` | Counter | YAML parse 失敗次數（定位壞檔）。租戶檔：**每次掃描計一次**（#1957 起由 walker 計、平面層不重計）；注意 watch 偵測到變更的那個 tick 會掃兩次（detectChange＋reload），所以「每次掃描」≠「每次 reload」。壞掉的 defaults 檔：平面層計一次，**另外每個受影響租戶再計一次**（刻意的，計數即影響範圍；例如根目錄 `_defaults.yaml` 壞、底下 3 個租戶，一次冷載計 4） |
 | `da_config_defaults_change_noop_total` | Counter | 純 cosmetic 的 `_defaults` 變更（註解 / 排序，無實質影響） |
 | `da_config_defaults_shadowed_total` | Counter | `_defaults` 變更被租戶 override 擋下的數量 |
 | `da_config_blast_radius_tenants_affected{reason,scope,effect}` | Histogram | 每次 tick 受影響租戶的分佈 |
 | `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次掃描完成時間（`time() − 此值` = 卡住偵測） |
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
-| `da_config_hierarchy_divergent_tenants` | Gauge | 「`/effective` 查得到、但不會產生 `user_threshold`」的租戶數。**#1521 修好之後這是一條不變量：正常運作下恆為 0。**非 0 代表兩個 conf.d 掃描器的母體又分歧了——`scanDirFileHashes` 與 `scanDirHierarchical` 看到的租戶集合不一致，受影響租戶的告警不會觸發。⛔ **目錄深度已不再是成因**（平面掃描器自 #1521 起遞迴）；目前可達的成因是**某個檔的平台區塊過不了平面解析**（`defaults:` 只吃數字），該檔連同它的 `tenants:` 整份被丟棄，而階層 walker 仍註冊了那些租戶。ERROR log 會指向先前那行點名該檔的 ERROR/WARN。每次 config commit 重設；**ERROR log 只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**——門檻與抑制窗由部署方決定，`> 0 for 10m` 是合理起點。⭐ **保留一個 release 當迴歸遙測**：#1521 已關閉，它的職責從「點名受害者」變成「證明修復仍然成立」，確認生產環境全程為 0 之後才退役 |
+| `da_config_subtree_undeliverable_tenants` | Gauge | 繼承了「只存在於子目錄 `_defaults.yaml`」之 key 的租戶數。`/effective` 會列出該 key 的值，但 collector 不會為它產生 `user_threshold`——collector 只走 conf.d **根目錄** `_defaults.yaml` 與宣告面（`optional_overrides:`），巢狀 `_defaults.yaml` 兩者都不餵——所以該租戶在這個 key 上的告警永遠不會觸發；租戶的其他 key 照常送出。暫行解法：把 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`；根本解（交付子目錄範圍，或在驗證時拒收）追蹤於 [#1976](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976)。每次 config commit 重設；ERROR log 點名租戶、來源檔與 key，**只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**，`> 0 for 10m` 是合理起點。⚠️ **BREAKING（#1957）**：取代舊的 conf.d 掃描器分歧 gauge（舊名見 CHANGELOG）；舊 gauge 的另一成因（同一個檔被兩平面解析出不同租戶）已因共用同一份完整解析而消失，故移除；兩平面租戶集合仍有兩個已知例外——增量 tenant-only reload 對壞檔保留最後正確值而 tenant-api／da-guard 回 404（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)），以及 `_` 開頭檔案裡的 `tenants:` 只進 `/metrics`（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)） |
 
 ### 3.4 Exit Codes（CLI binaries）
 

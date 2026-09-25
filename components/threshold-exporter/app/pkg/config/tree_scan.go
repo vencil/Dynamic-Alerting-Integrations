@@ -14,7 +14,8 @@ package config
 // Two enumerators over one tree is the defect CLASS (#1911): every cell of
 // the skip rule — hidden dir, hidden file, extension case, `_` prefix,
 // symlinked root, walk error, empty tree — had to be kept equal by hand, and
-// the divergence audit (app/config_divergence.go) exists because it was not.
+// the scanner-divergence audit (#1521, retired by #1957) existed because it
+// was not.
 //
 // ScanDirTree is the single walk. It produces BOTH products in one pass.
 // ⛔ It is the only RECURSIVE conf.d walker in the exporter module's
@@ -91,8 +92,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
 )
@@ -214,6 +213,23 @@ type TreeScan struct {
 	Keys      []string             // RelKeys sorted; the composite-hash order
 	Composite string               // SHA-256 over the per-file hashes in `Keys` order
 
+	// Partials is RelKey → the file's decoded ThresholdConfig, for every
+	// file THIS scan parsed successfully (#1957). The walker decides a
+	// file's validity and tenant set with ParseConfigFile — the same decode
+	// the exporter's flat plane builds /metrics from — and hands the result
+	// over here so that plane does not decode the same bytes a second time.
+	//
+	// ⛔ LAZY and TRANSIENT: nil when the scan parsed nothing (every quiet
+	// tick, where the mtime fast-path or the same-hash carry decides each
+	// file), and cleared by ReleaseData together with TreeFile.Data. A scan
+	// retained as the next prior therefore holds no decoded config; the flat
+	// plane's own per-file cache (package main's flatScanState.configs) is
+	// what survives between commits. Absent for `_`-prefixed files (never
+	// parsed here) and for files whose parse failed (TreeFile.ParseFailed).
+	// Values share their maps with nothing else the walker keeps; a consumer
+	// that strips sections assigns fields on its own copy of the struct.
+	Partials map[string]ThresholdConfig
+
 	// Hierarchy products. When Conflict is non-nil the Tenants map and the
 	// graph are nil: a duplicate tenant across files is a rejected
 	// configuration, not a graph with one edge fewer. That is the EXPORTER's
@@ -314,9 +330,11 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 //   - `_`-prefixed files are hashed but never parsed for tenants; the ones
 //     confdname.IsDefaults accepts are entered in `Defaults` (every spelling;
 //     which ONE a directory's chain reads is DefaultsCarriers' question).
-//   - every other kept file is parsed for its top-level `tenants:` keys; a
-//     parse failure is logged, counted on obs (when non-nil) and drops
-//     the file from `Tenants` only — it stays hashed and watched.
+//   - every other kept file is decoded IN FULL (ParseConfigFile, #1957 —
+//     the flat plane's decode) and declares the keys of its `tenants:`; the
+//     decoded config is handed over in `Partials`. A parse failure is
+//     logged, counted on obs (when non-nil) and drops the file from
+//     `Tenants` only — it stays hashed and watched.
 //   - the same tenant declared in two files is a conflict (see TreeScan):
 //     the whole-tree verdict (Conflict, nil Tenants) is the exporter's, the
 //     per-tenant verdict (Locate) is the read-only diagnostics'.
@@ -572,8 +590,15 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				// (immutable once built).
 				f.TenantIDs = pf.TenantIDs
 			default:
-				f.TenantIDs, f.ParseFailed = parseTenantDecls(e.abs, data, obs, logger)
+				var partial ThresholdConfig
+				f.TenantIDs, partial, f.ParseFailed = parseTenantDecls(e.abs, data, obs, logger)
 				f.Parsed = true
+				if !f.ParseFailed {
+					if scan.Partials == nil {
+						scan.Partials = make(map[string]ThresholdConfig)
+					}
+					scan.Partials[e.rel] = partial
+				}
 			}
 		}
 
@@ -669,33 +694,50 @@ func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
 	return p, nil
 }
 
-// parseTenantDecls extracts the top-level `tenants:` keys of one tenant
-// file. It deliberately decodes only the shape it needs — the full config is
-// parsed by the plane that consumes it — so a large tree stays cheap to scan.
-// Returns (nil, true) for an unparseable file (logged, counted when
-// obs is non-nil) and (nil, false) for a file without a `tenants:`
-// mapping (a commented-out placeholder is not an error).
-func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log.Logger) (ids []string, failed bool) {
-	var doc struct {
-		Tenants map[string]yaml.Node `yaml:"tenants"`
-	}
-	if perr := yaml.Unmarshal(data, &doc); perr != nil {
-		logger.Printf("WARN: cannot parse %s: %v", absPath, perr)
+// parseTenantDecls judges one tenant file with the FULL decode
+// (ParseConfigFile, #1957) and returns its sorted tenant IDs — the keys of
+// the decoded Tenants — together with the decoded config, which the caller
+// hands to the flat plane through TreeScan.Partials.
+//
+// ⛔ THE FULL DECODE, NOT THE SHAPE THIS FUNCTION NEEDS. It used to decode
+// only `tenants:` into map[string]yaml.Node, which accepted files the flat
+// plane's full decode rejects (a scalar tenant body, a `defaults:` block of
+// the wrong shape beside the tenants); those tenants then resolved through
+// /effective and da-guard while /metrics never served them. A file rejected
+// here now declares NO tenant on any plane. The cold-scan cost of decoding
+// the whole file is paid once: the flat plane reuses the result instead of
+// decoding the same bytes again.
+//
+// ⛔ THE ONE PLACE A TENANT FILE'S PARSE FAILURE IS REPORTED (#1957).
+// Returns (nil, _, true) for a file the decode rejects: logged in the flat
+// plane's historical wording (`WARN: skip unparseable file …`) and counted on
+// obs (when non-nil) exactly ONCE per scan (a watch tick that detects a
+// change scans twice; see package main's IncParseFailure for the defaults-
+// file unit, which differs). The flat plane reads
+// TreeFile.ParseFailed and neither re-logs nor re-counts — before #1957 a
+// syntax error was counted by both, and after the decode was unified a type
+// error would have been too. Returns (nil, cfg, false) for a valid file
+// without tenants (a commented-out placeholder, a file carrying only
+// profiles, is not an error).
+func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log.Logger) (ids []string, cfg ThresholdConfig, failed bool) {
+	cfg, perr := ParseConfigFile(data)
+	if perr != nil {
+		logger.Printf("WARN: skip unparseable file %s: %v", absPath, perr)
 		if obs != nil {
 			// Basename, not full path, to cap label cardinality (A-8d).
 			obs.IncParseFailure(filepath.Base(absPath))
 		}
-		return nil, true
+		return nil, ThresholdConfig{}, true
 	}
-	if len(doc.Tenants) == 0 {
-		return nil, false
+	if len(cfg.Tenants) == 0 {
+		return nil, cfg, false
 	}
-	ids = make([]string, 0, len(doc.Tenants))
-	for tid := range doc.Tenants {
+	ids = make([]string, 0, len(cfg.Tenants))
+	for tid := range cfg.Tenants {
 		ids = append(ids, tid)
 	}
 	sort.Strings(ids)
-	return ids, false
+	return ids, cfg, false
 }
 
 // RelHashes / RelMtimes / DataCache are the flat plane's projections (keys
@@ -729,14 +771,16 @@ func (s *TreeScan) DataCache() map[string][]byte {
 	return out
 }
 
-// ReleaseData drops the cached bytes once the plane that needed them has
-// parsed. The manager retains the scan as the next prior, and the prior
-// reads only Hash, Stat and TenantIDs — keeping a cold load's bytes alive
-// until the first reload would be a silent retention the cache never had.
+// ReleaseData drops the cached bytes AND the decoded Partials once the plane
+// that needed them has consumed them. The manager retains the scan as the
+// next prior, and the prior reads only Hash, Stat, TenantIDs and
+// ParseFailed — keeping a cold load's bytes or decoded configs alive until
+// the first reload would be a silent retention the cache never had.
 func (s *TreeScan) ReleaseData() {
 	for _, f := range s.Files {
 		f.Data = nil
 	}
+	s.Partials = nil
 }
 
 // AbsHashes is the hierarchy plane's projection (keys are Clean absolute

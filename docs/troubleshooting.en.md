@@ -43,7 +43,7 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 **Solution:**
 1. Force restart: `kubectl rollout restart deployment/threshold-exporter`
-2. Or wait for mount sync (typical < 1 minute)
+2. Or wait for mount sync (typical < 1 minute) — **only when the exporter includes the [#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969) fix**; on the affected versions listed above waiting never helps, only a restart (item 1) does
 
 ## Empty Vector Alerts Don't Fire
 

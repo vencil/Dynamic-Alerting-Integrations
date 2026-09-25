@@ -147,10 +147,12 @@ func applySubtreeDefaults(
 				// tenant under it, blocking their writes.
 				//
 				// Delivering these keys needs per-subtree scope in
-				// `ThresholdConfig`, which is #1568. Until then the honest
-				// state is "not delivered, and LOUD about it" — recorded here
-				// and reported by the divergence audit. The one thing this
-				// must never be again is silent. (#1569 blind review.)
+				// `ThresholdConfig` (or refusing them at validation time),
+				// which is #1976. Until then the honest state is "not
+				// delivered, and LOUD about it" — recorded here and reported
+				// by da_config_subtree_undeliverable_tenants
+				// (config_subtree_undeliverable.go). The one thing this must
+				// never be again is silent. (#1569 blind review.)
 				if !keyCanReachTheOutputPlane(cfg, key, value) {
 					if unreachable[tenantID] == nil {
 						unreachable[tenantID] = map[string]struct{}{}
@@ -356,7 +358,7 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	// the retired spelling as the only root default: a tenant AUTHORING
 	// the canonical `mysql_threads_running` at 42 emitted 42, while that key
 	// inherited from a subtree was refused and the tenant stayed at 80 —
-	// looser than configured, and the divergence report's own remediation
+	// looser than configured, and the undeliverable report's own remediation
 	// ("declare the key in the ROOT _defaults.yaml") was already satisfied,
 	// under the other spelling. Its `_critical` twin inherited fine the whole
 	// time, so one metric had its critical tier following the subtree and its

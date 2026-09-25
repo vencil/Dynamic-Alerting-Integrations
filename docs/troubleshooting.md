@@ -45,7 +45,7 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 **解決方案：**
 1. 強制重新啟動：`kubectl rollout restart deployment/threshold-exporter`
-2. 或等待掛載同步（典型 < 1分鐘）
+2. 或等待掛載同步（典型 < 1分鐘）——**只在 exporter 已含 [#1969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1969) 修正時有效**；在上方列出的受影響版本上等待永遠不會生效，只能用第 1 項重啟
 
 ## 空向量警報不觸發
 

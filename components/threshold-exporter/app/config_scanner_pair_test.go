@@ -143,79 +143,88 @@ func TestIncrementalLoadLandsWhereAFullLoadWould(t *testing.T) {
 	}
 }
 
-// TestAnUnparseableFileKeepsItsTenantAttributed guards the half of the
-// incremental prune that the equivalence matrix above cannot see, because the
-// two paths AGREE there.
+// TestAnUnparseableFileMovesBothPlanesTogether pins that, on the incremental
+// path, a tenant whose file stops parsing is in /effective's population
+// (`tenantSources`) exactly when it is in /metrics' (the merged config).
 //
-// The prune that stops a DEPARTED tenant being reported must not also delete
-// cause (a)'s true positive: a file that still EXISTS and failed to parse.
-// Keying the prune on "the tenant is gone from the merged config" would delete
-// exactly that case — the one the divergence audit exists for. Keying it on
-// this round's parse result separates the two.
+// ⛔ UNTIL #1957 THIS TEST ASSERTED THE OPPOSITE, on purpose: the prune kept a
+// broken file's tenant attributed after the merged config had dropped it, so
+// the divergence audit's cause (a) — "absent from the merged config, still
+// declared to the hierarchy" — could fire. With one decode
+// (config.ParseConfigFile) a file that fails it declares no tenant on ANY
+// plane, and the state cause (a) described is a bug, not a signal.
 //
-// ⛔ THE FIXTURE HAS TO FORCE THE FULL-REBUILD BRANCH, and the first version of
-// this test did not. `patchTenants` KEEPS a tenant whose file stopped parsing,
-// so on the tenant-only fast path the tenant never leaves the merged config and
-// both prune predicates behave identically — measured: swapping the correct
-// predicate for the wrong one left this test green. Touching `_defaults.yaml`
-// in the same reload takes the `mergePartialConfigs` branch, where the dropped
-// file really does take its tenant with it. That is the state cause (a)
-// describes, and the only one where the two predicates differ.
-func TestAnUnparseableFileKeepsItsTenantAttributed(t *testing.T) {
+// ⛔ BOTH MERGE BRANCHES, because they disagree about the tenant itself.
+// The full-rebuild branch (forced here by touching `_defaults.yaml` in the
+// same reload) drops the broken file's tenants, as a restart does; the
+// tenant-only branch keeps them (patchTenants' "keep the last good values",
+// a deliberate fail-safe this ticket does not revisit). The prune must follow
+// whichever the merged config did — measured: keying it on the file alone
+// (prune on every parse failure) reddens the tenant-only leg, keying it on
+// "keep" (the pre-#1957 rule) reddens the full-rebuild leg.
+func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
-	writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n")
-	writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  t-b: {}\n")
+	for _, tc := range []struct {
+		name       string
+		touchPlat  bool // also edit _defaults.yaml → full-rebuild branch
+		wantServed bool
+	}{
+		{"full-rebuild branch drops it from both", true, false},
+		{"tenant-only branch keeps it on both", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  t-b: {}\n")
 
-	m, _, logBuf := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	logBuf.Reset()
+			m, _, logBuf := newAuditedManager(t, dir)
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			logBuf.Reset()
 
-	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 81\n")
-	writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n  \tbroken: [\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
-	}
+			if tc.touchPlat {
+				writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 81\n")
+			}
+			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n  \tbroken: [\n")
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
 
-	if _, present := m.GetConfig().Tenants["t-a"]; present {
-		t.Fatal("fixture no longer reproduces cause (a): the unparseable file's tenant is still in the merged config, " +
-			"so this test cannot tell the two prune predicates apart")
-	}
-	m.mu.RLock()
-	_, attributed := m.hierarchy.tenantSources["t-a"]
-	m.mu.RUnlock()
-	if !attributed {
-		t.Fatal("t-a lost its source attribution because its file stopped parsing —\n" +
-			"that is cause (a) of the divergence audit, and dropping the attribution makes it unreportable")
-	}
-	// Pinned to the divergence line rather than the whole log. ⚠️ COSMETIC
-	// HERE, stated because the first version of this comment claimed
-	// otherwise: I asserted that the fixture's parse-failure lines also name
-	// `tenant=t-a`, which would have made the two whole-log checks
-	// independently satisfiable. Measured false — mutating the audit to name a
-	// constant wrong tenant reddens this test under BOTH forms, so nothing else
-	// in this log says `t-a`. Kept because it says what the test means, not
-	// because it adds detection here. (#1569 sweep B-5.)
-	assertLogLineWith(t, logBuf.String(), divergenceAnchor, "t-a")
+			_, served := m.GetConfig().Tenants["t-a"]
+			m.mu.RLock()
+			_, attributed := m.hierarchy.tenantSources["t-a"]
+			m.mu.RUnlock()
+			if served != tc.wantServed {
+				t.Fatalf("fixture precondition: merged config serves t-a = %v, want %v — "+
+					"this leg no longer exercises the branch it is named for", served, tc.wantServed)
+			}
+			if attributed != served {
+				t.Errorf("t-a: /metrics population has it = %v, /effective population has it = %v — "+
+					"the two planes disagree about a tenant whose file failed the one decode (#1957)",
+					served, attributed)
+			}
+			if strings.Contains(logBuf.String(), undeliverableAnchor) {
+				t.Errorf("an ERROR for a state both planes agree on:\n%s", logBuf.String())
+			}
 
-	// The sibling assertion: a tenant whose file is GONE must be pruned, or the
-	// audit reports a deletion as a defect.
-	logBuf.Reset()
-	if err := os.Remove(filepath.Join(dir, "b.yaml")); err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
-	}
-	m.mu.RLock()
-	_, stillThere := m.hierarchy.tenantSources["t-b"]
-	m.mu.RUnlock()
-	if stillThere {
-		t.Fatal("t-b kept its source attribution after its file was deleted — the audit will report " +
-			"the deleted tenant under cause (a), pointing operators at a log line that does not exist")
+			// The sibling assertion: a tenant whose file is GONE must be pruned.
+			if err := os.Remove(filepath.Join(dir, "b.yaml")); err != nil {
+				t.Fatalf("Remove: %v", err)
+			}
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
+			m.mu.RLock()
+			_, stillThere := m.hierarchy.tenantSources["t-b"]
+			m.mu.RUnlock()
+			if stillThere {
+				t.Fatal("t-b kept its source attribution after its file was deleted — /effective " +
+					"would keep answering for a tenant /metrics no longer serves")
+			}
+		})
 	}
 }
 
@@ -229,8 +238,9 @@ func TestAnUnparseableFileKeepsItsTenantAttributed(t *testing.T) {
 // removal loops deleted the tenant the moment EITHER owning file was edited
 // for any reason, because the other file did not change this round and so was
 // absent from `patchedTenants`. The tenant left the merged config while a file
-// on disk still declared it, and the divergence audit blamed cause (a) —
-// sending the operator to look for a parse-failure line that does not exist.
+// on disk still declared it, and the divergence audit (cause "a", removed in
+// #1957) blamed a parse failure — sending the operator to look for a line
+// that does not exist.
 //
 // Measured on both loops, before the fix: `dup present after r2=false,
 // divergenceERR=true`; after: `true / false`.
@@ -373,8 +383,8 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 				t.Fatalf("dup kept %q but a full reload of the same tree gives %q — "+
 					"the fast path is holding the value of a declaration that no longer exists", v, want)
 			}
-			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
-				t.Fatalf("a divergence ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
+			if strings.Contains(logBuf.String(), undeliverableAnchor) {
+				t.Fatalf("an undeliverable ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
 			}
 		})
 	}
@@ -416,7 +426,7 @@ func TestReclaimTenantFromMirrorsTheFullMergePrecedence(t *testing.T) {
 
 // publishedStateFingerprint renders everything a loader publishes that a
 // consumer can observe: the merged config, and the hierarchy state the
-// divergence audit reads. Paths are made root-relative so the two temp dirs
+// commit-time audit reads. Paths are made root-relative so the two temp dirs
 // compare equal.
 func publishedStateFingerprint(t *testing.T, m *ConfigManager, root string) string {
 	t.Helper()

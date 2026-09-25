@@ -118,7 +118,9 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	}
 
 	// ONE walk, the exporter's own (W2, #1677): tenant attribution, the
-	// defaults set and the bytes all come from this scan.
+	// defaults set and the bytes all come from this scan. A cold scan (no
+	// prior) that decodes every tenant file in full since #1957; reusing a
+	// prior across runs is #1977.
 	scan, err := ScanDirTree(absRoot, nil, nil, discardLogger)
 	if err != nil {
 		return nil, err

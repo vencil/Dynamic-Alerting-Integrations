@@ -75,7 +75,7 @@ type hierarchyState struct {
 	// subtree defaults chain supplies but that NO emitter can iterate
 	// (absent from both `cfg.Defaults` and `cfg.OptionalOverrides`).
 	//
-	// ⛔ It lives HERE, next to tenantSources, so the divergence audit reads
+	// ⛔ It lives HERE, next to tenantSources, so the undeliverable audit reads
 	// both from one lock window. Reloads are not serialised, and pairing
 	// reload N's config with reload N+1's diagnosis is exactly the failure
 	// the tenantSources snapshot exists to prevent. (#1569)
@@ -126,10 +126,10 @@ type ConfigManager struct {
 	// rather than package-level so `t.Parallel()` tests do not share it.
 	afterCommitUnlock func()
 
-	// divergence tracks what the conf.d divergence audit last put in the
-	// log, so a persistent divergence is stated once per change instead of
-	// once per config commit. See config_divergence.go.
-	divergence divergenceLogState
+	// undeliverable tracks what the subtree-undeliverable audit last put in
+	// the log, so a persistent condition is stated once per change instead of
+	// once per config commit. See config_subtree_undeliverable.go.
+	undeliverable undeliverableLogState
 
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
@@ -269,7 +269,8 @@ func (m *ConfigManager) SetLogger(logger *log.Logger) {
 // as the FIRST statement after installConfig releases m.mu (#1521).
 //
 // ⛔ Test-only, and narrow on purpose. It exists to make one specific
-// regression observable: the divergence audit must compare the config it
+// regression observable: the commit-time audit (config_subtree_undeliverable.go,
+// the #1521 divergence audit until #1957) must judge the state it
 // just installed against the hierarchy AS IT STOOD IN THAT LOCK WINDOW,
 // not against whatever the live manager holds by the time the audit runs.
 // Adversarial review measured that moving that read back outside the lock
@@ -377,8 +378,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// path (Load, fullDirLoad, IncrementalLoad, and diffAndReload via
 	// installNewHierarchyState → fullDirLoad) is covered by construction
 	// rather than by remembering to add a call. Observability only: it
-	// never fails the commit — see config_divergence.go for why not.
-	m.auditHierarchyDivergence(cfg, hierTenantSources, unreachableInherited, logHeader)
+	// never fails the commit — see config_subtree_undeliverable.go for why not.
+	m.auditSubtreeUndeliverable(hierTenantSources, unreachableInherited, logHeader)
 }
 
 // installConfig performs the atomic swap under m.mu and RETURNS the
@@ -652,6 +653,22 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
 	for _, name := range reparse {
+		// Rejected by the walker on this scan: already logged and counted
+		// there (see commitFlatFrom). Dropped from the cache so the merge
+		// below treats it as the full load does.
+		if f := scan.Files[name]; f != nil && f.ParseFailed {
+			delete(newConfigs, name)
+			continue
+		}
+		// The walker's decode of this file, when it parsed one (#1957; see
+		// commitFlatFrom). A changed or added tenant file always has one
+		// unless its parse failed: its hash moved against the prior, so the
+		// walker could not carry it.
+		if partial, ok := scan.Partials[name]; ok {
+			applyBoundaryRules(name, &partial, m.getLogger())
+			newConfigs[name] = partial
+			continue
+		}
 		fullPath := filepath.Join(m.path, name)
 		data, ok := dataCache[name]
 		if !ok {
@@ -745,34 +762,38 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// The block above fixed `unreachableInherited` and named the risk —
 	// "the asymmetry between the two fields `installConfig` returns is exactly
 	// the kind that becomes live later". It already was. `tenantSources` is
-	// what `hierarchyDivergentTenants` ITERATES, so a tenant that leaves the
-	// tree lingers there, is found missing from the merged config, and is
-	// reported under cause (a): "its file was dropped while building that
-	// config ... look for the ERROR/WARN line naming that file". There is no
-	// such line, because nothing is broken — the operator deleted the tenant.
-	// Measured both ways it can leave: removing one of two root tenant files,
-	// and emptying a root file that stays on disk, each emitted a full
-	// divergence ERROR naming the departed tenant while the merged config was
-	// correct.
+	// the population /effective serves (and the one the commit-time audit
+	// iterates), so a tenant that leaves the tree lingered there — still
+	// resolvable while /metrics had dropped it. Until #1957 the audit then
+	// reported it as a scanner divergence pointing at a parse-failure line
+	// that did not exist, because nothing was broken: the operator deleted
+	// the tenant. Measured both ways it can leave: removing one of two root
+	// tenant files, and emptying a root file that stays on disk.
 	//
-	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT, NOT BY
-	// TENANT ABSENCE. Cause (a)'s TRUE positive is a file that still exists and
-	// failed to parse; pruning on "the tenant is gone from the merged config"
-	// would delete exactly that case, which is the one this audit exists for.
+	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT.
 	// `newHashes` says whether the file is still on disk and `newConfigs` says
 	// whether it parsed this round (upstream deletes the entry when it did
 	// not), so:
 	//
 	//	gone from disk                 → prune (operator deleted the file)
 	//	on disk, parsed, no longer declares the tenant → prune (operator deleted the tenant)
-	//	on disk, did NOT parse         → KEEP, so cause (a) still fires
+	//	on disk, did NOT parse         → keep exactly while the merged config keeps it
+	//
+	// ⛔ THE THIRD ROW FOLLOWS THE MERGED CONFIG, NOT THE FILE (#1957). A file
+	// that fails the one decode (config.ParseConfigFile) declares no tenant on
+	// the walker's verdict, and a full load drops its tenants from BOTH planes.
+	// This path may instead keep them in the merged config — patchTenants'
+	// "keep the last good values" on the tenant-only branch — or drop them —
+	// the full-rebuild branch. Whichever it did, /effective must answer for
+	// the same tenant set /metrics serves: before #1957 this row was "KEEP,
+	// so cause (a) still fires", i.e. the rule deliberately MADE the two
+	// planes disagree so the divergence audit could report it.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
-	// tenant absent from `tenantSources` is never audited at all, which is the
-	// silent direction of the same asymmetry. Never OVERWRITES an existing
-	// attribution — where the two scanners disagree about which file owns a
-	// tenant, the hierarchical one is the authority the audit is written
-	// against.
+	// tenant absent from `tenantSources` is invisible to /effective while
+	// /metrics serves it. Never OVERWRITES an existing attribution — where
+	// the two disagree about which file owns a tenant (a duplicate the fast
+	// path accepts), the hierarchical one stands.
 	refreshTenantSources := func() {
 		scanRoot := absScanRoot(m.path)
 		scanKey := func(absPath string) (string, bool) {
@@ -801,6 +822,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 				if _, declared := partial.Tenants[tid]; !declared {
 					continue // the file parsed and no longer names this tenant
 				}
+			} else if _, served := merged.Tenants[tid]; !served {
+				continue // the file failed to parse and the merged config dropped it
 			}
 			next[tid] = src
 		}
@@ -1166,8 +1189,10 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
 	// it is deleted from `newConfigs` upstream, so `ok` is false and THIS
 	// file's tenants are left alone — today's fail-safe "keep the last good
-	// values". A full load drops them instead and the divergence audit shouts
-	// cause (a), so the two paths still disagree there; that difference is a
+	// values". A full load drops them instead (the walker rejects the file,
+	// #1957), so the two PATHS still disagree there — though on each path
+	// /effective follows /metrics (refreshTenantSources keeps such a tenant
+	// exactly while this merged config does). That difference is a
 	// deliberate behaviour question (silently keep stale values vs. stop a
 	// tenant's alerts on a typo), not something to settle inside a bug fix.
 	//
@@ -1236,9 +1261,10 @@ func (m *ConfigManager) fullDirLoad() error {
 // Order matters and is the reverse of what it looks like: the hierarchy
 // state goes in FIRST because installConfig hands the audit the
 // tenantSources standing in the commit's lock window. Committing the new
-// config against the previous tenantSources would report every tenant the
-// operator just deleted as divergent (it is still in the old sources and
-// absent from the new config) until the next commit.
+// config against the previous tenantSources would pair this commit's
+// refused keys with the previous population (and, until #1957 removed the
+// presence check, reported every tenant the operator just deleted as
+// divergent) until the next commit.
 func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 	if err := rejectDuplicateTenant(scan); err != nil {
 		return err
@@ -1258,10 +1284,12 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 // a file without bytes the parsed partial from the previous commit is
 // reused when its hash is unchanged — the walker's prior IS the tree of
 // that previous commit (see flatScanState.tree), which is what makes the
-// reuse sound. A file that is unchanged but has no cached partial (it
-// failed to parse last time, or it is a nested platform file this plane
-// never caches) is re-read and re-judged, so its ERROR/WARN and its
-// parse-failure count fire again exactly as on a cold load.
+// reuse sound. A `_`-prefixed file that is unchanged but has no cached
+// partial (it failed to parse last time, or it is a nested platform file
+// this plane never caches) is re-read and re-judged, so its ERROR/WARN and
+// its parse-failure count fire again exactly as on a cold load. A tenant
+// file is never re-judged here: the walker parses it (#1957) and has already
+// logged and counted a failure on this scan (TreeFile.ParseFailed).
 func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
@@ -1283,6 +1311,23 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 			continue
 		}
 		f := scan.Files[name]
+		// ⛔ THE WALKER ALREADY JUDGED IT (#1957). A tenant file whose one
+		// decode failed was logged and counted by the walker on THIS scan;
+		// re-reading it here would count it twice per scan (the historical
+		// double count for syntax errors) and log it twice.
+		if f.ParseFailed {
+			continue
+		}
+		// ⛔ THE WALKER ALREADY DECODED IT (#1957). A tenant file this scan
+		// parsed comes with its ThresholdConfig in scan.Partials, decoded by
+		// the same config.ParseConfigFile parsePartialConfig calls — so the
+		// walker's tenant set and this plane's are one verdict, and the bytes
+		// are not decoded twice.
+		if partial, ok := scan.Partials[name]; ok {
+			applyBoundaryRules(name, &partial, m.getLogger())
+			fileConfigs[name] = partial
+			continue
+		}
 		fullPath := filepath.Join(m.path, name)
 		data := f.Data
 		if data == nil {
@@ -1387,6 +1432,9 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // Every merged_hash is recomputed from disk. This is the cold-start
 // semantics; the incremental reuse of unchanged tenants lives in
 // classifyTenant, on the debounced path, and is not duplicated here.
+// ⚠️ recomputeMergedHash re-reads and re-parses each tenant file the walker
+// has just decoded in full (#1957; TreeScan.Partials) — the remaining
+// double parse of a hierarchical cold load, tracked in #1978.
 //
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than

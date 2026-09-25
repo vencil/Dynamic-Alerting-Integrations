@@ -104,6 +104,11 @@ type EffectiveConfig struct {
 // discarded here), so an unreadable tenant file reads as "not found" and an
 // unreadable _defaults.yaml drops out of the chain. Before W2 (#1677) an
 // unreadable defaults file was a hard error on this path.
+//
+// ⚠️ A COLD scan per call (prior nil): every file is read and, since #1957,
+// every tenant file decoded in full — the unified parse that makes a tenant
+// the exporter rejects 404 here too. Reusing a prior scan across requests
+// would put this back on the mtime fast-path; that is #1977, not done here.
 func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
 	if err != nil {

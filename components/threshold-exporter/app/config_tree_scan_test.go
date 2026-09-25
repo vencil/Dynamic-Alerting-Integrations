@@ -350,10 +350,10 @@ func scanWalks(t *testing.T, fresh *configMetrics) uint64 {
 // TestManagerWalksTheTreeOncePerPath pins the #1568 end state on the
 // manager: Load walks once, a quiet tick walks once, a tick that finds a
 // change walks twice (detectChange, then the debounced reload), and the
-// divergence gauge stays at 0 through a tenant edit AND a tenant deletion —
-// the deletion being the case that would read 1 if the flat commit ran
-// before the hierarchy install (the audit would pair the new config with
-// the old tenantSources). Both the hierarchical and the flat layout are
+// undeliverable gauge (the divergence gauge until #1957) stays at 0 through
+// a tenant edit AND a tenant deletion — the deletion being the case that
+// read 1 before #1957 if the flat commit ran before the hierarchy install
+// (the audit paired the new config with the old tenantSources). Both the hierarchical and the flat layout are
 // pinned because they take different branches of every function involved.
 func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 	t.Parallel()
@@ -387,7 +387,7 @@ func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 			m.SetLogger(log.New(&buf, "", 0))
 			t.Cleanup(m.Close)
 
-			gauge := func() float64 { return testutil.ToFloat64(fresh.hierarchyDivergentTenants) }
+			gauge := func() float64 { return testutil.ToFloat64(fresh.subtreeUndeliverableTenants) }
 			expectWalks := func(step string, want uint64, run func()) {
 				t.Helper()
 				before := scanWalks(t, fresh)
@@ -396,7 +396,7 @@ func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 					t.Errorf("%s: walked the tree %d time(s), want %d", step, got, want)
 				}
 				if g := gauge(); g != 0 {
-					t.Errorf("%s: da_config_hierarchy_divergent_tenants = %v, want 0", step, g)
+					t.Errorf("%s: da_config_subtree_undeliverable_tenants = %v, want 0", step, g)
 				}
 			}
 
@@ -467,8 +467,8 @@ func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 			}
 
 			expectWalks("quiet tick after the churn", 1, m.tickOnce)
-			if strings.Contains(buf.String(), "scanner divergence") {
-				t.Errorf("a divergence ERROR was logged on a healthy tree:\n%s", buf.String())
+			if strings.Contains(buf.String(), undeliverableAnchor) {
+				t.Errorf("an undeliverable ERROR was logged on a healthy tree:\n%s", buf.String())
 			}
 		})
 	}
@@ -647,7 +647,7 @@ func TestScanDirTree_NilConfigMetrics(t *testing.T) {
 		if f := got.Files["broken.yaml"]; f == nil || !f.ParseFailed {
 			t.Errorf("broken.yaml must be kept and marked ParseFailed: %+v", f)
 		}
-		if !strings.Contains(buf.String(), "WARN: cannot parse") {
+		if !strings.Contains(buf.String(), "WARN: skip unparseable file") {
 			t.Errorf("parse failure must still be LOGGED with nil metrics; log:\n%s", buf.String())
 		}
 		if _, err := scan(filepath.Join(root, "missing"), logger); err == nil {

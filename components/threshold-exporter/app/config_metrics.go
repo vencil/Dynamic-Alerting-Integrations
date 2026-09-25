@@ -83,14 +83,15 @@ type configMetrics struct {
 	// tenants are evicted automatically. See pkg/config/resolve.go
 	// ResolveAtWithStats for the producer side.
 	tenantMetricsOverLimit *prometheus.GaugeVec
-	// #1521: state-coded gauge for the conf.d dual-scanner divergence
-	// (hierarchical scanner sees a tenant, the flat scanner that feeds
-	// the collector does not). Gauge, not counter: the value is the
-	// CURRENT size of the divergent set, so fixing the layout drives it
-	// back to 0. A counter could only ever say "it happened N times",
-	// where N tracks reload frequency rather than misconfiguration
-	// severity. Set on every commitConfig — see config_divergence.go.
-	hierarchyDivergentTenants prometheus.Gauge
+	// State-coded gauge: tenants that inherit a key existing ONLY in a
+	// subtree `_defaults.yaml`, which /effective reports and the collector
+	// cannot emit (#1976; was the #1521 divergence gauge until #1957 removed
+	// its other cause). Gauge, not counter: the value is the CURRENT size of
+	// the set, so declaring the key at the root drives it back to 0. A
+	// counter could only ever say "it happened N times", where N tracks
+	// reload frequency rather than misconfiguration severity. Set on every
+	// commitConfig — see config_subtree_undeliverable.go.
+	subtreeUndeliverableTenants prometheus.Gauge
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -177,9 +178,9 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_tenant_metrics_over_limit",
 			Help: "State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
 		}, []string{"tenant"}),
-		hierarchyDivergentTenants: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_hierarchy_divergent_tenants",
-			Help: "Number of tenants currently visible to the hierarchical conf.d scanner (/effective) but ABSENT from the merged config that feeds the collector (#1521). Non-zero means those tenants emit no user_threshold series and their alerts cannot fire. INVARIANT: 0 in normal operation. Directory depth is no longer a cause — the flat scanner walks the tree recursively since #1521 — so a non-zero reading now means the two scanners parsed the same tree differently, most often a file whose platform block fails the flat parse (`defaults:` takes numbers only) and is therefore discarded whole, tenants included, while the hierarchical walker still registers them. State-coded: re-Set on every config commit, so it returns to 0 once the offending file is fixed. The accompanying ERROR log names the tenants and their source files. Retained one release as regression telemetry for #1521 (locked decision); retire once production has read 0 throughout. SUGGESTED alert: > 0 for 10m = page ops — no PrometheusRule ships for it yet.",
+		subtreeUndeliverableTenants: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_subtree_undeliverable_tenants",
+			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — one file decoded into different tenant sets by the two planes — is gone because both planes now judge a file with one decode. Known tenant-set exceptions that are NOT counted here: the incremental tenant-only reload keeping a broken file's last good tenants (#1980) and tenants declared in a _-prefixed file (#1982). SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}),
 	}
 }
@@ -210,7 +211,7 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.lastReloadComplete)
 	reg.MustRegister(m.freeOSMemory)
 	reg.MustRegister(m.tenantMetricsOverLimit)
-	reg.MustRegister(m.hierarchyDivergentTenants)
+	reg.MustRegister(m.subtreeUndeliverableTenants)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -236,10 +237,23 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // ─────────────────────────────────────────────────────────────────────
 
 // IncParseFailure bumps the parse-failure counter for a specific file
-// basename. Called from the tree scan (pkg/config parseTenantDecls, via
-// config.ScanObserver) whenever
-// yaml.Unmarshal returns an error for a non-_-prefixed tenant file, and
-// from the flat parse (parsePartialConfig) for the same file. file_basename
+// basename. Call sites and the resulting unit (#1957):
+//   - the tree scan (pkg/config parseTenantDecls, via config.ScanObserver):
+//     a non-_-prefixed tenant file the one decode (config.ParseConfigFile)
+//     rejects — ONCE per scan; the flat plane reuses that verdict and does
+//     not count again;
+//   - the flat parse (parsePartialConfig) or the nested syntax probe
+//     (reportUnparseableNestedPlatformFile): a `_`-prefixed file, which the
+//     walker never parses — once per flat commit;
+//   - emitParseFailureSignal (config_debounce.go): a broken defaults file in
+//     a tenant's chain, ONCE PER AFFECTED TENANT on every merged_hash
+//     recompute — intentional, the count is the blast radius (a broken root
+//     `_defaults.yaml` above 3 tenants reads 4 after one cold Load; pinned by
+//     TestADefaultsParseFailureCountsOncePlusOncePerTenant).
+//
+// ⚠️ "Per scan" is not "per reload": a watch tick that detects a change scans
+// twice (detectChange, then the debounced reload), so a broken tenant file
+// moves the counter by 2 on such a tick. file_basename
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
@@ -391,17 +405,15 @@ func (cm *configMetrics) IncFreeOSMemory() {
 	cm.freeOSMemory.Inc()
 }
 
-// SetHierarchyDivergentTenants publishes the current size of the conf.d
-// dual-scanner divergent set (#1521). Called from
-// ConfigManager.auditHierarchyDivergence on every config commit,
+// SetSubtreeUndeliverableTenants publishes the current number of tenants
+// inheriting a subtree-only key the collector cannot emit (#1976). Called
+// from ConfigManager.auditSubtreeUndeliverable on every config commit,
 // including the healthy case (n == 0) — the zero write is what lets the
-// gauge recover after an operator moves the misplaced tenant file, and it
-// distinguishes "audited, clean" from "never audited" only in combination
-// with the load having happened at all. See config_divergence.go for why
-// this is a gauge rather than a counter, and why the divergence does not
-// fail the load.
-func (cm *configMetrics) SetHierarchyDivergentTenants(n int) {
-	cm.hierarchyDivergentTenants.Set(float64(n))
+// gauge recover once the key is declared at the root. See
+// config_subtree_undeliverable.go for why this is a gauge rather than a
+// counter, and why the condition does not fail the load.
+func (cm *configMetrics) SetSubtreeUndeliverableTenants(n int) {
+	cm.subtreeUndeliverableTenants.Set(float64(n))
 }
 
 // PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit

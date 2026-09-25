@@ -42,6 +42,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // loadFile reads a single YAML config file and returns the parsed config + content hash.
@@ -55,7 +56,8 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))
 
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	cfg, err = config.ParseConfigFile(data)
+	if err != nil {
 		return cfg, "", fmt.Errorf("parse config %s: %w", path, err)
 	}
 
@@ -105,7 +107,9 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *
 	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 }
 
-// parsePartialConfig unmarshals one config file's bytes into a ThresholdConfig.
+// parsePartialConfig decodes one config file's bytes with the ONE decode,
+// config.ParseConfigFile (#1957) — the same function the conf.d walker judges
+// tenant files with, so a file this rejects declares no tenant on any plane.
 // On parse failure it records the parse_failure metric and logs — ERROR for
 // underscore-prefixed files (a broken _defaults/_profiles silently nullifies an
 // entire block → every dependent tenant override breaks; cycle-6 RCA, planning
@@ -115,8 +119,8 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *
 // logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
 // the flat-mode parse paths report failures identically.
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
-	var partial ThresholdConfig
-	if err := yaml.Unmarshal(data, &partial); err != nil {
+	partial, err := config.ParseConfigFile(data)
+	if err != nil {
 		metrics.IncParseFailure(filepath.Base(path))
 		if strings.HasPrefix(scanKeyBase(name), "_") {
 			logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)

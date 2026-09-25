@@ -234,7 +234,7 @@ K8s 把 ConfigMap mount 到 Pod 時用的 atomic-rename-via-symlink 行為，已
 |--------------|-----------|---------|
 | K8s Service discovery / endpoint slice 更新延遲 | 在 5s quantization 解析度下不可區分 | Phase 3（如有）可接 k3d 補強 |
 | Rolling pod restart 期間 scrape 失敗率 | 否，與 config-change SLO 正交 | 屬 deployment SLO，另案 |
-| ConfigMap update semantics（projected volume） | 否，已被 A-8b unit test 覆蓋 | A-8b |
+| ConfigMap update semantics（projected volume） | 否；A-8b 只覆蓋冷掃描列舉，`..data` 換版偵測由 `TestSymlinkedConfD_HotReloadsOnTargetChange`／`TestScanDirTree_ConfigMapDataSwap*` 覆蓋（見上方 #1969 更正） | A-8b（列舉）＋ #1969 測試（換版偵測） |
 | K8s-native RBAC / NetworkPolicy 路徑 | 否，與 alert fire-through 正交 | governance-security.md |
 
 → 結論：docker-compose 為 Phase 2 SLO 量測的**正確**選擇；k3d 不是「更高保真」，而是「換個維度的 noise」。
@@ -605,7 +605,7 @@ n=30 對 P95 的 empirical estimator 方差仍大。aggregator 應跑 bootstrap�
 
 | 既有項目 | 與本 harness 的關係 |
 |---------|------------------|
-| **A-8b unit test** (`TestScanDirHierarchical_K8sSymlinkLayout`，PR #54) | 已覆蓋 K8s ConfigMap-symlink 行為；e2e **不**重做。e2e 假設 scan 路徑正確，只測 fire-through latency |
+| **A-8b unit test** (`TestScanDirHierarchical_K8sSymlinkLayout`，PR #54) | 覆蓋 K8s ConfigMap-symlink 佈局的冷掃描列舉（換版偵測見 #1969 更正）；e2e **不**重做。e2e 假設 scan 路徑正確，只測 fire-through latency |
 | **A-15 `bench_wrapper.sh`** | 確立的 clean stdout 輸出 convention；e2e harness 的 `aggregate.py` 應遵循同一格式（最後一行為 single-line JSON summary） |
 | **B-1 Phase 1**（PR #59） | 提供 `buildDirConfigHierarchical` synthetic fixture builder；`fixture/synthetic-v1/` 直接 reuse；synthetic-v2 在其上加 zipfian + power-law |
 | **B-8 BlastRadius metric**（PR #59） | 提供 `affected-tenants` ReportMetric；e2e 可 cross-check：trigger 一個 defaults change 後，e2e 觀察到的 alert 數應接近 `affected-tenants` 計數 |
@@ -637,7 +637,7 @@ n=30 對 P95 的 empirical estimator 方差仍大。aggregator 應跑 bootstrap�
 | [Architecture & Design](../../../architecture-and-design.md) | 9 個核心設計概念與 4 層路由 — 解釋 alert fire-through 在系統內的位置 |
 | [Config-Driven 架構設計](../../../design/config-driven.md) | `_defaults.yaml` 鏈與 hot-reload 行為；fixture calibration 的概念基礎 |
 | [PR #59 — Phase 1 Hierarchical Baseline](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/59) | Phase 1 implementation 與本文件的 prerequisite |
-| [PR #54 — A-8b K8s symlink unit test](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/54) | 已覆蓋 ConfigMap-symlink 行為，e2e 不重做的依據 |
+| [PR #54 — A-8b K8s symlink unit test](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/54) | 覆蓋 ConfigMap-symlink 佈局的冷掃描列舉（換版偵測見 #1969 更正），e2e 不重做的依據 |
 | [Prometheus alerting rules docs](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/) | alert-rules.yml 撰寫參考 |
 | [Alertmanager configuration](https://prometheus.io/docs/alerting/latest/configuration/) | alertmanager.yml routing 設定參考 |
 | [Doc Template Spec](../../doc-template.md) | 本 design doc 遵循的 frontmatter 與結構規範 |
