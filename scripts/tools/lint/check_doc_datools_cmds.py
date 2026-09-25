@@ -142,6 +142,7 @@ _EXTRA_DOC_FILES = (
 _DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b")
 _DATOOLS_IMAGE_RE = re.compile(r"da[-_]tools", re.IGNORECASE)
 _WINDOWS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_WHOLE_PLACEHOLDER_RE = re.compile(r"<[^<>:]+>")
 
 # docker flags that consume the NEXT token as their value. Needed to tell the
 # image apart from a flag argument that merely happens to mention da-tools.
@@ -150,6 +151,18 @@ _VALUE_FLAGS = frozenset({
     "--name", "--network", "--entrypoint", "--mount", "--label", "-l",
     "--env-file", "--add-host", "-p", "--publish",
 })
+
+
+def _unbracket(tok: str) -> str:
+    """`[-v` → `-v`: a synopsis marks an optional mount as `[-v <spec>]`.
+
+    ⛔ Shared by `_mounts` and `_image_index` on purpose. When only `_mounts`
+    knew it, `_image_index` read `[-v` as a bare operand and took the mount
+    VALUE (`$(pwd)/da-tools-out:/data/output]`, which contains da-tools) as the
+    image — so a correctly-placed `--user` was reported as coming after it
+    (issue 1495 review). One predicate, two readers.
+    """
+    return tok[1:] if tok in ("[-v", "[--volume") else tok
 
 
 def _image_index(toks: List[str]) -> "int | None":
@@ -171,7 +184,7 @@ def _image_index(toks: List[str]) -> "int | None":
     i += 1
     operands = []
     while i < len(toks):
-        t = toks[i]
+        t = _unbracket(toks[i])
         if t in _VALUE_FLAGS:
             i += 2
             continue
@@ -316,6 +329,12 @@ def _mounts(flat: str) -> List[str]:
     toks = [t for t in _normalise(flat).split() if t != "\\"]
     out: List[str] = []
     for i, t in enumerate(toks):
+        # ⛔ A synopsis marks an optional mount as `[-v <output>:/data/output]`,
+        # so the flag token is `[-v`. Not recognising it dropped every optional
+        # mount in cli-reference.en.md from the judged set — including the
+        # writable ones this rule exists for (issue 1495). The closing `]` is
+        # already stripped from the operand below.
+        t = _unbracket(t)
         if t in ("-v", "--volume") and i + 1 < len(toks):
             out.append(toks[i + 1].strip("\"'").rstrip("\\,;)]\"'"))
         elif t.startswith(("--volume=", "-v=")):
@@ -353,7 +372,27 @@ def _is_bind_mount(spec: str) -> bool:
     if ":" not in spec:
         return False                      # anonymous volume
     head = spec.split(":")[0]
+    # A host side that is one whole `<placeholder>` stands for a directory the
+    # reader will fill in — a host path, i.e. a bind mount. ⚠️ A placeholder
+    # meant as a volume NAME (`<volume>:/cache`) would be misjudged here; none
+    # exists in the scan set, and a named volume should be written literally
+    # (`da-tools-cache:/cache`), which this function still excludes.
+    if _WHOLE_PLACEHOLDER_RE.fullmatch(head):
+        return True
     return head.startswith(("/", ".", "~", "$"))
+
+
+def _placeholder_outside_host(spec: str) -> bool:
+    """Does a `<placeholder>` appear after the host field of *spec*?
+
+    Only the host field may be a placeholder and still be judged; see the
+    caller. Windows / UNC host paths carry their own colon, so the host field
+    is split off after it.
+    """
+    skip = 2 if (_WINDOWS_PATH_RE.match(spec) or spec.startswith("\\\\")) else 0
+    cut = spec.find(":", skip)
+    rest = spec[cut + 1:] if cut >= 0 else ""
+    return "<" in rest or ">" in rest
 
 
 def _is_writable(spec: str) -> bool:
@@ -395,8 +434,11 @@ def check_writable_mount_has_user(doc_files: List[Path],
     declared you may write there, pass the uid that can. An example that never
     writes should say so with ``:ro`` and is then out of scope by construction.
 
-    Mount specs that are still placeholders (``<host>:/path``) are skipped —
-    there is nothing to judge yet. ⚠️ Note this is NOT the subcommand check's
+    A placeholder in the HOST field (``<output_dir>:/data/output``) is judged:
+    the container path and options already say whether the example may write,
+    and the reader will substitute a real directory their own uid owns. A
+    placeholder in the container or options field is skipped, since it could
+    hide ``:ro``. ⚠️ Note this is NOT the subcommand check's
     ``_PLACEHOLDER_CHARS`` set: that one contains ``$``, which appears in
     essentially every real example, and reusing it here skipped 97 of 122
     blocks including every site this rule was written to hold.
@@ -482,7 +524,14 @@ def check_writable_mount_has_user(doc_files: List[Path],
             # NOT reach here: `_is_bind_mount` already rejects it, so it never
             # entered `specs`. The reachable shape is a placeholder embedded in
             # an otherwise concrete path, which does pass that filter.
-            specs = [s for s in specs if not ("<" in s or ">" in s)]
+            # ⛔ …and judge a placeholder that sits only in the HOST field
+            # (issue 1495). Whether a mount is writable is decided by the
+            # container path and the options field; `<output_dir>` stands for
+            # a directory the reader fills in and cannot hide a `:ro`. Skipping
+            # those left six writable synopses in cli-reference.en.md — every
+            # one a PermissionError once copied — outside the rule. A `<…>` in
+            # the container or options field can hide one, so that stays out.
+            specs = [s for s in specs if not _placeholder_outside_host(s)]
             writable = [m for m in specs if _is_writable(m)]
             img_i = _image_index(toks)
             if _has_user_flag(toks):
