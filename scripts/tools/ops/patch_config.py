@@ -30,7 +30,6 @@ Dimensional metrics (Phase 2B):
 """
 import argparse
 import contextlib
-import io
 import subprocess
 import yaml
 import sys
@@ -41,7 +40,7 @@ import os
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
@@ -362,57 +361,6 @@ def get_current_value(cm_data, mode, tenant, metric_key):
     return None, "none"
 
 
-def read_roundtrip_value(cm_data, tenant, metric_key):
-    """What `_lib.sh get_cm_value` prints: the tenant's own scalar text, or
-    ``'default'`` when it sets none, so it can be handed back to
-    `patch-config`. Refused (`ConfigMapShapeError`): a tenant no key declares,
-    a value a string write cannot restore, and a value patch-config's own
-    argument parser does not accept."""
-    detect_mode(cm_data)
-    key, own = tenant_block(cm_data, tenant)
-    if key is None:
-        raise ConfigMapShapeError(
-            f"no threshold-config key declares tenant '{tenant}' under "
-            f"`tenants:`, so it has no value to read.")
-    node = own.get(metric_key)
-    if node is None:
-        return "default"
-    why = ("a mapping or sequence" if not isinstance(node, yaml.ScalarNode)
-           else "null" if _is_null(node)
-           else "text ending in a newline, which `$(...)` strips"
-           if node.value.endswith("\n")
-           else "text containing NUL, which argv cannot carry"
-           if "\0" in node.value else None)
-    if why:
-        raise ConfigMapShapeError(
-            f"tenant '{tenant}' key '{metric_key}' in {key} is {why}; a string "
-            f"written back would not restore it.")
-    rejected = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(rejected), \
-                contextlib.redirect_stdout(rejected):
-            build_parser().parse_args([tenant, metric_key, node.value])
-    except SystemExit as exc:
-        raise ConfigMapShapeError(
-            f"tenant '{tenant}' key '{metric_key}' in {key} is "
-            f"{node.value!r}, which patch-config's arguments do not accept: "
-            f"{' '.join(rejected.getvalue().strip().splitlines()[-1:])}") from exc
-    return node.value
-
-
-def shell_get_cm_value(cm_json_text, tenant, metric_key):
-    """`_lib.sh get_cm_value`'s body → exit code; on refusal stdout is empty
-    and stderr says why, so `set -euo pipefail` callers stop."""
-    try:
-        cm_data = json.loads(cm_json_text)
-        value = read_roundtrip_value(cm_data, tenant, metric_key)
-    except (ConfigMapShapeError, ValueError) as exc:
-        print(f"get_cm_value: {exc}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    print(value)
-    return EXIT_OK
-
-
 def find_affected_alerts(metric_key):
     """Identify alert rules that reference this metric.
 
@@ -585,7 +533,7 @@ def apply_patch(cm_data, mode, tenant, metric_key, value):
 
 
 def build_parser():
-    """The CLI's argument parser (also the judge of what `get_cm_value` may print)."""
+    """The CLI's argument parser."""
     parser = argparse.ArgumentParser(
         description="Patch threshold-config ConfigMap for a specific tenant",
     )
