@@ -30,7 +30,7 @@ import (
 
 // chainMembershipBaseTree writes the shared base tree:
 //
-//	<dir>/_defaults.yaml       cpu_pct: 50
+//	<dir>/_defaults.yaml       cpu_pct: 50, mem_pct: 60
 //	<dir>/sub/_defaults.yaml   cpu_pct: 90
 //	<dir>/sub/t.yaml           tenants: t: {}
 func chainMembershipBaseTree(t *testing.T, dir string) {
@@ -38,7 +38,7 @@ func chainMembershipBaseTree(t *testing.T, dir string) {
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatalf("mkdir sub: %v", err)
 	}
-	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n  mem_pct: 60\n")
 	writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yaml"), "defaults:\n  cpu_pct: 90\n")
 	writeTestYAML(t, filepath.Join(dir, "sub", "t.yaml"), "tenants:\n  t: {}\n")
 }
@@ -69,71 +69,100 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			t.Fatalf("remove %s: %v", p, err)
 		}
 	}
+	write := func(rel, content string) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
+			t.Helper()
+			writeTestYAML(t, filepath.Join(dir, filepath.FromSlash(rel)), content)
+		}
+	}
+	remove := func(rel string) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
+			t.Helper()
+			rm(t, filepath.Join(dir, filepath.FromSlash(rel)))
+		}
+	}
 
+	// -1 = not pinned.
 	cases := []struct {
 		name string
 		// extra runs on the base tree BEFORE Load (optional).
 		extra func(t *testing.T, dir string)
 		// mutate runs after Load, before the reload.
 		mutate func(t *testing.T, dir string)
-		// wantReloaded, when >= 0, pins diffAndReload's reloaded count.
-		wantReloaded int
-		// wantScope, when non-empty, pins the blast-radius scope of the
-		// (defaults, <scope>, applied) observation.
-		wantScope string
+		// wantReloaded / wantNoOp pin diffAndReload's counts when >= 0.
+		wantReloaded, wantNoOp int
+		// wantScope + wantEffect, when non-empty, pin exactly one
+		// (defaults, wantScope, wantEffect) blast-radius observation and
+		// none under scope "unknown".
+		wantScope, wantEffect string
 	}{
+		// ── membership changes that MOVE merged_hash (the #1964 defect) ──
 		{
-			name: "A delete subtree _defaults.yaml",
-			mutate: func(t *testing.T, dir string) {
-				rm(t, filepath.Join(dir, "sub", "_defaults.yaml"))
-			},
-			wantReloaded: 1,
-			wantScope:    "domain",
+			name:         "A delete subtree _defaults.yaml",
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 1, wantNoOp: 0,
+			wantScope: "domain", wantEffect: "applied",
 		},
 		{
-			name: "D co-located .yml with different content, delete .yaml",
-			extra: func(t *testing.T, dir string) {
-				writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yml"), "defaults:\n  cpu_pct: 30\n")
-			},
-			mutate: func(t *testing.T, dir string) {
-				rm(t, filepath.Join(dir, "sub", "_defaults.yaml"))
-			},
-			wantReloaded: 1,
-			wantScope:    "domain",
+			name:         "D co-located .yml with different content, delete .yaml",
+			extra:        write("sub/_defaults.yml", "defaults:\n  cpu_pct: 30\n"),
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 1, wantNoOp: 0,
+			wantScope: "domain", wantEffect: "applied",
 		},
 		{
-			name: "control: edit subtree _defaults.yaml content",
-			mutate: func(t *testing.T, dir string) {
-				writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yaml"), "defaults:\n  cpu_pct: 70\n")
-			},
-			wantReloaded: -1,
+			// mem_pct is set only at the root, so removing the root moves
+			// the merged result even though sub still sets cpu_pct.
+			name:         "delete root _defaults.yaml carrying a key nothing overrides",
+			mutate:       remove("_defaults.yaml"),
+			wantReloaded: 1, wantNoOp: 0,
+			wantScope: "global", wantEffect: "applied",
+		},
+
+		// ── membership changes that leave merged_hash unchanged (no-op) ──
+		{
+			// Root sets only cpu_pct, which sub overrides for this tenant.
+			name:         "no-op: delete root _defaults.yaml whose only key sub overrides",
+			extra:        write("_defaults.yaml", "defaults:\n  cpu_pct: 50\n"),
+			mutate:       remove("_defaults.yaml"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "global", wantEffect: "cosmetic",
 		},
 		{
-			name: "control: add subtree _defaults.yaml where none existed",
-			extra: func(t *testing.T, dir string) {
-				rm(t, filepath.Join(dir, "sub", "_defaults.yaml"))
-			},
-			mutate: func(t *testing.T, dir string) {
-				writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yaml"), "defaults:\n  cpu_pct: 70\n")
-			},
-			wantReloaded: -1,
+			// The tenant overrides the only key the removed file set.
+			name:         "no-op shadowed: delete subtree _defaults.yaml the tenant overrides",
+			extra:        write("sub/t.yaml", "tenants:\n  t:\n    cpu_pct: \"10\"\n"),
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "shadowed",
 		},
 		{
-			name: "control: co-located .yml with identical content, delete .yaml",
-			extra: func(t *testing.T, dir string) {
-				writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yml"), "defaults:\n  cpu_pct: 90\n")
-			},
-			mutate: func(t *testing.T, dir string) {
-				rm(t, filepath.Join(dir, "sub", "_defaults.yaml"))
-			},
-			wantReloaded: -1,
+			// The removed file restated the root's value; the tenant
+			// overrides nothing, so nothing was blocked — cosmetic.
+			name:         "no-op cosmetic: delete subtree _defaults.yaml restating the root value",
+			extra:        write("sub/_defaults.yaml", "defaults:\n  cpu_pct: 50\n"),
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: 0, wantNoOp: 1,
+			wantScope: "domain", wantEffect: "cosmetic",
+		},
+
+		// ── controls: hash-visible changes the old logic already handled ──
+		{
+			name:         "control: edit subtree _defaults.yaml content",
+			mutate:       write("sub/_defaults.yaml", "defaults:\n  cpu_pct: 70\n"),
+			wantReloaded: -1, wantNoOp: -1,
 		},
 		{
-			name: "control: delete root _defaults.yaml",
-			mutate: func(t *testing.T, dir string) {
-				rm(t, filepath.Join(dir, "_defaults.yaml"))
-			},
-			wantReloaded: -1,
+			name:         "control: add subtree _defaults.yaml where none existed",
+			extra:        remove("sub/_defaults.yaml"),
+			mutate:       write("sub/_defaults.yaml", "defaults:\n  cpu_pct: 70\n"),
+			wantReloaded: -1, wantNoOp: -1,
+		},
+		{
+			name:         "control: co-located .yml with identical content, delete .yaml",
+			extra:        write("sub/_defaults.yml", "defaults:\n  cpu_pct: 90\n"),
+			mutate:       remove("sub/_defaults.yaml"),
+			wantReloaded: -1, wantNoOp: -1,
 		},
 	}
 
@@ -158,12 +187,15 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			tc.mutate(t, dir)
 			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
 
-			reloaded, _, err := m.diffAndReload()
+			reloaded, noOp, err := m.diffAndReload()
 			if err != nil {
 				t.Fatalf("diffAndReload: %v", err)
 			}
 			if tc.wantReloaded >= 0 && reloaded != tc.wantReloaded {
 				t.Errorf("reloaded = %d, want %d", reloaded, tc.wantReloaded)
+			}
+			if tc.wantNoOp >= 0 && noOp != tc.wantNoOp {
+				t.Errorf("noOp = %d, want %d", noOp, tc.wantNoOp)
 			}
 
 			ec, ok := m.Resolve("t")
@@ -179,12 +211,12 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 					ec.MergedHash, pe.MergedHash, chainBases(ec.DefaultsChain), pe.DefaultsChain)
 			}
 
-			if tc.wantScope != "" {
-				if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, tc.wantScope, "applied"); n != 1 {
-					t.Errorf("blast-radius (defaults, %s, applied) sampleCount = %d, want 1", tc.wantScope, n)
+			if tc.wantEffect != "" {
+				if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, tc.wantScope, tc.wantEffect); n != 1 {
+					t.Errorf("blast-radius (defaults, %s, %s) sampleCount = %d, want 1", tc.wantScope, tc.wantEffect, n)
 				}
-				if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, "unknown", "applied"); n != 0 {
-					t.Errorf("blast-radius (defaults, unknown, applied) sampleCount = %d, want 0", n)
+				if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, "unknown", tc.wantEffect); n != 0 {
+					t.Errorf("blast-radius (defaults, unknown, %s) sampleCount = %d, want 0", tc.wantEffect, n)
 				}
 			}
 		})

@@ -126,11 +126,10 @@ func hashChangedChainPaths(chain []string, hashes, priorHashes map[string]string
 	return changed
 }
 
-// chainMembershipDelta returns the paths present in exactly one of prev /
-// next — defaults files that left or joined a tenant's chain between two
-// scans (#1964). Order: prev-only entries first, then next-only, each in
-// chain order.
-func chainMembershipDelta(prev, next []string) []string {
+// chainMembershipDelta returns the paths that left (in prev, not next) and
+// joined (in next, not prev) a tenant's defaults chain between two scans
+// (#1964), each in chain order.
+func chainMembershipDelta(prev, next []string) (removed, added []string) {
 	inPrev := make(map[string]bool, len(prev))
 	for _, p := range prev {
 		inPrev[p] = true
@@ -139,18 +138,17 @@ func chainMembershipDelta(prev, next []string) []string {
 	for _, p := range next {
 		inNext[p] = true
 	}
-	var delta []string
 	for _, p := range prev {
 		if !inNext[p] {
-			delta = append(delta, p)
+			removed = append(removed, p)
 		}
 	}
 	for _, p := range next {
 		if !inPrev[p] {
-			delta = append(delta, p)
+			added = append(added, p)
 		}
 	}
-	return delta
+	return removed, added
 }
 
 // widestPathScope returns the widest (smallest scopeRank) level among the
@@ -314,7 +312,9 @@ func pathOverriddenIn(node any, segs []string) bool {
 // Logic:
 //
 //  1. Aggregate dot-path keys that actually changed across every
-//     defaults file in the tenant's chain whose file hash moved.
+//     defaults file in the tenant's chain whose file hash moved, plus
+//     (#1964) every key set by a file in `removed` (left the chain) or
+//     `added` (joined it). nil removed/added = no membership change.
 //  2. If no key actually changed → cosmetic (comment-only / reorder /
 //     whitespace edit; common during operator formatter runs).
 //  3. Else parse the tenant's source YAML overrides; if every changed
@@ -334,10 +334,18 @@ func classifyDefaultsNoOpEffect(
 	defaultsChain []string,
 	priorParsed, newParsed map[string]map[string]any,
 	hashes, priorHashes map[string]string,
+	removed, added []string,
 ) string {
 	var allChanged []string
+	// #1964: a file that joined the chain contributes its whole content
+	// (diffed against an empty map below), not its diff against whatever
+	// the same path held before it was selected — skip it here.
+	joined := make(map[string]bool, len(added))
+	for _, dp := range added {
+		joined[dp] = true
+	}
 	for _, dp := range defaultsChain {
-		if hashes[dp] == priorHashes[dp] {
+		if joined[dp] || hashes[dp] == priorHashes[dp] {
 			continue
 		}
 		prev := priorParsed[dp]
@@ -350,6 +358,23 @@ func classifyDefaultsNoOpEffect(
 			continue
 		}
 		allChanged = append(allChanged, changedDefaultsKeys(prev, next)...)
+	}
+	// #1964: chain-membership changes. A file that left the chain withdraws
+	// every key it set (prior parse vs empty); a file that joined applies
+	// every key it sets (empty vs new parse). A carrier switch in a
+	// co-located `.yaml`/`.yml` pair is covered as one removal plus one
+	// addition. A missing parse on the relevant side is skipped, the same
+	// cosmetic fallback as above.
+	empty := map[string]any{}
+	for _, dp := range removed {
+		if prev := priorParsed[dp]; prev != nil {
+			allChanged = append(allChanged, changedDefaultsKeys(prev, empty)...)
+		}
+	}
+	for _, dp := range added {
+		if next := newParsed[dp]; next != nil {
+			allChanged = append(allChanged, changedDefaultsKeys(empty, next)...)
+		}
 	}
 	if len(allChanged) == 0 {
 		return "cosmetic"

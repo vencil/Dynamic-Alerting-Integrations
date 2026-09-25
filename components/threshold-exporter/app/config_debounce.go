@@ -408,6 +408,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	// the merge input changed.
 	scopePaths := hashChangedChainPaths(defaultsChain, scan.hashes, prior.hashes)
 	membershipChanged := false
+	var removedPaths, addedPaths []string
 	if prior.graph != nil {
 		// A tenant absent from the prior graph compares as an empty chain;
 		// a genuinely new tenant is already sourceChanged, so this only
@@ -415,7 +416,9 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		priorChain := prior.graph.TenantDefaults[tid]
 		if !slices.Equal(priorChain, defaultsChain) {
 			membershipChanged = true
-			scopePaths = append(scopePaths, chainMembershipDelta(priorChain, defaultsChain)...)
+			removedPaths, addedPaths = chainMembershipDelta(priorChain, defaultsChain)
+			scopePaths = append(scopePaths, removedPaths...)
+			scopePaths = append(scopePaths, addedPaths...)
 		}
 	}
 	defaultsChanged := membershipChanged || len(scopePaths) > 0
@@ -467,11 +470,12 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			// vs cosmetic (comment/reorder/whitespace).
 			//
 			// #1964: a chain-membership change whose merged_hash did not
-			// move lands here too, with no new semantics — the classifier
-			// only diffs hash-changed entries of the NEW chain, so a pure
-			// membership change (removed file, or carrier switched to an
-			// already-known hash) reads as cosmetic, and one combined with
-			// a hash change is judged on that hash change alone.
+			// move lands here too. The classifier counts a file that left
+			// the chain as withdrawing every key it set and a file that
+			// joined as applying every key it sets, so a removal the
+			// tenant overrides reads as shadowed and one another chain
+			// entry already supplies reads as cosmetic — same two effects,
+			// no new label.
 			res.noOp++
 			tenantBytes, terr := os.ReadFile(srcPath)
 			effect := "cosmetic"
@@ -480,6 +484,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 					tenantBytes, tid, defaultsChain,
 					prior.parsedDefaults, res.newParsedDefaults,
 					scan.hashes, prior.hashes,
+					removedPaths, addedPaths,
 				)
 			}
 			switch effect {

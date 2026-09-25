@@ -84,7 +84,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
-- **reload 時 defaults chain 成員變動也重算 merged_hash（exporter；[#1964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1964)）**：刪掉租戶 defaults chain 上的某個 `_defaults` 檔，或同目錄 `_defaults.yaml`／`_defaults.yml` 並存時刪掉 `.yaml`、改由內容不同的 `.yml` 當載體，exporter 熱重載後回的 chain 與設定已是新的，`/effective` 的 merged_hash 卻停在舊值，與 tenant-api 對同一棵樹算出的不一致。原因是 reload 只比對**新 chain 各檔的 hash**，而這兩種情形新 chain 上沒有任何一檔的 hash 變了。修法：上一輪與這一輪的 chain（路徑序列）不相等也視為 defaults 變更並重算；blast-radius 的 scope 也把移出／加入 chain 的檔算進去，不再落成 `unknown`。
+- **reload 時 defaults chain 成員變動也重算 merged_hash（exporter；[#1964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1964)）**：刪掉租戶 defaults chain 上的某個 `_defaults` 檔，或同目錄 `_defaults.yaml`／`_defaults.yml` 並存時刪掉 `.yaml`、改由內容不同的 `.yml` 當載體，exporter 熱重載後回的 chain 與設定已是新的，`/effective` 的 merged_hash 卻停在舊值，與 tenant-api 對同一棵樹算出的不一致。原因是 reload 只比對**新 chain 各檔的 hash**，而這兩種情形新 chain 上沒有任何一檔的 hash 變了。修法：上一輪與這一輪的 chain（路徑序列）不相等也視為 defaults 變更並重算。修法前這些情形根本不進 defaults 分支、不發任何 blast-radius 觀測；現在會依移出／加入 chain 的檔計 scope，merged_hash 未變時也依被移出／加入的檔所設的 key 判 shadowed 或 cosmetic。
 
 - **`pr_preflight` 的 BLOCKED 不再猜原因（dx；[#1924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1924)）**：原本只要 `reviewDecision` 不是 `APPROVED` 就印「需要 review approval」；在不要求 review 的 repo 上這個理由不成立，照它去找 reviewer 解不了 BLOCKED。`mergeStateStatus` 不說是哪條規則擋住，所以現在只印 BLOCKED，並在下方給出讀 base branch 的 protection 與 rulesets 設定的 `gh api` 指令。仍是 WARN，exit code 不變。
 
