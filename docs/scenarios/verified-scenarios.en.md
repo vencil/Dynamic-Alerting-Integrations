@@ -115,7 +115,7 @@ sequenceDiagram
 
     Note over PM: tenant:mysql_threads_connected:max<br/>< tenant:alert_threshold:mysql_connections (70)
 
-    PM->>PM: Alert → RESOLVED (on the next evaluation that no longer sees a value above the threshold; for does not affect this step)
+    PM->>PM: Alert → RESOLVED (on the next evaluation that no longer sees a value above the threshold — for does not affect this step)
 ```
 
 ## Coverage Overview
