@@ -179,6 +179,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # ⛔ ONE literal path string each — a `/ ".github" / "workflows"` split form
 # registers this module against nothing in verify_diff's text_map.
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+# Not read through these names — discovery globs WORKFLOW_DIR — but they are
+# the literal paths that tell verify_diff this module depends on them (#1398).
+_ALSO_SCANNED = (ROOT / ".github/workflows/docs-ci.yaml",
+                 ROOT / ".github/workflows/validate.yaml")
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 BASH = shutil.which("bash")
@@ -202,13 +206,11 @@ def _load(path: Path) -> dict:
 def _paths_filter_workflows() -> tuple[Path, ...]:
     """Every workflow that owns a `dorny/paths-filter` detect job.
 
-    Derived from the tree rather than listed. ⚠️ But "scanned" is a narrow
-    word: a workflow entering this set is only asked whether a gate-shaped
-    job in it is modelled or ledgered. It does NOT bring its jobs under the
-    rest of the assertions here — the required-check NAME sweep covers every
-    workflow separately, and everything else is `ci.yml` only. The sibling module carries the same
-    correction for the same reason — a workflow being scanned says nothing
-    about its jobs being seen. `sorted` keeps failure messages stable.
+    Derived from the tree rather than listed. Every gate assertion in this
+    module iterates the gates of these workflows (#1398 widened that from
+    `ci.yml` alone); the required-check NAME sweep additionally covers every
+    workflow, dorny or not, because branch protection matches names across
+    all of them. `sorted` keeps failure messages stable.
     """
     return tuple(
         path for path in sorted(WORKFLOW_DIR.glob("*.y*ml"))
@@ -1050,6 +1052,14 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
         "assertion parametrised over the gate set silently becomes zero "
         "tests, which reads as green.")
     problems: list[str] = []
+    scanned = {path.name for path in _paths_filter_workflows()}
+    # ⛔ A row keyed to a workflow outside the scan is never checked for
+    # staleness below — a typo'd name (`validate.yml`) would sit there until
+    # that name ever gained a detect job, and then silently exempt a leg.
+    problems += [
+        f"UNWATCHED_PATH_GATED_JOBS row {key!r} names a workflow with no "
+        "dorny detect job, so nothing can ever check it — delete or fix it."
+        for key in sorted(UNWATCHED_PATH_GATED_JOBS) if key[0] not in scanned]
     for path in _paths_filter_workflows():
         problems += _watch_problems(path, [g for g in gates if g.workflow == path.name])
     assert not problems, (
@@ -1160,7 +1170,7 @@ def test_the_required_check_names_belong_to_the_gates_and_nothing_else() -> None
             "more. Branch protection still asks for it, so either a gate was "
             "renamed (update GitHub settings in the same breath) or the check "
             "is now reported by something that is not a gate. Re-check with "
-            "the `gh api` command above; the pin was taken on 2026-08-13.")
+            "the `gh api` command above the set, whose comment dates the pin.")
 
     # ⛔ Deliberately ONE direction. An earlier version also refused a gate
     # whose name was not yet in the pinned set — which makes adding a fourth

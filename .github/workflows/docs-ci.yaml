@@ -42,6 +42,15 @@ on:
   push:
     branches: [main]
 
+# Same as ci.yml. Since #1398 every push to main runs the docs legs, and a
+# run that started before the next merge fetches the NEWER origin/main in
+# drift-checks while checking out its own older HEAD — against a release
+# wrap-up that emptied `[Unreleased]`, the changelog cap then reads the older
+# tree as having grown it and marks that commit red for no reason.
+concurrency:
+  group: docs-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Explicit least-privilege grant (repo default is read-only; every sibling
 # workflow declares this block too). pull-requests:read is specifically for
 # detect-changes' dorny/paths-filter@v3 REST-API mode below.
