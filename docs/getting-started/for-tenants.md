@@ -141,7 +141,7 @@ tenants:
   my-tenant:
     _state_maintenance:
       enabled: true
-      expires: "2026-03-15T06:00:00Z"   # 自動恢復
+      expires: "2099-03-15T06:00:00Z"   # 自動恢復
       reason: "Planned DB migration"
 ```
 
@@ -156,7 +156,7 @@ tenants:
   my-tenant:
     _silent_mode:
       target: "warning"                  # 只靜默 warning
-      expires: "2026-03-13T12:00:00Z"
+      expires: "2099-03-13T12:00:00Z"
       reason: "Known noisy alert during migration"
 ```
 

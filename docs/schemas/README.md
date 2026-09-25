@@ -70,7 +70,7 @@ tenants:
     mysql_connections: "70"      # ← autocomplete suggests threshold values
     _silent_mode:                 # ← hover shows documentation
       target: "warning"           # ← schema validates against ["warning", "critical", "all"]
-      expires: "2026-03-13T12:00:00Z"  # ← schema enforces RFC3339 (date-time) format
+      expires: "2099-03-13T12:00:00Z"  # ← schema enforces RFC3339 (date-time) format
 ```
 
 ---
@@ -95,11 +95,11 @@ tenants:
 
 ### "Invalid ISO 8601 timestamp"
 
-**Error**: `"2026-03-13 12:00:00" is not valid under any of the given schemas`
+**Error**: `"2099-03-13 12:00:00" is not valid under any of the given schemas`
 
 **Cause**: Timestamp missing timezone indicator (T separator, Z suffix)
 
-**Resolution**: Use ISO 8601 format: `2026-03-13T12:00:00Z`
+**Resolution**: Use ISO 8601 format: `2099-03-13T12:00:00Z`
 
 ### Receiver type mismatch
 
@@ -163,13 +163,13 @@ tenants:
     # Silent mode: notifications suppressed, but alert state tracked
     _silent_mode:
       target: "warning"
-      expires: "2026-03-13T12:00:00Z"
+      expires: "2099-03-13T12:00:00Z"
       reason: "Known noisy alert during migration"
 
     # Maintenance mode: alerts suppressed entirely + recurring windows
     _state_maintenance:
       enabled: true
-      expires: "2026-03-15T06:00:00Z"
+      expires: "2099-03-15T06:00:00Z"
       recurring:
         - cron: "0 2 * * *"           # Daily 2AM UTC
           duration: "4h"              # 4-hour maintenance window

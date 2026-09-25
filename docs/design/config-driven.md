@@ -481,7 +481,7 @@ tenants:
 
 可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`。未設定等同 Normal。
 
-**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2026-04-01T00:00:00Z"`；exporter 解析不了時只印 WARN、當成沒有期限，不會自動失效）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。已知缺陷：帶 `reason` 的 `target: all` 在 `expires` 到期後，整個 `/metrics` 會回 HTTP 500（[#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)）；修好前不要同時使用。
+**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2099-04-01T00:00:00Z"`；exporter 解析不了時只印 WARN、當成沒有期限，不會自動失效）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。已知缺陷：帶 `reason` 的 `target: all` 在 `expires` 到期後，整個 `/metrics` 會回 HTTP 500（[#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)）；修好前不要同時使用。
 
 ```yaml
 tenants:
