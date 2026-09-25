@@ -29,19 +29,26 @@ function generateMaintenanceYaml(tenants) {
 }
 
 // Silent mode is a tenant-config key (`_silent_mode`), not a ConfigMap entry
-// (#1988). Emits one block per tenant for tenants.<id>: in that tenant's
-// existing file; the shape follows docs/schemas/tenant-config.schema.json
-// #/definitions/silentMode. `now` is injectable so expires is testable.
+// (#1988). Emits one block per tenant, headed by a `# <id>` comment, to be
+// pasted under tenants.<id>: in that tenant's existing file. The blocks are
+// fragments, not a file, so the modal offers copy only. The shape follows
+// docs/schemas/tenant-config.schema.json#/definitions/silentMode. `now` is
+// injectable so expires is testable.
 const SILENT_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 
-function generateSilentModeYaml(tenants, now = new Date()) {
-  const expires = new Date(now.getTime() + SILENT_MODE_TTL_MS)
+// RFC3339 (no milliseconds) timestamp SILENT_MODE_TTL_MS after `now`. Shared
+// with the playground templates so no example silences for a fixed far date.
+function silentModeExpires(now = new Date()) {
+  return new Date(now.getTime() + SILENT_MODE_TTL_MS)
     .toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function generateSilentModeYaml(tenants, now = new Date()) {
+  const expires = silentModeExpires(now);
   const lines = [];
   tenants.forEach(name => {
     if (lines.length) lines.push('');
-    lines.push('# tenants:');
-    lines.push(`#   ${name}:`);
+    lines.push(`# ${name}`);
     lines.push('    _silent_mode:');
     lines.push('      target: "all"');
     lines.push(`      expires: "${expires}"`);
@@ -50,4 +57,4 @@ function generateSilentModeYaml(tenants, now = new Date()) {
   return lines.join('\n');
 }
 
-export { generateMaintenanceYaml, generateSilentModeYaml };
+export { generateMaintenanceYaml, generateSilentModeYaml, silentModeExpires };

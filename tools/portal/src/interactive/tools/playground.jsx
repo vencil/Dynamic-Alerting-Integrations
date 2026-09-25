@@ -16,6 +16,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 // (NOT merged with _common/validation — parseDuration contracts differ).
 import { validateTenantConfig } from './playground/validation.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { silentModeExpires } from './tenant-manager/utils/yaml-generators.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -23,7 +24,10 @@ const t = window.__t || ((zh, en) => en);
 // to design tokens using arbitrary-value pattern (bg-[color:var(--da-color-*)])
 // This enables consistent theming and dark mode support via CSS variables.
 
-const YAML_TEMPLATES = {
+// Built per page load (#1988): the redis example's _silent_mode expires is
+// computed from `now`, so an exported example never silences for decades.
+function buildYamlTemplates(now = new Date()) {
+  return {
   minimal: `# This is ALL a tenant needs to write — just 3 lines!
 tenants:
   my-app:
@@ -61,7 +65,7 @@ tenants:
     redis_connected_clients: "5000"
     _silent_mode:
       target: "warning"
-      expires: "2099-12-31T00:00:00Z"
+      expires: "${silentModeExpires(now)}"
       reason: "Cache migration"
     _routing:
       receiver_type: "email"
@@ -112,7 +116,8 @@ tenants:
 _domain_policy:
   allowed_domains: ["*.example.com", "hooks.slack.com"]
   denied_domains: ["*.internal.corp"]`
-};
+  };
+}
 
 // Simple line diff: compare current yaml to selected template
 function computeDiff(current, template) {
@@ -147,7 +152,10 @@ function readPlaygroundHash() {
   } catch { return { yaml: null, tpl: null }; }
 }
 
+export { buildYamlTemplates };
+
 export default function TenantYAMLPlayground() {
+  const YAML_TEMPLATES = useMemo(() => buildYamlTemplates(), []);
 
   const initial = readPlaygroundHash();
   const [yaml, setYaml] = useState(initial.yaml || YAML_TEMPLATES[initial.tpl] || YAML_TEMPLATES.mariadb);
@@ -295,7 +303,7 @@ export default function TenantYAMLPlayground() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('驗證結果', 'Validation Results')}</h2>
-                <p className="text-xs text-[color:var(--da-color-muted)] mt-1">
+                <p className="text-xs text-[color:var(--da-color-muted)] mt-1" role="status" aria-live="polite" data-testid="validation-status">
                   {validation.errors.length === 0
                     ? t('所有檢查都通過了!', 'All checks passed!')
                     : t(`找到 ${validation.errors.length} 個錯誤`, `${validation.errors.length} error(s) found`)}

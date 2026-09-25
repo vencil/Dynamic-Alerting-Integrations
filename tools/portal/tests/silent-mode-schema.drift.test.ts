@@ -37,3 +37,21 @@ describe('schema-explorer renders _silent_mode from the copy', () => {
     expect(screen.getByText(want)).toBeTruthy();
   });
 });
+
+describe('schema-explorer _silent_mode sub-keys show the schema description', () => {
+  it('each object-branch property renders its description from the copy', async () => {
+    const { render, screen, fireEvent } = await import('@testing-library/react');
+    const React = (await import('react')).default;
+    const { default: SchemaExplorer } = await import('../src/interactive/tools/schema-explorer.jsx');
+    render(React.createElement(SchemaExplorer));
+    // Expand every _silent_mode row that has children (the key appears more than once).
+    for (const code of screen.getAllByText('_silent_mode', { selector: 'code' })) {
+      const btn = (code.closest('div.flex.items-start') as HTMLElement).querySelector('button');
+      if (btn) fireEvent.click(btn);
+    }
+    const object = EXTRACT.definition.oneOf.find((b: any) => b.type === 'object') as any;
+    for (const p of Object.values(object.properties) as any[]) {
+      expect(screen.getAllByText((text) => text.includes(p.description)).length).toBeGreaterThan(0);
+    }
+  });
+});

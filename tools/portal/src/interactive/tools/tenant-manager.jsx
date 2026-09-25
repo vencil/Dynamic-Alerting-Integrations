@@ -1081,14 +1081,23 @@ export default function TenantManager() {
                 ? t('生成維護模式 YAML', 'Generate Maintenance YAML')
                 : t('生成靜默模式 YAML', 'Generate Silent Mode YAML')}
             </div>
+            {modalType === 'silent' && (
+              <p data-testid="silent-paste-note" style={{ marginBottom: 'var(--da-space-3)' }}>
+                {t('每段貼到該租戶既有檔案的 tenants.<id>: 之下；若已有 _silent_mode 請取代。',
+                  "Paste each block under tenants.<id>: in that tenant's existing file; replace any existing _silent_mode.")}
+              </p>
+            )}
             <div style={styles.codeBlock}>{modalData}</div>
             <div style={styles.buttonGroup2}>
               <button onClick={copyToClipboard} style={styles.button}>
                 {t('複製到剪貼板', 'Copy')}
               </button>
-              <button onClick={downloadYaml} style={styles.button}>
-                {t('下載 YAML', 'Download')}
-              </button>
+              {/* Silent output is per-tenant fragments, not a file (#1988): copy only. */}
+              {modalType !== 'silent' && (
+                <button onClick={downloadYaml} style={styles.button}>
+                  {t('下載 YAML', 'Download')}
+                </button>
+              )}
               <button onClick={() => setModalType(null)} style={{ ...styles.button, ...styles.buttonSecondary }}>
                 {t('關閉', 'Close')}
               </button>

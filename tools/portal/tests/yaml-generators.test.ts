@@ -12,6 +12,7 @@ import {
   generateMaintenanceYaml,
   generateSilentModeYaml,
 } from '../src/interactive/tools/tenant-manager/utils/yaml-generators.js';
+import { parseYAML } from '../src/interactive/tools/playground/validation.js';
 
 describe('generateMaintenanceYaml', () => {
   it('emits the standard ConfigMap envelope', () => {
@@ -58,12 +59,22 @@ describe('generateMaintenanceYaml', () => {
 describe('generateSilentModeYaml', () => {
   const NOW = new Date('2026-09-25T10:00:00.123Z');
 
-  it('emits a _silent_mode block per tenant, not a ConfigMap (#1988)', () => {
-    const yaml = generateSilentModeYaml(['db-a', 'db-b'], NOW);
-    expect(yaml).not.toContain('kind: ConfigMap');
-    expect(yaml).toContain('#   db-a:');
-    expect(yaml).toContain('#   db-b:');
-    expect(yaml.match(/^    _silent_mode:$/gm)).toHaveLength(2);
+  it('emits one block per tenant, headed by a single `# <id>` line (#1988)', () => {
+    const blocks = generateSilentModeYaml(['db-a', 'db-b'], NOW).split('\n\n');
+    expect(blocks.map(b => b.split('\n')[0])).toEqual(['# db-a', '# db-b']);
+    for (const b of blocks) expect(b.split('\n').filter(l => l.startsWith('#'))).toHaveLength(1);
+  });
+
+  it("each block pasted under tenants.<id>: parses to that tenant's _silent_mode", () => {
+    const ids = ['db-a', 'db-b'];
+    const blocks = generateSilentModeYaml(ids, NOW).split('\n\n');
+    blocks.forEach((b, i) => {
+      const body = b.split('\n').filter(l => !l.startsWith('#')).join('\n');
+      const doc = parseYAML(`tenants:\n  ${ids[i]}:\n${body}`).data;
+      expect(doc).toEqual({
+        tenants: { [ids[i]]: { _silent_mode: { target: 'all', expires: '2026-09-26T10:00:00Z', reason: 'Under investigation' } } },
+      });
+    });
   });
 
   it('uses the structured form with an RFC3339 expires 24h after now', () => {

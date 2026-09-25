@@ -14,7 +14,8 @@ const t = window.__t || ((zh, en) => en);
 // restated here (#1988): docs/schemas/tenant-config.schema.json
 // #/definitions/silentMode (deep-equal drift guard in
 // tests/silent-mode-schema.drift.test.ts). Types are read from the
-// definition; only the labels are written here.
+// definition, and each sub-key shows the definition's own description; only
+// the short labels are written here.
 const SILENT = SILENT_SCHEMA.definition;
 const SILENT_LABELS = {
   target: t('要靜默的 severity', 'Severity to silence'),
@@ -35,7 +36,8 @@ function silentModeNode() {
     children: Object.entries(object.properties || {}).map(([key, p]) => ({
       key,
       type: typeOf(p),
-      desc: (SILENT_LABELS[key] || key) + (required.includes(key) ? t('（必填）', ' (required)') : ''),
+      desc: (SILENT_LABELS[key] || key) + (required.includes(key) ? t('（必填）', ' (required)') : '')
+        + (p.description ? `: ${p.description}` : ''),
       rulePack: 'all',
     })),
   };
