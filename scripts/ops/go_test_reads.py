@@ -20,28 +20,39 @@ Then this script, run from the repo root:
   2. resolves every `open` in every log to a repo-relative path;
   3. fails if a tracked file was opened DIRECTLY and no gate pattern covers it.
 
-"Directly" excludes a file opened after one of its ancestor directories was
-opened in the same log — i.e. reached by listing a directory (WalkDir /
-ReadDir / Glob). A walker opens everything it passes and keeps what it wants,
-so its opens say nothing about what it depends on; requiring coverage for them
-would demand the whole repo for the gitops tenant-config walker. That walker's
-residual is already disclosed beside `**/conf.d/**` in ci.yml (#1722).
+"Directly" excludes a file opened after its PARENT directory was opened in the
+same log — i.e. reached by listing that directory (WalkDir / ReadDir / Glob
+must list a directory to find its children). A walker opens everything it
+passes and keeps what it wants, so its opens say nothing about what it depends
+on. Only the parent counts, not any ancestor: listing `a/` says nothing about a
+later direct read of `a/b/c`.
+
+⛔ Listing the REPO ROOT is the case that rule cannot contain: a walk from the
+root lists every directory, so from then on every read in that binary looks
+walked — including direct reads by unrelated tests that happen to run later.
+So a log that lists the root is refused (exit 2) unless its package is in
+ROOT_WALKERS, which names each such binary and why its blindness is accepted.
+
 `stat` lines never count: probing for `Makefile` to find the repo root is not
 depending on it.
 
 ⚠️ Blind spots, stated because a green run is read as a guarantee:
+  * every binary in ROOT_WALKERS is unchecked from its first root listing on;
+  * a file opened directly AND inside a directory the same binary had listed
+    earlier is classified as walked, i.e. not checked;
   * reads before `m.Run` (package init, the start of a TestMain) and reads by
     child processes are not in the log;
   * a test skipped on the runner opens nothing, so its reads are not checked
     (and do not need to be: it did not run);
-  * a file opened directly AND also inside a directory the same binary had
-    listed earlier is classified as walked, i.e. not checked;
+  * a binary that panics never flushes its log, leaving it empty; that exits 2
+    even if scripts/ops/ci_flake_retry.py later recovers the run (unreachable
+    while flaky-tests.yaml lists no flake);
   * compile inputs (`*.go`, go.mod, go.sum) are not opened by the test binary
     at all — tests/ops/test_go_filter_compile_inputs.py covers those.
 
 Exit codes: 0 every direct read is covered; 1 some are not; 2 the check could
-not measure (no logs, a log without the header, an unmodelled gate, a `!`
-pattern) — never read as a pass.
+not measure (no logs, a log without the header or outside the repo, an
+unlisted root walk, an unmodelled gate, a `!` pattern) — never read as a pass.
 
 Usage:
     python3 scripts/ops/go_test_reads.py --job go-tests-tenant-api \\
@@ -63,6 +74,14 @@ from paths_filter_glob import covers
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = "# test log"  # written by testing/internal/testdeps; cmd/go keys on it
 GATE_ATOM = re.compile(r"needs\.([\w-]+)\.outputs\.(\w+)_changed\s*==\s*'true'")
+
+# Test packages (repo-relative dir) allowed to list the repo root, each with why
+# its binary going unchecked afterwards is accepted. See the module docstring.
+ROOT_WALKERS = {
+    "components/tenant-api/internal/gitops":
+        "realTenantConfigs walks the whole repo for tenant configs; that "
+        "residual is disclosed beside `**/conf.d/**` in ci.yml (#1722)",
+}
 
 
 class Unmeasurable(Exception):
@@ -126,6 +145,11 @@ def direct_reads(log: Path, root: str, tracked: frozenset[str]) -> tuple[set[str
     if not cwd_file.is_file():
         raise Unmeasurable(f"{log.name} has no .cwd beside it")
     cwd = cwd_file.read_text(encoding="utf-8").strip()
+    if not cwd.startswith(root + "/"):
+        # Every open would resolve outside the repo and be dropped: a green
+        # run measuring nothing (e.g. a symlinked checkout path).
+        raise Unmeasurable(f"{log.name} ran in {cwd}, not under the repo root {root}")
+    package = cwd[len(root) + 1:]
     opened_dirs: set[str] = set()
     direct: set[str] = set()
     walked = 0
@@ -137,21 +161,24 @@ def direct_reads(log: Path, root: str, tracked: frozenset[str]) -> tuple[set[str
         if op != "open" or not arg:
             continue
         full = posixpath.normpath(posixpath.join(cwd, arg))
-        if full != root and not full.startswith(root + "/"):
+        if full == root:
+            if package not in ROOT_WALKERS:
+                raise Unmeasurable(
+                    f"{log.name} ({package}) listed the repo root, so every read "
+                    "after it looks walked and goes unchecked. Read the root's "
+                    "entries some other way, or add the package to ROOT_WALKERS "
+                    "with the reason that blindness is acceptable")
+            opened_dirs.add("")
+            continue
+        if not full.startswith(root + "/"):
             continue
         rel = full[len(root) + 1:]
         if rel not in tracked:
             opened_dirs.add(rel)  # a directory (ReadDir/WalkDir) or an untracked file
-            continue
-        parent = posixpath.dirname(rel)
-        while True:
-            if parent in opened_dirs:
-                walked += 1
-                break
-            if not parent:
-                direct.add(rel)
-                break
-            parent = posixpath.dirname(parent)
+        elif posixpath.dirname(rel) in opened_dirs:
+            walked += 1
+        else:
+            direct.add(rel)
     return direct, walked
 
 

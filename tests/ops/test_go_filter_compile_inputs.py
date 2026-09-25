@@ -84,8 +84,24 @@ def compile_inputs(module: str, modules: frozenset[str],
     return sorted(out)
 
 
+def local_replacements(module: str, gomod: str) -> list[str]:
+    """Repo dirs `module`'s go.mod swaps in with `replace … => ./x` or `../x`.
+
+    Those modules are compiled as part of this one, so their sources are this
+    leg's compile inputs too (tenant-api builds threshold-exporter this way).
+    """
+    out = []
+    for line in gomod.splitlines():
+        _, arrow, target = line.partition("=>")
+        target = target.split("//", 1)[0].strip()
+        if arrow and target.startswith((".", "/")):
+            out.append(posixpath.normpath(posixpath.join(module, target.split()[0])))
+    return out
+
+
 def compile_input_problems(legs: dict[str, str], gates: dict[str, list[str]],
-                           tracked: frozenset[str], untested: set[str]) -> list[str]:
+                           tracked: frozenset[str], untested: set[str],
+                           read=lambda p: (ROOT / p).read_text(encoding="utf-8")) -> list[str]:
     modules = frozenset(posixpath.dirname(f) for f in tracked
                         if posixpath.basename(f) == "go.mod")
     problems: list[str] = []
@@ -96,9 +112,19 @@ def compile_input_problems(legs: dict[str, str], gates: dict[str, list[str]],
             problems.append(f"{job} tests {wd}, which is in no tracked Go module")
             continue
         tested.add(mod)
-        inputs = compile_inputs(mod, modules, tracked)
-        if not inputs:
-            problems.append(f"{job}: module {mod} has no tracked Go source")
+        built, todo = set(), [mod]
+        while todo:
+            m = todo.pop()
+            if m in built:
+                continue
+            built.add(m)
+            gomod = f"{m}/go.mod" if m else "go.mod"
+            for r in local_replacements(m, read(gomod)):
+                if r not in modules:
+                    problems.append(f"{m}/go.mod replaces a module with {r}, not a tracked module")
+                else:
+                    todo.append(r)
+        inputs = sorted({f for m in built for f in compile_inputs(m, modules, tracked)})
         for f in inputs:
             if not any(_READS.covers(g, f) for g in gates[job]):
                 problems.append(f"{job} compiles {f}, which its gate does not cover")
@@ -126,19 +152,31 @@ def test_every_go_leg_is_woken_by_changes_to_what_it_compiles() -> None:
         "file's tree to that leg's filter in ci.yml:\n  " + "\n  ".join(problems))
 
 
-@pytest.mark.parametrize("case", ["uncovered", "no-legs", "orphan-module"])
+@pytest.mark.parametrize("case", [
+    "uncovered", "no-legs", "orphan-module", "leg-outside-module", "replaced-uncovered"])
 def test_the_problem_finder_reports_degenerate_inputs(case: str) -> None:
     """The assertion above is negative, so its finder must be seen to fire."""
     tracked = frozenset({"zmod/go.mod", "zmod/a.go", "zmod/sub/b.go",
-                         "zmod/nested/go.mod", "zmod/nested/c.go"})
+                         "zmod/nested/go.mod", "zmod/nested/c.go",
+                         "zlib/go.mod", "zlib/l.go"})
+    gomods = {"zmod/go.mod": "module zmod\nreplace zlib => ../zlib // local\n",
+              "zmod/nested/go.mod": "module nested\n", "zlib/go.mod": "module zlib\n"}
     legs = {"leg": "zmod/sub"}
-    gates = {"leg": ["zmod/*.go", "**/go.mod", "zmod/sub/**"]}
-    untested = {"zmod/nested"}
-    assert compile_input_problems(legs, gates, tracked, untested) == []
+    gates = {"leg": ["zmod/*.go", "**/go.mod", "zmod/sub/**", "zlib/**"]}
+    untested = {"zmod/nested", "zlib"}
+
+    def problems():
+        return compile_input_problems(legs, gates, tracked, untested, read=gomods.__getitem__)
+    assert problems() == []
     if case == "uncovered":
-        gates = {"leg": ["zmod/*.go", "**/go.mod"]}          # drops zmod/sub/b.go
+        gates = {"leg": ["zmod/*.go", "**/go.mod", "zlib/**"]}   # drops zmod/sub/b.go
     elif case == "no-legs":
         legs, gates = {}, {}
+    elif case == "orphan-module":
+        untested = {"zmod/nested"}
+    elif case == "leg-outside-module":
+        legs = {"leg": "zmod/sub", "stray": "znowhere"}
+        gates["stray"] = ["**"]
     else:
-        untested = set()
-    assert compile_input_problems(legs, gates, tracked, untested)
+        gates = {"leg": ["zmod/*.go", "**/go.mod", "zmod/sub/**"]}  # drops zlib/l.go
+    assert problems()
