@@ -274,6 +274,46 @@ def test_a_file_init_cannot_read_through_does_not_block_its_own_paths(
     assert not (conf / "db-c.yaml").exists()
 
 
+_PLACEHOLDER_OWN = {
+    "db-a.yaml": "# placeholder\n",
+    "team.yaml": "tenants:\n  db-a:\n    mysql_connections: !!str 5\n",
+}
+
+
+def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_plan(
+        tmp_path):
+    """第 5 輪 F2（plan 層）：own 存在但本身**沒有**宣告 t（佔位檔），另一檔只落
+    在 (d)。重寫 own 會多出一個 t 的載體 ⇒ 必須當成「沒有自有檔」：跳過。"""
+    sys.path.insert(0, str(TOOL.parent))
+    import init_project as ip
+    for rel, body in _PLACEHOLDER_OWN.items():
+        _place(tmp_path, rel, body)
+    plan = ip._plan_confd(
+        {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
+         "tenants": ["db-a"], "namespace": "monitoring",
+         "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
+    assert plan.generate == [] and not plan.conflicts, plan
+    assert plan.skipped == {"db-a": ["conf.d/team.yaml"]}
+    assert not plan.unverified
+
+
+def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_cli(
+        tmp_path):
+    """同上，走 CLI：rc 0、own 位元組不變、沒有第二個宣告、訊息附 (d) 原因。"""
+    out = tmp_path / "repo"
+    for rel, body in _PLACEHOLDER_OWN.items():
+        _place(out, rel, body)
+    own_before = (out / "conf.d" / "db-a.yaml").read_bytes()
+    run = _run(out, "db-a")
+    assert run.returncode == 0, run.stderr[-800:]
+    assert (out / "conf.d" / "db-a.yaml").read_bytes() == own_before
+    assert "db-a may already be declared by conf.d/team.yaml" in run.stderr
+    # 第 5 輪 F4：跳過訊息寫出 (d) 的原因與怎麼讓它可讀
+    assert ("init cannot read conf.d/team.yaml through (it carries an "
+            "explicit YAML tag)") in run.stderr, run.stderr
+    assert "`!Important`" in run.stderr
+
+
 def test_the_clobber_refusal_does_not_claim_a_second_declaration(tmp_path):
     """F2：db-z 只被宣告一次，訊息不得說「宣告了兩次、請合併」。"""
     out = _brownfield(tmp_path)

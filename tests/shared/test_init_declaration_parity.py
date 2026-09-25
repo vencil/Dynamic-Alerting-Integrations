@@ -54,6 +54,7 @@ def test_matrix_is_not_vacuous() -> None:
     assert sum(n.startswith("F1-1a-") for n in names) >= 4
     assert sum(n.startswith("R2-") for n in names) >= 6
     assert sum(n.startswith("R3-") for n in names) >= 10
+    assert sum(n.startswith("R5-") for n in names) >= 5
 
 
 def _build(tree: dict, base: Path) -> Path:
@@ -77,6 +78,38 @@ def test_init_covers_every_tenant_the_exporter_reads(tree, tmp_path) -> None:
         assert not missed, (
             f"{rel}: the exporter reads {sorted(missed)} from it, init does "
             f"not see a possible mention — it would write a duplicate")
+
+
+#: Rows whose coverage must come from a CONCRETE mention — (a), (b) or (c) —
+#: not from (d) "cannot read it through, so it names everyone". (d) would
+#: also pass the subset assertion above, which is exactly why these are
+#: pinned separately: dropping the UTF-16 decodings or the escaped-line-break
+#: handling turned those rows into (d) and the table stayed green (round-5
+#: review F3, mutants M4/M6).
+CONCRETE_REQUIRED = {
+    "R2-utf16le-with-bom",
+    "R3-escaped-key-in-flow-with-tab",
+    "R5-escaped-LF-break-in-key-with-tab",
+    "R5-escaped-CR-break-in-key-with-tab",
+    "R5-escaped-NEL-break-in-key-with-tab",
+    "R5-escaped-LS-break-in-key-with-tab",
+    "R5-escaped-PS-break-in-key-with-tab",
+}
+
+
+@pytest.mark.parametrize(
+    "tree", [t for t in MATRIX["trees"] if t["name"] in CONCRETE_REQUIRED],
+    ids=lambda t: t["name"])
+def test_the_coverage_of_these_rows_is_concrete_not_a_blanket(tree, tmp_path):
+    conf = _build(tree, tmp_path)
+    for rel, go_ids in tree["declarations"].items():
+        got, why = ip._mentions(conf / rel, sorted(go_ids))
+        assert why == "", f"{rel}: covered only by (d) — {why}"
+        assert set(go_ids) <= got, (rel, go_ids, got)
+
+
+def test_every_concrete_required_row_exists() -> None:
+    assert CONCRETE_REQUIRED <= {t["name"] for t in MATRIX["trees"]}
 
 
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])

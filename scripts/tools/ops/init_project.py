@@ -91,14 +91,16 @@ _HELP = {
                'conf.d/ 裡 init 只寫根目錄的 _defaults.yaml 與 <tenant>.yaml；\n'
                '可能已由你其他檔案宣告的租戶或其他拼法的預設會被跳過並列出\n'
                '（init 不檢查 exporter 能否讀取那些檔，請用 da-tools guard 確認），\n'
-               'init 自己的檔案已與之並存時拒絕執行（rc 1），不寫入任何檔案。'),
+               'init 自己的檔案已存在、且另一個檔具體提到同一租戶時，\n'
+               '拒絕執行（rc 1），不寫入任何檔案。'),
         'en': ('Bootstrap a Dynamic Alerting integration in your repository.\n\n'
                'In conf.d/ init writes only _defaults.yaml and <tenant>.yaml at\n'
                'the root. A tenant your other files may already declare, or\n'
                'defaults in another spelling, is skipped and named (init does not\n'
                'check whether the exporter can read those files; verify with\n'
-               'da-tools guard). If init\'s own file already sits beside one,\n'
-               'init refuses (rc 1) and writes nothing.'),
+               'da-tools guard). If init\'s own file already exists and another\n'
+               'file concretely names the same tenant, init refuses (rc 1) and\n'
+               'writes nothing.'),
     },
     'ci': {
         'zh': 'CI/CD 平台: github, gitlab, both (預設: both)',
@@ -3275,10 +3277,15 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 #: Characters that may continue a tenant id — a match flanked by one is part
 #: of a longer word, not a mention.
 _ID_CHAR = r'A-Za-z0-9_.\-'
-#: YAML double-quoted escapes (YAML 1.2 §5.7), plus the escaped line break.
+#: YAML double-quoted escapes (YAML 1.2 §5.7), plus the escaped line break
+#: (§7.3.1 s-double-escaped: `\` + a line break, then the next line's leading
+#: white space — spaces and tabs — is dropped). ⛔ The break set is yaml.v3's,
+#: not YAML 1.2's: libyaml also breaks on a lone CR, NEL (U+0085), LS
+#: (U+2028) and PS (U+2029), so `"db-\<U+2028>c"` is `db-c` to the exporter
+#: (#1942 round-5 review F1; matrix rows R5-*).
 _YAML_ESCAPE_RE = re.compile(
     r'\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})'
-    r'|(\r?\n)[ \t]*|(.))', re.DOTALL)
+    r'|(\r\n|[\r\n\x85\u2028\u2029])[ \t]*|(.))', re.DOTALL)
 _YAML_SIMPLE_ESCAPES = {
     '0': '\0', 'a': '\a', 'b': '\b', 't': '\t', 'n': '\n', 'v': '\v',
     'f': '\f', 'r': '\r', 'e': '\x1b', ' ': ' ', '"': '"', '/': '/',
@@ -3480,8 +3487,13 @@ class _ConfdPlan(NamedTuple):
     exporter reads."""
 
     unverified: Optional[dict[str, list[tuple[str, str]]]] = None
-    """Tenant init DID (re)write at its own existing path although another
-    file (d)-possibly mentions it -> [(that file, why init cannot read it)]."""
+    """Tenant init DID (re)write at its own existing path — which itself
+    names it — although another file (d)-possibly mentions it -> [(that
+    file, why init cannot read it)]."""
+
+    blanket: Optional[dict[str, str]] = None
+    """Tenant files init cannot read through (d) -> why; the skip notice
+    quotes it."""
 
     @property
     def write_defaults(self) -> bool:
@@ -3549,14 +3561,19 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         elif own in mentions and concrete:
             conflicts.append(_Conflict(
                 'duplicate', t, [_rel(own)] + [_rel(p) for p in concrete]))
-        elif own in mentions:
+        elif own in mentions and own not in blanket and t in mentions[own]:
             # ⛔ Coexistence refuses only on a CONCRETE mention. Its purpose
             # is that init never CREATES a duplicate — not that it validates
-            # the customer's tree. `own` already exists, so rewriting it adds
-            # no carrier: if a file init cannot read through (d) also
-            # declares t, that duplicate existed before this run. Refusing on
-            # (d) let one tagged or undecodable file block every re-run of
-            # every tenant that already has its init file. Named instead.
+            # the customer's tree. Here `own` exists AND itself concretely
+            # names t, so rewriting it adds no carrier of t: if a file init
+            # cannot read through (d) also declares t, that duplicate
+            # existed before this run. Refusing on (d) let one tagged or
+            # undecodable file block every re-run of every tenant that
+            # already has its init file. Named instead.
+            # ⛔ The "own names t" half is load-bearing (round-5 review F2):
+            # an own path that is a placeholder, empty, or declares someone
+            # else is NOT already a carrier of t, so rewriting it WOULD add
+            # one beside the (d) file. That case falls through to the skip.
             generate.append(t)
             unverified[t] = [(_rel(p), blanket[p]) for p in others]
         else:
@@ -3583,7 +3600,7 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
 
     plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
                       {_rel(p): sorted(ts) for p, ts in mentions.items()},
-                      unverified)
+                      unverified, {_rel(p): why for p, why in blanket.items()})
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
@@ -3620,7 +3637,37 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
             f"read that file. Verify with `da-tools guard defaults-impact "
             f"--config-dir {conf_dir}` (it reads the tree the way the "
             f"exporter does; the file should be listed under Scanned files)")
+        for f in files:
+            why = (plan.blanket or {}).get(f)
+            if why:
+                lines[-1] += (
+                    f"。init 讀不透 {f}（{why}），因此把它當成提及每一個要求的"
+                    f"租戶；要讓 init 讀得透：{_read_through_hint(why, True)}"
+                    if is_zh else
+                    f". init cannot read {f} through ({why}), so it treats it "
+                    f"as naming every requested tenant; to let init read it: "
+                    f"{_read_through_hint(why, False)}")
     return lines
+
+
+def _read_through_hint(why: str, is_zh: bool) -> str:
+    """How to make a (d) file one init can read through (round-5 F4)."""
+    if 'tag' in why:
+        return ("移除明確 tag（`!!str`、`!name` 等）——註解或字串裡以 `!` 開頭的字"
+                "（例如 `!Important`、`\"wow !!\"`）也會被當成 tag"
+                if is_zh else
+                "remove the explicit tags (`!!str`, `!name` …) — a `!` "
+                "starting a word inside a comment or a string (`!Important`, "
+                "`\"wow !!\"`) counts as a tag too")
+    if 'encoding' in why:
+        return "把檔案存成 UTF-8" if is_zh else "save the file as UTF-8"
+    if 'cannot be read' in why:
+        return ("讓執行 init 的使用者讀得到它" if is_zh else
+                "make it readable by the user running init")
+    return ("簡化它（例如極深的巢狀、`\\U00110000` 這類超出範圍的 escape）"
+            if is_zh else
+            "simplify it (e.g. very deep nesting, or an out-of-range escape "
+            "such as `\\U00110000`)")
 
 
 def _unverified_lines(plan: _ConfdPlan, is_zh: bool,
@@ -4919,8 +4966,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              'may already declare (db-c.yml, a multi-tenant '
                              'file), or defaults in another spelling '
                              '(_defaults.yml), is skipped and named; if init\'s '
-                             'own file already sits beside one, the run is '
-                             'refused (rc 1) and nothing is written'
+                             'own file already exists and another file '
+                             'concretely names the same tenant (a tenants: key '
+                             'or the id as a token), the run is refused (rc 1) '
+                             'and nothing is written'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -4932,9 +4981,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              '.gitlab-ci.yml，也不會改寫 conf.d 裡的其他檔案：'
                              '可能已由你自己的檔案宣告的租戶（db-c.yml、多租戶'
                              '檔）或其他拼法的預設（_defaults.yml）會被跳過並'
-                             '列出；若 init '
-                             '自己的檔案已與之並存，則拒絕執行（rc 1），'
-                             '不寫入任何檔案')
+                             '列出；若 init 自己的檔已存在、且另一個檔具體提到'
+                             '同一個租戶（tenants: 的 key 或租戶 id token），'
+                             '則拒絕執行（rc 1），不寫入任何檔案')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')
