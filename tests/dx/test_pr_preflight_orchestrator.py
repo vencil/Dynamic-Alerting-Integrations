@@ -1,5 +1,4 @@
-"""Tests for pr_preflight.py: the orchestrator `main()` and helpers without
-their own test file."""
+"""Tests for pr_preflight.py."""
 from __future__ import annotations
 
 import os
@@ -284,7 +283,8 @@ class TestMainOrchestrator:
 
         def _no_process(*a, **kw):
             raise AssertionError(
-                f"main() started a process with every check_* stubbed: {a} {kw}"
+                f"main() started a process with every check_* stubbed: "
+                f"{a[:1] or kw.get('args')}"
             )
 
         monkeypatch.setattr(_subprocess, "Popen", _no_process)
