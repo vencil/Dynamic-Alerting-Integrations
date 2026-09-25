@@ -606,8 +606,7 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     )
     assert r_main.returncode == 0, f"stderr={r_main.stderr}"
 
-    # CONTROL: remove it and the gate must block again, pointing at that
-    # worktree rather than at a `git checkout` git would refuse (exit 128).
+    # CONTROL: remove it and the gate must block again.
     (Path(common) / f".preflight-ok.{sib_sha}").unlink()
     r2 = _run_gate(
         tmp_path, _refspec("sibling", sib_sha),
@@ -616,30 +615,25 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     assert r2.returncode == 1, f"control did not fire. stderr={r2.stderr}"
 
 
-def _follow_the_hint(stderr: str, cwd: Path) -> subprocess.CompletedProcess:
-    """Run the banner's `cd ...` exactly as printed and report where it lands."""
-    lines = [
-        ln.strip() for ln in stderr.splitlines()
-        if ln.strip().startswith("cd ") and ln.rstrip().endswith("&& make pr-preflight")
-    ]
-    assert len(lines) == 1, f"expected one `cd ... && make pr-preflight` line: {stderr}"
-    cd = lines[0][: -len("&& make pr-preflight")]
-    return subprocess.run(  # subprocess-timeout: ignore
-        ["bash", "-c", f"{cd} && pwd -P"], cwd=cwd, capture_output=True, text=True,
+def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
+    """Run the banner's instruction as printed, `make pr-preflight` swapped for
+    a probe; return (HEAD, directory) where it lands."""
+    lines = [ln.strip() for ln in stderr.splitlines()
+             if ln.rstrip().endswith("make pr-preflight")]
+    assert len(lines) == 1, f"expected one instruction line: {stderr}"
+    step = lines[0][: -len("make pr-preflight")]
+    r = subprocess.run(  # subprocess-timeout: ignore
+        ["bash", "-c", step + "git rev-parse HEAD && pwd -P"],
+        cwd=cwd, capture_output=True, text=True,
     )
+    assert r.returncode == 0, f"the instruction does not run: {r.stderr}"
+    head, landed = r.stdout.splitlines()
+    return head, Path(landed)
 
 
-@pytest.mark.parametrize(
-    "name", ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME"],
-    ids=["plain", "space", "quote", "dollar"],
-)
-def test_the_hint_lands_in_the_worktree_that_holds_the_branch(tmp_path: Path, name: str):
-    """#1952 — the printed `cd` is executed, not substring-matched.
-
-    `sibling` next to it is the prefix a whitespace split would cut
-    `sibling wt` to: an existing directory, so a truncated `cd` succeeds and
-    lands in the wrong tree.
-    """
+def _held_worktree(tmp_path: Path, name: str, commits: int = 1) -> tuple[Path, list[str]]:
+    """Main repo + a worktree `name` on branch `held` with `commits` commits
+    past main, next to a plain directory `sibling`. Returns (wt, shas)."""
     _init_git(tmp_path)
     root = tmp_path.parent / f"wts-{tmp_path.name}"
     (root / "sibling").mkdir(parents=True)
@@ -649,26 +643,60 @@ def test_the_hint_lands_in_the_worktree_that_holds_the_branch(tmp_path: Path, na
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
     }
-    for args in (["-C", str(tmp_path), "worktree", "add", "-q", "-b", "held", str(wt), "main"],
-                 ["-C", str(wt), "commit", "-q", "--allow-empty", "-m", "held work"]):
+    assert subprocess.run(  # subprocess-timeout: ignore
+        ["git", "-C", str(tmp_path), "worktree", "add", "-q", "-b", "held", str(wt), "main"],
+        capture_output=True, text=True, env=env,
+    ).returncode == 0
+    shas = []
+    for i in range(commits):
         assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", *args], capture_output=True, text=True, env=env,
+            ["git", "-C", str(wt), "commit", "-q", "--allow-empty", "-m", f"held {i}"],
+            capture_output=True, text=True, env=env,
         ).returncode == 0
-    sha = subprocess.run(  # subprocess-timeout: ignore
-        ["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True,
-    ).stdout.strip()
+        shas.append(subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True,
+        ).stdout.strip())
+    return wt, shas
 
+
+def _blocked(tmp_path: Path, sha: str) -> subprocess.CompletedProcess:
     r = _run_gate(
         tmp_path, _refspec("held", sha),
         path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
         env_extra={"GIT_PREFLIGHT_STRICT": "1"},
     )
     assert r.returncode == 1, f"stderr={r.stderr}"
-    landed = _follow_the_hint(r.stderr, tmp_path)
-    assert landed.returncode == 0, f"the hint does not run: {landed.stderr}"
-    assert Path(landed.stdout.strip()) == wt.resolve(), (
-        f"the hint lands in {landed.stdout.strip()!r}, not in {wt}"
-    )
+    return r
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME", "sibling ", "sib\\ling"],
+    ids=["plain", "space", "quote", "dollar", "trailing-space", "backslash"],
+)
+def test_the_hint_lands_in_the_worktree_at_the_pushed_commit(tmp_path: Path, name: str):
+    """#1952 — the printed `cd` is executed, not substring-matched.
+
+    `sibling` is the prefix a whitespace split cuts these names to, and an
+    existing directory: a truncated `cd` succeeds there.
+    """
+    wt, (sha,) = _held_worktree(tmp_path, name)
+    head, landed = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+    assert (head, landed) == (sha, wt.resolve())
+
+
+@pytest.mark.parametrize("shape", ["held-at-a-later-commit", "worktree-dir-gone"])
+def test_following_the_hint_reaches_the_pushed_commit(tmp_path: Path, shape: str):
+    """#1952 — no worktree whose HEAD is the pushed commit is there to enter:
+    the branch's worktree has moved past it, or its directory is gone."""
+    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    if shape == "worktree-dir-gone":
+        shutil.rmtree(wt)
+        sha = shas[-1]
+    else:
+        sha = shas[0]
+    head, _ = _follow_the_hint(_blocked(tmp_path, sha).stderr, tmp_path)
+    assert head == sha
 
 
 def test_an_empty_gh_answer_is_unknown_not_no_pr(tmp_path: Path):

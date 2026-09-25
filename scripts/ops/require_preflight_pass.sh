@@ -227,19 +227,19 @@ if [ "$_missing_found" = "0" ]; then
 fi
 
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
-# ⛔ `git checkout <branch>` exits 128 when that branch is checked out in
-# another worktree, which is the normal state here — an instruction that
-# cannot reach green is a dead end, not a hint. Point at that worktree instead.
-# ⛔ `--porcelain`: the human format puts the path and the branch on one
-# space-separated line, so a path with a space was cut at it (#1952).
+# Point at a worktree whose HEAD IS the pushed commit: preflight marks HEAD.
+# ⛔ Not the worktree holding the branch — it may sit at another commit.
+# ⛔ Skip entries whose directory is not there (prunable, or a path in the
+# other OS's form). `-z`: a path may contain spaces or newlines (#1952).
 _other_wt=""
 _wt_cur=""
-while IFS= read -r _wt_line; do
+while IFS= read -r -d '' _wt_line; do
     case "$_wt_line" in
         "worktree "*) _wt_cur="${_wt_line#worktree }" ;;
-        "branch refs/heads/$_missing_branch") _other_wt="$_wt_cur"; break ;;
+        "HEAD $_missing_sha")
+            if [ -d "$_wt_cur" ]; then _other_wt="$_wt_cur"; break; fi ;;
     esac
-done <<< "$(git worktree list --porcelain 2>/dev/null)"
+done < <(git worktree list --porcelain -z 2>/dev/null)
 
 if [ "$_missing_sha" = "$head_sha" ]; then
     _checkout_hint="    make pr-preflight"
