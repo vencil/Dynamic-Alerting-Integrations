@@ -19,11 +19,9 @@ lang: zh
 
 場景 A–F 的對外行為說明、每項保證由哪個測試或 lint 守、以及缺口，見公開 [驗證場景](../scenarios/verified-scenarios.md)（SSOT，本檔不複製）。
 
-### 端到端展演（`make demo-full`）
+### 端到端生命週期（live 叢集，無自動化覆蓋）
 
-| 項目 | 企業防護需求 | 測試方式 | 核心斷言 | 指令 |
-|------|-------------|----------|----------|------|
-| **demo-full** | 端到端展演完整生命週期 | Composite load → alert 觸發 → cleanup → alert 恢復 | 6 步驟全部成功; alert firing → inactive 完整週期 | `make demo-full` |
+live 叢集上「真實負載 → alert firing → cleanup → resolved」**沒有自動化測試、也沒有斷言**；缺口已列入公開 [驗證場景](../scenarios/verified-scenarios.md) 的缺口清單（SSOT）。手動觀察入口：`make load-composite TENANT=<tenant>` / `make load-cleanup`。原 `make demo-full`（`scripts/demo.sh`）已於 [#1989](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1989) 刪除——它沒有斷言、跳過的步驟仍 rc 0，且自腳本搬遷後 Step 1 即 rc 2。
 
 ### Unit/Integration Tests（`make test` / `pytest`）
 

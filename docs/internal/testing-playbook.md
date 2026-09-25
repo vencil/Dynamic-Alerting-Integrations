@@ -217,12 +217,9 @@ da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用
 | sysbench (16 threads) | `mysql_global_status_slow_queries` | 運行中 | — | `MariaDBHighSlowQueries` |
 | composite | connections AND cpu | — | — | `MariaDBSystemBottleneck` |
 
-## Demo 工作流
+### 手動觀察入口（無自動化斷言）
 
-| 指令 | 行為 | 耗時 |
-|------|------|------|
-| `make demo` | scaffold → migrate → diagnose → check_alert → patch_config → baseline_discovery | ~45s |
-| `make demo-full` | 上述 + composite load → alerts FIRING → cleanup → resolved | ~5min |
+上表是手動量得的基線，不是測試斷言。要在 live 叢集重現：`make load-composite TENANT=<tenant>` 施加 connections + sysbench，觀察 Prometheus 告警，`make load-cleanup`（只掃 `db-*` namespace）清除後，recording rule 與 alert rule 在下一輪 evaluation 看不到超標值即轉 resolved——`for` 只管 pending → firing，規則沒有 `keep_firing_for`。`TENANT` 須為 namespace 名稱等於 tenant 的 MariaDB tenant。**沒有任何 CI／排程在跑這條 firing → resolved 路徑**（缺口列在公開 [驗證場景](../scenarios/verified-scenarios.md) 的缺口清單）。原本的 `make demo`／`make demo-full`（`scripts/demo.sh`）已於 [#1989](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1989) 刪除。
 
 ## 程式碼品質規範
 

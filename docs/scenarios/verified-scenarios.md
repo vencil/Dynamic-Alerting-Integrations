@@ -61,12 +61,12 @@ tenants:
 
 **缺口（目前沒有自動化覆蓋）**：
 
-- 在 live 叢集改閾值、看 alert 翻轉 firing ↔ resolved（A、E 的端到端形態）。
+- 在 live 叢集改閾值、或施加真實負載後清除，看 alert 翻轉 firing ↔ resolved（A、E 的端到端形態，以及下方〈端到端生命週期〉一節描述的路徑）。
 - 同租戶多 pod／多節點取最差值（B 的跨 pod 半邊）。
 - Kill Pod 後服務不中斷、PDB 保住至少一個 Pod（F 的故障切換半邊）。
 - `MariaDBHighConnections`、`MariaDBSystemBottleneck`（複合警報）、`ContainerImagePullFailure` 沒有觸發測試，列在 `tests/rulepacks/vmalert_coverage_baseline.yaml` 的 `uncovered`。
 
-下面展開其中最關鍵的設計證明與端到端生命週期。
+下面展開其中最關鍵的設計證明，以及端到端生命週期的機制說明。
 
 ## 關鍵設計驗證：`max by(tenant)` 防 HA 翻倍
 
@@ -77,37 +77,45 @@ threshold-exporter 以 2 副本 HA 運行，兩個 Pod 各自吐出相同的 `us
 
 Pod 數量怎麼變，`max` 的結果都不變，這是高可用設計選 **`max` 而非 `sum`** 的根據（詳見[架構與設計 §高可用性](../architecture-and-design.md#4-高可用性設計-high-availability)）。
 
-## 端到端生命週期 (demo-full)
+## 端到端生命週期
 
-`make demo-full` 展示從工具驗證到真實負載的完整流程。以下時序圖描述核心路徑——一個真實負載如何觸發告警、清除後又如何自動恢復：
+以下時序圖是**機制說明**：一個真實負載如何透過 recording rule 與 `user_threshold` 比對而觸發告警、清除後又如何自動恢復。⚠️ **沒有自動化測試在 live 叢集上驗證這條 firing → resolved 路徑**（見上方缺口清單）。
+
+要在自己的叢集上手動觀察，入口是：
+
+```bash
+make load-composite TENANT=<tenant>   # connections + sysbench OLTP 同時施加
+make load-cleanup                     # 刪除 db-* namespace 內的壓測 Job／Pod
+```
+
+`TENANT` 必須是 namespace 名稱等於 tenant 名稱的 MariaDB tenant：負載打的是 `mariadb.<tenant>.svc`，而 `load-cleanup` 只掃 `db-` 開頭的 namespace。
+
+兩者之間用 Prometheus（`localhost:9090/alerts`）觀察告警狀態。`for` 只管 pending → firing；清除後，recording rule 與 alert rule 在下一輪 evaluation 看不到超標值即轉 resolved（規則沒有 `keep_firing_for`）。
 
 ```mermaid
 sequenceDiagram
     participant Op as Operator
-    participant LG as Load Generator<br/>(connections + stress-ng)
+    participant LG as Load Generator<br/>(connections + sysbench)
     participant DB as MariaDB<br/>(db-a)
     participant TE as threshold-exporter
     participant PM as Prometheus
 
-    Note over Op: Step 1-5: scaffold / migrate / diagnose / check_alert / baseline
-
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
-    DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
+    DB-->>PM: mysql_global_status_threads_connected<br/>（連線數超過閾值 70）
     TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
 
-    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:mysql_connections (70)
+    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max<br/>> tenant:alert_threshold:mysql_connections (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
     Op->>LG: run_load.sh --cleanup
-    LG->>DB: Kill connections + stop stress-ng
-    DB-->>PM: mysql_threads_connected ≈ 5
+    LG->>DB: 刪除壓測 Job／Pod（connections + sysbench）
+    DB-->>PM: mysql_global_status_threads_connected<br/>（連線數回落到閾值 70 以下）
 
-    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:mysql_connections (70)
+    Note over PM: tenant:mysql_threads_connected:max<br/>< tenant:alert_threshold:mysql_connections (70)
 
-    PM->>PM: Alert → RESOLVED (after for duration)
-    Note over Op: ✅ 完整 firing → resolved 週期驗證通過
+    PM->>PM: Alert → RESOLVED（下一輪 evaluation 看不到超標值即轉；for 不影響這一步）
 ```
 
 ## 覆蓋總覽
