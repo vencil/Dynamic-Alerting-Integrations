@@ -1,0 +1,4 @@
+function p(t){let e=[];return e.push("apiVersion: v1"),e.push("kind: ConfigMap"),e.push("metadata:"),e.push("  name: tenant-operational-modes"),e.push("  namespace: monitoring"),e.push("data:"),t.forEach(a=>{e.push(`  ${a}_maintenance: |`),e.push("    mode: maintenance"),e.push('    reason: "Scheduled maintenance"'),e.push('    expires: "2026-04-05T00:00:00Z"')}),e.join(`
+`)}var i=24*60*60*1e3;function o(t=new Date){return new Date(t.getTime()+i).toISOString().replace(/\.\d{3}Z$/,"Z")}function r(t,e=new Date){let a=o(e),n=[];return t.forEach(s=>{n.length&&n.push(""),n.push(`# ${s}`),n.push("    _silent_mode:"),n.push('      target: "all"'),n.push(`      expires: "${a}"`),n.push('      reason: "Under investigation"')}),n.join(`
+`)}export{p as a,o as b,r as c};
+//# sourceMappingURL=chunk-ZFO45COR.js.map

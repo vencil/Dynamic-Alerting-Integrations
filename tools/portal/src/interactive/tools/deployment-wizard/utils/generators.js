@@ -167,8 +167,8 @@ function deployNotes(config, size) {
       id: 'silent-mode',
       title: t('靜默 / 維護模式是租戶設定，不是 Helm value', 'Silent / maintenance mode is tenant config, not a Helm value'),
       body: t(
-        '三態模式逐租戶設定：在 conf.d 的租戶檔寫 `_silent_mode`（可帶 `expires`）或 `_state_maintenance: enable`。chart 沒有平台層級的「預設模式」開關。',
-        'The three-state mode is per tenant: set `_silent_mode` (optionally with `expires`) or `_state_maintenance: enable` in the tenant\'s conf.d file. The chart has no platform-wide "default mode" switch.',
+        '三態模式逐租戶設定：在 conf.d 的租戶檔寫 `_silent_mode`（接受的寫法見 Schema Explorer）或 `_state_maintenance: enable`。chart 沒有平台層級的「預設模式」開關。',
+        'The three-state mode is per tenant: set `_silent_mode` (accepted forms: see Schema Explorer) or `_state_maintenance: enable` in the tenant\'s conf.d file. The chart has no platform-wide "default mode" switch.',
       ),
     },
     {

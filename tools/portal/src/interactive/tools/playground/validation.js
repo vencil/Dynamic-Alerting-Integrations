@@ -92,7 +92,8 @@ function parseInlineArray(s) {
 function splitKeyValue(line) {
   const idx = line.indexOf(':');
   if (idx === -1) return null;
-  const key = line.slice(0, idx).trim();
+  // Keys may be quoted in YAML ("key": / 'key':); strip the pair like values.
+  const key = stripQuotes(line.slice(0, idx).trim());
   const value = line.slice(idx + 1).trim();
   return { key, value };
 }
@@ -119,7 +120,7 @@ function parseYAML(text) {
 
       // Pure key line (ends with ":" and nothing after)
       if (trimmed.endsWith(':') && !trimmed.includes(': ')) {
-        const key = trimmed.slice(0, -1);
+        const key = stripQuotes(trimmed.slice(0, -1).trim());
         if (indent === 0) {
           if (key === 'tenants') result.tenants = {};
         } else if (indent === 2 && result.tenants) {
@@ -283,22 +284,14 @@ function validateTenantConfig(yamlText) {
         // Special keys validation
         specialKeysCount++;
 
+        // _silent_mode is deliberately not judged here (#1988): parseYAML is a
+        // lenient line parser, and on inputs where it and the exporter's YAML
+        // decoder disagree every verdict it gave (error, pass, or "confirmed")
+        // was wrong in some direction. The accepted shapes live in
+        // docs/schemas/tenant-config.schema.json#/definitions/silentMode.
+        // Known key, no verdict.
         if (key === '_silent_mode') {
-          if (value === 'disable') {
-            // Valid
-          } else if (typeof value === 'object' && value !== null) {
-            if (value.expires && !isValidISO8601(value.expires)) {
-              errors.push({
-                rule: '_silent_mode',
-                message: t(`${tenantId}._silent_mode.expires: 無效的 ISO 8601 時間戳`, `${tenantId}._silent_mode.expires: invalid ISO 8601 timestamp`)
-              });
-            }
-          } else {
-            errors.push({
-              rule: '_silent_mode',
-              message: t(`${tenantId}._silent_mode: 必須是 "disable" 或具有 expires 的對象`, `${tenantId}._silent_mode: must be "disable" or object with expires`)
-            });
-          }
+          // intentionally empty
         } else if (key === '_state_maintenance') {
           if (typeof value === 'object' && value !== null) {
             if (value.expires && !isValidISO8601(value.expires)) {

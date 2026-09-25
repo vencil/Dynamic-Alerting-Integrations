@@ -6,8 +6,42 @@ related: [playground, glossary, config-lint]
 ---
 
 import React, { useState, useMemo } from 'react';
+import SILENT_SCHEMA from './_common/data/silent-mode-schema.json';
 
 const t = window.__t || ((zh, en) => en);
+
+// _silent_mode is rendered from a verbatim copy of the schema definition, not
+// restated here (#1988): docs/schemas/tenant-config.schema.json
+// #/definitions/silentMode (deep-equal drift guard in
+// tests/silent-mode-schema.drift.test.ts). Types are read from the
+// definition, and each sub-key shows the definition's own description; only
+// the short labels are written here.
+const SILENT = SILENT_SCHEMA.definition;
+const SILENT_LABELS = {
+  target: t('要靜默的 severity', 'Severity to silence'),
+  expires: t('自動失效時間', 'Auto-expiry time'),
+  reason: t('原因', 'Reason'),
+};
+const typeOf = (d) => (d.enum
+  ? d.enum.map(v => JSON.stringify(v)).join(' | ')
+  : (d.format ? `${d.type} (${d.format})` : d.type));
+function silentModeNode() {
+  const object = SILENT.oneOf.find(b => b.type === 'object') || {};
+  const required = object.required || [];
+  return {
+    key: '_silent_mode',
+    type: SILENT.oneOf.map(typeOf).join(' | '),
+    desc: t('靜默模式：告警照常產生，通知被抑制', 'Silent mode: alerts still fire, notifications are suppressed'),
+    rulePack: 'all',
+    children: Object.entries(object.properties || {}).map(([key, p]) => ({
+      key,
+      type: typeOf(p),
+      desc: (SILENT_LABELS[key] || key) + (required.includes(key) ? t('（必填）', ' (required)') : '')
+        + (p.description ? `: ${p.description}` : ''),
+      rulePack: 'all',
+    })),
+  };
+}
 
 /* ── Full schema tree ── */
 const SCHEMA = [
@@ -48,16 +82,7 @@ const SCHEMA = [
       { key: 'node_disk_usage_warning_critical', type: 'number', desc: t('磁碟使用率 critical（%）', 'Disk usage critical (%)'), rulePack: 'node', example: '90', range: '0-100' },
     ],
   },
-  {
-    key: '_silent_mode',
-    type: 'boolean | object',
-    desc: t('靜默模式：告警產生但不發送通知', 'Silent mode: alerts fire but notifications suppressed'),
-    rulePack: 'all',
-    children: [
-      { key: 'enabled', type: 'boolean', desc: t('啟用靜默模式', 'Enable silent mode'), rulePack: 'all', example: 'true' },
-      { key: 'expires', type: 'string (ISO8601)', desc: t('自動失效時間', 'Auto-expiry timestamp'), rulePack: 'all', example: '"2026-03-15T00:00:00Z"' },
-    ],
-  },
+  silentModeNode(),
   {
     key: '_state_maintenance',
     type: 'object',

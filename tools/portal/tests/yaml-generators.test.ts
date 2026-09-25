@@ -12,6 +12,7 @@ import {
   generateMaintenanceYaml,
   generateSilentModeYaml,
 } from '../src/interactive/tools/tenant-manager/utils/yaml-generators.js';
+import { parseYAML } from '../src/interactive/tools/playground/validation.js';
 
 describe('generateMaintenanceYaml', () => {
   it('emits the standard ConfigMap envelope', () => {
@@ -56,42 +57,39 @@ describe('generateMaintenanceYaml', () => {
 });
 
 describe('generateSilentModeYaml', () => {
-  it('emits the standard ConfigMap envelope', () => {
-    const yaml = generateSilentModeYaml(['tenant-a']);
-    expect(yaml).toContain('apiVersion: v1');
-    expect(yaml).toContain('kind: ConfigMap');
-    expect(yaml).toContain('name: tenant-operational-modes');
+  const NOW = new Date('2026-09-25T10:00:00.123Z');
+
+  it('emits one block per tenant, headed by a single `# <id>` line (#1988)', () => {
+    const blocks = generateSilentModeYaml(['db-a', 'db-b'], NOW).split('\n\n');
+    expect(blocks.map(b => b.split('\n')[0])).toEqual(['# db-a', '# db-b']);
+    for (const b of blocks) expect(b.split('\n').filter(l => l.startsWith('#'))).toHaveLength(1);
   });
 
-  it('emits one data block per tenant with _silent suffix', () => {
-    const yaml = generateSilentModeYaml(['db-a', 'db-b']);
-    expect(yaml).toContain('  db-a_silent: |');
-    expect(yaml).toContain('  db-b_silent: |');
+  it("each block pasted under tenants.<id>: parses to that tenant's _silent_mode", () => {
+    const ids = ['db-a', 'db-b'];
+    const blocks = generateSilentModeYaml(ids, NOW).split('\n\n');
+    blocks.forEach((b, i) => {
+      const body = b.split('\n').filter(l => !l.startsWith('#')).join('\n');
+      const doc = parseYAML(`tenants:\n  ${ids[i]}:\n${body}`).data;
+      expect(doc).toEqual({
+        tenants: { [ids[i]]: { _silent_mode: { target: 'all', expires: '2026-09-26T10:00:00Z', reason: 'Under investigation' } } },
+      });
+    });
   });
 
-  it('uses silent-mode-specific mode + reason', () => {
-    const yaml = generateSilentModeYaml(['db-a']);
-    expect(yaml).toContain('mode: silent');
-    expect(yaml).toContain('reason: "Under investigation"');
+  it('uses the structured form with an RFC3339 expires 24h after now', () => {
+    const yaml = generateSilentModeYaml(['db-a'], NOW);
+    expect(yaml).toContain('      target: "all"');
+    expect(yaml).toContain('      expires: "2026-09-26T10:00:00Z"');
+    expect(yaml).toContain('      reason: "Under investigation"');
   });
 
-  it('handles empty tenant list (envelope only)', () => {
-    const yaml = generateSilentModeYaml([]);
-    expect(yaml).toContain('data:');
-    expect(yaml).not.toContain('_silent:');
+  it('handles empty tenant list', () => {
+    expect(generateSilentModeYaml([], NOW)).toBe('');
   });
 });
 
 describe('cross-function invariants', () => {
-  it('maintenance and silent yamls share the same metadata.name', () => {
-    const m = generateMaintenanceYaml(['t']);
-    const s = generateSilentModeYaml(['t']);
-    // Both target the same ConfigMap; tenants choose mode by which key
-    // suffix they apply.
-    expect(m).toContain('name: tenant-operational-modes');
-    expect(s).toContain('name: tenant-operational-modes');
-  });
-
   it('output is a string ending without trailing newline', () => {
     // join('\n') with no trailing element → last char is content, not '\n'.
     const yaml = generateMaintenanceYaml(['t']);
