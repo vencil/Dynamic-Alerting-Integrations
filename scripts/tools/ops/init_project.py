@@ -92,6 +92,7 @@ _HELP = {
                '可能已由你其他檔案宣告的租戶或其他拼法的預設會被跳過並列出\n'
                '（init 不檢查 exporter 能否讀取那些檔，請用 da-tools guard 確認），\n'
                'init 自己的檔案已存在、且另一個檔具體提到同一租戶時，\n'
+               '或要重寫的自有檔還宣告了不在 --tenants 裡的租戶時，\n'
                '拒絕執行（rc 1），不寫入任何檔案。'),
         'en': ('Bootstrap a Dynamic Alerting integration in your repository.\n\n'
                'In conf.d/ init writes only _defaults.yaml and <tenant>.yaml at\n'
@@ -99,8 +100,9 @@ _HELP = {
                'defaults in another spelling, is skipped and named (init does not\n'
                'check whether the exporter can read those files; verify with\n'
                'da-tools guard). If init\'s own file already exists and another\n'
-               'file concretely names the same tenant, init refuses (rc 1) and\n'
-               'writes nothing.'),
+               'file concretely names the same tenant, or an own file it would\n'
+               'rewrite also declares a tenant not in --tenants, init refuses\n'
+               '(rc 1) and writes nothing.'),
     },
     'ci': {
         'zh': 'CI/CD 平台: github, gitlab, both (預設: both)',
@@ -3344,6 +3346,40 @@ class _ReadThroughFailed(Exception):
     """(d): init cannot read this file through; it may mention anyone."""
 
 
+def _all_tenant_keys(path: Path) -> Optional[set[str]]:
+    """EVERY tenant key `path` declares (a), or None when init cannot list them.
+
+    For init's own `conf.d/<t>.yaml` before it rewrites that file: the rewrite
+    keeps only t, so every OTHER key would vanish (owner ruling on #1942,
+    round-1 F2). Unlike `_mentions` this cannot be answered by token search —
+    the other ids are not known in advance — so it needs the whole stream to
+    compose. One decoding only, chosen by BOM: a UTF-16 decoding of a UTF-8
+    file composes into a harmless-looking scalar and would read as "declares
+    nothing". Anything short of a full compose is None, and the caller
+    refuses (fail-closed): not being able to list them is not "there are none".
+    """
+    try:
+        raw = path.read_bytes()
+        if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
+            text = raw.decode('utf-16')
+        elif raw.startswith(b'\xef\xbb\xbf'):
+            text = raw.decode('utf-8-sig')
+        else:
+            text = raw.decode('utf-8')
+        keys: set[str] = set()
+        for doc in yaml.compose_all(text, Loader=yaml.SafeLoader):
+            if not isinstance(doc, yaml.MappingNode):
+                continue
+            for k, v in doc.value:
+                if (isinstance(k, yaml.ScalarNode) and k.value == 'tenants'
+                        and isinstance(v, yaml.MappingNode)):
+                    keys |= {kk.value for kk, _ in v.value
+                             if isinstance(kk, yaml.ScalarNode)}
+        return keys
+    except Exception:  # noqa: BLE001 — any failure means "cannot list them"
+        return None
+
+
 def _possible_mentions_unguarded(path: Path, requested: list[str]) -> set[str]:
     try:
         raw = path.read_bytes()
@@ -3452,7 +3488,7 @@ class _Conflict(NamedTuple):
     """One reason the run is refused (rendered by `_conflict_message`)."""
 
     kind: str
-    """'duplicate' | 'defaults' | 'clobber' | 'case'."""
+    """'duplicate' | 'defaults' | 'clobber' | 'drops' | 'case'."""
 
     tenant: str
     """The tenant concerned ('' for defaults / case)."""
@@ -3461,7 +3497,8 @@ class _Conflict(NamedTuple):
     """Output-relative POSIX paths, the first one init's own when relevant."""
 
     detail: str = ''
-    """'clobber': the tenant whose init path would be overwritten."""
+    """'clobber': the tenant whose init path would be overwritten; 'drops':
+    the unrequested tenants it declares, comma-joined ('' = cannot list)."""
 
 
 class _ConfdPlan(NamedTuple):
@@ -3522,10 +3559,16 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     entry whose name differs only in case (`Conf.D/` for `conf.d/`,
     `DB-C.YAML` for `db-c.yaml`; `_case_variants_along`).
 
-    ⚠️ Not handled, pending an owner ruling: init's own `conf.d/<t>.yaml`
-    that ALSO declares a tenant this run was NOT asked for is overwritten as
-    before, and that declaration is lost. Only the requested-tenant form of
-    it (below, 'clobber') is refused.
+    ⛔ Rewriting init's own `conf.d/<t>.yaml` keeps only t, so every other
+    tenant that file declares would lose its declaration. Two refusals cover
+    that, one per kind of tenant:
+      * 'clobber' — another REQUESTED tenant (it was skipped because of this
+        very file, so after the rewrite it would be declared nowhere);
+      * 'drops' — tenants this run was NOT asked for (owner ruling on #1942,
+        round-1 F2: refuse, do not overwrite; `--force` included). Found by
+        `_all_tenant_keys`; if init cannot list the file's keys it refuses
+        the same way. An own file init cannot read through at all (d) keeps
+        its existing handling and is not listed here.
     """
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
@@ -3590,6 +3633,16 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
                 conflicts.append(_Conflict('clobber', t, [f],
                                            generated_paths[out / f]))
                 break
+    # 'drops': the unrequested half of the same loss (see the docstring).
+    for t in generate:
+        own = conf_dir / f'{t}.yaml'
+        if own not in mentions or own in blanket:
+            continue
+        keys = _all_tenant_keys(own)
+        lost = None if keys is None else sorted(keys - set(requested))
+        if lost is None or lost:
+            conflicts.append(_Conflict('drops', t, [_rel(own)],
+                                       ', '.join(lost or [])))
 
     own_defaults = [p for p in root_defaults if p.name == '_defaults.yaml']
     other_defaults = [p for p in root_defaults if p.name != '_defaults.yaml']
@@ -3771,6 +3824,32 @@ def _conflict_row(c: _Conflict, is_zh: bool) -> str:
                 f"{c.tenant} would be declared nowhere. Move {c.tenant}'s "
                 f"entry into a file of its own, or leave {c.detail} out of "
                 f"--tenants (so init does not rewrite {f}), then re-run.")
+    if c.kind == 'drops':
+        f = c.files[0]
+        if not c.detail:
+            return (f"init 會重寫 {f}（租戶 {c.tenant} 的 init 路徑），但無法列出"
+                    f"它宣告的所有租戶（PyYAML 讀不了這個檔），重寫可能讓其他"
+                    f"租戶的宣告消失。請先確認它只宣告 {c.tenant}（或把其他租戶"
+                    f"移到各自的檔案）再重跑。"
+                    if is_zh else
+                    f"init would rewrite {f} (its own path for tenant "
+                    f"{c.tenant}) but cannot list every tenant it declares "
+                    f"(PyYAML cannot parse the file), so the rewrite could drop "
+                    f"another tenant's declaration. Make sure it declares only "
+                    f"{c.tenant} (move any other tenant to a file of its own), "
+                    f"then re-run.")
+        first = c.detail.split(', ')[0]
+        return (f"init 會重寫 {f}（租戶 {c.tenant} 的 init 路徑），但它也宣告了"
+                f"這次沒要求的 {c.detail}；重寫會讓 {c.detail} 的宣告消失。請把 "
+                f"{c.detail} 移到各自的檔案（例如 conf.d/{first}.yaml）後再跑，"
+                f"或把 {c.detail} 也加進 --tenants（若它本來就該由 init 產生）。"
+                if is_zh else
+                f"init would rewrite {f} (its own path for tenant {c.tenant}), "
+                f"but that file also declares {c.detail}, which this run was "
+                f"not asked for; the rewrite would make {c.detail}'s "
+                f"declaration disappear. Move {c.detail} into a file of its own "
+                f"(e.g. conf.d/{first}.yaml) and re-run, or add {c.detail} to "
+                f"--tenants too (if init should generate it).")
     # 'case'
     own, existing = c.files
     return (f"init 會寫入 {own}，但同一層已有只差大小寫的 {existing}；在不分"
@@ -4968,8 +5047,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              '(_defaults.yml), is skipped and named; if init\'s '
                              'own file already exists and another file '
                              'concretely names the same tenant (a tenants: key '
-                             'or the id as a token), the run is refused (rc 1) '
-                             'and nothing is written'
+                             'or the id as a token), or if a conf.d/<tenant>.yaml '
+                             'it would rewrite also declares a tenant not in '
+                             '--tenants, the run is refused (rc 1) and nothing '
+                             'is written'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -4983,7 +5064,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              '檔）或其他拼法的預設（_defaults.yml）會被跳過並'
                              '列出；若 init 自己的檔已存在、且另一個檔具體提到'
                              '同一個租戶（tenants: 的 key 或租戶 id token），'
-                             '則拒絕執行（rc 1），不寫入任何檔案')
+                             '或它要重寫的 conf.d/<tenant>.yaml 還宣告了不在 '
+                             '--tenants 裡的租戶，則拒絕執行（rc 1），'
+                             '不寫入任何檔案')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')

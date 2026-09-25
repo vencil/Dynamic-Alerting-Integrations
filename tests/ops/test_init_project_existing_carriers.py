@@ -314,6 +314,69 @@ def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_cli(
     assert "`!Important`" in run.stderr
 
 
+# ── owner 裁決（2026-09-25，第 1 輪 F2 的另一半）：重寫 init 自有路徑時，那個
+# 檔還宣告了本輪「沒要求」的租戶 ⇒ 拒絕（'drops'），--force 也一樣。
+_OWN_WITH_EXTRA = "tenants:\n  db-a: {}\n  db-z:\n    x: \"1\"\n"
+
+
+def _plan(base: Path, tenants: list):
+    sys.path.insert(0, str(TOOL.parent))
+    import init_project as ip
+    return ip._plan_confd(
+        {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
+         "tenants": tenants, "namespace": "monitoring",
+         "da_tools_image": ip.DA_TOOLS_IMAGE}, str(base))
+
+
+def test_rewriting_an_own_path_that_declares_an_unrequested_tenant_plan(
+        tmp_path):
+    _place(tmp_path, "db-a.yaml", _OWN_WITH_EXTRA)
+    plan = _plan(tmp_path, ["db-a"])
+    drops = [c for c in plan.conflicts if c.kind == "drops"]
+    assert [(c.tenant, c.files, c.detail) for c in drops] == [
+        ("db-a", ["conf.d/db-a.yaml"], "db-z")], plan.conflicts
+
+
+@pytest.mark.parametrize("extra", [[], ["--dry-run"], ["--force"]],
+                         ids=["run", "dry-run", "force"])
+def test_rewriting_an_own_path_that_declares_an_unrequested_tenant_cli(
+        tmp_path, extra):
+    out = tmp_path / "repo"
+    if extra == ["--force"]:
+        assert _run(out, "db-a").returncode == 0      # 已初始化（有 marker）
+    _place(out, "db-a.yaml", _OWN_WITH_EXTRA)
+    before = _snapshot(out)
+
+    run = _run(out, "db-a", *extra)
+
+    assert run.returncode == 1, (run.returncode, run.stderr[-800:])
+    assert _snapshot(out) == before, "拒絕時不得寫入任何檔案"
+    assert "init would rewrite conf.d/db-a.yaml" in run.stderr
+    assert "also declares db-z, which this run was not asked for" in run.stderr
+    assert "conf.d/db-z.yaml" in run.stderr and "--tenants" in run.stderr
+
+
+def test_an_own_path_whose_keys_init_cannot_list_is_refused(tmp_path):
+    """列不出自有檔的所有 key（PyYAML 讀不了）也拒絕——列不出不等於沒有。"""
+    out = tmp_path / "repo"
+    _place(out, "db-a.yaml", "tenants:\n  db-a: {}\nnote:\t1\n")
+    before = _snapshot(out)
+    run = _run(out, "db-a")
+    assert run.returncode == 1, run.stderr[-800:]
+    assert _snapshot(out) == before
+    assert "cannot list every tenant it declares" in run.stderr
+
+
+def test_an_own_path_declaring_only_its_tenant_is_still_rewritten(tmp_path):
+    """對照組：只宣告 db-a 的 db-a.yaml 照常重寫。"""
+    out = tmp_path / "repo"
+    own = _place(out, "db-a.yaml", "tenants:\n  db-a: {}\n# HAND-EDIT\n")
+    run = _run(out, "db-a")
+    assert run.returncode == 0, run.stderr[-800:]
+    assert "HAND-EDIT" not in own.read_text(encoding="utf-8")
+    assert "init refused" not in run.stderr
+
+
 def test_the_clobber_refusal_does_not_claim_a_second_declaration(tmp_path):
     """F2：db-z 只被宣告一次，訊息不得說「宣告了兩次、請合併」。"""
     out = _brownfield(tmp_path)
