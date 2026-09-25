@@ -564,6 +564,47 @@ class TestLinkTargetOutsideConfD:
         assert r.returncode == 0, r.stderr
         assert json.loads(r.stdout)["substitution_type"] == "insert"
 
+    def _whatif_tree(self, tmp_path):
+        conf_d = tmp_path / "c"
+        (conf_d / "sub").mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (conf_d / "sub" / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
+        (conf_d / "sub" / "tw.yaml").write_text("tenants:\n  tw: {}\n", encoding="utf-8")
+        return conf_d
+
+    def test_what_if_link_takes_its_entry_level_like_a_regular_file(self, tmp_path):
+        # #1967 blind review F2: the what-if file's OWN level came from its
+        # resolved path, so a root-level link to a file outside conf.d was
+        # append-external while an identical regular file was inserted.
+        conf_d = self._whatif_tree(tmp_path)
+        (tmp_path / "o").mkdir()
+        (tmp_path / "o" / "w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        (conf_d / "_whatif_real.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        self._link(conf_d / "_whatif.yaml", "../o/w.yaml")
+        outs = []
+        for name in ("_whatif.yaml", "_whatif_real.yaml"):
+            r = self._run(conf_d, "tw", "--what-if", str(conf_d / name))
+            assert r.returncode == 0, r.stderr
+            out = json.loads(r.stdout)
+            outs.append((out["substitution_type"], out["what_if_merged_hash"]))
+        assert outs[0] == outs[1], outs
+        assert outs[0][0] == "insert"
+
+    def test_what_if_link_into_a_deeper_dir_is_at_its_entry_level(self, tmp_path):
+        # `_x.yaml -> sub/deep/_y.yaml` sits at the ROOT level (0), below
+        # `sub/_defaults.yaml`, so its cpu_pct is overridden by 70 and the
+        # merged_hash does not move. At the target's level (2) it would be
+        # the nearest level and win with 10.
+        conf_d = self._whatif_tree(tmp_path)
+        (conf_d / "sub" / "deep").mkdir()
+        (conf_d / "sub" / "deep" / "_y.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        self._link(conf_d / "_x.yaml", "sub/deep/_y.yaml")
+        r = self._run(conf_d, "tw", "--what-if", str(conf_d / "_x.yaml"))
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        assert out["substitution_type"] == "insert"
+        assert out["merged_hash_changed"] is False, out
+
     def test_link_target_inside_conf_d_keeps_the_resolved_path(self, tmp_path):
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "_real.txt").write_text("tenants:\n  tg: {}\n", encoding="utf-8")

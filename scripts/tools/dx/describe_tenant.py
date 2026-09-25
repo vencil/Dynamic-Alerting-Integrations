@@ -341,6 +341,24 @@ class ConfDScanner:
         except ValueError:
             return str(entry.relative_to(self.conf_d))
 
+    def entry_level(self, entry: Path) -> int | None:
+        """The chain level of conf.d entry `entry`, or None outside conf.d.
+
+        ⛔ #1967: ONE rule for every level this tool computes — the chain's
+        carriers and the `--what-if` file alike. The level is that of the
+        directory HOLDING the entry, resolved (the same key `_scan` groups
+        carriers by, `dp.parent.resolve()`); the entry's own name is never
+        followed. Resolving the whole path instead put a link's level at its
+        target's directory: `_whatif.yaml -> ../o/w.yaml` came out as
+        append-external while an identical regular file was inserted, and
+        `_x.yaml -> sub/deep/y.yaml` counted as level 2 instead of 0.
+        """
+        holder = Path(os.path.realpath(entry.absolute().parent))
+        try:
+            return len(holder.relative_to(self.conf_d).parts)
+        except ValueError:
+            return None
+
     def _resolve_defaults_chain(self, tenant_file: Path) -> list[tuple[Path, Path]]:
         """Walk from tenant file up to conf.d/ root, collecting _defaults.yaml at each level.
 
@@ -655,29 +673,29 @@ def main() -> None:
             simulated_chain = list(chain)
             substitution_type = "substitute"  # Override existing defaults at same path
         else:
-            # Insert according to directory depth if path is inside conf.d/, else append
-            try:
-                what_if_rel = what_if_path.relative_to(scanner.conf_d)
-                what_if_depth = len(what_if_rel.parts) - 1  # minus filename
+            # Insert according to directory depth if the ENTRY is inside
+            # conf.d/, else append. #1967: both depths come from
+            # `entry_level` — the directory holding the entry, never the
+            # resolved target (a carrier or what-if link may point elsewhere
+            # in conf.d, or outside it). Before, the chain side raised into a
+            # `except ValueError` here and silently misfiled the what-if as
+            # append-external, and the what-if side took its link's target's
+            # level.
+            what_if_depth = scanner.entry_level(Path(args.what_if))
+            if what_if_depth is not None:
                 # Insert sorted by depth so that outer (L0) precedes inner (L3)
                 inserted = False
                 simulated_chain = []
-                # #1967: a level's depth is that of the directory HOLDING
-                # its entry (the level it occupies in the chain), not of the
-                # resolved target — which may sit elsewhere in conf.d, or
-                # outside it, where `relative_to` raised into the ValueError
-                # below and silently misfiled the what-if as append-external.
                 for dp, entry in zip(chain, chain_entries):
-                    dp_depth = len(entry.relative_to(scanner.conf_d).parts) - 1
-                    if not inserted and what_if_depth < dp_depth:
+                    if not inserted and what_if_depth < scanner.entry_level(entry):
                         simulated_chain.append(what_if_path)
                         inserted = True
                     simulated_chain.append(dp)
                 if not inserted:
                     simulated_chain.append(what_if_path)
                 substitution_type = "insert"
-            except ValueError:
-                # what-if path outside conf.d/ → append at end (highest override)
+            else:
+                # what-if entry outside conf.d/ → append at end (highest override)
                 simulated_chain = list(chain) + [what_if_path]
                 substitution_type = "append-external"
 
