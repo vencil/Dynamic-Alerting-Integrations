@@ -415,7 +415,7 @@ export default function PlatformDemo() {
         <div className="max-w-7xl mx-auto px-6 py-8">
           <h1 className="text-4xl font-bold text-slate-900">{t('平台展示', 'Platform Demo')}</h1>
           <p className="text-slate-600 mt-2 text-lg">
-            {t('體驗 ', 'Experience the ')}<code className="bg-slate-100 px-2 py-1 rounded text-sm font-mono">make demo</code>{t(' 工作流 — 無需叢集', ' workflow — no cluster required')}
+            {t('導覽平台工作流（scaffold → migrate → validate → routes → baseline）— 示意指令、模擬輸出，無需叢集', 'A walkthrough of the platform workflow (scaffold → migrate → validate → routes → baseline) — illustrative commands, simulated output, no cluster required')}
           </p>
         </div>
       </div>
@@ -516,7 +516,7 @@ export default function PlatformDemo() {
               <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-6 shadow-sm">
                 <h3 className="text-xl font-bold text-green-900">{t('展示完成!', 'Demo Complete!')}</h3>
                 <p className="text-green-800 mt-2">
-                  {t('您已成功完成整個 ', "You've successfully walked through the entire ")}<code className="bg-green-100 px-2 py-1 rounded text-sm font-mono">make demo</code>{t(' 工作流。', ' workflow.')}
+                  {t('您已走完整個平台工作流導覽（示意指令、模擬輸出）。', "You've walked through the entire platform workflow tour (illustrative commands, simulated output).")}
                 </p>
                 <div className="mt-4 space-y-2">
                   <p className="font-semibold text-green-900">{t('後續步驟:', 'Next Steps:')}</p>
