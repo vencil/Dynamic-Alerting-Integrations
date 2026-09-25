@@ -230,17 +230,22 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # ⛔ `git checkout <branch>` exits 128 when that branch is checked out in
 # another worktree, which is the normal state here — an instruction that
 # cannot reach green is a dead end, not a hint. Point at that worktree instead.
+# ⛔ `--porcelain`: the human format puts the path and the branch on one
+# space-separated line, so a path with a space was cut at it (#1952).
 _other_wt=""
-while read -r _wt_path _wt_rest; do
-    case "$_wt_rest" in
-        *"[$_missing_branch]"*) _other_wt="$_wt_path"; break ;;
+_wt_cur=""
+while IFS= read -r _wt_line; do
+    case "$_wt_line" in
+        "worktree "*) _wt_cur="${_wt_line#worktree }" ;;
+        "branch refs/heads/$_missing_branch") _other_wt="$_wt_cur"; break ;;
     esac
-done <<< "$(git worktree list 2>/dev/null)"
+done <<< "$(git worktree list --porcelain 2>/dev/null)"
 
 if [ "$_missing_sha" = "$head_sha" ]; then
     _checkout_hint="    make pr-preflight"
 elif [ -n "$_other_wt" ]; then
-    _checkout_hint="    cd ${_other_wt} && make pr-preflight"
+    printf -v _other_wt_q '%q' "$_other_wt"
+    _checkout_hint="    cd ${_other_wt_q} && make pr-preflight"
 else
     # ⛔ By SHA, not by branch name. `git push <old-sha>:refs/heads/x` and
     # `git push HEAD:refs/heads/other-name` both name a remote branch that

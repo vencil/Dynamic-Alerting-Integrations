@@ -614,9 +614,60 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
         path_prepend=shim, env_extra={"GIT_PREFLIGHT_STRICT": "1"},
     )
     assert r2.returncode == 1, f"control did not fire. stderr={r2.stderr}"
-    assert "cd " in r2.stderr and str(wt.name) in r2.stderr, (
-        "the branch is checked out in another worktree, so `git checkout` "
-        f"exits 128 there; the hint must point at it. stderr={r2.stderr}"
+
+
+def _follow_the_hint(stderr: str, cwd: Path) -> subprocess.CompletedProcess:
+    """Run the banner's `cd ...` exactly as printed and report where it lands."""
+    lines = [
+        ln.strip() for ln in stderr.splitlines()
+        if ln.strip().startswith("cd ") and ln.rstrip().endswith("&& make pr-preflight")
+    ]
+    assert len(lines) == 1, f"expected one `cd ... && make pr-preflight` line: {stderr}"
+    cd = lines[0][: -len("&& make pr-preflight")]
+    return subprocess.run(  # subprocess-timeout: ignore
+        ["bash", "-c", f"{cd} && pwd -P"], cwd=cwd, capture_output=True, text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME"],
+    ids=["plain", "space", "quote", "dollar"],
+)
+def test_the_hint_lands_in_the_worktree_that_holds_the_branch(tmp_path: Path, name: str):
+    """#1952 — the printed `cd` is executed, not substring-matched.
+
+    `sibling` next to it is the prefix a whitespace split would cut
+    `sibling wt` to: an existing directory, so a truncated `cd` succeeds and
+    lands in the wrong tree.
+    """
+    _init_git(tmp_path)
+    root = tmp_path.parent / f"wts-{tmp_path.name}"
+    (root / "sibling").mkdir(parents=True)
+    wt = root / name
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    for args in (["-C", str(tmp_path), "worktree", "add", "-q", "-b", "held", str(wt), "main"],
+                 ["-C", str(wt), "commit", "-q", "--allow-empty", "-m", "held work"]):
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", *args], capture_output=True, text=True, env=env,
+        ).returncode == 0
+    sha = subprocess.run(  # subprocess-timeout: ignore
+        ["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True,
+    ).stdout.strip()
+
+    r = _run_gate(
+        tmp_path, _refspec("held", sha),
+        path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
+        env_extra={"GIT_PREFLIGHT_STRICT": "1"},
+    )
+    assert r.returncode == 1, f"stderr={r.stderr}"
+    landed = _follow_the_hint(r.stderr, tmp_path)
+    assert landed.returncode == 0, f"the hint does not run: {landed.stderr}"
+    assert Path(landed.stdout.strip()) == wt.resolve(), (
+        f"the hint lands in {landed.stdout.strip()!r}, not in {wt}"
     )
 
 
