@@ -46,6 +46,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -245,6 +246,14 @@ type reloadPriorState struct {
 	// (flatScanState.tree). It carries the mtimes the fast-path compares
 	// against AND the tenant declarations it must carry across.
 	tree *treeScan
+	// graph is the last commit's inheritance graph. classifyTenant compares
+	// each tenant's prior defaults chain (path sequence) against this tick's:
+	// a chain whose MEMBERSHIP changed — a `_defaults` file deleted, or the
+	// selected carrier of a co-located `.yaml`/`.yml` pair switching to a
+	// file whose hash was already known — moves merged_hash even though no
+	// entry of the new chain changed hash (#1964). nil before hierarchical
+	// mode first commits.
+	graph *InheritanceGraph
 }
 
 // reloadScanState bundles the hierarchy projection of this tick's scan
@@ -285,6 +294,7 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 		mergedHashes:     m.hierarchy.mergedHashes,
 		tenantSources:    m.hierarchy.tenantSources,
 		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
+		graph:            m.hierarchy.graph,          // #1964: prior chain membership
 		hierarchicalMode: m.hierarchy.enabled,
 		tree:             m.flat.tree,
 	}
@@ -389,13 +399,26 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	sourceChanged := !wasKnown || prevSrc != srcPath || scan.hashes[srcPath] != prior.hashes[srcPath]
 
 	defaultsChain := scan.graph.TenantDefaults[tid]
-	defaultsChanged := false
-	for _, dp := range defaultsChain {
-		if scan.hashes[dp] != prior.hashes[dp] {
-			defaultsChanged = true
-			break
+	// scopePaths: the defaults files whose change this tick feeds the
+	// tenant — chain entries whose hash moved, plus (#1964) any path that
+	// left or joined the chain. Hash comparison alone misses a membership
+	// change: deleting a `_defaults` file, or a co-located `.yaml`/`.yml`
+	// pair switching its selected carrier to a file whose hash was already
+	// in prior.hashes, leaves every entry of the NEW chain hash-stable while
+	// the merge input changed.
+	scopePaths := hashChangedChainPaths(defaultsChain, scan.hashes, prior.hashes)
+	membershipChanged := false
+	if prior.graph != nil {
+		// A tenant absent from the prior graph compares as an empty chain;
+		// a genuinely new tenant is already sourceChanged, so this only
+		// adds signal for tenants that were known.
+		priorChain := prior.graph.TenantDefaults[tid]
+		if !slices.Equal(priorChain, defaultsChain) {
+			membershipChanged = true
+			scopePaths = append(scopePaths, chainMembershipDelta(priorChain, defaultsChain)...)
 		}
 	}
+	defaultsChanged := membershipChanged || len(scopePaths) > 0
 
 	if !sourceChanged && !defaultsChanged {
 		// Reuse cached merged_hash — nothing that feeds this tenant moved.
@@ -430,11 +453,11 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			buckets[reloadEmissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
 		}
 	} else if defaultsChanged {
-		scope := widestChangedScope(defaultsChain, scan.hashes, prior.hashes, m.path)
+		scope := widestPathScope(scopePaths, m.path)
 		if scope == "" {
-			// Defensive: defaultsChanged was true but no chain entry
-			// differs by hash. Shouldn't happen (defaultsChanged is
-			// derived from the same comparison) — fall back to unknown.
+			// Defensive: defaultsChanged was true but no path was
+			// attributed. Only reachable when the chain was reordered
+			// with identical membership and hashes — fall back to unknown.
 			scope = "unknown"
 		}
 		if prev, ok := prior.mergedHashes[tid]; ok && prev == mh {
@@ -442,6 +465,13 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			// didn't — "quiet defaults edit". v2.8.0 Issue #61 splits
 			// this into shadowed (tenant override blocked the change)
 			// vs cosmetic (comment/reorder/whitespace).
+			//
+			// #1964: a chain-membership change whose merged_hash did not
+			// move lands here too, with no new semantics — the classifier
+			// only diffs hash-changed entries of the NEW chain, so a pure
+			// membership change (removed file, or carrier switched to an
+			// already-known hash) reads as cosmetic, and one combined with
+			// a hash change is judged on that hash change alone.
 			res.noOp++
 			tenantBytes, terr := os.ReadFile(srcPath)
 			effect := "cosmetic"

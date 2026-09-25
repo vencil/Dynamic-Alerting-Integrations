@@ -111,12 +111,54 @@ func defaultsPathLevel(path, root string) string {
 // to "unknown"; returns "" if no file in the chain actually changed
 // (caller should not enter the defaults-effect branch in that case).
 func widestChangedScope(chain []string, hashes, priorHashes map[string]string, root string) string {
+	return widestPathScope(hashChangedChainPaths(chain, hashes, priorHashes), root)
+}
+
+// hashChangedChainPaths returns the entries of `chain` whose hash moved
+// between the prior and current scan, in chain order.
+func hashChangedChainPaths(chain []string, hashes, priorHashes map[string]string) []string {
+	var changed []string
+	for _, p := range chain {
+		if hashes[p] != priorHashes[p] {
+			changed = append(changed, p)
+		}
+	}
+	return changed
+}
+
+// chainMembershipDelta returns the paths present in exactly one of prev /
+// next — defaults files that left or joined a tenant's chain between two
+// scans (#1964). Order: prev-only entries first, then next-only, each in
+// chain order.
+func chainMembershipDelta(prev, next []string) []string {
+	inPrev := make(map[string]bool, len(prev))
+	for _, p := range prev {
+		inPrev[p] = true
+	}
+	inNext := make(map[string]bool, len(next))
+	for _, p := range next {
+		inNext[p] = true
+	}
+	var delta []string
+	for _, p := range prev {
+		if !inNext[p] {
+			delta = append(delta, p)
+		}
+	}
+	for _, p := range next {
+		if !inPrev[p] {
+			delta = append(delta, p)
+		}
+	}
+	return delta
+}
+
+// widestPathScope returns the widest (smallest scopeRank) level among the
+// given defaults paths, or "" when paths is empty.
+func widestPathScope(paths []string, root string) string {
 	widest := ""
 	widestRank := 999
-	for _, p := range chain {
-		if hashes[p] == priorHashes[p] {
-			continue
-		}
+	for _, p := range paths {
 		lvl := defaultsPathLevel(p, root)
 		if r, ok := scopeRank[lvl]; ok && r < widestRank {
 			widestRank = r
