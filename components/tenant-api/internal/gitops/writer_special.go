@@ -1,7 +1,8 @@
 package gitops
 
 // Special-file write paths for non-tenant GitOps entities — _groups.yaml,
-// _views.yaml, _federation_policy.yaml, and per-tenant _federation/<id>.yaml.
+// _views.yaml, _federation_policy.yaml, and per-tenant _federation/<id>.yaml or
+// .yml (any extension case; a new subset defaults to .yaml).
 // Split out of writer.go (Cycle 5 refactor) so the tenant write path and these
 // entity write paths read separately — no behavior change, pure intra-package
 // move. All share the same writer mutex + HEAD conflict detection as tenant
@@ -88,6 +89,7 @@ func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, author
 
 	// Resolved under w.mu so no other write through this Writer can create
 	// or rename the tenant's subset file between the answer and the write.
+	// Argued, not pinned: no test fails if this call moves above the lock.
 	path, err := confd.TenantFilePathForWrite(dir, tenantID)
 	if err != nil {
 		return err

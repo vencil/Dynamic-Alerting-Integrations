@@ -37,7 +37,7 @@ func OrphanCounts() (tokens, subsetFiles int64) {
 // OrphanReport is the result of one orphan scan.
 type OrphanReport struct {
 	Tokens  []string // token_id of each live token whose tenant left conf.d
-	Subsets []string // tenant id of each stale conf.d/_federation/<id>.yaml
+	Subsets []string // tenant id of each stale conf.d/_federation/<id>.{yaml,yml} (any extension case)
 }
 
 // empty reports whether the scan found nothing.
@@ -136,7 +136,8 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 
 // Detector periodically reports federation artifacts left behind
 // by an incomplete tenant offboarding — live token Records and
-// conf.d/_federation/<tenant>.yaml subset files whose owning tenant is
+// conf.d/_federation/<tenant>.{yaml,yml} subset files (any extension
+// case) whose owning tenant is
 // no longer in conf.d (ADR-020 #521).
 //
 // It only OBSERVES: it emits a WARN log and updates the orphan gauges

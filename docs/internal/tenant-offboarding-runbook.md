@@ -12,11 +12,11 @@ updated_at: 2026-05-19
 
 # 租戶 Offboarding Runbook — Federation 清理
 
-> 移除一個租戶時，**federation 的兩樣東西不會隨 `conf.d/<tenant>.yaml` 一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒設定檔。本 runbook 是 ADR-020 §Token model 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
+> 移除一個租戶時，**federation 的兩樣東西不會隨租戶設定檔 `conf.d/<tenant>.yaml`（或 `.yml`）一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒設定檔。本 runbook 是 ADR-020 §Token model 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
 
 ## 背景：為什麼 offboarding 不會自動清乾淨
 
-租戶 offboarding 在本平台是一個 **git 操作** —— 移除該租戶的 `conf.d/<tenant>.yaml`。但 federation 有兩樣東西**不在** `conf.d/<tenant>.yaml` 裡，所以不會被一併帶走：
+租戶 offboarding 在本平台是一個 **git 操作** —— 移除該租戶的設定檔 `conf.d/<tenant>.yaml`（或 `.yml`，副檔名不分大小寫）。但 federation 有兩樣東西**不在**租戶設定檔裡，所以不會被一併帶走：
 
 | 殘留物 | 存放處 | 不清會怎樣 |
 |---|---|---|
@@ -56,7 +56,7 @@ curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
 ### 2. 移除 federation subset 檔
 
 ```sh
-ls conf.d/_federation/ | grep -i -E '^<tenant>\.(yaml|yml)$'   # 先看實際檔名
+ls conf.d/_federation/ | grep -i -x -F -e '<tenant>.yaml' -e '<tenant>.yml'   # 先看實際檔名（固定字串比對，id 裡的 . 不是萬用字元）
 git rm conf.d/_federation/<上一步列出的每個檔名>
 ```
 
@@ -69,8 +69,11 @@ git rm conf.d/_federation/<上一步列出的每個檔名>
 ### 3. 移除租戶設定檔（offboarding 本身）
 
 ```sh
-git rm conf.d/<tenant>.yaml
+ls conf.d/ | grep -i -x -F -e '<tenant>.yaml' -e '<tenant>.yml'   # 先看實際檔名
+git rm conf.d/<上一步列出的每個檔名>
 ```
+
+租戶設定檔同樣可能是 `<tenant>.yml` 或大寫副檔名（tenant-api 與 threshold-exporter 都認，[#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673)）；直接 `git rm conf.d/<tenant>.yaml` 在這種租戶上會回 `pathspec did not match`。與步驟 2 同一個但書：`grep -i` 也放寬了主檔名大小寫，只刪主檔名與 `<tenant>` 完全相同的。
 
 步驟 2、3 在同一個 commit、走同一次 PR review。
 
@@ -112,9 +115,9 @@ tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federat
 
 ### `FederationRejectionRateAnomaly` 不會對已退租租戶誤報
 
-`FederationRejectionRateAnomaly`（`k8s/03-monitoring/configmap-rules-platform.yaml`）自 [#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550) 起在規則尾端 join `and on (tenant) tenant_metadata_info` —— 只評估**仍在 conf.d** 的租戶。完成步驟 3（`git rm conf.d/<tenant>.yaml`）後，threshold-exporter 重載、該租戶的 `tenant_metadata_info` 序列消失，告警的 join 隨之把它排除：殭屍 token 在上表階段一造成的 100% `auth_failed` **不會**再讓平台 ops 被一個已不存在的租戶 call 醒。
+`FederationRejectionRateAnomaly`（`k8s/03-monitoring/configmap-rules-platform.yaml`）自 [#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550) 起在規則尾端 join `and on (tenant) tenant_metadata_info` —— 只評估**仍在 conf.d** 的租戶。完成步驟 3（`git rm` 租戶設定檔）後，threshold-exporter 重載、該租戶的 `tenant_metadata_info` 序列消失，告警的 join 隨之把它排除：殭屍 token 在上表階段一造成的 100% `auth_failed` **不會**再讓平台 ops 被一個已不存在的租戶 call 醒。
 
-> 若你**仍**看到此告警對某已退租租戶觸發 —— 代表步驟 3 沒做完（`conf.d/<tenant>.yaml` 還在 repo），threshold-exporter 仍在發該租戶的 `tenant_metadata_info`。回到 §步驟 補完。
+> 若你**仍**看到此告警對某已退租租戶觸發 —— 代表步驟 3 沒做完（租戶設定檔 `conf.d/<tenant>.{yaml,yml}` 還在 repo），threshold-exporter 仍在發該租戶的 `tenant_metadata_info`。回到 §步驟 補完。
 
 ### 殘留流量本身（選用清理）
 

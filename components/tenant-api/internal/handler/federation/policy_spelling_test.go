@@ -42,7 +42,7 @@ const spellingTenant = "db-a"
 // the default spelling; these tests exist for the other spellings.
 func plantSubsetFile(t *testing.T, configDir, name, metric string) string {
 	t.Helper()
-	dir := filepath.Join(configDir, "_federation")
+	dir := confd.FederationSubsetDir(configDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir _federation: %v", err)
 	}
@@ -56,7 +56,7 @@ func plantSubsetFile(t *testing.T, configDir, name, metric string) string {
 // subsetDirNames lists _federation/ sorted; a missing directory lists empty.
 func subsetDirNames(t *testing.T, configDir string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(configDir, "_federation"))
+	entries, err := os.ReadDir(confd.FederationSubsetDir(configDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -237,14 +237,14 @@ func TestPutTenantFederation_SpellingOutcomes(t *testing.T) {
 			if tc.wantNewIn == "" {
 				// Refused: every pre-existing file is byte-identical.
 				for name, b := range before {
-					got, err := os.ReadFile(filepath.Join(configDir, "_federation", name))
+					got, err := os.ReadFile(filepath.Join(confd.FederationSubsetDir(configDir), name))
 					if err != nil || string(got) != string(b) {
 						t.Errorf("%s changed on a refused PUT: err=%v, got %q, want %q", name, err, got, b)
 					}
 				}
 				return
 			}
-			got, err := os.ReadFile(filepath.Join(configDir, "_federation", tc.wantNewIn))
+			got, err := os.ReadFile(filepath.Join(confd.FederationSubsetDir(configDir), tc.wantNewIn))
 			if err != nil {
 				t.Fatalf("read %s: %v", tc.wantNewIn, err)
 			}
