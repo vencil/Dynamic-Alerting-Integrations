@@ -212,13 +212,23 @@ ls -la "$CONF_DIR/"
 pause
 
 # ─────────────────────────────────────────────
-step "Validate all tenant configs (CI mode)"
+step "Validate all tenant configs"
 # ─────────────────────────────────────────────
 
-info "Running: da-tools validate-config --config-dir $CONF_DIR --ci"
-python3 "$TOOLS_DIR/ops/validate_config.py" --config-dir "$CONF_DIR" --ci 2>&1 || true
+# validate-config has no --ci flag: its exit code is already CI-shaped
+# (0 = no failed check, 1 = a check failed, 2 = the tool did not run).
+# issue 1380: this step used to pass --ci and swallow the rc=2 with `|| true`,
+# then announce success — so the rc is read here, not discarded.
+info "Running: da-tools validate-config --config-dir $CONF_DIR"
+vc_rc=0
+python3 "$TOOLS_DIR/ops/validate_config.py" --config-dir "$CONF_DIR" 2>&1 || vc_rc=$?
 echo ""
-info "Validation complete — any warnings are advisory"
+case "$vc_rc" in
+  0) info "Validation passed (exit 0) — WARN lines, if any, are advisory" ;;
+  1) warn "Validation found failed checks (exit 1) — see the report above" ;;
+  *) warn "validate-config did not run (exit $vc_rc) — the demo cannot continue"
+     exit "$vc_rc" ;;
+esac
 
 pause
 
@@ -299,7 +309,7 @@ echo -e "${BOLD}║${NC}    (MariaDB, Redis, Kafka, JVM, PostgreSQL, Oracle, DB2
 echo -e "${BOLD}║${NC}  ✓ Direct routing + Routing Profile (ADR-007)                  ${BOLD}║${NC}"
 echo -e "${BOLD}║${NC}  ✓ Domain policy enforcement (Finance: PagerDuty only)         ${BOLD}║${NC}"
 echo -e "${BOLD}║${NC}  ✓ Three-state operations (Normal / Silent / Maintenance)      ${BOLD}║${NC}"
-echo -e "${BOLD}║${NC}  ✓ CI-mode validation (da-tools validate-config --ci)          ${BOLD}║${NC}"
+echo -e "${BOLD}║${NC}  ✓ Unified config validation (da-tools validate-config)        ${BOLD}║${NC}"
 echo -e "${BOLD}║${NC}  ✓ Route generation with validation                            ${BOLD}║${NC}"
 echo -e "${BOLD}║${NC}  ✓ Routing trace (explain-route)                               ${BOLD}║${NC}"
 echo -e "${BOLD}║${NC}  ✓ Blast radius analysis (config-diff)                         ${BOLD}║${NC}"

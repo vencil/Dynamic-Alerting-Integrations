@@ -185,24 +185,54 @@ _metadata:
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
-  validate-config --config-dir /data/conf.d --ci
+  validate-config --config-dir /data/conf.d
 ```
 
-預期輸出：
+預期輸出（照練習 1、2 做完之後的實測結果；`schema` 底下 WARN 列的順序每次執行可能不同）：
 
 ```
-[PASS] prod-mariadb: 5 keys, routing OK
-[PASS] prod-redis:   5 keys, routing OK (profile: team-sre-apac)
-[PASS] prod-kafka:   7 keys, routing OK
-[PASS] staging-pg:   2 keys, routing OK, maintenance window active
-[PASS] prod-oracle:  4 keys, routing OK (profile: domain-finance-tier1)
+============================================================
+  validate-config — Unified Validation Report
+============================================================
 
-✅ All 5 tenants passed validation.
+[PASS] yaml_syntax
+       6 files parsed successfully
+
+[WARN] schema
+         WARN: prod-kafka: unknown key 'jvm_memory' not in defaults
+         WARN: prod-kafka: unknown key 'kafka_broker_count' not in defaults
+         WARN: prod-oracle: _routing_profile references unknown profile 'domain-finance-tier1'
+         WARN: prod-oracle: unknown key 'oracle_sessions_active' not in defaults
+         WARN: prod-oracle: unknown key 'oracle_sessions_active_critical' not in defaults
+         WARN: prod-oracle: unknown reserved key '_domain_policy' (typo?)
+         WARN: prod-redis: _routing_profile references unknown profile 'team-sre-apac'
+         WARN: prod-redis: unknown key 'redis_memory_used_bytes' not in defaults
+         WARN: prod-redis: unknown key 'redis_memory_used_bytes_critical' not in defaults
+       -> Suggested action: ...
+
+[PASS] routes
+       5 routes, 5 receivers, 5 inhibit_rules
+
+[PASS] profiles
+       5 tenants scanned, 0 profile refs, 0 profiles defined
+
+[PASS] policy_dsl
+       No _policies defined — skipped
+
+[PASS] tenant_uniqueness
+       5 tenant(s), each declared in exactly one file
+
+------------------------------------------------------------
+  Total: 6 checks | 5 pass | 1 warn | 0 fail
+------------------------------------------------------------
+  Result: WARN (pass with warnings)
 ```
 
-若出現警告，檢查 key 名稱和 timing guardrails。
+結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。`schema` 那 9 列 WARN 來自練習 2 的範例值：有幾個 key 不在 `_defaults.yaml` 裡，兩個 `_routing_profile` 指向尚未定義的 profile。實際導入時請逐列確認 key 名稱。
 
-**檢查點**：你能解釋為什麼 `group_wait: "2s"` 會驗證失敗嗎？（提示：guardrail 最小值是 5s）
+⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段整份貼成了檔案，漏掉 init 產生的 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
+
+**檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 
 ## Exercise 4: Generate Alertmanager Routes
 

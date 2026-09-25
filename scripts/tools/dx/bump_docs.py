@@ -929,15 +929,10 @@ def _build_platform_rules():
         "replacement": lambda v: f"version: v{v}",
     })
 
-    # ⚠️ 這條的目標字串不在 cli-playground.jsx —— `[✓] Version consistency`
-    # 是 playground 的模擬輸出，住在拆分出去的 commands.js 裡。原規則同時搞錯
-    # 目錄與檔名，repoint 時一併修正（#1407）。
-    rules.append({
-        "file": "tools/portal/src/interactive/tools/cli-playground/commands.js",
-        "desc": "cli-playground commands.js version consistency output",
-        "pattern": r"\[✓\]\s+Version consistency\s+v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
-        "replacement": lambda v: f"[✓] Version consistency  v{v}",
-    })
+    # cli-playground/commands.js 已經沒有版號可驅動：它曾有一行模擬輸出
+    # `[✓] Version consistency  vX.Y.Z`，但那整段 validate-config 預覽是捏造的
+    # （真的報告預設不印版本列，要帶 --version-check 才有），#1380 換成實跑輸出後
+    # 這條規則便無目標。別把它加回來，除非該檔又出現需要跟著 release 走的版號。
 
     rules.append({
         "file": "tools/portal/src/interactive/tools/platform-demo.jsx",

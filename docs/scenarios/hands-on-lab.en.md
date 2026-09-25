@@ -190,24 +190,54 @@ _metadata:
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
-  validate-config --config-dir /data/conf.d --ci
+  validate-config --config-dir /data/conf.d
 ```
 
-Expected output:
+Expected output (measured after doing Exercises 1 and 2 as written; the order of the WARN lines under `schema` can differ between runs):
 
 ```
-[PASS] prod-mariadb: 5 keys, routing OK
-[PASS] prod-redis:   5 keys, routing OK (profile: team-sre-apac)
-[PASS] prod-kafka:   7 keys, routing OK
-[PASS] staging-pg:   2 keys, routing OK, maintenance window active
-[PASS] prod-oracle:  4 keys, routing OK (profile: domain-finance-tier1)
+============================================================
+  validate-config — Unified Validation Report
+============================================================
 
-✅ All 5 tenants passed validation.
+[PASS] yaml_syntax
+       6 files parsed successfully
+
+[WARN] schema
+         WARN: prod-kafka: unknown key 'jvm_memory' not in defaults
+         WARN: prod-kafka: unknown key 'kafka_broker_count' not in defaults
+         WARN: prod-oracle: _routing_profile references unknown profile 'domain-finance-tier1'
+         WARN: prod-oracle: unknown key 'oracle_sessions_active' not in defaults
+         WARN: prod-oracle: unknown key 'oracle_sessions_active_critical' not in defaults
+         WARN: prod-oracle: unknown reserved key '_domain_policy' (typo?)
+         WARN: prod-redis: _routing_profile references unknown profile 'team-sre-apac'
+         WARN: prod-redis: unknown key 'redis_memory_used_bytes' not in defaults
+         WARN: prod-redis: unknown key 'redis_memory_used_bytes_critical' not in defaults
+       -> Suggested action: ...
+
+[PASS] routes
+       5 routes, 5 receivers, 5 inhibit_rules
+
+[PASS] profiles
+       5 tenants scanned, 0 profile refs, 0 profiles defined
+
+[PASS] policy_dsl
+       No _policies defined — skipped
+
+[PASS] tenant_uniqueness
+       5 tenant(s), each declared in exactly one file
+
+------------------------------------------------------------
+  Total: 6 checks | 5 pass | 1 warn | 0 fail
+------------------------------------------------------------
+  Result: WARN (pass with warnings)
 ```
 
-If any warnings appear, review the key names and timing guardrails.
+The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed. The 9 WARN lines under `schema` come from Exercise 2's sample values: a few keys are not in `_defaults.yaml`, and the two `_routing_profile` values point at profiles that are not defined. Check each key name when you adopt this for real.
 
-**Checkpoint**: Can you explain why `group_wait: "2s"` would fail validation? (Hint: guardrail minimum is 5s)
+⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you pasted the Exercise 2 snippets as whole files and dropped the two outer levels (`tenants:` and `<tenant name>:`) that init generated. Every check then reads PASS while nothing was validated.
+
+**Checkpoint**: Can you explain why `group_wait: "2s"` produces a WARN under `routes`, and why the value that takes effect is 5s? (Hint: the guardrail range is 5s–5m; a value below the floor is clamped to 5s — a warning, not a failure)
 
 ## Exercise 4: Generate Alertmanager Routes
 
