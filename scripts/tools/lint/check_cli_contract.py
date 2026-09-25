@@ -1639,7 +1639,7 @@ def portal_commands(src_dir: Path = PORTAL_PLAYGROUND_DIR,
             text = _JS_FRONTMATTER.sub(lambda m: "\n" * m.group(0).count("\n"), text, count=1)
             text = text.replace("'./commands.js'", "'./commands.mjs'")
             mod = Path(tmp) / name.replace(".js", ".mjs")
-            mod.write_text(text, encoding="utf-8")
+            mod.write_text(text, encoding="utf-8", newline="\n")
             mods[name] = json.dumps(mod.as_uri())
         driver = _PORTAL_DRIVER % {"commands": mods["commands.js"],
                                    "engine": mods["engine.js"]}
