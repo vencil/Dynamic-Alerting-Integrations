@@ -119,7 +119,6 @@ lang: zh
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
-| `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
 | `list_subprocess_only_modules.py` | 每個模組被哪一種進入點執行到（以 coverage 實測為準）。 |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
@@ -181,7 +180,6 @@ lang: zh
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
-| `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |

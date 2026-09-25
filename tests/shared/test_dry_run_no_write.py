@@ -228,6 +228,7 @@ KNOWN_DRY_RUN_WRITERS: dict[str, str] = {
     # 擴建到 dx/ 時（#1454 D）量到兩支：`inject_related_docs --update --dry-run`
     # 與 `migrate_conf_d --apply --dry-run` 都照寫——`--dry-run` 從來沒被讀過。
     # 兩支已改成 dry-run 優先（issue #1454 後續），清單回到空的。
+    # （inject_related_docs 後來整支退役，#1984。）
 }
 
 
@@ -488,14 +489,6 @@ def _md_without_frontmatter(tmp: Path) -> str:
     # 的 README/CHANGELOG。直接指到 docs/ 會什麼都不收（write_control 抓到過）。
     _write(tmp, "project/docs/guide.md", "# Guide\n\nSome body text.\n")
     return str(tmp / "fix" / "project")
-
-
-def _related_docs(tmp: Path) -> str:
-    for name, title in (("alpha.md", "Alpha"), ("beta.md", "Beta")):
-        _write(tmp, f"related/{name}", (
-            f"---\ntitle: {title}\ntags: [alerting, tenant]\n"
-            f"audience: [platform]\nlang: zh\n---\n# {title}\n\nbody\n"))
-    return str(tmp / "fix" / "related")
 
 
 def _flat_conf_d_repo(tmp: Path) -> str:
@@ -785,13 +778,9 @@ RECIPES: list[Recipe] = [
                     "--output", _out(t, "tenant-metadata.json"), "--dry-run"],
       write_control=True),
 
-    # 下面兩支的寫入要寫入旗標（--update / --apply）才開，所以 recipe 把它與
-    # --dry-run 同給——那正是「使用者以為自己在預覽」的情境。兩支原本都沒有
-    # 守衛（--dry-run 從沒被讀過），現在是 dry-run 優先。
-    R("inject_related_docs",
-      lambda t, s: ["--docs-dir", _related_docs(t), "--update", "--dry-run"],
-      write_control=True),
-
+    # 下面這支要帶寫入旗標（--apply）才會寫檔，所以 recipe 把它與 --dry-run
+    # 一起給——正是「使用者以為自己在預覽」的情境。它原本沒有守衛（--dry-run
+    # 從沒被讀過），現在是 dry-run 優先。
     R("migrate_conf_d",
       lambda t, s: ["--conf-d", _flat_conf_d_repo(t), "--apply", "--dry-run"],
       cwd="confrepo", env=lambda t: dict(_GIT_ENV), write_control=True),
@@ -848,7 +837,8 @@ def test_recipe_table_covers_every_dry_run_tool():
 # 但一支從 ops/ 搬到 dx/ 也是範圍變動，應該被看見。
 # lint 目錄原本有 1 支（fix_doc_links），dx 原本 15 支；fix_doc_links 與
 # scaffold_jsx_dep 在 issue #1454 退役後，lint 目錄沒有宣告 --dry-run 的工具。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 14}
+# dx 再少一支：inject_related_docs 在 #1984 退役。
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 13}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():
