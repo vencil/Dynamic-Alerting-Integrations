@@ -118,24 +118,8 @@ _HELP = {
         'en': 'da-tools Docker image (default: ghcr.io/vencil/da-tools:latest)',
     },
     'config_source': {
-        'zh': '配置來源: configmap (預設) 或 git (git-sync sidecar 模式)',
-        'en': 'Config source: configmap (default) or git (git-sync sidecar mode)',
-    },
-    'git_repo': {
-        'zh': 'Git 倉庫 URL (--config-source git 時必填)',
-        'en': 'Git repository URL (required when --config-source git)',
-    },
-    'git_branch': {
-        'zh': 'Git 分支 (預設: main)',
-        'en': 'Git branch (default: main)',
-    },
-    'git_path': {
-        'zh': 'Git 倉庫中 conf.d/ 的路徑 (預設: conf.d)',
-        'en': 'Path to conf.d/ inside the git repo (default: conf.d)',
-    },
-    'git_period': {
-        'zh': 'git-sync 同步間隔秒數 (預設: 60)',
-        'en': 'git-sync poll interval in seconds (default: 60)',
+        'zh': '配置來源: 目前只支援 configmap (預設)；git (GitOps Native Mode) 暫不支援，見 issue 1349',
+        'en': 'Config source: only configmap (default) is supported; git (GitOps Native Mode) is temporarily unsupported, see issue 1349',
     },
     'epilog': {
         'zh': '''範例:
@@ -156,6 +140,17 @@ _HELP = {
 # Bilingual Helper & Validation Functions
 # ============================================================
 
+# issue 1349. Delivered to customers, so the ticket is spelled "issue 1349",
+# not "#1349" (a bare `#N` in a customer repo links to THEIR issue N).
+_GIT_MODE_REFUSAL = (
+    "--config-source git (GitOps Native Mode) is temporarily unsupported: "
+    "the kustomize overlay it generated patched Deployment/threshold-exporter, "
+    "which the generated tree does not contain (the Deployment comes from the "
+    "Helm chart), so it deployed only the ConfigMap. Use the default "
+    "--config-source configmap. Tracking: issue 1349 in "
+    "vencil/Dynamic-Alerting-Integrations."
+)
+
 def _h(key: str) -> str:
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
@@ -165,7 +160,7 @@ def _h(key: str) -> str:
 # ============================================================
 # Every ref below is emitted into a file the CUSTOMER runs: the GitLab CI
 # apply stage carries `environment: name: production` plus cluster-write
-# credentials, and the git-sync patch is applied straight into their cluster.
+# credentials.
 #
 # ⛔ Pinned to a concrete VERSION TAG, deliberately NOT a digest. The
 # customer's repo has no updater of ours to re-resolve a digest, and an
@@ -231,15 +226,6 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 # tags are release artifacts rather than re-pushed tags, so an upstream fix
 # never reached an existing customer without them re-running this tool — we
 # carried that maintenance for a stage that could not run.
-
-# registry.k8s.io/git-sync publishes ONLY exact patch tags (no `latest`, no
-# `v4`), so a consumer is forced to name a version. The previous pin, v4.4.0
-# (2024-12-13), was 8 releases and ~19 months behind when this was caught: it
-# misses CVE-2025-30204 (High, reached transitively through golang-jwt and
-# fixed in v4.4.1) plus every base-image rebuild from v4.4.3 onward. git-sync
-# publishes no per-project advisory feed, so a stale pin here emits no signal
-# whatsoever — the staleness is only ever found by looking.
-GIT_SYNC_IMAGE = 'registry.k8s.io/git-sync/git-sync:v4.7.1'
 
 # ⛔ ACTION PIN POLICY (issue 1417, owner call: follow the platform). The
 # GitHub Actions the delivered workflow uses are pinned to the SAME major this
@@ -620,12 +606,9 @@ def _critical_prefill_note(critical: dict) -> str:
     `--config-source configmap`, `--deploy helm` generates no `kustomize/` tree
     at all (measured — the output is `.da-init.yaml`, the CI files,
     `.pre-commit-config.da.yaml` and `conf.d/`, nothing else).
-    ⚠️ That `--config-source` qualifier is load-bearing rather than hedging, and
-    it was missing here: GitOps Native Mode (`--config-source git` with a
-    `--git-repo`) writes `kustomize/overlays/gitops/` under EVERY `--deploy`
-    value (measured — `run_init` step 3b), so the unqualified sentence is false
-    for exactly those customers. Issue 1473 was filed on the unqualified
-    reading and its fix had to measure the qualified one.
+    (GitOps Native Mode, `--config-source git`, used to add a
+    `kustomize/overlays/gitops/` tree under every `--deploy`; it is refused
+    since issue 1349, so `configmap` is now the only source.)
     ⚠️ "the CI files" is deliberately not a count:
     `--ci gitlab`/`both` also writes the repo-root `.gitlab-ci.yml` shell
     (#1357), so the old wording "two CI files" went stale the moment that
@@ -1087,13 +1070,11 @@ def _offset_path(offset: str, path: str) -> str:
 #     so ZERO jobs were created and the PR/MR went green having validated
 #     nothing — issue 1357's failure shape, moved onto the helm trigger.
 #
-# ⚠️ `kustomize` is NOT "kustomize mode only", and measuring that is what
-# corrected the ticket: GitOps Native Mode (`--config-source git` with a
-# `--git-repo`) writes `kustomize/overlays/gitops/{kustomization,
-# git-sync-patch}.yaml` for EVERY `--deploy` value (`run_init` step 3b).
-# Dropping the entry on `deploy_method` alone would have swapped a dead entry
-# for a MISSING one — the same defect in the other direction, aimed at exactly
-# the customers who took the GitOps path.
+# ⚠️ `kustomize` used to be added for EVERY `--deploy` under GitOps Native Mode
+# (`--config-source git`), which wrote `kustomize/overlays/gitops/` regardless
+# of method. That mode is refused since issue 1349 (its git-sync patch targeted
+# a Deployment the kustomize tree never contains), so the tree set now depends
+# on `deploy_method` alone. Bring the branch back WITH the mode, not before.
 #
 # Membership is "this run writes the tree, or a generated job reads it", never
 # "it is one of ours":
@@ -1115,24 +1096,13 @@ def _offset_path(offset: str, path: str) -> str:
 # to the server with no checkout), so this function deliberately added no tree
 # for it. That method is retired (#1351), so the case it carved out is gone with
 # it — not relaxed.
-def _ci_trigger_trees(
-    deploy_method: str,
-    config_source: str = 'configmap',
-    git_repo: str = '',
-) -> tuple[str, ...]:
-    """Top-level trees this invocation's CI triggers must watch.
-
-    Defaults match the CLI's own (`--config-source configmap`, no
-    `--git-repo`), so a caller that passes only `deploy_method` gets the
-    non-GitOps answer rather than a silently wider one.
-    """
+def _ci_trigger_trees(deploy_method: str) -> tuple[str, ...]:
+    """Top-level trees this invocation's CI triggers must watch."""
     trees = {'conf.d', 'rule-packs'}
     if deploy_method == 'kustomize':
         trees.add('kustomize')
     if deploy_method == 'helm':
         trees.add('environments')
-    if config_source == 'git' and git_repo:
-        trees.add('kustomize')
     return tuple(sorted(trees))
 
 
@@ -1300,16 +1270,9 @@ def _gen_github_actions(
     da_tools_image: str,
     deploy_method: str,
     *,
-    config_source: str = 'configmap',
-    git_repo: str = '',
     offset: str = '',
 ) -> str:
     """Generate GitHub Actions workflow for Dynamic Alerting CI/CD.
-
-    `config_source` / `git_repo` are keyword-only and default to the CLI's own
-    defaults: they reach the `on.paths` filter through `_ci_trigger_trees`, and
-    a caller that omits them gets the non-GitOps tree set rather than a
-    silently wider one.
 
     `offset` is the subdirectory prefix every repo-root-relative path in the
     OUTPUT needs (issue 1454 C): `on.paths`, `CONFIG_DIR`, the custom-rule
@@ -1326,7 +1289,7 @@ def _gen_github_actions(
     # The `{trigger_paths}` placeholder sits at the template's OWN margin (see
     # `_ci_trigger_paths_block` for why it cannot sit at column 0).
     trigger_paths = _ci_trigger_paths_block(
-        _ci_trigger_trees(deploy_method, config_source, git_repo),
+        _ci_trigger_trees(deploy_method),
         suffix='/**', indent=' ' * 6, quote="'", offset=offset,
     )
     # ⛔ Indent the apply block IN CODE, not by hand-matching two templates.
@@ -2504,15 +2467,12 @@ def _gen_gitlab_ci(
     da_tools_image: str,
     deploy_method: str,
     *,
-    config_source: str = 'configmap',
-    git_repo: str = '',
     offset: str = '',
 ) -> str:
     """Generate GitLab CI pipeline for Dynamic Alerting CI/CD.
 
-    `config_source` / `git_repo` are keyword-only and default to the CLI's own
-    defaults — same contract as `_gen_github_actions`, and the same
-    `_ci_trigger_trees` call, so the two legs cannot name different trees.
+    Same `_ci_trigger_trees` call as `_gen_github_actions`, so the two legs
+    cannot name different trees.
 
     `offset` (issue 1454 C) prefixes every repo-root-relative path in the
     output. GitLab's own docs say it of both keys this file gates on: "Paths
@@ -2535,7 +2495,7 @@ def _gen_gitlab_ci(
     # therefore be half-watched. The spelling differs per platform — GitHub's
     # `**` crosses `/` and GitLab's does not — while the tree set does not.
     trigger_changes = _ci_trigger_paths_block(
-        _ci_trigger_trees(deploy_method, config_source, git_repo),
+        _ci_trigger_trees(deploy_method),
         suffix='/**/*', indent=' ' * 8, offset=offset,
     )
 
@@ -2900,128 +2860,6 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
     """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD)
 
 
-def _gen_git_sync_deployment(
-    namespace: str, git_repo: str, git_branch: str, git_path: str,
-    git_period: int = 60,
-) -> str:
-    """Generate K8s Deployment patch adding git-sync sidecar to threshold-exporter."""
-    return textwrap.dedent(f"""\
-    # git-sync-patch.yaml — GitOps Native Mode
-    # Generated by: da-tools init --config-source git
-    #
-    # Architecture:
-    #   1. initContainer (git-sync --one-time) — clones repo before exporter starts
-    #   2. sidecar (git-sync --period) — keeps config in sync with Git
-    #   3. threshold-exporter reads from shared emptyDir via existing Directory Scanner
-    #
-    # Prerequisites:
-    #   kubectl create secret generic git-sync-credentials \\
-    #     --from-file=ssh-key=~/.ssh/id_ed25519 \\
-    #     -n {namespace}
-    #   OR for HTTPS:
-    #   kubectl create secret generic git-sync-credentials \\
-    #     --from-literal=username=<user> --from-literal=password=<token> \\
-    #     -n {namespace}
-    #
-    # Verify:
-    #   da-tools gitops-check sidecar --namespace {namespace}
-
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: threshold-exporter
-      namespace: {namespace}
-    spec:
-      template:
-        spec:
-          # ── Init: one-time clone so exporter never starts with empty config ──
-          initContainers:
-            - name: git-sync-init
-              image: {GIT_SYNC_IMAGE}
-              args:
-                - "--repo={git_repo}"
-                - "--ref={git_branch}"
-                - "--root=/data/config"
-                - "--link=current"
-                - "--one-time"
-              volumeMounts:
-                - name: git-config
-                  mountPath: /data/config
-                - name: git-credentials
-                  mountPath: /etc/git-secret
-                  readOnly: true
-              securityContext:
-                runAsUser: 65533
-                runAsGroup: 65533
-          containers:
-            - name: threshold-exporter
-              args:
-                # git-sync --link=current creates: /data/config/current → <checkout>
-                - "--config-dir=/data/config/current/{git_path}"
-              volumeMounts:
-                - name: git-config
-                  mountPath: /data/config
-                  readOnly: true
-            - name: git-sync
-              image: {GIT_SYNC_IMAGE}
-              args:
-                - "--repo={git_repo}"
-                - "--ref={git_branch}"
-                - "--root=/data/config"
-                - "--period={git_period}s"
-                - "--link=current"
-                - "--max-failures=3"
-              volumeMounts:
-                - name: git-config
-                  mountPath: /data/config
-                - name: git-credentials
-                  mountPath: /etc/git-secret
-                  readOnly: true
-              securityContext:
-                runAsUser: 65533
-                runAsGroup: 65533
-              resources:
-                requests:
-                  cpu: 10m
-                  memory: 32Mi
-                limits:
-                  cpu: 50m
-                  memory: 64Mi
-          volumes:
-            - name: git-config
-              emptyDir: {{}}
-            - name: git-credentials
-              secret:
-                secretName: git-sync-credentials
-                optional: true
-    """)
-
-
-def _gen_git_sync_kustomization(namespace: str) -> str:
-    """Generate kustomization.yaml for git-sync overlay."""
-    return textwrap.dedent(f"""\
-    # kustomization.yaml — GitOps Native Mode overlay
-    # Generated by: da-tools init --config-source git
-    #
-    # This overlay patches the threshold-exporter Deployment
-    # to use git-sync sidecar instead of ConfigMap volume.
-
-    apiVersion: kustomize.config.k8s.io/v1beta1
-    kind: Kustomization
-
-    namespace: {namespace}
-
-    resources:
-      - ../../base
-
-    patches:
-      - path: git-sync-patch.yaml
-        target:
-          kind: Deployment
-          name: threshold-exporter
-    """)
-
-
 def _gen_kustomize_overlay(env_name: str, namespace: str) -> str:
     """Generate kustomize/overlays/<env>/kustomization.yaml."""
     return (
@@ -3143,8 +2981,6 @@ def _gen_da_init_marker(
     deploy_method: str,
     rule_packs: list[str],
     tenants: list[str],
-    config_source: str = 'configmap',
-    git_repo: Optional[str] = None,
 ) -> str:
     """Generate .da-init.yaml marker file."""
     marker = {
@@ -3152,12 +2988,10 @@ def _gen_da_init_marker(
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'ci_platform': ci_platform,
         'deploy_method': deploy_method,
-        'config_source': config_source,
+        'config_source': 'configmap',
         'rule_packs': rule_packs,
         'tenants': tenants,
     }
-    if git_repo:
-        marker['git_repo'] = git_repo
     header = textwrap.dedent("""\
     # .da-init.yaml — Dynamic Alerting project marker
     # Do not edit manually. Used by da-tools for upgrade detection.
@@ -3380,13 +3214,6 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
         _add(out / 'kustomize' / 'base' / 'README.md')
         _add(out / 'kustomize' / 'overlays' / 'dev' / 'kustomization.yaml')
         _add(out / 'kustomize' / 'overlays' / 'prod' / 'kustomization.yaml')
-    # GitOps Native Mode writes a gitops overlay regardless of --deploy
-    # (run_init step 3b). Omitting it here understated the dry-run by two
-    # files, one of them a Deployment patch — the preview promised nothing
-    # would touch kustomize/ and then two files appeared there.
-    if config.get('config_source') == 'git' and config.get('git_repo'):
-        _add(out / 'kustomize' / 'overlays' / 'gitops' / 'kustomization.yaml')
-        _add(out / 'kustomize' / 'overlays' / 'gitops' / 'git-sync-patch.yaml')
     _add(out / '.pre-commit-config.da.yaml')
     _add(out / '.da-init.yaml')
     return paths
@@ -3422,11 +3249,13 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     tenants = config['tenants']
     namespace = config['namespace']
     da_tools_image = config['da_tools_image']
-    config_source = config.get('config_source', 'configmap')
-    git_repo = config.get('git_repo', '')
-    git_branch = config.get('git_branch', 'main')
-    git_path = config.get('git_path', 'conf.d')
-    git_period = config.get('git_period', 60)
+    # issue 1349: GitOps Native Mode is refused, not silently ignored. Its
+    # overlay patched `Deployment/threshold-exporter`, which the kustomize tree
+    # never contains (the Deployment is the Helm chart's), so it applied only
+    # the ConfigMap. Refuse here too, not only in the CLI, so a caller passing a
+    # config dict cannot get the old no-op tree.
+    if config.get('config_source', 'configmap') != 'configmap':
+        raise ValueError(_GIT_MODE_REFUSAL)
     # issue 1454 C. Computed ONCE per run and threaded into every generator
     # that emits a repo-root-relative path. Empty for a root install, which is
     # every path in those templates' native shape.
@@ -3455,7 +3284,6 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             str(out / _GH_WORKFLOW_REL),
             _gen_github_actions(
                 namespace, da_tools_image, deploy,
-                config_source=config_source, git_repo=git_repo,
                 offset=offset,
             ),
             created,
@@ -3466,7 +3294,6 @@ def run_init(config: dict, output_dir: str) -> list[str]:
             str(out / _GL_PIPELINE_REL),
             _gen_gitlab_ci(
                 namespace, da_tools_image, deploy,
-                config_source=config_source, git_repo=git_repo,
                 offset=offset,
             ),
             created,
@@ -3520,22 +3347,6 @@ def run_init(config: dict, output_dir: str) -> list[str]:
                 created,
             )
 
-    # ── 3b. GitOps Native Mode (git-sync sidecar) ──────────
-    if config_source == 'git' and git_repo:
-        gitsync_dir = out / 'kustomize' / 'overlays' / 'gitops'
-        _write_file(
-            str(gitsync_dir / 'kustomization.yaml'),
-            _gen_git_sync_kustomization(namespace),
-            created,
-        )
-        _write_file(
-            str(gitsync_dir / 'git-sync-patch.yaml'),
-            _gen_git_sync_deployment(
-                namespace, git_repo, git_branch, git_path, git_period,
-            ),
-            created,
-        )
-
     # ── 4. Pre-commit config ───────────────────────────────
     _write_file(
         str(out / '.pre-commit-config.da.yaml'),
@@ -3546,7 +3357,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 5. Marker file ─────────────────────────────────────
     _write_file(
         str(out / '.da-init.yaml'),
-        _gen_da_init_marker(ci, deploy, rule_packs, tenants, config_source, git_repo),
+        _gen_da_init_marker(ci, deploy, rule_packs, tenants),
         created,
     )
 
@@ -4184,8 +3995,10 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
 
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
     """Build configuration from CLI args or interactive flow."""
-    if args.config_source == 'git' and not args.git_repo:
-        parser.error("--config-source git requires --git-repo <url>")
+    if args.config_source == 'git' or any(
+            getattr(args, a) is not None
+            for a in ('git_repo', 'git_branch', 'git_path', 'git_period')):
+        parser.error(_GIT_MODE_REFUSAL)
 
     has_cli_args = args.ci or args.tenants or args.rule_packs or args.deploy
     if args.non_interactive or has_cli_args:
@@ -4198,20 +4011,10 @@ def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
             'tenants': [t.strip() for t in (args.tenants or 'db-a,db-b').split(',')],
             'namespace': args.namespace,
             'da_tools_image': args.da_tools_image,
-            'config_source': args.config_source,
-            'git_repo': args.git_repo,
-            'git_branch': args.git_branch,
-            'git_path': args.git_path,
-            'git_period': args.git_period,
         }
     else:
         config = _interactive_flow()
         config['da_tools_image'] = args.da_tools_image
-        config.setdefault('config_source', args.config_source)
-        config.setdefault('git_repo', args.git_repo)
-        config.setdefault('git_branch', args.git_branch)
-        config.setdefault('git_path', args.git_path)
-        config.setdefault('git_period', args.git_period)
         return config
 
 
@@ -4464,11 +4267,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--config-source',
                         choices=['configmap', 'git'], default='configmap',
                         help=_h('config_source'))
-    parser.add_argument('--git-repo', default=None, help=_h('git_repo'))
-    parser.add_argument('--git-branch', default='main', help=_h('git_branch'))
-    parser.add_argument('--git-path', default='conf.d', help=_h('git_path'))
-    parser.add_argument('--git-period', type=int, default=60,
-                        help=_h('git_period'))
+    # issue 1349: the GitOps Native Mode flags are still PARSED (hidden from
+    # --help) only so that a command copied from the old docs gets the refusal
+    # below instead of argparse's bare "unrecognized arguments".
+    # Literal flag names, one call each: the conf.d population walk
+    # (test_confd_case_parity_across_tools) reads `add_argument` statically.
+    parser.add_argument('--git-repo', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--git-branch', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--git-path', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--git-period', default=None, help=argparse.SUPPRESS)
 
     return parser
 

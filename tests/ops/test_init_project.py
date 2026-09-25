@@ -3572,173 +3572,45 @@ class TestMainTenantValidation:
             assert os.path.isfile(os.path.join(tmpdir, '.da-init.yaml'))
 
 
-class TestGitOpsNativeMode:
-    """Test --config-source git generates git-sync sidecar overlay."""
+class TestGitOpsNativeModeIsRefused:
+    """GitOps Native Mode（`--config-source git`）已撤下（issue #1349）。
 
-    def test_git_source_creates_overlay(self):
-        """--config-source git generates kustomize/overlays/gitops/."""
+    它產生的 overlay 以 `Deployment/threshold-exporter` 為 patch 目標，而產出的
+    kustomize 樹只有 ConfigMap（Deployment 屬於 Helm chart），kustomize 把 patch
+    當成 no-op，於是套用後只有 ConfigMap。撤下的形狀是「拒絕」而不是「靜默
+    忽略」：這裡釘的是 run_init 這一層，CLI 那一層在 TestTheCliLayerItself。
+    """
+
+    _CFG = {
+        'ci': 'github', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+        'tenants': ['db-a'], 'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def test_run_init_refuses_a_git_config_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main',
-                'git_path': 'conf.d',
-            }
-            created = ip.run_init(config, tmpdir)
-            gitops_dir = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops')
-            assert os.path.isfile(os.path.join(gitops_dir, 'kustomization.yaml'))
-            assert os.path.isfile(os.path.join(gitops_dir, 'git-sync-patch.yaml'))
+            with pytest.raises(ValueError, match='issue 1349'):
+                ip.run_init(dict(self._CFG, config_source='git',
+                                 git_repo='https://example.com/r.git'), tmpdir)
+            assert not os.listdir(tmpdir)
 
-    def test_git_sync_patch_contains_repo_url(self):
-        """git-sync-patch.yaml references the configured repo URL."""
+    def test_the_default_config_still_writes_no_gitops_tree(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'https://github.com/myorg/myrepo.git',
-                'git_branch': 'production',
-                'git_path': 'alerting/conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path, encoding='utf-8') as f:
-                content = f.read()
-            assert 'https://github.com/myorg/myrepo.git' in content
-            assert 'production' in content
-            assert 'alerting/conf.d' in content
+            created = ip.run_init(dict(self._CFG), tmpdir)
+        assert created, 'anti-vacuity: run_init wrote nothing at all'
+        assert not [f for f in created if 'gitops' in f or 'git-sync' in f], created
 
-    def test_configmap_mode_no_gitops_overlay(self):
-        """Default configmap mode does not create gitops overlay."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'configmap',
-                'git_repo': None, 'git_branch': 'main', 'git_path': 'conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            gitops_dir = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops')
-            assert not os.path.exists(gitops_dir)
-
-    def test_marker_records_config_source(self):
-        """Marker file records config_source and git_repo."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main', 'git_path': 'conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            with open(os.path.join(tmpdir, '.da-init.yaml'), encoding='utf-8') as f:
-                marker = yaml.safe_load(f)
-            assert marker['config_source'] == 'git'
-            assert marker['git_repo'] == 'git@github.com:example/configs.git'
-
-    def test_git_sync_kustomization_references_patch(self):
-        """kustomization.yaml references the git-sync-patch.yaml."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main', 'git_path': 'conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            kust_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'kustomization.yaml')
-            with open(kust_path, encoding='utf-8') as f:
-                kust = yaml.safe_load(f)
-            assert 'patches' in kust
-            assert any('git-sync-patch.yaml' in str(p) for p in kust['patches'])
-
-    def test_git_sync_patch_has_init_container(self):
-        """git-sync-patch.yaml includes initContainer with --one-time."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main', 'git_path': 'conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path, encoding='utf-8') as f:
-                patch = yaml.safe_load(f)
-            spec = patch['spec']['template']['spec']
-            # Verify initContainer exists with --one-time
-            init_containers = spec.get('initContainers', [])
-            assert len(init_containers) == 1
-            assert init_containers[0]['name'] == 'git-sync-init'
-            assert '--one-time' in init_containers[0]['args']
-
-    def test_git_sync_custom_period(self):
-        """--git-period sets the sidecar polling interval."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main', 'git_path': 'conf.d',
-                'git_period': 30,
-            }
-            ip.run_init(config, tmpdir)
-            patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path, encoding='utf-8') as f:
-                content = f.read()
-            assert '--period=30s' in content
-
-    def test_git_sync_exporter_reads_current_symlink(self):
-        """Exporter config-dir path includes /current/ for git-sync symlink."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {
-                'ci': 'github', 'deploy': 'kustomize',
-                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'config_source': 'git',
-                'git_repo': 'git@github.com:example/configs.git',
-                'git_branch': 'main', 'git_path': 'alerting/conf.d',
-            }
-            ip.run_init(config, tmpdir)
-            patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path, encoding='utf-8') as f:
-                patch = yaml.safe_load(f)
-            exporter = patch['spec']['template']['spec']['containers'][0]
-            assert exporter['name'] == 'threshold-exporter'
-            assert '/data/config/current/alerting/conf.d' in exporter['args'][0]
-
-
-# ============================================================
-# ── Customer-delivered image pins (#1337 ②④) ──
-# ============================================================
+    def test_the_refusal_names_the_ticket_the_customer_way(self):
+        """客戶 repo 裡的 `#1349` 會連到**他們自己**的 issue 1349。"""
+        assert 'issue 1349' in ip._GIT_MODE_REFUSAL
+        assert '#1349' not in ip._GIT_MODE_REFUSAL
 
 class TestCustomerDeliveredImagePins:
     """Every container image ref handed to a customer must name a version.
 
     These refs land in files the CUSTOMER executes: the GitLab apply stage
-    carries `environment: name: production` plus cluster-write credentials,
-    and the git-sync patch is applied straight into their cluster. A floating
+    carries `environment: name: production` plus cluster-write credentials.
+    A floating
     tag there moves under them with no change on their side — which is what
     had already happened when #1337 was written: `alpine/helm:latest` walked
     existing pipelines across the Helm 3 -> 4 major boundary, and
@@ -3751,11 +3623,10 @@ class TestCustomerDeliveredImagePins:
     first-party would silently reverse that decision.
 
     ⚠️ Honest boundary — this suite checks FLOATING vs CONCRETE, never
-    CURRENCY. Reverting git-sync to the stale v4.4.0 leaves every test below
-    green (measured, not assumed), because v4.4.0 is a perfectly concrete tag.
+    CURRENCY. Reverting a pin to a stale but concrete tag leaves every test
+    below green (measured on the git-sync pin before #1349 withdrew it).
     Nothing offline can tell you a pin has gone stale; that needs a registry
-    round-trip, and git-sync publishes no advisory feed to subscribe to
-    either. Do not read a green run here as "the pins are current".
+    round-trip. Do not read a green run here as "the pins are current".
     """
 
     _FIRST_PARTY = 'ghcr.io/vencil/'
@@ -3780,13 +3651,14 @@ class TestCustomerDeliveredImagePins:
 
     def test_pin_table_entries_are_concrete(self):
         """Every pinned ref names a repository AND a non-floating tag."""
-        refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()] + [ip.GIT_SYNC_IMAGE]
+        refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()]
         # ⚠️ 4 before #1351 retired `--deploy argocd` and its
-        # `quay.io/argoproj/argocd` pin with it. ⛔ The floor tracks the pin
-        # table's real size — lowering it to clear a red is how the
-        # anti-vacuity check stops checking, so it moves only when a pin is
-        # deliberately removed, and the CHANGELOG says which.
-        assert len(refs) >= 3, 'anti-vacuity: the pin table shrank unexpectedly'
+        # `quay.io/argoproj/argocd` pin with it; 3 before #1349 withdrew GitOps
+        # Native Mode and its git-sync pin. ⛔ The floor tracks the pin table's
+        # real size — lowering it to clear a red is how the anti-vacuity check
+        # stops checking, so it moves only when a pin is deliberately removed,
+        # and the CHANGELOG says which.
+        assert len(refs) >= 2, 'anti-vacuity: the pin table shrank unexpectedly'
         for ref in refs:
             tag = self._tag_of(ref)
             assert tag is not None, (
@@ -4018,16 +3890,6 @@ class TestCustomerDeliveredImagePins:
                 checked += 1
             assert checked == 3, 'anti-vacuity: expected three artifacts to carry it'
 
-    def test_git_sync_containers_all_use_the_pinned_ref(self):
-        """Both the init container and the sidecar track one constant."""
-        patch = yaml.safe_load(ip._gen_git_sync_deployment(
-            'monitoring', 'https://example.com/r.git', 'main', 'conf.d'))
-        spec = patch['spec']['template']['spec']
-        found = [c['image'] for c in spec.get('initContainers', []) + spec['containers']
-                 if 'git-sync' in c['name']]
-        assert len(found) >= 2, 'anti-vacuity: expected an init container AND a sidecar'
-        assert set(found) == {ip.GIT_SYNC_IMAGE}, f'git-sync refs drifted: {sorted(set(found))}'
-
     def test_precommit_snippet_honours_the_requested_image(self):
         """`--da-tools-image` must reach the snippet.
 
@@ -4049,13 +3911,12 @@ class TestCustomerDeliveredImagePins:
         ⛔ That claim is only true because the artifacts are obtained by RUNNING
         `run_init` into a temp dir and walking everything it wrote. An earlier
         version listed the generators by hand, and a floating ref planted in
-        `_gen_kustomize_base` or `_gen_git_sync_kustomization` sailed through —
+        `_gen_kustomize_base` (or the since-withdrawn git-sync overlay) sailed through —
         the list, not the scan, was the hole.
         """
         offenders, scanned = [], 0
         for deploy in ('kustomize', 'helm'):
             with tempfile.TemporaryDirectory() as tmpdir:
-                # config_source=git so the git-sync overlay is generated too.
                 ip.run_init({
                     'ci': 'both',
                     'deploy': deploy,
@@ -4063,11 +3924,6 @@ class TestCustomerDeliveredImagePins:
                     'tenants': ['db-a'],
                     'namespace': 'monitoring',
                     'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                    'config_source': 'git',
-                    'git_repo': 'https://example.com/r.git',
-                    'git_branch': 'main',
-                    'git_path': 'conf.d',
-                    'git_period': 60,
                 }, tmpdir)
                 for root, _dirs, files in os.walk(tmpdir):
                     for fn in files:
@@ -4100,7 +3956,8 @@ class TestCustomerDeliveredImagePins:
             assert self._FLOATING_RE.findall(f'      image: {bad}') == [bad]
         # ...and must not fire on a pinned ref or on a GitHub runner label.
         assert not self._FLOATING_RE.findall('    runs-on: ubuntu-latest')
-        assert not self._FLOATING_RE.findall(f'      image: {ip.GIT_SYNC_IMAGE}')
+        pinned = next(iter(ip._GITLAB_APPLY_IMAGES.values()))[1]
+        assert not self._FLOATING_RE.findall(f'      image: {pinned}')
 
 
 class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
@@ -4695,23 +4552,21 @@ class TestTheCliLayerItself:
             assert r.returncode == 2, (r.returncode, r.stderr[-400:])
             assert not self._files(tmpdir), self._files(tmpdir)
 
-    def test_git_config_source_requires_a_repo_url(self):
-        """⛔ 這個檢查被反轉過（`not args.git_repo` → `args.git_repo`）而全綠：
-        **附了 URL** 的合法呼叫變成 rc=2 / 0 個檔案，錯誤訊息還說少了那個
-        URL。兩個方向都釘。
-        """
+    @pytest.mark.parametrize('extra', [
+        ('--config-source', 'git'),
+        ('--config-source', 'git', '--git-repo', 'https://example.com/x.git'),
+        # 舊文件的指令少了 --config-source 也一樣：單給 --git-repo 過去會被
+        # 靜默忽略，現在同樣被拒絕，而不是產出一份看似成功的樹。
+        ('--git-repo', 'https://example.com/x.git'),
+    ], ids=['bare', 'with-repo', 'repo-only'])
+    def test_gitops_native_mode_is_refused(self, extra):
+        """issue #1349：GitOps Native Mode 撤下後，CLI 以 rc=2 拒絕、0 個檔案，
+        訊息點名 issue 1349（客戶看得到的輸出用 `issue N`，不用 `#N`）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
-                          '--config-source', 'git')
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a', *extra)
             assert r.returncode == 2, (r.returncode, r.stderr[-400:])
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
-                          '--config-source', 'git',
-                          '--git-repo', 'https://example.com/x.git')
-            assert r.returncode == 0, (
-                '附了 --git-repo 的合法呼叫被拒絕\n'
-                f'rc={r.returncode}\n{r.stderr[-600:]}')
-            assert self._files(tmpdir)
+            assert 'issue 1349' in r.stderr, r.stderr[-600:]
+            assert not self._files(tmpdir), self._files(tmpdir)
 
     def test_an_unknown_rule_pack_is_rejected(self):
         """⛔ `invalid = []` 之後，`--rule-packs bogus` 從 rc=2 / 0 個檔案變成
@@ -5327,31 +5182,17 @@ class TestTheSummaryDoesNotContradictItself:
             'greenfield 的結尾句指向一個從來沒被印出來的步驟：\n'
             + '\n'.join(out.splitlines()[-6:]))
 
-    def test_the_gitops_artifacts_need_both_flags_not_either(self):
-        """⛔ `config_source == 'git' and git_repo` 兩處都可以改成 `or` 而全綠
-        （preview 與實跑一起改，於是兩者仍然一致、沒有測試看得見差別）。
+    def test_the_preview_matches_what_run_init_writes(self):
+        """預覽要在寫入**之前**取——寫完再問會得到一個「對錯誤世界正確」的
+        答案（根 shell 是唯一取決於目標 repo 而非旗標的產物）。
 
-        後果：只給 `--git-repo X`（沒有 `--config-source git`）就會多寫出
-        `kustomize/overlays/gitops/kustomization.yaml` 與 git-sync patch——
-        一份會改動客戶 Deployment 的檔案。
+        （這條原本同時釘 GitOps Native Mode 的兩個旗標；那個模式在 issue #1349
+        撤下，拒絕行為改由 TestGitOpsNativeModeIsRefused 釘。）
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _, created = self._summary(
-                tmpdir, git_repo='https://example.com/x.git',
-                config_source='local')
-        gitops = [f for f in created if 'gitops' in f or 'git-sync' in f]
-        assert not gitops, (
-            '只給了 --git-repo（沒有 --config-source git）卻產生了 gitops '
-            f'產物：{gitops}')
-        # 反向：兩個旗標都給時，那些產物**必須**出現，而且預覽與實跑要一致。
-        # ⚠️ 預覽要在寫入**之前**取——寫完再問會得到一個「對錯誤世界正確」的
-        # 答案（根 shell 是唯一取決於目標 repo 而非旗標的產物）。
-        cfg = dict(self._CFG, ci='both', deploy='kustomize',
-                   git_repo='https://example.com/x.git', config_source='git')
+        cfg = dict(self._CFG, ci='both', deploy='kustomize')
         with tempfile.TemporaryDirectory() as tmpdir:
             preview = ip._preview_files(dict(cfg), tmpdir)
             created = ip.run_init(dict(cfg), tmpdir)
-        assert any('gitops' in f or 'git-sync' in f for f in created), created
         # ⛔ 比較前正規化分隔符，因為兩邊**刻意**用不同的形式：
         # `_preview_files` 的 docstring 明寫「Paths use POSIX separators
         # regardless of OS … Same rationale as _snapshot_mtimes (PR #319)」，
@@ -5372,8 +5213,7 @@ class TestTheSummaryDoesNotContradictItself:
         拿掉預覽清單裡的任何一項，等式就要紅——否則那個正規化順手把鑑別力
         也一起正規化掉了。
         """
-        cfg = dict(self._CFG, ci='both', deploy='kustomize',
-                   git_repo='https://example.com/x.git', config_source='git')
+        cfg = dict(self._CFG, ci='both', deploy='kustomize')
         with tempfile.TemporaryDirectory() as tmpdir:
             preview = ip._preview_files(dict(cfg), tmpdir)
             created = ip.run_init(dict(cfg), tmpdir)

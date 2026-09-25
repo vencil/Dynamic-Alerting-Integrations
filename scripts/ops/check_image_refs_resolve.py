@@ -104,7 +104,8 @@ SKIP_REPO_PREFIXES = ("ghcr.io/vencil/",)
 # ── The CUSTOMER-DELIVERED scan face (#1337 follow-up) ───────────────────────
 # `da-tools init` writes third-party image refs into files the CUSTOMER runs:
 # the GitLab apply stage (which carries `environment: name: production` plus
-# cluster-write credentials) and the git-sync patch applied into their cluster.
+# cluster-write credentials). (The git-sync image of GitOps Native Mode left
+# this face when that mode was withdrawn in issue #1349.)
 # Those refs live in `scripts/**`, so SOURCE_GLOBS above cannot see them and
 # neither can Renovate (all three of its customManagers key on `@sha256:`,
 # which these deliberately do not carry). They were in NO automated view of the
@@ -149,12 +150,12 @@ def delivered_refs(root: Path) -> set[str]:
     to "nothing to check", which reads exactly like a clean run), and an empty
     pin table is an error rather than a silent no-op.
 
-    ⛔ EACH SOURCE IS CHECKED SEPARATELY, and that is not tidiness. The two
+    ⛔ EACH SOURCE IS CHECKED SEPARATELY, and that is not tidiness. The
     sources are unioned, so a check on the UNION is unreachable as long as
-    either one is non-empty: an earlier draft tested `if not refs` after
-    unconditionally adding GIT_SYNC_IMAGE, which made the emptiness guard dead
-    code — emptying `_GITLAB_APPLY_IMAGES` entirely still exited 0 and reported
-    one clean ref. A guard over a union can only catch the case where EVERY
+    any one is non-empty: an earlier draft tested `if not refs` after
+    unconditionally adding a second pin (then GIT_SYNC_IMAGE, since withdrawn
+    in #1349), which made the emptiness guard dead code — emptying
+    `_GITLAB_APPLY_IMAGES` entirely still exited 0 and reported one clean ref. A guard over a union can only catch the case where EVERY
     source failed at once, which is the least likely one.
     """
     import importlib.util
@@ -275,8 +276,6 @@ def delivered_refs(root: Path) -> set[str]:
     non_empty = [ref for _var, ref in table.values()
                  if isinstance(ref, str) and ref.strip()]
     apply_refs = {ref.strip() for ref in non_empty}
-    git_sync = getattr(mod, "GIT_SYNC_IMAGE", "")
-    git_sync = git_sync.strip() if isinstance(git_sync, str) else ""
     # ⛔ THIRD source, and it is the one every generated project gets. Review
     # derived the delivered surface from the artifact instead of from this table:
     # across all 18 `--ci` × `--deploy` × `--config-source` combinations,
@@ -292,8 +291,7 @@ def delivered_refs(root: Path) -> set[str]:
     da_tools = getattr(mod, "DA_TOOLS_IMAGE", "")
     da_tools = da_tools.strip() if isinstance(da_tools, str) else ""
     empty = [name for name, value in
-             (("_GITLAB_APPLY_IMAGES", apply_refs), ("GIT_SYNC_IMAGE", git_sync),
-              ("DA_TOOLS_IMAGE", da_tools))
+             (("_GITLAB_APPLY_IMAGES", apply_refs), ("DA_TOOLS_IMAGE", da_tools))
              if not value]
     if table and len(non_empty) < len(table):
         empty.append(
@@ -304,7 +302,7 @@ def delivered_refs(root: Path) -> set[str]:
             f"check_image_refs_resolve: the customer-delivered pin table in {path} "
             f"is missing or EMPTY: {', '.join(empty)} — refusing to report a clean "
             "scope over a table that resolved to nothing.")
-    return apply_refs | {git_sync, da_tools}
+    return apply_refs | {da_tools}
 
 
 def _repo_of(ref: str) -> str:

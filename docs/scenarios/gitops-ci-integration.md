@@ -17,7 +17,7 @@ lang: zh
 
 - **快速初始化**：`da-tools init` 一鍵產生所有整合檔案
 - **三階段 Pipeline**：Validate → Generate → Apply（GitHub Actions；GitLab 為 Validate → Apply 兩階段，見 §1）
-- **部署模式**：`--deploy kustomize`、`--deploy helm`，加上兩種你自己接的路徑——ArgoCD（指向 kustomize 樹）與 GitOps Native（git-sync sidecar）
+- **部署模式**：`--deploy kustomize`、`--deploy helm`，加上你自己接的 ArgoCD（指向 kustomize 樹）。GitOps Native（git-sync sidecar）暫不支援，見 §3.4
 - **兩大 CI 平台**：GitHub Actions、GitLab CI
 
 ## 前置條件
@@ -358,51 +358,11 @@ spec:
 
 ### 3.4 GitOps Native Mode（git-sync sidecar）
 
-適合：想要消除 ConfigMap 中間層、讓 threshold-exporter 直接從 Git 讀取配置的團隊。
+⚠️ **暫不支援**（[#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349)）。`da-tools init --config-source git` 現在會以 exit 2 拒絕，不產生任何檔案。
 
-**概念**：git-sync sidecar 定期 pull Git 倉庫到 emptyDir shared volume，threshold-exporter 的 Directory Scanner 從 shared volume 讀取配置。既有的 SHA-256 hot-reload 機制無縫復用——sidecar 只負責 Git → filesystem 同步，exporter 不需要知道配置來自 Git。
+撤下的原因：它產生的 `kustomize/overlays/gitops/` 以 `Deployment/threshold-exporter` 為 patch 目標，但 threshold-exporter 的 Deployment 由 Helm chart 部署，產出的 kustomize 樹裡只有 ConfigMap。kustomize 把打不到目標的 patch 當成 no-op，所以照原本步驟 `kubectl apply -k kustomize/overlays/gitops/` 只會套用 ConfigMap，沒有任何 git-sync container。
 
-**初始化：**
-
-```bash
-da-tools init \
-  --ci github \
-  --deploy kustomize \
-  --config-source git \
-  --git-repo git@github.com:your-org/configs.git \
-  --git-branch main \
-  --git-path conf.d \
-  --tenants prod-mariadb,prod-redis \
-  --non-interactive
-```
-
-這會額外產生 `kustomize/overlays/gitops/` 目錄，包含 git-sync sidecar Deployment patch。
-
-**部署前準備：**
-
-```bash
-# 建立 Git 認證 Secret（SSH key 或 HTTPS token）
-kubectl create secret generic git-sync-credentials \
-  --from-file=ssh-key=$HOME/.ssh/id_ed25519 \
-  -n monitoring
-
-# 部署
-kubectl apply -k kustomize/overlays/gitops/
-
-# 驗證就緒度
-da-tools gitops-check sidecar --namespace monitoring
-da-tools gitops-check local --dir /data/config/conf.d
-```
-
-**架構**：initContainer 用 `--one-time` 模式先完成首次 clone（確保 exporter 啟動時已有配置），sidecar 持續 `--period` polling 同步後續變更。
-
-**優勢**：Git push → sidecar 自動 pull → exporter hot-reload，端到端自動化，無需 CI/CD 管線的 `kubectl apply` 步驟。
-
-**進階選項：**
-
-- **調整同步間隔**：`--git-period 30` 可將 polling 間隔從預設 60 秒降為 30 秒
-- **Webhook 觸發**（秒級延遲）：在 git-sync-patch.yaml 中加入 `--webhook-url=http://localhost:8888` 和 `--webhook-port=8888`，搭配 GitHub/GitLab Webhook 推送變更通知。需額外配置 Service + Ingress 將 webhook 路由到 git-sync container
-- **HTTPS 認證**：將 `--from-file=ssh-key` 改為 `--from-literal=username=... --from-literal=password=<token>`
+在它重新支援之前，請使用預設的 `--config-source configmap`，搭配 §3.1 或 §3.2 的部署方式。
 
 ## 4. Shift-Left：Pre-commit Hooks
 

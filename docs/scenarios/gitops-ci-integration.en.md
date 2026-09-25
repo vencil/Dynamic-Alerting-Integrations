@@ -17,7 +17,7 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 
 - **Quick init**: `da-tools init` generates all integration files in one command
 - **Three-stage pipeline**: Validate → Generate → Apply (GitHub Actions; the GitLab artifact has two stages, Validate → Apply — see §1)
-- **Four deployment modes**: Kustomize, Helm, ArgoCD, GitOps Native (git-sync sidecar)
+- **Deployment modes**: Kustomize, Helm, and ArgoCD pointed at the kustomize tree. GitOps Native (git-sync sidecar) is temporarily unsupported, see §3.4
 - **Two CI platforms**: GitHub Actions, GitLab CI
 
 ## Prerequisites
@@ -386,51 +386,11 @@ took no capability away.
 
 ### 3.4 GitOps Native Mode (git-sync sidecar)
 
-Best for: Teams that want to eliminate the ConfigMap middle layer and have threshold-exporter read config directly from Git.
+⚠️ **Temporarily unsupported** ([#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349)). `da-tools init --config-source git` now exits 2 and writes no files.
 
-**Concept**: A git-sync sidecar periodically pulls the Git repo to an emptyDir shared volume. threshold-exporter's Directory Scanner reads config from the shared volume. The existing SHA-256 hot-reload mechanism works seamlessly — the sidecar only handles Git → filesystem sync; the exporter doesn't need to know the config comes from Git.
+Why it was withdrawn: the `kustomize/overlays/gitops/` it generated patched `Deployment/threshold-exporter`, but the threshold-exporter Deployment is deployed by the Helm chart and the generated kustomize tree contains only the ConfigMap. kustomize treats a patch whose target matches nothing as a no-op, so the old `kubectl apply -k kustomize/overlays/gitops/` step applied only the ConfigMap, with no git-sync container anywhere.
 
-**Initialize:**
-
-```bash
-da-tools init \
-  --ci github \
-  --deploy kustomize \
-  --config-source git \
-  --git-repo git@github.com:your-org/configs.git \
-  --git-branch main \
-  --git-path conf.d \
-  --tenants prod-mariadb,prod-redis \
-  --non-interactive
-```
-
-This generates an additional `kustomize/overlays/gitops/` directory with the git-sync sidecar Deployment patch.
-
-**Pre-deployment setup:**
-
-```bash
-# Create Git auth Secret (SSH key or HTTPS token)
-kubectl create secret generic git-sync-credentials \
-  --from-file=ssh-key=$HOME/.ssh/id_ed25519 \
-  -n monitoring
-
-# Deploy
-kubectl apply -k kustomize/overlays/gitops/
-
-# Validate readiness
-da-tools gitops-check sidecar --namespace monitoring
-da-tools gitops-check local --dir /data/config/conf.d
-```
-
-**Architecture**: An initContainer runs `--one-time` to complete the initial clone (ensuring config exists before the exporter starts), while the sidecar continuously polls with `--period` for ongoing updates.
-
-**Advantage**: Git push → sidecar auto-pull → exporter hot-reload, end-to-end automation with no CI/CD `kubectl apply` step needed.
-
-**Advanced options:**
-
-- **Adjust sync interval**: `--git-period 30` reduces the polling interval from the default 60s to 30s
-- **Webhook trigger** (sub-second latency): Add `--webhook-url=http://localhost:8888` and `--webhook-port=8888` to git-sync-patch.yaml, then configure a GitHub/GitLab Webhook to push change notifications. Requires additional Service + Ingress to route the webhook to the git-sync container
-- **HTTPS authentication**: Replace `--from-file=ssh-key` with `--from-literal=username=... --from-literal=password=<token>`
+Until it is supported again, use the default `--config-source configmap` with the §3.1 or §3.2 deployment path.
 
 ## 4. Shift-Left: Pre-commit Hooks
 
