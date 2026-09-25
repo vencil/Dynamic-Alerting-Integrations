@@ -244,7 +244,7 @@ da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-1
 # 2. 驗證目前模式（等 exporter reload 且 Prometheus scrape 之後；租戶同時在 maintenance 時回 maintenance）
 da-tools diagnose db-product-01
 # 輸出含："operational_mode": "silent:all"（只靜音單一嚴重度時為 silent:warning / silent:critical；
-# 維護與靜默都沒生效時，輸出裡不會出現 operational_mode 這個欄位；兩者同時生效時顯示 maintenance）
+# 只有查到生效中的維護或靜默時才會出現 operational_mode 這個欄位）
 
 # 3. 維護結束、提前解除靜默
 da-tools patch-config db-product-01 _silent_mode disable

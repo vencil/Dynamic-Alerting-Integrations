@@ -243,7 +243,7 @@ da-tools patch-config db-product-01 _silent_mode '{target: all, expires: "2099-1
 # 2. Verify current mode (after the exporter reloads and Prometheus scrapes; returns maintenance if the tenant is also in maintenance)
 da-tools diagnose db-product-01
 # Output includes: "operational_mode": "silent:all" (silent:warning / silent:critical when only one severity is muted;
-# with neither maintenance nor silence active the operational_mode field is omitted; when both are active it shows maintenance)
+# the operational_mode field appears only when an active maintenance or silence is found)
 
 # 3. Maintenance done: clear silent mode early
 da-tools patch-config db-product-01 _silent_mode disable
