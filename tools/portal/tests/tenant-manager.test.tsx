@@ -180,6 +180,17 @@ describe('TenantManager — last-mile activation', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(document.activeElement).toBe(opener);
   });
+
+  it('silent-mode modal is copy-only with a paste note (its output is per-tenant fragments, #1988)', async () => {
+    await renderAndSettle();
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByRole('button', { name: 'Select All Filtered' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Silent Mode YAML' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByTestId('silent-paste-note')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Download' })).toBeNull();
+  });
 });
 
 /**
