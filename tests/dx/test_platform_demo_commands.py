@@ -60,11 +60,27 @@ def test_demo_has_commands():
     assert len(_displayed_commands()) >= 5
 
 
-@pytest.mark.parametrize("command", _displayed_commands())
-def test_terminal_echoes_the_displayed_command(command):
+def _phases() -> list[tuple[str, str, str]]:
+    """(phase id, command, first terminal line) for every phase entry."""
     src = TRANSCRIPTS.read_text(encoding="utf-8")
-    assert f"'$ {command}'," in src, (
-        f"terminal playback does not start with `$ {command}`")
+    return re.findall(
+        r"^  (\w+): \{\n    command: '([^']+)',\n    terminal: \[\n      '([^']*)',$",
+        src, flags=re.MULTILINE)
+
+
+def test_every_command_belongs_to_a_parsed_phase():
+    # Keeps the per-phase check below from silently covering fewer phases
+    # than there are displayed commands (e.g. after a layout change).
+    assert [c for _, c, _ in _phases()] == _displayed_commands()
+
+
+@pytest.mark.parametrize("phase,command,first_line", _phases())
+def test_terminal_echoes_its_own_command(phase, command, first_line):
+    # Paired per phase: a whole-file substring search would pass if one
+    # phase lost its echo while another phase carried the same one.
+    assert first_line == f"$ {command}", (
+        f"{phase}: terminal playback starts with {first_line!r}, "
+        f"not `$ {command}`")
 
 
 @pytest.mark.parametrize("command", _displayed_commands())

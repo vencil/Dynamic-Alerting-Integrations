@@ -8,6 +8,7 @@ related: [wizard, cli-playground, onboarding-checklist]
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronRight, Play, RotateCcw, Zap } from 'lucide-react';
 import { DEMO_TRANSCRIPTS } from './platform-demo/fixtures/transcripts.js';
+import { CHARS_PER_TICK, transcriptChars, runDurationMs } from './platform-demo/utils/typing.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -41,7 +42,7 @@ const PHASE_CONFIG = [
   {
     id: 'baseline',
     title: t('基線探索', 'Baseline Discovery'),
-    description: t('觀測指標負載並建議閾值', 'Observe metric load and suggest thresholds'),
+    description: t('觀測指標負載並建議閾值——此處數值取自本機 stub Prometheus，為合成資料，不是任何租戶的實測', 'Observe metric load and suggest thresholds — the values here come from a local stub Prometheus: synthetic, not measured on any tenant'),
     ...DEMO_TRANSCRIPTS.baseline,
   },
 ];
@@ -187,11 +188,11 @@ function PhaseContent({ phase, isActive, isRunning, onRun, typingSpeed }) {
   useEffect(() => {
     if (!isRunning) { setTypingIdx(-1); return; }
     setTypingIdx(0);
-    const totalChars = phase.terminal.reduce((s, l) => s + l.length + 1, 0);
+    const totalChars = transcriptChars(phase.terminal);
     const id = setInterval(() => {
       setTypingIdx(prev => {
         if (prev >= totalChars) { clearInterval(id); return prev; }
-        return prev + 2; // 2 chars per tick for smooth progress
+        return prev + CHARS_PER_TICK;
       });
     }, typingSpeed || 20);
     return () => clearInterval(id);
@@ -257,7 +258,7 @@ export default function PlatformDemo() {
           setCurrentPhaseIdx(currentPhaseIdx + 1);
         }, 500);
       }
-    }, (currentPhase.terminal.length * typingSpeed + 1000));
+    }, runDurationMs(currentPhase.terminal, typingSpeed));
   }, [isRunning, completedPhases, currentPhase.id, autoPlay, currentPhaseIdx, typingSpeed]);
 
   const handleNext = useCallback(() => {
