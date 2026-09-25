@@ -1252,6 +1252,43 @@ class TestPortalCarrier:
                      repo_root=tmp_path)
         assert any("CLI Playground carrier has nothing to read" in e for e in r.fatal)
 
+    @staticmethod
+    def _fake_node(tmp_path, body):
+        """A stand-in for node that fails in a chosen way (POSIX shell script)."""
+        exe = tmp_path / "fake-node"
+        exe.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8", newline="\n")
+        exe.chmod(0o755)
+        return str(exe)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stand-in for node")
+    @pytest.mark.parametrize("body,needle", [
+        ("echo 'SyntaxError: boom' >&2; exit 3", "rc=3"),
+        ("printf '[]'", "zero commands"),
+    ])
+    def test_a_node_that_runs_but_fails_is_fatal_not_silent(
+            self, tmp_path, monkeypatch, body, needle):
+        """⛔ node present but the catalog cannot be evaluated (a syntax error in
+        commands.js, an empty catalog) is not "nothing to report": the carrier
+        saw none of the page, so the scan must end rc=2, not green."""
+        node = self._fake_node(tmp_path, body)
+        with pytest.raises(RuntimeError, match=needle):
+            mod.portal_commands(_PLAYGROUND, node=node)
+        # …and scan() turns that into a FATAL, never a clean result.
+        root = tmp_path / "repo"
+        rel = mod.PORTAL_PLAYGROUND_DIR.relative_to(mod.REPO_ROOT)
+        (root / rel).mkdir(parents=True)
+        for name in mod.PORTAL_PLAYGROUND_FILES:
+            (root / rel / name).write_text((_PLAYGROUND / name).read_text(
+                encoding="utf-8"), encoding="utf-8", newline="\n")
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: node)
+        r = mod.scan(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
+                     reference_docs=(_reference(tmp_path),), injected=INJECTED,
+                     exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
+                     repo_root=root)
+        assert any("CLI Playground carrier failed" in e and needle in e
+                   for e in r.fatal), r.fatal
+        assert r.stats["portal_commands"] == 0
+
     def test_no_node_is_disclosed_or_fatal_under_the_require_env(
             self, tmp_path, monkeypatch):
         monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
