@@ -1,0 +1,79 @@
+# promtool unit test — TenantConfigEvent (rule-pack-operational.yaml), #2003.
+# Run: promtool test rules tests/rulepacks/rule-pack-operational_test.yaml
+#
+# Pins the da_config_event -> TenantConfigEvent label flow for the label schema
+# {tenant, event, reason, target_severity}:
+#   - an expired `_silent_mode: {target: all, reason: ...}` is TWO series that
+#     differ only in target_severity -> TWO alerts, each carrying it (before
+#     #2003 the pair was label-identical and /metrics answered 500);
+#   - maintenance / threshold events emit target_severity="" and the alert has
+#     NO target_severity label (empty value == absent in the Prometheus model).
+# Second case: no event series -> no alert.
+rule_files:
+- ../../rule-packs/rule-pack-operational.yaml
+evaluation_interval: 15s
+tests:
+- interval: 15s
+  input_series:
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="warning"}
+    values: 1x8
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="critical"}
+    values: 1x8
+  - series: da_config_event{tenant="tenant-y", event="maintenance_expired", reason="window", target_severity=""}
+    values: 1x8
+  - series: 'da_config_event{tenant="tenant-z", event="threshold_expired", reason="mysql_connections: incident", target_severity=""}'
+    values: 1x8
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: TenantConfigEvent
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        tenant: tenant-x
+        event: silence_expired
+        reason: DB maintenance
+        target_severity: warning
+      exp_annotations:
+        summary: 'Config expired for tenant-x: silence_expired'
+        summary_zh: tenant-x 的組態已過期：silence_expired
+        description: 'Timed config for tenant tenant-x has expired and auto-deactivated. Event: silence_expired. Reason: DB maintenance. Please update or remove the expired config entry.'
+        description_zh: tenant-x 的定時組態已過期並自動停用。事件：silence_expired。原因：DB maintenance。請更新或移除過期的組態項目。
+    - exp_labels:
+        severity: warning
+        tenant: tenant-x
+        event: silence_expired
+        reason: DB maintenance
+        target_severity: critical
+      exp_annotations:
+        summary: 'Config expired for tenant-x: silence_expired'
+        summary_zh: tenant-x 的組態已過期：silence_expired
+        description: 'Timed config for tenant tenant-x has expired and auto-deactivated. Event: silence_expired. Reason: DB maintenance. Please update or remove the expired config entry.'
+        description_zh: tenant-x 的定時組態已過期並自動停用。事件：silence_expired。原因：DB maintenance。請更新或移除過期的組態項目。
+    - exp_labels:
+        severity: warning
+        tenant: tenant-y
+        event: maintenance_expired
+        reason: window
+      exp_annotations:
+        summary: 'Config expired for tenant-y: maintenance_expired'
+        summary_zh: tenant-y 的組態已過期：maintenance_expired
+        description: 'Timed config for tenant tenant-y has expired and auto-deactivated. Event: maintenance_expired. Reason: window. Please update or remove the expired config entry.'
+        description_zh: tenant-y 的定時組態已過期並自動停用。事件：maintenance_expired。原因：window。請更新或移除過期的組態項目。
+    - exp_labels:
+        severity: warning
+        tenant: tenant-z
+        event: threshold_expired
+        reason: 'mysql_connections: incident'
+      exp_annotations:
+        summary: 'Config expired for tenant-z: threshold_expired'
+        summary_zh: tenant-z 的組態已過期：threshold_expired
+        description: 'Timed config for tenant tenant-z has expired and auto-deactivated. Event: threshold_expired. Reason: mysql_connections: incident. Please update or remove the expired config entry.'
+        description_zh: 'tenant-z 的定時組態已過期並自動停用。事件：threshold_expired。原因：mysql_connections: incident。請更新或移除過期的組態項目。'
+- interval: 15s
+  input_series:
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="r", target_severity="warning"}
+    values: _x8
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: TenantConfigEvent
+    exp_alerts: []

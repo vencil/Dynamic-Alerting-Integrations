@@ -249,7 +249,7 @@ da-tools diagnose db-product-01
 da-tools patch-config db-product-01 _silent_mode disable
 ```
 
-⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it only logs a WARN (on every scrape) and treats the silence as having **no expiry** — it will not end on its own. If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Known defect: once `expires` passes on a `target: all` silence that carries a `reason`, the whole `/metrics` endpoint returns HTTP 500 ([#2003](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2003)); do not combine them until it is fixed. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
+⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it only logs a WARN (on every scrape) and treats the silence as having **no expiry** — it will not end on its own. If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
 
 ```bash
 # Scheduled maintenance windows (CronJob auto-creates Alertmanager silences)

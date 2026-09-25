@@ -132,22 +132,16 @@ tenant_metadata_info{tenant="db-b",oncall="sre-team@example.com",alert_channel="
 
 **Usage:** Dynamically inject SLA tier, team information, or on-call information into alert rules.
 
-#### `da_config_event` - Configuration Event Counter
+#### `da_config_event` - Timed Config Expiry Event
 
-Tracks configuration reload events and errors.
+Gauge, value always 1. Emitted once a config with `expires` has expired; disappears when the config is updated or removed. Labels: `{tenant, event, reason, target_severity}`; `event` is `silence_expired` / `maintenance_expired` / `threshold_expired`. `target_severity` is set only for `silence_expired` (`warning` / `critical`) and empty for the other events.
 
 ```
-# HELP da_config_event Configuration event counter
-# TYPE da_config_event counter
-da_config_event{event_type="reload_success"} 42
-da_config_event{event_type="reload_error"} 2
-da_config_event{event_type="config_hash_sha256"} 0x82a4d7c9f1e...
+# TYPE da_config_event gauge
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="db-b"} 1
+da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="db-b"} 1
+da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
 ```
-
-**Event Types:**
-- `reload_success`: Number of successful configuration reloads
-- `reload_error`: Number of failed configuration reloads
-- `config_hash_sha256`: SHA-256 hash of current configuration
 
 ### Complete Example
 
@@ -184,11 +178,6 @@ user_severity_dedup{tenant="db-b",alertname="HighDiskUsage"} 0
 # TYPE tenant_metadata_info info
 tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold",oncall="platform-team"} 1
 tenant_metadata_info{tenant="db-b",team="data",env="staging",sla_tier="silver",oncall="data-team"} 1
-
-# HELP da_config_event Configuration event counter
-# TYPE da_config_event counter
-da_config_event{event_type="reload_success"} 42
-da_config_event{event_type="reload_error"} 2
 
 # EOF
 ```
@@ -498,9 +487,6 @@ kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
 
 **Solution:**
 ```bash
-# Check if configuration event counter increased
-curl -s http://<pod-ip>:8080/metrics | grep da_config_event
-
 # Check ConfigMap update time
 kubectl get configmap threshold-config -n monitoring -o wide
 
