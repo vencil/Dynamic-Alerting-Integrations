@@ -1984,6 +1984,10 @@ jobs:
         # (tests/ops/test_ci_aggregate_gate_contract.py).
         run: |
           set -euo pipefail
+          # nullglob: with every shard cancelled nothing matches, and bash
+          # would otherwise hand the literal pattern to `cp` ("cannot stat"),
+          # failing the step under `set -e` before the warning below.
+          shopt -s nullglob
           n=0
           for f in coverage-shards/*/.coverage; do
             n=$((n + 1))
