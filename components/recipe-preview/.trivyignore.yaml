@@ -27,13 +27,13 @@
 # produces a clean run that proves NOTHING. Never cite a green govulncheck for
 # an ID that is absent from the DB.
 #
-# GOVERNANCE: per-ID, each with an expiry and a named justification borrowed
-# from the OpenVEX vocabulary (`vulnerable_code_not_present` >
-# `vulnerable_code_not_in_execute_path` > risk acceptance — always use the
-# WEAKEST one the evidence supports). Re-validate whenever PROM_SHA256 changes
-# or an entry expires. Consumed by the release.yaml + nightly-image-scan +
-# component-docker-build Trivy steps via the `trivyignores:` input. The hard
-# gate (exit-code 1) is unchanged — only these entries are waived.
+# GOVERNANCE: per-ID. Required fields and allowed `justification:` values are
+# enforced in tests/ops/test_nightly_scan_matrix_drift.py; of the OpenVEX
+# justifications, always use the WEAKEST one the evidence supports
+# (`vulnerable_code_not_present` > `vulnerable_code_not_in_execute_path` >
+# `risk_accepted`). Re-validate whenever PROM_SHA256 changes or an entry
+# expires. Consumed via the workflows' `trivyignores:` input. The hard gate
+# (exit-code 1) is unchanged — only these entries are waived.
 #
 # ⏰ WATCH — findings arrive here with no change on our side: the vuln DB keeps
 # matching new advisories against upstream's dependencies inside the bundled

@@ -923,6 +923,85 @@ func (m *Manager) ScopeAllowed(p *VerifiedPrincipal, tenantID, environment, doma
 	return visAt(visSS, visSE, visES, visEE, metaFlag, orgFlag)
 }
 
+// ScopeAllowedUnknownMetadata is the list-plane visibility decision for a
+// tenant whose environment/domain are UNKNOWN — its conf.d file exists but is
+// not usable, so its `_metadata` could not be read (#1680's degraded row).
+//
+// ⛔ Unknown is NOT unlabeled, which is why this is not ScopeAllowed(p, id,
+// "", "", orgs). scopeFieldModes reads an empty value as an unlabeled tenant
+// and shadow mode lets that through on a restricted field; for a broken file
+// that would show an environment-restricted caller a tenant whose real
+// environment — merely unreadable right now — they may not be allowed. So the
+// metadata axis here has no shadow leniency: a rule grants only if it places
+// NO restriction on either metadata axis (empty Environments AND empty
+// Domains), identically in shadow and enforce mode, whatever
+// metadataScopeEnforce says.
+//
+// The org axis IS evaluated exactly as ScopeAllowed does under the current
+// orgScopeEnforce flag: tenantOrgs comes from _tenant_orgs.yaml, which is
+// independent of the broken file, so the tenant's org labels are as known as
+// they ever are.
+//
+// Per-rule fold, like ScopeAllowed: a single rule must pass tenant pattern,
+// the metadata wildcard AND its own org restriction. Rule A (metadata
+// wildcard, wrong tenant pattern) plus rule B (right pattern,
+// environment-restricted) grants nothing.
+//
+// Would-deny recording: the ORG axis only, never the metadata axis.
+//
+//   - Metadata axis: nothing to record. The scope_would_deny series measure
+//     how many grants hinge on the unlabeled-tenant leniency, and their
+//     increase()==0 is the flip criterion for the enforce flags. This
+//     decision grants no metadata leniency at all (unrestricted-only in both
+//     modes), so flipping --rbac-metadata-scope-enforce can never change it,
+//     and a broken file is an incident state rather than a labeling gap.
+//   - Org axis: recorded exactly as ScopeAllowed records it, with the
+//     metadata side held at "unrestricted-only". tenantOrgs comes from
+//     _tenant_orgs.yaml, which the broken file does not touch, so an
+//     unlabeled tenant here is a GENUINE labeling gap: a degraded row that is
+//     visible only through the org axis's shadow leniency would otherwise
+//     vanish, unannounced, the moment --rbac-org-scope-enforce is flipped
+//     after the {axis="org"} soak showed increase()==0.
+//
+// Open mode (no groups) matches ScopeAllowed: failClosedOnEmpty denies,
+// otherwise visible (and records nothing, as ScopeAllowed does).
+func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID string, tenantOrgs []string) bool {
+	cfg := m.Get()
+	if len(cfg.Groups) == 0 {
+		return !m.failClosedOnEmpty // MED-8 deny when configured-but-empty; open mode otherwise
+	}
+
+	subject := subjectFor(p)
+	var visShadow, visEnforce bool // per org mode; metadata fixed at unrestricted-only
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) {
+			continue
+		}
+		if !tenantMatches(rule.Tenants, tenantID) {
+			continue
+		}
+		if len(rule.Environments) != 0 || len(rule.Domains) != 0 {
+			continue // restricted on a metadata axis whose value is unknown
+		}
+		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
+		if rule.OrgScope != "" {
+			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
+		}
+		visShadow = visShadow || orgShadow
+		visEnforce = visEnforce || orgEnforce
+		if visShadow && visEnforce {
+			break // both org modes decided; further rules cannot change either
+		}
+	}
+
+	m.recordScopeShadowGap(visShadow, visEnforce, scopeAxisOrg)
+	if m.orgScopeEnforce {
+		return visEnforce
+	}
+	return visShadow
+}
+
 // visAt selects one of the four aggregate visibility booleans by the effective
 // per-axis modes (false=shadow, true=enforce). The index order matches the
 // visSS/visSE/visES/visEE naming: first bit = metadata mode, second = org mode.

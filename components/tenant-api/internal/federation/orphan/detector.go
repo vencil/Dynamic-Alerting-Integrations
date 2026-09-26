@@ -71,21 +71,20 @@ func scanOrphans(known map[string]struct{}, records []token.Record, subsetTenant
 // a subdirectory. On a read error it returns (nil, err); callers MUST
 // treat the error as "skip this pass" and never as "no tenants exist",
 // which would flag every artifact as orphaned.
+//
+// ⛔ Content-blind on purpose (#1680): enumeration is confd.ListTenantFiles,
+// and confd.ReadTenantFile is deliberately NOT consulted. A tenant whose file
+// is broken is not an offboarded tenant — skipping it would under-count the
+// live set, which is exactly the direction that flags its artifacts as
+// orphaned. This detector must only ever err toward "still live".
 func scanKnownTenants(configDir string) (map[string]struct{}, error) {
-	entries, err := os.ReadDir(configDir)
+	files, err := confd.ListTenantFiles(configDir)
 	if err != nil {
 		return nil, err
 	}
-	known := make(map[string]struct{})
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		id, ok := confd.TenantIDFromFile(e.Name())
-		if !ok {
-			continue
-		}
-		known[id] = struct{}{}
+	known := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		known[f.ID] = struct{}{}
 	}
 	return known, nil
 }
@@ -102,8 +101,9 @@ func scanKnownTenants(configDir string) (map[string]struct{}, error) {
 // without first tripping over the 409. Observe-only, like the rest of
 // the detector: nothing is renamed or deleted.
 func scanSubsetTenants(configDir string) ([]string, error) {
-	dir := confd.FederationSubsetDir(configDir)
-	entries, err := os.ReadDir(dir)
+	// Same single enumeration loop as conf.d itself (confd.ListTenantFiles,
+	// #1680), and content-blind for the same reason as scanKnownTenants.
+	entries, err := confd.ListTenantFiles(confd.FederationSubsetDir(configDir))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -112,18 +112,11 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 	}
 	var out []string
 	files := make(map[string][]string)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	for _, f := range entries {
+		if len(files[f.ID]) == 0 {
+			out = append(out, f.ID)
 		}
-		id, ok := confd.TenantIDFromFile(e.Name())
-		if !ok {
-			continue
-		}
-		if len(files[id]) == 0 {
-			out = append(out, id)
-		}
-		files[id] = append(files[id], e.Name())
+		files[f.ID] = append(files[f.ID], f.Name)
 	}
 	for _, id := range out {
 		if len(files[id]) > 1 {

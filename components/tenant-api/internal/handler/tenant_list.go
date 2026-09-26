@@ -3,8 +3,6 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -28,6 +26,18 @@ type TenantSummary struct {
 	Owner       string   `json:"owner,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Groups      []string `json:"groups,omitempty"`
+
+	// ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
+	// exists but is not usable, so every other field except ID is empty —
+	// its metadata is UNKNOWN, not unlabeled. Absent on a healthy row.
+	// Values: unreadable (stat/read failed, e.g. a dangling symlink or a
+	// permission error), not_regular_file (e.g. a symlink to a directory),
+	// malformed_yaml (not parseable as YAML), invalid_config (parses as YAML
+	// at the syntax level but cannot be loaded as a tenant config — wrong
+	// shape, or errors the YAML library only detects on a typed decode, such
+	// as duplicate keys). The first three come from confd.FileProblem;
+	// invalid_config is decided by this handler.
+	ConfigError string `json:"config_error,omitempty" enums:"unreadable,not_regular_file,malformed_yaml,invalid_config"`
 }
 
 // ListTenants handles GET /api/v1/tenants
@@ -35,8 +45,18 @@ type TenantSummary struct {
 // v2.5.0 Phase C: Permission-filtered — only returns tenants the user has
 // access to based on RBAC group rules (tenant patterns + environments + domains).
 //
+// #1680: a tenant whose conf.d file is not usable is returned as a degraded
+// row (ID + config_error) instead of being dropped. Its environment/domain
+// are unknown, so it is visible ONLY to a caller whose matching rule places
+// no restriction on either metadata axis (rbac.ScopeAllowedUnknownMetadata).
+//
 // @Summary     List tenants
 // @Description Returns tenants visible to the authenticated user, filtered by RBAC.
+// @Description A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
+// @Description (unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be
+// @Description loaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).
+// @Description Its environment/domain are unknown, so the
+// @Description row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
@@ -66,6 +86,15 @@ func ListTenants(d *Deps) http.HandlerFunc {
 // org axis; a nil manager is tolerated (OrgsForTenant is nil-receiver-safe) and
 // yields unlabeled orgs, which with no org-scoped rule is byte-identical to the
 // pre-P4 metadata-only filter.
+//
+// A DEGRADED row (ConfigError != "", #1680) is decided by
+// ScopeAllowedUnknownMetadata instead of ScopeAllowed. ⛔ Passing its empty
+// Environment/Domain to ScopeAllowed would be a leak: ScopeAllowed reads an
+// empty value as UNLABELED, which shadow metadata mode lets through, so an
+// environment-restricted caller would see a broken tenant whose real — merely
+// unreadable — environment they may not be allowed. Unknown is not unlabeled.
+// The org list still comes from _tenant_orgs.yaml, which the broken file does
+// not affect, so the org axis is evaluated normally.
 func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal) []TenantSummary {
 	cfg := rbacMgr.Get()
 	if len(cfg.Groups) == 0 {
@@ -78,6 +107,12 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 	filtered := make([]TenantSummary, 0, len(tenants))
 	for _, t := range tenants {
 		orgs, _ := tenantOrg.OrgsForTenant(t.ID)
+		if t.ConfigError != "" {
+			if rbacMgr.ScopeAllowedUnknownMetadata(p, t.ID, orgs) {
+				filtered = append(filtered, t)
+			}
+			continue
+		}
 		if rbacMgr.ScopeAllowed(p, t.ID, t.Environment, t.Domain, orgs) {
 			filtered = append(filtered, t)
 		}
@@ -85,33 +120,47 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 	return filtered
 }
 
-// loadAllTenants scans configDir for *.yaml files and extracts tenant summaries.
+// configErrorInvalidConfig is the one TenantSummary.ConfigError reason the
+// handler decides rather than package confd: the bytes parse as YAML at the
+// syntax level (confd.ReadTenantFile's generic yaml.Node parse calls the file
+// usable — confd deliberately knows nothing about the threshold-exporter
+// schema) but they cannot be loaded as a tenant config by the typed decode
+// into cfg.ThresholdConfig. That covers a wrong shape (e.g. `tenants:`
+// holding a list instead of a map) AND errors the YAML library only detects
+// on a typed decode, such as a duplicate mapping key (`tenants:` twice).
+// Same stability contract as the confd.FileProblem values.
+const configErrorInvalidConfig = "invalid_config"
+
+// loadAllTenants scans configDir for tenant config files and extracts tenant
+// summaries.
+//
+// Enumeration is confd.ListTenantFiles and usability is confd.ReadTenantFile
+// — the one loop and the one classifier every conf.d caller shares (#1680).
+// A file that is listed but not usable becomes a DEGRADED row (ID +
+// ConfigError, no metadata) instead of being dropped. Dropping it used to make
+// a tenant whose file broke vanish from GET /api/v1/tenants with a 200, while
+// the federation planes, the startup guard and the write plane all still
+// counted it — so the portal read "offboarded" for a tenant that was merely
+// broken, and that no one could see needed repair.
 func loadAllTenants(configDir string) ([]TenantSummary, error) {
-	entries, err := os.ReadDir(configDir)
+	files, err := confd.ListTenantFiles(configDir)
 	if err != nil {
 		return nil, err
 	}
 
 	summaries := []TenantSummary{}
-	seen := make(map[string]string, len(entries)) // tenant id → the file that claimed it
+	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it
 
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() {
-			continue
-		}
-		tenantID, ok := confd.TenantIDFromFile(name)
-		if !ok {
-			continue
-		}
+	for _, f := range files {
+		tenantID, name := f.ID, f.Name
 
 		// #1673: claim the id on the FILENAME alone, before any read or parse.
-		// An unreadable or malformed sibling used to be skipped by the
-		// `continue`s below without ever reserving its id, so a valid
-		// `<id>.yml` beside a broken `<id>.yaml` was listed here while
-		// confd.ResolveTenantFile — which matches names, not contents —
-		// answered 409 for the same tenant. Name-based claiming keeps the two
-		// planes agreeing, which is the whole point of this change.
+		// An unreadable or malformed sibling used to be skipped without ever
+		// reserving its id, so a valid `<id>.yml` beside a broken `<id>.yaml`
+		// was listed here while confd.ResolveTenantFile — which matches
+		// names, not contents — answered 409 for the same tenant. Name-based
+		// claiming keeps the two planes agreeing, which is the whole point of
+		// this change.
 		//
 		// Refusing the whole listing rather than returning the tenant twice:
 		// the two files can disagree on `_metadata` (so on env/domain scope)
@@ -123,13 +172,15 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		}
 		seen[tenantID] = name
 
-		data, err := os.ReadFile(filepath.Join(configDir, name))
-		if err != nil {
+		data, problem := confd.ReadTenantFile(configDir, name)
+		if problem != confd.ProblemNone {
+			summaries = append(summaries, TenantSummary{ID: tenantID, ConfigError: string(problem)})
 			continue
 		}
 
 		var partial cfg.ThresholdConfig
 		if err := yaml.Unmarshal(data, &partial); err != nil {
+			summaries = append(summaries, TenantSummary{ID: tenantID, ConfigError: configErrorInvalidConfig})
 			continue
 		}
 

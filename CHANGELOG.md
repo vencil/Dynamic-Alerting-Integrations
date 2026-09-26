@@ -15,6 +15,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **Trivy 豁免條目必須帶到期日與 justification（ci；[#1933](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1933)）**：沒有真正到期日的豁免條目，Trivy 永遠不讓它過期。新增 `test_every_waiver_entry_has_expiry_and_justification`：每則條目要有 `id`、`statement`、`expired_at` 與 `justification`（允許值見該測試的 `_WAIVER_JUSTIFICATIONS`）；純文字的 `.trivyignore` 不接受。
+
 - **JSX 的 ARIA 參照改由 pre-commit 擋（lint、portal；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：新增 `aria-references-check` hook，對 `tools/portal/src/` 下被修改的 `.jsx` 執行 `check_aria_references.py`。`aria-labelledby`／`aria-describedby`／`aria-controls`／`aria-owns`／`htmlFor` 指向的 id 若不在同一個檔案內，就回 rc 1。這支工具原本已經存在，只是沒有任何閘門呼叫它。⚠️ 以 template literal 組出來的 id 只比對字面前綴，完全動態的參照無法驗證，只會計數，不會判違規。
 
 - **Go 測試讀的 repo 檔，現在由 CI 在執行當下核對 path filter（ci、tests；[#1399](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1399)）**：`go` filter 過去沒有覆蓋掃描器，每一條都能無聲刪除。現在每條 Go leg 經 `scripts/ops/go_testlog_exec.sh` 以 Go 自帶的 test log 記下實際開過的檔，再由 `scripts/ops/go_test_reads.py` 核對它們都在該 leg 的 gate 內，不在就紅；量不到時 exit 2。編譯輸入（`*.go`、go.mod、go.sum）改由 `tests/ops/test_go_filter_compile_inputs.py` 推導。首次量測找到一個活的缺口：`helm/tenant-api/values.yaml` 已補進 `go` filter。走訪整個目錄的讀取、`m.Run` 之前與子行程的讀取不在檢查範圍，見腳本 docstring。
@@ -92,6 +94,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Removed
 
+- **`doc_impact.py` 與 `analyze_tier1_fp_rate.py` 退役（dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。`doc_impact` 除了測試之外沒有任何呼叫端；`analyze_tier1_fp_rate` 服務的 #433 已結案。一併移除：tool-map 條目、`test_dx_json_stdout_contract` 的兩個 recipe 與假 `gh` 專為後者保留的 `run list` 路由、`test_bilingual_help_contract` 的兩筆 allowlist。
+
 - **`check_portal_i18n.py`、`check_glossary_coverage.py`、`check_i18n_coverage.py` 退役（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決，三支都只掛在手動 stage。一併移除：三個 manual hook、`make lint-portal` 裡的 portal i18n 步驟、`check_lint_toolchain_fit` 的兩筆 allowlist、tool-map 條目，以及 `lint-policy.md`、`dev-rules.md`、`hook-vs-skill-coverage.md` 的對應內容。⚠️ 沒有補替代品：Portal JSX 寫死字串與術語表覆蓋率這兩項檢查是直接拿掉。
 
 - **`check_doc_template.py` 與 `inject_related_docs.py` 退役；doc-template §2.8「相關資源」段落從強制改為建議（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。檢查工具只掛在手動 stage、從來沒有接上閘門，規則只寫在文件裡，實際上大多數文件都沒有這個段落。產生器 `--update` 會覆寫已經存在、由人手整理的「相關資源」段落，不能拿來補齊。frontmatter 是否存在，仍由 CI 的 `add_frontmatter.py --check` 把關。
@@ -114,6 +118,9 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **設定檔壞掉的租戶不再從 `GET /api/v1/tenants` 靜默消失（tenant-api；[#1680](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1680)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：YAML 壞掉、symlink 斷掉或指向目錄的租戶，清單回 `200 []`，federation、啟動檢查與寫入平面卻仍算它活著。五個 conf.d 列舉器改共用 `confd.ListTenantFiles`（不讀內容），只有清單另以 `confd.ReadTenantFile` 判定可用性；federation 與寫入平面刻意不看內容。
+  - ⚠️ **API 變更**：壞檔租戶改回降級列 `{id, config_error}`，值為穩定契約：`unreadable`、`not_regular_file`、`malformed_yaml`、`invalid_config`（語法可解析但無法載入為租戶設定，含重複 key；由 handler 判定）。空檔仍可用。`/search` 的 `q` 比對其 id，metadata 篩選不命中。
+  - ⛔ **只有 `environments` 與 `domains` 皆不設限的呼叫者看得到**（新 `rbac.ScopeAllowedUnknownMetadata`，shadow／enforce 皆同；org 軸照常）。不沿用 `ScopeAllowed` 帶空值：那會被當未標記而在 shadow 放行。portal 尚未顯示 `config_error`。
 - **federation subset 存成 `<id>.yml` 時，`GET /api/v1/tenants/{id}/federation` 回空子集、PUT 在旁邊另建 `<id>.yaml`（tenant-api；[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)）**：`conf.d/_federation/` 的孤兒偵測器接受 `.yaml`/`.yml`（副檔名不分大小寫），讀取與寫入端卻硬寫 `<id>.yaml`。於是讀取端對 `.yml` 租戶回 `200 {"metrics":[]}`，PUT 則新建第二個檔、舊檔留著且無人讀。本次把 [#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673) 的 `confd.ResolveTenantFile` / `TenantFilePathForWrite` 原樣套到 `_federation/` 目錄：讀取解析**實際**檔案（不存在仍是空子集），寫入寫回**既有**檔案（只有全新 subset 才用 `<id>.yaml`）。
   - **同一租戶兩種拼法並存 → 409**，GET 與 PUT 皆然、不寫任何檔；對映與租戶平面 `GET`／`PUT /tenants/{id}` 的 `ErrAmbiguousTenantFile` 相同。孤兒偵測器對這種租戶只計一次（先前算 2）並噴 WARN 列出檔名，仍只觀測。
   - ⚠️ **行為變更**：`_federation/` 下同時有 `<id>.yaml` 與 `<id>.yml` 的租戶，GET 先前回 `200` 與 `.yaml` 那份內容、PUT 只改 `.yaml`，現在兩者都回 `409`，須在 git 刪掉其中一個。OpenAPI spec 的 GET 補上 `409`。`tenant_api_federation_orphaned_subset_files` 的 HELP 改為「以租戶計」（名稱不變）。
@@ -133,6 +140,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - **`check-doc-reading-time` 與 `check-doc-freshness` 兩支手動 hook 從來沒真的檢查過文件；`make pre-tag` 的 playbook 新鮮度不再印假的 ✅（lint、dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：兩支 hook 的 entry 都傳了 `--ci`，但兩支工具都不認得這個參數，argparse 每次都 exit 2，文件一份都沒被量過。現在改傳工具真正定義的 `--check`。`pre-tag` 呼叫的 `playbook-freshness-ll` 設計上只是提醒、不會擋，但結尾橫幅卻寫死「playbook-freshness ✅」，即使同一段輸出裡已經列出 ⛔ 過期條目；現在橫幅改為註明它是 advisory，要看上方輸出。
 
 - **da-portal / tenant-api chart 的 `ingress.*` 終於會產生 Ingress（helm；[#2027](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2027)）**：兩個 chart 的 values.yaml（及 da-portal `values-tier2.yaml` 的 `ingress.enabled: true`）一直宣告 `ingress:`，卻沒有任何 template 讀它——`helm install` 回 0、叢集裡沒有 Ingress。新增 `templates/ingress.yaml`（預設關閉）。⛔ 後端固定為 Service 的 `http` port（→ oauth2-proxy :4180）、不可設定：8080 在 tenant-api 信任注入的身分 header、在 da-portal 直達 nginx，經 Ingress 對外即身分偽造（GHSA-3g2h-rf85-5rrv）。`oauth2Proxy.enabled=false` 或 `ingress.hosts` 為空時 render 直接失敗；只給 host 未給 `paths`（da-portal README 的範例就是這樣）時預設 `/` Prefix。tenant-api chart 2.9.21 → 2.9.22；部署設定精靈的 Tier 2 說明同步改寫。
+
+- **CI/CD 設定精靈的 GitHub Actions 預覽改為 `da-tools init` 寫出的完整檔案（portal；[#1351](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1351)）**：預覽原本是手寫的縮短版，和實際產物差在 workflow 層的 `env:`、`name:`，以及四個 step 的內容。其中 blast-radius 那一步少了「conf.d 在這個 commit 不存在就拒絕比對」的防護，照預覽貼上的客戶在 config 目錄被移走時，會一直收到寫著 no changes 的報告。依 owner 裁決 (a)，預覽現在逐字等於 `da-tools init --ci github` 的輸出，只多一行精靈自己的浮動 tag 註解。`test_generated_ci_artifacts.py` 原本的逐軸比對與宣告式例外（`env:` 差異、step body 不比對）改成整份檔案逐字比對，預設映像與自訂映像（可變 tag、digest）都比。`cicdGenerators.test.ts` 裡以 `indexOf` 檢查 `--user` 位置的規則改成找 `${{ env.DA_TOOLS_IMAGE }}`，找不到映像本身就算違規，並補上用合成命令證明它仍會觸發的測試。
 
 - **nightly CVE 報告 delivered 桶的失敗成因說明不再經過 bash 解析（ci；[#1970](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1970)）**：`FAILURE_CAUSE_NOTE` 也會進 issue 內文，但它不是 `file_cve_report.sh` 的參數，#1355／#1932 的守衛看不到它；原本寫在 `run:` 的雙引號字串裡，日後寫進反引號、`$(` 或 `"` 就會被 bash 執行或切斷。現在散文放在該 step 的 `env:`（`DELIVERED_FAILURE_CAUSE_NOTE`），`run:` 只做 `export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"`。issue 內文不變。新增 `test_failure_cause_note_prose_is_not_shell_text`：report step 裡對 `FAILURE_CAUSE_NOTE` 的賦值只能引用 `env:` 的變數，且該值不得含 `${{`（Actions 會對它求值）。
 

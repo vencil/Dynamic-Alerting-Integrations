@@ -794,7 +794,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
                 "produces": [
                     "application/json"
                 ],
@@ -2790,6 +2790,16 @@ const docTemplate = `{
         "internal_handler.TenantSummary": {
             "type": "object",
             "properties": {
+                "config_error": {
+                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, or errors the YAML library only detects on a typed decode, such\nas duplicate keys). The first three come from confd.FileProblem;\ninvalid_config is decided by this handler.",
+                    "type": "string",
+                    "enum": [
+                        "unreadable",
+                        "not_regular_file",
+                        "malformed_yaml",
+                        "invalid_config"
+                    ]
+                },
                 "db_type": {
                     "type": "string"
                 },
