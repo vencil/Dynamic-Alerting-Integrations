@@ -135,8 +135,9 @@ jobs:
               # executes it on every build, so breaking it fails that required
               # check — and nothing else pre-merge runs it (#2079 measured
               # `tests/dx/test_generate_nav.py` still passing with the hook
-              # raising at import). The directory, so a second hook is covered.
-              - "scripts/mkdocs/**"
+              # raising at import). ⚠️ Only this file is pinned: a new hook
+              # added to `hooks:` needs its own line here.
+              - "scripts/mkdocs/rule_packs_bridge.py"
               # ⛔ The pin SSOT six of this workflow's gated jobs INSTALL FROM
               # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
               # not a file any doc check reads, which is why no "does a test

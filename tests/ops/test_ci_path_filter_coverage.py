@@ -2111,7 +2111,9 @@ PINNED_STEP_INPUTS = {
 # the tracked files no pattern covered. Re-run that when a leg's commands
 # change — a NEW indirect read still arrives unannounced, and no assertion here
 # will say so. (`drift-checks` was excluded: validate_all.py fans out through
-# subprocess, so an in-process recorder under-reports it.)
+# subprocess, so an in-process recorder under-reports it.) Entries do not all
+# come from that one sweep — each says where it came from; #2079 re-measured
+# every leg under strace, subprocesses included.
 TRACED_INDIRECT_INPUTS = {
     # check-links: the waiver list decides what that required check ENFORCES.
     ("docs-ci.yaml", "docs", ".doclinkignore"),
