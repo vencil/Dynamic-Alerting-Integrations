@@ -18,7 +18,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -347,6 +346,7 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // @Param       id path string true "Tenant ID"
 // @Success     200 {object} fedpolicy.Subset
 // @Failure     400 {object} handler.ErrorResponse
+// @Failure     409 {object} handler.ErrorResponse
 // @Failure     500 {object} handler.ErrorResponse
 // @Router      /api/v1/tenants/{id}/federation [get]
 func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
@@ -357,7 +357,15 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 		subset, err := readFederationSubset(d, tenantID)
-		if err != nil {
+		switch {
+		case errors.Is(err, confd.ErrAmbiguousTenantFile):
+			// #1698: two files under _federation/ claim this tenant. Same
+			// stance and status as GET /tenants/{id} on the tenant plane
+			// (#1673): the request is fine, the on-disk state is not, and
+			// picking one file would serve a coin flip.
+			handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
+			return
+		case err != nil:
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "read federation subset: "+err.Error())
 			return
 		}
@@ -435,6 +443,12 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
 			}
+			// #1698: two subset files claim this tenant, so the writer cannot
+			// know which one to rewrite — 409, as tenant PUT does (#1673).
+			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
+				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
+				return
+			}
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -454,23 +468,19 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 // the branch by identity, not by message text.
 var ErrUnaddressableTenantID = errors.New("unaddressable tenant id: cannot name a _federation/ subset file")
 
-// federationSubsetPath is the only place the _federation/<id>.yaml join
-// is spelled on the read side. It exists so a test can plant a fixture
-// at exactly the path the reader will open, instead of hand-copying the
-// expression into the test and letting the copy go stale in silence the
-// next time this one changes.
+// readFederationSubset loads tenantID's subset file from
+// conf.d/_federation/. A missing file is not an error — it means the tenant
+// has selected no federation metrics yet, which yields an empty subset.
 //
-// The write side spells the same join separately, in another package
-// (gitops.Writer.WriteFederationSubsetFile). Unifying the two is a
-// refactor of its own; what this change does buy is that both run the
-// same confd predicate before they get there.
-func federationSubsetPath(configDir, tenantID string) string {
-	return filepath.Join(configDir, "_federation", tenantID+".yaml")
-}
-
-// readFederationSubset loads conf.d/_federation/<tenantID>.yaml. A
-// missing file is not an error — it means the tenant has selected no
-// federation metrics yet, which yields an empty subset.
+// WHICH file is resolved, not assumed (#1698): _federation/ is a
+// conf.d-shaped directory, and the orphan detector's scan has always counted
+// `<id>.yml` and upper-case extensions there as a tenant's subset. A reader
+// that joined `<id>.yaml` returned an EMPTY subset — a 200 indistinguishable
+// from "federates nothing" — for a tenant whose subset is stored under
+// another spelling. confd.ResolveTenantFile is the tenant plane's answer to
+// the same question (#1673), reused here with the _federation/ directory
+// rather than restated. Two files claiming one tenant surface as
+// confd.ErrAmbiguousTenantFile; the caller maps it to the tenant plane's 409.
 //
 // The confd predicate below is the read-side twin of guardTenantID's
 // sink-side check on the write path (internal/gitops/writer.go) — the
@@ -485,10 +495,14 @@ func federationSubsetPath(configDir, tenantID string) string {
 // inside _federation/ as ordinary filenames, and `sub/nested` merely
 // buries the file one level down. They are refused because the id could
 // not name a subset file, not because each one is its own traversal.
+// (Those measurements were taken against the pre-#1698 `<id>.yaml` join;
+// confd.ResolveTenantFile now refuses the same shapes again with
+// ErrUnsafeTenantID, but the predicate here runs first and keeps its own
+// sentinel.)
 //
-// The predicate runs BEFORE the join and the read, so a rejected id
-// never reaches os.ReadFile — the file at the escaped path is not
-// opened, not read, and not discarded after the fact.
+// The predicate runs BEFORE the directory listing and the read, so a
+// rejected id never reaches the filesystem — the file at the escaped path
+// is not opened, not read, and not discarded after the fact.
 //
 // This is a backstop, not the request-shape gate: the sole caller runs
 // handler.ValidateTenantID on the chi URL param first, so an id
@@ -503,8 +517,17 @@ func readFederationSubset(d *handler.Deps, tenantID string) (*fedpolicy.Subset, 
 	if !confd.IsAddressableTenantID(tenantID) {
 		return nil, fmt.Errorf("%w: %q", ErrUnaddressableTenantID, tenantID)
 	}
-	data, err := os.ReadFile(federationSubsetPath(d.ConfigDir, tenantID))
+	path, err := confd.ResolveTenantFile(confd.FederationSubsetDir(d.ConfigDir), tenantID)
+	if errors.Is(err, confd.ErrTenantFileNotFound) {
+		return &fedpolicy.Subset{Metrics: []string{}}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// Lost a race with a delete between resolve and read — the same
+		// "no subset" answer the resolver would have given a moment later.
 		return &fedpolicy.Subset{Metrics: []string{}}, nil
 	}
 	if err != nil {

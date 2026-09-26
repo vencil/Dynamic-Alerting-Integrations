@@ -124,8 +124,8 @@
 | `POST` | `/api/v1/federation/tokens` | admin(對 body 的租戶) | 簽發短效 token(預設 4h);token 本體只在回應出現一次 |
 | `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin(對該租戶) | 列出該租戶未過期的 token 記錄(不含 token 本體) |
 | `DELETE` | `/api/v1/federation/tokens/{id}` | admin(對該 token 的租戶) | 撤銷 token;最終一致,約 1–2 分鐘內隨設定同步生效 |
-| `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集 |
-| `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單) |
+| `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集;`_federation/<id>.yaml` / `.yml` 兩種拼法皆可解析,無檔回空子集,同一 id 兩種拼法並存回 409 |
+| `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單);寫回既有檔,全新子集才用 `.yaml`,同一 id 兩種拼法並存回 409 |
 
 > token 記錄存於跨 replica 共用的 Kubernetes ConfigMap(由 Helm chart 預建),服務維持 stateless、可多 replica。濫用防線:每租戶同時最多 16 個有效 token + 每分鐘簽發上限,超出分別回 409 / 429。未設定簽章金鑰時,整組聯邦 token 端點不註冊。
 

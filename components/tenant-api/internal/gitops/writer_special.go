@@ -1,7 +1,8 @@
 package gitops
 
 // Special-file write paths for non-tenant GitOps entities — _groups.yaml,
-// _views.yaml, _federation_policy.yaml, and per-tenant _federation/<id>.yaml.
+// _views.yaml, _federation_policy.yaml, and per-tenant _federation/<id>.yaml or
+// .yml (any extension case; a new subset defaults to .yaml).
 // Split out of writer.go (Cycle 5 refactor) so the tenant write path and these
 // entity write paths read separately — no behavior change, pure intra-package
 // move. All share the same writer mutex + HEAD conflict detection as tenant
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,15 +43,24 @@ func (w *Writer) WriteFederationPolicyFile(ctx context.Context, authorEmail, yam
 }
 
 // WriteFederationSubsetFile validates, persists, and commits one
-// tenant's federation metric subset to _federation/<tenantID>.yaml
-// (ADR-020 IV-2e). One file per tenant on purpose: a tenant's
-// self-service subset edits never contend on a shared git object, so
-// concurrent edits across tenants cannot conflict. The _federation/
-// directory is created on first write.
+// tenant's federation metric subset under _federation/ (ADR-020 IV-2e).
+// One file per tenant on purpose: a tenant's self-service subset edits
+// never contend on a shared git object, so concurrent edits across
+// tenants cannot conflict. The _federation/ directory is created on
+// first write.
+//
+// The file written is the tenant's EXISTING subset file whatever its
+// spelling (`<id>.yml`, `<id>.YAML`, …), and `<id>.yaml` only for a
+// tenant that has none (#1698) — confd.TenantFilePathForWrite, the
+// tenant plane's #1673 answer, pointed at _federation/. Joining a fixed
+// `<id>.yaml` here created a SECOND file beside a `<id>.yml` subset and
+// left the original with stale content and no reader. Two files already
+// claiming the tenant are refused with confd.ErrAmbiguousTenantFile and
+// nothing is written.
 func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
-	// Reserved-id backstop: the subset path also writes {tenantID}.yaml, so a
-	// reserved id would land a _*/.* file inside _federation/ (defense-in-depth;
-	// see guardTenantID).
+	// Reserved-id backstop: a brand-new subset is written as {tenantID}.yaml,
+	// so a reserved id would land a _*/.* file inside _federation/
+	// (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return err
 	}
@@ -62,7 +73,7 @@ func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, author
 	// MkdirAll is idempotent and git-independent — done before taking
 	// the write lock so a filesystem syscall never serialises behind
 	// the (git-bound) write path.
-	dir := filepath.Join(w.configDir, "_federation")
+	dir := confd.FederationSubsetDir(w.configDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create _federation dir: %w", err)
 	}
@@ -76,8 +87,15 @@ func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, author
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// Resolved under w.mu so no other write through this Writer can create
+	// or rename the tenant's subset file between the answer and the write.
+	// Argued, not pinned: no test fails if this call moves above the lock.
+	path, err := confd.TenantFilePathForWrite(dir, tenantID)
+	if err != nil {
+		return err
+	}
 	return w.commitFileChange(
-		filepath.Join(dir, tenantID+".yaml"),
+		path,
 		"federation/"+tenantID,
 		authorEmail,
 		[]byte(yamlContent),

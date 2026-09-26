@@ -176,7 +176,7 @@ Tenant subset（你自選的子集，經 API 自助管理）
 ```
 
 - **Platform whitelist**（`_federation_policy.yaml`）：平台決定「哪些 metric 開放給 federation」的目錄。
-- **Tenant subset**（`conf.d/_federation/<你>.yaml`）：你從 whitelist 中挑自己要的子集，經 `PUT /api/v1/tenants/{id}/federation` 自助管理（需該租戶 admin）。
+- **Tenant subset**（`conf.d/_federation/<你>.yaml`）：你從 whitelist 中挑自己要的子集，經 `PUT /api/v1/tenants/{id}/federation` 自助管理（需該租戶 admin）。既有檔若是 `<你>.yml`（或大寫副檔名），API 照樣讀它、寫回它；同一租戶有兩種拼法並存時，`GET`／`PUT` 回 `409`，須先在 git 刪掉其中一個。
 
 範例 subset：
 
