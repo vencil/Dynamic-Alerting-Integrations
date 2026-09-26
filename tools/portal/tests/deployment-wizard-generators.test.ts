@@ -142,8 +142,13 @@ describe('every emitted key is read by the target chart (structural, all configs
     ]) {
       expect(isConsumed('threshold-exporter', fictional), fictional).toBe(false);
     }
-    // da-portal declares ingress.* in values.yaml but has no Ingress template.
-    expect(isConsumed('da-portal', 'ingress.enabled')).toBe(false);
+    // Declared in da-portal's values.yaml yet read by no template (the
+    // ServiceAccount is created unconditionally under a fixed name): the
+    // resolver must not treat "present in values.yaml" as "consumed".
+    expect(isConsumed('da-portal', 'serviceAccount.create')).toBe(false);
+    // #2027 gave both charts an Ingress template; ingress.* is now read.
+    expect(isConsumed('da-portal', 'ingress.enabled')).toBe(true);
+    expect(isConsumed('tenant-api', 'ingress.hosts')).toBe(true);
   });
 
   it('leafPaths control: parses nesting, and throws on shapes it cannot read', () => {

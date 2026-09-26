@@ -340,6 +340,8 @@ helm install tenant-api oci://ghcr.io/vencil/charts/tenant-api \
 
 Chart 會建立:Deployment + oauth2-proxy sidecar、Service、RBAC ConfigMap、NetworkPolicy、PDB。
 
+對外入口：設 `ingress.enabled=true` 與 `ingress.hosts` 會多建一個 Ingress（預設關閉，#2027）。後端固定是 Service 的 `http` port（→ oauth2-proxy :4180），**不可設定**——internal port 8080 信任注入的身分 header，永遠不經 Ingress 對外（GHSA-3g2h-rf85-5rrv）；`oauth2Proxy.enabled=false` 時 render 直接失敗。
+
 本機 Docker(從 repo root build,因 go.mod 需 threshold-exporter 模組):
 
 ```bash

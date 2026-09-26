@@ -122,6 +122,8 @@ helm install da-portal helm/da-portal -n monitoring \
   --set oauth2Proxy.cookieSecure=true
 ```
 
+The Ingress backend is always the Service `http` port (80 → oauth2-proxy :4180) and is not configurable: port 8080 reaches nginx without authentication and must never be published (GHSA-3g2h-rf85-5rrv). Rendering therefore fails when `ingress.enabled=true` and `oauth2Proxy.enabled=false`, and when `ingress.hosts` is empty. A host given without `paths` (as above) serves `/` with `pathType: Prefix`. Before #2027 these values were declared but no template read them.
+
 #### Tenant API URL
 
 By default, the chart assumes tenant-api is in the same cluster, in its dedicated `tenant-api` namespace (#1004), at:

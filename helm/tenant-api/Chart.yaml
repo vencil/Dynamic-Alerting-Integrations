@@ -26,7 +26,10 @@ type: application
 #          list plane already binds, this one binds writes for the first time, so
 #          sharing it would tighten writes the moment a list-plane-soaked deployment
 #          upgrades. Default shadow = no-op.
-version: 2.9.21
+# 2.9.22 — #2027: templates/ingress.yaml — the long-declared `ingress.*` values now
+#          render an Ingress (default off = no-op). Backend is hard-wired to the
+#          oauth2-proxy `http` port; render fails with oauth2Proxy.enabled=false.
+version: 2.9.22
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values
