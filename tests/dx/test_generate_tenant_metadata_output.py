@@ -164,7 +164,7 @@ class TestInterruptedWrite:
         out.write_text(_PREVIOUS, encoding="utf-8")
 
         def boom(src, dst):
-            raise OSError(errno.EXDEV, "Invalid cross-device link", src, None, dst)
+            raise OSError(errno.EIO, "Input/output error", src, None, dst)
 
         monkeypatch.setattr(gtm.os, "replace", boom)
         rc = _run(monkeypatch, confd, out)
@@ -237,6 +237,9 @@ class TestNoRegressionVsInPlace:
         at the point it bites: ``mkstemp`` refusing with EACCES."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
+        # The in-place writer chmodded after writing, so a 0600 file came
+        # out 0644 (measured). The fallback must keep doing that.
+        out.chmod(0o600)
 
         def denied(*a, **k):
             raise PermissionError(errno.EACCES, "Permission denied",
@@ -304,6 +307,159 @@ class TestNoRegressionVsInPlace:
         assert f"ERROR: cannot write {out}: Is a directory" in capsys.readouterr().err
 
 
+class TestSameResultAsInPlace:
+    """Blind-review round (#2082): wherever the in-place writer succeeded or
+    refused, the atomic one must end the same way — falling back to in
+    place (with a WARN when that loses atomicity), never a new rc 2."""
+
+    def test_a_read_only_file_is_still_refused(self, monkeypatch, confd, tmp_path, capsys):
+        """Non-root shape of 0444: ``os.access`` says no and the kernel
+        refuses the in-place open. Simulated so it also runs as root."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        out.chmod(0o444)
+        real_access, real_write_text = os.access, Path.write_text
+
+        def access(path, mode, *a, **k):
+            if os.fspath(path) == str(out) and mode & os.W_OK:
+                return False
+            return real_access(path, mode, *a, **k)
+
+        def write_text(self, *a, **k):
+            if str(self) == str(out):
+                raise PermissionError(errno.EACCES, "Permission denied", str(out))
+            return real_write_text(self, *a, **k)
+
+        monkeypatch.setattr(gtm.os, "access", access)
+        monkeypatch.setattr(Path, "write_text", write_text)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+
+        assert rc == 2
+        assert f"ERROR: cannot write {out}: Permission denied" in err
+        assert out.read_text(encoding="utf-8") == _PREVIOUS
+        assert stat.S_IMODE(out.stat().st_mode) == 0o444
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                        reason="root ignores 0444; the simulated test covers it")
+    def test_a_read_only_file_is_still_refused_for_real(self, monkeypatch, confd, tmp_path):
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        out.chmod(0o444)
+        assert _run(monkeypatch, confd, out) == 2
+        assert out.read_text(encoding="utf-8") == _PREVIOUS
+        assert stat.S_IMODE(out.stat().st_mode) == 0o444
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
+                        reason="only root can create a file owned by someone else")
+    def test_a_root_run_keeps_the_files_owner(self, monkeypatch, confd, tmp_path):
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        os.chown(out, 65534, 65534)
+
+        assert _run(monkeypatch, confd, out) == 0
+
+        st = out.stat()
+        assert (st.st_uid, st.st_gid) == (65534, 65534)
+        assert _is_fresh_metadata(out)
+
+    @pytest.mark.parametrize("code", [errno.EBUSY, errno.EXDEV])
+    def test_a_mount_point_target_falls_back_in_place(
+        self, monkeypatch, confd, tmp_path, capsys, code,
+    ):
+        """docker ``-v file:file`` / k8s subPath: rename over a mount point
+        is EBUSY, while writing through it worked."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+
+        def busy(src, dst):
+            raise OSError(code, os.strerror(code), src, None, dst)
+
+        monkeypatch.setattr(gtm.os, "replace", busy)
+        rc = _run(monkeypatch, confd, out)
+        err = capsys.readouterr().err
+
+        assert rc == 0, err
+        assert "WARN:" in err and "cannot be replaced" in err
+        assert _is_fresh_metadata(out)
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    def test_no_file_and_no_writable_dir_is_one_error_line_no_warn(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """Nothing exists to truncate, so a WARN saying so is noise ahead of
+        the real ERROR."""
+        out = tmp_path / "meta.json"
+        real_write_text = Path.write_text
+
+        def denied(*a, **k):
+            raise PermissionError(errno.EACCES, "Permission denied",
+                                  str(tmp_path / ".meta.json.xyz.tmp"))
+
+        def write_text(self, *a, **k):
+            if str(self) == str(out):
+                raise PermissionError(errno.EACCES, "Permission denied", str(out))
+            return real_write_text(self, *a, **k)
+
+        monkeypatch.setattr(gtm.tempfile, "mkstemp", denied)
+        monkeypatch.setattr(Path, "write_text", write_text)
+        rc = _run(monkeypatch, confd, out)
+        err_lines = capsys.readouterr().err.strip().splitlines()
+
+        assert rc == 2
+        assert err_lines == [f"ERROR: cannot write {out}: Permission denied "
+                             f"(errno 13) — check the value given to --output"]
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+    def test_a_fifo_output_stays_a_fifo_and_the_reader_gets_json(
+        self, monkeypatch, confd, tmp_path,
+    ):
+        import threading
+
+        out = tmp_path / "meta.fifo"
+        os.mkfifo(out)
+        got: list[bytes] = []
+        reader = threading.Thread(target=lambda: got.append(out.read_bytes()), daemon=True)
+        reader.start()
+
+        rc = _run(monkeypatch, confd, out)
+        reader.join(timeout=10)
+
+        assert rc == 0
+        assert not reader.is_alive(), "the writer never opened the FIFO"
+        assert stat.S_ISFIFO(os.stat(out).st_mode)
+        assert "acme" in json.loads(got[0])["tenant_metadata"]
+
+    @pytest.mark.parametrize("code", [errno.ENOSPC, errno.EIO])
+    def test_a_failing_fsync_does_not_replace(self, monkeypatch, confd, tmp_path, capsys, code):
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+
+        def fsync(fd):
+            raise OSError(code, os.strerror(code))
+
+        monkeypatch.setattr(gtm.os, "fsync", fsync)
+        rc = _run(monkeypatch, confd, out)
+
+        assert rc == 2
+        assert out.read_text(encoding="utf-8") == _PREVIOUS
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    def test_must_fire_an_fsync_the_filesystem_does_not_support_is_fine(
+        self, monkeypatch, confd, tmp_path,
+    ):
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+
+        def fsync(fd):
+            raise OSError(errno.EINVAL, "Invalid argument")
+
+        monkeypatch.setattr(gtm.os, "fsync", fsync)
+        assert _run(monkeypatch, confd, out) == 0
+        assert _is_fresh_metadata(out)
+
+
 _DAMAGED = {
     "bad_json": b"{bad",
     "truncated": b'{\n  "tenants": {\n    "ac',
@@ -311,6 +467,7 @@ _DAMAGED = {
     "scalar": b"5",
     "null": b"null",
     "non_utf8": b"\xff\xfe",
+    "nested_too_deep": b"[" * 100_000,   # json raises RecursionError
 }
 
 

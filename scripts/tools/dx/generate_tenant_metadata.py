@@ -467,6 +467,11 @@ _FSYNC_UNSUPPORTED_ERRNOS = frozenset(
 # mkstemp's prefix embeds the target name; cap it so a target name near
 # NAME_MAX cannot turn a write that works in place into ENAMETOOLONG.
 _TMP_PREFIX_NAME_CAP = 64
+# os.replace errnos where the in-place write would still have worked:
+# EBUSY — the target is a mount point (docker `-v file:file`, k8s subPath);
+# EXDEV — the same, seen through some bind setups; EPERM / EACCES — a sticky
+# directory (/tmp) holding a writable file owned by someone else.
+_REPLACE_REFUSED_ERRNOS = frozenset({errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES})
 
 
 class OutputNoSpaceError(OutputWriteError):
@@ -562,10 +567,20 @@ def atomic_replace_output(out: Path, content: str) -> None:
       other links go stale without a word — trades a rare crash-window for a
       certain, silent divergence.
 
-    Ownership: a replace leaves the file owned by whoever ran the tool,
-    where the in-place write kept the old owner. (The old code then failed
-    its own ``chmod`` with EPERM on a file it did not own — rc 2 after the
-    bytes were already written — so that case now succeeds instead.)
+    Rule for every other case: where the in-place write succeeded or
+    refused, this does the same — when atomic is not possible it falls back
+    to the in-place write (WARN when that loses atomicity), it does not add
+    a new rc 2:
+
+    * **read-only file** (``os.access(out, W_OK)`` false): in place, so it
+      is still refused with EACCES (rc 2) instead of being replaced through
+      the writable directory.
+    * **ownership**: the tmp is ``fchown``-ed to the old file's uid/gid, so a
+      root run does not leave a root-owned file the owner cannot rewrite. If
+      that is not permitted and the owner differs, in place (which, as
+      before, writes and then fails its own chmod: rc 2).
+    * **target is a mount point / sticky directory** (``os.replace`` fails
+      EBUSY / EXDEV / EPERM / EACCES): the tmp is removed, WARN, in place.
 
     Every ``OSError`` leaves as :class:`OutputWriteError` (or
     :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
@@ -589,6 +604,13 @@ def atomic_replace_output(out: Path, content: str) -> None:
         )
         _write_in_place(out, content, set_mode=True)
         return
+    if st is not None and not os.access(out, os.W_OK):
+        # A read-only file (0444, or not ours): the in-place write refused
+        # it with EACCES, and a replace would need only the DIRECTORY to be
+        # writable — it would silently overwrite a file the operator
+        # protected. Let the in-place write refuse it as before (rc 2).
+        _write_in_place(out, content, set_mode=True)
+        return
 
     target = Path(os.path.realpath(out))
     try:
@@ -598,25 +620,50 @@ def atomic_replace_output(out: Path, content: str) -> None:
             suffix=".tmp",
         )
     except PermissionError as exc:
-        _warn_not_atomic(
-            out, f"cannot create a temporary file beside it ({exc.strerror})",
-        )
+        if st is not None:
+            _warn_not_atomic(
+                out, f"cannot create a temporary file beside it ({exc.strerror})",
+            )
+        # No file yet ⇒ nothing to protect and nothing to warn about: the
+        # in-place write fails on the same directory with its own ERROR.
         _write_in_place(out, content, set_mode=True)
         return
     except OSError as exc:
         raise _output_error(out, exc, previous_kept=True) from exc
 
+    fallback: str | None = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(content)
-            fh.flush()
+        if st is not None and hasattr(os, "fchown") and (
+                st.st_uid != os.geteuid() or st.st_gid != os.getegid()):
             try:
-                os.fsync(fh.fileno())
+                os.fchown(fd, st.st_uid, st.st_gid)
+            except PermissionError:
+                if st.st_uid != os.geteuid():
+                    # Cannot hand the file back to its owner. The in-place
+                    # writer kept the owner (and then failed its own chmod,
+                    # rc 2); taking the file over silently is worse.
+                    fallback = "owner"
+                # Same owner, a group we are not in: proceed. The file ends
+                # up with our group where in place kept the old one — the
+                # owner can still rewrite it, so no later run is refused.
+        if fallback is None:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(content)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError as exc:
+                    if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
+                        raise _output_error(out, exc, previous_kept=True) from exc
+            os.chmod(tmp_name, _OUTPUT_MODE)
+            try:
+                os.replace(tmp_name, target)
             except OSError as exc:
-                if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
-                    raise _output_error(out, exc, previous_kept=True) from exc
-        os.chmod(tmp_name, _OUTPUT_MODE)
-        os.replace(tmp_name, target)
+                if exc.errno not in _REPLACE_REFUSED_ERRNOS:
+                    raise
+                fallback = f"it cannot be replaced ({exc.strerror})"
+        else:
+            os.close(fd)
     except BaseException as exc:
         try:
             os.unlink(tmp_name)
@@ -627,6 +674,15 @@ def atomic_replace_output(out: Path, content: str) -> None:
         if isinstance(exc, OSError):
             raise _output_error(out, exc, previous_kept=True) from exc
         raise
+
+    if fallback is not None:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        if fallback != "owner":
+            _warn_not_atomic(out, fallback)
+        _write_in_place(out, content, set_mode=True)
 
 
 def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
@@ -647,6 +703,8 @@ def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
         existing = json.loads(raw)
     except ValueError as exc:
         return None, f"not valid JSON ({exc})"
+    except RecursionError:
+        return None, "not usable JSON (nested too deeply to parse)"
     if not isinstance(existing, dict):
         kind = {list: "an array", str: "a string", bool: "a boolean",
                 int: "a number", float: "a number", type(None): "null",
