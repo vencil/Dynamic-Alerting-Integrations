@@ -284,6 +284,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 				writeForgeDegraded(w, r)
 				return
 			}
+			// #2078: the id is also declared by another conf.d file (the
+			// exporter already rejects that tree) → 409, fixed message.
+			if writeTenantPlacementError(w, r, err) {
+				return
+			}
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}

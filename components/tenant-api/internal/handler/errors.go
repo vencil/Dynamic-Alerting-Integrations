@@ -86,7 +86,45 @@ const (
 	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
 	// parse detail inline against the submitted document.
 	CodeCandidateInvalid = "CANDIDATE_INVALID"
+	// CodeTenantDeclaredElsewhere marks a 409 from a tenant write that would
+	// create `<id>.yaml` for an id another conf.d file already declares (a
+	// subdirectory file, or a shared file's `tenants:` map — #2078). One id in
+	// two files makes the exporter reject the whole config, so nothing is
+	// written. Also carried per op on a direct-mode batch (BatchResult.Code).
+	CodeTenantDeclaredElsewhere = "TENANT_DECLARED_ELSEWHERE"
 )
+
+// msgTenantDeclaredElsewhere is the FIXED client-facing text for
+// gitops.ErrTenantDeclaredElsewhere. ⛔ It deliberately names no file: the
+// error's own text carries the other file's path, which only the server log
+// may see (an RBAC-restricted caller must not learn other files' names).
+const msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file (or by several); " +
+	"conf.d must declare each tenant exactly once"
+
+// msgTenantTreeScan is the fixed client-facing text for gitops.ErrTenantTreeScan
+// (the declared-elsewhere check could not run, so nothing was written).
+const msgTenantTreeScan = "cannot verify where the tenant is declared in conf.d; nothing was written"
+
+// writeTenantPlacementError renders the two #2078 write-guard outcomes and
+// reports whether err was one of them. The full error (with the other file's
+// path) goes to slog only; the response carries a fixed message.
+//
+//   - gitops.ErrTenantDeclaredElsewhere → 409 TENANT_DECLARED_ELSEWHERE
+//   - gitops.ErrTenantTreeScan          → 500 INTERNAL_ERROR (the conf.d walk
+//     could not run; the guard fails closed rather than risk a duplicate)
+func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
+		slog.Warn("tenant write refused: tenant declared by another conf.d file", "error", err)
+		WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeTenantDeclaredElsewhere, msgTenantDeclaredElsewhere)
+	case errors.Is(err, gitops.ErrTenantTreeScan):
+		slog.Error("tenant write refused: conf.d scan failed", "error", err)
+		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgTenantTreeScan)
+	default:
+		return false
+	}
+	return true
+}
 
 // ErrorResponse is the canonical error envelope. All fields except
 // `error` are optional via custom MarshalJSON (non-zero values
@@ -343,7 +381,12 @@ func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
 //   - confd.ErrAmbiguousTenantFile → 409 (#1673: two files claim one tenant, so
 //     the server cannot know which one the write should land on — the REQUEST is
 //     fine, the on-disk state is not, which is why this is not a 400)
+//   - gitops.ErrTenantDeclaredElsewhere / ErrTenantTreeScan → 409 / 500 via
+//     writeTenantPlacementError (#2078)
 func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if writeTenantPlacementError(w, r, err) {
+		return true
+	}
 	switch {
 	case errors.Is(err, gitops.ErrWriteOverloaded):
 		WriteOverloaded(w, r)
