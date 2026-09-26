@@ -9,11 +9,13 @@ Usage:
     python3 scripts/tools/dx/generate_tenant_metadata.py --dry-run    # 只印出不寫檔
 """
 import argparse
+import errno
 import json
 import os
 import stat
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,7 +39,11 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789)
+    OutputWriteError,
+    exit_on_output_write_error,
+    output_write,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -441,6 +447,214 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# --output: atomic replace that does not regress the in-place write (#2082)
+# ---------------------------------------------------------------------------
+# 0644, the mode this tool has always left on --output (a pre-existing 0600
+# file comes out 0644 too — measured on the in-place writer this replaces).
+_OUTPUT_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
+_NO_SPACE_ERRNOS = frozenset(
+    e for e in (errno.ENOSPC, getattr(errno, "EDQUOT", None)) if e is not None
+)
+# fsync errnos that mean "this filesystem does not do fsync", not "the bytes
+# did not land". ENOSPC / EIO from fsync are NOT here: with delayed
+# allocation that is where a full disk shows up, and replacing the good file
+# with that tmp would be the exact damage this function exists to prevent.
+_FSYNC_UNSUPPORTED_ERRNOS = frozenset(
+    e for e in (errno.EINVAL, getattr(errno, "ENOTSUP", None),
+                getattr(errno, "EOPNOTSUPP", None)) if e is not None
+)
+# mkstemp's prefix embeds the target name; cap it so a target name near
+# NAME_MAX cannot turn a write that works in place into ENAMETOOLONG.
+_TMP_PREFIX_NAME_CAP = 64
+
+
+class OutputNoSpaceError(OutputWriteError):
+    """``OutputWriteError`` for a full / over-quota filesystem (#2082).
+
+    The shared message ends in "check the value given to --output", which
+    for ENOSPC sends the operator to the one thing that is right. Same class
+    family (so ``exit_on_output_write_error`` still turns it into rc 2 with no
+    traceback), different hint — and it says whether the previous file
+    survived, because on the atomic path it did and on the in-place
+    fallbacks it may not have.
+    """
+
+    def __init__(self, path: Any, cause: OSError, *, flag: str | None,
+                 previous_kept: bool) -> None:
+        super().__init__(path, cause, flag=flag)
+        self.previous_kept = previous_kept
+
+    def __str__(self) -> str:
+        detail = self.strerror or str(self.cause)
+        if self.errno is not None:
+            detail = f"{detail} (errno {self.errno})"
+        state = ("the previous file is unchanged" if self.previous_kept
+                 else "the file may now be incomplete")
+        return (f"cannot {self.action} {self.path}: {detail} — the filesystem "
+                f"holding it is full or over quota; free space and re-run "
+                f"({state})")
+
+
+def _output_error(out: Path, exc: OSError, *, previous_kept: bool) -> OutputWriteError:
+    """The #1789 exception for a failure while producing *out*, named by *out*.
+
+    Named by the ``--output`` value, never by the private tmp file or the
+    symlink's resolved target: those are paths the operator did not type.
+    """
+    if getattr(exc, "errno", None) in _NO_SPACE_ERRNOS:
+        return OutputNoSpaceError(out, exc, flag="--output", previous_kept=previous_kept)
+    return OutputWriteError(out, exc, flag="--output")
+
+
+def _warn_not_atomic(out: Path, why: str) -> None:
+    print(
+        f"WARN: {safe_label(str(out))}: {why}; writing it in place instead "
+        f"of atomically — an interrupted run can leave it truncated",
+        file=sys.stderr,
+    )
+
+
+def _write_in_place(out: Path, content: str, *, set_mode: bool) -> None:
+    """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks."""
+    try:
+        out.write_text(content, encoding="utf-8", newline="\n")
+        if set_mode:
+            os.chmod(out, _OUTPUT_MODE)
+    except OSError as exc:
+        raise _output_error(out, exc, previous_kept=False) from exc
+
+
+def atomic_replace_output(out: Path, content: str) -> None:
+    """Write *content* to ``--output`` so an interrupted run keeps the old file.
+
+    #2082: the in-place ``write_text`` truncated first, so ENOSPC / a kill /
+    a FUSE drop mid-write left half a JSON document where the last good one
+    was. This writes a private tmp file in the directory of the REAL target,
+    fsyncs it, sets 0644 and ``os.replace``-s it over the target: a reader
+    sees the old bytes or the new ones, never a prefix.
+
+    ⛔ It is not the shared ``_atomic_write.atomic_write_text``, which was
+    measured to regress this tool in three ways; each is handled here:
+
+    * **symlink ``--output``** — the target is ``os.path.realpath(out)``, so
+      the symlink stays a symlink and the file it points at is what gets
+      replaced (including across filesystems: the tmp lives beside the
+      target, not beside the link).
+    * **a user's ``<out>.tmp``** — the tmp name comes from ``mkstemp``
+      (random, ``O_EXCL``), so nothing that already exists is touched; on any
+      failure only that tmp is removed.
+    * **directory not writable, file writable** — ``mkstemp`` raises
+      ``PermissionError``; this falls back to the in-place write with a WARN
+      on stderr and keeps today's rc 0, instead of failing a run that works
+      now. Atomicity is given up only where it was never available.
+
+    Two more shapes also keep the in-place write, on purpose:
+
+    * **a non-regular file** (``/proc/self/fd/1`` → a pipe or tty, a FIFO, a
+      directory): there is nothing to replace atomically; the write goes
+      through the name as before (a directory still ends in rc 2), and no
+      chmod is attempted on something this tool did not create.
+    * **a hard-linked file** (``st_nlink > 1``): a replace gives this name a
+      new inode and silently stops updating every other name of the old one.
+      Chosen: keep the in-place write (every link keeps seeing the update)
+      and WARN that this run is not atomic. The alternative — atomic, and the
+      other links go stale without a word — trades a rare crash-window for a
+      certain, silent divergence.
+
+    Ownership: a replace leaves the file owned by whoever ran the tool,
+    where the in-place write kept the old owner. (The old code then failed
+    its own ``chmod`` with EPERM on a file it did not own — rc 2 after the
+    bytes were already written — so that case now succeeds instead.)
+
+    Every ``OSError`` leaves as :class:`OutputWriteError` (or
+    :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
+    ``exit_on_output_write_error`` ends it at rc 2 with no traceback.
+    """
+    try:
+        st = os.stat(out)  # follows symlinks, /proc magic links included
+    except FileNotFoundError:
+        st = None
+    except OSError as exc:
+        raise _output_error(out, exc, previous_kept=True) from exc
+
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        _write_in_place(out, content, set_mode=False)
+        return
+    if st is not None and st.st_nlink > 1:
+        _warn_not_atomic(
+            out,
+            f"it has {st.st_nlink} hard links and replacing it would detach "
+            f"this name from the others",
+        )
+        _write_in_place(out, content, set_mode=True)
+        return
+
+    target = Path(os.path.realpath(out))
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name[:_TMP_PREFIX_NAME_CAP]}.",
+            suffix=".tmp",
+        )
+    except PermissionError as exc:
+        _warn_not_atomic(
+            out, f"cannot create a temporary file beside it ({exc.strerror})",
+        )
+        _write_in_place(out, content, set_mode=True)
+        return
+    except OSError as exc:
+        raise _output_error(out, exc, previous_kept=True) from exc
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError as exc:
+                if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
+                    raise _output_error(out, exc, previous_kept=True) from exc
+        os.chmod(tmp_name, _OUTPUT_MODE)
+        os.replace(tmp_name, target)
+    except BaseException as exc:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        if isinstance(exc, OutputWriteError):
+            raise
+        if isinstance(exc, OSError):
+            raise _output_error(out, exc, previous_kept=True) from exc
+        raise
+
+
+def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
+    """``(metadata, None)`` or ``(None, why it cannot be compared)`` (#2082).
+
+    Every way the ``--output`` file can be unusable — half-written JSON, a
+    non-object top level, non-UTF-8 bytes, a directory, an unreadable file —
+    becomes a reason string instead of a traceback, so ``--check`` can tell
+    "damaged" apart from "outdated".
+    """
+    try:
+        raw = out.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        return None, f"not UTF-8 ({exc.reason} at byte {exc.start})"
+    except OSError as exc:
+        return None, f"cannot be read ({exc.strerror or exc})"
+    try:
+        existing = json.loads(raw)
+    except ValueError as exc:
+        return None, f"not valid JSON ({exc})"
+    if not isinstance(existing, dict):
+        kind = {list: "an array", str: "a string", bool: "a boolean",
+                int: "a number", float: "a number", type(None): "null",
+                }.get(type(existing), type(existing).__name__)
+        return None, f"top level is {kind}, expected a JSON object"
+    return existing, None
+
+
 @exit_on_output_write_error
 def main():
     """CLI entry point: 租戶元資料產生器."""
@@ -462,7 +676,8 @@ def main():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="CI mode: exit 1 if metadata is outdated",
+        help="CI mode: exit 1 if metadata is outdated, "
+             "exit 2 if the --output file is damaged or unreadable",
     )
     parser.add_argument(
         "--dry-run",
@@ -507,7 +722,17 @@ def main():
             )
             sys.exit(EXIT_VIOLATION)
 
-        existing = json.loads(args.output.read_text(encoding="utf-8"))
+        existing, damaged = _read_existing_for_check(args.output)
+        if damaged is not None:
+            # #2082: rc 2, not the "outdated" rc 1 — the file is not an older
+            # version of this output, it is not one at all, and a CI consumer
+            # must not read a truncated file as ordinary drift.
+            print(
+                f"ERROR: {safe_label(str(args.output))} is damaged: {damaged}. "
+                f"Regenerate it by re-running without --check.",
+                file=sys.stderr,
+            )
+            sys.exit(EXIT_CALLER_ERROR)
         existing.pop("generated", None)
         existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
 
@@ -530,15 +755,12 @@ def main():
     with output_write(args.output.parent, flag="--output",
                       action="create directory"):
         args.output.parent.mkdir(parents=True, exist_ok=True)
-    # The chmod is INSIDE the same block as the write: 0644 is part of
-    # producing this file, and a chmod that fails leaves the operator with a
-    # file whose mode is not the one the tool promises (#1789).
+    # #2082: atomic replace (0644 set on the tmp before the rename), so a
+    # failed run leaves the previous file whole. It converts its own
+    # failures to OutputWriteError; the wrapper stays as the #1789 guard for
+    # anything it does not, and is what the static pin looks for.
     with output_write(args.output, flag="--output"):
-        args.output.write_text(content, encoding="utf-8", newline="\n")
-        os.chmod(
-            args.output,
-            stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
-        )
+        atomic_replace_output(args.output, content)
 
     try:
         display_path = args.output.relative_to(REPO_ROOT)
