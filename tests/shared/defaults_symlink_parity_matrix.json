@@ -31,9 +31,13 @@
     "cm's ghostpayload is un-linked with a non-hidden name, so ONLY pruning the",
     "`..<timestamp>/` directory keeps it out (ghostdot is also a hidden file).",
     "Every such tree keeps a visible control tenant, so an empty walk fails.",
-    "Scope: tenant bodies and the defaults chain only. describe_tenant's",
-    "`_custom_alerts` view comes from custom_alerts/loader.collect_instances,",
-    "which lists conf.d on its own and still reads those paths (#2086).",
+    "#2086: describe_tenant's `_custom_alerts` view comes from",
+    "custom_alerts/loader.collect_instances, which lists conf.d on its own.",
+    "hf / hd / cm therefore each hold a `ghostalert` file declaring a GHOST",
+    "recipe for the VISIBLE control tenant acme from an unread path. Go never",
+    "sees it (acme's pinned answer is unchanged); on main 4722e0a0 the loader",
+    "did, so describe_tenant's acme gained `_custom_alerts` and its",
+    "effective_config / merged_hash left the pinned row.",
     "#2049: a third shape, error = {\"error\": \"duplicate\"} alone: the tenant",
     "is declared by more than one carrier, so the exporter serves no effective",
     "config for it (Go: ResolveEffective returns *DuplicateTenantError for that",
@@ -116,7 +120,8 @@
       "files": {
         "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
         "acme.yaml": "tenants:\n  acme: {}\n",
-        ".hidden.yaml": "tenants:\n  ghosthidden: {}\n"
+        ".hidden.yaml": "tenants:\n  ghosthidden: {}\n",
+        ".ghostalert.yaml": "tenants:\n  acme:\n    _custom_alerts:\n      - {recipe: threshold, name: GHOST, metric: ghost_metric, op: \">\", window: 5m, threshold: \"80:warning\"}\n"
       },
       "symlinks": {},
       "expect": {
@@ -130,7 +135,8 @@
         "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
         "acme.yaml": "tenants:\n  acme: {}\n",
         ".snap/_defaults.yaml": "defaults:\n  cpu_pct: 90\n",
-        ".snap/acme2.yaml": "tenants:\n  ghostsnap: {}\n"
+        ".snap/acme2.yaml": "tenants:\n  ghostsnap: {}\n",
+        ".snap/ghostalert.yaml": "tenants:\n  acme:\n    _custom_alerts:\n      - {recipe: threshold, name: GHOST, metric: ghost_metric, op: \">\", window: 5m, threshold: \"80:warning\"}\n"
       },
       "symlinks": {},
       "expect": {
@@ -144,7 +150,8 @@
         "..2026_09_25/_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
         "..2026_09_25/acme.yaml": "tenants:\n  acme: {}\n",
         "..2026_09_25/.ghost.yaml": "tenants:\n  ghostdot: {}\n",
-        "..2026_09_25/ghostpayload.yaml": "tenants:\n  ghostpayload: {}\n"
+        "..2026_09_25/ghostpayload.yaml": "tenants:\n  ghostpayload: {}\n",
+        "..2026_09_25/ghostalert.yaml": "tenants:\n  acme:\n    _custom_alerts:\n      - {recipe: threshold, name: GHOST, metric: ghost_metric, op: \">\", window: 5m, threshold: \"80:warning\"}\n"
       },
       "symlinks": {
         "..data": "..2026_09_25",
