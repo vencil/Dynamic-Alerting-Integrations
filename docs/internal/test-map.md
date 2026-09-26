@@ -111,6 +111,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope）+ Hypothesis profile（見下） |
 | `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
 | `pyproject.toml` | pytest markers + coverage config（`testpaths = ["tests"]` 自動遞迴） |
+| `tests/_tree.py` | 掃「repo 裡有哪些檔」的測試一律用 `repo_files()`（`git ls-files`，fail-closed），不要 `REPO_ROOT.rglob`：後者會走進 `.claude/worktrees` 裡整份 repo 的副本與 `node_modules`，把副本當成本樹比對，而且在平行跑時慢上數個數量級 |
 
 ### Hypothesis deadline 慣例（property-based 測試）
 

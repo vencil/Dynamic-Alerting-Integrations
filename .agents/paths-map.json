@@ -9,7 +9,7 @@
         {"file": "docs/internal/windows-mcp-playbook.md", "section": "Helm Upgrade 防衝突"},
         {"file": "docs/internal/iac-lint-baseline.md", "section": "Layer 2 — Helm template"}
       ],
-      "note": "Helm SAST L2 只在 CI 硬擋，本地要手動跑 `pre-commit run --hook-stage manual --all-files iac-helm-sast-check`；values 裡的 secret-shape 是 L3，同一份 baseline 列管。新增 value→env 接線後跑 `helm template` 並 grep 那個 env：`{{- with X }}` 區塊內 `.` 被重綁成 X——裡面用 `.foo` 去拿 root 的 key 會靜默輸出空字串、X 的路徑拼錯則整段靜默不輸出，兩種 `helm template` 都 rc=0（寫 `.Values.foo` 反而會報錯）；要 root 用 `$.Values.foo`。"
+      "note": "Helm SAST L2 只在 CI 硬擋，本地要手動跑 `pre-commit run --hook-stage manual --all-files iac-helm-sast-check`；values 裡的 secret-shape 是 L3，同一份 baseline 列管。新增 value→env 接線後跑 `helm template` 並 grep 那個 env：`{{- with X }}` 區塊內 `.` 被重綁成 X——裡面用 `.foo` 去拿 root 的 key 會靜默輸出空字串、X 的路徑拼錯則整段靜默不輸出，兩種 `helm template` 都 rc=0（寫 `.Values.foo` 反而會報錯）；要 root 用 `$.Values.foo`。改 portal 部署精靈會帶的 image（`generate_platform_data.py` 的 `WIZARD_THIRD_PARTY`／`WIZARD_FIRST_PARTY`）的 tag，是同一顆 commit 裡的三件事：`make platform-data` 重生 `docs/assets/platform-data.json`、同步手抄鏡像 `tools/portal/src/interactive/tools/_common/data/images.js`（`images-fallback-drift.test.ts` 逐 key 比對）、`make portal-build` 重建 dist。"
     },
     {
       "id": "k8s-manifests",
@@ -17,7 +17,7 @@
       "read": [
         {"file": "docs/internal/iac-lint-baseline.md", "section": "Layer 4 — k8s raw manifest"}
       ],
-      "note": "raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再 `make rulepack-configmaps`。"
+      "note": "raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再 `make rulepack-configmaps`。改精靈會帶的 image（`WIZARD_THIRD_PARTY`／`WIZARD_FIRST_PARTY`）的 tag，同 helm-chart 那三件事（platform-data → `images.js` 鏡像 → dist）；其他 image 不牽動 portal。"
     },
     {
       "id": "rule-packs-confd",
@@ -49,7 +49,7 @@
       "id": "portal",
       "paths": ["tools/portal/**", "docs/assets/dist/**"],
       "read": [
-        {"file": "docs/internal/jsx-multi-file-pattern.md", "section": "Build & verify loop"}
+        {"file": "tools/portal/CLAUDE.md"}, {"file": "docs/internal/jsx-multi-file-pattern.md", "section": "Build & verify loop"}
       ],
       "note": "改 source 後自己跑 `make portal-build` 重生提交的 dist——「改了 source 忘了重 build」沒有任何 hook 擋（`dist-source-consistency-check` 只抓反向：提交了 dist 卻沒有 source 變更）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build。"
     },
@@ -70,6 +70,12 @@
         {"file": "docs/internal/lint-policy.md", "section": "7. 新增 lint 的審核 checklist"}
       ],
       "note": "新工具要守 exit code 0/1/2 與 `--ci`／`--json` 約定，`subprocess` 帶 timeout、`open` 帶 encoding；docstring 改了跑 `generate_tool_map.py --generate --lang all`；改到 `tests/shared/property-coverage.yaml` 已宣告的那幾個模組時，新 module-level 函式要進它的 triage（其他模組不受該 lint 管）。"
+    },
+    {
+      "id": "python-tests",
+      "paths": ["tests/**/*.py"],
+      "read": [{"file": "docs/internal/test-map.md", "section": "測試基礎設施"}],
+      "note": "掃 repo 檔用 `tests/_tree.py` 的 `repo_files()`，不要 `REPO_ROOT.rglob`（會把 `.claude/worktrees` 裡的 repo 副本當成本樹）；本地驗證新 CLI 工具要跑 `pytest tests/`，管它的契約測試在 `tests/shared/`、`tests/ops/`，不在工具自己那層。"
     },
     {
       "id": "changelog",

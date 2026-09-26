@@ -42,6 +42,21 @@
 
 上面各節管**怎麼發**；這節管**怎麼收**。兩者不對稱：發的時候你在找問題，收的時候你在被說服，而被說服比找問題容易得多。
 
+**0. ⛔ 先確認抓齊了，再開始分流。時點是「PR 開完」，不是「想起來要 triage」。**
+
+CodeRabbit 的意見分在三個端點，任何一個沒抓、沒讀完，畫面都和「沒意見」一樣：
+
+| 端點 | 住著什麼 | 漏法 |
+|---|---|---|
+| `pulls/N/comments` | inline finding（有 thread） | — |
+| `pulls/N/reviews` | review body：`Actionable comments posted: N`，以及折疊在後段的 `🧹 Nitpick comments (M)`、`⚠️ Outside diff range comments (K)` | 截斷 body 只讀開頭；用 `coderabbitai` 篩作者（review 掛的是 `coderabbitai[bot]`） |
+| `issues/N/comments` | 摘要留言（walkthrough、第 6 步那些區塊） | 只看計數不讀全文 |
+
+- **對帳**：處置條數要等於 N＋M＋K。thread 數不等於 finding 數——nitpick 與 outside-diff 沒有 thread，用 PR 留言逐條回。
+- **只有摘要留言、沒有新 review body 時，整份讀那則留言。** `Review limit reached`、`Review skipped`、真的審過且乾淨，三者計數同形；`CodeRabbit` status check 綠也不代表審過。
+- **「審過了」只認一個證據**：`reviews` 出現新的 `submitted_at`，且 `commit_id` 等於目前 head。`@coderabbitai review` 的「Full review finished」回覆不算；本 repo 關了增量審查（`.coderabbit.yaml`），推新 commit 不會自動重審。要重審就用 **top-level** `gh pr comment` 貼 `@coderabbitai review`。
+- **三個端點全是 0 時先懷疑查詢本身**（shell 吃掉 `--jq` 的字串插值、stderr 被丟掉）：拿一支已知有意見的 PR 跑同一支查詢當對照。
+
 **1. 每條 finding 先分流，再動手**——`take` / `reframe` / `reject`，逐條給理由：
 
 - **take**：驗過屬實、在本 PR 範圍內 ⇒ 修。

@@ -38,6 +38,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ## 收 review：三種處置各有收尾，缺一則 merge 被擋
 
+⛔ **分流之前先確認抓齊**：CodeRabbit 的意見分在 inline、review body（nitpick／outside-diff 折疊在後段）、摘要留言三處，只有摘要留言時 `Review limit reached` 與「審過且乾淨」計數同形；「審過了」只認 `commit_id` 等於 head 的新 review。對帳法在 [`references/discipline.md`](references/discipline.md) 收 review 第 0 步。
+
 | 處置 | 收尾 |
 |---|---|
 | take（驗過屬實） | 修 → 回覆處置 → resolve thread |

@@ -57,6 +57,9 @@ base（上一輪 review 看到的那顆）：[FIX_BASE_SHA]
 head：[HEAD_SHA]
 自己取 diff：git diff --stat [FIX_BASE_SHA]..[HEAD_SHA] 與 git diff [FIX_BASE_SHA]..[HEAD_SHA]
 
+你的 checkout：[REVIEW_TREE]（detached 在 [HEAD_SHA]，不是「最新 main＋複製改動檔」）
+你的暫存目錄：[PRIVATE_SCRATCH]（只給你用；scratchpad 是跨 agent 共用的）
+⛔ 不要 import 任何不是你自己寫的模組——別人放在共用目錄的腳本會在 import 時整批執行。
 ⛔ 你對這棵 checkout 是唯讀的：不得改動 working tree、index、HEAD 或分支狀態。
 ⛔ 你不 spawn 任何 subagent。這個流程給的 review 席位就是全部；你另外派的
    reviewer 只是複製其中一席、算全價、而且它的裁決不計分。diff 太大就自己分幾
@@ -104,6 +107,8 @@ head：[HEAD_SHA]
 | 修法本身的新破壞 | 同上 | 同上 |
 | **範圍外觀察** | ⛔ **不進本輪、不開下一輪**。有價值就開票 | `question`，`status=open`，`claim` 寫觀察、`evidence` 寫「要什麼證據才能收掉」 |
 | 標 `[未驗]` 的主張 | 你自己重量一次才寫進出貨物 | — |
+
+⛔ **這份報告只對 `[HEAD_SHA]` 有效。** 之後又推了 commit，出貨的 head 就不是它審過的那顆；對外寫「已審過」時要指名審到哪顆 SHA，之後的 commit 另外交代。
 
 ⚠️ 用 `question` 是刻意的：`converge_status.py` 對 `question` 只計數不判定（`:302`、`:477`），所以範圍外觀察**不會**經由 `UNREVIEWED-FIX` 把迴圈拉長。**沒有為此新增任何 `kind` 或規則。**
 
