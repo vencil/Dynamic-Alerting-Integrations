@@ -2397,7 +2397,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "load_error": {
-                    "description": "Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's names other tenants.",
+                    "description": "Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's message names other tenants.",
                     "type": "string"
                 },
                 "parse_failed_files": {

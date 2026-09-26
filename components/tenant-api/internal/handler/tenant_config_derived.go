@@ -50,7 +50,7 @@ type ConfigDerivedMeta struct {
 	ParseFailedFiles []string `json:"parse_failed_files"`
 	// Parse-failed files not named in parse_failed_files because the caller's RBAC scope does not cover them.
 	ParseFailedHidden int `json:"parse_failed_hidden,omitempty"`
-	// Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's names other tenants.
+	// Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's message names other tenants.
 	LoadError string `json:"load_error,omitempty"`
 }
 

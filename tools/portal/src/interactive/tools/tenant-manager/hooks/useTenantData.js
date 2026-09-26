@@ -64,6 +64,9 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         console.warn('[tenant-manager] live API unavailable, falling back to platform-data.json:', e?.message || e);
       }
 
+      // A notice from an earlier API answer does not describe fallback data.
+      setDerivationNotice(null);
+
       // ---- Step 2: fall back to platform-data.json ----
       try {
         const response = await fetch('platform-data.json');
