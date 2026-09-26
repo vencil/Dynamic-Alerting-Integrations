@@ -44,8 +44,9 @@ jobs:
     # Only proceed when the triggering CI run was on a pull_request and
     # actually finished (success OR failure — not cancelled/skipped).
     # `failure` is included on purpose since coverage moved to the
-    # advisory `python-coverage` job (2026-09-19): a coverage drop below
-    # `--cov-fail-under` reddens that job and therefore the whole run,
+    # advisory `python-coverage` jobs (2026-09-19; sharded since, with the
+    # report in `python-coverage-combine`): a coverage drop below the
+    # `fail_under` floor reddens that job and therefore the whole run,
     # and that is exactly the run the delta comment must appear on. The
     # artifact is uploaded `if: always()`, so it exists on a failed run;
     # a genuinely missing artifact still takes the "skipping delta"

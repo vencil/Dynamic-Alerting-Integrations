@@ -57,7 +57,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 
 | Job (workflow) | 跑什麼 |
 |---------------|--------|
-| `Python Tests (3.13)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑在 `Python Tests — run (3.13)`：`pytest tests/`，跳過 3 個 `@slow` 測試（見下），**不開 coverage**。coverage 在另一個 advisory job `Python Coverage (3.13)` 跑（同一棵樹加 `--cov`、上傳 `coverage-py3.13` 給 coverage-delta 留言、`--cov-fail-under=75` 紅了不擋 merge）。⚠️ **不再受 path gate 影響**：`python` filter 帶 catch-all，實跑腿在每支 PR 都跑（理由與成本量測見 `ci.yml` 該 filter 的註解）。Go / Portal 兩線仍是 path-gated |
+| `Python Tests (3.13)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑在 `Python Tests — run (3.13, K/3)` 三個平行分片：`pytest tests/ --shard=K/3`（`tests/_shard.py` 以 nodeid 的 crc32 分配，三片互斥且合起來是整棵樹），跳過 3 個 `@slow` 測試（見下），**不開 coverage**。coverage 在另一組 advisory job 跑：`Python Coverage (3.13, K/3)` 同樣分三片加 `--cov`，再由 `Python Coverage (3.13)` 合併、上傳 `coverage-py3.13` 給 coverage-delta 留言、套 `pyproject.toml` 的 `fail_under = 75`（紅了不擋 merge）。⚠️ **不再受 path gate 影響**：`python` filter 帶 catch-all，實跑腿在每支 PR 都跑（理由與成本量測見 `ci.yml` 該 filter 的註解）。Go / Portal 兩線仍是 path-gated |
 | `Go Tests (1.26)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑拆成數條 `go-tests-*` leg，一個 module 一條（權威清單是 `ci.yml` 裡這個 gate 的 `needs:`，本表刻意不複述——舊版寫「三腿」時已經漏掉兩條），同受 `detect-changes` path gate |
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts`（排除 `@visual` tag） |
 | `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（ESM Option C；monorepo restructure 後從 tests/portal/ 搬入） |
