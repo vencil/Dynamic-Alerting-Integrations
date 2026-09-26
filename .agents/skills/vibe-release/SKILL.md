@@ -1,6 +1,6 @@
 ---
 name: vibe-release
-description: Vibe 六線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
+description: Vibe 六線版號 release 收尾 SOP — CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → make pre-tag → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
 ---
 
 # vibe-release — 六線版號 release 收尾
@@ -25,15 +25,7 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 ## 收尾流程
 
-### 1. `make pre-tag`（硬性閘門）
-
-⛔ **這是打 tag 前的最後一道關卡，不是收尾的第一步**：在步驟 2–4 的變更都已 commit、合併之後，於要打 tag 的那個 commit 上跑。`changelog-fragments-consumed` 在步驟 2 組裝並刪除片段之前必然擋下——那是預期結果，不是跳過 pre-tag（連帶跳過 draft-advisory 等檢查）的理由。收尾途中想先看其他項目，可以單獨跑 `make version-check`、`make lint-docs`。
-
-含 version-check + lint-docs + playbook-freshness + **`changelog-fragments-consumed`（hard gate，#2102）** + **`draft-advisory-check`（hard gate，#1295 fold-in）** + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 **7** 個 self-built image build + CVE scan 收進 pre-tag——#1337 由 5 擴到 7，多的兩顆隨 chart 出貨、從不發布）。⇒ 需要 PATH 上有 **docker（含 Buildx plugin——`docker-build-all` 跑的是 `docker buildx build`）** + trivy + **gh**。
-
-> **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
-
-### 2. CHANGELOG distill + **project-face refresh**（Rule 2）
+### 1. CHANGELOG distill + **project-face refresh**（Rule 2）
 
 ⛔ **先組裝片段**（#2102）：還沒發布的變更都在 `changelog.d/`，`[Unreleased]` 已凍結且是空的（凍結前的條目已在 #2109 改寫成片段）。跑 `python3 scripts/tools/dx/generate_changelog.py --assemble`（依 section → topic → created 排好的原料；同一個 issue 有多份片段會印提醒），濃縮成 `## [vX.Y.0]`（插在 `[Unreleased]` 之下），然後 `git rm` 已組裝的片段檔（`changelog.d/README.md` 留著）。還留著的片段會讓 `make pre-tag` 的 `changelog-fragments-consumed` 擋下：它要不是漏進這一版的 release note，就是會在下一版被再組裝一次。
 
@@ -43,11 +35,11 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 - **architecture-and-design.md / .en.md**（深度，架構師/貢獻者）：§Roadmap 當前版翻「In Development → Shipped (YYYY-MM-DD)」+ 加 next-version 方向列（**link milestone 不列 issue**）+ 重大新類別加架構圖
 - **區分受眾**：README =「前 30 秒 value prop」；arch-and-design =「30 分鐘理解架構」，別兩處鏡像同內容
 
-### 3. Roadmap v.next = **link milestone 不複製 issue list**（Rule 3）
+### 2. Roadmap v.next = **link milestone 不複製 issue list**（Rule 3）
 
 issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說謊。roadmap 拆三段：(1) vX.Y.0 delivered 靜態成就；(2) v.next 方向 + **單一 live milestone link** + 3-5 focus bullet；(3) 長期願景。docs = SSOT for「打算做什麼」，milestone = SSOT for「正在做什麼」，不同抽象層故不漂移。
 
-### 4. 未發布的 draft security advisory 檢查（Rule 4）
+### 3. 未發布的 draft security advisory 檢查（Rule 4）
 
 ✅ **這一條自 #1295 起已機械化**：`make pre-tag` 會跑 `draft-advisory-check`，有 draft 就中止並印出清單。`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。所以人工跑 `make pre-tag` 也蓋得到，不再只靠這個 skill 被叫起來。
 
@@ -60,6 +52,14 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 有 draft 就對照它的觸發條件決定是否**隨這次 release 一併發布**——通常還要回填 `patched_versions`（advisory 常在「fix 已合入、尚未發版」狀態下建立，那個欄位當時只能留空）。
 
 **為什麼放在這裡**：draft advisory **不出現在任何維護者會例行掃的清單**——它不在 issue 列表、不在 PR 列表，GitHub 也沒有到期提醒或陳舊警示（查遍官方文件無此機制）。因此「等發版再發」這個決定沒有任何東西會叫醒你，除非把檢查掛在**發版本身**這個必然會發生的事件上。若該 advisory 的 affected package 是 dependency-graph 不支援的 ecosystem（如 `other`），它更不會進全域 Advisory Database、不觸發任何人的 Dependabot——**發布是唯一的觸達管道，漏掉就等於沒發生**。首例：[#1269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1269)（TRK-354）。
+
+### 4. `make pre-tag`（硬性閘門，Rule 1）
+
+⛔ **打 tag 前的最後一道關卡**：步驟 1–3 的變更都 commit、合併之後，在要打 tag 的那個 commit 上跑。`changelog-fragments-consumed` 檢查的就是那個 commit（`HEAD`）與工作目錄；步驟 1 還沒完成就跑，它必然擋下。收尾途中想先看其他項目，可以單獨跑 `make version-check`、`make lint-docs`，不要因此跳過整個 pre-tag。
+
+含 version-check + lint-docs + playbook-freshness + **`changelog-fragments-consumed`（hard gate，#2102）** + **`draft-advisory-check`（hard gate，#1295 fold-in）** + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 **7** 個 self-built image build + CVE scan 收進 pre-tag——#1337 由 5 擴到 7，多的兩顆隨 chart 出貨、從不發布）。⇒ 需要 PATH 上有 **docker（含 Buildx plugin——`docker-build-all` 跑的是 `docker buildx build`）** + trivy + **gh**。
+
+> **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
 
 ### 5. 六線 tag push + `gh release create`
 

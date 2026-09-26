@@ -697,7 +697,7 @@ def check_fragments_consumed(root: Path, rev: str = "HEAD") -> int:
                 where.append("worktree")
             print(f"  {name}  ({', '.join(where)})")
         print("   Assemble them into the new ## [vX.Y.Z] block, `git rm` them and commit "
-              "(vibe-release step 2), then run this on the commit you tag.")
+              "(vibe-release step 1), then run this on the commit you tag.")
         return EXIT_VIOLATION
     print(f"✅ no changelog fragments left in {FRAGMENT_DIR}/ ({rev} and worktree)")
     return EXIT_OK
