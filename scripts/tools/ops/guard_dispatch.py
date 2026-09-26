@@ -36,7 +36,7 @@ Exit codes (passthrough from da-guard):
 Usage:
   da-tools guard defaults-impact --config-dir conf.d/
   da-tools guard defaults-impact --config-dir conf.d/ --scope conf.d/db/ \\
-      --required-fields cpu,memory --cardinality-limit 500
+      --required-fields cpu,memory
 
 v2.8.0 PR-2: dispatcher boilerplate (binary resolution, subcommand
 allowlist, bilingual help, missing-binary hints, subprocess passthrough)
@@ -65,6 +65,8 @@ _USAGE_EN = (
     "  --scope <path>               Sub-directory to validate (default: whole tree).\n"
     "  --required-fields <a,b,c>    Comma-separated dotted paths every tenant must have.\n"
     "  --cardinality-limit <n>      Per-tenant predicted-metric ceiling (0 disables).\n"
+    "                               Omitted: the root _defaults.yaml's\n"
+    "                               max_metrics_per_tenant (unset = 500).\n"
     "  --format md|json             Output format (default md).\n"
     "  --output <path>              Write report to file instead of stdout.\n"
     "  --warn-as-error              Treat warnings as errors for exit code.\n"
@@ -77,7 +79,7 @@ _USAGE_EN = (
     "Examples:\n"
     "  da-tools guard defaults-impact --config-dir conf.d/\n"
     "  da-tools guard defaults-impact --config-dir conf.d/ \\\n"
-    "      --scope conf.d/db/ --cardinality-limit 500 --format json\n"
+    "      --scope conf.d/db/ --format json\n"
 )
 
 _USAGE_ZH = (
@@ -92,6 +94,8 @@ _USAGE_ZH = (
     "  --scope <path>               限定驗證的子目錄 (預設: 整棵樹)。\n"
     "  --required-fields <a,b,c>    每個租戶 effective config 必有的點分路徑欄位 (CSV)。\n"
     "  --cardinality-limit <n>      每租戶 metric 數上限 (0 = 關閉檢查)。\n"
+    "                               省略時取根目錄 _defaults.yaml 的\n"
+    "                               max_metrics_per_tenant (未設 = 500)。\n"
     "  --format md|json             輸出格式 (預設 md)。\n"
     "  --output <path>              寫到檔案而非 stdout。\n"
     "  --warn-as-error              將 warning 視為 error 影響 exit code。\n"
@@ -104,7 +108,7 @@ _USAGE_ZH = (
     "範例:\n"
     "  da-tools guard defaults-impact --config-dir conf.d/\n"
     "  da-tools guard defaults-impact --config-dir conf.d/ \\\n"
-    "      --scope conf.d/db/ --cardinality-limit 500 --format json\n"
+    "      --scope conf.d/db/ --format json\n"
 )
 
 # guard's subcommand is a Python-side organising layer — da-guard

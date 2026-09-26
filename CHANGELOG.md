@@ -120,6 +120,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **da-guard 的 cardinality 預測改跟執行期同一個上限（da-guard、CI；[#2043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2043)）**：`guard-defaults-impact.yml` 先前寫死 `--cardinality-limit 500`，#2028 讓根 `_defaults.yaml` 的 `max_metrics_per_tenant` 生效後就可能跟 exporter 不一致——設定值高於 500 會對不會被截斷的租戶報錯擋 PR，低於 500 則放行實際會被截斷的租戶。現在沒給 `--cardinality-limit` 時，da-guard 自己讀 `--config-dir` **根目錄**的 `_defaults.yaml`，用跟 exporter 同一套選檔、解碼與換算（`config.RootMaxMetricsPerTenant`：未設或 0 → 500、負值 → 不檢查），`--scope` 執行也用根的值；stderr 會印出上限與來源檔，根檔解碼失敗則 exit 2。workflow 拿掉寫死的 500，文件與 `da-tools guard` 說明裡的範例一併拿掉。
+  - 上限改由受檢的樹自己決定之後，guard 無法再攔下「同一個 PR 調高上限」這件事本身，所以新增 `--baseline-config-dir`：workflow 傳入 PR 的 merge-base，根 `max_metrics_per_tenant` 被調高或關閉時，報告開頭加一則提示（不影響 exit code）；base 無法 checkout 時報告會明講沒比對。
+  - ⚠️ **CLI 行為變更**：不帶 `--cardinality-limit` 執行的 da-guard（例如自建的 pre-commit hook）以前完全不檢查 cardinality，現在會以根設定（未設即 500）檢查。要維持舊行為請明確傳 `--cardinality-limit 0`。
+
 - **設定檔壞掉的租戶不再從 `GET /api/v1/tenants` 靜默消失（tenant-api；[#1680](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1680)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：YAML 壞掉、symlink 斷掉或指向目錄的租戶，清單回 `200 []`，federation、啟動檢查與寫入平面卻仍算它活著。五個 conf.d 列舉器改共用 `confd.ListTenantFiles`（不讀內容），只有清單另以 `confd.ReadTenantFile` 判定可用性；federation 與寫入平面刻意不看內容。
   - ⚠️ **API 變更**：壞檔租戶改回降級列 `{id, config_error}`，值為穩定契約：`unreadable`、`not_regular_file`、`malformed_yaml`、`invalid_config`（語法可解析但無法載入為租戶設定，含重複 key；由 handler 判定）。空檔仍可用。`/search` 的 `q` 比對其 id，metadata 篩選不命中。
   - ⛔ **只有 `environments` 與 `domains` 皆不設限的呼叫者看得到**（新 `rbac.ScopeAllowedUnknownMetadata`，shadow／enforce 皆同；org 軸照常）。不沿用 `ScopeAllowed` 帶空值：那會被當未標記而在 shadow 放行。portal 尚未顯示 `config_error`。
