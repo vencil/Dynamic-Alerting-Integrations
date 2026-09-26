@@ -13,16 +13,10 @@ The observable form of that contract, per bilingual tool:
 
 WHY THIS FILE EXISTS
 --------------------
-The dev-rules "da-tools 契約" family has three enforceable contracts. Two are
-already behavioral gates: exit codes → ``test_tool_exit_codes.py``; ``--json``
-stdout → ``test_json_stdout_contract.py`` (both dev-rules §13). The bilingual
-help contract (§9 L3) had ZERO behavioral enforcement: the nominal check,
-``scripts/tools/lint/check_i18n_coverage.py``, was a manual-stage soft-warn
-COVERAGE REPORT — a string heuristic (does the source mention
-``detect_cli_lang`` / ``_HELP``?) that never ran a tool, so a tool whose
-wiring silently stopped switching stayed "covered". This file is the
-enforcement. The coverage report was retired in TRK-383 (nothing read its
-output) and nothing replaces it.
+The bilingual help contract (dev-rules §9 L3) is enforced here behaviorally:
+each tool is run with ``--help`` under both languages. A check that only reads
+the source (does it mention ``detect_cli_lang`` / ``_HELP``?) cannot tell
+whether the switch still works.
 
 SCOPE — corpus and its four-way partition
 -----------------------------------------
