@@ -75,7 +75,20 @@ def _load_describe_module():
     return mod
 
 
-def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple[dict, int]:
+def _duplicate_detail(tenant_id, files: list[str]) -> str:
+    """tenant-verify's own wording for a duplicate declaration.
+
+    ⛔ Not `ConfDScanner.duplicate_error`: that message is describe's
+    ("Not describing any of them"). Same predicate, this tool's verdict.
+    """
+    return (f"tenant '{tenant_id}' is declared in {len(files)} files: "
+            f"{', '.join(files)}. Cannot verify it — no merged_hash is "
+            f"computed for an ambiguous tenant. Delete the extra "
+            f"declaration so the tenant lives in exactly one file, then "
+            f"re-run tenant-verify.")
+
+
+def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[dict, int]:
     """Verify a single tenant. Returns (info_dict, exit_code).
 
     info_dict shape:
@@ -100,7 +113,7 @@ def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple
             "tenant_id": tenant_id,
             "error": "duplicate",
             "files": list(files),
-            "detail": scanner.duplicate_error(tenant_id),
+            "detail": _duplicate_detail(tenant_id, files),
         }, EXIT_VERIFY_FAILED)
     try:
         info = scanner.source_info(tenant_id)
@@ -221,14 +234,17 @@ def main() -> int:
 
     if args.all:
         results = verify_all(scanner)
+        dups = _duplicated(results)
         if args.json:
             print(json.dumps({"tenants": results}, indent=2, ensure_ascii=False))
         else:
             for r in results:
                 _print_human(r)
                 print()
-            print(f"# total: {len(results)} tenants in {conf_d}")
-        dups = _duplicated(results)
+            # Verified and refused are counted apart: a duplicated tenant
+            # has no merged_hash, so it must not read as one of N verified.
+            print(f"# total: {len(results) - len(dups)} tenants verified, "
+                  f"{len(dups)} duplicate-declared (not verified) in {conf_d}")
         if dups:
             print(f"error: {len(dups)} tenant(s) declared in more than one "
                   f"file, no merged_hash reported for them: "

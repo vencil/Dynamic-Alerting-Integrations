@@ -303,6 +303,37 @@ def test_duplicate_declaration_fails_item6_human(
     assert "[OK]" not in out
 
 
+@_ORDERS
+def test_duplicate_declaration_fails_without_expect_json(
+        verify_module, tmp_path, capsys, cli_argv, stray_name, files):
+    """No --expect-merged-hash (the plain lookup the cutover docs teach):
+    still exit 2 with every file, not whichever declaration the scan kept."""
+    import json as _json
+
+    root = _dup_tree(tmp_path, stray_name)
+    cli_argv("tenant-verify", "acme", "--conf-d", str(root), "--json")
+    assert verify_module.main() == 2
+    parsed = _json.loads(capsys.readouterr().out)
+    assert parsed["error"] == "duplicate"
+    assert parsed["files"] == files
+    assert "merged_hash" not in parsed
+    # tenant-verify's own verdict, not describe's "Not describing ..."
+    assert "Cannot verify" in parsed["detail"]
+    assert "describing" not in parsed["detail"]
+
+
+@_ORDERS
+def test_duplicate_declaration_fails_without_expect_human(
+        verify_module, tmp_path, capsys, cli_argv, stray_name, files):
+    root = _dup_tree(tmp_path, stray_name)
+    cli_argv("tenant-verify", "acme", "--conf-d", str(root))
+    assert verify_module.main() == 2
+    out = capsys.readouterr().out
+    for f in files:
+        assert out.count(f"declared in: {f}\n") == 1
+    assert "merged_hash:" not in out
+
+
 def test_duplicate_tree_clean_tenant_still_passes(verify_module, tmp_path, cli_argv):
     """Must-ring control: the refusal is per tenant, not per tree."""
     root = _dup_tree(tmp_path, "other.yaml")
@@ -348,6 +379,17 @@ def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_a
     assert "declared in: zz.yaml" in captured.out
     assert "tenant_id:     solo" in captured.out
     assert "declared in more than one file" in captured.err
+    # The duplicated tenant is not counted as verified (2 listed, 1 verified).
+    assert "# total: 1 tenants verified, 1 duplicate-declared (not verified)" \
+        in captured.out
+
+
+def test_all_human_total_without_duplicate(verify_module, conf_d, capsys, cli_argv):
+    """Must-ring control for the total line: clean tree → all verified."""
+    cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d))
+    assert verify_module.main() == 0
+    assert "# total: 3 tenants verified, 0 duplicate-declared (not verified)" \
+        in capsys.readouterr().out
 
 
 def test_all_without_duplicate_exits_0(verify_module, conf_d, cli_argv):
