@@ -93,6 +93,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
+    duplicate_declarations,
     is_reserved_name,
     iter_config_files,
     observe_flat_reads,
@@ -1121,8 +1122,9 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
         for tenant_id in tenants:
             declared.setdefault(tenant_id, set()).add(label)
 
-    duplicates = {tid: sorted(paths)
-                  for tid, paths in declared.items() if len(paths) > 1}
+    # #2049: the predicate is shared with describe_tenant — one answer to
+    # "which tenants does more than one carrier declare".
+    duplicates = duplicate_declarations(declared)
 
     if duplicates:
         details = []

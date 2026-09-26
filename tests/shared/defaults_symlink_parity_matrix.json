@@ -20,7 +20,7 @@
     "`files` / `symlinks` keys are tree-root-relative; link targets are relative",
     "to the link, as os.symlink takes them. A link may target a DIRECTORY",
     "(a ConfigMap mount's `..data -> ..<timestamp>`); it need not exist yet.",
-    "#2054: an `expect` row is ONE of two shapes, never a mix (both sides",
+    "#2054: an `expect` row is ONE shape (a third, error, is below), never a mix (both sides",
     "reject a mixed or partial row): resolved = all of chain_len /",
     "effective_config / merged_hash; absent = {\"absent\": true} alone, meaning",
     "the exporter's walker does not see this tenant (Go: ResolveEffective",
@@ -33,7 +33,17 @@
     "Every such tree keeps a visible control tenant, so an empty walk fails.",
     "Scope: tenant bodies and the defaults chain only. describe_tenant's",
     "`_custom_alerts` view comes from custom_alerts/loader.collect_instances,",
-    "which lists conf.d on its own and still reads those paths (#2086)."
+    "which lists conf.d on its own and still reads those paths (#2086).",
+    "#2049: a third shape, error = {\"error\": \"duplicate\"} alone: the tenant",
+    "is declared by more than one carrier, so the exporter serves no effective",
+    "config for it (Go: ResolveEffective returns *DuplicateTenantError for that",
+    "tenant; Python: describe_tenant exits non-zero naming the duplicate).",
+    "A carrier is a directory ENTRY: a link beside its own target is two (dupA),",
+    "and so is one stem in both spellings (dupC). Measured on main c2f29ce9:",
+    "describe_tenant described acme in dupA and dupB with rc 0 and no warning,",
+    "while Go refused both. Each duplicate tree keeps a control tenant that",
+    "must still resolve. The ConfigMap mount's root link (cm above) is the",
+    "no-false-positive control: its acme is ONE entry and still resolves."
   ],
   "trees": [
     {
@@ -145,6 +155,47 @@
         "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
         "ghostdot": {"absent": true},
         "ghostpayload": {"absent": true}
+      }
+    },
+    {
+      "name": "dupA-tenant-link-beside-its-target-is-a-duplicate",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "real.yaml": "tenants:\n  acme:\n    cpu_pct: 70\n",
+        "ctl.yaml": "tenants:\n  ctl: {}\n"
+      },
+      "symlinks": {"acme.yaml": "real.yaml"},
+      "expect": {
+        "acme": {"error": "duplicate"},
+        "ctl": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"}
+      }
+    },
+    {
+      "name": "dupB-two-files-declare-one-tenant",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "real.yaml": "tenants:\n  acme:\n    cpu_pct: 70\n",
+        "other.yaml": "tenants:\n  acme:\n    cpu_pct: 10\n",
+        "zeta.yaml": "tenants:\n  zeta:\n    cpu_pct: 20\n"
+      },
+      "symlinks": {},
+      "expect": {
+        "acme": {"error": "duplicate"},
+        "zeta": {"chain_len": 1, "effective_config": {"cpu_pct": 20}, "merged_hash": "943a8e46808b6b6a"}
+      }
+    },
+    {
+      "name": "dupC-one-stem-two-spellings-is-a-duplicate",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "acme.yaml": "tenants:\n  acme:\n    cpu_pct: 70\n",
+        "acme.yml": "tenants:\n  acme:\n    cpu_pct: 10\n",
+        "ctl.yaml": "tenants:\n  ctl: {}\n"
+      },
+      "symlinks": {},
+      "expect": {
+        "acme": {"error": "duplicate"},
+        "ctl": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"}
       }
     }
   ]

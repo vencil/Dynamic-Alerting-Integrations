@@ -4,7 +4,8 @@ package config
 // tests/shared/defaults_symlink_parity_matrix.json (#1674 round 2): defaults
 // carriers that are symlinks; since #2054 also which entries the walker does
 // NOT read at all (hidden files, hidden directories, a ConfigMap mount's
-// `..data` payload), via `"absent": true` rows. The Python half is
+// `..data` payload), via `"absent": true` rows; since #2049 also tenants
+// declared by more than one carrier, via `"error": "duplicate"` rows. The Python half is
 // tests/shared/test_defaults_symlink_parity.py (describe_tenant). Neither side
 // reads the other's source; both assert the table.
 //
@@ -46,10 +47,13 @@ type symlinkParityMatrix struct {
 // effective_config, merged_hash) or "absent" (`"absent": true` alone — the
 // walker must not see this tenant at all, #2054). ⛔ Mixing shapes is a
 // broken table, not a looser one: `absent` beside a merged_hash would let
-// either half go unchecked while the row stays green. A later shape (#2049's
-// `error`) is one more case in shape().
+// either half go unchecked while the row stays green. "error" (#2049) is
+// `"error": "duplicate"` alone: ResolveEffective must return
+// *DuplicateTenantError for this tenant — the exporter serves no effective
+// config for a tenant two carriers declare.
 type parityExpect struct {
 	Absent          *bool          `json:"absent"`
+	Error           *string        `json:"error"`
 	ChainLen        *int           `json:"chain_len"`
 	EffectiveConfig map[string]any `json:"effective_config"`
 	MergedHash      *string        `json:"merged_hash"`
@@ -81,6 +85,10 @@ func (e *parityExpect) UnmarshalJSON(raw []byte) error {
 const (
 	shapeResolved = "resolved"
 	shapeAbsent   = "absent"
+	shapeError    = "error"
+
+	// errorDuplicate is the only `error` value the matrix knows.
+	errorDuplicate = "duplicate"
 )
 
 func (e parityExpect) shape() (string, error) {
@@ -91,6 +99,12 @@ func (e parityExpect) shape() (string, error) {
 		}
 	}
 	switch {
+	case e.Error != nil && *e.Error != errorDuplicate:
+		return "", fmt.Errorf(`"error" must be %q, got %q`, errorDuplicate, *e.Error)
+	case e.Error != nil && (e.Absent != nil || resolvedKeys > 0):
+		return "", errors.New(`"error" is exclusive with absent / chain_len / effective_config / merged_hash`)
+	case e.Error != nil:
+		return shapeError, nil
 	case e.Absent != nil && !*e.Absent:
 		return "", errors.New(`"absent" must be true when present — omit it for a tenant that resolves`)
 	case e.Absent != nil && resolvedKeys > 0:
@@ -108,7 +122,7 @@ func (e parityExpect) shape() (string, error) {
 // or a mixed row would be read as whichever half happened to match.
 func TestParityExpectShapeRejectsMixedRows(t *testing.T) {
 	t.Parallel()
-	yes, no, n, h := true, false, 1, "x"
+	yes, no, n, h, dup, other := true, false, 1, "x", errorDuplicate, "conflict"
 	for name, e := range map[string]parityExpect{
 		"absent-false":          {Absent: &no},
 		"absent-with-hash":      {Absent: &yes, MergedHash: &h},
@@ -116,6 +130,11 @@ func TestParityExpectShapeRejectsMixedRows(t *testing.T) {
 		"absent-with-effective": {Absent: &yes, EffectiveConfig: map[string]any{}},
 		"resolved-missing-hash": {ChainLen: &n, EffectiveConfig: map[string]any{}},
 		"empty":                 {},
+		"error-unknown-value":   {Error: &other},
+		"error-with-absent":     {Error: &dup, Absent: &yes},
+		"error-with-hash":       {Error: &dup, MergedHash: &h},
+		"error-with-chain":      {Error: &dup, ChainLen: &n},
+		"error-with-effective":  {Error: &dup, EffectiveConfig: map[string]any{}},
 	} {
 		if got, err := e.shape(); err == nil {
 			t.Errorf("%s: accepted as %q, want an error", name, got)
@@ -137,7 +156,9 @@ func TestParityExpectDecodeRejectsNullAndUnknownKeys(t *testing.T) {
 		"absent-with-null-hash":      {`{"absent":true,"merged_hash":null}`, true},
 		"resolved-with-null-chain":   {`{"chain_len":null,"effective_config":{},"merged_hash":"x"}`, true},
 		"unknown-key":                {`{"absent":true,"absnet":true}`, true},
+		"error-with-null-hash":       {`{"error":"duplicate","merged_hash":null}`, true},
 		"valid-absent":               {`{"absent":true}`, false},
+		"valid-error":                {`{"error":"duplicate"}`, false},
 		"valid-resolved":             {`{"chain_len":1,"effective_config":{"cpu_pct":50},"merged_hash":"x"}`, false},
 	} {
 		var e parityExpect
@@ -194,9 +215,16 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 			}
 			for tenant, want := range tree.Expect {
 				ec, err := ResolveEffective(confD, tenant)
-				if shape, _ := want.shape(); shape == shapeAbsent {
+				switch shape, _ := want.shape(); shape {
+				case shapeAbsent:
 					if !errors.Is(err, ErrTenantNotFound) {
 						t.Errorf("%s: pinned absent (the walker must not read it), got %+v, err %v", tenant, ec, err)
+					}
+					continue
+				case shapeError:
+					var dup *DuplicateTenantError
+					if !errors.As(err, &dup) || dup.TenantID != tenant {
+						t.Errorf("%s: pinned duplicate (two carriers declare it), got %+v, err %v", tenant, ec, err)
 					}
 					continue
 				}

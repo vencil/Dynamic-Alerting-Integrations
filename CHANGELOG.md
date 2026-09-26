@@ -129,6 +129,12 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 - **Operator 路徑產出的 PrometheusRule／ServiceMonitor 帶上 Prometheus selector 需要的 label（da-tools、helm；[#2075](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2075)）**：`operator-prometheus-integration.md` 說 `operator-generate` 產出的 PrometheusRule 帶 `prometheus: kube-prometheus` 與 `release: kube-prometheus-stack` 兩個 selector label，程式卻只帶前者；ServiceMonitor（工具產出的與 chart 的）則沒有任何 selector label。保留 kube-prometheus-stack 預設 selector 的環境會靜默不載入它們。現在 PrometheusRule 預設帶兩個 label、ServiceMonitor 預設帶 `release: kube-prometheus-stack`；新增可重複的 `--selector-label key=value`（同 key 覆寫預設，不可改寫 `app.kubernetes.io/part-of`）；chart 新增 `rules.operator.serviceMonitor.labels`，預設同為 `release: kube-prometheus-stack`（與 chart 固定 label 撞 key 時 render 失敗）；label key 的 DNS prefix 逐段驗證。
 
+- **`describe_tenant` 遇到被多個檔案宣告的租戶改為報錯並點名所有載體（dx；[#2049](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2049)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：同一租戶被兩個載體宣告、且各檔都能完整解析時，exporter 回 `DuplicateTenantError`，這支卻 rc 0 地挑一份描述。載體以目錄項計（連結與目標並存、`.yaml`／`.yml` 同 stem 都算兩個；ConfigMap 掛載不誤報）。
+  - ⚠️ **rc 行為變更**：查詢的租戶重複時（含 `--show-sources`、`--diff`、`--what-if`），stderr 點名全部宣告檔、**exit 1**（找不到仍是 2）。`--all` 跳過重複租戶、其餘照常輸出，有重複即 exit 1；`blast-radius` workflow 的 `--all` 因此會失敗。
+  - 判定與 `validate_config` 共用 `_lib_confd.duplicate_declarations`；共讀矩陣新增 `{"error": "duplicate"}` 形狀。
+  - 已知分歧（#1942）：exporter 完整解碼會丟棄的檔仍算載體，這類樹 describe_tenant 仍拒絕並請跑 validate-config。
+  - `tenant_verify` 本次未改，重複租戶在那裡仍會挑一份。
+
 - **threshold-exporter chart 移除從未生效的 `rules.operator.ruleLabels`／`receiverTemplate`／`secretRef`（helm、文件；[#2073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2073)）**：三個 key 自 #21 起就宣告在 `values.yaml`，但沒有任何 template 讀取——本 chart 不產生 PrometheusRule 或 AlertmanagerConfig（ADR-008：chart 保持 path-agnostic，CRD 由 `da-tools operator-generate` 產生），照 `prometheus-operator-integration.md` 的範例設定只會是 silent no-op。values 移除這三個 key，並改正 `rules.mode` 註解（兩種模式都不出貨 Rule Pack，`operator` 只多一個 ServiceMonitor）；文件範例改用 `operator-generate --receiver-template / --secret-name / --secret-key`；`test_values_operator_section` 改為斷言 `rules.operator` 只宣告 `serviceMonitor`。覆寫檔裡殘留這些 key 不會出錯，一如以往沒有作用。
 
 - **`generate_tenant_metadata` 與 `gitops-check local` 不再讀 conf.d 的隱藏檔（dx、ops；[#2055](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2055)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：exporter 略過所有 `.` 開頭的檔名，這兩支卻照讀。

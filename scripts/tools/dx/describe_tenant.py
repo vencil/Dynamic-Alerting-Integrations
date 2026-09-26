@@ -30,6 +30,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    duplicate_declarations,
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
@@ -39,7 +40,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     warn_multi_carrier,
     unusable_reason,
 )
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:
@@ -172,6 +173,10 @@ class ConfDScanner:
         self._tenant_entries: dict[str, Path] = {}
         self._defaults_chain_entries: dict[str, list[Path]] = {}
         self.defaults_data: dict[str, dict] = {}      # defaults path str → parsed defaults dict
+        # #2049: tenant_id → sorted conf.d-relative entries, for every tenant
+        # MORE THAN ONE carrier declares. `tenants` / `tenant_files` still
+        # hold one of those declarations; the CLI must not describe it.
+        self.duplicates: dict[Any, list[str]] = {}
         # #772: tenant_id → [(recipe, origin, is_own), ...] — the ADR-024 UNION
         # resolution of `_custom_alerts` from the compiler's own walker. Computed
         # ONCE (collect_instances scans the whole tree) so effective_config() is a
@@ -290,7 +295,16 @@ class ConfDScanner:
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 
-        # Collect all tenant files
+        # Collect all tenant files.
+        # #2049: every carrier that declares a tenant is recorded in
+        # `declared`, keyed by the conf.d ENTRY as listed (never resolved),
+        # in BOTH passes — `acme.yaml` + `acme.yml` is two carriers to the
+        # exporter as much as `a.yaml` + `b.yaml` is. `self.tenants` /
+        # `tenant_files` still pick one declaration (last `.yaml` wins, `.yaml` over `.yml`) so
+        # existing library callers keep their shape; the CLI refuses to
+        # describe a tenant listed in `self.duplicates` (see
+        # `duplicate_error`), which is what the exporter does with it.
+        declared: dict[Any, list[str]] = {}
         for fp in _iter_confd_yaml(entries, (".yaml",)):
             if is_reserved_name(fp.name):
                 continue
@@ -301,6 +315,7 @@ class ConfDScanner:
             if not isinstance(tenants_block, dict):
                 continue
             for tid, tconfig in tenants_block.items():
+                declared.setdefault(tid, []).append(self._entry_label(fp))
                 self.tenants[tid] = _tenant_body(tconfig)
                 self._record_tenant(tid, fp)
 
@@ -314,9 +329,56 @@ class ConfDScanner:
             if not isinstance(tenants_block, dict):
                 continue
             for tid, tconfig in tenants_block.items():
+                declared.setdefault(tid, []).append(self._entry_label(fp))
                 if tid not in self.tenants:
                     self.tenants[tid] = _tenant_body(tconfig)
                     self._record_tenant(tid, fp)
+
+        # ⛔ The shared predicate (`_lib_confd.duplicate_declarations`, also
+        # behind validate_config's `tenant_uniqueness`), not a local one.
+        self.duplicates = duplicate_declarations(declared)
+
+    def _entry_label(self, entry: Path) -> str:
+        """How a duplicate report names carrier `entry`: its conf.d-relative
+        path AS LISTED (#2049).
+
+        ⛔ Not `_report_path`, which reports a link by its target: for
+        `acme.yaml -> real.yaml` beside `real.yaml` that names `real.yaml`
+        twice — one carrier to this reader, two to the exporter (its walker
+        counts directory entries and raises DuplicateTenantError on them).
+        """
+        return entry.relative_to(self.conf_d).as_posix()
+
+    def duplicate_error(self, tenant_id: Any) -> str | None:
+        """Why `tenant_id` cannot be described when more than one carrier
+        declares it; None when it is declared at most once (#2049).
+
+        When every carrier parses, the exporter's walker raises
+        DuplicateTenantError for such a tenant (and a full load rejects the
+        whole conf.d), so it serves NO effective config for it. Describing
+        one of the declarations — whichever the scan kept, as this tool did
+        before — answered a question the exporter refuses, with rc 0 and no
+        warning. Every carrier is named, sorted, so the operator can decide
+        which one owns the tenant.
+
+        ⚠️ The verdict is CONDITIONAL on purpose. A carrier here is a file
+        whose `tenants:` key names the tenant (the #1942 rule, see
+        `_lib_confd.declared_tenant_ids`); a file the exporter's full decode
+        rejects declares nothing there, so Go can resolve this tenant from
+        the other file. Refusing is still right — it matches validate_config
+        and beats picking a value — but claiming the exporter rejects it
+        would be false for that tree.
+        """
+        files = self.duplicates.get(tenant_id)
+        if not files:
+            return None
+        return (f"duplicate tenant ID '{tenant_id}': declared in {len(files)} "
+                f"files under {self.conf_d}: {', '.join(files)}. If every one "
+                f"of these files parses, the exporter rejects this tenant (a "
+                f"full load rejects the whole conf.d); a file its full decode "
+                f"rejects declares nothing there. Not describing any of "
+                f"them — run validate-config, and keep the tenant in "
+                f"exactly one file.")
 
     def _record_tenant(self, tid: str, fp: Path) -> None:
         """Record where tenant `tid` came from: conf.d entry `fp`."""
@@ -616,10 +678,31 @@ def main() -> None:
             return json.dumps(data, indent=2, ensure_ascii=False)
         return json.dumps(data, indent=2, ensure_ascii=False)
 
+    # #2049: THE checkpoint for "this tenant is declared by more than one
+    # carrier". Every mode that names a tenant (default, --show-sources,
+    # --diff for BOTH sides, --what-if) passes through it before anything
+    # is computed; --all asks `duplicate_error` per tenant. Exit code is
+    # EXIT_VIOLATION, not the not-found EXIT_CALLER_ERROR: the invocation
+    # and the tree are readable, and the finding is one the user must fix
+    # in conf.d — the code validate_config's `tenant_uniqueness` gives for
+    # the same state. It also keeps "ambiguous" apart from "absent".
+    def _refuse_duplicate(t: Any) -> None:
+        msg = scanner.duplicate_error(t)
+        if msg is not None:
+            print(f"❌ {msg}", file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
+
     # --all mode
     if args.all:
         result = {}
+        duplicated = 0
         for tid in sorted(scanner.tenants.keys()):
+            msg = scanner.duplicate_error(tid)
+            if msg is not None:
+                # Reported, not described; the other tenants still are.
+                print(f"❌ {msg}", file=sys.stderr)
+                duplicated += 1
+                continue
             info = scanner.source_info(tid)
             result[tid] = info
         out = _output(result)
@@ -629,18 +712,24 @@ def main() -> None:
             print(f"✅ Written {len(result)} tenants to {args.output}", file=sys.stderr)
         else:
             print(out)
+        if duplicated:
+            print(f"❌ {duplicated} tenant(s) not described: declared in more "
+                  f"than one file (see above).", file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
         return
 
     if not args.tenant_id:
         parser.error("tenant_id is required (or use --all)")
 
     tid = args.tenant_id
+    _refuse_duplicate(tid)
     if tid not in scanner.tenants:
         print(f"❌ Tenant '{tid}' not found. Available: {', '.join(sorted(scanner.tenants.keys())[:10])}...", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # --diff mode
     if args.diff:
+        _refuse_duplicate(args.diff)
         if args.diff not in scanner.tenants:
             print(f"❌ Tenant '{args.diff}' not found.", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)

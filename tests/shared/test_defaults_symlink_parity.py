@@ -7,6 +7,8 @@ holds the ENTRY, whatever it points at.
 Since #2054 the table also pins tenants the exporter does NOT see at all
 (`"absent": true`: hidden files, hidden directories, a ConfigMap mount's
 `..<timestamp>/` payload), which describe_tenant must report as not found.
+Since #2049 it also pins tenants declared by more than one carrier
+(`"error": "duplicate"`), which describe_tenant must refuse to describe.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
+EXIT_VIOLATION = 1  # _lib_exitcodes.EXIT_VIOLATION: describe_tenant's "duplicate" (#2049)
 EXIT_CALLER_ERROR = 2  # _lib_exitcodes.EXIT_CALLER_ERROR: describe_tenant's "not found"
 MATRIX = json.loads((Path(__file__).parent / "defaults_symlink_parity_matrix.json")
                     .read_text(encoding="utf-8"))
@@ -34,10 +37,11 @@ TREE_OPTIONAL = {"conf_d"}
 # #2054: an `expect` row is exactly ONE shape, chosen by its key set. A mixed
 # row (`absent` beside a merged_hash) or a partial one is a broken table — it
 # would leave one half unchecked while staying green — so it is rejected, not
-# read leniently. A later shape (#2049's `error`) is one more entry here.
+# read leniently. #2049's `error` (`{"error": "duplicate"}` alone) is the third.
 EXPECT_SHAPES = {
     "resolved": {"chain_len", "effective_config", "merged_hash"},
     "absent": {"absent"},
+    "error": {"error"},
 }
 
 
@@ -47,6 +51,8 @@ def expect_shape(want: dict) -> str:
         if set(want) == keys:
             if shape == "absent" and want["absent"] is not True:
                 raise ValueError('"absent" must be true when present')
+            if shape == "error" and want["error"] != "duplicate":
+                raise ValueError(f'"error" must be "duplicate", got {want["error"]!r}')
             return shape
     raise ValueError(f"expect row {sorted(want)} matches no shape "
                      f"{ {k: sorted(v) for k, v in EXPECT_SHAPES.items()} }")
@@ -67,8 +73,15 @@ def test_matrix_is_not_vacuous() -> None:
     {"absent": True, "effective_config": {}},
     {"chain_len": 1, "effective_config": {}},
     {},
+    {"error": "conflict"},
+    {"error": "duplicate", "absent": True},
+    {"error": "duplicate", "merged_hash": "x"},
+    {"error": "duplicate", "chain_len": 1},
+    {"error": "duplicate", "effective_config": {}},
 ], ids=["absent-false", "absent-with-hash", "absent-with-chain",
-        "absent-with-effective", "resolved-missing-hash", "empty"])
+        "absent-with-effective", "resolved-missing-hash", "empty",
+        "error-unknown-value", "error-with-absent", "error-with-hash",
+        "error-with-chain", "error-with-effective"])
 def test_expect_shape_rejects_mixed_rows(bad: dict) -> None:
     with pytest.raises(ValueError):
         expect_shape(bad)
@@ -121,6 +134,13 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path) -> N
             # The exporter's walker never reads it, so neither may this tool.
             assert r.returncode == EXIT_CALLER_ERROR, (tenant, r.returncode, r.stdout)
             assert f"Tenant '{tenant}' not found" in r.stderr, (tenant, r.stderr)
+            continue
+        if expect_shape(want) == "error":
+            # Two carriers declare it: the exporter serves no effective
+            # config, so this tool must not pick one of the declarations.
+            assert r.returncode == EXIT_VIOLATION, (tenant, r.returncode, r.stdout)
+            assert r.stdout == "", (tenant, r.stdout)
+            assert f"duplicate tenant ID '{tenant}'" in r.stderr, (tenant, r.stderr)
             continue
         assert r.returncode == 0, r.stderr
         out = json.loads(r.stdout)
