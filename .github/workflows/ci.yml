@@ -1962,8 +1962,17 @@ jobs:
 
       - name: Combine shards, write coverage.xml, apply the floor
         # Every shard must be present: a combined report missing a shard
-        # under-reports coverage and would go red (or, worse, stay green on
-        # a smaller denominator) for a reason that is not the code.
+        # under-reports coverage (a smaller denominator), so none is written.
+        # ⛔ A missing shard is a WARNING here, not an error, and no signal is
+        # lost by that: each shard uploads `if: always()` with
+        # `if-no-files-found: error`, so a shard can be missing only if its
+        # own row is already red or cancelled. The case that made this an
+        # error a liability: the concurrency group cancels a superseded run,
+        # its cancelled shard uploads nothing, and this job — `always()` —
+        # went red on "found 2" for a run nobody reads (run 36253944192).
+        # The cancellation is detected by the count, not by reading
+        # `needs.*.result`: a job that reads a verdict is a gate
+        # (tests/ops/test_ci_aggregate_gate_contract.py).
         run: |
           set -euo pipefail
           n=0
@@ -1972,8 +1981,8 @@ jobs:
             cp "$f" ".coverage.shard$n"
           done
           if [ "$n" -ne 3 ]; then
-            echo "::error::expected 3 shard coverage files, found $n"
-            exit 1
+            echo "::warning::expected 3 shard coverage files, found $n; a shard failed before uploading or was cancelled (see its own row) — no combined report"
+            exit 0
           fi
           python -m coverage combine .coverage.shard*
           python -m coverage xml -o coverage.xml
