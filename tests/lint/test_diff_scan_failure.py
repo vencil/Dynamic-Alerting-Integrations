@@ -229,6 +229,34 @@ def test_rename_into_accepted_place_exits_0(name, in_repo, monkeypatch, capsys):
     assert rc == 0, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
 
 
+# A symlink replaced by a regular file with violating content is status T,
+# which `AM` dropped too (#2025, found in review). The symlink is committed
+# through the index, so the case builds the same on a `core.symlinks=false`
+# checkout. ad_hoc is not listed: a type change does not move the file, so it
+# was already an offender by location before the change.
+TYPE_CHANGE_INTO_VIOLATION = {
+    "bat_ascii_purity": ("scripts/ops/a.bat", _NON_ASCII_BAT),
+    "repo_name": ("docs/a.md", _WRONG_MD),
+}
+
+
+@pytest.mark.parametrize("name", sorted(TYPE_CHANGE_INTO_VIOLATION))
+def test_type_change_into_violation_is_seen(name, in_repo, monkeypatch, capsys):
+    module, *_rest, extra = CASES[name]
+    rel, data = TYPE_CHANGE_INTO_VIOLATION[name]
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=str(in_repo), input=b"target",
+                          check=True, capture_output=True, timeout=30).stdout.decode().strip()
+    _git(in_repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},{rel}")
+    _git(in_repo, "commit", "-q", "-m", "symlink")
+    _git(in_repo, "rm", "-q", "--cached", rel)
+    _stage(in_repo, rel, data)
+    status = subprocess.run(["git", "diff", "--name-status", "HEAD"], cwd=str(in_repo),
+                            check=True, capture_output=True, text=True, timeout=30).stdout
+    assert status == f"T\t{rel}\n", status
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 1, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
 # ---------------------------------------------------------------------------
 # The helper itself
 # ---------------------------------------------------------------------------
@@ -263,8 +291,8 @@ def test_helper_returns_non_ascii_paths_verbatim(repo):
 def test_helper_lists_a_copy_under_copy_detection_config(repo):
     """``diff.renames=copies`` is the user's config; it must not hide a copy (#2025).
 
-    This is the case that separates ``--no-renames`` from adding ``R`` to the
-    filter: git reports the copy as ``C``, which ``AMR`` drops as well.
+    git reports the copy as ``C``, so a filter that adds ``R`` to ``AM`` still
+    drops it; only excluding ``D`` keeps every status that leaves a file.
     """
     _git(repo, "config", "diff.renames", "copies")
     body = "".join(f"line {i}\n" for i in range(30)).encode()
