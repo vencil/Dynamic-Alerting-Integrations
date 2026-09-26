@@ -17,12 +17,6 @@ entries:
   - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--cleanup-rules", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--apply", count: 1, ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--split", count: 1, ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "-o", count: 1, ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--apply", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--include-servicemonitor", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--split", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V1, token: "--scenario", count: 1, ticket: "#1513"}
   - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V3, token: "--scenario", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.md, command: analyze-gaps, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
@@ -125,5 +119,3 @@ entries:
   - {file: docs/scenarios/tenant-lifecycle.en.md, command: scaffold, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
   - {file: docs/scenarios/tenant-lifecycle.md, command: offboard, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
   - {file: docs/scenarios/tenant-lifecycle.md, command: scaffold, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
-  - {file: docs/troubleshooting.en.md, command: operator-generate, verdict: V1, token: "--tenant", count: 3, ticket: "#1513"}
-  - {file: docs/troubleshooting.md, command: operator-generate, verdict: V1, token: "--tenant", count: 3, ticket: "#1513"}

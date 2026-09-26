@@ -160,8 +160,9 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - Diagnosis: Compare `kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'` output with PrometheusRule labels
    - Fix: Ensure PrometheusRule includes both `prometheus: kube-prometheus` and `release: kube-prometheus-stack`
    ```bash
-   # Use operator-generate to produce correct labels automatically
-   da-tools operator-generate --tenant <name> --output-dir ./crds/
+   # Use operator-generate to produce correct labels automatically (both are on by default; override with --selector-label when your Helm release is named differently)
+   da-tools operator-generate --config-dir conf.d/ --output-dir ./crds/
+   da-tools operator-generate --config-dir conf.d/ --selector-label release=<your-release> --output-dir ./crds/
    # Or manually patch existing CRD
    kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
    ```
@@ -172,7 +173,7 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - Fix: Extend namespace selector or deploy PrometheusRule to an already-monitored namespace
    ```bash
    # Option A: Deploy CRD to monitoring namespace
-   da-tools operator-generate --tenant <name> --namespace monitoring --output-dir ./crds/
+   da-tools operator-generate --config-dir conf.d/ --namespace monitoring --output-dir ./crds/
    # Option B: Modify Prometheus CRD ruleNamespaceSelector to include target namespace
    kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
    # Add target namespace label under spec.ruleNamespaceSelector.matchLabels
@@ -183,8 +184,8 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - Diagnosis: `kubectl api-versions | grep monitoring.coreos.com`
    - Fix:
    ```bash
-   # Specify API version matching your cluster
-   da-tools operator-generate --tenant <name> --api-version v1 --output-dir ./crds/
+   # Specify the AlertmanagerConfig API version matching your cluster (v1alpha1 / v1beta1, default v1beta1)
+   da-tools operator-generate --config-dir conf.d/ --api-version v1alpha1 --output-dir ./crds/
    ```
 
 **Rollback Procedure** (from Operator back to ConfigMap mode):

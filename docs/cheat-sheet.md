@@ -57,7 +57,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `state-reconcile` | 遷移狀態目錄一致化（.da/state/ schema 驗證 + .da/manifest.json 重建，#405 Cat A） | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema，#405 Cat D） | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
-| `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --namespace, --split, --apply | `da-tools operator-generate --help` |
+| `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 CRD YAML + 6 階段遷移計畫 | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
