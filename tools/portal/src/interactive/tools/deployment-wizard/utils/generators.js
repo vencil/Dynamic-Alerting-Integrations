@@ -193,8 +193,8 @@ function deployNotes(config, size) {
       id: 'tier2-extra',
       title: t('Tier 2：這些仍需你自己補', 'Tier 2: what you still need to add yourself'),
       body: t(
-        `這兩個 chart 不含 Ingress template，請自建 Ingress 指向 service（da-portal 與 tenant-api 皆 port 80）。tenant-api 需另設 conf.d 來源（\`confDir\` / \`gitRepoUrl\`），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
-        `Neither chart ships an Ingress template — create your own Ingress pointing at the service (port 80 on both da-portal and tenant-api). tenant-api also needs its conf.d source (\`confDir\` / \`gitRepoUrl\`); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
+        `對外入口：在該 chart 的 values 設 \`ingress.enabled: true\`、\`ingress.className\` 與 \`ingress.hosts\`（兩個 chart 皆有 Ingress template，後端固定走 oauth2-proxy）。tenant-api 需另設 conf.d 來源（\`confDir\` / \`gitRepoUrl\`），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
+        `External access: set \`ingress.enabled: true\`, \`ingress.className\` and \`ingress.hosts\` in that chart's values (both charts ship an Ingress template; its backend is always oauth2-proxy). tenant-api also needs its conf.d source (\`confDir\` / \`gitRepoUrl\`); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
       ),
     });
   }
