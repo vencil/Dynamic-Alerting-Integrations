@@ -206,14 +206,12 @@ The threshold-exporter Helm chart adds a `rules.mode` toggle in v2.6.0:
 rules:
   mode: operator    # Switch to Operator mode
   operator:
-    ruleLabels:
-      prometheus: kube-prometheus
     serviceMonitor:
       enabled: true
       interval: 15s
 ```
 
-When `mode: operator` is set: the chart automatically generates ServiceMonitor; Rule Pack is loaded via PrometheusRule CRD instead of ConfigMap projected volume. The threshold-exporter itself remains unchanged—it still reads tenant thresholds from `conf.d/` ConfigMap.
+When `mode: operator` is set: the chart automatically generates ServiceMonitor; Rule Pack is loaded via PrometheusRule CRD instead of ConfigMap projected volume — ⚠️ those PrometheusRules are **not rendered by the chart**; generate them with `da-tools operator-generate` and apply them (see above). The threshold-exporter itself remains unchanged—it still reads tenant thresholds from `conf.d/` ConfigMap.
 
 ---
 
