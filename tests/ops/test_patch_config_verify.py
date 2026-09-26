@@ -958,6 +958,9 @@ class TestRollbackAccounting:
         "old-after-our-rollback": (
             "after-rollback", {}, None, False,
             "error-rolled-back", 6, False, True, 2),
+        "write-call-failed-but-landed-then-rolled-back": (
+            "after-rollback", {"fail_patch": {0}, "patch_lands": True}, None,
+            False, "error-rolled-back", 6, False, True, 2),
         "E2-write-call-failed-and-did-not-land": (
             "conclude", {"fail_patch": {0}}, None, False,
             "caller_error", 2, False, None, 1),
