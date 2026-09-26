@@ -331,6 +331,8 @@ func benchFullDirLoadHierarchicalAtSize(b *testing.B, n int) {
 func benchDiffAndReloadHierarchicalNoChangeAtSize(b *testing.B, n int) {
 	b.Helper()
 	dir := buildDirConfigHierarchical(b, n)
+	// Pin Warm mode (#2048) — see the note under the 1000 wrapper below.
+	setFixtureMtimes(b, dir, time.Now().Add(-time.Hour))
 	silenceLogs(b)
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {
@@ -361,22 +363,27 @@ func BenchmarkDiffAndReload_Hierarchical_1000_NoChange(b *testing.B) {
 	benchDiffAndReloadHierarchicalNoChangeAtSize(b, 1000)
 }
 
-// ⚠️ THE BENCHMARK ABOVE IS BIMODAL, AND NOT BECAUSE OF THE CODE UNDER TEST.
-// Its fixture is written moments before the loop, so for the first
-// TreeScanMtimeGuard (2s) every tick re-reads and re-hashes all 1201 files
-// (~42.9k allocs/op); after that the mtime fast-path takes them (~33.3k).
-// Which one `go test -bench` reports depends on whether its ~1s round lands
-// before or after that 2s mark — a knife-edge of a few percent in ns/op.
-// Measured (#1982, merge-base aa020b88 vs head, -count=1 x10 interleaved):
-// merge-base 2 fast / 7 slow / 1 mixed, head 3 fast / 7 slow, identical
-// allocs within each mode. A reported +30% allocs on it can therefore be a
-// mode flip rather than a regression. The two pinned variants below hold
-// the mode fixed (mtimes set before the load), so each mode's cost can be
-// compared across revisions on its own.
+// ..._NoChange (all sizes) is pinned to Warm mode (#2048). Its fixture is
+// written moments before the loop, so while files are younger than
+// TreeScanMtimeGuard (2s) every tick re-reads and re-hashes them (~42.9k
+// allocs/op at 1000); after that the mtime fast-path takes them (~33.3k).
+// Unpinned, the reported mode depended on whether the ~1s round landed
+// before or after that 2s mark — i.e. on run order and -benchtime. Under the
+// full PR-gate / nightly regex earlier benches had already aged the shared
+// fixture, so those numbers were always Warm and see no step from pinning;
+// run alone or under a narrow regex it flipped (1000 @1s: 42943; 2000 @1s:
+// 66337 vs @3s: 48726). Backdating mtimes before the load removes that.
+// The shared fixture's other users (ScanDirTree prior=nil, FullDirLoad with
+// a new manager each op) have no prior to compare against, so the backdate
+// does not affect them.
+//
+// At 1000, ..._NoChange_Warm below now measures the same thing; it keeps
+// its name so the nightly trend line continues. ..._NoChange_Reread is the
+// cold (re-read) path.
 
-func benchDiffAndReloadHierarchicalPinned(b *testing.B, n int, mtime time.Time) {
+// setFixtureMtimes sets the atime/mtime of every regular file under dir.
+func setFixtureMtimes(b *testing.B, dir string, mtime time.Time) {
 	b.Helper()
-	dir := buildDirConfigHierarchicalFresh(b, n)
 	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -389,6 +396,12 @@ func benchDiffAndReloadHierarchicalPinned(b *testing.B, n int, mtime time.Time) 
 	if err != nil {
 		b.Fatal(err)
 	}
+}
+
+func benchDiffAndReloadHierarchicalPinned(b *testing.B, n int, mtime time.Time) {
+	b.Helper()
+	dir := buildDirConfigHierarchicalFresh(b, n)
+	setFixtureMtimes(b, dir, mtime)
 	silenceLogs(b)
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {

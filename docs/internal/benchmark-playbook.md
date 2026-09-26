@@ -1003,6 +1003,8 @@ BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_
 cat /tmp/b1_out/bench.out.txt
 ```
 
+⚠️ `BenchmarkDiffAndReload_Hierarchical_{1000,2000,5000}_NoChange` 已固定在 Warm 模式（[#2048](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2048)）：載入前把共用 fixture 的 mtime 回溯到 `TreeScanMtimeGuard` 之外，所以單獨跑或窄 regex 下不再因執行順序與 `-benchtime` 在「全檔重讀」與「mtime fast-path」兩個模式間翻轉（改前 1000 單獨 1s 量到 42943 allocs/op，改後恆為約 33333）。PR gate 與 nightly 的完整 regex 下它本來就落在 Warm，數字不會出現斷層。冷路徑改看 `..._1000_NoChange_Reread`。
+
 ---
 
 ## Engineering Reference Benchmarks
