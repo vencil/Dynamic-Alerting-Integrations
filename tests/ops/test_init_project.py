@@ -3590,6 +3590,218 @@ class TestMainTenantValidation:
             assert os.path.isfile(os.path.join(tmpdir, '.da-init.yaml'))
 
 
+class TestMissingTenantsOnATerminal:
+    """#1426：產生型旗標（`--ci` / `--rule-packs` / `--deploy`）給了、
+    `--tenants` 沒給時的合約（owner 裁定 plan d）。
+
+    - stdin 是 TTY ⇒ **只**補問租戶名稱一次，其他旗標照給的用；
+    - stdin 不是 TTY ⇒ rc 2、點名 `--tenants`、零寫入；
+    - `--non-interactive` 維持原樣（缺 `--tenants` ⇒ rc 2，TTY 也不問）；
+    - 完全沒給旗標 ⇒ 完整互動流程不變（它的提示看得到 `[db-a,db-b]` 預設）。
+
+    ⚠️ 走行程內 `main()` 而非 subprocess，因為 TTY 這一半要靠 `_stdin_is_tty`
+    這個 seam 才量得到——子行程拿不到假的終端機。非 TTY 的真實子行程版本在
+    `TestTheCliLayerItself::test_no_example_tenants_are_invented_off_a_terminal`。
+    """
+
+    @staticmethod
+    def _drive(monkeypatch, out, argv, answers, tty):
+        prompts = []
+        queue = list(answers)
+
+        def fake_input(prompt=''):
+            prompts.append(prompt)
+            if not queue:
+                raise AssertionError(f'unexpected prompt: {prompt!r}')
+            nxt = queue.pop(0)
+            if isinstance(nxt, BaseException):
+                raise nxt
+            return nxt
+
+        monkeypatch.setattr(ip, '_stdin_is_tty', lambda: tty)
+        monkeypatch.setattr('builtins.input', fake_input)
+        monkeypatch.setattr(sys, 'argv', ['init', '-o', str(out), *argv])
+        ip.main()
+        return prompts
+
+    @staticmethod
+    def _tenant_files(out):
+        return sorted(p.stem for p in (out / 'conf.d').iterdir()
+                      if not p.stem.startswith('_'))
+
+    def test_a_terminal_is_asked_only_for_tenants(self, monkeypatch, tmp_path):
+        """⛔ 只問一次、只問租戶；`--deploy helm` / `--ci github` 照給的用。"""
+        out = tmp_path / 'repo'
+        prompts = self._drive(monkeypatch, out,
+                              ['--deploy', 'helm', '--ci', 'github'],
+                              [' acme , beta '], tty=True)
+        assert len(prompts) == 1, prompts
+        assert '--tenants' in prompts[0], prompts[0]
+        # 補問沒有預設值：不能讓範例名稱在使用者沒打字時落地。
+        assert 'db-a' not in prompts[0], prompts[0]
+        assert self._tenant_files(out) == ['acme', 'beta']
+        marker = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))
+        assert marker['deploy_method'] == 'helm', marker
+        assert marker['ci_platform'] == 'github', marker
+        assert marker['tenants'] == ['acme', 'beta'], marker
+        assert (out / 'environments' / 'prod' / 'values.yaml').is_file()
+        assert not (out / 'kustomize').exists()
+        assert not (out / '.gitlab-ci.yml').exists()
+
+    def test_an_empty_answer_is_a_caller_error(self, monkeypatch, tmp_path,
+                                               capsys):
+        """空白回答不會退回範例租戶，也不重問：rc 2，零寫入。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--deploy', 'helm'], ['  '], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert 'At least one tenant name is required' in capsys.readouterr().err
+        assert not out.exists()
+
+    @pytest.mark.parametrize('interrupt', [EOFError(), KeyboardInterrupt()],
+                             ids=['eof', 'ctrl-c'])
+    def test_eof_or_interrupt_at_the_prompt_is_a_caller_error(
+            self, monkeypatch, tmp_path, capsys, interrupt):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--ci', 'github'], [interrupt],
+                        tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert '--tenants' in capsys.readouterr().err
+        assert not out.exists()
+
+    @pytest.mark.parametrize('flag,value', [
+        ('--deploy', 'helm'), ('--ci', 'github'), ('--rule-packs', 'mariadb'),
+    ])
+    def test_off_a_terminal_nothing_is_asked(self, monkeypatch, tmp_path,
+                                             capsys, flag, value):
+        """非 TTY：不呼叫 `input`（`_drive` 的 answers 是空的，一問就炸）。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, [flag, value], [], tty=False)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert '--tenants' in err and flag in err, err
+        assert not out.exists()
+
+    def test_non_interactive_is_unchanged_even_on_a_terminal(
+            self, monkeypatch, tmp_path, capsys):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--non-interactive', '--deploy', 'helm'],
+                        [], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert '--non-interactive requires --tenants' in capsys.readouterr().err
+        assert not out.exists()
+
+    @pytest.mark.parametrize('tty', [True, False], ids=['tty', 'no-tty'])
+    def test_no_flags_is_still_the_full_interactive_flow(
+            self, monkeypatch, tmp_path, tty):
+        """完全沒給旗標：五個提示全都在，租戶提示**看得到**的預設仍是
+        `db-a,db-b`；`_stdin_is_tty` 不參與這條路（兩種值結果相同）。"""
+        out = tmp_path / 'repo'
+        prompts = self._drive(monkeypatch, out, [], [''] * 5, tty=tty)
+        assert len(prompts) == 5, prompts
+        assert any('[db-a,db-b]' in p for p in prompts), prompts
+        assert self._tenant_files(out) == ['db-a', 'db-b']
+
+    def test_the_tty_seam_treats_an_absent_or_closed_stdin_as_not_a_terminal(
+            self, monkeypatch):
+        class _Closed:
+            def isatty(self):
+                raise ValueError('I/O operation on closed file')
+
+        monkeypatch.setattr(sys, 'stdin', None)
+        assert ip._stdin_is_tty() is False
+        monkeypatch.setattr(sys, 'stdin', _Closed())
+        assert ip._stdin_is_tty() is False
+
+    @pytest.mark.parametrize('stdin_tty,stdout_tty', [(True, False), (False, True)],
+                             ids=['stdin-tty-stdout-redirected',
+                                  'stdin-redirected-stdout-tty'])
+    def test_the_tty_seam_asks_stdin_not_stdout(self, monkeypatch, stdin_tty,
+                                                stdout_tty):
+        """⛔ 補問讀的是 stdin，所以只有 stdin 算數。把 seam 改成讀
+        `sys.stdout.isatty()` 的突變原本全綠：`init --deploy helm > log`
+        在終端機上會被拒絕，而 `echo | init --deploy helm` 會去問一個讀不到
+        答案的提示。兩個方向各一列。"""
+        class _Stream:
+            def __init__(self, tty):
+                self._tty = tty
+
+            def isatty(self):
+                return self._tty
+
+        monkeypatch.setattr(sys, 'stdin', _Stream(stdin_tty))
+        monkeypatch.setattr(sys, 'stdout', _Stream(stdout_tty))
+        assert ip._stdin_is_tty() is stdin_tty
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    @pytest.mark.parametrize('flags', [(), ('--ci', 'github')],
+                             ids=['tenants-alone', 'with-ci'])
+    def test_an_empty_tenants_flag_is_asked_for_on_a_terminal(
+            self, monkeypatch, tmp_path, empty, flags):
+        """`--tenants ''` 是**給了**的旗標：不能掉進完整互動流程（那裡連按
+        Enter 會寫出範例的 db-a/db-b）。TTY 上只補問租戶一次。"""
+        out = tmp_path / 'repo'
+        prompts = self._drive(monkeypatch, out, [*flags, '--tenants', empty],
+                              ['acme'], tty=True)
+        assert len(prompts) == 1, prompts
+        assert '--tenants' in prompts[0] and 'db-a' not in prompts[0], prompts
+        assert self._tenant_files(out) == ['acme']
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    @pytest.mark.parametrize('flags', [(), ('--ci', 'github')],
+                             ids=['tenants-alone', 'with-ci'])
+    def test_an_empty_tenants_flag_off_a_terminal_is_a_caller_error(
+            self, monkeypatch, tmp_path, capsys, empty, flags):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, [*flags, '--tenants', empty], [],
+                        tty=False)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        # 點名的是「--tenants 是空的」，不是「沒給 --tenants」。
+        assert '--tenants is empty' in err, err
+        assert 'without --tenants' not in err, err
+        assert not out.exists()
+
+    @pytest.mark.parametrize('empty', ['', ' , '], ids=['empty', 'blank-list'])
+    def test_non_interactive_with_an_empty_tenants_flag_is_refused(
+            self, monkeypatch, tmp_path, capsys, empty):
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out,
+                        ['--non-interactive', '--tenants', empty], [], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert '--non-interactive requires --tenants' in capsys.readouterr().err
+        assert not out.exists()
+
+    def test_a_list_with_some_names_keeps_its_blanks(self, monkeypatch,
+                                                     tmp_path, capsys):
+        """「空」只指一個名字都沒有。`a,,b` 仍交給 `_validate_config`，以
+        名稱不合法 rc 2 拒絕，不會被悄悄修成 `a,b`，也不會補問。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--tenants', 'db-x,,db-y'], [],
+                        tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert 'Invalid tenant names' in capsys.readouterr().err
+        assert not out.exists()
+
+    def test_a_prompted_list_with_some_names_keeps_its_blanks(
+            self, monkeypatch, tmp_path, capsys):
+        """補問與 `--tenants` 同一份契約：回答 `db-x,,db-y` 同樣以名稱不合法
+        rc 2 拒絕、零寫入，不會被補問悄悄修成 `db-x,db-y`。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--deploy', 'helm'],
+                        ['db-x,,db-y'], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert 'Invalid tenant names' in capsys.readouterr().err
+        assert not out.exists()
+
+
 class TestGitOpsNativeModeIsRefused:
     """GitOps Native Mode（`--config-source git`）已撤下（issue #1349）。
 
@@ -4529,10 +4741,16 @@ class TestTheCliLayerItself:
         # `LANG=zh_TW.UTF-8` 的開發機上，斷言英文訊息的那些測試照樣紅。
         env = dict(os.environ, LANG='en_US.UTF-8')
         env.pop('DA_LANG', None)
+        # ⛔ stdin 明確給 DEVNULL（#1426）：不給的話子行程**繼承**跑測試那個
+        # 終端機的 stdin，於是「缺 --tenants」在開發機上會掉進補問提示、卡到
+        # timeout，而在 CI（stdin 非 TTY）上是 rc 2——同一條測試兩種結果。
+        # 這個 helper 量的就是非 TTY 那條路；TTY 那條路在
+        # `TestMissingTenantsOnATerminal` 以 seam 在行程內量。
         return subprocess.run(
             [sys.executable, str(self._SCRIPT), '-o', str(tmpdir), *args],
             capture_output=True, text=True, encoding='utf-8',
-            errors='replace', timeout=300, env=env)
+            errors='replace', timeout=300, env=env,
+            stdin=subprocess.DEVNULL)
 
     def _files(self, tmpdir):
         from pathlib import Path as _P
@@ -4546,20 +4764,32 @@ class TestTheCliLayerItself:
         ('--rule-packs', 'mariadb'),
         ('--tenants', 'db-a'),
     ])
-    def test_any_single_generating_flag_means_non_interactive(
+    def test_any_single_generating_flag_skips_the_interactive_flow(
             self, flag, value):
         """⛔ `has_cli_args` 少算 `--deploy`（或 `--ci`）之後，
-        `da-tools init --deploy helm` 從 rc=0 / 8 個檔案變成 **rc=1 / 0 個
-        檔案**——掉進互動提示，然後在關閉的 stdin 上死掉。
+        `da-tools init --deploy helm` 掉進**完整**互動提示，然後在關閉的
+        stdin 上以 EOFError traceback（rc=1）死掉。
 
-        四個旗標各自都必須足以構成「這是非互動呼叫」。
+        四個旗標各自都必須足以跳過完整互動流程。#1426 之後，沒有 `--tenants`
+        的三列在非 TTY 上的正確結果是 **rc 2、訊息點名 `--tenants`、0 個
+        檔案**（不再補上範例租戶 `db-a,db-b`）；`--tenants` 那列是 rc 0。
+        區分點：掉進完整互動流程的話，stderr 是 EOFError、rc 1，不會點名
+        `--tenants`。
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             r = self._run(tmpdir, flag, value)
-            assert r.returncode == 0, (
-                f'{flag} {value} 沒有被當成非互動呼叫\n'
+            if flag == '--tenants':
+                assert r.returncode == 0, (
+                    f'{flag} {value} 沒有被當成非互動呼叫\n'
+                    f'rc={r.returncode}\n{r.stderr[-600:]}')
+                assert self._files(tmpdir), '沒有產生任何檔案'
+                return
+            assert r.returncode == EXIT_CALLER_ERROR, (
+                f'{flag} {value}（無 --tenants、stdin 非 TTY）應為 rc 2\n'
                 f'rc={r.returncode}\n{r.stderr[-600:]}')
-            assert self._files(tmpdir), '沒有產生任何檔案'
+            assert '--tenants' in r.stderr and 'EOFError' not in r.stderr, (
+                r.stderr[-600:])
+            assert not self._files(tmpdir), self._files(tmpdir)
 
     # ── 必要參數檢查：兩個方向都要對 ────────────────────────────────
     def test_non_interactive_without_tenants_is_a_caller_error(self):
@@ -4669,14 +4899,38 @@ class TestTheCliLayerItself:
         assert 'mariadb' in marker['rule_packs'], marker
         assert 'kubernetes' in marker['rule_packs'], marker
 
-    def test_the_default_tenants_are_two_not_one(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r = self._run(tmpdir, '--ci', 'github')
-            assert r.returncode == 0, r.stderr[-400:]
-            from pathlib import Path as _P
-            names = sorted(p.stem for p in (_P(tmpdir) / 'conf.d').iterdir()
-                           if not p.stem.startswith('_'))
-            assert names == ['db-a', 'db-b'], names
+    @pytest.mark.parametrize('extra', [
+        ('--deploy', 'helm'),
+        ('--ci', 'github'),
+        ('--rule-packs', 'mariadb'),
+        ('--ci', 'both', '--rule-packs', 'mariadb,redis', '--deploy', 'kustomize'),
+        ('--deploy', 'helm', '--dry-run'),
+        # `--tenants ''` 單獨出現曾被當成「沒給旗標」而掉進完整互動流程，
+        # 在關閉的 stdin 上以 EOFError traceback rc 1 死掉。
+        ('--tenants', ''),
+        ('--ci', 'github', '--tenants', ' , '),
+    ], ids=['deploy', 'ci', 'rule-packs', 'all-three', 'dry-run',
+            'empty-tenants-alone', 'blank-tenants-with-ci'])
+    def test_no_example_tenants_are_invented_off_a_terminal(self, extra):
+        """⛔ #1426：原本這裡釘的是「`--ci github` 單獨呼叫會得到 db-a、db-b
+        兩個租戶」——也就是把缺陷當成合約。那兩個是範例名稱，落進客戶的
+        conf.d/ 之後，Next steps 還把它們當成客戶自己的租戶。
+
+        現在：產生型旗標給了、`--tenants` 沒給、stdin 不是 TTY ⇒ rc 2，
+        訊息點名 `--tenants`，**輸出目錄不存在**（一個檔都沒寫）。
+        `--dry-run` 同樣 rc 2：它的預覽否則會列出那兩個捏造的租戶。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as parent:
+            out = _P(parent) / 'repo'
+            r = self._run(out, *extra)
+            assert r.returncode == EXIT_CALLER_ERROR, (
+                r.returncode, r.stdout[-400:], r.stderr[-400:])
+            assert '--tenants' in r.stderr, r.stderr[-600:]
+            assert 'Traceback' not in r.stderr, r.stderr[-600:]
+            assert 'db-a' not in r.stdout, r.stdout[-600:]
+            assert not out.exists(), sorted(
+                p.relative_to(out).as_posix() for p in out.rglob('*'))
 
     # ── 已初始化目錄：結束碼與閘門順序都是合約 ──────────────────────
     def test_reinit_without_force_is_a_violation_not_a_caller_error(self):

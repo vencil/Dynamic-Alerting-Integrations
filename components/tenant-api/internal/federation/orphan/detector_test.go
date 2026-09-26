@@ -307,3 +307,47 @@ func TestDetector_Run_ScansImmediatelyTicksAndStops(t *testing.T) {
 		t.Errorf("after Run, OrphanCounts() = (%d, %d), want (1, 1)", tok, sub)
 	}
 }
+
+// #1698: _federation/ accepts every spelling confd.TenantIDFromFile does, so
+// one tenant can have `<id>.yaml` AND `<id>.yml` there at once. That is ONE
+// tenant with a subset, and the orphan gauge counts tenants — two spellings
+// must not make one orphan count twice.
+func TestScanSubsetTenants_TwoSpellingsAreOneTenant(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fedDir := filepath.Join(dir, federationSubsetDir)
+	if err := os.Mkdir(fedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"db-stale.yaml", "db-stale.yml", "db-stale.YAML", "db-a.yml"} {
+		writeTenantFile(t, fedDir, f)
+	}
+	got, err := scanSubsetTenants(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	if want := []string{"db-a", "db-stale"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("subset tenants = %v, want %v", got, want)
+	}
+}
+
+// End to end through scanOnce: the published gauge is 1 for one orphaned
+// tenant, whatever number of spellings its subset is stored under.
+// NOT parallel — writes the package-level gauges (see saveGauges).
+func TestDetector_ScanOnce_TwoSpellingsCountOnce(t *testing.T) {
+	saveGauges(t)
+	dir := t.TempDir()
+	writeTenantFile(t, dir, "db-a.yaml")
+	fedDir := filepath.Join(dir, federationSubsetDir)
+	if err := os.Mkdir(fedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTenantFile(t, fedDir, "db-stale.yaml")
+	writeTenantFile(t, fedDir, "db-stale.yml")
+
+	NewDetector(dir, func() ([]token.Record, error) { return nil, nil }).scanOnce()
+	if _, sub := OrphanCounts(); sub != 1 {
+		t.Errorf("orphaned subset gauge = %d, want 1 — one orphaned tenant stored under two spellings", sub)
+	}
+}

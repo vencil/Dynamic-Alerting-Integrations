@@ -78,6 +78,20 @@ func guardBareTenantID(tenantID string) error {
 	return nil
 }
 
+// FederationSubsetDirName is the conf.d subdirectory holding one federation
+// metric-subset file per tenant (ADR-020 IV-2e). It is a conf.d-shaped
+// directory — one `<id>.yaml`/`<id>.yml` per tenant — so every per-tenant
+// question about it is answered by the SAME resolver as conf.d itself, called
+// with FederationSubsetDir as the directory (#1698). The read handler, the
+// writer and the orphan detector each used to spell this join and the file
+// name on their own, and disagreed about which spellings count.
+const FederationSubsetDirName = "_federation"
+
+// FederationSubsetDir returns configDir's federation-subset directory.
+func FederationSubsetDir(configDir string) string {
+	return filepath.Join(configDir, FederationSubsetDirName)
+}
+
 // DefaultTenantFileName is the name a NEW tenant's config file gets. It is the
 // only place the `.yaml` spelling is chosen; every other site resolves an
 // existing file instead of assuming one.

@@ -7,7 +7,8 @@ package fedpolicy
 //   - Platform whitelist — _federation_policy.yaml at the config-dir
 //     root, maintainer-managed. The platform-curated catalogue of
 //     metrics offered for federation.
-//   - Tenant subset — conf.d/_federation/<tenant>.yaml, one file per
+//   - Tenant subset — conf.d/_federation/<tenant>.yaml or .yml (any
+//     extension case; a new subset defaults to .yaml), one file per
 //     tenant, tenant-self-managed. The metrics one tenant selected;
 //     every entry must be contained in the platform whitelist.
 //
@@ -54,7 +55,7 @@ type Config struct {
 	Whitelist []WhitelistEntry `yaml:"whitelist" json:"whitelist"`
 }
 
-// Subset is the parsed conf.d/_federation/<tenant>.yaml: the
+// Subset is the parsed conf.d/_federation/<tenant>.{yaml,yml}: the
 // metric subset one tenant selected for federation. Every metric must
 // be present in the platform whitelist (the 2-tier containment rule).
 type Subset struct {

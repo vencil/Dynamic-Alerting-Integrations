@@ -227,26 +227,31 @@ if [ "$_missing_found" = "0" ]; then
 fi
 
 marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
-# ⛔ `git checkout <branch>` exits 128 when that branch is checked out in
-# another worktree, which is the normal state here — an instruction that
-# cannot reach green is a dead end, not a hint. Point at that worktree instead.
-_other_wt=""
-while read -r _wt_path _wt_rest; do
-    case "$_wt_rest" in
-        *"[$_missing_branch]"*) _other_wt="$_wt_path"; break ;;
-    esac
-done <<< "$(git worktree list 2>/dev/null)"
-
-if [ "$_missing_sha" = "$head_sha" ]; then
-    _checkout_hint="    make pr-preflight"
-elif [ -n "$_other_wt" ]; then
-    _checkout_hint="    cd ${_other_wt} && make pr-preflight"
+# Where to run preflight. It marks HEAD and checks the working tree, so the
+# tree you push from qualifies only when its HEAD IS the pushed commit and its
+# tracked files are clean. Anything else gets a throwaway worktree: at that
+# commit, clean, and nobody else's (#1952).
+# ⛔ One line, run in a subshell, absolute paths: the instruction must not move
+# the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
+# re-read from wherever that shell stands.
+# ⛔ A `status` that fails is not "clean": unknown must not pick the tree.
+_here=""
+if [ "$_missing_sha" = "$head_sha" ] \
+    && _dirty="$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" \
+    && [ -z "$_dirty" ]; then
+    _here="$(git rev-parse --show-toplevel 2>/dev/null)" || _here=""
+fi
+if [ -n "$_here" ]; then
+    printf -v _here_q '%q' "$_here"
+    _checkout_hint="    (cd ${_here_q} && make pr-preflight)"
 else
-    # ⛔ By SHA, not by branch name. `git push <old-sha>:refs/heads/x` and
-    # `git push HEAD:refs/heads/other-name` both name a remote branch that
-    # either does not exist locally or does not point at the commit being
-    # pushed — so `git checkout <branch>` marks the wrong commit, or fails.
-    _checkout_hint="    git checkout --detach ${_missing_sha} && make pr-preflight"
+    # ⛔ `&&` before the clean-up: a failed `add` (path already there) must not
+    # remove what is there. `$$` keeps two pushes' paths apart.
+    _common="$(CDPATH='' cd "$git_dir" && pwd)"
+    _tmp_root="$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
+    printf -v _common_q '%q' "$_common"
+    printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && { (cd ${_tmp_wt_q} && make pr-preflight); r=\$?; git -C ${_common_q} worktree remove --force ${_tmp_wt_q}; exit \$r; })"
 fi
 
 # No marker — block with actionable instructions.

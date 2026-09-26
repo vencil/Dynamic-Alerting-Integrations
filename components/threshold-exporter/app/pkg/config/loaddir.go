@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"os"
 )
 
 // RejectDuplicateTenant is the issue-#127 hard reject shared by every full
@@ -65,7 +66,7 @@ func LoadDir(dir string, logger *log.Logger) (*ThresholdConfig, error) {
 	var parsedDefaults map[string]map[string]any
 	if len(scan.Defaults) > 0 || len(scan.Tenants) > 0 {
 		tenantDefaults = scan.InheritanceGraph().TenantDefaults
-		parsedDefaults = ParseDefaultsFiles(scan.Defaults, logger)
+		parsedDefaults = ParseDefaultsFiles(scan.Defaults, scanDefaultsSource(scan), logger)
 	}
 
 	built, err := BuildFlatConfig(scan, FlatBuildInput{
@@ -78,4 +79,27 @@ func LoadDir(dir string, logger *log.Logger) (*ThresholdConfig, error) {
 		return nil, err
 	}
 	return &built.Config, nil
+}
+
+// scanDefaultsSource serves ParseDefaultsFiles from the bytes this scan
+// already read (a cold scan has no priors, so every file it read carries
+// Data), falling back to the disk for a file it did not. Each file is parsed
+// once, as the cold load does (#1978).
+func scanDefaultsSource(scan *TreeScan) DefaultsSource {
+	data := make(map[string][]byte, len(scan.Files))
+	for _, f := range scan.Files {
+		if f.Data != nil {
+			data[f.AbsPath] = f.Data
+		}
+	}
+	return func(absPath string) ([]byte, ChainDefaults, error) {
+		b, ok := data[absPath]
+		if !ok {
+			var err error
+			if b, err = os.ReadFile(absPath); err != nil {
+				return nil, ChainDefaults{}, err
+			}
+		}
+		return b, ParseChainDefaults(b), nil
+	}
 }
