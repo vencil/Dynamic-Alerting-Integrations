@@ -250,7 +250,7 @@ Sub-issue body 樣板（10 段固定結構）：
 - [ ] 所有 X 個 file 改完
 - [ ] CI green: `pre-commit run --all-files`
 - [ ] Local re-scan: trivy image <target> 0 / 0
-- [ ] CHANGELOG entry under `## [Unreleased] — Security`
+- [ ] `changelog.d/` 片段，`section: Security`（`CHANGELOG.md` 的 `[Unreleased]` 已凍結，#2102）
 
 ## References
 - Audit run: <date>
@@ -321,7 +321,7 @@ scripts/ops/win_git_escape.bat push origin <branch>
 
 ### 8.3 CHANGELOG entry 樣板
 
-放在 `## [Unreleased]` 的 `### Security` subsection（沒有就新加）：
+寫成一份 `changelog.d/` 片段檔（front matter `section: Security`，格式見 `changelog.d/README.md`；`CHANGELOG.md` 的 `[Unreleased]` 自 #2102 起凍結，不再直接加條目）。本文：
 
 ```markdown
 - **<元件> <old> → <new>（v2.8.0, [#<sub>](url) of umbrella [#<umb>](url) Q<N> <YEAR> CVE audit）** —
@@ -343,9 +343,11 @@ scripts/ops/win_git_escape.bat push origin <branch>
 
 ### 9.1 CHANGELOG `### Security` rebase chain
 
-每個 audit PR 都加新 entry → 後 merge 的 PR 都會跟前一個 conflict。**已知 pattern，不是 bug**。
+✅ **自 #2102 起不再發生**：每個 audit PR 各寫一份 `changelog.d/` 片段檔，不會改到同一行。下面的 SOP 只剩一種情況適用——分支還停在 #2102 之前、仍在 `CHANGELOG.md` 加條目（那樣的條目 rebase 後也會被 `changelog-format` 的凍結擋下，應改寫成片段）。
 
-解法 SOP：
+以前的情況：每個 audit PR 都加新 entry → 後 merge 的 PR 都會跟前一個 conflict。
+
+解法 SOP（舊）：
 
 ```bash
 git fetch origin main

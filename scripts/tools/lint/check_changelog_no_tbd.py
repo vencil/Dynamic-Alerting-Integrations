@@ -93,6 +93,9 @@ _IGNORE_MARKER = "<!-- changelog-no-tbd: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
 _DEFAULT_TARGET_FILES = ("CHANGELOG.md", "CHANGELOG-archive.md")
+# In-flight entries live here since #2102; a placeholder in a fragment ships
+# into the release notes the same way one in CHANGELOG.md did.
+_FRAGMENT_DIR = "changelog.d"
 
 # Bare TBD with word boundary so `TBDDD` or identifiers like `myTBD`
 # don't match. Case-sensitive uppercase only. Lookbehind/lookahead
@@ -212,7 +215,7 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
         PROJECT_ROOT / name
         for name in _DEFAULT_TARGET_FILES
         if (PROJECT_ROOT / name).is_file()
-    ]
+    ] + sorted((PROJECT_ROOT / _FRAGMENT_DIR).glob("*.md"))
 
 
 def filter_to_diff_added(
@@ -264,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Files or directories to scan. Defaults to CHANGELOG.md + CHANGELOG-archive.md.",
+        help="Files or directories to scan. Defaults to CHANGELOG.md + "
+             "CHANGELOG-archive.md + changelog.d/*.md.",
     )
     parser.add_argument(
         "--ci",

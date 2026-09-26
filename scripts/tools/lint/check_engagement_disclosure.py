@@ -42,6 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCAN_GLOBS = (
     "docs/**/*.md",
     "CHANGELOG.md",
+    "changelog.d/*.md",
     "README*.md",
     "rule-packs/**/*.yaml",
     "rule-packs/**/*.yml",

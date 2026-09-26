@@ -84,7 +84,16 @@
         {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"},
         {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "3. Pre-commit auto hooks"}
       ],
-      "note": "只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。"
+      "note": "`## [Unreleased]` 已凍結（#2102）：新增條目會被 `changelog-format` 擋下，還沒發布的變更改寫成 `changelog.d/` 片段檔（格式見 `changelog.d/README.md`）。只剩發版收尾與修正既有條目會動這個檔；驗：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。"
+    },
+    {
+      "id": "changelog-fragments",
+      "paths": ["changelog.d/**"],
+      "read": [
+        {"file": "changelog.d/README.md"},
+        {"file": "docs/internal/commit-convention.md", "section": "Changelog fragments (`changelog.d/`)"}
+      ],
+      "note": "一個變更一個片段檔、本文恰好一個 `- ` 條目（≤ 1,000 字元）；修改還沒發布的功能要改它原本的片段，不要另開一份。驗：`python3 scripts/tools/dx/generate_changelog.py --fragments`（pre-commit `changelog-fragments`），預覽組裝結果：`--assemble`。"
     },
     {
       "id": "agents-ssot",

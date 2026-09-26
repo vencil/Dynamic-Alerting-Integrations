@@ -16,6 +16,10 @@ Usage:
 
     # Check mode: verify all commits since tag follow conventional format
     generate_changelog.py --check
+
+    # changelog.d/ fragments (#2102): lint them, or print them assembled
+    generate_changelog.py --fragments [PATH ...]
+    generate_changelog.py --assemble
 """
 
 import argparse
@@ -24,6 +28,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -490,6 +495,199 @@ def _git_show(ref: str, path: str) -> Optional[str]:
     return r.stdout.decode("utf-8", errors="replace")
 
 
+# ── [Unreleased] freeze (#2102) ─────────────────────────────────────
+
+def lint_unreleased_frozen(
+    text: str,
+    base_text: Optional[str],
+    section: str = CAP_SECTION,
+    base_label: str = "the base",
+) -> List[str]:
+    """Refuse any NEW top-level entry in ``## [section]`` over the base.
+
+    In-flight entries live in ``changelog.d/`` fragments (#2102): every PR
+    appending to the same few ``###`` blocks of one file is what made any
+    two PRs conflict. The section may still shrink or be corrected in place
+    (the growth cap above bounds that); it may not gain an entry. Skipped,
+    like the cap, when either side has no such section.
+    """
+    head = _section_size(text, section)
+    if head is None or base_text is None:
+        return []
+    base = _section_size(base_text, section)
+    if base is None:
+        return []
+    new = head[1] - base[1]
+    if new <= 0:
+        return []
+    return [
+        f"[{section}] gained {new} entr{'y' if new == 1 else 'ies'} over "
+        f"{base_label}; [{section}] is frozen — write the entry as a fragment "
+        f"in {FRAGMENT_DIR}/ instead (format: {FRAGMENT_DIR}/{FRAGMENT_README})"
+    ]
+
+
+# ── changelog.d/ fragments (#2102) ──────────────────────────────────
+#
+# One file per change, assembled into a release section at release time
+# (`--assemble`). A fragment is YAML front matter plus exactly one entry, in
+# the same shape `agent_output_metrics.iter_entries` counts in CHANGELOG.md:
+#
+#     ---
+#     section: Added            # FRAGMENT_SECTIONS
+#     topic: ci                 # grouping key at assembly (kebab-case)
+#     issues: [2102]            # may be empty, never absent
+#     created: 2026-09-26T15:40:00+08:00
+#     ---
+#     - **headline（scope；#2102）**：what changed, for whom.
+#
+# Assembly order is section → topic → created → filename: entries about one
+# topic sit together, oldest first. Revising an UNRELEASED change means
+# editing its fragment, not adding a second one — the release note states
+# the net change since the last release.
+
+FRAGMENT_DIR = "changelog.d"
+FRAGMENT_README = "README.md"
+# Keep a Changelog's section order; assembly emits them in this order.
+FRAGMENT_SECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+FRAGMENT_KEYS = ("section", "topic", "issues", "created")
+_TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_FRONT_MATTER_RE = re.compile(r"\A---\n(?P<meta>.*?)\n---\n(?P<body>.*)\Z", re.DOTALL)
+
+
+def _parse_created(value) -> Optional[datetime]:
+    """A timezone-aware datetime, or None. YAML already turns an unquoted
+    ISO timestamp into a datetime; a quoted one arrives as a string."""
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def parse_fragment(text: str) -> Tuple[Optional[Dict], str, List[str]]:
+    """Split a fragment into (meta, body, problems). ``meta`` is None when the
+    front matter is missing or unparseable; ``problems`` lists every issue
+    found, and ``meta["created"]`` is normalised to a datetime when valid."""
+    import yaml  # pyyaml: the hooks install it; imported here so --check needs nothing
+
+    text = text.replace("\r\n", "\n")
+    fm = _FRONT_MATTER_RE.match(text)
+    if not fm:
+        return None, text, ["no front matter: the file must start with a '---' block "
+                            f"carrying {', '.join(FRAGMENT_KEYS)}"]
+    try:
+        meta = yaml.safe_load(fm.group("meta"))
+    except yaml.YAMLError as exc:
+        return None, fm.group("body"), [f"front matter is not valid YAML: {exc}"]
+    if not isinstance(meta, dict):
+        return None, fm.group("body"), ["front matter is not a mapping"]
+    problems: List[str] = []
+    missing = [k for k in FRAGMENT_KEYS if k not in meta]
+    extra = sorted(str(k) for k in set(meta) - set(FRAGMENT_KEYS))
+    if missing:
+        problems.append(f"front matter lacks {', '.join(missing)}")
+    if extra:
+        problems.append(f"front matter has unknown key(s) {', '.join(extra)}")
+    if "section" in meta and meta["section"] not in FRAGMENT_SECTIONS:
+        problems.append(f"section {meta['section']!r} is not one of "
+                        f"{', '.join(FRAGMENT_SECTIONS)}")
+    if "topic" in meta and not (isinstance(meta["topic"], str)
+                                and _TOPIC_RE.match(meta["topic"])):
+        problems.append(f"topic {meta['topic']!r} is not kebab-case "
+                        "([a-z0-9-], starting alphanumeric)")
+    if "issues" in meta:
+        vals = meta["issues"]
+        if not isinstance(vals, list) or not all(
+                isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in vals):
+            problems.append("issues must be a list of issue numbers, e.g. [2102] (or [])")
+    if "created" in meta:
+        created = _parse_created(meta["created"])
+        if created is None:
+            problems.append("created must be an ISO 8601 timestamp with a UTC offset, "
+                            "e.g. 2026-09-26T15:40:00+08:00 (`date -Iseconds`)")
+        else:
+            meta["created"] = created
+    return meta, fm.group("body"), problems
+
+
+def lint_fragment(path: Path, cap: int = ENTRY_CAP) -> List[str]:
+    """Every problem with one fragment file (empty list = clean)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"could not read: {exc}"]
+    _, body, problems = parse_fragment(text)
+    lines = split_lines(body)
+    entries = list(iter_entries(lines, 1))
+    if len(entries) != 1:
+        problems.append(f"body must hold exactly one top-level '- ' entry, found "
+                        f"{len(entries)} (one change per fragment)")
+        return problems
+    first_line, entry = entries[0]
+    start = first_line - 1
+    end = start + entry.count("\n") + 1
+    if any(ln.strip() for ln in lines[:start] + lines[end:]):
+        problems.append("text outside the entry: the body must be the one '- ' bullet "
+                        "and its indented continuation lines")
+    if cap and len(entry) > cap:
+        problems.append(f"entry is {len(entry)} chars, over the {cap}-char cap; keep the "
+                        "conclusions here and move measurements to the PR body or an issue")
+    return problems
+
+
+def fragment_paths(root: Path) -> List[Path]:
+    """The fragments under ``root/changelog.d`` (README excluded), sorted."""
+    d = root / FRAGMENT_DIR
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob("*.md") if p.name != FRAGMENT_README)
+
+
+def assemble_fragments(paths: List[Path]) -> Tuple[str, List[str], List[str]]:
+    """Render fragments as release-section markdown.
+
+    Returns (markdown, problems, notes). A fragment with problems is left
+    out and named in ``problems``; ``notes`` are advisories (one issue
+    spread over several fragments) that never fail anything.
+    """
+    problems: List[str] = []
+    rows = []
+    for p in paths:
+        found = lint_fragment(p, cap=0)
+        if found:
+            problems += [f"{p}: {i}" for i in found]
+            continue
+        meta, body, _ = parse_fragment(p.read_text(encoding="utf-8"))
+        _, entry = next(iter_entries(split_lines(body), 1))
+        rows.append((FRAGMENT_SECTIONS.index(meta["section"]), meta["topic"],
+                     meta["created"], p.name, meta, entry))
+    rows.sort(key=lambda r: r[:4])
+    out: List[str] = []
+    by_issue: Dict[int, List[str]] = defaultdict(list)
+    section = topic = None
+    for _, row_topic, _, name, meta, entry in rows:
+        for n in meta["issues"]:
+            by_issue[n].append(name)
+        if meta["section"] != section:
+            section, topic = meta["section"], None
+            out += [f"### {section}", ""]
+        if row_topic != topic:
+            topic = row_topic
+            out += [f"<!-- topic: {topic} -->", ""]
+        out += [entry.rstrip("\n"), ""]
+    notes = [f"note: issue #{n} has {len(names)} fragments ({', '.join(names)}); "
+             "if they describe one unreleased change, merge them into one"
+             for n, names in sorted(by_issue.items()) if len(names) > 1]
+    markdown = "\n".join(out).rstrip("\n") + "\n" if out else ""
+    return markdown, problems, notes
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -544,7 +742,45 @@ def main() -> int:
              "repo's shared diff base — $LINT_DIFF_BASE, else "
              "origin/$GITHUB_BASE_REF on a PR run, else origin/main)",
     )
+    parser.add_argument(
+        "--fragments",
+        nargs="*",
+        metavar="PATH",
+        help=f"Lint {FRAGMENT_DIR}/ fragments (front matter, one entry, the per-entry "
+             f"cap); defaults to every fragment in {FRAGMENT_DIR}/",
+    )
+    parser.add_argument(
+        "--assemble",
+        action="store_true",
+        help=f"Print the {FRAGMENT_DIR}/ fragments as release-section markdown "
+             "(section, then topic, then created); the release wrap-up distils this",
+    )
     args = parser.parse_args()
+
+    # Fragment lint / assembly (#2102).
+    if args.fragments is not None or args.assemble:
+        repo_root = Path(__file__).resolve().parents[3]
+        paths = ([Path(t) for t in dict.fromkeys(args.fragments)]
+                 if args.fragments else fragment_paths(repo_root))
+        paths = [p for p in paths if p.name != FRAGMENT_README]
+        missing = [str(p) for p in paths if not p.is_file()]
+        if missing:
+            print(f"ERROR: not a readable file: {', '.join(missing)}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        if args.assemble:
+            markdown, problems, notes = assemble_fragments(paths)
+            for line in problems + notes:
+                print(line, file=sys.stderr)
+            print(markdown, end="")
+            return EXIT_VIOLATION if problems else EXIT_OK
+        issues = [f"{p}: {i}" for p in paths for i in lint_fragment(p, args.cap)]
+        if issues:
+            print(f"❌ {len(issues)} changelog fragment issue(s):")
+            for issue in issues:
+                print(f"  {issue}")
+            return EXIT_VIOLATION
+        print(f"✅ {len(paths)} changelog fragment(s) clean")
+        return EXIT_OK
 
     # Lint mode — validate existing changelog format. ⛔ `is not None`: bare
     # `--lint` yields an empty list, which is falsy.
@@ -606,6 +842,8 @@ def main() -> int:
                 else:
                     issues += [f"{target}: {i}" for i in
                                lint_entry_caps(text, base_text, args.cap, base_label=base)]
+                    issues += [f"{target}: {i}" for i in
+                               lint_unreleased_frozen(text, base_text, base_label=base)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

@@ -51,7 +51,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 5. **⛔ 宣稱要配證據區塊，沒有就不准宣稱** — 「測試過了」「lint 乾淨」「build 成功」「修好了」「CI 綠」每一句都是**主張**，同一則訊息裡要配一個證據區塊：以 `$ <指令>` 開頭的 fenced block，接該次實際輸出的節錄（≤ 8 行，不含 `$` 那行與 fence；含 rc 或 pass/fail 那行）。指令必須是**這一輪**跑過的：上一輪的結果不算、部分檢查不算、「應該會過」不算、agent 回報成功不算（自己看 diff）。沒跑就寫一行 `[未驗] <宣稱>`；跑不了的補一句擋住它的那件事，不寫辯解——**「量不到」與「量了沒事」必須可區分**。過程敘事（第一次怎麼錯、後來怎麼改）只進 commit body，不進回覆、PR body 與 CHANGELOG。判別語：讀者要拿這段做什麼？拍板 → 結論＋改變裁決的量測；重做或驗證 → 指令與輸出；不再重蹈 → commit／docstring／CHANGELOG。 ⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**：`cmd | head; echo $?` 讀到的是 `head` 的 rc；要 rc 就別接管線。
 6. **禁止直推 main** — 一律 branch → PR → owner 明示後 merge。pre-push hook 攔截（`scripts/ops/protect_main_push.sh` + `require_preflight_pass.sh`）。
 7. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用 Read+Edit 或 pipe。
-8. **Doc-as-Code** — 影響 API / schema / CLI 的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
+8. **Doc-as-Code** — 影響 API / schema / CLI 的變更須同步 changelog + `CLAUDE.md` + `README.md`。changelog 一律寫成 `changelog.d/` 片段檔：`CHANGELOG.md` 的 `[Unreleased]` 已凍結，往裡面新增條目會被 `changelog-format` 擋下（[#2102](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2102)；格式見 [`changelog.d/README.md`](changelog.d/README.md)）。
 9. **Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）。
 
 完整規範（受眾是 contributor／人）見 [`dev-rules.md`](docs/internal/dev-rules.md)。
@@ -82,7 +82,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 | secret 洩漏處置（ASSUME COMPROMISE / ROTATE FIRST） | [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md) |
 | IaC lint baseline、Severity→Action、豁免列管 | [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md) |
 | 哪些事機械強制、哪些要 AI 自覺、哪裡漏接 | [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md) |
-| 版本歷程、in-flight 工作 | [`CHANGELOG.md`](CHANGELOG.md) |
+| 版本歷程、in-flight 工作 | 已發布：[`CHANGELOG.md`](CHANGELOG.md)；還沒發布：[`changelog.d/`](changelog.d/README.md) 片段 |
 
 ⚠️ **測試注入 seam 的適用範圍是 `components/threshold-exporter/app/*_test.go`，不是全 repo 鐵則**。該範圍內鐵則是「metrics / logger / watch 這三者一律走 seam」，不等於全面禁止 global swap。**由 `t.Parallel()` 測試寫入的 process-global 必須用冪等 reset**，不能 save-then-restore（那是「最後一個 cleanup 贏」，會還原掉別的測試的寫入）；且 reset 只解決清理、**不提供隔離**——平行測試各自需要不同值時，全域本身就是錯的機制。完整對照表與決策樹見 test-map.md。
 
@@ -102,7 +102,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 ## Pre-commit 品質閘門
 
-113 auto-run + 9 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
+114 auto-run + 9 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
 
 ⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
 
@@ -119,7 +119,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 
 ## 專案概覽
 
-**Multi-Tenant Dynamic Alerting 平台 (v2.9.0)** — config-driven、SHA-256 hot-reload、Directory Scanner。架構見 [`architecture-and-design.md`](docs/architecture-and-design.md)；**版本歷程與 in-flight 工作一律以 [`CHANGELOG.md`](CHANGELOG.md) 為準**，本檔不複述。
+**Multi-Tenant Dynamic Alerting 平台 (v2.9.0)** — config-driven、SHA-256 hot-reload、Directory Scanner。架構見 [`architecture-and-design.md`](docs/architecture-and-design.md)；**版本歷程一律以 [`CHANGELOG.md`](CHANGELOG.md) 為準、in-flight 工作以 [`changelog.d/`](changelog.d/README.md) 為準**，本檔不複述。
 
 ⛔ 上面那個版號**不是裝飾**：`_lib_versions.read_platform_version()` 以 `## 專案概覽` 標題為錨、抓 `Multi-Tenant Dynamic Alerting 平台 (vX.Y.Z)` 這個確切句型，`check_frontmatter_versions` / doc-map / tool-map / version-consistency 四處共用它。**改動這一行或這個標題名會讓那四支 lint 一起 rc 2**——要改版號請連同 release 流程一起改，不要順手重寫句型。
 

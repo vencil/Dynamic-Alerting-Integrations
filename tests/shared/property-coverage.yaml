@@ -135,6 +135,12 @@ modules:
       lint_entry_caps: "Section growth per new entry; boundary / retro / no-base / deletion-credit cases are pinned in tests/dx/test_generate_changelog.py (TestSectionGrowthCap)"
       _section_size: "Two-value accessor over section_lines + iter_entries; covered by the cap tests"
       _git_show: "Side-effecting (git subprocess); real-repo test in TestCapBase"
+      lint_unreleased_frozen: "Entry-count delta over the base (#2102); pinned in tests/dx/test_changelog_fragments.py and cells B/F of TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed"
+      _parse_created: "Timestamp coercion (datetime or ISO string, offset required); cases pinned in tests/dx/test_changelog_fragments.py"
+      parse_fragment: "Front-matter validator (#2102); one case per defect in tests/dx/test_changelog_fragments.py"
+      lint_fragment: "I/O (reads the fragment) + body shape; covered by tests/dx/test_changelog_fragments.py"
+      fragment_paths: "I/O (globs changelog.d/); covered by the live-tree test"
+      assemble_fragments: "I/O + ordering; section/topic/created order and mixed-offset order pinned in tests/dx/test_changelog_fragments.py"
 
   scripts/tools/dx/axe_lite_static.py:
     covered:

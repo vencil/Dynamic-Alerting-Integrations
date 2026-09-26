@@ -8,4 +8,4 @@ applyTo: "CHANGELOG.md"
 - `docs/internal/commit-convention.md` §Editing `CHANGELOG.md` by hand
 - `docs/internal/hook-vs-skill-coverage.md` §3. Pre-commit auto hooks
 
-約束：只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。
+約束：`## [Unreleased]` 已凍結（#2102）：新增條目會被 `changelog-format` 擋下，還沒發布的變更改寫成 `changelog.d/` 片段檔（格式見 `changelog.d/README.md`）。只剩發版收尾與修正既有條目會動這個檔；驗：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。
