@@ -42,6 +42,46 @@ func (w *Writer) abortFeatureBranch(base, branchName string) {
 	_ = w.gitExec("branch", "-D", branchName)
 }
 
+// baseRestoreAttempts is how many times restoreBase tries checkoutBaseClean
+// before giving up (#2070): the first try plus one immediate retry.
+const baseRestoreAttempts = 2
+
+// restoreBase returns the worktree to a clean base after the feature branch
+// was committed (Step 7 of WritePR / WritePRBatch). A failed attempt is
+// retried once, immediately and without sleeping — the caller holds the tree
+// lock, and a sleep here would only hold every other write behind it. If both
+// attempts fail it logs at ERROR and returns an error wrapping ErrBaseRestore:
+// the tree is stranded on branch, so conf.d readers would see the un-merged
+// proposal, and the write must not report success.
+//
+// ⛔ The git error is rendered with %v, NOT wrapped: gitErr turns index.lock
+// contention into ErrWriteOverloaded, which the handler answers with a 503
+// "retry" — after a successful push that retry would cut a second branch for
+// the same change. See ErrBaseRestore.
+//
+// Callers hold the tree lock (lockTree); this never takes or releases it.
+func (w *Writer) restoreBase(base, branch string, pushed bool) error {
+	var err error
+	for attempt := 1; attempt <= baseRestoreAttempts; attempt++ {
+		if w.beforeBaseRestore != nil {
+			w.beforeBaseRestore(attempt)
+		}
+		if err = w.checkoutBaseClean(base); err == nil {
+			return nil
+		}
+		if attempt < baseRestoreAttempts {
+			slog.Warn("gitops: failed to switch back to base branch — retrying",
+				"base", base, "branch", branch, "pushed", pushed,
+				"attempt", attempt, "error", err)
+		}
+	}
+	slog.Error("gitops: failed to switch back to base branch — worktree left on feature branch (#2070)",
+		"base", base, "branch", branch, "pushed", pushed,
+		"attempts", baseRestoreAttempts, "error", err)
+	return fmt.Errorf("%w (branch %q, pushed to origin: %t, attempts: %d): %v",
+		ErrBaseRestore, branch, pushed, baseRestoreAttempts, err)
+}
+
 // WritePR validates and writes a tenant config to a feature branch for PR creation.
 //
 // Unlike Write(), this method:
@@ -199,12 +239,16 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 		// Don't delete the branch — the commit is valuable even if push fails
 	}
 
-	// Step 7: return to a clean base branch. On failure we only warn: the next
-	// WritePR re-anchors on the base at Step 3 regardless, so the tree can never
-	// stay stranded on a feature branch and pollute the next tenant's PR.
-	if err := w.checkoutBaseClean(base); err != nil {
-		slog.Warn("gitops: failed to switch back to base branch",
-			"base", base, "branch", branchName, "error", err)
+	// Step 7: return to a clean base branch, retrying once (#2070). If both
+	// attempts fail the tree is still on the feature branch — every conf.d
+	// reader would serve the un-merged proposal — so the write FAILS (500)
+	// instead of reporting success, and the error names the branch and whether
+	// it reached origin. Step 8 is skipped: we are still on that branch, so it
+	// cannot be deleted. The next PR-mode write's Step 3 re-anchor on the base
+	// clears the stranded tree; the special-file writes (writer_special.go)
+	// commit to whatever is checked out and do NOT re-anchor.
+	if err := w.restoreBase(base, branchName, pushed); err != nil {
+		return nil, err
 	}
 
 	// Step 8: drop the local feature branch after a CONFIRMED push (#641). The
@@ -213,10 +257,8 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// `tenant-api/<tenant>/<ts>` ref forever (the deployment runs one long-lived
 	// replica, so this is the only thing bounding the loose-ref accumulation).
 	// On push failure we KEEP the branch (the only copy of the commit) — same as
-	// before. Must run AFTER step 7 (can't -D the currently-checked-out branch).
-	// Edge: if step 7 itself only warned (still on the feature branch), this -D
-	// fails ("checked out branch") and that one branch leaks — bounded by the
-	// next WritePR's #638 ironclad re-anchor at step 3.
+	// before. Must run AFTER step 7 (can't -D the currently-checked-out branch),
+	// and only runs when step 7 succeeded — a failed step 7 returns above.
 	if pushed {
 		if err := w.gitExec("branch", "-D", branchName); err != nil {
 			slog.Warn("gitops: failed to delete local feature branch after push",
@@ -381,9 +423,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			"branch", branchName, "error", err)
 	}
 
-	if err := w.checkoutBaseClean(base); err != nil {
-		slog.Warn("gitops: failed to switch back to base branch",
-			"base", base, "branch", branchName, "error", err)
+	// Return to a clean base, retrying once; on a second failure fail the write
+	// and skip the branch drop below (#2070 — same semantics as WritePR Step 7).
+	if err := w.restoreBase(base, branchName, pushed); err != nil {
+		return nil, err
 	}
 
 	// Drop the local batch branch after a confirmed push (#641, same rationale as

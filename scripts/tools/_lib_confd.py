@@ -52,7 +52,7 @@ import contextlib
 import contextvars
 import os
 import re
-from typing import Callable, Iterable, Iterator, NamedTuple
+from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
 import sys
 from pathlib import Path
 
@@ -61,6 +61,7 @@ __all__ = [
     "config_stem",
     "configmap_key_problem",
     "declared_tenant_ids",
+    "duplicate_declarations",
     "unselected_carriers",
     "overlay_platform_tenants",
     "defaults_files_in",
@@ -1300,6 +1301,46 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
             # their tenants the same way, so membership must compare alike.
             ids.update(data["tenants"])
     return ids
+
+
+def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"
+                           ) -> "dict[Any, list[str]]":
+    """The tenants declared by MORE THAN ONE carrier, each with its sorted
+    carrier labels: ``{tenant: [label, ...]}`` for every tenant whose
+    labels hold two or more distinct values.
+
+    ⛔ THE predicate for "one tenant id, two files" — the state in which,
+    when every carrier involved parses, the exporter's walker raises
+    ``*DuplicateTenantError`` for that tenant (``pkg/config``
+    ``TreeScan.Locate``) and a full load rejects the whole dir.
+    ``validate_config.check_tenant_uniqueness`` and ``describe_tenant``
+    both ask it; one function, so those two Python readers cannot disagree
+    with EACH OTHER about which tenants are duplicated (#2049).
+
+    ⚠️ They can disagree with the walker. A carrier here is a file whose
+    first document has a ``tenants:`` key naming the tenant — the repo's
+    decided Python notion of "declares" (see ``declared_tenant_ids``: the
+    Go full decode is deliberately NOT mirrored, #1942). A file the
+    exporter's full decode REJECTS (e.g. another tenant's body is a scalar)
+    declares nothing on the Go side, so Go may resolve a tenant this
+    predicate calls duplicated. Callers must word their verdict for that.
+
+    *declared* maps a tenant id to the labels of every carrier that
+    declares it. A label names a carrier the way the exporter counts one:
+    the conf.d ENTRY as listed, never its resolved target. ⛔ So a link
+    ``acme.yaml -> real.yaml`` beside ``real.yaml`` is TWO carriers — the
+    exporter's walker lists directory entries and never follows a link, and
+    measured on main c2f29ce9 it rejects that tree. Labelling by the
+    resolved path would fold the two into one and describe a tenant the
+    exporter refuses. Repeated labels (the same carrier reported twice)
+    count once.
+    """
+    out: dict[Any, list[str]] = {}
+    for tenant, labels in declared.items():
+        distinct = sorted(set(labels))
+        if len(distinct) > 1:
+            out[tenant] = distinct
+    return out
 
 
 def overlay_platform_tenants(

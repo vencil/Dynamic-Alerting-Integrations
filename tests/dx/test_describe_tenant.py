@@ -373,6 +373,172 @@ class TestCLI:
 
 
 # ---------------------------------------------------------------------------
+# Test: a tenant declared by more than one carrier (#2049)
+# ---------------------------------------------------------------------------
+
+class TestDuplicateDeclaration:
+    """#2049: the exporter's walker raises DuplicateTenantError for a tenant
+    two conf.d ENTRIES declare (and a full load rejects the dir), so it
+    serves no effective config for it. Measured on main c2f29ce9 this tool
+    described one of the declarations instead, rc 0, no warning. Go's
+    answer for these exact shapes is pinned in
+    tests/shared/defaults_symlink_parity_matrix.json (dupA / dupB / dupC)."""
+
+    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+
+    @staticmethod
+    def _tree(tmp_path, shape):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (conf_d / "zeta.yaml").write_text("tenants:\n  zeta:\n    cpu_pct: 20\n", encoding="utf-8")
+        if shape == "link":        # dupA: a link beside its own target
+            (conf_d / "real.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+            try:
+                os.symlink("real.yaml", conf_d / "acme.yaml")
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlinks unavailable here: {exc}")
+            files = ["acme.yaml", "real.yaml"]
+        elif shape == "two-files":  # dupB
+            (conf_d / "real.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+            (conf_d / "other.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 10\n", encoding="utf-8")
+            files = ["other.yaml", "real.yaml"]
+        elif shape == "two-spellings":  # dupC: one stem, `.yaml` and `.yml`
+            (conf_d / "acme.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+            (conf_d / "acme.yml").write_text("tenants:\n  acme:\n    cpu_pct: 10\n", encoding="utf-8")
+            files = ["acme.yaml", "acme.yml"]
+        else:  # "nested": the second carrier lives in a sub-directory
+            (conf_d / "acme.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+            (conf_d / "team").mkdir()
+            (conf_d / "team" / "acme.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 10\n", encoding="utf-8")
+            files = ["acme.yaml", "team/acme.yaml"]
+        return conf_d, files
+
+    def _run(self, conf_d, *args):
+        return subprocess.run(
+            [sys.executable, self.DESCRIBE, *args, "--conf-d", str(conf_d)],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    SHAPES = ["link", "two-files", "two-spellings", "nested"]
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_scanner_names_every_carrier_by_its_entry(self, tmp_path, shape):
+        conf_d, files = self._tree(tmp_path, shape)
+        scanner = dt.ConfDScanner(conf_d)
+        # ⛔ By the ENTRY: labelling the link by its target would fold dupA's
+        # two carriers into one `real.yaml` and describe what Go refuses.
+        assert scanner.duplicates == {"acme": files}
+        assert scanner.duplicate_error("zeta") is None
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("mode", [
+        ["acme"],
+        ["acme", "--show-sources"],
+        ["zeta", "--diff", "acme"],
+        ["acme", "--diff", "zeta"],
+        ["acme", "--what-if", "WHATIF"],
+    ], ids=["default", "show-sources", "diff-other-side", "diff-this-side", "what-if"])
+    def test_every_mode_refuses_the_duplicated_tenant(self, tmp_path, shape, mode):
+        conf_d, files = self._tree(tmp_path, shape)
+        args = [str(conf_d / "_defaults.yaml") if a == "WHATIF" else a for a in mode]
+        r = self._run(conf_d, *args)
+        assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stdout, r.stderr)
+        assert r.stdout == ""
+        assert "duplicate tenant ID 'acme'" in r.stderr, r.stderr
+        assert ", ".join(files) in r.stderr, r.stderr
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_the_unduplicated_tenant_is_still_described(self, tmp_path, shape):
+        conf_d, _ = self._tree(tmp_path, shape)
+        r = self._run(conf_d, "zeta")
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 20}
+        assert "duplicate tenant ID" not in r.stderr
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_all_reports_the_duplicate_once_and_describes_the_rest(self, tmp_path, shape):
+        conf_d, files = self._tree(tmp_path, shape)
+        r = self._run(conf_d, "--all")
+        assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stderr)
+        out = json.loads(r.stdout)
+        assert list(out) == ["zeta"], "the duplicated tenant must not be described"
+        assert r.stderr.count("duplicate tenant ID 'acme'") == 1, r.stderr
+        assert ", ".join(files) in r.stderr
+
+    def test_all_output_file_is_still_written_before_the_nonzero_exit(self, tmp_path):
+        conf_d, _ = self._tree(tmp_path, "two-files")
+        dest = tmp_path / "effective.json"
+        r = self._run(conf_d, "--all", "--output", str(dest))
+        assert r.returncode == dt.EXIT_VIOLATION, r.stderr
+        assert list(json.loads(dest.read_text(encoding="utf-8"))) == ["zeta"]
+
+    def test_configmap_root_link_is_not_a_duplicate(self, tmp_path):
+        # The no-false-positive control: a ConfigMap mount lists the tenant
+        # ONCE at the root (a link into `..data`); the payload directory is
+        # never walked, so its real file is not a second carrier.
+        conf_d = tmp_path / "conf.d"
+        payload = conf_d / "..2026_09_26"
+        payload.mkdir(parents=True)
+        (payload / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (payload / "acme.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+        try:
+            os.symlink("..2026_09_26", conf_d / "..data", target_is_directory=True)
+            os.symlink("..data/acme.yaml", conf_d / "acme.yaml")
+            os.symlink("..data/_defaults.yaml", conf_d / "_defaults.yaml")
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlinks unavailable here: {exc}")
+        assert dt.ConfDScanner(conf_d).duplicates == {}
+        r = self._run(conf_d, "acme")
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
+
+    def test_a_file_the_exporter_drops_still_counts_but_the_verdict_is_conditional(
+            self, tmp_path):
+        """Pinned KNOWN divergence from Go (#1942), deliberately NOT in the
+        shared Go/Python matrix (the two sides answer differently there).
+
+        `zbad.yaml` also declares `other: 5` — a scalar tenant body, which
+        the exporter's full decode rejects, so on the Go side that file
+        declares NOTHING and ResolveEffective(acme) returns good.yaml's
+        cpu_pct 70 (measured on this branch). Python counts carriers by the
+        first document's `tenants:` keys and does not mirror Go's decode
+        (`_lib_confd.declared_tenant_ids`, #1942), so it still refuses —
+        consistently with validate_config, and better than the old answer,
+        which picked zbad.yaml's 10 by file order. What it must NOT do is
+        claim unconditionally that the exporter rejects this tenant.
+        """
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
+        (conf_d / "good.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
+        (conf_d / "zbad.yaml").write_text(
+            "tenants:\n  acme:\n    cpu_pct: 10\n  other: 5\n", encoding="utf-8")
+        r = self._run(conf_d, "acme")
+        assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stdout, r.stderr)
+        assert r.stdout == ""
+        assert "duplicate tenant ID 'acme'" in r.stderr
+        assert "good.yaml, zbad.yaml" in r.stderr, r.stderr
+        # Conditional wording only: "If every one of these files parses, ...".
+        assert "If every one of these files parses" in r.stderr, r.stderr
+        assert "— the exporter rejects" not in r.stderr, r.stderr
+        assert "run validate-config" in r.stderr, r.stderr
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_validate_config_flags_the_same_tenant_and_files(self, tmp_path, shape):
+        # One predicate (`_lib_confd.duplicate_declarations`) behind both
+        # tools: the linter must fail on exactly what this tool refuses.
+        ops_dir = os.path.join(REPO_ROOT, "scripts", "tools", "ops")
+        if ops_dir not in sys.path:
+            sys.path.insert(0, ops_dir)
+        import validate_config as vc
+        conf_d, files = self._tree(tmp_path, shape)
+        res = vc.check_tenant_uniqueness(str(conf_d))
+        assert res["status"] == "fail", res
+        assert any(f'tenant "acme" is declared in {len(files)} files: '
+                   f'{", ".join(files)}' in d for d in res["details"]), res["details"]
+
+
+# ---------------------------------------------------------------------------
 # Test: --what-if mode (P0 #5 ship-blocker fix)
 # ---------------------------------------------------------------------------
 

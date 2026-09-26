@@ -105,6 +105,22 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
 
+// ErrBaseRestore is returned by WritePR / WritePRBatch when, after the feature
+// branch was committed (and usually pushed), returning the worktree to a clean
+// base failed on both attempts (#2070). The tree is then left on the feature
+// branch, and every endpoint that reads conf.d would serve the un-merged
+// proposal as if it were the configuration — so the write must NOT report
+// success. The handler maps it to a generic 500.
+//
+// ⛔ Returned errors wrap ONLY this sentinel; the underlying git error is
+// rendered with %v, never %w. gitErr maps index.lock contention to
+// ErrWriteOverloaded, and that sentinel (like ErrForgeDegraded) makes the
+// handler answer 503 "retry" — but the push has already succeeded, so a retry
+// would cut and push a second branch for the same change. The message names
+// the branch and whether it was pushed, so an operator can find a branch that
+// is on origin with no PR/MR opened for it.
+var ErrBaseRestore = errors.New("failed to return the config worktree to the base branch after a PR-mode write")
+
 // extraDocumentsWithContent counts the YAML documents after the first that
 // decode to something non-nil. A body whose YAML is invalid returns 0 — that is
 // the caller's earlier Unmarshal check to report, not this one's.
@@ -199,6 +215,12 @@ type Writer struct {
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
+
+	// beforeBaseRestore is a TEST-ONLY seam (#2070): restoreBase calls it, when
+	// non-nil, right before each checkoutBaseClean attempt (attempt is 1-based).
+	// Per-Writer rather than package-level so parallel tests cannot see each
+	// other's hooks. Always nil in production.
+	beforeBaseRestore func(attempt int)
 
 	// Load-shedding admission control (TRK-320). Before taking w.mu, every write
 	// passes through acquireWrite(ctx): a single execution token (writeExec, cap 1)
