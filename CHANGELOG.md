@@ -122,6 +122,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 - **threshold-exporter chart 移除從未生效的 `rules.operator.ruleLabels`／`receiverTemplate`／`secretRef`（helm、文件；[#2073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2073)）**：三個 key 自 #21 起就宣告在 `values.yaml`，但沒有任何 template 讀取——本 chart 不產生 PrometheusRule 或 AlertmanagerConfig（ADR-008：chart 保持 path-agnostic，CRD 由 `da-tools operator-generate` 產生），照 `prometheus-operator-integration.md` 的範例設定只會是 silent no-op。values 移除這三個 key，並改正 `rules.mode` 註解（兩種模式都不出貨 Rule Pack，`operator` 只多一個 ServiceMonitor）；文件範例改用 `operator-generate --receiver-template / --secret-name / --secret-key`；`test_values_operator_section` 改為斷言 `rules.operator` 只宣告 `serviceMonitor`。覆寫檔裡殘留這些 key 不會出錯，一如以往沒有作用。
 
+- **`generate_tenant_metadata` 與 `gitops-check local` 不再讀 conf.d 的隱藏檔（dx、ops；[#2055](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2055)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：exporter 略過所有 `.` 開頭的檔名，這兩支卻照讀。
+  - `generate_tenant_metadata`：`.hidden.yaml` 宣告的租戶會出現在 portal 租戶清單（exporter 並不服務它）；檔名排序在 `.` 之前的真實租戶檔（如 `-acme.yaml`）還會被宣告同一租戶的隱藏檔整筆蓋掉（owner、閾值一起換）。
+  - `gitops-check local`：隱藏檔被算進租戶檔數；語法壞掉的編輯器殘檔（如 `.acme.yaml`）讓 readiness 判定 fail。
+  - 現在兩支都與 exporter 一致略過 `.` 開頭的檔名。
+
 - **`describe_tenant` 不再描述藏在隱藏檔／隱藏目錄裡的租戶（dx；[#2054](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2054)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：它用 `rglob("*")` 列 conf.d，會讀 `.hidden.yaml`、`.snap/` 底下的檔，以及 ConfigMap 掛載的 `..2026_…/` payload，於是對 exporter 根本看不到的租戶照樣 rc 0 印出設定；ConfigMap 版面上的租戶本體還經 link 與 payload 各讀一次。現在租戶本體與 defaults 鏈改用 `_lib_confd` 新增的 `list_config_tree`：一次走訪同時產出可讀檔與不可用項目（`iter_config_files` / `unusable_config_paths` 的遞迴模式改由它產生，平面模式不變），剪掉 `.` 開頭的目錄與檔、不跟進目錄 symlink，與 exporter 的 `ScanDirTree` 一致。讀不到的子目錄（含 `_` 開頭）現在會出 WARNING。
   - ⚠️ 範圍僅限租戶本體與 defaults 鏈：`_custom_alerts` 的解析走 `custom_alerts/loader.collect_instances` 自己的列舉，隱藏路徑與 ConfigMap 重複讀在那裡仍存在，另開 [#2086](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2086)。
   - Go／Python 共讀的 `tests/shared/defaults_symlink_parity_matrix.json` 新增 `{"absent": true}` 列（與 `chain_len` 等欄互斥，混用兩邊皆紅），並加入隱藏檔、隱藏目錄、`..data` 掛載三棵樹。
