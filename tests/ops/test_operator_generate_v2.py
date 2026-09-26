@@ -1085,3 +1085,56 @@ class TestNestedWarningSurvivesTheExtraction:
         assert "subdirectories" not in err, (
             f"a FLAT conf.d must not trigger the nested warning; stderr was {err!r}"
         )
+
+
+class TestSelectorLabels:
+    """#2075：Prometheus 只載入 label 對得上 selector 的 PrometheusRule／ServiceMonitor。
+
+    文件宣稱產出的 PrometheusRule 帶 `prometheus` 與 `release` 兩個 label，程式
+    卻只帶 `prometheus`；Helm release 不叫 kube-prometheus-stack 時更沒有旗標可改。
+    """
+
+    def _labels_of(self, gen_dirs, capsys, *extra) -> dict:
+        doc = TestMainJsonSingleDocument._run_json(
+            TestMainJsonSingleDocument(), gen_dirs, capsys, "--dry-run", *extra,
+        )
+        return {c["kind"]: c["metadata"]["labels"] for c in doc["crds"]}
+
+    def test_defaults_carry_both_documented_selector_labels(self, gen_dirs, capsys):
+        labels = self._labels_of(gen_dirs, capsys)
+        assert labels["PrometheusRule"] == {
+            "prometheus": "kube-prometheus",
+            "release": "kube-prometheus-stack",
+            "app.kubernetes.io/part-of": "dynamic-alerting",
+        }
+        assert labels["ServiceMonitor"] == {
+            "release": "kube-prometheus-stack",
+            "app.kubernetes.io/part-of": "dynamic-alerting",
+        }
+
+    def test_selector_label_overrides_and_extends_both_crds(self, gen_dirs, capsys):
+        labels = self._labels_of(
+            gen_dirs, capsys,
+            "--selector-label", "release=my-prom",
+            "--selector-label", "team=db",
+        )
+        for kind in ("PrometheusRule", "ServiceMonitor"):
+            assert labels[kind]["release"] == "my-prom", kind
+            assert labels[kind]["team"] == "db", kind
+            assert labels[kind]["app.kubernetes.io/part-of"] == "dynamic-alerting", kind
+        assert labels["PrometheusRule"]["prometheus"] == "kube-prometheus"
+        assert "team" not in labels.get("AlertmanagerConfig", {}), (
+            "selector labels are for Prometheus selection, not AlertmanagerConfig"
+        )
+
+    @pytest.mark.parametrize("bad", [
+        "no-equals-sign",
+        "bad key=x",
+        "k=" + "a" * 64,                        # value over 63 chars
+        "app.kubernetes.io/part-of=other",      # identifies this tool's CRDs
+    ])
+    def test_invalid_selector_label_is_a_caller_error(self, bad, capsys):
+        with pytest.raises(SystemExit) as exc:
+            og.build_arg_parser().parse_args(["--selector-label", bad])
+        assert exc.value.code == 2
+        assert "--selector-label" in capsys.readouterr().err

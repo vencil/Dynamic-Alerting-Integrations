@@ -186,6 +186,11 @@ rules:
     serviceMonitor:
       enabled: true
       interval: 15s
+      # Extra labels so Prometheus's serviceMonitorSelector picks it up (#2075).
+      # kube-prometheus-stack's default selector matches `release: <its Helm
+      # release name>`, e.g. {release: kube-prometheus-stack}. `app` and
+      # `app.kubernetes.io/part-of` are set by the chart and cannot be overridden.
+      labels: {}
 
 resources:
   requests:

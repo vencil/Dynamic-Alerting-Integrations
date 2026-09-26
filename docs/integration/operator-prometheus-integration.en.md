@@ -251,7 +251,12 @@ kubectl get prometheusrule -n monitoring --show-labels
 
 # 3. If labels don't match, regenerate using operator-generate (auto dual-label)
 da-tools operator-generate --components rules --namespace monitoring
+
+# 4. Helm release not named kube-prometheus-stack: match the actual selector with --selector-label
+da-tools operator-generate --selector-label release=my-prom
 ```
+
+`--selector-label` is repeatable, lands on both the PrometheusRule and the ServiceMonitor, and overrides a default of the same key (#2075). The chart's own ServiceMonitor (`rules.mode: operator`) takes extra labels from the values key `rules.operator.serviceMonitor.labels`.
 
 > **Common pitfall**: Manually-written PrometheusRules often only carry `release: kube-prometheus-stack`, but some environments require `prometheus: kube-prometheus` in the ruleSelector. Using `operator-generate` avoids this issue.
 

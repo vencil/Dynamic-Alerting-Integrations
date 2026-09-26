@@ -1514,6 +1514,7 @@ da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
+| `--selector-label <KEY=VALUE>` | Label added to the PrometheusRule and ServiceMonitor (repeatable; overrides a default of the same key) so Prometheus's `ruleSelector` / `serviceMonitorSelector` matches. Use `release=<name>` when your Helm release is not named `kube-prometheus-stack` | PrometheusRule: `prometheus=kube-prometheus`, `release=kube-prometheus-stack`; ServiceMonitor: `release=kube-prometheus-stack` |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--split` | Generate individual CRD files (split by Rule Pack) | false |
 | `--include-servicemonitor` | Also generate ServiceMonitor CRD | false |
