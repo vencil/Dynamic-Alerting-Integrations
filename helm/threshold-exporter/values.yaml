@@ -186,6 +186,14 @@ rules:
     serviceMonitor:
       enabled: true
       interval: 15s
+      # Extra labels so Prometheus's serviceMonitorSelector picks it up (#2075).
+      # kube-prometheus-stack's default selector matches `release: <its Helm
+      # release name>`; the default below matches `da-tools operator-generate`.
+      # Set `release` to your stack's release name, or `release: null` to drop
+      # it. `app` and `app.kubernetes.io/part-of` are set by the chart and
+      # cannot be overridden.
+      labels:
+        release: kube-prometheus-stack
 
 resources:
   requests:

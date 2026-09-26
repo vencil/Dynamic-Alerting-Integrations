@@ -1347,12 +1347,24 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
     tree = _unusable_tree(tmp_path / "conf.d")
     calls: list[str] = []
     real_rglob = pathlib.Path.rglob
+    real_walk = os.walk
 
     def counting_rglob(self, pattern, *a, **kw):
         calls.append(pattern)
         return real_rglob(self, pattern, *a, **kw)
 
+    # #2054: describe_tenant now lists through `_lib_confd.list_config_tree`
+    # (`os.walk`, hidden-pruned like the exporter), so a whole-tree walk is
+    # counted on BOTH mechanisms — counting only `rglob` would read zero
+    # walks as "fine". Only walks rooted AT the tree count: `unusable_reason`
+    # probes a single sub-directory with `os.walk`, which is not a listing.
+    def counting_walk(top, *a, **kw):
+        if pathlib.Path(top).resolve() == tree.resolve():
+            calls.append("*")
+        return real_walk(top, *a, **kw)
+
     monkeypatch.setattr(pathlib.Path, "rglob", counting_rglob)
+    monkeypatch.setattr(os, "walk", counting_walk)
     monkeypatch.chdir(tmp_path)
 
     if call == "main":

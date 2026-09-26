@@ -1417,6 +1417,7 @@ da-tools operator-generate [options]
 | `--receiver-template <TYPE>` | Receiver 模板類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
 | `--secret-name <NAME>` | K8s Secret 名稱（receiver 機密引用），需搭配 `--receiver-template` | `da-{tenant}-{type}` |
 | `--secret-key <KEY>` | K8s Secret 中的 key 名稱 | 依 receiver 類型自動推斷 |
+| `--selector-label <KEY=VALUE>` | 加在 PrometheusRule 與 ServiceMonitor 上的 label（可重複；同 key 覆寫預設），讓 Prometheus 的 `ruleSelector`／`serviceMonitorSelector` 對得上。Helm release 不叫 `kube-prometheus-stack` 時用 `release=<名稱>` | PrometheusRule：`prometheus=kube-prometheus`、`release=kube-prometheus-stack`；ServiceMonitor：`release=kube-prometheus-stack` |
 | `--gitops` | GitOps 模式（sorted keys、無 timestamps） | false |
 | `--dry-run` | 列印輸出而不寫入檔案 | false |
 | `--json` | 以 JSON 格式輸出結果報告 | false |
