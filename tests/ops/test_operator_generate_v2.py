@@ -325,18 +325,16 @@ class TestHelmChartThresholdExporter:
         assert values_yaml["rules"]["mode"] == "configmap"
 
     def test_values_operator_section(self, values_yaml: dict):
-        """Operator section has expected fields."""
-        operator = values_yaml["rules"]["operator"]
-        assert "ruleLabels" in operator
-        assert "serviceMonitor" in operator
-        assert "receiverTemplate" in operator
-        assert "secretRef" in operator
+        """Operator section declares only what the chart's templates read (#2073).
 
-    def test_values_secret_ref_empty_by_default(self, values_yaml: dict):
-        """Secret ref is empty by default (must be user-provided)."""
-        secret_ref = values_yaml["rules"]["operator"]["secretRef"]
-        assert secret_ref["name"] == ""
-        assert secret_ref["key"] == ""
+        ruleLabels / receiverTemplate / secretRef used to be declared here
+        but no template ever read them — setting them was a silent no-op.
+        Per ADR-008 the chart stays path-agnostic: PrometheusRule and
+        AlertmanagerConfig come from `da-tools operator-generate`
+        (--receiver-template / --secret-name / --secret-key).
+        """
+        operator = values_yaml["rules"]["operator"]
+        assert set(operator) == {"serviceMonitor"}, sorted(operator)
 
     def test_servicemonitor_template_exists(self, chart_dir: Path):
         """ServiceMonitor template exists for operator mode."""

@@ -206,14 +206,12 @@ threshold-exporter Helm chart 在 v2.6.0 新增 `rules.mode` toggle：
 rules:
   mode: operator    # 切換至 Operator 模式
   operator:
-    ruleLabels:
-      prometheus: kube-prometheus
     serviceMonitor:
       enabled: true
       interval: 15s
 ```
 
-設定 `mode: operator` 後：chart 自動產出 ServiceMonitor；Rule Pack 改由 PrometheusRule CRD 載入（而非 ConfigMap projected volume）。threshold-exporter 本身不變——它仍讀取 `conf.d/` ConfigMap 中的 tenant 閾值。
+設定 `mode: operator` 後：chart 自動產出 ServiceMonitor；Rule Pack 改由 PrometheusRule CRD 載入（而非 ConfigMap projected volume）——⚠️ 這些 PrometheusRule **不是 chart 產生的**，請用 `da-tools operator-generate` 產出後 apply（見上文）。threshold-exporter 本身不變——它仍讀取 `conf.d/` ConfigMap 中的 tenant 閾值。
 
 ---
 

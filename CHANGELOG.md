@@ -120,6 +120,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **threshold-exporter chart 移除從未生效的 `rules.operator.ruleLabels`／`receiverTemplate`／`secretRef`（helm、文件；[#2073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2073)）**：三個 key 自 #21 起就宣告在 `values.yaml`，但沒有任何 template 讀取——本 chart 不產生 PrometheusRule 或 AlertmanagerConfig（ADR-008：chart 保持 path-agnostic，CRD 由 `da-tools operator-generate` 產生），照 `prometheus-operator-integration.md` 的範例設定只會是 silent no-op。values 移除這三個 key，並改正 `rules.mode` 註解（兩種模式都不出貨 Rule Pack，`operator` 只多一個 ServiceMonitor）；文件範例改用 `operator-generate --receiver-template / --secret-name / --secret-key`；`test_values_operator_section` 改為斷言 `rules.operator` 只宣告 `serviceMonitor`。覆寫檔裡殘留這些 key 不會出錯，一如以往沒有作用。
+
 - **`generate_tenant_metadata` 與 `gitops-check local` 不再讀 conf.d 的隱藏檔（dx、ops；[#2055](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2055)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：exporter 略過所有 `.` 開頭的檔名，這兩支卻照讀。
   - `generate_tenant_metadata`：`.hidden.yaml` 宣告的租戶會出現在 portal 租戶清單（exporter 並不服務它）；檔名排序在 `.` 之前的真實租戶檔（如 `-acme.yaml`）還會被宣告同一租戶的隱藏檔整筆蓋掉（owner、閾值一起換）。
   - `gitops-check local`：隱藏檔被算進租戶檔數；語法壞掉的編輯器殘檔（如 `.acme.yaml`）讓 readiness 判定 fail。

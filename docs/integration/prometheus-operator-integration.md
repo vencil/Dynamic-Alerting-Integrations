@@ -54,14 +54,15 @@ v2.6.0 的 threshold-exporter Helm chart 新增 `rules.mode: operator` toggle：
 rules:
   mode: operator
   operator:
-    ruleLabels:
-      prometheus: kube-prometheus
     serviceMonitor:
       enabled: true
-    receiverTemplate: slack
-    secretRef:
-      name: da-alerts-secret
-      key: webhook-url
+```
+
+chart 在 `operator` 模式只產出 ServiceMonitor。PrometheusRule 與 AlertmanagerConfig 由 [`da-tools operator-generate`](../cli-reference.md#operator-generate) 產生（ADR-008：chart 保持 path-agnostic），receiver 與 Secret 以旗標指定：
+
+```bash
+da-tools operator-generate --receiver-template slack \
+    --secret-name da-alerts-secret --secret-key webhook-url
 ```
 
 ---
