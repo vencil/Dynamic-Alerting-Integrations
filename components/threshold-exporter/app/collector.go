@@ -72,8 +72,11 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectCustomAlertErrors(ch, stats.PerTenantCustomAlertErrors)
 	c.collectDeprecatedKeys(ch, stats.PerTenantDeprecatedKeys)
 	c.collectSloObjectives(ch, stats.SloObjectives)
-	c.collectStateFilters(ch, cfg)
-	c.collectSilentModes(ch, cfg)
+	// Silent mode + state filters come from ONE reading shared with tenant-api
+	// (config.OperationalStatesAt, #1988), resolved at the scrape's `now`.
+	ops := cfg.OperationalStatesAt(now)
+	c.collectStateFilters(ch, ops.StateFilters)
+	c.collectSilentModes(ch, ops)
 	c.collectMaintenanceExpiries(ch, cfg)
 	c.collectThresholdExpiries(ch, cfg, now)
 	c.collectSeverityDedup(ch, cfg)
@@ -217,14 +220,14 @@ func (c *ThresholdCollector) collectSloObjectives(ch chan<- prometheus.Metric, o
 }
 
 // collectStateFilters emits user_state_filter flags (Scenario C).
-func (c *ThresholdCollector) collectStateFilters(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+func (c *ThresholdCollector) collectStateFilters(ch chan<- prometheus.Metric, stateFilters []ResolvedStateFilter) {
 	stateDesc := prometheus.NewDesc(
 		"user_state_filter",
 		"State-based monitoring filter flag (1=enabled, absent=disabled). Scenario C: state/string matching.",
 		[]string{"tenant", "filter", "severity"},
 		nil,
 	)
-	for _, sf := range cfg.ResolveStateFilters() {
+	for _, sf := range stateFilters {
 		m, err := prometheus.NewConstMetric(stateDesc, prometheus.GaugeValue, 1.0, sf.Tenant, sf.FilterName, sf.Severity)
 		if err != nil {
 			log.Printf("WARN: failed to create user_state_filter metric for tenant=%s filter=%s: %v", sf.Tenant, sf.FilterName, err)
@@ -278,24 +281,24 @@ func emitConfigEvent(ch chan<- prometheus.Metric, tenant, event, reason, targetS
 
 // collectSilentModes emits user_silent_mode for active silences; expired
 // silences emit da_config_event instead (v1.7.0) so Alertmanager inhibit
-// stops and notifications resume.
-func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+// stops and notifications resume. The active/expired split is
+// OperationalStatesAt's, not this method's.
+func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, ops OperationalStates) {
 	silentDesc := prometheus.NewDesc(
 		"user_silent_mode",
 		"Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.",
 		[]string{"tenant", "target_severity"},
 		nil,
 	)
-	for _, sm := range cfg.ResolveSilentModes() {
-		if sm.Expired {
-			// Expired: emit config event instead of sentinel metric
-			reason := sm.Reason
-			if reason == "" {
-				reason = "silent_mode expired for " + sm.TargetSeverity
-			}
-			emitConfigEvent(ch, sm.Tenant, "silence_expired", reason, sm.TargetSeverity)
-			continue
+	for _, sm := range ops.ExpiredSilences {
+		// Expired: emit config event instead of sentinel metric
+		reason := sm.Reason
+		if reason == "" {
+			reason = "silent_mode expired for " + sm.TargetSeverity
 		}
+		emitConfigEvent(ch, sm.Tenant, "silence_expired", reason, sm.TargetSeverity)
+	}
+	for _, sm := range ops.Silences {
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
 		if err != nil {
 			log.Printf("WARN: failed to create user_silent_mode metric for tenant=%s: %v", sm.Tenant, err)

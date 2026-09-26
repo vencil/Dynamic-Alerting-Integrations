@@ -920,24 +920,40 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 	}
 }
 
-func TestIsMaintenanceActive(t *testing.T) {
+// TestOperationalStatesAt_Maintenance replaces TestIsMaintenanceActive (#1988):
+// that helper was deleted because it disagreed with the collector, and the
+// reading that survives is the collector's — a `maintenance` state-filter row.
+// The first three rows are the old table; the `""` / `~` rows are the shapes
+// it got wrong (it said inactive, the collector emits the filter), and the
+// last row is the one it could not see at all: no platform filter, no row.
+func TestOperationalStatesAt_Maintenance(t *testing.T) {
 	t.Parallel()
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	declared := map[string]StateFilter{"maintenance": {Severity: "warning", DefaultState: "disable"}}
 	tests := []struct {
 		name     string
-		cfg      *ThresholdConfig
-		tenant   string
+		filters  map[string]StateFilter
+		value    ScheduledValue
 		isActive bool
 	}{
-		{"ScalarEnable", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("enable")}}}, "db-a", true},
-		{"Expired", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + past + "\ntarget: enable\n")}}}, "db-a", false},
-		{"NotExpiredYet", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + future + "\ntarget: enable\n")}}}, "db-a", true},
+		{"ScalarEnable", declared, SV("enable"), true},
+		{"Expired", declared, SV("expires: " + past + "\ntarget: enable\n"), false},
+		{"NotExpiredYet", declared, SV("expires: " + future + "\ntarget: enable\n"), true},
+		{"EmptyString", declared, SV(""), true},
+		{"YAMLNull", declared, ScheduledValue{}, true},
+		{"NoPlatformFilter", nil, SV("enable"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if active := tt.cfg.IsMaintenanceActive(tt.tenant, time.Now()); active != tt.isActive {
-				t.Errorf("expected active=%v, got %v", tt.isActive, active)
+			t.Parallel()
+			cfg := &ThresholdConfig{
+				StateFilters: tt.filters,
+				Tenants:      map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": tt.value}},
+			}
+			got := cfg.OperationalStatesAt(time.Now()).ByTenant(cfg)["db-a"].MaintenanceActive
+			if got != tt.isActive {
+				t.Errorf("expected active=%v, got %v", tt.isActive, got)
 			}
 		})
 	}

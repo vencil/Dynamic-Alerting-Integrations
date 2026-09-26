@@ -423,26 +423,10 @@ func (m *ConfigManager) installConfig(
 	return m.hierarchy.tenantSources, m.hierarchy.unreachableInherited, m.afterCommitUnlock
 }
 
-// rejectDuplicateTenant is the issue-#127 hard reject shared by every full
-// load: a tenant declared in two files is a misconfiguration, and the
-// caller propagates the typed error without committing any state. The
-// walker records the conflict on the scan instead of failing the walk, so
-// the flat products of a rejected tree are still available for diagnosis;
-// this is the one place that turns the record back into the error callers
-// unwrap with errors.As(&DuplicateTenantError{}).
-//
-// Historically the hierarchical scan was a SECOND walk that could also
-// fail on its own (its non-duplicate errors were logged as
-// "WARN: hierarchical scan during <loader> failed" and ignored, because
-// hierarchical mode is opt-in). With one walk there is no second failure
-// to tolerate: a tree the flat plane cannot read is a hard error for the
-// load, as it always was.
-func rejectDuplicateTenant(scan *treeScan) error {
-	if scan.Conflict != nil {
-		return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", scan.Conflict)
-	}
-	return nil
-}
+// rejectDuplicateTenant forwards to config.RejectDuplicateTenant
+// (pkg/config/loaddir.go), the issue-#127 hard reject every full load shares
+// with config.LoadDir (#1988).
+func rejectDuplicateTenant(scan *treeScan) error { return config.RejectDuplicateTenant(scan) }
 
 // Load loads config from either a single file or a directory.
 //

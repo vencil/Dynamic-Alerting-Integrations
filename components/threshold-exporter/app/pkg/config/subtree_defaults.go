@@ -278,9 +278,8 @@ func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string, sv Schedule
 			return false
 		}
 		// ⛔ AND THE CONSUMER READS `Default`, NOT `ResolveValue(now)`.
-		// `ResolveStateFiltersAt` and `IsMaintenanceActive` both take
-		// `sv.Default` verbatim, so a schedule's windows are invisible to
-		// them — while `isThresholdShaped` accepts a schedule and
+		// `ResolveStateFiltersAt` takes `sv.Default` verbatim, so a
+		// schedule's windows are invisible to it — while `isThresholdShaped` accepts a schedule and
 		// `/effective` renders it. Measured: a subtree declaring
 		// `_state_maintenance` as `default: enable` with a window saying
 		// `disable` resolved to "disable" on the config plane and left the

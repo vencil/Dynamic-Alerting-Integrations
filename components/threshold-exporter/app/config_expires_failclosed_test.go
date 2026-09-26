@@ -107,8 +107,8 @@ func TestMaintenance_MalformedExpiresFailsClosed(t *testing.T) {
 			if got := cfg.ResolveStateFiltersAt(failClosedNow); len(got) != 0 {
 				t.Errorf("ResolveStateFiltersAt: expires %q not RFC3339 → maintenance must not be emitted, got %+v", m.expires, got)
 			}
-			if cfg.IsMaintenanceActive(tenant, failClosedNow) {
-				t.Errorf("IsMaintenanceActive: expires %q not RFC3339 → must be false", m.expires)
+			if cfg.OperationalStatesAt(failClosedNow).ByTenant(cfg)[tenant].MaintenanceActive {
+				t.Errorf("OperationalStatesAt: expires %q not RFC3339 → maintenance must be inactive", m.expires)
 			}
 			if got := cfg.ResolveMaintenanceExpiriesAt(failClosedNow); len(got) != 0 {
 				t.Errorf("ResolveMaintenanceExpiriesAt: ignored setting has no window to report, got %+v", got)
@@ -139,8 +139,8 @@ func TestMaintenance_ValidExpiresUnchanged(t *testing.T) {
 			if got := cfg.ResolveStateFiltersAt(failClosedNow); len(got) != wantFilters {
 				t.Errorf("ResolveStateFiltersAt: want %d, got %+v", wantFilters, got)
 			}
-			if got := cfg.IsMaintenanceActive(tenant, failClosedNow); got != tt.wantActive {
-				t.Errorf("IsMaintenanceActive: want %v, got %v", tt.wantActive, got)
+			if got := cfg.OperationalStatesAt(failClosedNow).ByTenant(cfg)[tenant].MaintenanceActive; got != tt.wantActive {
+				t.Errorf("OperationalStatesAt: want maintenance active=%v, got %v", tt.wantActive, got)
 			}
 			exp := cfg.ResolveMaintenanceExpiriesAt(failClosedNow)
 			if len(exp) != 1 || exp[0].Expired == tt.wantActive {
