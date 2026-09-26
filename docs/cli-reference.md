@@ -2416,6 +2416,7 @@ da-tools guard <subcommand> [flags]
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV |
 | `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
+| `--baseline-config-dir <path>` | 空 | 變更前的同一棵 conf.d（CI 傳 PR 的 merge-base）；根 `_defaults.yaml` 的 `max_metrics_per_tenant` 被調高或關閉時，報告開頭加一則提示。不影響 exit code |
 | `--format md\|json` | md | 輸出格式 |
 | `--output <path>` | stdout | 寫入指定檔；parent dir 必須存在 |
 | `--warn-as-error` | false | 把 warning 視為 error 影響 exit code |

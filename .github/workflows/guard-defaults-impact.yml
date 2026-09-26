@@ -304,10 +304,31 @@ jobs:
         env:
           CONF_D: ${{ steps.detect.outputs.conf_d }}
           TARGETS: ${{ runner.temp }}/guard-targets.tsv
+          BASE_REF: ${{ github.base_ref }}
         run: |
           REPORT="$RUNNER_TEMP/guard-report.md"
           : > "$REPORT"
           WORST=0
+
+          # The PR's merge-base tree, for --baseline-config-dir (#2043 review):
+          # since the cap is read from the tree under test, a PR that raises
+          # or disables max_metrics_per_tenant is checked against its own new
+          # cap, so da-guard is told what the cap WAS and opens its report
+          # with a notice when it was relaxed. Only on pull_request — push /
+          # workflow_dispatch have no base to compare with. ⛔ Never silent:
+          # a base that cannot be checked out is said in the report, because
+          # "no notice" must keep meaning "not relaxed", not "not compared".
+          BASE_TREE=""
+          if [ -n "${BASE_REF:-}" ]; then
+            if mb=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null) \
+               && git worktree add --detach "$RUNNER_TEMP/base-tree" "$mb" >/dev/null 2>&1; then
+              BASE_TREE="$RUNNER_TEMP/base-tree"
+            else
+              echo "::warning::could not check out the merge-base of origin/${BASE_REF} — per-tenant cap changes are NOT compared this run"
+              echo "> ⚠️ 無法 checkout PR 的 merge-base，本次**沒有**比對每租戶 cardinality 上限是否被放寬。" >> "$REPORT"
+              echo >> "$REPORT"
+            fi
+          fi
 
           run_one() {
             local config_dir="$1" scope="$2" part
@@ -341,10 +362,15 @@ jobs:
             # _defaults.yaml's max_metrics_per_tenant, unset = 500. A
             # hard-coded 500 here disagreed with the runtime whenever a tree
             # set its own cap (false errors above 500, missed truncation below).
+            local baseline=()
+            if [ -n "$BASE_TREE" ]; then
+              baseline=(--baseline-config-dir "$BASE_TREE/$config_dir")
+            fi
             set +e
             "$RUNNER_TEMP/da-guard" \
                 --config-dir "$config_dir" \
                 --scope "$scope" \
+                "${baseline[@]}" \
                 --format md \
                 --output "$part"
             local rc=$?
