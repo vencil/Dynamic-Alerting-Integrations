@@ -11,7 +11,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ## [Unreleased]
 
-<!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
+<!-- ⛔ 本區已凍結（#2102）：新的 in-flight 條目一律寫成 changelog.d/ 片段檔（格式見 changelog.d/README.md），在這裡新增條目會被 changelog-format 擋下。下面是凍結前留下的條目，release 收尾時連同 `generate_changelog.py --assemble` 的片段一起濃縮成正式 `## [vX.Y.Z]`。 -->
 
 ### Added
 

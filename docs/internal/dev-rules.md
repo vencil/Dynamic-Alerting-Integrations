@@ -54,7 +54,7 @@ lang: zh
 ### 4. Doc-as-Code：CHANGELOG / CLAUDE.md / README 同步更新
 
 **規則**：任何影響 API、schema、CLI、配置格式、文件結構的變更，必須同步更新：
-- `CHANGELOG.md` — Unreleased 區
+- changelog — 在 `changelog.d/` 新增一份片段檔（`CHANGELOG.md` 的 `[Unreleased]` 已凍結，[#2102](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2102)；格式見 [`commit-convention.md`](commit-convention.md#changelog-fragments-changelogd)）
 - `CLAUDE.md` — 若影響 Agent routing 或計數
 - `README.md` / `README.en.md` — 若影響使用者第一眼看到的資訊
 - `docs/architecture-and-design.md` 的 **Mermaid / C4 架構圖** — 若變更動到 sequence / data-flow / component boundary（視為 schema 等級需同步項；對應 adversarial self-review 第 6 lens，TRK-303）
@@ -506,7 +506,7 @@ tools:
 
 v2.8.0 期間發現 planning.md `§12.1 Session Ledger（Working Log）`型 append-only 表會持續膨脹（單一 session row 動輒 2-4 KB），在重複 read 時造成 context 壓力。**v2.9.0+ planning doc 不再保留 Session ledger 表**，改採：
 
-- **完成 PR / commit**：抄入 `CHANGELOG.md` 即足夠（git log 為事實 SSOT）
+- **完成 PR / commit**：寫一份 `changelog.d/` 片段即足夠（git log 為事實 SSOT；發版時組裝進 `CHANGELOG.md`）
 - **跨 session 進度追蹤**：用 §12.2 型 Live Tracker（mutate-only，不 append）
 - **環境 trap / Lesson Learned**：直接落對應 playbook（不在 planning 中轉手）
 - **session 內臨時筆記**：L3 `_*.md` working scratch

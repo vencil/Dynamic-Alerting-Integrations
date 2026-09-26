@@ -34,6 +34,8 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 ### 2. CHANGELOG distill + **project-face refresh**（Rule 2）
 
+⛔ **先組裝片段**（#2102）：自那之後還沒發布的變更在 `changelog.d/`，不在 `[Unreleased]`。跑 `python3 scripts/tools/dx/generate_changelog.py --assemble`（依 section → topic → created 排好的原料；同一個 issue 有多份片段會印提醒），連同 `[Unreleased]` 裡凍結前留下的條目一起濃縮成 `## [vX.Y.0]`，然後 `git rm` 已組裝的片段檔（`changelog.d/README.md` 留著）。漏組裝的片段會被下一版當成這一版之後的變更。
+
 `[Unreleased]` → `## [vX.Y.0]` 時，**同步刷新門面**（CHANGELOG 是版本切片，README / architecture-and-design 是 release 之間客戶/架構師看的門面）：
 
 - **README.md / README.en.md**（廣度，SRE/DevOps evaluator）：version badge + 雙語/tool/doc count badge（`bump_docs.py --sync-counts --dry-run` 對照）+ 新支柱在既有結構提及（不為單次 release 重構）

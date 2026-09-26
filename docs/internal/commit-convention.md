@@ -236,7 +236,17 @@ Breaking changes (marked with `!` or `BREAKING CHANGE:`) appear prominently at t
 
 Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped and may be collapsed in the CHANGELOG.
 
+### Changelog fragments (`changelog.d/`)
+
+`## [Unreleased]` in `CHANGELOG.md` is **frozen** ([#2102](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2102)): `changelog-format` refuses any new entry there. An unreleased change is written as **one fragment file** under `changelog.d/` and assembled into `## [vX.Y.Z]` at release time. Why: every PR appending to the same few `###` blocks of one file made any two parallel PRs conflict, so each merge forced every other open PR to rebase and re-run CI.
+
+- **Format** (the full spec and an example are in [`changelog.d/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/changelog.d/README.md)): YAML front matter with `section` (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`), `topic` (kebab-case grouping key), `issues` (list, may be `[]`) and `created` (ISO 8601 with offset, `date -Iseconds`); then exactly one column-0 `- ` entry, at most 1,000 characters. Checked by `python3 scripts/tools/dx/generate_changelog.py --fragments` (pre-commit `changelog-fragments`).
+- **⛔ Revising an unreleased change edits its fragment; it does not add a second one.** The release note states the net change since the last release. `--assemble` prints a note when one issue has several fragments. A change to something already released gets a new fragment.
+- **Order at assembly** is section → topic → `created` → filename, so entries about one topic sit together, oldest first. `python3 scripts/tools/dx/generate_changelog.py --assemble` prints the result; the release wrap-up (`vibe-release`, step 2) distils it and deletes the assembled fragments.
+
 ### Editing `CHANGELOG.md` by hand
+
+Since the freeze this is release wrap-up and corrections to existing entries only; new entries go to `changelog.d/` (above).
 
 - **A rebase can silently drop or duplicate a bullet with zero conflict markers** — equal bullet *counts* hide it. After any rebase that touched `CHANGELOG.md`, compare line **multisets** (a set hides a duplicated bullet) against the oracle `expected = (main − (base − mine)) + (mine − base)` — upstream's lines, minus the ones I deleted, plus the ones I added (`base` = the fork point before this rebase) — run `python3 scripts/tools/dx/changelog_rebase_check.py` right after the rebase (it reads `ORIG_HEAD`; also works mid-conflict on the working tree; exit 1 lists the missing and extra lines). `mine ∪ main` is the wrong oracle: it reports bullets that upstream legitimately rewrote as "missing". A union-style conflict resolution errs the other way — it keeps both the old and the rewritten text of one bullet — so look for extras, not only losses. Then run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`: two PRs that each bumped the same count rebase cleanly into a wrong number.
 - **An edit at a section boundary can swallow the next `### heading`** (the last bullet under `### Added`, right above `### Fixed`): every entry below then files under the wrong section, and nothing is red. After editing, list the headings: `sed -n '/^## \[Unreleased\]/,/^## \[v/p' CHANGELOG.md | grep '^###'` (keep both `^` anchors: bullets and the placeholder comment quote those headings mid-line, and an unanchored range skips headings).

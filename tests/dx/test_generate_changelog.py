@@ -1098,10 +1098,12 @@ class TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed:
     id  repo / env                                  expected
     ==  ==========================================  ===========================
     A   3,000-char entry committed, origin/main     rc 1, "over origin/main"
-    B   200-char entry committed, origin/main       rc 0                (control)
+    B   200-char entry committed, origin/main       no "grew by"; rc 1 only
+                                                    from the #2102 freeze
     C   3,000-char entry, origin/main NOT fetched   rc 2 + fetch hint, both streams
     D   GITHUB_BASE_REF=rel-1, origin/rel-1 there   rc 1, "over origin/rel-1"
     E   GITHUB_BASE_REF=rel-1, ref NOT fetched      rc 2                (CI, unchanged)
+    F   no new entry (a blank line), origin/main    rc 0                (control)
     ==  ==========================================  ===========================
 
     ⚠️ **B is the anti-vacuity cell.** Without it, an implementation that
@@ -1122,15 +1124,31 @@ class TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed:
         assert rc == EXIT_VIOLATION, out
         assert "grew by" in out and "over origin/main" in out, out
 
-    def test_b_a_compliant_entry_on_the_same_branch_stays_green(
+    def test_b_a_compliant_entry_on_the_same_branch_is_not_over_the_cap(
             self, tmp_path, monkeypatch, capsys):
-        """Control cell. Same repo shape, same command, smaller entry."""
+        """Control cell. Same repo shape, same command, smaller entry: the cap
+        measures it and stays quiet. Since #2102 any NEW [Unreleased] entry is
+        refused by the freeze, so the command is red for that reason alone —
+        cell F below is the fully green control."""
         _pr_shaped_repo(tmp_path, monkeypatch, _entry("slim", 200))
         monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
         rc = gc.main()
         out = capsys.readouterr().out
-        assert rc == 0, out
+        assert rc == EXIT_VIOLATION, out
         assert "grew by" not in out, out
+        assert "1 changelog format issue(s)" in out and "is frozen" in out, out
+
+    def test_f_a_correction_without_a_new_entry_stays_green(
+            self, tmp_path, monkeypatch, capsys):
+        """The green control for the whole command: the PR commit changes
+        [Unreleased] without adding an entry (one blank line), so neither the
+        cap nor the freeze has anything to say."""
+        _pr_shaped_repo(tmp_path, monkeypatch, "")
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "grew by" not in out and "is frozen" not in out, out
 
     def test_c_an_unfetched_origin_main_is_rc2_on_both_streams_not_a_pass(
             self, tmp_path, monkeypatch, capsys):

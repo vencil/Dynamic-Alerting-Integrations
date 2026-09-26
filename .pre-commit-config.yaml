@@ -385,6 +385,17 @@ repos:
         files: ^CHANGELOG.*\.md$
         additional_dependencies: ['pyyaml']
 
+      # #2102: in-flight entries are one file each under changelog.d/ (the
+      # [Unreleased] freeze above refuses new ones in CHANGELOG.md). Front
+      # matter keys/values, exactly one entry, the same per-entry cap. The
+      # tool skips changelog.d/README.md itself, so the pattern need not.
+      - id: changelog-fragments
+        name: Changelog fragments (changelog.d/ front matter, one entry, entry cap)
+        entry: python3 -X utf8 scripts/tools/dx/generate_changelog.py --fragments
+        language: python
+        files: ^changelog\.d/.*\.md$
+        additional_dependencies: ['pyyaml']
+
       - id: version-consistency
         name: Version/count consistency
         entry: python3 -X utf8 scripts/tools/lint/validate_docs_versions.py --ci
@@ -568,7 +579,7 @@ repos:
         # (the tuple rule in dev-rules §E is semantic and cannot be linted).
         # Deliberately NOT a keyword denylist: it fires only on the narrow
         # "<source platform> ... <in-flight marker>" conjunction on one line.
-        files: ^(CHANGELOG\.md|README(\.en)?\.md|docs/.*\.md|rule-packs/.*\.ya?ml|tests/.*\.(ya?ml|py)|scripts/.*\.py)$
+        files: ^(CHANGELOG\.md|changelog\.d/.*\.md|README(\.en)?\.md|docs/.*\.md|rule-packs/.*\.ya?ml|tests/.*\.(ya?ml|py)|scripts/.*\.py)$
 
       - id: commit-scope-doc-drift
         name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)
@@ -1316,7 +1327,9 @@ repos:
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'
         language: pygrep
-        exclude: ^CHANGELOG\.md$
+        # changelog.d/ (#2102) holds the in-flight half of CHANGELOG.md, which
+        # quotes retired names when it records their removal.
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md)$
         # #731 normalized mariadb's bare `tenant:alert_threshold:{connections,cpu}`
         # recording rules to `mysql_*` (the conf.d-key prefix the exporter emits).
         # Those bare names are now a permanently-forbidden legacy string anywhere
@@ -1330,7 +1343,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py)$
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
@@ -1385,7 +1398,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_changelog_no_tbd.py --ci
         language: python
         pass_filenames: false
-        files: ^(CHANGELOG\.md|CHANGELOG-archive\.md)$
+        files: ^(CHANGELOG\.md|CHANGELOG-archive\.md|changelog\.d/.*\.md)$
         # Auto-stage, FATAL on findings (default for new lints when
         # post-rewrite violation count is 0; mirrors PR #169 / #170).
         # If existing codebase has violations, add granular `--strict-changelog_no_tbd`

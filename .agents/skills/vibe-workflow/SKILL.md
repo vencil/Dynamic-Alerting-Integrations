@@ -31,7 +31,7 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 
 1. 依任務類型讀對應 Playbook（`vibe-playbook-nav`）。
 2. 改碼 → Go test / Python test → 場景驗證（`make dc-*`）。
-3. 效能相關變更跑完整 benchmark（idle + routing + Go micro-bench），記到 CHANGELOG 與 architecture docs。
+3. 效能相關變更跑完整 benchmark（idle + routing + Go micro-bench），記到 changelog（`changelog.d/` 片段）與 architecture docs。
 4. 文件同步：`make version-check` 只檢查；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（`make bump-docs` 是版號 bump，不做計數）。沒有 pre-commit hook 跑 bump_docs：Doc-as-Code #4 靠自覺＋`make pre-tag`。
 5. `git commit`（FUSE 卡住時 `make win-commit`）。
 6. `make pr-preflight`（寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`。
