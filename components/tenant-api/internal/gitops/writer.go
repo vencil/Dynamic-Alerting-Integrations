@@ -511,7 +511,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// and the commit below must land on the same one. An ambiguous tenant is
 	// refused here with a typed error, so callers can map it to 409 instead of
 	// the 400 a validation string would produce.
-	filePath, err := w.tenantFilePath(tenantID, nil)
+	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -587,17 +587,14 @@ type MergeFunc func(existing []byte) (string, error)
 // tree is one the exporter rejects anyway, and the fix is removing the other
 // declaration, not writing to either one.
 //
-// ts is the lock section's shared walk (see sectionScan); nil means a one-off
-// walk for this call alone.
-func (w *Writer) tenantFilePath(tenantID string, ts *sectionScan) (string, error) {
+// Every call walks the tree as it is NOW, so each op of a batch is judged
+// after the ops before it have written.
+func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
 		return "", err
 	}
-	if ts == nil {
-		ts = w.newSectionScan()
-	}
-	if err := ts.ensureNotDeclaredElsewhere(tenantID, path); err != nil {
+	if err := w.ensureNotDeclaredElsewhere(tenantID, path); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -608,64 +605,33 @@ func (w *Writer) tenantFilePath(tenantID string, ts *sectionScan) (string, error
 // tree's unreadable / unparseable files on its own reload loop.
 var discardScanLogger = log.New(io.Discard, "", 0)
 
-// sectionScan is one conf.d walk shared by every tenant resolution inside ONE
-// section over ONE tree: a WritePRBatch pre-flight loop, or the ops of a
-// WritePRBatch after its checkout. It is built lazily on the first resolution
-// and never retained past the section (no package global, no Writer field), so
-// a later section — another request, or the other tree of the same batch —
-// always walks afresh.
-//
-// ⛔ WHY SHARING WITHIN A SECTION IS SOUND. Inside a section tenant-api writes
-// only the op's own `<id>.yaml`, and every body passes validate(), whose
-// addedTenantKeys refuses any `tenants:` key the replaced file did not already
-// declare — judged with the same decode the walker uses to read declarations
-// (cfg.ParseConfigFile is a plain yaml.v3 Unmarshal into cfg.ThresholdConfig,
-// which is what addedTenantKeys' baseline decodes into). So a write in the
-// section can only (a) add the op's own id to its own target file, or (b)
-// drop declarations. For any later op on id x, the true attribution is
-// therefore the walked one minus dropped files plus at most x's own target;
-// whenever the walked one says "not found" or "only the target", so does the
-// truth. A stale walk can over-refuse (after a drop) but never let a
-// duplicate through.
-type sectionScan struct {
-	w    *Writer
-	scan *cfg.TreeScan
-	err  error
-	done bool
-}
-
-func (w *Writer) newSectionScan() *sectionScan {
-	return &sectionScan{w: w}
-}
-
-func (s *sectionScan) get() (*cfg.TreeScan, error) {
-	if !s.done {
-		s.scan, s.err = s.w.scanTree()
-		s.done = true
-	}
-	return s.scan, s.err
-}
-
-// defaultTreeScanTimeout bounds one #2078 conf.d walk. Same value and reason
-// as the list snapshot's load deadline: the walker reads every file, and a
-// file whose read never returns (a FIFO named *.yaml, a hung network mount)
-// would otherwise hang the write — inside WriteMerged / the PR paths, while
-// holding the single-writer lock, i.e. every later write too. Measured on a
-// 1000-file tree a walk takes ~20 ms, so this is far from a healthy tree.
+// defaultTreeScanTimeout bounds one #2078 conf.d walk. The walker reads every
+// file, and a file whose read never returns (a FIFO named *.yaml, a hung
+// network mount) would otherwise hang the write — inside WriteMerged / the PR
+// paths, while holding the single-writer lock, i.e. every later write too.
+// Measured on a 1000-file tree a walk takes ~20 ms.
 const defaultTreeScanTimeout = 5 * time.Second
 
 // errTreeScanTimeout / errTreeScanStuck are wrapped in ErrTenantTreeScan by
-// ensureNotDeclaredElsewhere: the guard fails closed on both.
+// ensureNotDeclaredElsewhere: the guard fails closed on both. They reach the
+// server log only.
 var (
 	errTreeScanTimeout = errors.New("conf.d walk timed out")
-	errTreeScanStuck   = errors.New("an earlier conf.d walk is still blocked")
+	errTreeScanStuck   = errors.New("an earlier conf.d walk is still blocked; restart tenant-api to recover")
 )
 
 // scanTree is the one call site of cfg.ScanDirTree on the write path, bounded
 // by treeScanTimeout. A walk that outlives it cannot be cancelled (the walker
 // takes no context), so it is left running and counted in stuckTreeScans
-// until it returns; while one is stuck, later calls fail at once instead of
-// each leaking another blocked goroutine behind the same file.
+// until it returns; while the count is non-zero, later calls fail at once.
+//
+// ⚠️ That bounds new walks only AFTER the first timeout: every write or diff
+// that enters within the same timeout window has already started its own walk,
+// and each of those can block too — the leak is bounded by the number of
+// requests concurrent within that window, not by one. (Diff does not hold the
+// writer lock, so diffs are not serialised behind writes.) A blocked walk ends
+// only when the file it is reading is opened for writing or the process
+// restarts: removing the file does not unblock a read already in progress.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 	if w.stuckTreeScans.Load() > 0 {
 		return nil, errTreeScanStuck
@@ -722,8 +688,8 @@ func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 // Same walker, not a re-implementation: which files count (extensions, hidden
 // entries, `_` prefixes, symlinked roots) and what counts as a declaration (a
 // file the full decode accepts) cannot drift from what the exporter loads.
-func (s *sectionScan) ensureNotDeclaredElsewhere(tenantID, target string) error {
-	scan, err := s.get()
+func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
+	scan, err := w.scanTree()
 	if err != nil {
 		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
 	}
@@ -838,7 +804,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 
 	// #1673: one resolution for the whole flow — the file we read below and the
 	// file we commit at the end must be the same one.
-	filePath, err := w.tenantFilePath(tenantID, nil)
+	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -871,7 +837,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 // Diff returns the unified diff between the current file and proposed content.
 // Returns empty string if files are identical or no current file exists.
 func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
-	filePath, err := w.tenantFilePath(tenantID, nil)
+	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return "", err
 	}

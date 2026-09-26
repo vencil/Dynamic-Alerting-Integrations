@@ -98,8 +98,8 @@ const (
 // gitops.ErrTenantDeclaredElsewhere. ⛔ It deliberately names no file: the
 // error's own text carries the other file's path, which only the server log
 // may see (an RBAC-restricted caller must not learn other files' names).
-const msgTenantDeclaredElsewhere = "tenant is already declared in another conf.d file; edit that file " +
-	"instead (creating <id>.yaml would give the tenant two files, which the exporter rejects)"
+const msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file (or by several); " +
+	"conf.d must declare each tenant exactly once"
 
 // msgTenantTreeScan is the fixed client-facing text for gitops.ErrTenantTreeScan
 // (the declared-elsewhere check could not run, so nothing was written).
