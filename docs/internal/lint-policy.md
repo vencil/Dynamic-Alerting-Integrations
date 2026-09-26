@@ -230,10 +230,9 @@ Python 掃描是重造輪子。repo 已有 ESLint toolchain（`tests/e2e/eslint.
 「以 `glob`/`rglob` 掃 `*.jsx`/`*.tsx`/`*.css`/`*.scss` 內容」的 lint；新增且未列入
 `ALLOWLIST` 者 → **BLOCK**。逃生門（同 (b) class bypass 精神）：ESLint/stylelint
 確實無法覆蓋者（cross-file registry parity、雙語語意、diff-only + PR-body bypass
-plumbing），在該 script 的 `ALLOWLIST` 加一行 justification 即放行。既有 11 個
+plumbing），在該 script 的 `ALLOWLIST` 加一行 justification 即放行。既有的
 JS-targeting DIY lint 已 grandfather（**不做 retroactive migration**，符合 §2 +
-lint-adoption hybrid policy）。逃生門**實際被用過一次**（ALLOWLIST 因此為 12
-條）：`check_portal_asset_shipping.py` 的斷言對象是 **da-portal Dockerfile 的 COPY
+lint-adoption hybrid policy）。逃生門用過的例子：`check_portal_asset_shipping.py` 的斷言對象是 **da-portal Dockerfile 的 COPY
 集合**，JSX 只是「URL 被讀出來的地方」——ESLint 看不見 container build，屬上述
 cross-file parity 類別。判準是**斷言對象**而非**掃描對象**：掃到 JSX 不等於它是
 JS lint。偵測刻意**窄**（只認目錄 content-scanning、排除
