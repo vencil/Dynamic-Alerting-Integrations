@@ -276,3 +276,100 @@ class TestExtensionSpellingAxis:
             f"({CONFIG_SUFFIXES!r}) and the generator produced "
             f"{sorted(meta['tenant_metadata'])}, expected {expected}"
         )
+
+
+def _owned(tid: str, owner: str) -> str:
+    return (
+        "tenants:\n"
+        f"  {tid}:\n"
+        "    mysql_connections: 70\n"
+        "    _metadata:\n"
+        f"      owner: {owner}\n"
+    )
+
+
+class TestHiddenEntriesAxis:
+    """#2055: `.`-prefixed names are skipped by the exporter's walker, so the
+    portal's tenant list must not read them either.
+
+    ⛔ Every test pairs the hidden fixture with a CONTROL whose body is
+    byte-identical and whose name is not hidden. Without it, "the tenant is
+    absent" is equally satisfied by a reader that reads nothing at all.
+    """
+
+    def test_a_hidden_carrier_declares_no_tenant(self, tmp_path):
+        body = _owned("ghost", "ghost-team")
+
+        control = _seed(tmp_path / "control", ".yaml")
+        (control / "ghost.yaml").write_text(body, encoding="utf-8")
+        assert "ghost" in gtm.build_tenant_metadata(control)["tenant_metadata"]
+
+        root = _seed(tmp_path / "confd", ".yaml")
+        (root / ".hidden.yaml").write_text(body, encoding="utf-8")
+        tenants = gtm.build_tenant_metadata(root)["tenant_metadata"]
+
+        assert sorted(tenants) == ["db-a", "db-b"], (
+            f"`.hidden.yaml` is invisible to the exporter but its tenant "
+            f"reached the portal list: {sorted(tenants)}"
+        )
+
+    def test_a_later_sorting_hidden_file_cannot_overwrite_a_tenant(
+            self, tmp_path):
+        # `-` (0x2d) sorts before `.` (0x2e), so `.zz.yaml` is read LAST and
+        # `tenant_configs.update` would let it win.
+        assert sorted(["-acme.yaml", ".zz.yaml"]) == ["-acme.yaml", ".zz.yaml"]
+
+        control = tmp_path / "control"
+        control.mkdir()
+        (control / "-acme.yaml").write_text(
+            _owned("acme", "real-team"), encoding="utf-8")
+        (control / "zz.yaml").write_text(
+            _owned("acme", "ghost-team"), encoding="utf-8")
+        got = gtm.build_tenant_metadata(control)["tenant_metadata"]
+        assert got["acme"]["owner"] == "ghost-team", (
+            "control: a non-hidden later file must still overwrite, or the "
+            "hidden case below proves nothing"
+        )
+
+        root = tmp_path / "confd"
+        root.mkdir()
+        (root / "-acme.yaml").write_text(
+            _owned("acme", "real-team"), encoding="utf-8")
+        (root / ".zz.yaml").write_text(
+            _owned("acme", "ghost-team"), encoding="utf-8")
+        got = gtm.build_tenant_metadata(root)["tenant_metadata"]
+
+        assert got["acme"]["owner"] == "real-team", (
+            f"hidden `.zz.yaml` overwrote the real tenant's owner: {got}"
+        )
+
+    def test_hidden_broken_entries_raise_no_warning(self, tmp_path, capsys):
+        """Both stderr stations: the `unusable` report (a directory named
+        like a config file) and the parse-failure handler (bad YAML).
+
+        ⚠️ The first station's hidden skip lives in `unusable_config_entries`
+        itself, not in this module; the second is this module's loop filter.
+        """
+        bad_yaml = "tenants: [unclosed\n"
+
+        control = _seed(tmp_path / "control", ".yaml")
+        (control / "broken-dir.yaml").mkdir()
+        (control / "broken.yaml").write_text(bad_yaml, encoding="utf-8")
+        gtm.build_tenant_metadata(control)
+        err = capsys.readouterr().err
+        assert "broken-dir.yaml" in err and "broken.yaml:" in err, (
+            f"control: the non-hidden twins must be reported, or silence "
+            f"below proves nothing; stderr was {err!r}"
+        )
+
+        root = _seed(tmp_path / "confd", ".yaml")
+        (root / ".broken-dir.yaml").mkdir()
+        (root / ".broken.yaml").write_text(bad_yaml, encoding="utf-8")
+        meta = gtm.build_tenant_metadata(root)
+        err = capsys.readouterr().err
+
+        assert "WARNING" not in err, (
+            f"a hidden entry the exporter never reads produced a warning: "
+            f"{err!r}"
+        )
+        assert sorted(meta["tenant_metadata"]) == ["db-a", "db-b"]

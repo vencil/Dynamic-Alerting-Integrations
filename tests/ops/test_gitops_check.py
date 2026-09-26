@@ -673,6 +673,58 @@ class TestCheckLocalExtensionSpelling:
         )
 
 
+
+class TestCheckLocalHiddenEntries:
+    """#2055: `.`-prefixed names are skipped by the exporter's walker, so
+    `check_local` must neither count them nor fail on them.
+
+    ⛔ The last test is the CONTROL: the same broken body under a visible
+    name must still fail, or "passes with a broken hidden file" is equally
+    satisfied by a check that never parses anything.
+    """
+
+    _BROKEN = "k1: [unclosed\n"
+
+    @staticmethod
+    def _root(tmp_path):
+        root = tmp_path / "confd"
+        root.mkdir()
+        Path(root, "_defaults.yaml").write_text(
+            "global_threshold: 100\n", encoding="utf-8")
+        Path(root, "acme.yaml").write_text("k1: '1'\n", encoding="utf-8")
+        return root
+
+    def test_hidden_file_is_not_a_tenant_file(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, ".hidden.yaml").write_text(
+            "k1: '1'\nk2: '2'\n", encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "pass"
+        assert (result.details["tenant_files"],
+                result.details["total_metrics"]) == (1, 1), result.details
+
+    def test_broken_hidden_leftover_does_not_fail(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, ".acme.yaml").write_text(self._BROKEN, encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "pass", result.details
+        assert result.details["tenant_files"] == 1
+
+    def test_control_broken_visible_file_still_fails(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, "bad.yaml").write_text(self._BROKEN, encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "fail"
+        assert [e["file"] for e in result.details["parse_errors"]] \
+            == ["bad.yaml"]
+
+
 # ── 4. check_sidecar() Tests ───────────────────────────────────────────────
 
 class TestCheckSidecar:

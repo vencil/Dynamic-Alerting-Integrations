@@ -120,6 +120,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **`generate_tenant_metadata` 與 `gitops-check local` 不再讀 conf.d 的隱藏檔（dx、ops；[#2055](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2055)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：exporter 略過所有 `.` 開頭的檔名，這兩支卻照讀。
+  - `generate_tenant_metadata`：`.hidden.yaml` 宣告的租戶會出現在 portal 租戶清單（exporter 並不服務它）；檔名排序在 `.` 之前的真實租戶檔（如 `-acme.yaml`）還會被宣告同一租戶的隱藏檔整筆蓋掉（owner、閾值一起換）。
+  - `gitops-check local`：隱藏檔被算進租戶檔數；語法壞掉的編輯器殘檔（如 `.acme.yaml`）讓 readiness 判定 fail。
+  - 現在兩支都與 exporter 一致略過 `.` 開頭的檔名。
+
 - **threshold-exporter chart README 的「常用覆寫」表不再列 chart 不存在的 key（helm、文件；[#2044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2044)）**：`config.directory` 與 `podDisruptionBudget.enabled` 在 `values.yaml` 裡不存在，照抄是 silent no-op——掛載路徑固定為 `/etc/threshold-exporter/conf.d`，PDB 由 `replicaCount > 1` 自動建立、沒有開關；`rules.mode` 沒有 `disabled` 分支，而且它只決定 `operator` 時要不要建 ServiceMonitor，本 chart 並不出貨 Rule Pack；`image.tag` 預設是空字串（由 appVersion 推導），不是 `v2.7.0`。新增 `tests/helm/test_readme_values_keys.py`：各 chart README 參數表列的每個 key 都必須存在於該 chart 的 `values.yaml`。
 
 - **da-guard 的 cardinality 預測改跟執行期同一個上限（da-guard、CI；[#2043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2043)）**：`guard-defaults-impact.yml` 先前寫死 `--cardinality-limit 500`，#2028 讓根 `_defaults.yaml` 的 `max_metrics_per_tenant` 生效後就可能跟 exporter 不一致——設定值高於 500 會對不會被截斷的租戶報錯擋 PR，低於 500 則放行實際會被截斷的租戶。現在沒給 `--cardinality-limit` 時，da-guard 自己讀 `--config-dir` **根目錄**的 `_defaults.yaml`，用跟 exporter 同一套選檔、解碼與換算（`config.RootMaxMetricsPerTenant`：未設或 0 → 500、負值 → 不檢查），`--scope` 執行也用根的值；stderr 會印出上限與來源檔，根檔解碼失敗則 exit 2。workflow 拿掉寫死的 500，文件與 `da-tools guard` 說明裡的範例一併拿掉。
