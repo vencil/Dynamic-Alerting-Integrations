@@ -15,6 +15,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **`changelog_rebase_check.py`：rebase 後驗 CHANGELOG 有沒有被靜默吃掉或重複條目（dx）**：rebase 可能在沒有任何衝突標記的情況下丟掉或重複一則條目，而且條目數常常不變。新工具以 `main ＋（mine − base）` 為準比對行的多重集合，列出缺少與多出的行（exit 1）；預設讀 `ORIG_HEAD` 與 working tree，解衝突途中也能用。`commit-convention.md` 與編輯 CHANGELOG 時注入的提醒都已指向它。
 - **Trivy 豁免條目必須帶到期日與 justification（ci；[#1933](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1933)）**：沒有真正到期日的豁免條目，Trivy 永遠不讓它過期。新增 `test_every_waiver_entry_has_expiry_and_justification`：每則條目要有 `id`、`statement`、`expired_at` 與 `justification`（允許值見該測試的 `_WAIVER_JUSTIFICATIONS`）；純文字的 `.trivyignore` 不接受。
 
 - **JSX 的 ARIA 參照改由 pre-commit 擋（lint、portal；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：新增 `aria-references-check` hook，對 `tools/portal/src/` 下被修改的 `.jsx` 執行 `check_aria_references.py`。`aria-labelledby`／`aria-describedby`／`aria-controls`／`aria-owns`／`htmlFor` 指向的 id 若不在同一個檔案內，就回 rc 1。這支工具原本已經存在，只是沒有任何閘門呼叫它。⚠️ 以 template literal 組出來的 id 只比對字面前綴，完全動態的參照無法驗證，只會計數，不會判違規。
