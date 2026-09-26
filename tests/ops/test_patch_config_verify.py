@@ -896,3 +896,148 @@ class TestCompareAndSwap:
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["reason"]) == (2, "configmap_shape")
         assert c.patches == []
+
+
+class TestRollbackAccounting:
+    """#1950 PR 2 的 T2／T3：回滾已經做完或做不完時，回報要跟著 ConfigMap 走。"""
+
+    def test_t2_a_done_rollback_is_not_redone_when_conclude_fails_after_it(self, capsys):
+        """回滾成功之後 `_conclude` 自己丟例外 ⇒ 備援不得再送一次回滾。
+
+        再送一次必然 409（前置條件是寫入產生的版本，回滾已把它推過去），
+        重讀時 key 是舊位元組 ≠ 新位元組，會被讀成「另一個寫者改了」而回 7——
+        但 ConfigMap 實際上已經回滾完成。"""
+        c = FakeCluster(dict(_ANCHOR_CM))
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 2  # the write and ONE rollback
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
+    def test_f1_a_rollback_that_errored_but_landed_is_not_redone(self, capsys):
+        """回滾的 kubectl 回錯、但 patch 其實已落地，之後 `_conclude` 又出錯 ⇒
+        備援先觀察：key 已是舊位元組就不重送（重送必然 409 並誤判成 7）。"""
+        c = FakeCluster(dict(_ANCHOR_CM), fail_patch={1}, patch_lands={1})
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 2  # the write and the one rollback that landed
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
+    def test_f1_a_sent_rollback_that_did_not_land_is_sent_again(self, capsys):
+        """回滾已送出但沒落地（key 仍是新位元組）⇒ 備援照原規則重送，成功即回滾。"""
+        c = FakeCluster(dict(_ANCHOR_CM), fail_patch={1})
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 3  # the write, the failed rollback, the resend
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
+    # _observed_fallback's truth table (#1950 PR 2 round 3): `_conclude` fails,
+    # the answer follows only what the key is observed to hold.
+    # row: (where _conclude fails, FakeCluster kwargs, what happens to the key
+    #       as it fails, the fallback's first read fails,
+    #       -> status, exit code, written, rolled_back, patches sent)
+    _THEIRS = "tenants:\n  t-a: {mysql_connections: '99'}\n"
+    FALLBACK_ROWS = {
+        "E1-rollback-sent-first-read-unreadable": (
+            "after-rollback", {}, None, True,
+            "state-unknown", 7, None, False, 2),
+        "old-after-our-rollback": (
+            "after-rollback", {}, None, False,
+            "error-rolled-back", 6, False, True, 2),
+        "write-call-failed-but-landed-then-rolled-back": (
+            "after-rollback", {"fail_patch": {0}, "patch_lands": True}, None,
+            False, "error-rolled-back", 6, False, True, 2),
+        "E2-write-call-failed-and-did-not-land": (
+            "conclude", {"fail_patch": {0}}, None, False,
+            "caller_error", 2, False, None, 1),
+        "old-written-no-rollback-sent": (
+            "conclude", {}, "old", False,
+            "overwritten-by-another-writer", 7, False, False, 1),
+        "new-rollback-lands": (
+            "conclude", {}, None, False,
+            "error-rolled-back", 6, False, True, 2),
+        "new-rollback-fails": (
+            "conclude", {"fail_patch": {1}}, None, False,
+            "rollback-failed", 5, True, False, 2),
+        "new-rollback-then-unreadable": (
+            "conclude", {"fail_get_cm_after": 2}, None, False,
+            "state-unknown", 7, None, False, 2),
+        "another-value": (
+            "conclude", {}, "theirs", False,
+            "overwritten-by-another-writer", 7, False, False, 1),
+    }
+
+    @pytest.mark.parametrize("row", FALLBACK_ROWS, ids=list(FALLBACK_ROWS))
+    def test_the_fallback_answers_from_the_key_it_observes(self, capsys, row):
+        where, kw, key_becomes, unreadable_once, status, rc, written, \
+            rolled_back, n_patches = self.FALLBACK_ROWS[row]
+        c = FakeCluster(dict(_ANCHOR_CM), **kw)
+        old = c.data["config.yaml"]
+        orig = c.__call__
+        state = {"armed": False}
+
+        def side(cmd):
+            if state["armed"] and cmd[:3] == ["kubectl", "get", "configmap"]:
+                state["armed"] = False
+                raise pc.KubectlError("transient")
+            return orig(cmd)
+
+        def fail(*_):
+            if key_becomes:
+                c.other_writer("config.yaml",
+                               old if key_becomes == "old" else self._THEIRS)
+            state["armed"] = unreadable_once
+            raise RuntimeError("bug in _conclude")
+        target = (mock.patch.object(pc._Signals, "cause", side_effect=fail)
+                  if where == "after-rollback"
+                  else mock.patch("patch_config._conclude", side_effect=fail))
+        with target, mock.patch("patch_config.run_cmd", side_effect=side), \
+                mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
+                                        "mysql_connections", "60", *FAST]):
+            try:
+                pc.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code
+        doc = json.loads(capsys.readouterr().out)
+        assert (code, doc["status"], doc["written"], doc.get("rolled_back"),
+                len(c.patches)) == (rc, status, written, rolled_back, n_patches)
+
+    def test_t3_a_rollback_that_keeps_conflicting_stops_after_the_bound(self, capsys):
+        """每次回滾都 409、key 仍是我們的位元組（只有別的 key 一直在變）⇒
+        恰好送 ROLLBACK_CONFLICT_ATTEMPTS 次回滾就停，回報 rollback-failed。"""
+        churn = {"n": 0}
+
+        def other_key_keeps_changing(n, cl):
+            if n > 1 + 4 * pc.ROLLBACK_CONFLICT_ATTEMPTS:
+                # an unbounded retry would spin forever: end it (as a failed
+                # rollback) so the count below turns red instead of hanging
+                raise RuntimeError("the rollback is not bounded")
+            if n >= 1:  # before every rollback attempt, never before the write
+                churn["n"] += 1
+                cl.other_writer("t-b.yaml",
+                                f"tenants:\n  t-b: {{m: '{churn['n']}'}}\n")
+        c = FakeCluster(_multi(), render=TestCompareAndSwap._verify_fails,
+                        concurrent=other_key_keeps_changing)
+        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        doc = json.loads(capsys.readouterr().out)
+        rollbacks = [p for p in c.patches[1:] if "t-a.yaml" in p["data"]]
+        assert len(rollbacks) == pc.ROLLBACK_CONFLICT_ATTEMPTS
+        assert len(c.patches) == 1 + pc.ROLLBACK_CONFLICT_ATTEMPTS
+        assert "'65'" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
+        assert (code, doc["status"], doc["written"]) == (
+            pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True)
