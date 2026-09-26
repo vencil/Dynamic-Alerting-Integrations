@@ -445,20 +445,10 @@ class TestCheckLocal:
 #   * Recursion: `check_local` is flat by construction (`base.iterdir()`).
 #     That is `test_confd_enumeration_contract.py`'s axis; nested carriers do
 #     get a `WARN` on stderr, so this one at least speaks.
-#   * Hidden names: this reader COUNTS `.hidden.yaml` as a tenant file while
-#     the exporter skips dot-prefixed entries (`scanDirHierarchical`, `config_hierarchy.go`).
-#     Measured on the tree before this change and unchanged by it, so it is
-#     pre-existing — but it is also the same shape as the bug fixed here: the
-#     shared predicates say `is_hidden_name(".secret.yaml") is True` and
-#     `config_stem(".secret.yaml") == ""` (this file carries no tenant id),
-#     while the loop two lines below counts it as tenant #2. This module
-#     does not import `is_hidden_name` at all.
-#     ⛔ Closing it DELETES tenants that count today, so it is a separate
-#     behaviour change; the fixtures below therefore contain no dot-prefixed
-#     name at all, rather than pinning today's answer for them.
-#     ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
-#     several enumerators — not this reader's hidden-axis answer, so the
-#     disclosure has to carry itself.
+#   * Hidden names: closed by #2055 — `check_local` now skips dot-prefixed
+#     entries as the exporter's walker does. Pinned by
+#     `TestCheckLocalHiddenEntries` below, not by this class; the fixtures
+#     here still contain no dot-prefixed name.
 #   * Entries `is_file()` drops (a directory named `notes.yml/`, a broken
 #     symlink) are still silently skipped rather than named. ⚠️ #1607's
 #     closing comment verifies `operator_generate`
@@ -671,6 +661,58 @@ class TestCheckLocalExtensionSpelling:
             f"total_metrics={result.details['total_metrics']}, expected "
             f"{(len(CONFIG_SUFFIXES), expected_metrics)}"
         )
+
+
+
+class TestCheckLocalHiddenEntries:
+    """#2055: `.`-prefixed names are skipped by the exporter's walker, so
+    `check_local` must neither count them nor fail on them.
+
+    ⛔ The last test is the CONTROL: the same broken body under a visible
+    name must still fail, or "passes with a broken hidden file" is equally
+    satisfied by a check that never parses anything.
+    """
+
+    _BROKEN = "k1: [unclosed\n"
+
+    @staticmethod
+    def _root(tmp_path):
+        root = tmp_path / "confd"
+        root.mkdir()
+        Path(root, "_defaults.yaml").write_text(
+            "global_threshold: 100\n", encoding="utf-8")
+        Path(root, "acme.yaml").write_text("k1: '1'\n", encoding="utf-8")
+        return root
+
+    def test_hidden_file_is_not_a_tenant_file(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, ".hidden.yaml").write_text(
+            "k1: '1'\nk2: '2'\n", encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "pass"
+        assert (result.details["tenant_files"],
+                result.details["total_metrics"]) == (1, 1), result.details
+
+    def test_broken_hidden_leftover_does_not_fail(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, ".acme.yaml").write_text(self._BROKEN, encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "pass", result.details
+        assert result.details["tenant_files"] == 1
+
+    def test_control_broken_visible_file_still_fails(self, tmp_path):
+        root = self._root(tmp_path)
+        Path(root, "bad.yaml").write_text(self._BROKEN, encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "fail"
+        assert [e["file"] for e in result.details["parse_errors"]] \
+            == ["bad.yaml"]
 
 
 # ── 4. check_sidecar() Tests ───────────────────────────────────────────────
