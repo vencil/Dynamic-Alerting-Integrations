@@ -317,6 +317,8 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 # exit 0 = 與快照一致，rollback 成功；非 0 = 不一致，需追查
 ```
 
+同一 tenant 被兩個以上的檔宣告時（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)），兩道指令都 exit 2 且不給該 tenant 的 `merged_hash`：單一 tenant 模式列出所有宣告檔；`--all` 把它列成 `error: "duplicate"` 條目、其餘 tenant 照常輸出——`--all` 不再恆為 exit 0，在 `set -e` 腳本裡拍快照會在這裡停下。刪除多餘檔、讓 tenant 只留在一個檔後重跑。
+
 ---
 
 ## 6. Operator Reference
@@ -362,7 +364,7 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 
 `validate`（Shadow Monitoring 比對）在 mapping 載入後**零比對組**時 exit `2`——什麼都沒驗證不得視為驗證通過（`da-tools validate && promote` 不會被 vacuous pass 放行）。
 
-> **唯一例外 — `tenant-verify`**：此命令為 SSOT 前既有、且客戶 rollback runbook 已依賴其契約，故**反轉** `1`/`2` 語意——`2` = 驗證發現差異（mismatch / 租戶不存在，rollback checklist 的訊號），`1` = 呼叫錯誤。其餘所有命令一律遵循上表。詳見 [cli-reference.md](../../docs/cli-reference.md) §tenant-verify。
+> **唯一例外 — `tenant-verify`**：此命令為 SSOT 前既有、且客戶 rollback runbook 已依賴其契約，故**反轉** `1`/`2` 語意——`2` = 驗證發現差異（mismatch / 租戶不存在 / 租戶重複宣告，rollback checklist 的訊號），`1` = 呼叫錯誤。其餘所有命令一律遵循上表。詳見 [cli-reference.md](../../docs/cli-reference.md) §tenant-verify。
 
 ### 6.4 Bilingual Help
 

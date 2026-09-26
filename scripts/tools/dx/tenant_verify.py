@@ -18,8 +18,9 @@ Exit codes:
     0  — verification passed (tenant exists; if --expect-merged-hash given,
          it matched)
     1  — usage / IO error
-    2  — verification failed (--expect-merged-hash mismatch, or tenant not
-         found)
+    2  — verification failed (--expect-merged-hash mismatch, tenant not
+         found, or tenant declared in more than one file); with --all,
+         any tenant declared in more than one file
 
 Design note: this tool reuses describe_tenant.ConfDScanner for the actual
 inheritance + canonical-hash computation. The wrapping here is purposely
@@ -56,7 +57,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # Mirrors diag_pr_ci.py's documented extension.
 EXIT_PASS = 0           # verification passed (tenant exists; hash matched if given)
 EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags)
-EXIT_VERIFY_FAILED = 2  # mismatch or tenant not found (rollback-checklist signal)
+EXIT_VERIFY_FAILED = 2  # mismatch, not found, or duplicate (rollback-checklist signal)
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent
@@ -81,7 +82,26 @@ def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple
       { "tenant_id": ..., "source_hash": ..., "merged_hash": ...,
         "defaults_chain": [...], "expected_merged_hash": ... | null,
         "match": bool | null }
+    or, on a finding, { "tenant_id": ..., "error": "not_found" } /
+      { "tenant_id": ..., "error": "duplicate", "files": [...],
+        "detail": ... }
+
+    #2093: a tenant declared by more than one conf.d file is refused
+    BEFORE any hash is computed. The scanner keeps one declaration for its
+    library callers, and which one depends on filename order — so hashing
+    it let rollback checklist item 6 pass (rc 0, `[OK]`) whenever the
+    stray file sorted first, and fail as a plain MISMATCH when it sorted
+    last. `files` is the scanner's duplicate list (sorted, conf.d-relative
+    POSIX paths), the same predicate describe_tenant refuses on (#2049).
     """
+    files = scanner.duplicates.get(tenant_id)
+    if files:
+        return ({
+            "tenant_id": tenant_id,
+            "error": "duplicate",
+            "files": list(files),
+            "detail": scanner.duplicate_error(tenant_id),
+        }, EXIT_VERIFY_FAILED)
     try:
         info = scanner.source_info(tenant_id)
     except KeyError:
@@ -103,7 +123,12 @@ def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple
 
 
 def verify_all(scanner) -> list[dict]:
-    """Verify every tenant in the scanner. Returns list of info dicts."""
+    """Verify every tenant in the scanner. Returns list of info dicts.
+
+    A tenant declared in more than one file comes back as an error entry
+    (`error: "duplicate"`, `files`, no `merged_hash`); every other tenant
+    is still reported. `main` turns any such entry into exit 2 (#2093).
+    """
     results = []
     for tid in sorted(scanner.tenants.keys()):
         info, _ = verify_one(scanner, tid, expect_merged_hash=None)
@@ -111,11 +136,23 @@ def verify_all(scanner) -> list[dict]:
     return results
 
 
+def _duplicated(results: list[dict]) -> list[dict]:
+    """The --all entries refused as declared in more than one file."""
+    return [r for r in results if r.get("error") == "duplicate"]
+
+
 def _print_human(info: dict) -> None:
     """Pretty-print one tenant's verify result for human eyeballs."""
     print(f"tenant_id:     {info['tenant_id']}")
     if "error" in info:
         print(f"  status:      ERROR — {info['error']}")
+        if info["error"] == "duplicate":
+            # Every carrier, not just the one the scan kept: rollback
+            # checklist item 6 runs without --json (#2093).
+            for f in info["files"]:
+                print(f"  declared in: {f}")
+            print("  fix:         keep the tenant in exactly one file "
+                  "(remove the extra declaration), then re-run")
         return
     print(f"  source_file: {info['source_file']}")
     print(f"  source_hash: {info['source_hash']}")
@@ -191,6 +228,13 @@ def main() -> int:
                 _print_human(r)
                 print()
             print(f"# total: {len(results)} tenants in {conf_d}")
+        dups = _duplicated(results)
+        if dups:
+            print(f"error: {len(dups)} tenant(s) declared in more than one "
+                  f"file, no merged_hash reported for them: "
+                  f"{', '.join(str(r['tenant_id']) for r in dups)}",
+                  file=sys.stderr)
+            return EXIT_VERIFY_FAILED
         return EXIT_PASS
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)

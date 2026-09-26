@@ -223,3 +223,134 @@ def test_main_expect_mismatch_exit_code_2(verify_module, conf_d, monkeypatch, cl
             "--json")
     code = verify_module.main()
     assert code == 2
+
+
+# ── #2093: one tenant declared by two files ─────────────────────────────
+#
+# The scanner keeps ONE of the two declarations, chosen by filename order.
+# Before the fix, rollback checklist item 6 hashed that one: rc 0 `[OK]`
+# when the stray file sorted BEFORE the real one, rc 2 MISMATCH when it
+# sorted after. Both orders are pinned so neither can pass by accident,
+# and the "must ring" controls (single declaration, a clean tenant in the
+# same tree, --all on a clean tree) keep rc 0.
+
+_REAL = "tenants:\n  acme:\n    mysql_connections: \"70\"\n"
+_STRAY = "tenants:\n  acme:\n    mysql_connections: \"99\"\n"
+
+
+def _dup_tree(tmp_path, stray_name: str):
+    """conf.d with `acme` in real.yaml AND `stray_name`, plus a clean
+    tenant `solo` declared once."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "real.yaml").write_text(_REAL, encoding="utf-8")
+    (root / stray_name).write_text(_STRAY, encoding="utf-8")
+    (root / "solo.yaml").write_text(
+        "tenants:\n  solo:\n    mysql_connections: \"10\"\n", encoding="utf-8")
+    return root
+
+
+def _pre_base_hash(verify_module, tmp_path):
+    """merged_hash of `acme` when only real.yaml declares it."""
+    root = tmp_path / "pre"
+    root.mkdir()
+    (root / "real.yaml").write_text(_REAL, encoding="utf-8")
+    info, code = verify_module.verify_one(
+        _scanner(verify_module, root), "acme", expect_merged_hash=None)
+    assert code == 0
+    return info["merged_hash"]
+
+
+_ORDERS = pytest.mark.parametrize("stray_name, files", [
+    ("other.yaml", ["other.yaml", "real.yaml"]),  # stray sorts BEFORE real
+    ("zz.yaml", ["real.yaml", "zz.yaml"]),        # stray sorts AFTER real
+], ids=["stray-first", "stray-last"])
+
+
+@_ORDERS
+def test_duplicate_declaration_fails_item6_json(
+        verify_module, tmp_path, capsys, cli_argv, stray_name, files):
+    """Item 6 with the pre-base hash → exit 2 + every file, both orders."""
+    import json as _json
+
+    expect = _pre_base_hash(verify_module, tmp_path)
+    root = _dup_tree(tmp_path, stray_name)
+    cli_argv("tenant-verify", "acme", "--conf-d", str(root),
+             "--expect-merged-hash", expect, "--json")
+    code = verify_module.main()
+    assert code == 2
+    parsed = _json.loads(capsys.readouterr().out)
+    assert parsed["error"] == "duplicate"
+    assert parsed["files"] == files
+    assert "merged_hash" not in parsed
+
+
+@_ORDERS
+def test_duplicate_declaration_fails_item6_human(
+        verify_module, tmp_path, capsys, cli_argv, stray_name, files):
+    """Runbook item 6 runs WITHOUT --json: human output names every file
+    and never prints the `[OK]` marker."""
+    expect = _pre_base_hash(verify_module, tmp_path)
+    root = _dup_tree(tmp_path, stray_name)
+    cli_argv("tenant-verify", "acme", "--conf-d", str(root),
+             "--expect-merged-hash", expect)
+    code = verify_module.main()
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "duplicate" in out
+    for f in files:
+        assert f"declared in: {f}" in out
+    assert "[OK]" not in out
+
+
+def test_duplicate_tree_clean_tenant_still_passes(verify_module, tmp_path, cli_argv):
+    """Must-ring control: the refusal is per tenant, not per tree."""
+    root = _dup_tree(tmp_path, "other.yaml")
+    cli_argv("tenant-verify", "solo", "--conf-d", str(root))
+    assert verify_module.main() == 0
+
+
+def test_single_declaration_item6_passes(verify_module, tmp_path, cli_argv):
+    """Must-ring control: the pre-base tree itself → rc 0 against its hash."""
+    expect = _pre_base_hash(verify_module, tmp_path)
+    cli_argv("tenant-verify", "acme", "--conf-d", str(tmp_path / "pre"),
+             "--expect-merged-hash", expect)
+    assert verify_module.main() == 0
+
+
+def test_all_with_duplicate_exits_2_and_keeps_others(
+        verify_module, tmp_path, capsys, cli_argv):
+    """--all: the duplicated tenant is an error entry (files, no hash),
+    the other tenants are still reported, and the run exits 2."""
+    import json as _json
+
+    root = _dup_tree(tmp_path, "other.yaml")
+    cli_argv("tenant-verify", "--all", "--conf-d", str(root), "--json")
+    code = verify_module.main()
+    assert code == 2
+    doc = _json.loads(capsys.readouterr().out)
+    tenants = {t["tenant_id"]: t for t in doc["tenants"]}
+    assert set(tenants) == {"acme", "solo"}
+    assert tenants["acme"]["error"] == "duplicate"
+    assert tenants["acme"]["files"] == ["other.yaml", "real.yaml"]
+    assert "merged_hash" not in tenants["acme"]
+    assert tenants["solo"]["merged_hash"]
+
+
+def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_argv):
+    """--all without --json: every file listed, other tenants printed,
+    and the refusal summarised on stderr."""
+    root = _dup_tree(tmp_path, "zz.yaml")
+    cli_argv("tenant-verify", "--all", "--conf-d", str(root))
+    assert verify_module.main() == 2
+    captured = capsys.readouterr()
+    assert "declared in: real.yaml" in captured.out
+    assert "declared in: zz.yaml" in captured.out
+    assert "tenant_id:     solo" in captured.out
+    assert "declared in more than one file" in captured.err
+
+
+def test_all_without_duplicate_exits_0(verify_module, conf_d, cli_argv):
+    """Must-ring control: a clean tree keeps the --all rc 0 contract."""
+    cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d), "--json")
+    assert verify_module.main() == 0

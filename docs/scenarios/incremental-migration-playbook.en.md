@@ -605,12 +605,12 @@ Rehearsal contents:
 [ ] 3. da_config_reload_trigger_total{reason="defaults"} delta from wave start == expected cascading defaults file count
 [ ] 4. da_config_reload_duration_seconds_count delta from wave start == 1 (debounce coalesced correctly)
 [ ] 5. da_config_blast_radius_tenants_affected{effect="applied"} delta sum ≈ expected affected-tenant count
-[ ] 6. Sample 5 tenants: da-tools tenant-verify <id> --expect-merged-hash <pre-base-snapshot> (exit 0 = pass, exit 2 = mismatch)
+[ ] 6. Sample 5 tenants: da-tools tenant-verify <id> --expect-merged-hash <pre-base-snapshot> (exit 0 = pass, exit 2 = mismatch / tenant not found / duplicate declaration)
 [ ] 7. ALERTS{severity!="info"} count over last 10 min ≤ pre-wave baseline + 5%
 [ ] 8. Alertmanager Silenced alerts list is empty (no leftover silences obscuring observation)
 ```
 
-**Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed). Capture a pre-Base-PR snapshot with `da-tools tenant-verify --all --json > pre-base.json` first, then compare after rollback to pinpoint drifted tenants.
+**Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed). Capture a pre-Base-PR snapshot with `da-tools tenant-verify --all --json > pre-base.json` first, then compare after rollback to pinpoint drifted tenants. Exit 2 with `status: ERROR — duplicate` is not hash drift but a **duplicate declaration**: the tenant appears in every file listed under `declared in:` (e.g. a file the rollback failed to delete), so the tool refuses to compute a hash — delete the extra file so the tenant lives in exactly one file, then re-run item 6. `--all` also exits 2 on a duplicate declaration (other tenants are still reported); resolve it before taking the snapshot.
 
 ### Tooling follow-up (not yet implemented, on v2.8.x backlog)
 
