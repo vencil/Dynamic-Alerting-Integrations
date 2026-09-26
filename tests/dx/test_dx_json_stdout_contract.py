@@ -237,8 +237,6 @@ if argv[:1] == ["api"]:
         emit(fixture("jobs_55002.json"))
     if "/pulls/" in path and "/check-runs" not in path:
         emit(fixture("pull_446.json"))
-    if path.endswith("/pulls"):
-        emit("[]")
     emit("{{}}")
 emit("{{}}")
 '''

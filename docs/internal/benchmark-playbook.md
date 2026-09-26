@@ -591,7 +591,7 @@ func silenceLogs(b *testing.B) {
 >
 > **Bench regression gate**:
 > - Phase 1 (nightly informational) 已落地（`bench-record.yaml`）。
-> - Phase 2 **redesigned** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67) — split into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative drift). Tier 1 已 ship 並啟用：`.github/workflows/bench-gate-pr.yaml`。Tier 2 待 W4 開發。
+> - Phase 2 **redesigned** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67) — split into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative drift). Tier 1 已 ship 並啟用：`.github/workflows/bench-gate-pr.yaml`。
 > - 完整 design + 5 個 SRE 防線 codification + hardware floor escalation：codified gotchas 見 memory `feedback_github_actions_workflow_gotchas.md`（原 `bench-gate-rollout.md` 已移除）。
 > - PR-time operational flow（觸發條件 / step summary 解讀 / regression 處理 informational / nightly trend watchdog）：[§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) below。
 
