@@ -118,7 +118,7 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
      ConfigMap then holds. The rollback is conditional on the version the
      write produced: if only other keys changed, it is retried on the fresh
      version a bounded number of times; if another writer changed the patched
-     key itself, it is not rolled back (their change is kept; exit {EXIT_STATE_UNKNOWN}).
+     key itself, it is not rolled back (exit {EXIT_STATE_UNKNOWN}).
 signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   exporter call; from the rollback on they are ignored until the process
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes

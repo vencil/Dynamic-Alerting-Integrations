@@ -1802,7 +1802,7 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 | `4` | 連不到 exporter（沒有符合 selector 的 pod、pods/proxy 失敗、回應形狀不對）：寫入前發生則什麼都沒寫，寫入後發生則已回滾 |
 | `5` | 回滾本身失敗：ConfigMap 可能仍是新位元組，需人工處理 |
 | `6` | 寫入後被 Ctrl-C／SIGTERM 中斷，或發生意外錯誤；已回滾（寫入前被中斷則照一般方式結束，什麼都沒寫） |
-| `7` | 無法判定 ConfigMap 現在的內容（讀不到，或新舊皆非），或寫入後另一個寫者改了同一個 key（不回滾，保留對方的變更）：需人工確認 |
+| `7` | 無法判定 ConfigMap 現在的內容（讀不到，或新舊皆非），或寫入後另一個寫者改了同一個 key（不回滾）：需人工確認 |
 
 ---
 
