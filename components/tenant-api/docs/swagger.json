@@ -1310,7 +1310,7 @@
         },
         "/api/v1/tenants/{id}/effective": {
             "get": {
-                "description": "Returns the tenant config after merging the _defaults.yaml\nchain from L0 (conf.d root) down to the tenant's own file.\nIncludes two SHA-256 hashes (truncated to 16 hex chars):\nsource_hash for raw file content and merged_hash for the\ncanonical-JSON of the merged dict. Parity target:\nscripts/tools/dx/describe_tenant.py.",
+                "description": "Returns the tenant config after merging the _defaults.yaml\nchain from L0 (conf.d root) down to the tenant's own file,\nwith the root platform files' per-tenant `tenants:` entries\napplied between the chain and the tenant file (the tenant\nfile wins key by key); platform_overlay names the files and\nkeys that layer supplied and is omitted when it supplied none.\nIncludes two SHA-256 hashes (truncated to 16 hex chars):\nsource_hash for raw file content and merged_hash for the\ncanonical-JSON of the merged dict. Parity target:\nscripts/tools/dx/describe_tenant.py.",
                 "produces": [
                     "application/json"
                 ],
@@ -1819,6 +1819,13 @@
                 "merged_hash": {
                     "type": "string"
                 },
+                "platform_overlay": {
+                    "description": "PlatformOverlay names the root platform files whose `tenants:` block\nsupplied values to EffectiveConfig (#2019), in merge order, each with\nthe top-level keys it supplied — only keys the tenant file does not\nwrite and no later platform file overwrote. Omitted when that layer\ncontributes nothing. Same name and shape as describe_tenant.py.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/config.PlatformOverlaySource"
+                    }
+                },
                 "source_file": {
                     "type": "string"
                 },
@@ -1829,6 +1836,20 @@
                     "type": "string"
                 },
                 "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "config.PlatformOverlaySource": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string"
+                },
+                "keys": {
                     "type": "array",
                     "items": {
                         "type": "string"

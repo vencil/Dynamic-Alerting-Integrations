@@ -24,6 +24,10 @@ package main
 //   405 → {"error": "method not allowed"}
 //   413 → {"error": "request too large"}
 //
+// ⚠️ The request carries no platform files, so the root platform files'
+// per-tenant `tenants:` layer that /effective applies (#2019) is NOT
+// applied here — see config.SimulateEffective's header.
+//
 // Why base64 for YAML payloads: YAML inside JSON requires escaping
 // quotes/newlines, which is fragile when callers paste from a file.
 // base64 is one well-defined transcoding; encoding/json's []byte

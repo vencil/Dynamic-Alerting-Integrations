@@ -141,6 +141,8 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-
 `defaults_chain` 就是合併順序，越內層越後面。`mysql_connections: 90` 是不加引號的
 數字 ⇒ 來自平台的 `_defaults.yaml`，而鏈上最內層設它的是 `finance/_defaults.yaml`，
 也就是 **domain 層**。（`container_memory` 是加引號的字串，那個是租戶自己設的。）
+若輸出另有 `platform_overlay`，其中列出的鍵來自根目錄平台檔 `tenants:` 區塊給這個租戶的值
+（#2019），既不是 defaults chain 也不是租戶檔——這些鍵的來源以該清單為準，不看引號。
 若只想為這個租戶調整 `mysql_connections`，在 tenant 檔案中覆蓋即可：
 
 ```yaml

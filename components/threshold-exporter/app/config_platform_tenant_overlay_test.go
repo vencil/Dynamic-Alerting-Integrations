@@ -17,6 +17,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,6 +29,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // overlayMetricKey is the one threshold the matrix pins. The collector
@@ -50,13 +54,21 @@ type overlayMatrix struct {
 		Name   string            `json:"name"`
 		Files  map[string]string `json:"files"`
 		Expect map[string]struct {
-			Metric        *float64 `json:"metric"`
-			Dedup         *string  `json:"dedup"`      // Python routing plane
-			GroupWait     *string  `json:"group_wait"` // Python routing plane
-			ExporterDedup *string  `json:"exporter_dedup"`
-			SilentMode    *string  `json:"silent_mode"`
+			Metric        *float64       `json:"metric"`
+			Dedup         *string        `json:"dedup"`      // Python routing plane
+			GroupWait     *string        `json:"group_wait"` // Python routing plane
+			ExporterDedup *string        `json:"exporter_dedup"`
+			SilentMode    *string        `json:"silent_mode"`
+			Walker        *overlayWalker `json:"walker"` // #2019: /effective + describe_tenant
 		} `json:"expect"`
 	} `json:"trees"`
+}
+
+// overlayWalker is the matrix's walker-plane column (#2019): what
+// config.ResolveEffective (and describe_tenant.py) serve for the tenant.
+type overlayWalker struct {
+	EffectiveConfig map[string]any                 `json:"effective_config"`
+	PlatformOverlay []config.PlatformOverlaySource `json:"platform_overlay"`
 }
 
 func loadOverlayMatrix(t *testing.T) overlayMatrix {
@@ -206,6 +218,12 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				if got := exporterSilentMode(mgr, tenant); !sameOptString(got, want.SilentMode) {
 					t.Errorf("%s: %s exporter _silent_mode = %s, want %s", tree.Name, tenant, showOpt(got), showOpt(want.SilentMode))
 				}
+				// #2019: the walker plane must serve the same tenant values.
+				// The column is checked against ResolveEffective here and
+				// against the /metrics columns of the same row, so a row
+				// cannot pin a walker answer that disagrees with /metrics.
+				assertWalkerRow(t, dir, tree.Name, tenant, want.Walker)
+				assertWalkerAgreesWithMetrics(t, tree.Name, tenant, want.Walker, want.Metric, want.SilentMode, want.ExporterDedup)
 			}
 			// No tenant the table does not name is served — otherwise an
 			// orphan row passes by checking only the tenants it lists.
@@ -215,6 +233,67 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// assertWalkerRow checks config.ResolveEffective against the walker column:
+// not-found ⇔ null; otherwise the effective config (compared as JSON, the
+// wire form /effective serves), platform_overlay, and that the JSON omits
+// `platform_overlay` exactly when the column says null.
+func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker) {
+	t.Helper()
+	ec, err := config.ResolveEffective(dir, tenant)
+	if want == nil {
+		if !errors.Is(err, config.ErrTenantNotFound) {
+			t.Errorf("%s: /effective for %s = (%v, %v), want not found", tree, tenant, ec, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Errorf("%s: /effective for %s: %v", tree, tenant, err)
+		return
+	}
+	gotCfg, _ := json.Marshal(ec.EffectiveConfig)
+	wantCfg, _ := json.Marshal(want.EffectiveConfig)
+	if !bytes.Equal(gotCfg, wantCfg) {
+		t.Errorf("%s: /effective %s effective_config = %s, want %s", tree, tenant, gotCfg, wantCfg)
+	}
+	if !reflect.DeepEqual(ec.PlatformOverlay, want.PlatformOverlay) {
+		t.Errorf("%s: /effective %s platform_overlay = %+v, want %+v", tree, tenant, ec.PlatformOverlay, want.PlatformOverlay)
+	}
+	body, _ := json.Marshal(ec)
+	if has := bytes.Contains(body, []byte(`"platform_overlay"`)); has != (want.PlatformOverlay != nil) {
+		t.Errorf("%s: /effective %s JSON carries platform_overlay=%v, want %v: %s", tree, tenant, has, want.PlatformOverlay != nil, body)
+	}
+}
+
+// assertWalkerAgreesWithMetrics is the row's own consistency: the walker
+// column's mysql_connections / _silent_mode / _severity_dedup are the values
+// the /metrics columns say the exporter resolves (absent `_severity_dedup` =
+// "enable", absent `_silent_mode` = "").
+func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant string, w *overlayWalker, metric *float64, silent, dedup *string) {
+	t.Helper()
+	if (w == nil) != (metric == nil) {
+		t.Errorf("%s: %s walker present=%v but metric present=%v", tree, tenant, w != nil, metric != nil)
+		return
+	}
+	if w == nil {
+		return
+	}
+	v, err := strconv.ParseFloat(fmt.Sprint(w.EffectiveConfig[overlayMetricKey]), 64)
+	if err != nil || v != *metric {
+		t.Errorf("%s: %s walker %s=%v, metric column %v", tree, tenant, overlayMetricKey, w.EffectiveConfig[overlayMetricKey], *metric)
+	}
+	sm, _ := w.EffectiveConfig["_silent_mode"].(string)
+	if silent == nil || sm != *silent {
+		t.Errorf("%s: %s walker _silent_mode=%q, silent_mode column %s", tree, tenant, sm, showOpt(silent))
+	}
+	dd, ok := w.EffectiveConfig["_severity_dedup"].(string)
+	if !ok {
+		dd = "enable"
+	}
+	if dedup == nil || dd != *dedup {
+		t.Errorf("%s: %s walker _severity_dedup=%q, exporter_dedup column %s", tree, tenant, dd, showOpt(dedup))
 	}
 }
 

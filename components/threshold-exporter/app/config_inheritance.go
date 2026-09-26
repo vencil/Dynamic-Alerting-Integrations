@@ -59,17 +59,21 @@ func computeEffectiveConfig(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
+	overlay ...config.PlatformBlock,
 ) (map[string]any, error) {
-	return config.ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	return config.ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay...)
 }
 
 // computeMergedHash returns the 16-char tenant-config fingerprint.
+// `overlay` is the tenant's root-platform-file entries (#2019); see
+// config.ComputeEffectiveConfig.
 func computeMergedHash(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
+	overlay ...config.PlatformBlock,
 ) (string, error) {
-	return config.ComputeMergedHash(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	return config.ComputeMergedHash(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay...)
 }
 
 // chainDefaults / parseChainDefaults / computeMergedHashFromChain: the
@@ -81,8 +85,8 @@ type chainDefaults = config.ChainDefaults
 
 func parseChainDefaults(b []byte) chainDefaults { return config.ParseChainDefaults(b) }
 
-func computeMergedHashFromChain(tenantYAMLBytes []byte, tenantID string, defaultsChain []chainDefaults) (string, error) {
-	return config.ComputeMergedHashFromChain(tenantYAMLBytes, tenantID, defaultsChain)
+func computeMergedHashFromChain(tenantYAMLBytes []byte, tenantID string, defaultsChain []chainDefaults, overlay ...config.PlatformBlock) (string, error) {
+	return config.ComputeMergedHashFromChain(tenantYAMLBytes, tenantID, defaultsChain, overlay...)
 }
 
 // computeSourceHash returns the 16-char source-file fingerprint.

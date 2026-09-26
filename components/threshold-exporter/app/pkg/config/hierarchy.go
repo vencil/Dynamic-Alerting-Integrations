@@ -30,6 +30,9 @@ package config
 //   - hash = SHA-256(canonical_json(merged))[:16]
 //   - canonical JSON = sort_keys + no-space + no-HTML-escape + no-trailing-newline
 //   - defaults chain is L0→Ln (root first, leaf last)
+//   - between the chain and the tenant file: the ROOT platform files'
+//     `tenants:` entries for the tenant (#2019, platform_overlay.go), per
+//     top-level key, the tenant file winning — the /metrics plane's order
 //
 // Limit of scope: this resolver is *read-only* and *stateless*. Each call
 // runs one fresh ScanDirTree (no prior, so every file is read and hashed) —
@@ -61,13 +64,19 @@ var ErrTenantNotFound = errors.New("tenant not found in config tree")
 // HTTP response so tenant-api's /effective contract doesn't grow surface for
 // downstream consumers that don't need it.
 type EffectiveConfig struct {
-	TenantID        string         `json:"tenant_id"`
-	SourceFile      string         `json:"source_file"`
-	SourceHash      string         `json:"source_hash"`
-	MergedHash      string         `json:"merged_hash"`
-	DefaultsChain   []string       `json:"defaults_chain"`
-	EffectiveConfig map[string]any `json:"effective_config"`
-	Warnings        []string       `json:"warnings,omitempty"`
+	TenantID      string   `json:"tenant_id"`
+	SourceFile    string   `json:"source_file"`
+	SourceHash    string   `json:"source_hash"`
+	MergedHash    string   `json:"merged_hash"`
+	DefaultsChain []string `json:"defaults_chain"`
+	// PlatformOverlay names the root platform files whose `tenants:` block
+	// supplied values to EffectiveConfig (#2019), in merge order, each with
+	// the top-level keys it supplied — only keys the tenant file does not
+	// write and no later platform file overwrote. Omitted when that layer
+	// contributes nothing. Same name and shape as describe_tenant.py.
+	PlatformOverlay []PlatformOverlaySource `json:"platform_overlay,omitempty"`
+	EffectiveConfig map[string]any          `json:"effective_config"`
+	Warnings        []string                `json:"warnings,omitempty"`
 
 	// TenantOverridesRaw is the tenant.yaml override block before any
 	// defaults-chain merge. Populated by ResolveEffective so the C-12
@@ -76,7 +85,13 @@ type EffectiveConfig struct {
 	TenantOverridesRaw map[string]any `json:"-"`
 
 	// MergedDefaults is the defaults chain merged together for this
-	// tenant's directory, BEFORE the tenant override is applied. This
+	// tenant's directory, BEFORE the tenant override is applied — with the
+	// root platform files' NON-MAPPING values for this tenant (#2019)
+	// merged over it, because deleting such a key from the tenant file
+	// falls back to THAT value, not to the chain's. A mapping-valued
+	// platform key (or one the tenant writes as a mapping) is replaced
+	// wholesale by the tenant's value, so its leaves fall back to the chain
+	// and are left as the chain has them (platformInherited). This
 	// is the "what the tenant inherits" view that the guard's
 	// redundant-override check needs (different tenants under cascading
 	// _defaults.yaml may inherit different merged defaults; see
@@ -87,7 +102,9 @@ type EffectiveConfig struct {
 // ResolveEffective locates the tenant file that defines `tenantID` in ONE
 // ScanDirTree walk of `configDir` (the exporter's own walker), collects the
 // _defaults.yaml chain from root down to the tenant's directory, and returns
-// the merged config plus dual hashes.
+// the merged config plus dual hashes. The root platform files' `tenants:`
+// entries for the tenant are merged between the chain and the tenant file
+// and reported in PlatformOverlay (#2019).
 //
 // Returns (nil, ErrTenantNotFound) when the tenant isn't present — callers
 // should translate to 404. A tenant declared in two files returns its own
@@ -131,6 +148,11 @@ var discardLogger = log.New(io.Discard, "", 0)
 type effectiveResolver struct {
 	scan          *TreeScan
 	defaultsByDir map[string]string // dir → the one carrier TreeScan.DefaultsCarriers picks there
+
+	// platform is every root platform file's `tenants:` block (#2019),
+	// decoded on the first resolve and shared by every tenant after it.
+	platform     []PlatformTenants
+	platformDone bool
 }
 
 // newEffectiveResolver reads the chain rule off the scan — the SAME
@@ -165,6 +187,18 @@ func (r *effectiveResolver) bytesOf(absPath string) ([]byte, error) {
 	return f.Data, nil
 }
 
+// platformTenants decodes the root platform files' `tenants:` blocks once
+// per resolver, from the scan's own bytes (LoadRootPlatformTenants).
+func (r *effectiveResolver) platformTenants() []PlatformTenants {
+	if !r.platformDone {
+		r.platform = LoadRootPlatformTenants(r.scan, nil, func(f *TreeFile) ([]byte, error) {
+			return r.bytesOf(f.AbsPath)
+		})
+		r.platformDone = true
+	}
+	return r.platform
+}
+
 // rel renders absPath relative to the resolved scan root, slash-separated.
 func (r *effectiveResolver) rel(absPath string) string {
 	if rp, err := filepath.Rel(r.scan.AbsRoot, absPath); err == nil {
@@ -193,7 +227,8 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		defaultsYAML = append(defaultsYAML, b)
 	}
 
-	merged, mergedDefaults, tenantRaw, err := computeEffectiveConfigBytesDetailed(tenantBytes, tenantID, defaultsYAML)
+	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
+	merged, mergedDefaults, tenantRaw, sources, err := computeEffectiveConfigBytesDetailed(tenantBytes, tenantID, defaultsYAML, overlay)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +251,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		SourceHash:         fmt.Sprintf("%x", sourceSum)[:16],
 		MergedHash:         fmt.Sprintf("%x", mergedSum)[:16],
 		DefaultsChain:      relChain,
+		PlatformOverlay:    sources,
 		EffectiveConfig:    merged,
 		TenantOverridesRaw: tenantRaw,
 		MergedDefaults:     mergedDefaults,
@@ -231,8 +267,9 @@ func computeEffectiveConfigBytes(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
+	overlay []PlatformBlock,
 ) (map[string]any, error) {
-	merged, _, _, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	merged, _, _, _, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay)
 	return merged, err
 }
 
@@ -241,7 +278,9 @@ func computeEffectiveConfigBytes(
 // needs:
 //
 //   - mergedDefaults: the defaults chain merged together, BEFORE the
-//     tenant override is applied. Captured as a deep-copy snapshot so
+//     tenant override is applied — with the platform values a deleted
+//     tenant key falls back to merged over it (#2019, platformInherited:
+//     non-mapping platform values only). Captured as a copy so
 //     subsequent merging into `merged` doesn't mutate it.
 //   - tenantRaw:      the tenant.yaml override block, raw. Returned
 //     by extractTenantRaw and never mutated past this point.
@@ -250,32 +289,42 @@ func computeEffectiveConfigBytes(
 // library treats as the tuple (NewDefaults, TenantOverrides) per
 // tenant. We deliberately return them separately rather than letting
 // downstream callers re-derive: re-derivation requires re-running the
-// merge engine and would invite drift.
+// merge engine and would invite drift. `sources` is the platform
+// overlay's attribution (EffectiveConfig.PlatformOverlay); nil without one.
 func computeEffectiveConfigBytesDetailed(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
-) (merged, mergedDefaults, tenantRaw map[string]any, err error) {
+	overlay []PlatformBlock,
+) (merged, mergedDefaults, tenantRaw map[string]any, sources []PlatformOverlaySource, err error) {
 	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
 	// debounced path's per-tenant call, and a slice per call was +1 alloc
 	// per re-merged tenant). A file after a broken one is never parsed.
 	merged = make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		if merged, err = foldDefaults(merged, i, ParseChainDefaults(defBytes)); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
-	// Snapshot the merged-defaults state BEFORE the tenant override
-	// is applied. deepCopyMap defends against shared sub-maps that
-	// the subsequent deepMerge could mutate via aliasing.
-	mergedDefaults = deepCopyMap(merged)
-
-	merged, tenantRaw, err = mergeTenantOver(merged, tenantYAMLBytes, tenantID)
+	chain := merged
+	merged, tenantRaw, sources, err = mergeTenantOver(chain, tenantYAMLBytes, tenantID, overlay)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return merged, mergedDefaults, tenantRaw, nil
+
+	// The merged-defaults state BEFORE the tenant override: `chain` is
+	// untouched by the merge above (deepMerge copies its base), and is
+	// copied here so a caller mutating MergedDefaults cannot alias the
+	// effective config. The platform part is platformInherited — only what
+	// deleting a tenant key really falls back to, not the whole platform
+	// union (a mapping-valued platform key is replaced wholesale).
+	if pi := platformInherited(overlay, tenantRaw); pi != nil {
+		mergedDefaults = deepMerge(chain, pi)
+	} else {
+		mergedDefaults = deepCopyMap(chain)
+	}
+	return merged, mergedDefaults, tenantRaw, sources, nil
 }
 
 // ChainDefaults is one defaults file taken through the FIRST half of the
@@ -337,17 +386,19 @@ func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]an
 }
 
 // mergeTenantOver applies tenantID's override block from the tenant file's
-// bytes on top of the merged defaults.
-func mergeTenantOver(merged map[string]any, tenantYAMLBytes []byte, tenantID string) (out, tenantRaw map[string]any, err error) {
+// bytes on top of the merged defaults — with the platform overlay's keys
+// the tenant file does not write filled in first (overlayTenant; #2019).
+func mergeTenantOver(merged map[string]any, tenantYAMLBytes []byte, tenantID string, overlay []PlatformBlock) (out, tenantRaw map[string]any, sources []PlatformOverlaySource, err error) {
 	var tenantDoc any
 	if err := yaml.Unmarshal(tenantYAMLBytes, &tenantDoc); err != nil {
-		return nil, nil, fmt.Errorf("parse tenant: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse tenant: %w", err)
 	}
 	tenantRaw, err = extractTenantRaw(normalizeYAMLToJSON(tenantDoc), tenantID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return deepMerge(merged, tenantRaw), tenantRaw, nil
+	override, sources := overlayTenant(tenantRaw, overlay, merged)
+	return deepMerge(merged, override), tenantRaw, sources, nil
 }
 
 func deepMerge(base, override map[string]any) map[string]any {
@@ -546,24 +597,35 @@ func CanonicalJSON(data any) ([]byte, error) { return canonicalJSON(data) }
 // ComputeEffectiveConfig is the byte-input version of
 // computeEffectiveConfigBytes — public-facing alias for the simulate
 // primitive (app/handler_simulate.go) and the inheritance.go wrappers.
+//
+// `overlay` is the tenant's root-platform-file entries (PlatformOverlayFor;
+// #2019), applied after the defaults chain and before the tenant file, key
+// by key with the tenant file winning. ⛔ Variadic ON PURPOSE: a caller that
+// passes none gets exactly the pre-#2019 merge — which is what /simulate
+// wants (its request carries a defaults chain and no platform files) — and
+// every existing call site keeps compiling with one merge function, not a
+// *WithOverlay twin that could drift from it.
 func ComputeEffectiveConfig(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
+	overlay ...PlatformBlock,
 ) (map[string]any, error) {
-	return computeEffectiveConfigBytes(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	return computeEffectiveConfigBytes(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay)
 }
 
 // ComputeMergedHash returns the 16-char `merged_hash` user-facing
 // fingerprint. SHA-256 over CanonicalJSON of ComputeEffectiveConfig's
 // output, truncated to 16 hex chars. Parity with describe_tenant.py
-// pinned by the golden fixtures under tests/golden/.
+// pinned by the golden fixtures under tests/golden/. `overlay` as for
+// ComputeEffectiveConfig.
 func ComputeMergedHash(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChainYAML [][]byte,
+	overlay ...PlatformBlock,
 ) (string, error) {
-	merged, err := ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	merged, err := ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay...)
 	if err != nil {
 		return "", err
 	}
@@ -577,16 +639,18 @@ func ComputeMergedHash(
 // parse and foldDefaults for the per-file fold (mergeDefaultsChain here,
 // computeEffectiveConfigBytesDetailed there) — so this is not a second merge. It only skips the
 // merged-defaults snapshot ComputeMergedHash computes and discards.
+// `overlay` as for ComputeEffectiveConfig.
 func ComputeMergedHashFromChain(
 	tenantYAMLBytes []byte,
 	tenantID string,
 	defaultsChain []ChainDefaults,
+	overlay ...PlatformBlock,
 ) (string, error) {
 	merged, err := mergeDefaultsChain(defaultsChain)
 	if err != nil {
 		return "", err
 	}
-	merged, _, err = mergeTenantOver(merged, tenantYAMLBytes, tenantID)
+	merged, _, _, err = mergeTenantOver(merged, tenantYAMLBytes, tenantID, overlay)
 	if err != nil {
 		return "", err
 	}

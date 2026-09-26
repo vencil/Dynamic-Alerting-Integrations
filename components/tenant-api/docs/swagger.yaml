@@ -40,6 +40,16 @@ definitions:
         type: object
       merged_hash:
         type: string
+      platform_overlay:
+        description: |-
+          PlatformOverlay names the root platform files whose `tenants:` block
+          supplied values to EffectiveConfig (#2019), in merge order, each with
+          the top-level keys it supplied — only keys the tenant file does not
+          write and no later platform file overwrote. Omitted when that layer
+          contributes nothing. Same name and shape as describe_tenant.py.
+        items:
+          $ref: '#/definitions/config.PlatformOverlaySource'
+        type: array
       source_file:
         type: string
       source_hash:
@@ -47,6 +57,15 @@ definitions:
       tenant_id:
         type: string
       warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  config.PlatformOverlaySource:
+    properties:
+      file:
+        type: string
+      keys:
         items:
           type: string
         type: array
@@ -1876,7 +1895,11 @@ paths:
     get:
       description: |-
         Returns the tenant config after merging the _defaults.yaml
-        chain from L0 (conf.d root) down to the tenant's own file.
+        chain from L0 (conf.d root) down to the tenant's own file,
+        with the root platform files' per-tenant `tenants:` entries
+        applied between the chain and the tenant file (the tenant
+        file wins key by key); platform_overlay names the files and
+        keys that layer supplied and is omitted when it supplied none.
         Includes two SHA-256 hashes (truncated to 16 hex chars):
         source_hash for raw file content and merged_hash for the
         canonical-JSON of the merged dict. Parity target:

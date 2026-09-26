@@ -124,7 +124,7 @@ func TestComputeEffectiveConfig_NullThreshold_MatchesEmittingPath(t *testing.T) 
 	defaults := []byte("defaults:\n  mysql_connections: 80\n  container_memory: 85\n")
 	tenant := []byte("tenants:\n  tenant-a:\n    mysql_connections: ~\n    container_memory: \"disable\"\n")
 
-	merged, err := computeEffectiveConfigBytes(tenant, "tenant-a", [][]byte{defaults})
+	merged, err := computeEffectiveConfigBytes(tenant, "tenant-a", [][]byte{defaults}, nil)
 	if err != nil {
 		t.Fatalf("computeEffectiveConfigBytes: %v", err)
 	}

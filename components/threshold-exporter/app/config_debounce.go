@@ -52,6 +52,8 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // Reload trigger reasons — label values for the
@@ -254,6 +256,10 @@ type reloadPriorState struct {
 	// entry of the new chain changed hash (#1964). nil before hierarchical
 	// mode first commits.
 	graph *InheritanceGraph
+	// platform is the last commit's root platform files' `tenants:`
+	// blocks (#2019): the second input set classifyTenant compares, and
+	// the decode cache this tick's LoadRootPlatformTenants reuses by hash.
+	platform []config.PlatformTenants
 }
 
 // reloadScanState bundles the hierarchy projection of this tick's scan
@@ -267,6 +273,11 @@ type reloadScanState struct {
 	hashes   map[string]string
 	graph    *InheritanceGraph
 	tree     *treeScan
+	// platform is this tick's root platform files' `tenants:` blocks
+	// (#2019); platformMoved is platformFilesMoved(prior, this) — false on
+	// the common tick, which skips the per-tenant comparison.
+	platform      []config.PlatformTenants
+	platformMoved bool
 }
 
 // reloadResult bundles classifyAndCount's output for installNewHierarchyState
@@ -295,6 +306,7 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 		tenantSources:    m.hierarchy.tenantSources,
 		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
 		graph:            m.hierarchy.graph,          // #1964: prior chain membership
+		platform:         m.hierarchy.platform,       // #2019: prior platform per-tenant blocks
 		hierarchicalMode: m.hierarchy.enabled,
 		tree:             m.flat.tree,
 	}
@@ -344,12 +356,15 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 		return reloadScanState{}, true, nil
 	}
 
+	platform := config.LoadRootPlatformTenants(scan, prior.platform, readTreeFile)
 	return reloadScanState{
-		tenants:  scan.Tenants,
-		defaults: scan.Defaults,
-		hashes:   scan.AbsHashes(),
-		graph:    scan.InheritanceGraph(),
-		tree:     scan,
+		tenants:       scan.Tenants,
+		defaults:      scan.Defaults,
+		hashes:        scan.AbsHashes(),
+		graph:         scan.InheritanceGraph(),
+		tree:          scan,
+		platform:      platform,
+		platformMoved: platformFilesMoved(prior.platform, platform),
 	}, false, nil
 }
 
@@ -421,6 +436,16 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			scopePaths = append(scopePaths, addedPaths...)
 		}
 	}
+	// #2019: the root platform files' entries for this tenant are merge
+	// input too, outside the chain. Compared only on a tick where some
+	// root platform file moved, and then per tenant — an edit to another
+	// tenant's entry does not touch this one.
+	var overlayKeys []string
+	if scan.platformMoved {
+		var overlayPaths []string
+		overlayPaths, overlayKeys = platformOverlayDelta(prior.platform, scan.platform, tid)
+		scopePaths = append(scopePaths, overlayPaths...)
+	}
 	defaultsChanged := membershipChanged || len(scopePaths) > 0
 
 	if !sourceChanged && !defaultsChanged {
@@ -433,7 +458,8 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		// Fall through to compute.
 	}
 
-	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain)
+	overlay := config.PlatformOverlayFor(scan.platform, tid)
+	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain, overlay...)
 	if mergeErr != nil {
 		logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
 		// Preserve any prior merged_hash we had so the /effective
@@ -486,6 +512,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 					prior.parsedDefaults, res.newParsedDefaults,
 					scan.hashes, prior.hashes,
 					removedPaths, addedPaths,
+					overlayKeys, overlay,
 				)
 			}
 			switch effect {
@@ -600,6 +627,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.mergedHashes = result.newMergedHashes
 	m.hierarchy.graph = scan.graph
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
+	m.hierarchy.platform = scan.platform
 	m.mu.Unlock()
 
 	if err := m.commitFlatFrom(scan.tree); err != nil {
@@ -684,7 +712,10 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 // Per-tenant duplication is intentional: ops alerts on the metric
 // (`sum(rate(da_config_parse_failure_total{file_basename="_defaults.yaml"}
 // [5m])) > 0`) and the count itself is the blast-radius signal.
-func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string) (string, error) {
+//
+// `overlay` is the tenant's root-platform-file entries (#2019,
+// config.PlatformOverlayFor) — part of what merged_hash is a hash of.
+func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string, overlay ...config.PlatformBlock) (string, error) {
 	tenantBytes, err := os.ReadFile(tenantFile)
 	if err != nil {
 		return "", err
@@ -697,7 +728,7 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 		}
 		chainBytes = append(chainBytes, b)
 	}
-	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes)
+	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes, overlay...)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}

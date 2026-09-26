@@ -25,6 +25,15 @@ package config
 // implementations, so read a simulate result as "what the config would
 // merge to", not as "what /metrics will emit".
 //
+// ⚠️ NO PLATFORM PER-TENANT LAYER (#2019). /effective, da-guard and the
+// exporter's merged_hash also apply the root platform files' `tenants:`
+// entries for the tenant (PlatformOverlayFor). A /simulate request carries
+// a tenant file and a defaults chain only — no platform files — so that
+// layer is not applied here, and for a tenant a root platform file names
+// the simulated effective config and merged_hash differ from /effective's
+// by exactly that layer. Deliberate: the request shape is unchanged, and
+// the result is "tenant file + this chain", nothing read from disk.
+//
 // API shape mirrors describe_tenant.py JSON output and EffectiveConfig
 // so HTTP consumers can compare the two responses field-for-field.
 

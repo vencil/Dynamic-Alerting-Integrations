@@ -308,6 +308,15 @@ func pathOverriddenIn(node any, segs []string) bool {
 //     because merged_hash *would* have moved, but parse failures or
 //     edge cases land here rather than in a bogus "applied" bucket).
 //
+// `overlayKeys` (#2019) are the top-level keys whose value in the
+// tenant's root-platform-file entries (platformOverlayDelta) changed this
+// tick. They are TOP-LEVEL keys, not dot paths — a tenant key replaces a
+// platform key wholesale (config.overlayTenant) — so each is shadowed iff
+// the tenant file writes that key at all; they join step 2's "anything
+// changed" test and step 3's "every change is shadowed" test. `overlay`
+// is the tenant's current platform entries: a CHAIN key they set shadows
+// the chain change just as a tenant-file key does.
+//
 // All disk-I/O is deliberately scoped to this rare path (tenants in
 // the noOp set are by definition the "quiet defaults edit" minority).
 // On parse failure of the tenant file we return "cosmetic" with a
@@ -319,6 +328,8 @@ func classifyDefaultsNoOpEffect(
 	priorParsed, newParsed map[string]map[string]any,
 	hashes, priorHashes map[string]string,
 	removed, added []string,
+	overlayKeys []string,
+	overlay []config.PlatformBlock,
 ) string {
 	var allChanged []string
 	// #1964: a file that joined the chain contributes its whole content
@@ -378,7 +389,7 @@ func classifyDefaultsNoOpEffect(
 			allChanged = append(allChanged, changedDefaultsKeys(empty, next)...)
 		}
 	}
-	if len(allChanged) == 0 {
+	if len(allChanged) == 0 && len(overlayKeys) == 0 {
 		return "cosmetic"
 	}
 	var doc any
@@ -389,8 +400,17 @@ func classifyDefaultsNoOpEffect(
 	if err != nil {
 		return "cosmetic"
 	}
-	if tenantOverridesAll(overrides, allChanged) {
-		return "shadowed"
+	// #2019: a chain change is shadowed by whatever the tenant's own layer
+	// sets over the chain — its file AND its root platform entries
+	// (`overlay`, merged exactly as the merge does). A platform change
+	// (overlayKeys) can only be shadowed by the tenant FILE, below.
+	if !tenantOverridesAll(config.ApplyPlatformOverlay(overrides, overlay), allChanged) {
+		return "cosmetic"
 	}
-	return "cosmetic"
+	for _, k := range overlayKeys {
+		if _, written := overrides[k]; !written {
+			return "cosmetic"
+		}
+	}
+	return "shadowed"
 }

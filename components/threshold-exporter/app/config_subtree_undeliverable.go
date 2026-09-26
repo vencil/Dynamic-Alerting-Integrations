@@ -15,9 +15,8 @@ package main
 // So the same file gets the same tenant verdict on both planes. (Not "both
 // planes hold the same tenants" unconditionally: the incremental tenant-only
 // reload keeps a now-broken file's last good tenants, which the stateless
-// readers — tenant-api, da-guard — cannot (#1980), and a `_`-prefixed file
-// declaring `tenants:` reaches /metrics but not /effective (#1982). Neither
-// is this audit's business.) What this audit reports is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
+// readers — tenant-api, da-guard — cannot (#1980). Not this audit's
+// business.) What this audit reports is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
 // /effective resolves the tenant's inheritance chain and reports the value;
 // the collector cannot emit it, because it iterates the ROOT defaults and the
 // declared surface (`optional_overrides:`), and a nested `_` file feeds
