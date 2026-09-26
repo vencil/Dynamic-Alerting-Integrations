@@ -184,23 +184,9 @@ CITATIONS = (
          (OPEN, TAIL),
          "The `CANARY_BENCH` vs `CANARY_BENCHES` comment — the site that "
          "drifted first in #1439."),
-    Cite("CHANGELOG.md",
-         "原文逐字為",
-         (OPEN, TAIL),
-         "The #1439 entry that reproduces the sentence and marks its elision."),
-    Cite("CHANGELOG.md",
-         "漂移落在健康 runner 的抖動內",
-         (FLAP, GATE),
-         "A Chinese paraphrase built around verbatim fragments. ⚠️ Not named "
-         "by the ticket; found by enumeration."),
-    Cite("CHANGELOG.md",
-         "Sleep 仍解析並顯示",
-         (EYES_LC,),
-         "⚠️ Another quoted fragment in that same entry, near enough to the "
-         "previous anchor to fall inside its window yet not asserted by it — "
-         "so it sat unpinned until a blind reviewer mutated it and the suite "
-         "stayed green. Being in range is not the same as being checked. "
-         "Lowercased `emitted`."),
+    # The three `CHANGELOG.md` citations (the #1439 entry) left with that
+    # entry: the #2102 distill condensed the frozen [Unreleased] into
+    # changelog.d/ fragments that do not quote the sentence.
     Cite("docs/internal/benchmark-playbook.md",
          "3-4% 漂移只有 ~30-40us",
          (FLAP, GATE),
@@ -259,7 +245,8 @@ CITATIONS = (
 # by another copy in the same file — the nearest two copies are thousands of
 # characters apart". That stopped being true the moment a further
 # `CHANGELOG.md` citation was declared, with its anchor inside this window of
-# its neighbour's. So the separation is no longer an invariant
+# its neighbour's (those citations have since left with the #2102 distill;
+# the lesson stands). So the separation is no longer an invariant
 # and is not claimed as one — `_assert_unambiguous` asserts the property that
 # actually matters instead, that each declared segment occurs exactly ONCE
 # inside the window it is checked in.

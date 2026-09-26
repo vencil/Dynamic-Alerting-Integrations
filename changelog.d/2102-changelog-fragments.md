@@ -1,6 +1,6 @@
 ---
 section: Changed
-topic: dx
+topic: dev-workflow
 issues: [2102]
 created: 2026-09-26T15:40:04+00:00
 ---
