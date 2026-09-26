@@ -835,6 +835,22 @@ definitions:
     type: object
   internal_handler.TenantSummary:
     properties:
+      config_error:
+        description: |-
+          ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
+          exists but is not usable, so every other field except ID is empty —
+          its metadata is UNKNOWN, not unlabeled. Absent on a healthy row.
+          Values: unreadable (stat/read failed, e.g. a dangling symlink or a
+          permission error), not_regular_file (e.g. a symlink to a directory),
+          malformed_yaml (not parseable as YAML), invalid_config (valid YAML that
+          does not match the tenant config schema). The first three come from
+          confd.FileProblem; invalid_config is decided by this handler.
+        enum:
+        - unreadable
+        - not_regular_file
+        - malformed_yaml
+        - invalid_config
+        type: string
       db_type:
         type: string
       domain:
@@ -1525,8 +1541,11 @@ paths:
       - prs
   /api/v1/tenants:
     get:
-      description: Returns tenants visible to the authenticated user, filtered by
-        RBAC.
+      description: |-
+        Returns tenants visible to the authenticated user, filtered by RBAC.
+        A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
+        (unreadable | not_regular_file | malformed_yaml | invalid_config). Its environment/domain are unknown, so the
+        row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
       produces:
       - application/json
       responses:

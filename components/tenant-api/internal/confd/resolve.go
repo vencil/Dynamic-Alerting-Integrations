@@ -100,8 +100,13 @@ func DefaultTenantFileName(tenantID string) string { return tenantID + ".yaml" }
 // matchTenantFiles returns the sorted base names in configDir that classify as
 // tenantID's config file. A missing configDir yields no matches rather than an
 // error — see ErrTenantFileNotFound.
+//
+// Enumeration is ListTenantFiles, the one conf.d loop (#1680). Content is
+// deliberately NOT consulted: this is the write plane's resolver, and it must
+// still find a tenant's file when that file is broken — otherwise no API could
+// ever repair it.
 func matchTenantFiles(configDir, tenantID string) ([]string, error) {
-	entries, err := os.ReadDir(configDir)
+	files, err := ListTenantFiles(configDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -109,15 +114,11 @@ func matchTenantFiles(configDir, tenantID string) ([]string, error) {
 		return nil, err
 	}
 	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
+	for _, f := range files {
+		if f.ID != tenantID {
 			continue
 		}
-		id, ok := TenantIDFromFile(e.Name())
-		if !ok || id != tenantID {
-			continue
-		}
-		names = append(names, e.Name())
+		names = append(names, f.Name)
 	}
 	sort.Strings(names)
 	return names, nil

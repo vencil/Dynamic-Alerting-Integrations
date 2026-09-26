@@ -70,7 +70,7 @@
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
 | `GET` | `/api/v1/me` | read | 當前呼叫者的 email + groups + RBAC 摘要 |
-| `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶 |
+| `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失 |
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);內含短期快照快取,為大量租戶下的低延遲設計 |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + 解析後的閾值;`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409 |
 | `GET` | `/api/v1/tenants/{id}/effective` | read | 最終生效設定(租戶覆寫與平台預設逐層合併後的值)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測) |
@@ -83,6 +83,8 @@
 | `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
+
+> **降級列(#1680)**:`GET /api/v1/tenants` 與 `/search` 對「conf.d 裡有這個租戶檔、但檔案無法使用」的租戶回一列 `{"id":"<id>","config_error":"<原因>"}`,其餘欄位全空——它的 metadata 是**未知**,不是「未標記」。`config_error` 的值是穩定契約:`unreadable`(stat/讀取失敗,例如斷掉的 symlink、權限不足)、`not_regular_file`(例如指向目錄的 symlink)、`malformed_yaml`(不是合法 YAML)、`invalid_config`(是合法 YAML 但不符租戶設定結構);健康的列沒有這個欄位。空檔視為可用(列出一列無 metadata 的租戶,與過去相同)。**只有**命中規則對 `environments` 與 `domains` **都不設限**的呼叫者看得到降級列,shadow 與 enforce 模式皆然——受限呼叫者看不到,因為該租戶真實的環境/域讀不出來,不能當成未標記放行;org 軸照常判定(組織清單來自 `_tenant_orgs.yaml`,不受壞檔影響)。`/search` 的 metadata 篩選(`environment` / `tier` / `domain` / `db_type` / `tag`)不會命中降級列,`q` 仍比對其 `id`。federation 的 orphan 偵測、啟動時的 registry 完整性檢查與寫入平面的檔案解析刻意**不看檔案內容**,壞檔租戶在這些平面仍算活著——所以 `PUT` 仍能把壞檔修回來。
 
 ### Custom Alerts(租戶自助告警)
 

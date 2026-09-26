@@ -37,22 +37,22 @@ import (
 //
 // Shared by the backfill handler and the startup integrity guard; the
 // "what counts as a tenant file" rule itself lives once in package confd,
-// which every scanner and ValidateTenantID share (no copy to drift).
+// which every scanner and ValidateTenantID share (no copy to drift), and so
+// does the enumeration loop itself (confd.ListTenantFiles, #1680).
+//
+// ⛔ Content-blind on purpose: a tenant whose file is broken (malformed YAML,
+// dangling symlink) is still a tenant that was onboarded against the
+// registry, so it must still count toward "the fleet is non-empty". Whether
+// the file is usable is confd.ReadTenantFile's question, which this caller
+// deliberately does not ask.
 func ListTenantIDs(configDir string) ([]string, error) {
-	entries, err := os.ReadDir(configDir)
+	files, err := confd.ListTenantFiles(configDir)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		id, ok := confd.TenantIDFromFile(e.Name())
-		if !ok {
-			continue
-		}
-		ids = append(ids, id)
+	ids := make([]string, 0, len(files))
+	for _, f := range files {
+		ids = append(ids, f.ID)
 	}
 	return ids, nil
 }

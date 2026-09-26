@@ -48,6 +48,17 @@ import (
 //     across id / owner / domain / db_type / tags[]. Inverted index
 //     / fuzzy matching is out of scope; revisit if a customer needs
 //     it (rare in practice — operators search by exact id prefix).
+//   - DEGRADED rows (#1680 — a tenant whose conf.d file is not usable,
+//     carrying only id + config_error) are part of the snapshot on
+//     purpose, and go through the same filterTenantsByRBAC (so only
+//     metadata-unrestricted callers see them). The exact-match metadata
+//     filters (environment / tier / domain / db_type / tag) never match
+//     one: its metadata is UNKNOWN, and matching "unknown" against a
+//     requested value would be a guess. Free-text q still matches its id
+//     — the only field it has — so an operator searching for a tenant by
+//     name finds it broken rather than absent. Sorting treats its empty
+//     metadata like any unlabeled row (sorts first, id tiebreaker).
+//     Pinned by TestSearchTenants_DegradedRows.
 //   - cursor-style pagination uses a numeric offset for v1. Opaque
 //     cursor tokens (resilient to ordering changes between pages)
 //     are a future enhancement.
