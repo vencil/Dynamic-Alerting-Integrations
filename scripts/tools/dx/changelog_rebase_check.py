@@ -126,7 +126,7 @@ def _render(r: dict) -> str:
         out.extend(f"  {sign} {ln[:160]}" for ln in lines[:SHOW_LIMIT])
         if len(lines) > SHOW_LIMIT:
             out.append(f"  … {len(lines) - SHOW_LIMIT} more")
-    out.append("OK — matches main + (mine − base)" if r["ok"]
+    out.append("OK — matches main − (base − mine) + (mine − base)" if r["ok"]
                else "MISMATCH — fix the file, then re-run")
     return "\n".join(out)
 
@@ -134,10 +134,11 @@ def _render(r: dict) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=i18n_text(
-            "rebase 後驗 CHANGELOG 的行集合是否恰為 main ＋（mine − base）："
+            "rebase 後驗 CHANGELOG 的行多重集合是否恰為「main 扣掉我刪的、加上我新增的」："
             "抓出被靜默吃掉或重複的條目。",
-            "After a rebase, check that CHANGELOG lines equal main + "
-            "(mine - base): catches bullets silently dropped or duplicated."),
+            "After a rebase, check that CHANGELOG lines (as a multiset) equal "
+            "main minus what I deleted plus what I added: catches bullets "
+            "silently dropped or duplicated."),
     )
     p.add_argument("--repo", default=".", help=i18n_text(
         "repo 或 worktree 路徑（預設目前目錄）",

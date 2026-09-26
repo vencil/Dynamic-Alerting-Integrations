@@ -119,4 +119,5 @@ def test_cli_runs_as_a_script(repo):
          "--main", "main"],
         capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.rstrip().endswith("OK — matches main + (mine − base)")
+    assert proc.stdout.rstrip().startswith("CHANGELOG.md: base=")
+    assert proc.stdout.rstrip().splitlines()[-1].startswith("OK — ")
