@@ -153,7 +153,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    走別的管線。
    ⛔ **不要從「不進 effective」推出「照樣生效」。** 本文件**不列出**哪些平級鍵生效——那份
    清單每次列都會錯（本 ADR 已因此被證偽三次）。⚠️ 兩個實測反例足以說明為什麼：
-   `max_metrics_per_tenant` 在 `-config-dir` 模式下**從未生效**（見條 2 末段）；`_routing` 與
+   `max_metrics_per_tenant` 在 `-config-dir` 模式下直到 #2028 都**從未生效**（見條 2 末段）；`_routing` 與
    `_routing_profile` 寫在頂層是**靜默 no-op**。⇒ **你改的那個鍵會不會生效，去問條 3 表上的
    消費端；不在表上就自己找到它再下結論。**
    ⛔ **哪些鍵允許出現，見 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)
@@ -191,13 +191,14 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    ⛔ `check_confd_schema.py` 對上述**全部**回 `RC=0`（`defaults` 的 sub-schema 逐字宣告
    values left loose）——**沒有任何 schema 閘門擋這一步**。
 
-   ⚠️ **`max_metrics_per_tenant` 是另一回事，不要用縮排來解釋它**：在 `-config-dir`（Helm 出貨
-   用的模式）下，`mergePartialInto` 只搬 `Defaults` / `StateFilters` / `OptionalOverrides` /
-   `Profiles` / `Tenants` 五個欄位，**沒有 `MaxMetricsPerTenant`** ⇒ 不論你寫在頂層還是縮排
-   進去，`ThresholdConfig.MaxMetricsPerTenant` **都是 0**，執行期一律 fallback 到內建的
-   `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件 `== 0`）。⛔ 也就是說**這個鍵在目錄
-   模式下從未生效**（單檔 `-config` 模式下才會）——`platform-defaults.schema.json` 的
-   `$comment` 目前把它列為平台層可讀，那句與目錄模式的實作不符。
+   ⚠️ **`max_metrics_per_tenant` 是另一回事，不要用縮排來解釋它**：它是**只在根目錄生效**的
+   頂層鍵（#2028）。`-config-dir`（Helm 出貨用的模式）下，只有 conf.d **根層**的
+   `_defaults.yaml` 寫的值會進 `ThresholdConfig.MaxMetricsPerTenant`；子目錄的 `_defaults.yaml`、
+   其他 `_*` 檔、租戶檔寫了都**記 WARN 並忽略**（租戶檔被剝除是安全考量：否則租戶能替自己調高
+   上限）。它不走子樹繼承——這是一個全域上限，不是逐租戶的閾值。未設或 0 ＝內建
+   `DefaultMaxMetricsPerTenant = 500`，負值＝不截斷（`resolve.go` 只在 `limit > 0` 時截斷）。
+   Helm 使用者透過 chart 的 `thresholdConfig.max_metrics_per_tenant` 設定。⛔ 史料：#2028 之前
+   `mergePartialInto` 不搬這個欄位，這個鍵在目錄模式下**從未生效**（單檔 `-config` 模式下才會）。
 
 3. **改了平級鍵之後，不要拿 `merged_hash` / `/effective` / `blast_radius` 去確認它生效**
    （那三個面看不到，而且執行期會把它標成 `effect="cosmetic"`，見下方「診斷面的代價」）。

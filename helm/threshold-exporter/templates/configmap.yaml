@@ -66,6 +66,23 @@ data:
     state_filters:
       {{- .Values.thresholdConfig.state_filters | toYaml | nindent 6 }}
     {{- end }}
+    {{- /* #2028: TOP-LEVEL sibling of defaults, read ONLY from this root
+           carrier. Checked BEFORE the truthy guard for the same reason as
+           optional_overrides above: a mistyped value must fail loudly, not be
+           indistinguishable from "unset". A non-integer would otherwise reach
+           the exporter's decode of the WHOLE _defaults.yaml and fail it. */}}
+    {{- $cap := .Values.thresholdConfig.max_metrics_per_tenant }}
+    {{- if not (kindIs "invalid" $cap) }}
+    {{- if not (or (kindIs "int" $cap) (kindIs "int64" $cap) (kindIs "float64" $cap)) }}
+    {{- fail (printf "thresholdConfig.max_metrics_per_tenant must be an integer, got %s" (kindOf $cap)) }}
+    {{- end }}
+    {{- if ne (float64 $cap) (floor (float64 $cap)) }}
+    {{- fail (printf "thresholdConfig.max_metrics_per_tenant must be an integer, got %v" $cap) }}
+    {{- end }}
+    {{- if ne (int64 $cap) 0 }}
+    max_metrics_per_tenant: {{ int64 $cap }}
+    {{- end }}
+    {{- end }}
   # Per-tenant YAML files — one key per tenant
   {{- range $tenant, $overrides := .Values.thresholdConfig.tenants }}
   {{ $tenant }}.yaml: |

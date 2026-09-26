@@ -215,7 +215,17 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 	var probe any
 	err := yaml.Unmarshal(data, &probe)
 	if err == nil {
-		return probe, true // syntactically fine; its content simply is not for this plane
+		// Syntactically fine; its content simply is not for this plane —
+		// except a key that exists ONLY on this plane (#2028). Subtree
+		// inheritance carries `defaults:` down the tree, but the per-tenant
+		// cap is one global value read from the root carrier alone, so a
+		// nested one would otherwise vanish without a word.
+		if top, ok := probe.(map[string]any); ok {
+			if _, set := top["max_metrics_per_tenant"]; set {
+				logger.Printf("WARN: max_metrics_per_tenant found in %s — only the ROOT _defaults.yaml may set it (one global cap, not inherited per subtree), ignoring", fullPath)
+			}
+		}
+		return probe, true
 	}
 	if metrics != nil {
 		metrics.IncParseFailure(filepath.Base(fullPath))
@@ -299,6 +309,10 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			logger.Printf("WARN: optional_overrides found in %s — platform-scoped, not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
 			partial.OptionalOverrides = nil
 		}
+		if partial.MaxMetricsPerTenant != 0 {
+			logger.Printf("WARN: max_metrics_per_tenant found in %s — not a defaults carrier (only the ROOT _defaults.yaml / _defaults.yml is), ignoring", name)
+			partial.MaxMetricsPerTenant = 0
+		}
 	}
 
 	if !isPlatformFile {
@@ -319,6 +333,14 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 		if len(partial.Defaults) > 0 {
 			logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.Defaults = nil
+		}
+		// ⛔ SECURITY (#2028): the cap exists to bound what ONE tenant can make
+		// the exporter emit. A tenant file that could set it would raise its
+		// own ceiling — or disable it with a negative value — via a direct
+		// GitOps push. Same boundary as Defaults above.
+		if partial.MaxMetricsPerTenant != 0 {
+			logger.Printf("WARN: max_metrics_per_tenant found in %s — platform-scoped, only the ROOT _defaults.yaml may set it, ignoring", name)
+			partial.MaxMetricsPerTenant = 0
 		}
 	}
 	if !isPlatformFile {
@@ -627,6 +649,15 @@ func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 			seen[k] = struct{}{}
 			merged.OptionalOverrides = append(merged.OptionalOverrides, k)
 		}
+	}
+	// #2028: this field was never copied, so in directory mode (the mode the
+	// Helm chart runs) the cap was always the built-in DefaultMaxMetricsPerTenant
+	// whatever `_defaults.yaml` said. Order-independent by construction:
+	// applyBoundaryRules zeroes it in every file except a defaults carrier, and
+	// a nested carrier never reaches this merge — so only the root carrier
+	// arrives here non-zero.
+	if partial.MaxMetricsPerTenant != 0 {
+		merged.MaxMetricsPerTenant = partial.MaxMetricsPerTenant
 	}
 	for profileName, profileValues := range partial.Profiles {
 		if merged.Profiles[profileName] == nil {

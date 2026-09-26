@@ -380,7 +380,7 @@ Federation 的 scrape interval 疊加在邊緣的 scrape interval 之上。最�
 緩解措施：
 - 邊緣 `write_relabel_configs` 只推送 `{tenant!=""}` 指標
 - Federation `match[]` 限縮拉取範圍
-- threshold-exporter `max_metrics_per_tenant` 限制每租戶指標數
+- threshold-exporter `max_metrics_per_tenant` 限制每租戶指標數（只認 conf.d 根目錄的 `_defaults.yaml`；Helm 用 `thresholdConfig.max_metrics_per_tenant`；未設＝500）
 - 監控 `prometheus_tsdb_head_series` 追蹤 cardinality 趨勢
 
 ### 7.3 高可用

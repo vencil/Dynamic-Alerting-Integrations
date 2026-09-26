@@ -107,7 +107,7 @@ JetBrains 內建 YAML schema 支援（不需 yaml-language-server）：
 
 - **頂層 key 嚴格**（`additionalProperties:false`）→ 擋上述非前綴類 typo。`^_state_` / `^_routing` patternProperties 放行 prefix-class（同 tenant validator 的寬鬆 prefix 模型 → prefix **內部** typo 如 `_routing_defualts` **不在守備**）。
 - **巢狀值刻意 loose**（`defaults` / `state_filters` 下的 metric / filter 名是動態的、不建模）。
-- 頂層 properties 同時鏡像 Go `ThresholdConfig`（`tenants` / `profiles` / `max_metrics_per_tenant` 也放行——loader 從任何檔讀它們）。
+- 頂層 properties 同時鏡像 Go `ThresholdConfig`（`tenants` / `profiles` / `max_metrics_per_tenant` 也放行——loader 從任何檔解碼它們；但 exporter 只採信根目錄 `_defaults.yaml` 的 `max_metrics_per_tenant`，其他位置記 WARN 忽略，#2028）。
 - **CI（`check_confd_schema.py`）與編輯器（devcontainer `yaml.schemas`）用同一 schema、同一組檔案**（兩種副檔名拼法、不分大小寫；例外見〈適用範圍〉的已知差異）。
 
 **仍 fast-follow（defer-with-trigger）**：(1) `_defaults` 的 **full 巢狀結構** schema（metric / filter 名動態，須真建模）——trigger＝收到 value-level「對合法亮紅 / 對錯放行」回報；(2) 其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）的專屬 schema——形狀各異，`_routing_profiles` 等已有自家 validator（`check_routing_profiles.py`）。

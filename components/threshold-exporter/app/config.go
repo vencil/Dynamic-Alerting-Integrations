@@ -1160,7 +1160,11 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		OptionalOverrides: prev.OptionalOverrides,
 		StateFilters:      prev.StateFilters, // shared
 		Profiles:          prev.Profiles,     // shared
-		Tenants:           make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
+		// #2028: same obligation — without it the cap set in the root
+		// `_defaults.yaml` silently fell back to the built-in one on the first
+		// tenant-only reload.
+		MaxMetricsPerTenant: prev.MaxMetricsPerTenant,
+		Tenants:             make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 	}
 	// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
 	//

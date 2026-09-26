@@ -173,10 +173,10 @@ function deployNotes(config, size) {
     },
     {
       id: 'cardinality',
-      title: t('每租戶指標上限不可經 Helm 設定', 'The per-tenant metric cap is not configurable through Helm'),
+      title: t('每租戶指標上限（選填）', 'Per-tenant metric cap (optional)'),
       body: t(
-        'chart 以 -config-dir 模式執行，此模式下 `max_metrics_per_tenant` 不生效，上限固定為內建的 500（見 ADR-017）。超限時 `da_tenant_metrics_over_limit` 會 > 0。',
-        'The chart runs the exporter in -config-dir mode, where `max_metrics_per_tenant` does not take effect; the cap is the built-in 500 (see ADR-017). When a tenant exceeds it, `da_tenant_metrics_over_limit` goes above 0.',
+        '預設為內建的 500；要調整請在 threshold-exporter 的 values 設 `thresholdConfig.max_metrics_per_tenant`（只寫進根目錄的 _defaults.yaml，租戶無法自行調高）。超限時 `da_tenant_metrics_over_limit` 會 > 0。',
+        'Defaults to the built-in 500; to change it, set `thresholdConfig.max_metrics_per_tenant` in the threshold-exporter values (it is written to the root _defaults.yaml only, so a tenant cannot raise its own cap). When a tenant exceeds it, `da_tenant_metrics_over_limit` goes above 0.',
       ),
     },
     {
