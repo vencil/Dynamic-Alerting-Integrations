@@ -28,6 +28,8 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 ### 1. `make pre-tag`（硬性閘門）
 
+⛔ **這是打 tag 前的最後一道關卡，不是收尾的第一步**：在步驟 2–4 的變更都已 commit、合併之後，於要打 tag 的那個 commit 上跑。`changelog-fragments-consumed` 在步驟 2 組裝並刪除片段之前必然擋下——那是預期結果，不是跳過 pre-tag（連帶跳過 draft-advisory 等檢查）的理由。收尾途中想先看其他項目，可以單獨跑 `make version-check`、`make lint-docs`。
+
 含 version-check + lint-docs + playbook-freshness + **`changelog-fragments-consumed`（hard gate，#2102）** + **`draft-advisory-check`（hard gate，#1295 fold-in）** + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 **7** 個 self-built image build + CVE scan 收進 pre-tag——#1337 由 5 擴到 7，多的兩顆隨 chart 出貨、從不發布）。⇒ 需要 PATH 上有 **docker（含 Buildx plugin——`docker-build-all` 跑的是 `docker buildx build`）** + trivy + **gh**。
 
 > **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。

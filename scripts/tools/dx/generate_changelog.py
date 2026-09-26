@@ -650,7 +650,23 @@ def fragment_paths(root: Path) -> List[Path]:
     return sorted(p for p in d.glob("*.md") if p.name != FRAGMENT_README)
 
 
-def check_fragments_consumed(root: Path) -> int:
+def _committed_fragments(root: Path, rev: str) -> Optional[List[str]]:
+    """Fragment paths in ``rev``'s tree (README excluded); None when git
+    cannot list them."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(root), "ls-tree", "--name-only", rev, f"{FRAGMENT_DIR}/"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted(n for n in r.stdout.splitlines()
+                  if n.endswith(".md") and Path(n).name != FRAGMENT_README)
+
+
+def check_fragments_consumed(root: Path, rev: str = "HEAD") -> int:
     """Exit code for ``--check-consumed``: every fragment must be gone.
 
     Run on the commit being tagged. The release wrap-up assembles the
@@ -658,16 +674,32 @@ def check_fragments_consumed(root: Path) -> int:
     missed this release's notes or will be assembled again into the next
     one. A fragment merged after the wrap-up is a change the tag would ship
     without describing, so it fails too.
+
+    Both the committed tree (what the tag records) and the worktree are
+    checked: a deletion that was never committed empties the worktree
+    while the tagged commit still carries the fragment. Fail-closed when
+    git cannot list the tree.
     """
-    left = fragment_paths(root)
+    committed = _committed_fragments(root, rev)
+    if committed is None:
+        print(f"❌ could not list {FRAGMENT_DIR}/ at {rev} (not a git checkout, or "
+              "unknown revision); refusing to report the fragments as assembled")
+        return EXIT_CALLER_ERROR
+    in_tree = {p.relative_to(root).as_posix() for p in fragment_paths(root)}
+    left = sorted(set(committed) | in_tree)
     if left:
         print(f"❌ {len(left)} changelog fragment(s) not assembled into this release:")
-        for p in left:
-            print(f"  {p.relative_to(root)}")
-        print("   Assemble them into the new ## [vX.Y.Z] block and `git rm` them "
-              "(vibe-release step 2).")
+        for name in left:
+            where = []
+            if name in committed:
+                where.append(rev)
+            if name in in_tree:
+                where.append("worktree")
+            print(f"  {name}  ({', '.join(where)})")
+        print("   Assemble them into the new ## [vX.Y.Z] block, `git rm` them and commit "
+              "(vibe-release step 2), then run this on the commit you tag.")
         return EXIT_VIOLATION
-    print(f"✅ no changelog fragments left in {FRAGMENT_DIR}/")
+    print(f"✅ no changelog fragments left in {FRAGMENT_DIR}/ ({rev} and worktree)")
     return EXIT_OK
 
 
