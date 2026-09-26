@@ -115,6 +115,21 @@ rules:
   #   - patch / update on apps/deployments for federation-gateway / vector / tenant-api
 ```
 
+**What `patch-config` apply needs (outside the baseline above)**: `da-tools patch-config` verifies each write on every threshold-exporter pod (#1950), so the identity running it needs, besides `get` / `patch` on `threshold-config`, these two rules in the exporter's namespace. What it writes is the **cross-tenant** `threshold-config`, which is not the operator above's job to begin with — this is a platform-admin (break-glass) identity: give it its own Role, do not fold this into `tenant-operator-baseline`.
+
+```yaml
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]            # find every exporter pod by -l app=threshold-exporter
+  - apiGroups: [""]
+    resources: ["pods/proxy"]
+    verbs: ["get"]             # kubectl get --raw …/pods/<pod>:<port>/proxy/{metrics,api/v1/config}
+```
+
+- **Why `pods/proxy`, not port-forward**: `create pods/portforward` is a runtime bypass §2.1 rule 4 withholds (the §2.3 script asserts it is `no`); a Service load-balances and cannot reach every pod.
+- **Scope**: GET only. But pod names are generated, so `resourceNames` cannot narrow it to the exporter ⇒ it allows a GET to **every port of every pod** in that namespace, including container ports a sidecar (an auth proxy, say) normally fronts. RBAC cannot narrow it to the exporter pods, so bind these two rules only to the identity that runs apply, with a Role + RoleBinding in the exporter's namespace (not a ClusterRole / ClusterRoleBinding); to narrow it further, run the exporter in its own namespace and point `--exporter-namespace` at it.
+- The §2.3 script asserts **nothing** about `pods/proxy` (neither that it is granted nor that it is not); granting it is the adopter's call.
+
 > **Acceptance is not reading this YAML, it's querying effective permissions** — because permissions are the union of all bindings, a single Role can't guarantee a dangerous grant isn't added elsewhere. Verify against a **live cluster** with the §2.3 script.
 
 ### 2.3 Verification script `scripts/ops/verify_operator_rbac.sh`

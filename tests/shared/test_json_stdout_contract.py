@@ -127,7 +127,7 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    `threshold_recommend --markdown` itself) lets `--json` win, so this is an
    outlier, not a convention.  It is deliberately **not** gated yet: two output
    formats on one stdout is a genuine contradiction and the resolution
-   (fail-loud `EXIT_CALLER_ERROR` plus an envelope like `patch_config[apply]`, or an argparse
+   (fail-loud `EXIT_CALLER_ERROR` plus an envelope like `patch_config[bad-arguments]`, or an argparse
    mutually-exclusive group) is a caller-facing behaviour decision for the
    owner, not something this gate should decide by fiat.  Once decided, add the
    recipe with `expect_caller_error=True`.
@@ -412,7 +412,8 @@ if "get" in argv and "threshold-config" in argv and os.environ.get("FAKE_KUBECTL
 if "get" in argv and "threshold-config" in argv:
     print(json.dumps({
         "apiVersion": "v1", "kind": "ConfigMap",
-        "metadata": {"name": "threshold-config", "namespace": "monitoring"},
+        "metadata": {"name": "threshold-config", "namespace": "monitoring",
+                     "resourceVersion": "1"},
         "data": {
             "_defaults.yaml": (
                 "defaults:\n  max_connections: '100'\n  slow_queries: '5'\n"
@@ -614,6 +615,17 @@ class Recipe:
 
 
 _PC_DIFF = ["tenant-x", "cpu", "1", "--diff", "--json"]
+
+
+def _status_doc(status: str) -> Callable[[object], str | None]:
+    """A document whose `status` discriminator is `status`."""
+    def check(doc: object) -> str | None:
+        if not isinstance(doc, dict):
+            return f"expected a JSON object, got {type(doc).__name__}"
+        if doc.get("status") != status:
+            return f"status must be {status!r}, got {doc.get('status')!r}"
+        return None
+    return check
 
 
 def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
@@ -968,13 +980,20 @@ RECIPES: list[Recipe] = [
     R("patch_config", "json-help", lambda t, s: ["--json", "-h"],
       doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "help"
       else f"status must be 'help', got {d!r:.100}"),
+    # apply under --json: the fake kubectl lists no exporter pod, so a real
+    # change ends `unreachable` before anything is written; the current value
+    # is a no-op that never asks for pods.
+    R("patch_config", "apply-unreachable",
+      lambda t, s: ["db-a", "max_connections", "150", "--json"], needs_kubectl=True,
+      doc_check=_status_doc("unreachable")),
+    R("patch_config", "apply-noop",
+      lambda t, s: ["db-a", "max_connections", "120", "--json"], needs_kubectl=True,
+      doc_check=_status_doc("no-op")),
     # Caller-error early exits: exit 2 and still one document.
     *[R("patch_config", mode, (lambda a: lambda t, s: a)(argv),
         needs_kubectl=True, expect_caller_error=True,
         doc_check=_caller_error_doc(reason), fake_cm=cm)
       for mode, argv, reason, cm in [
-        # `--json` without `--diff` would APPLY; refused, nothing applied.
-        ("apply", ["tenant-x", "cpu", "1", "--json"], "json_requires_diff", None),
         ("bad-arguments", ["tenant-x", "--diff", "--json"], "bad_arguments", None),
         ("json-equals", ["tenant-x", "cpu", "1", "--diff", "--json=x"],
          "bad_arguments", None),

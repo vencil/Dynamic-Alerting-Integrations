@@ -33,10 +33,17 @@ EXIT_CALLER_ERROR (2)
 Allowed extensions
 ------------------
 A tool MAY define higher codes (>= 3) for finer-grained caller-error
-subtypes, as long as 0/1/2 keep the meanings above. The only sanctioned
->= 3 extension today is diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented
-in docs/internal/windows-mcp-playbook.md trap #64 — "switch host" hint,
-distinct from exit 2 "gh missing/unauthenticated").
+subtypes, as long as 0/1/2 keep the meanings above. The sanctioned >= 3
+extensions today:
+
+* diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented in
+  docs/internal/windows-mcp-playbook.md trap #64 — "switch host" hint,
+  distinct from exit 2 "gh missing/unauthenticated").
+* ops/patch_config.py's apply (#1950): its module-level EXIT_* constants
+  >= 3 name what happened after (or around) the write — rolled back, may
+  still be written, or unknown — which exit 2's "nothing written" cannot
+  say; its verification failure stays EXIT_VIOLATION (1). Table in
+  docs/cli-reference.md §patch-config.
 
 One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
 finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its

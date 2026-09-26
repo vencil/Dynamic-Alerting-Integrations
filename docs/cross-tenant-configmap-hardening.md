@@ -115,6 +115,21 @@ rules:
   #   - apps/deployments 對 federation-gateway / vector / tenant-api 的 patch / update
 ```
 
+**`patch-config` apply 需要的權限（不屬於上面的基線）**：`da-tools patch-config` 寫入後會逐 pod 向 threshold-exporter 驗收（#1950），所以跑它的身分除了 `threshold-config` 的 `get` / `patch` 之外，還要在 exporter 所在 namespace 有下面兩條。它改的是**跨租戶**的 `threshold-config`，本來就不是上面那個 operator 該做的事——這是平台管理員（break-glass）的身分，另開 Role 綁給那個身分，不要併進 `tenant-operator-baseline`。
+
+```yaml
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]            # 以 -l app=threshold-exporter 找出每個 exporter pod
+  - apiGroups: [""]
+    resources: ["pods/proxy"]
+    verbs: ["get"]             # kubectl get --raw …/pods/<pod>:<port>/proxy/{metrics,api/v1/config}
+```
+
+- **為什麼是 `pods/proxy` 而不是 port-forward**：`create pods/portforward` 是 §2.1 第四條要拒絕的 runtime 旁路（§2.3 腳本斷言它為 `no`）；Service 走負載均衡，驗不到每一個 pod。
+- **範圍**：只用 GET。但 pod 名稱是生成的，`resourceNames` 縮不到 exporter ⇒ 這條等於能對該 namespace **每個 pod 的每個 port** 發 GET，包含平常由 sidecar（例如認證 proxy）擋在前面的 container port。RBAC 無法把它縮到 exporter pod，所以只把這兩條綁給執行 apply 的那個身分，並且用 exporter 所在 namespace 的 Role＋RoleBinding（不要 ClusterRole／ClusterRoleBinding）；要更窄，就把 exporter 放在自己的 namespace 並用 `--exporter-namespace` 指過去。
+- §2.3 的腳本對 `pods/proxy` **不做任何斷言**（不要求有、也不要求沒有）；授予與否由導入者決定。
+
 > **驗收方式不是讀這份 YAML，而是查有效權限**——因為權限是所有綁定的聯集，光看單一 Role 無法保證別處沒補上危險 grant。用 §2.3 的腳本對**活叢集**驗證。
 
 ### 2.3 驗證腳本 `scripts/ops/verify_operator_rbac.sh`
