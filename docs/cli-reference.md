@@ -1776,11 +1776,11 @@ python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespac
 
 **拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；查找路徑上有 merge key `<<`；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫會以 YAML 1.1 型別重新序列化該 key 的其他值，並遺失註解。
 
-**寫後驗收（apply）**：新位元組與該 key 現有位元組相同 ⇒ 不寫、不等，結束碼 `0`。否則先經 `kubectl get --raw …/pods/<pod>:<port>/proxy/…`（只用 GET）逐一讀 Running 且未在刪除中的 pod 的 `/api/v1/config` 的 `Last reload` 與 `/metrics`，patch 後等每個 pod 的 `Last reload` 改變，再逐 pod 比對全部 `user_*` series 與 `da_config_parse_failure_total`。`_` 開頭的 key（`_silent_mode`、`_profile` 等）不判目標租戶自己的 series，只列在 stderr（與 `--json`）。不合、逾時、途中連不到、寫入後被 Ctrl-C／SIGTERM 中斷或發生意外錯誤 ⇒ patch 回舊位元組（原本沒有的 key 會刪掉）並非 0 結束；patch 呼叫本身失敗時會重讀 ConfigMap 判定是否已套用。判準細節與已知殘留限制見 `patch-config --help`。
+**寫後驗收（apply）**：新位元組與該 key 現有位元組相同 ⇒ 不寫、不等，結束碼 `0`。否則先經 `kubectl get --raw …/pods/<pod>:<port>/proxy/…`（只用 GET）逐一讀 Running 且未在刪除中的 pod 的 `/api/v1/config` 的 `Last reload` 與 `/metrics`，patch 後等每個 pod 的 `Last reload` 改變，再逐 pod 比對全部 `user_*` series 與 `da_config_parse_failure_total`。`_` 開頭的 key（`_silent_mode`、`_profile` 等）不判目標租戶自己的 series，只列在 stderr（與 `--json`）。不合、逾時、途中連不到、寫入後被 Ctrl-C／SIGTERM 中斷或發生意外錯誤 ⇒ patch 回舊位元組（原本沒有的 key 會刪掉）並非 0 結束；寫入與回滾都以 ConfigMap 的 `resourceVersion` 為前置條件：讀取後被別人改過就不寫；回滾時同一個 key 已被別人改過就不回滾（不覆蓋對方）；驗收結束時 ConfigMap 必須仍是本次寫入產生的版本。patch 呼叫本身失敗時會重讀 ConfigMap 判定是否已套用。判準細節與已知殘留限制見 `patch-config --help`。
 
 **`--diff`**：`changed` 與 apply 同一判定——apply 不送 patch 時為 `false`。`--json` 的 `before.value` 是原文字串（null 為 `null`，mapping／sequence 為其 YAML 文字）。
 
-**`--json`**：每條結束路徑的 stdout 都是一份 JSON（stdout 已關閉，或寫入前就被信號結束的行程除外）；`--json --help` 為結束碼 `0`、`status: "help"`。結束碼 `2` 時鍵與預覽相同、值清空，另加 `status: "caller_error"` 與 `reason`（`bad_arguments`／`configmap_shape`／`kubectl_failed`／`unexpected_error`）。apply 的文件沿用預覽的鍵（`before`／`after` 為 `null`），另加 `status`（`no-op`／`applied`／`verify-failed-rolled-back`／`timeout`／`unreachable`／`rollback-failed`／`interrupted-rolled-back`／`error-rolled-back`／`state-unknown`）、`exit_code`、`written`（結束時 ConfigMap 是否為新位元組；不明為 `null`）、`rolled_back`、`message`，以及 `pods.<pod>` 的 `problems`／`warnings`／`target_changes`（目標租戶變動的 series，`before`／`after` 為 `null` 表示不存在）。
+**`--json`**：每條結束路徑的 stdout 都是一份 JSON（stdout 已關閉，或寫入前就被信號結束的行程除外）；`--json --help` 為結束碼 `0`、`status: "help"`。結束碼 `2` 時鍵與預覽相同、值清空，另加 `status: "caller_error"` 與 `reason`（`bad_arguments`／`configmap_shape`／`configmap_changed`／`kubectl_failed`／`unexpected_error`）。apply 的文件沿用預覽的鍵（`before`／`after` 為 `null`），另加 `status`（`no-op`／`applied`／`verify-failed-rolled-back`／`timeout`／`unreachable`／`rollback-failed`／`interrupted-rolled-back`／`error-rolled-back`／`state-unknown`／`overwritten-by-another-writer`）、`exit_code`、`written`（結束時 ConfigMap 是否為新位元組；不明為 `null`）、`rolled_back`、`message`，以及 `pods.<pod>` 的 `problems`／`warnings`／`target_changes`（目標租戶變動的 series，`before`／`after` 為 `null` 表示不存在）。
 
 **範例**
 
@@ -1797,12 +1797,12 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 |------|------|
 | `0` | 成功（已在每個 exporter pod 驗收）；含 `default` 與位元組相同的 no-op |
 | `1` | 寫後驗收失敗（非目標租戶的 series 變了、目標租戶變動超出上限、新的 parse failure 等）；已回滾 |
-| `2` | 呼叫端錯誤，**什麼都沒寫**：`kubectl` 無法執行或非零結束（例如不在 PATH、叢集連不上、ConfigMap 不存在、無權限）、上述任一種拒絕、argparse 拒絕的參數、未預期的例外 |
+| `2` | 呼叫端錯誤，**什麼都沒寫**：`kubectl` 無法執行或非零結束（例如不在 PATH、叢集連不上、ConfigMap 不存在、無權限）、上述任一種拒絕、讀取後 ConfigMap 已被別人改動（`reason: configmap_changed`，重跑即可）、argparse 拒絕的參數、寫入前發生的未預期例外 |
 | `3` | `--reload-timeout` 到期時仍有 pod 沒 reload；已回滾 |
 | `4` | 連不到 exporter（沒有符合 selector 的 pod、pods/proxy 失敗、回應形狀不對）：寫入前發生則什麼都沒寫，寫入後發生則已回滾 |
 | `5` | 回滾本身失敗：ConfigMap 可能仍是新位元組，需人工處理 |
 | `6` | 寫入後被 Ctrl-C／SIGTERM 中斷，或發生意外錯誤；已回滾（寫入前被中斷則照一般方式結束，什麼都沒寫） |
-| `7` | 無法判定 ConfigMap 現在的內容（讀不到，或新舊皆非）：需人工確認 |
+| `7` | 無法判定 ConfigMap 現在的內容（讀不到，或新舊皆非），或寫入後另一個寫者改了同一個 key（不回滾，保留對方的變更）：需人工確認 |
 
 ---
 

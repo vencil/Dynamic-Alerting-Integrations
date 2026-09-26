@@ -32,7 +32,7 @@ SCENARIOS["rollback-fail"] = SCENARIOS["verify-fail"]
 FAKE_KW = {"rollback-fail": {"fail_patch": {1}}}
 # Every function between the write and the answer (module functions, and the
 # methods of the two objects apply drives).
-MODULE_FNS = ["_kubectl_patch", "_read_key", "parse_metrics", "verify_pod",
+MODULE_FNS = ["_kubectl_patch", "_read_key", "_read_cm", "parse_metrics", "verify_pod",
               "_conclude", "_send_rollback",
               "_wait_rolled_back", "_observed_fallback",
               "_say", "_emit", "_apply_envelope", "format_json_report",

@@ -36,15 +36,20 @@ FAKE_KUBECTL = textwrap.dedent('''\
     #!/usr/bin/env python3
     import json, os, sys, urllib.request
     d, port, a = os.environ["FAKE_CM_DIR"], os.environ["FAKE_PORT"], sys.argv[1:]
+    rv_file = os.environ["FAKE_RV"]  # resourceVersion, outside the watched dir
+    rv = open(rv_file, encoding="utf-8").read() if os.path.exists(rv_file) else "1"
     if a[:2] == ["get", "configmap"]:
         data = {}
         for n in sorted(os.listdir(d)):
             with open(os.path.join(d, n), encoding="utf-8") as fh:
                 data[n] = fh.read()
-        print(json.dumps({"data": data}))
+        print(json.dumps({"metadata": {"resourceVersion": rv}, "data": data}))
     elif a[:1] == ["patch"]:
         with open(a[a.index("--patch-file") + 1], encoding="utf-8") as fh:
-            patch = json.load(fh)["data"]
+            body = json.load(fh)
+        patch = body["data"]
+        if body.get("metadata", {}).get("resourceVersion") not in (None, rv):
+            sys.exit("Error from server (Conflict): the object has been modified")
         for k, v in patch.items():
             p = os.path.join(d, k)
             if v is None:
@@ -53,6 +58,10 @@ FAKE_KUBECTL = textwrap.dedent('''\
                 with open(p + ".tmp", "w", encoding="utf-8") as fh:
                     fh.write(v)
                 os.replace(p + ".tmp", p)
+        rv = str(int(rv) + 1)
+        with open(rv_file, "w", encoding="utf-8") as fh:
+            fh.write(rv)
+        print(json.dumps({"metadata": {"resourceVersion": rv}}))
     elif a[:2] == ["get", "pods"]:
         print(json.dumps({"items": [{"metadata": {"name": "exporter-0"},
               "status": {"phase": "Running"},
@@ -116,6 +125,7 @@ class Cluster:
              f"127.0.0.1:{self.port}", "-reload-interval", "1s"],
             env=env, stdout=self.log, stderr=subprocess.STDOUT)
         self.env = dict(env, FAKE_CM_DIR=str(self.dir), FAKE_PORT=str(self.port),
+                        FAKE_RV=str(tmp_path / "rv"),
                         PATH=f"{bindir}{os.pathsep}{env.get('PATH', '')}")
         deadline = time.monotonic() + 20
         while True:

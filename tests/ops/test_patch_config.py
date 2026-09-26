@@ -473,7 +473,8 @@ class TestApplyPatch:
     def test_writes_the_tenant_key_once(self, mode, data):
         cluster = FakeCluster(data)
         with mock.patch("patch_config.run_cmd", side_effect=cluster):
-            pc.apply_patch({"data": data}, mode, "db-a", "cpu", "90")
+            pc.apply_patch({"metadata": {"resourceVersion": "1"}, "data": data},
+                           mode, "db-a", "cpu", "90")
         assert len(cluster.patches) == 1
         (key, text), = cluster.patches[0]["data"].items()
         assert yaml.safe_load(text)["tenants"]["db-a"]["cpu"] == "90"

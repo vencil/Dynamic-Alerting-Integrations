@@ -779,3 +779,120 @@ def test_every_exit_code_is_in_the_cli_reference_table(doc):
     section = text.split("#### patch-config", 1)[1].split("\n---", 1)[0]
     rows = {int(m) for m in re.findall(r"^\| `(\d+)` \|", section, re.M)}
     assert rows == codes, (sorted(rows), sorted(codes))
+
+
+
+class TestCompareAndSwap:
+    """寫入與回滾都帶 metadata.resourceVersion 前置條件（#2063 審查 HIGH）：
+    另一個寫者的變更不會被本工具的回滾蓋掉。"""
+
+    T_B2 = "tenants:\n  t-b:\n    mysql_connections: '55'\n"
+
+    @staticmethod
+    def _json_run(c, value="65", capsys=None):
+        code = _run(c, "--json", "t-a", "mysql_connections", value)
+        return code, json.loads(capsys.readouterr().out)
+
+    @staticmethod
+    def _verify_fails(data, pod=None):
+        """Toy exporter whose verification always fails (a new parse failure)."""
+        extra = ('da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'
+                 if "'65'" in data.get("t-a.yaml", "") else "")
+        return render_thresholds(data) + extra
+
+    def test_every_write_carries_the_version_it_is_based_on(self, capsys):
+        c = FakeCluster(_multi())
+        code, _ = self._json_run(c, capsys=capsys)
+        assert code == 0 and c.preconditions == ["1"]
+
+    def test_the_write_conflicts_when_the_configmap_changed_since_read(self, capsys):
+        c = FakeCluster(_multi(), concurrent=lambda n, cl: n == 0 and
+                        cl.other_writer("t-b.yaml", self.T_B2))
+        code, doc = self._json_run(c, capsys=capsys)
+        assert (code, doc["status"], doc["reason"], doc["written"]) == (
+            2, "caller_error", "configmap_changed", False)
+        assert c.data["t-a.yaml"] == T_A and c.data["t-b.yaml"] == self.T_B2
+        assert len(c.patches) == 1  # no blind retry
+
+    def test_a_rollback_conflict_on_another_key_retries_and_keeps_theirs(self, capsys):
+        c = FakeCluster(_multi(), render=self._verify_fails,
+                        concurrent=lambda n, cl: n == 1 and
+                        cl.other_writer("t-b.yaml", self.T_B2))
+        code, doc = self._json_run(c, capsys=capsys)
+        assert (code, doc["status"], doc["rolled_back"]) == (
+            1, "verify-failed-rolled-back", True)
+        assert c.data["t-a.yaml"] == T_A          # ours rolled back
+        assert c.data["t-b.yaml"] == self.T_B2    # theirs kept
+        assert c.preconditions == ["1", "2", "3"]  # write, conflict, retry
+
+    def test_a_rollback_never_overwrites_another_writers_value(self, capsys):
+        theirs = "tenants:\n  t-a:\n    mysql_connections: '99'\n"
+        c = FakeCluster(_multi(), render=self._verify_fails,
+                        concurrent=lambda n, cl: n == 1 and
+                        cl.other_writer("t-a.yaml", theirs))
+        code, doc = self._json_run(c, capsys=capsys)
+        assert (code, doc["status"], doc["written"], doc["rolled_back"]) == (
+            pc.EXIT_STATE_UNKNOWN, "overwritten-by-another-writer", False, False)
+        assert "another writer" in doc["message"]
+        assert c.data["t-a.yaml"] == theirs      # not destroyed
+
+    def test_a_write_by_someone_else_during_verification_is_not_success(self, capsys):
+        """寫入之後、驗收結束之前有人寫了 ConfigMap：看到的 reload 不能證明
+        pod 載入的是我們的位元組 ⇒ 不回報成功（回滾我們的 key、保留他們的）。"""
+        c = FakeCluster(_multi())
+        orig = c.__call__
+
+        def side(cmd):
+            if (cmd[:3] == ["kubectl", "get", "--raw"] and c.patches
+                    and "metrics" in cmd[3] and c.data["t-b.yaml"] != self.T_B2):
+                c.other_writer("t-b.yaml", self.T_B2)
+            return orig(cmd)
+        with mock.patch("patch_config.run_cmd", side_effect=side), \
+                mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
+                                        "mysql_connections", "65", *FAST]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        doc = json.loads(capsys.readouterr().out)
+        assert (exc.value.code, doc["status"]) == (1, "verify-failed-rolled-back")
+        assert "another" in doc["message"]
+        assert c.data["t-a.yaml"] == T_A and c.data["t-b.yaml"] == self.T_B2
+
+    def test_another_value_for_our_key_during_verification_is_not_success(self, capsys):
+        """CodeRabbit／#2063 項 2：寫入後、驗收完成前，另一個寫者把同一個 key
+        設成別的值——就算看到 reload 也不得回報成功，也不得回滾蓋掉對方。"""
+        theirs = "tenants:\n  t-a:\n    mysql_connections: '99'\n"
+        c = FakeCluster(_multi())
+        orig = c.__call__
+
+        def side(cmd):
+            if (cmd[:3] == ["kubectl", "get", "--raw"] and c.patches
+                    and "metrics" in cmd[3] and c.data["t-a.yaml"] != theirs):
+                c.other_writer("t-a.yaml", theirs)
+            return orig(cmd)
+        with mock.patch("patch_config.run_cmd", side_effect=side), \
+                mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
+                                        "mysql_connections", "65", *FAST]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        doc = json.loads(capsys.readouterr().out)
+        assert (exc.value.code, doc["status"]) == (
+            pc.EXIT_STATE_UNKNOWN, "overwritten-by-another-writer")
+        assert c.data["t-a.yaml"] == theirs
+
+    def test_no_resource_version_refuses_before_writing(self, capsys):
+        c = FakeCluster(_multi())
+        orig = c.__call__
+
+        def side(cmd):
+            out = orig(cmd)
+            if cmd[:3] == ["kubectl", "get", "configmap"]:
+                return json.dumps({"data": json.loads(out)["data"]})
+            return out
+        with mock.patch("patch_config.run_cmd", side_effect=side), \
+                mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
+                                        "mysql_connections", "65", *FAST]):
+            with pytest.raises(SystemExit) as exc:
+                pc.main()
+        doc = json.loads(capsys.readouterr().out)
+        assert (exc.value.code, doc["reason"]) == (2, "configmap_shape")
+        assert c.patches == []

@@ -35,6 +35,7 @@ see are in `VERIFY_HELP` below (also printed by --help).
 import argparse
 import contextlib
 import re
+import select
 import signal
 import subprocess
 import time
@@ -79,6 +80,9 @@ EXIT_ROLLBACK_FAILED = 5       # the rollback patch itself failed
 EXIT_ABORTED_ROLLED_BACK = 6   # interrupt / unexpected error after the write; rolled back
 EXIT_STATE_UNKNOWN = 7         # what the ConfigMap holds cannot be told
 
+# Rollback attempts when only other keys changed under it (see `_send_rollback`).
+ROLLBACK_CONFLICT_ATTEMPTS = 3
+
 # Upper bound on a threshold key's `user_*` changes (see `verify_pod`).
 THRESHOLD_KEY_MAX_CHANGES = 4
 
@@ -90,10 +94,12 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
      --exporter-namespace) and read, via `kubectl get --raw
      .../pods/<pod>:<port>/proxy/...` (GET only), each pod's /api/v1/config
      `Last reload` and /metrics.
-  3. kubectl patch (if the call fails, the ConfigMap is re-read to tell
-     whether it landed); wait until every pod's `Last reload` differs from
-     the value read in 2 (pod clock against pod clock); --reload-timeout is
-     the deadline that ends the wait, checked between polling passes.
+  3. kubectl patch, conditional on the ConfigMap's resourceVersion as read
+     (changed since -> nothing is written, exit {EXIT_CALLER_ERROR}: re-run; if the call fails
+     otherwise, the ConfigMap is re-read to tell whether it landed); wait
+     until every pod's `Last reload` differs from the value read in 2 (pod
+     clock against pod clock); --reload-timeout is the deadline that ends
+     the wait, checked between polling passes.
   4. on each pod, compare every `user_*` series (name + labels -> value) with 2.
      Any change on a series whose `tenant` is not <tenant> fails. For a key
      not starting with `_`, more than {THRESHOLD_KEY_MAX_CHANGES} changed series of <tenant> fails
@@ -101,13 +107,18 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
      <tenant>'s own series are not judged, only listed (stderr / --json).
      da_config_parse_failure_total{{file_basename}} fails if it rises for a
      basename that was absent or 0 before, or for the patched key; a rise on
-     another already-failing basename is only a warning.
+     another already-failing basename is only a warning. Finally the
+     ConfigMap must still be at the version the write produced: if anyone
+     wrote it meanwhile, the reloads may not be of these bytes -> fails.
   5. any failure in 3-4, Ctrl-C / SIGTERM or any other error from the write
      call on -> the old bytes are patched back (the key is removed if it did
      not exist) unless the ConfigMap is seen to hold the old bytes, or cannot
      be told apart after a failed write call; pods that reloaded are waited
      for once more (best effort); status and exit code follow what the
-     ConfigMap then holds.
+     ConfigMap then holds. The rollback is conditional on the version the
+     write produced: if only other keys changed, it is retried on the fresh
+     version a bounded number of times; if another writer changed the patched
+     key itself, it is not rolled back (their change is kept; exit {EXIT_STATE_UNKNOWN}).
 signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   exporter call; from the rollback on they are ignored until the process
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes
@@ -118,7 +129,8 @@ exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back
   back); {EXIT_ROLLBACK_FAILED} rollback failed - the ConfigMap may still hold the new bytes;
   {EXIT_ABORTED_ROLLED_BACK} interrupted or an unexpected error after the write, rolled back;
   {EXIT_STATE_UNKNOWN} what the ConfigMap holds cannot be told (not readable, or neither
-  version) - check it by hand. Ctrl-C / SIGTERM before the write ends
+  version), or another writer changed the patched key after this write (not
+  rolled back) - check it by hand. Ctrl-C / SIGTERM before the write ends
   as it normally would.
 needs: list pods, get pods/proxy in the exporter namespace (besides get/patch
   on the ConfigMap).
@@ -128,8 +140,9 @@ not seen (known residuals): a future `expires:` in the same key rewritten so
   any change of <tenant>'s own series (a wrong `_profile` that drops its
   thresholds is listed, not rolled back); a write the exporter drops without
   counting a parse failure (the target just keeps its old value); a pod that
-  starts after step 2; a reload started by someone else's write, or one in
-  the same second as the previous reload; the legacy `-config` single-file
+  starts after step 2; a reload of a version older than the one read (a
+  write made just before apply read the ConfigMap, not yet delivered to the
+  pod), or one in the same second as the previous reload; the legacy `-config` single-file
   mode reloads nothing on a broken file, so that only ever ends as a timeout.
 wrongly failed: a write that FIXES a key the exporter could not parse (its
   counter keeps rising until the reload); another tenant's `expires:` passing
@@ -601,6 +614,10 @@ class VerifyFailed(Exception):
     """An exporter pod shows a change other than the one allowed."""
 
 
+class ConcurrentWrite(VerifyFailed):
+    """The ConfigMap changed after our write, before verification ended."""
+
+
 class ReloadTimeout(Exception):
     """Not every pod's `Last reload` moved within the timeout."""
 
@@ -802,14 +819,35 @@ def _show(series):
     return name + "{" + ",".join(f'{k}="{v}"' for k, v in labels) + "}"
 
 
-def _kubectl_patch(patch_data):
+class PatchConflict(KubectlError):
+    """The apiserver refused the patch: the ConfigMap's resourceVersion is
+    no longer the one the patch was based on (409 Conflict)."""
+
+
+def _kubectl_patch(patch_data, resource_version):
+    """Merge-patch the ConfigMap only if it is still at `resource_version`
+    (metadata.resourceVersion in a merge patch is the apiserver's optimistic
+    concurrency precondition). Returns the resourceVersion the patch
+    produced (None if kubectl did not print it); PatchConflict on 409."""
+    patch_data = dict(patch_data,
+                      metadata={"resourceVersion": resource_version})
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json',
                                      encoding="utf-8", newline='\n') as temp:
         json.dump(patch_data, temp)
         temp_path = temp.name
     try:
-        run_cmd(["kubectl", "patch", "configmap", CONFIGMAP, "-n", NAMESPACE,
-                 "--type", "merge", "--patch-file", temp_path])
+        try:
+            out = run_cmd(["kubectl", "patch", "configmap", CONFIGMAP,
+                           "-n", NAMESPACE, "--type", "merge",
+                           "--patch-file", temp_path, "-o", "json"])
+        except KubectlError as exc:
+            if "(Conflict)" in str(exc):
+                raise PatchConflict(str(exc)) from exc
+            raise
+        try:
+            return json.loads(out)["metadata"]["resourceVersion"]
+        except (ValueError, KeyError, TypeError):
+            return None
     finally:
         try:
             os.remove(temp_path)
@@ -827,7 +865,40 @@ def _say(text, out=False):
         stream.write(text + "\n")
         stream.flush()
     except Exception:  # noqa: BLE001 — output is best effort, by contract
+        pass  # the fd is sent to /dev/null at the end of main (_seal_std_streams)
+
+
+def _to_devnull(stream):
+    """Point a failing stream's fd at /dev/null, so whatever is still
+    buffered for it — and anything written after main (atexit hooks) — can
+    no longer fail the interpreter's exit flush (exit code 120)."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, stream.fileno())
+        finally:
+            os.close(devnull)
+    except Exception:  # noqa: BLE001 — None, no fileno, not a real fd
         pass
+
+
+def _seal_std_streams():
+    """At the end of main: flush stdout / stderr, and send any of them that
+    fails to flush or whose reader is gone (POLLERR / POLLHUP) to
+    /dev/null — including one this tool never wrote to."""
+    for stream in {id(s): s for s in (sys.stdout, sys.stderr, sys.__stdout__,
+                                      sys.__stderr__) if s is not None}.values():
+        try:
+            stream.flush()
+            fd = stream.fileno()
+            poller = select.poll()
+            poller.register(fd, select.POLLOUT)
+            broken = any(ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL)
+                         for _, ev in poller.poll(0))
+        except Exception:  # noqa: BLE001 — a failed flush is a broken stream
+            broken = True
+        if broken:
+            _to_devnull(stream)
 
 
 def _emit(document=None):
@@ -853,6 +924,8 @@ class _Write:
         self.attempted = False   # the write call was started
         self.returned = False    # ... and returned cleanly
         self.verified = False    # every pod verified it
+        self.rv_read = None      # resourceVersion the write is based on
+        self.rv_written = None   # resourceVersion the write produced
 
 
 def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
@@ -871,6 +944,11 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
         _say(f"No-op: nothing to change for tenant '{tenant}' key "
              f"'{metric_key}'; nothing was written.")
         return "no-op"
+    write.rv_read = (cm_data.get("metadata") or {}).get("resourceVersion")
+    if not write.rv_read:
+        raise ConfigMapShapeError(
+            f"{CONFIGMAP} as read has no metadata.resourceVersion; refusing "
+            f"to write without a version precondition.")
 
     exporter = exporter or Exporter()
     exporter.discover()
@@ -885,7 +963,7 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     if SIGNALS.pending is not None:  # arrived just before the write
         SIGNALS.die()
     write.attempted = True
-    _kubectl_patch(patch_data)
+    write.rv_written = _kubectl_patch(patch_data, write.rv_read)
     write.returned = True
     SIGNALS.armed = True
     _say(f"Waiting for {len(before)} exporter pod(s) to reload...", out=True)
@@ -904,6 +982,14 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
                  f"{t['before'] or '(absent)'} -> {t['after'] or '(absent)'}")
     if problems:
         raise VerifyFailed("\n".join(problems))
+    # The reloads seen above can only have loaded our bytes (or later ones)
+    # if nobody wrote the ConfigMap after us.
+    now = _read_cm()
+    if write.rv_written is None or now is _UNREADABLE or now[1] != write.rv_written:
+        raise ConcurrentWrite(
+            "threshold-config changed while apply was verifying (another "
+            "writer), or its version cannot be confirmed; the reloads seen "
+            "may not be of these bytes.")
     write.verified = True
     _say(f"Success! Verified on {len(after)} exporter pod(s).", out=True)
     return "applied"
@@ -998,14 +1084,21 @@ SIGNALS = _Signals()
 _UNREADABLE = object()
 
 
-def _read_key(key):
-    """The ConfigMap's `key` now (None if absent), or _UNREADABLE."""
+def _read_cm():
+    """(data, resourceVersion) of the ConfigMap now, or _UNREADABLE."""
     try:
-        return _cm_keys(json.loads(run_cmd([
+        cm = json.loads(run_cmd([
             "kubectl", "get", "configmap", CONFIGMAP, "-n", NAMESPACE,
-            "-o", "json"]))).get(key)
+            "-o", "json"]))
+        return _cm_keys(cm), cm["metadata"]["resourceVersion"]
     except BaseException:  # noqa: BLE001 — any failure is "cannot tell"
         return _UNREADABLE
+
+
+def _read_key(key):
+    """The ConfigMap's `key` now (None if absent), or _UNREADABLE."""
+    now = _read_cm()
+    return _UNREADABLE if now is _UNREADABLE else now[0].get(key)
 
 
 _UNKNOWN = {"status": "state-unknown", "reason": None, "written": None,
@@ -1042,6 +1135,14 @@ def _conclude(exc, write):
     # From here the ConfigMap may hold the new bytes.
     SIGNALS.armed = False  # the rollback and its waits are not interrupted
     _guarded(SIGNALS.ignore)  # the rollback's kubectl inherits SIG_IGN
+    if not write.returned and isinstance(exc, PatchConflict):
+        # 409: the apiserver refused the write; nothing was written.
+        if SIGNALS.pending is not None:
+            return None
+        return _outcome("caller_error", (
+            "threshold-config changed since it was read; nothing was "
+            "written — re-run patch-config."), "configmap_changed",
+            changed=False)
     if not write.returned:
         now = _read_key(write.key)
         if now == write.old:  # the failed write call did not land
@@ -1058,8 +1159,14 @@ def _conclude(exc, write):
                    "holds neither the old nor the new bytes")
                 + "; check it by hand."), written=None)
     failed = _send_rollback(write)
-    now = write.old if failed is None else _read_key(write.key)
     cause = SIGNALS.cause(exc)
+    if isinstance(failed, Overwritten):
+        return _outcome("overwritten-by-another-writer", (
+            f"{type(cause).__name__}: {cause}; another writer changed key "
+            f"{write.key} after this write, so it was not rolled back (that "
+            f"would destroy their change); check it by hand."),
+            written=failed.value == write.new)
+    now = write.old if failed is None else _read_key(write.key)
     if now == write.new:
         return _outcome("rollback-failed", (
             f"{type(cause).__name__}: {cause}; the rollback failed too "
@@ -1079,14 +1186,38 @@ def _conclude(exc, write):
     return _outcome(status, f"{type(cause).__name__}: {cause}", rolled_back=True)
 
 
+class Overwritten(Exception):
+    """Another writer replaced the patched key after our write: rolling back
+    would destroy their change, so it is not rolled back."""
+
+    def __init__(self, value):
+        super().__init__("another writer changed the key after this write")
+        self.value = value
+
+
 def _send_rollback(write):
-    """Patch the old bytes back (the key removed if it did not exist).
-    None if the call returned cleanly, else what it raised."""
-    try:
-        _kubectl_patch({"data": {write.key: write.old}})
-        return None
-    except BaseException as exc:  # noqa: BLE001 — judged from the ConfigMap
-        return exc
+    """Patch the old bytes back (the key removed if it did not exist), only
+    over the version our write produced. On a conflict: if the key still
+    holds exactly our bytes (another key changed), retry on the fresh
+    version, a bounded number of times; if it holds anything else, stop —
+    Overwritten. None if a rollback went through, else what stopped it."""
+    rv = write.rv_written
+    for _ in range(ROLLBACK_CONFLICT_ATTEMPTS):
+        try:
+            if rv is None:
+                raise PatchConflict("the version our write produced is unknown")
+            _kubectl_patch({"data": {write.key: write.old}}, rv)
+            return None
+        except PatchConflict as exc:
+            now = _read_cm()
+            if now is _UNREADABLE:
+                return exc
+            if now[0].get(write.key) != write.new:
+                return Overwritten(now[0].get(write.key))
+            rv = now[1]
+        except BaseException as exc:  # noqa: BLE001 — judged from the ConfigMap
+            return exc
+    return PatchConflict("the ConfigMap kept changing under the rollback")
 
 
 def _wait_rolled_back(write):
@@ -1113,6 +1244,10 @@ def _observed_fallback(write):
         if write.verified:
             return _outcome("applied", written=True)
         failed = _send_rollback(write)
+        if isinstance(failed, Overwritten):
+            return _outcome("overwritten-by-another-writer", "internal "
+                            "error; another writer changed the key, not "
+                            "rolled back", written=False)
         now = write.old if failed is None else _read_key(write.key)
         if now == write.old:
             return _outcome("error-rolled-back", "internal error; rolled back",
@@ -1233,13 +1368,20 @@ def _status_exit_code(status):
         return EXIT_EXPORTER_UNREACHABLE
     if status == "rollback-failed":
         return EXIT_ROLLBACK_FAILED
-    if status == "state-unknown":
+    if status in ("state-unknown", "overwritten-by-another-writer"):
         return EXIT_STATE_UNKNOWN
     return EXIT_ABORTED_ROLLED_BACK  # interrupted- / error-rolled-back
 
 
 def main():
     """CLI entry point: Patch threshold-config ConfigMap for a specific tenant."""
+    try:
+        _main()
+    finally:
+        _seal_std_streams()
+
+
+def _main():
     as_json = any(len(a) > 2 and "--json".startswith(a.split("=", 1)[0])
                   for a in sys.argv[1:])
     try:

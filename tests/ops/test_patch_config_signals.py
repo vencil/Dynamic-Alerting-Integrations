@@ -49,11 +49,17 @@ FAKE_KUBECTL = textwrap.dedent('''\
         return json.load(open(os.path.join(S, "cm.json"), encoding="utf-8"))
     def gen():
         return int(open(os.path.join(S, "gen"), encoding="utf-8").read())
+    def rv():
+        p = os.path.join(S, "rv")
+        return open(p, encoding="utf-8").read() if os.path.exists(p) else "1"
     if a[:2] == ["get", "configmap"]:
-        print(json.dumps({"data": cm()}))
+        print(json.dumps({"metadata": {"resourceVersion": rv()}, "data": cm()}))
     elif a[:1] == ["patch"]:
-        patch = json.load(open(a[a.index("--patch-file") + 1], encoding="utf-8"))["data"]
+        body = json.load(open(a[a.index("--patch-file") + 1], encoding="utf-8"))
+        patch = body["data"]
         delay("patch_before")
+        if body.get("metadata", {}).get("resourceVersion") not in (None, rv()):
+            sys.exit("Error from server (Conflict): the object has been modified")
         d = cm()
         for k, v in patch.items():
             if v is None:
@@ -61,11 +67,14 @@ FAKE_KUBECTL = textwrap.dedent('''\
             else:
                 d[k] = v
         json.dump(d, open(os.path.join(S, "cm.json"), "w", encoding="utf-8"))
+        new_rv = str(int(rv()) + 1)
+        open(os.path.join(S, "rv"), "w", encoding="utf-8").write(new_rv)
         if not os.path.exists(os.path.join(S, "freeze")):  # freeze: never reloads
             g = gen() + 1
             open(os.path.join(S, "gen"), "w", encoding="utf-8").write(str(g))
         log("patch-landed")
         delay("patch_after")
+        print(json.dumps({"metadata": {"resourceVersion": new_rv}, "data": d}))
     elif a[:2] == ["get", "pods"]:
         print(json.dumps({"items": [{"metadata": {"name": "exporter-0"},
               "status": {"phase": "Running"},
@@ -319,8 +328,11 @@ def test_w2_a_signal_just_after_an_early_answer_does_not_change_it(tmp_path, cas
                     pass
                 break
         rc, out, err, cm = r.finish()
-        assert rc == _one_doc(out)["exit_code"], (i, rc, err[-300:])
         assert cm == r.old
+        if out:  # answered: the signal must not change the stated code
+            assert rc == _one_doc(out)["exit_code"], (i, rc, err[-300:])
+        else:  # the signal came before the answer: nothing written, ended by it
+            assert rc < 0, (i, rc, err[-300:])
 
 
 @needs_posix
@@ -337,3 +349,51 @@ def test_m7_a_signal_during_the_wait_ends_well_before_the_timeout(tmp_path, sig)
     assert time.monotonic() - t0 < 5, err[-300:]
     assert (rc, _one_doc(out)["status"]) == (6, "interrupted-rolled-back")
     assert cm == r.old
+
+
+# Runs the tool the way a coverage / atexit hook would see it: something writes
+# to stdout AFTER main() has answered. With stdout's reader gone, that write
+# (or the interpreter's exit flush of it) is what turns the exit code into 120.
+_AFTER_MAIN = """
+import atexit, runpy, sys
+flag, tool = sys.argv[1], sys.argv[2]
+sys.argv = [tool] + sys.argv[3:]
+def late():
+    try:
+        sys.stdout.write("written after main\\n")
+        sys.stdout.flush()
+        result = "ok"
+    except BaseException as exc:
+        result = repr(exc)
+    with open(flag, "w", encoding="utf-8") as fh:
+        fh.write(result)
+atexit.register(late)
+runpy.run_path(tool, run_name="__main__")
+"""
+
+
+@needs_posix
+@pytest.mark.parametrize("json_flag", [["--json"], []], ids=["json", "text"])
+def test_a_broken_stdout_cannot_fail_what_runs_after_main(tmp_path, json_flag):
+    """A：stdout 的讀端一開始就關了。main 結束時把壞掉的 fd 導到 /dev/null，
+    之後的寫入（atexit、直譯器收尾的 flush）不會失敗，結束碼維持實況。"""
+    r = Run(tmp_path, OLD, {})
+    r.proc.kill()
+    r.proc.wait()
+    (r.dir / "cm.json").write_text(json.dumps(OLD), encoding="utf-8")
+    (r.dir / "rv").unlink(missing_ok=True)
+    env = dict(os.environ, FAKE_S=str(r.dir),
+               PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}")
+    flag = tmp_path / "late"
+    for i in range(5):
+        (r.dir / "cm.json").write_text(json.dumps(OLD), encoding="utf-8")
+        (r.dir / "rv").unlink(missing_ok=True)
+        rfd, wfd = os.pipe()
+        os.close(rfd)
+        p = subprocess.run([sys.executable, "-c", _AFTER_MAIN, str(flag), str(TOOL),
+                            *json_flag, "t-a", "mysql_connections", "65",
+                            "--poll-interval", "0.05"],
+                           env=env, stdout=wfd, stderr=subprocess.DEVNULL, timeout=60)
+        os.close(wfd)
+        assert p.returncode == 0, (i, p.returncode)
+        assert flag.read_text(encoding="utf-8") == "ok", i

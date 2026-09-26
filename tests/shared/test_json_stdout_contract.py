@@ -412,7 +412,8 @@ if "get" in argv and "threshold-config" in argv and os.environ.get("FAKE_KUBECTL
 if "get" in argv and "threshold-config" in argv:
     print(json.dumps({
         "apiVersion": "v1", "kind": "ConfigMap",
-        "metadata": {"name": "threshold-config", "namespace": "monitoring"},
+        "metadata": {"name": "threshold-config", "namespace": "monitoring",
+                     "resourceVersion": "1"},
         "data": {
             "_defaults.yaml": (
                 "defaults:\n  max_connections: '100'\n  slow_queries: '5'\n"

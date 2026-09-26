@@ -36,7 +36,7 @@ class FakeCluster:
     def __init__(self, data, render=render_thresholds, pods=("exporter-0",),
                  reload=lambda n: True, fail_patch=(), fail_raw=None,
                  no_pods=False, not_serving=None, patch_lands=False,
-                 fail_get_cm_after=None):
+                 fail_get_cm_after=None, concurrent=None):
         self.data = dict(data)
         self.render, self.reload = render, reload
         self.pods = list(pods)
@@ -49,7 +49,18 @@ class FakeCluster:
         self.not_serving = dict(not_serving or {})
         self.patch_lands = patch_lands  # a failing patch was still applied (bool, or patch indices)
         self.fail_get_cm_after = fail_get_cm_after  # n patches → get cm fails
+        # resourceVersion, bumped by every write; a patch carrying another
+        # one is refused like the apiserver does (409 Conflict).
+        self.rv = 1
+        self.preconditions = []
+        # concurrent(n, cluster): runs before patch #n — another writer
+        self.concurrent = concurrent
         self.calls = []
+
+    def other_writer(self, key, value):
+        """Someone else's write: changes `key` and bumps the version."""
+        self.data[key] = value
+        self.rv += 1
 
     def __call__(self, cmd):
         self.calls.append(cmd)
@@ -57,7 +68,8 @@ class FakeCluster:
             if (self.fail_get_cm_after is not None
                     and len(self.patches) >= self.fail_get_cm_after):
                 raise pc.KubectlError("get configmap failed")
-            return json.dumps({"data": self.data})
+            return json.dumps({"metadata": {"resourceVersion": str(self.rv)},
+                               "data": self.data})
         if cmd[:3] == ["kubectl", "get", "pods"]:
             items = [] if self.no_pods else [
                 self._pod(p, "Running", None) for p in self.pods] + [
@@ -78,7 +90,17 @@ class FakeCluster:
             with open(cmd[cmd.index("--patch-file") + 1], encoding="utf-8") as fh:
                 patch = json.load(fh)
             n = len(self.patches)
-            self.patches.append(patch)
+            if self.concurrent:
+                self.concurrent(n, self)
+            self.patches.append({"data": patch["data"]})
+            want = (patch.get("metadata") or {}).get("resourceVersion")
+            self.preconditions.append(want)
+            if want is not None and want != str(self.rv):
+                raise pc.KubectlError(
+                    'Error from server (Conflict): Operation cannot be fulfilled '
+                    'on configmaps "threshold-config": the object has been '
+                    'modified; please apply your changes to the latest version '
+                    'and try again')
             lands = (self.patch_lands is True
                      or (not isinstance(self.patch_lands, bool)
                          and n in self.patch_lands))
@@ -89,13 +111,15 @@ class FakeCluster:
                     self.data.pop(k, None)
                 else:
                     self.data[k] = v
+            self.rv += 1
             if self.reload(n):
                 for p in self.pods:
                     self.loaded[p] = dict(self.data)
                     self.gen[p] += 1
             if n in self.fail_patch:
                 raise pc.KubectlError("patch timed out (but was applied)")
-            return ""
+            return json.dumps({"metadata": {"resourceVersion": str(self.rv)},
+                               "data": self.data})
         raise AssertionError(f"unexpected kubectl call: {cmd}")
 
     @staticmethod
