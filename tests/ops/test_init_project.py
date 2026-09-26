@@ -5825,12 +5825,17 @@ class TestRoundEightMutationSurvivors:
         prereq = prereqs[0] if lang == 'zh' else prereqs[1]
         marker = '叢集憑證' if lang == 'zh' else 'cluster credentials'
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = dict(self._CFG, ci='github', deploy=deploy)
-            created = ip.run_init(config, tmpdir)
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                ip._print_summary(created, tmpdir, config)
-            out = buf.getvalue()
+            # 在輸出目錄執行：下一步的路徑以 cwd 為基準（issue 1379），
+            # 這裡斷言的是句子內容，不是路徑基準。離開前先還原 cwd，
+            # 否則 Windows 刪不掉仍是 cwd 的暫存目錄。
+            with monkeypatch.context() as m:
+                m.chdir(tmpdir)
+                config = dict(self._CFG, ci='github', deploy=deploy)
+                created = ip.run_init(config, tmpdir)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, tmpdir, config)
+                out = buf.getvalue()
         line = next((ln for ln in out.splitlines() if marker in ln), None)
         assert line is not None, (
             f'找不到 {lang} 的憑證句（_LANG={ip._LANG!r}）。\n{out}')
