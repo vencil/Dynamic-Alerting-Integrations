@@ -138,7 +138,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 必記的 Makefile 入口：
 
 - `make pr-preflight` — ⛔ PR merge 前必跑，寫 `.git/.preflight-ok.<SHA>` marker（marker 綁 sha，commit 後要重跑）。剛證 hooks 綠可用 `make pr-preflight-quick`。
-- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + 未發布 draft advisory 檢查 + docker build hard gate；需 docker / trivy / gh）。
+- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + `changelog.d/` 片段已組裝 + 未發布 draft advisory 檢查 + docker build hard gate；需 docker / trivy / gh）。
 - `make lint-docs` — 一站式文件 lint。
 - `make session-cleanup` — session 結束清理。
 - `make api-docs` — 從 tenant-api swag 標註產生 OpenAPI spec（改 handler 標註或標註可達的 struct 後必跑，CI 有 drift check）。

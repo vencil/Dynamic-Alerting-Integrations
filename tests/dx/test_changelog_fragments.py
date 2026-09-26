@@ -140,6 +140,32 @@ def test_nothing_to_assemble_is_empty(tmp_path):
     assert gc.assemble_fragments([]) == ("", [], [])
 
 
+# ── check_fragments_consumed (make pre-tag) ──────────────────────────
+
+def test_a_leftover_fragment_blocks_the_tag_and_is_named(tmp_path, capsys):
+    d = tmp_path / gc.FRAGMENT_DIR
+    d.mkdir()
+    _write(d, gc.FRAGMENT_README, "# docs, not a fragment\n")
+    _write(d, "2102-left-behind.md", _fragment())
+    assert gc.check_fragments_consumed(tmp_path) == EXIT_VIOLATION
+    assert "2102-left-behind.md" in capsys.readouterr().out
+
+
+def test_only_the_readme_left_lets_the_tag_through(tmp_path):
+    d = tmp_path / gc.FRAGMENT_DIR
+    d.mkdir()
+    _write(d, gc.FRAGMENT_README, "# docs, not a fragment\n")
+    assert gc.check_fragments_consumed(tmp_path) == EXIT_OK
+
+
+def test_pre_tag_runs_the_consumed_check():
+    """The check only matters if the tag gate runs it."""
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    pre_tag = next(ln for ln in makefile.splitlines() if ln.startswith("pre-tag:"))
+    assert "changelog-fragments-consumed" in pre_tag.split("##")[0].split()
+    assert "--check-consumed" in makefile
+
+
 # ── lint_unreleased_frozen ───────────────────────────────────────────
 
 def _unreleased(*entries: str) -> str:
@@ -199,6 +225,12 @@ def test_cli_assemble_prints_markdown_and_fails_on_a_broken_fragment(tmp_path):
     bad = _write(tmp_path, "bad.md", _fragment(section="Nope"))
     proc = _run("--assemble", "--fragments", str(good), str(bad))
     assert proc.returncode == EXIT_VIOLATION and "bad.md" in proc.stderr
+
+
+def test_cli_check_consumed_matches_the_live_tree():
+    proc = _run("--check-consumed")
+    expected = EXIT_VIOLATION if gc.fragment_paths(REPO_ROOT) else EXIT_OK
+    assert proc.returncode == expected, proc.stdout + proc.stderr
 
 
 # ── Live tree ────────────────────────────────────────────────────────

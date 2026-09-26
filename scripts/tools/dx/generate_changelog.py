@@ -20,6 +20,7 @@ Usage:
     # changelog.d/ fragments (#2102): lint them, or print them assembled
     generate_changelog.py --fragments [PATH ...]
     generate_changelog.py --assemble
+    generate_changelog.py --check-consumed   # make pre-tag: none may be left
 """
 
 import argparse
@@ -649,6 +650,27 @@ def fragment_paths(root: Path) -> List[Path]:
     return sorted(p for p in d.glob("*.md") if p.name != FRAGMENT_README)
 
 
+def check_fragments_consumed(root: Path) -> int:
+    """Exit code for ``--check-consumed``: every fragment must be gone.
+
+    Run on the commit being tagged. The release wrap-up assembles the
+    fragments into ``## [vX.Y.Z]`` and deletes them; one still here either
+    missed this release's notes or will be assembled again into the next
+    one. A fragment merged after the wrap-up is a change the tag would ship
+    without describing, so it fails too.
+    """
+    left = fragment_paths(root)
+    if left:
+        print(f"❌ {len(left)} changelog fragment(s) not assembled into this release:")
+        for p in left:
+            print(f"  {p.relative_to(root)}")
+        print("   Assemble them into the new ## [vX.Y.Z] block and `git rm` them "
+              "(vibe-release step 2).")
+        return EXIT_VIOLATION
+    print(f"✅ no changelog fragments left in {FRAGMENT_DIR}/")
+    return EXIT_OK
+
+
 def assemble_fragments(paths: List[Path]) -> Tuple[str, List[str], List[str]]:
     """Render fragments as release-section markdown.
 
@@ -755,7 +777,16 @@ def main() -> int:
         help=f"Print the {FRAGMENT_DIR}/ fragments as release-section markdown "
              "(section, then topic, then created); the release wrap-up distils this",
     )
+    parser.add_argument(
+        "--check-consumed",
+        action="store_true",
+        help=f"Fail if any {FRAGMENT_DIR}/ fragment is left (make pre-tag: the "
+             "commit being tagged must have assembled all of them)",
+    )
     args = parser.parse_args()
+
+    if args.check_consumed:
+        return check_fragments_consumed(Path(__file__).resolve().parents[3])
 
     # Fragment lint / assembly (#2102).
     if args.fragments is not None or args.assemble:
