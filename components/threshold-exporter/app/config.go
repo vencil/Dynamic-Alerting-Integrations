@@ -1456,18 +1456,39 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // duplicate tenant was rejected by the caller. Merge failures and
 // unreadable defaults files are logged and skipped per tenant / per file.
 //
-// Every merged_hash is recomputed from disk. This is the cold-start
-// semantics; the incremental reuse of unchanged tenants lives in
-// classifyTenant, on the debounced path, and is not duplicated here.
-// ⚠️ recomputeMergedHash re-reads and re-parses each tenant file the walker
-// has just decoded in full (#1957; TreeScan.Partials) — the remaining
-// double parse of a hierarchical cold load, tracked in #1978.
+// Every merged_hash is recomputed. This is the cold-start semantics; the
+// incremental reuse of unchanged tenants lives in classifyTenant, on the
+// debounced path, and is not duplicated here.
+//
+// The inputs are THIS scan's bytes, not a second read of the tree (#1978):
+// coldMergeInputs hands out TreeFile.Data (every file of a prior-less scan;
+// a file a warm scan carried unread falls back to os.ReadFile, as before),
+// and parses each defaults file ONCE for every tenant whose chain holds it
+// and for the parsedDefaults cache. Measured before the change on the
+// 1000-tenant four-level bench fixture: each `_defaults.yaml` was read
+// 2 + (tenants below it) times and parsed 1 + (tenants below it) times —
+// the root file 1002 reads / 1001 parses — and recomputeMergedHash was ~68%
+// of fullDirLoad's CPU. The merged_hash is the same function of the same
+// bytes (config.ComputeMergedHashFromChain shares its two halves with
+// ComputeMergedHash), pinned by TestColdLoadMergedHashesMatchRecompute.
+// ⚠️ What remains: each tenant file is still YAML-decoded twice — once by
+// the walker into a typed ThresholdConfig (#1957; TreeScan.Partials) and
+// once here into the untyped document the hash is taken over. Hashing the
+// typed decode would change what is hashed (describe_tenant.py parity), so
+// that second decode stays.
 //
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than
 // merging in place so a partial install never leaves torn state visible
 // to the /effective read path.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
+	m.populateHierarchyStateWith(scan, newColdMergeInputs(scan))
+}
+
+// populateHierarchyStateWith is populateHierarchyStateFrom over the given
+// merge inputs — the seam through which a test observes the reads and
+// parses one cold load makes. `in` must come from newColdMergeInputs(scan).
+func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMergeInputs) {
 	tenants, defaults, graph := scan.Tenants, scan.Defaults, scan.InheritanceGraph()
 	if len(defaults) == 0 && len(tenants) == 0 {
 		// Empty tree or flat layout with no files we recognize. Don't
@@ -1479,7 +1500,7 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	newMergedHashes := make(map[string]string, len(tenants))
 	for tid, srcPath := range tenants {
 		chain := graph.TenantDefaults[tid]
-		mh, mergeErr := m.recomputeMergedHash(tid, srcPath, chain)
+		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in)
 		if mergeErr != nil {
 			logMergeSkip(m.getLogger(), tid, "initial-hierarchy-scan", mergeErr)
 			continue
@@ -1492,8 +1513,10 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	// shadowed-vs-cosmetic effects without a "warm-up" tick where every
 	// noOp falls back to "unknown". Parse failures are logged-and-skipped
 	// (not fatal — same policy as logMergeSkip above) so one broken
-	// defaults file can't poison the rest of the cache.
-	newParsedDefaults := config.ParseDefaultsFiles(defaults, m.getLogger())
+	// defaults file can't poison the rest of the cache. The parse is the
+	// one the merge above already made (#1978): ParseDefaultsFiles takes
+	// each file's bytes and chain parse from `in` instead of a third read.
+	newParsedDefaults := config.ParseDefaultsFiles(defaults, in.defaultsSource, m.getLogger())
 
 	m.mu.Lock()
 	// Only flip hierarchicalMode on once we've seen a _defaults.yaml
@@ -1508,6 +1531,107 @@ func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
+}
+
+// coldMergeInputs is what one cold load merges from (#1978): the bytes the
+// scan already read, keyed by absolute path, and each defaults file parsed
+// on first use and then shared by every tenant chain that holds it. Used by
+// one goroutine for one populateHierarchyStateFrom call and dropped with it;
+// the bytes are the scan's own (released by commitFlatFrom as before), and
+// the parsed blocks are the very maps the parsedDefaults cache keeps, so
+// what it adds to a load's footprint is two index maps.
+//
+// ⛔ Cold load only. The debounced path (classifyTenant) keeps
+// recomputeMergedHash: it re-merges only the tenants whose inputs moved, and
+// a file its scan carried unread has no bytes to hand out.
+type coldMergeInputs struct {
+	data     map[string][]byte // AbsPath → TreeFile.Data (files this scan read)
+	defaults map[string]*coldDefaultsEntry
+
+	// Test seams, nil in production (#1978 review): called once per disk
+	// read bytesOf falls back to and once per defaults parse. They live on
+	// THIS value, which one populateHierarchyStateWith call owns, so a
+	// parallel test observes only its own load (no process-global state).
+	onDiskRead func(absPath string)
+	onParse    func(absPath string)
+}
+
+// coldDefaultsEntry is one defaults file's read + parse, made once.
+type coldDefaultsEntry struct {
+	raw     []byte
+	readErr error
+	parsed  chainDefaults
+}
+
+func newColdMergeInputs(scan *treeScan) *coldMergeInputs {
+	data := make(map[string][]byte, len(scan.Files))
+	for _, f := range scan.Files {
+		if f.Data != nil {
+			data[f.AbsPath] = f.Data
+		}
+	}
+	return &coldMergeInputs{data: data, defaults: make(map[string]*coldDefaultsEntry)}
+}
+
+// bytesOf is the scan's bytes for absPath, or a read of the file when the
+// scan did not keep them (a warm fullDirLoad whose walker carried the file
+// by the mtime fast-path) — the read recomputeMergedHash always made.
+func (in *coldMergeInputs) bytesOf(absPath string) ([]byte, error) {
+	if b, ok := in.data[absPath]; ok {
+		return b, nil
+	}
+	if in.onDiskRead != nil {
+		in.onDiskRead(absPath)
+	}
+	return os.ReadFile(absPath)
+}
+
+func (in *coldMergeInputs) defaultsEntry(absPath string) *coldDefaultsEntry {
+	if e, ok := in.defaults[absPath]; ok {
+		return e
+	}
+	e := &coldDefaultsEntry{}
+	e.raw, e.readErr = in.bytesOf(absPath)
+	if e.readErr == nil {
+		e.parsed = parseChainDefaults(e.raw)
+		if in.onParse != nil {
+			in.onParse(absPath)
+		}
+	}
+	in.defaults[absPath] = e
+	return e
+}
+
+// defaultsSource is `in` as a config.DefaultsSource: the file's bytes, its
+// one chain parse, or the read error — for config.ParseDefaultsFiles.
+func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ChainDefaults, error) {
+	e := in.defaultsEntry(absPath)
+	return e.raw, e.parsed, e.readErr
+}
+
+// coldMergedHash is recomputeMergedHash over coldMergeInputs: the same
+// merged_hash, the same error for the same bytes, and the same
+// emitParseFailureSignal on a merge failure. Read errors keep their
+// precedence over parse errors (recomputeMergedHash reads the tenant file
+// and every chain file before it parses anything).
+func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs) (string, error) {
+	tenantBytes, err := in.bytesOf(tenantFile)
+	if err != nil {
+		return "", err
+	}
+	chain := make([]chainDefaults, 0, len(defaultsChain))
+	for _, dp := range defaultsChain {
+		e := in.defaultsEntry(dp)
+		if e.readErr != nil {
+			return "", e.readErr
+		}
+		chain = append(chain, e.parsed)
+	}
+	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain)
+	if mergeErr != nil {
+		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
+	}
+	return h, mergeErr
 }
 
 // logConfigStats logs config summary with cheap counts instead of calling
