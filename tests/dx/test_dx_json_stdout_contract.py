@@ -192,7 +192,7 @@ JSON_TOOLS = collect_json_tools()
 # ═══════════════════════════════════════════════════════════════════════════
 # Fake gh — shadows the real binary on PATH (POSIX only; see module docstring).
 #
-# Routes the gh call shapes the gh-facing dx tools make:
+# Routes the gh call shapes the dx tools under test make:
 #   * `gh --version` / `gh auth status`      → succeed (prereq probes)
 #   * `gh api /rate_limit`                    → healthy remaining quota
 #   * `gh repo view --json nameWithOwner`     → a canned owner/repo
@@ -223,8 +223,6 @@ if argv[:2] == ["auth", "status"]:
     sys.exit(0)
 if argv[:2] == ["repo", "view"]:
     emit(json.dumps({{"nameWithOwner": "vencil/Dynamic-Alerting-Integrations"}}))
-if argv[:2] == ["pr", "view"]:
-    emit(json.dumps({{"state": "MERGED", "labels": []}}))
 if argv[:1] == ["api"]:
     path = next((a for a in argv[1:] if not a.startswith("-")), "")
     if "/rate_limit" in path:
