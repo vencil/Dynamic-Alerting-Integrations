@@ -147,7 +147,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "agent_output_metrics.py": _R_DX,
     "analyze_bench_history.py": _R_DX,
     "analyze_probe.py": _R_DX,
-    "analyze_tier1_fp_rate.py": _R_DX,
     "axe_lite_static.py": _R_DX,
     "bump_playbook_versions.py": _R_DX,
     "check_aria_references.py": _R_DX,
@@ -292,7 +291,6 @@ CHINESE_ONLY_HELP: dict[str, str] = {
     "validate_migration.py": _R_ZH,
     # ── scripts/tools/dx ───────────────────────────────────────────────
     "bump_docs.py": _R_ZH,
-    "doc_impact.py": _R_ZH,
     "generate_byo_rulepack_table.py": _R_ZH,
     "generate_doc_map.py": _R_ZH,
     "generate_rule_pack_stats.py": _R_ZH,

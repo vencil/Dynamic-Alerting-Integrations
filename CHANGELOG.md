@@ -90,6 +90,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Removed
 
+- **`doc_impact.py` 與 `analyze_tier1_fp_rate.py` 退役（dx；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。`doc_impact` 除了測試之外沒有任何呼叫端；`analyze_tier1_fp_rate` 服務的 #433 已結案。一併移除：tool-map 條目、`test_dx_json_stdout_contract` 的兩個 recipe 與假 `gh` 專為後者保留的 `run list` 路由、`test_bilingual_help_contract` 的兩筆 allowlist。
+
 - **`check_portal_i18n.py`、`check_glossary_coverage.py`、`check_i18n_coverage.py` 退役（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決，三支都只掛在手動 stage。一併移除：三個 manual hook、`make lint-portal` 裡的 portal i18n 步驟、`check_lint_toolchain_fit` 的兩筆 allowlist、tool-map 條目，以及 `lint-policy.md`、`dev-rules.md`、`hook-vs-skill-coverage.md` 的對應內容。⚠️ 沒有補替代品：Portal JSX 寫死字串與術語表覆蓋率這兩項檢查是直接拿掉。
 
 - **`check_doc_template.py` 與 `inject_related_docs.py` 退役；doc-template §2.8「相關資源」段落從強制改為建議（lint、dx、docs；[#1984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1984)）**：owner 裁決。檢查工具只掛在手動 stage、從來沒有接上閘門，規則只寫在文件裡，實際上大多數文件都沒有這個段落。產生器 `--update` 會覆寫已經存在、由人手整理的「相關資源」段落，不能拿來補齊。frontmatter 是否存在，仍由 CI 的 `add_frontmatter.py --check` 把關。

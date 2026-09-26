@@ -20,24 +20,23 @@ WHY THIS FILE EXISTS
 --------------------
 The ops half of da-tools got this gate in #1112
 (``tests/shared/test_json_stdout_contract.py``, 83 recipes over 37 ops tools).
-The **dx** half (``scripts/tools/dx/``) never had it.  A human spot-check of five
-dx tools (describe_tenant / tenant_verify / coverage_delta / waveform_score /
-doc_impact) found them clean, so this gate is primarily a **ratchet** — it locks
-in the current good state and stops a future dx tool from regressing.  But it is
+The **dx** half (``scripts/tools/dx/``) never had it.  This gate is primarily a
+**ratchet** — it locks in the current good state and stops a future dx tool from
+regressing.  But it is
 *also* executable recon: it actually RUNS every gate-able dx ``--json`` mode, so a
 prose-leak the spot-check missed (analogous to the cardinality-URL crash the ops
 gate flushed out) lands as a red here, not in a caller's ``| jq``.
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* Exactly the 16 dx tools that DECLARE a JSON-output flag as an argparse
-  ``add_argument`` — 15 via ``--json`` / ``--json-output`` and 1
-  (``describe_tenant``) via ``--format`` with a ``json`` choice.
+* The dx tools that DECLARE a JSON-output flag as an argparse ``add_argument``
+  — ``--json`` / ``--json-output``, or (``describe_tenant``) ``--format`` with a
+  ``json`` choice.
   ``collect_json_tools()`` is **AST-based, not regex-based**, precisely because a
   literal ``"--json"`` substring scan (what the ops gate uses) would also match
   the ``["gh", …, "--json", …]`` *pass-through* arguments in ``pr_preflight`` /
-  ``analyze_bench_history`` / (the gh calls inside) ``diag_pr_ci`` /
-  ``analyze_tier1_fp_rate`` — those are gh's output selector, NOT the tool's own
+  ``analyze_bench_history`` / (the gh calls inside) ``diag_pr_ci`` — those are
+  gh's output selector, NOT the tool's own
   stdout contract, and must not be gated.  Walking ``add_argument`` calls captures
   the tool's *own* declared flags and ignores list-literal pass-throughs.
 * ``test_recipe_table_covers_every_json_tool`` fails if a new dx tool grows a
@@ -59,15 +58,13 @@ inversion is not exercised and not asserted.
 
 HOW EXTERNAL DEPENDENCIES ARE HANDLED (stub, don't skip-and-shrug)
 -----------------------------------------------------------------
-* **gh** (``diag_pr_ci`` / ``analyze_tier1_fp_rate``) → a fake ``gh`` on PATH
-  (``fake_gh_dir``) routes ``api``/``repo view``/``run list`` calls to the recorded
-  ``tests/dx/fixtures/diag_pr_ci/`` fixtures (``diag_pr_ci``) and to an empty
-  ``run list`` (``analyze_tier1_fp_rate`` — the empty run list short-circuits before
-  its ``--jq`` endpoints, so a single canned reply drives a full clean JSON doc).
+* **gh** (``diag_pr_ci``) → a fake ``gh`` on PATH (``fake_gh_dir``) routes
+  ``api``/``repo view`` calls to the recorded ``tests/dx/fixtures/diag_pr_ci/``
+  fixtures.
   **Windows caveat, verified empirically:** Python's ``subprocess`` on Windows
   resolves a bare ``gh`` to ``gh.exe`` and ignores PATHEXT, so a ``.bat``/POSIX
   shim is bypassed and the REAL ``gh`` would run (network / auth / rate-limit).
-  These two recipes therefore ``skip`` on ``os.name == 'nt'`` and run for real on
+  Recipes that need gh therefore ``skip`` on ``os.name == 'nt'`` and run for real on
   POSIX (Linux CI / dev container), where this gate is authoritative — identical
   to the ops gate's fake-kubectl boundary.
 * **jsonschema** (``waveform_compile`` / ``waveform_score``) → required at import;
@@ -123,15 +120,13 @@ DX_DIR = REPO_ROOT / "scripts" / "tools" / "dx"
 # ── Real in-repo fixtures (all asserted to exist by test_fixture_paths_exist) ──
 SEED_CONF_D = REPO_ROOT / "try-local" / "seed" / "conf.d"
 RULE_PACKS = REPO_ROOT / "rule-packs"
-DOCS_DIR = REPO_ROOT / "docs"
-ARCH_DOC = DOCS_DIR / "architecture-and-design.md"
 WAVEFORM_FIX = REPO_ROOT / "tests" / "dx" / "fixtures" / "waveform"
 WAVEFORM_PACK = WAVEFORM_FIX / "selftest_service_up.yaml"
 WAVEFORM_TOLERANCES = WAVEFORM_FIX / "tolerances" / "selftest_tolerances.yaml"
 DIAG_FIXTURE_DIR = REPO_ROOT / "tests" / "dx" / "fixtures" / "diag_pr_ci"
 
 FIXTURE_PATHS = [
-    SEED_CONF_D, RULE_PACKS, DOCS_DIR, ARCH_DOC,
+    SEED_CONF_D, RULE_PACKS,
     WAVEFORM_PACK, WAVEFORM_TOLERANCES, DIAG_FIXTURE_DIR,
 ]
 
@@ -154,7 +149,7 @@ _HAVE_VMALERT = shutil.which("vmalert") is not None
 # Walking add_argument calls is what distinguishes a tool's OWN flag from the
 # `["gh", ..., "--json", ...]` pass-through list literals that a substring regex
 # would wrongly sweep in (pr_preflight / analyze_bench_history / the gh calls
-# inside diag_pr_ci & analyze_tier1_fp_rate).
+# inside diag_pr_ci).
 # ═══════════════════════════════════════════════════════════════════════════
 def _declares_json_output_flag(path: Path) -> bool:
     try:
@@ -197,14 +192,11 @@ JSON_TOOLS = collect_json_tools()
 # ═══════════════════════════════════════════════════════════════════════════
 # Fake gh — shadows the real binary on PATH (POSIX only; see module docstring).
 #
-# Routes the three gh call shapes the two gh-facing dx tools make:
+# Routes the gh call shapes the gh-facing dx tools make:
 #   * `gh --version` / `gh auth status`      → succeed (prereq probes)
 #   * `gh api /rate_limit`                    → healthy remaining quota
 #   * `gh repo view --json nameWithOwner`     → a canned owner/repo
 #   * `gh api <endpoint>`                     → the recorded diag_pr_ci fixtures
-#   * `gh run list ...`                       → `[]`  (analyze_tier1_fp_rate: an
-#                                                empty run list short-circuits
-#                                                before its `--jq` endpoints)
 # ═══════════════════════════════════════════════════════════════════════════
 _FAKE_GH_PY = r'''
 import json, os, sys
@@ -231,8 +223,6 @@ if argv[:2] == ["auth", "status"]:
     sys.exit(0)
 if argv[:2] == ["repo", "view"]:
     emit(json.dumps({{"nameWithOwner": "vencil/Dynamic-Alerting-Integrations"}}))
-if argv[:2] == ["run", "list"]:
-    emit("[]")
 if argv[:2] == ["pr", "view"]:
     emit(json.dumps({{"state": "MERGED", "labels": []}}))
 if argv[:1] == ["api"]:
@@ -407,10 +397,6 @@ RECIPES: list[Recipe] = [
       lambda t: ["--json", "changelog", "--path", _changelog(t), "--section", "v9.9.9"],
       expect_caller_error=True),
 
-    # ── analyze_tier1_fp_rate — empty run list short-circuits to a clean doc ─
-    R("analyze_tier1_fp_rate", "json",
-      lambda t: ["--json"], expect_exit=EXIT_OK, needs_gh=True),
-
     # ── coverage_delta ──────────────────────────────────────────────────────
     R("coverage_delta", "json",
       lambda t: [_cobertura(t, "before.xml", 0.70),
@@ -454,11 +440,6 @@ RECIPES: list[Recipe] = [
     # ── doc_coverage ────────────────────────────────────────────────────────
     R("doc_coverage", "json",
       lambda t: ["--json", "--repo-root", str(REPO_ROOT)], expect_exit=EXIT_OK),
-
-    # ── doc_impact  (a real doc drives the report path) ────────────────────
-    R("doc_impact", "json",
-      lambda t: ["--json", str(ARCH_DOC), "--docs-dir", str(DOCS_DIR)],
-      expect_exit=EXIT_OK),
 
     # ── generate_rule_pack_stats  (reads rule-packs/ via __file__) ─────────
     R("generate_rule_pack_stats", "json",
@@ -511,10 +492,7 @@ def test_fixture_paths_exist():
 
 
 def test_recipe_table_covers_every_json_tool():
-    """A dx tool that grows a JSON-output flag must gain a recipe, or this rots.
-
-    (15 declare `--json`/`--json-output`; describe_tenant declares `--format json`.)
-    """
+    """A dx tool that grows a JSON-output flag must gain a recipe, or this rots."""
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
     stale = sorted(covered - set(JSON_TOOLS))
@@ -523,9 +501,8 @@ def test_recipe_table_covers_every_json_tool():
         f"recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names dx tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 16, (
-        f"expected 16 dx JSON-output tools (15 --json/--json-output + 1 "
-        f"describe_tenant --format json), found {len(JSON_TOOLS)}: "
+    assert len(JSON_TOOLS) == 14, (
+        f"expected 14 dx JSON-output tools, found {len(JSON_TOOLS)}: "
         f"{sorted(JSON_TOOLS)}"
     )
 
