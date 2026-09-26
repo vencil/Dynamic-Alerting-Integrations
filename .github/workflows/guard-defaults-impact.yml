@@ -77,6 +77,9 @@ on:
       - "components/threshold-exporter/app/internal/guard/**"
       - "components/threshold-exporter/app/pkg/config/scope.go"
       - "components/threshold-exporter/app/pkg/config/hierarchy.go"
+      # The cardinality cap da-guard uses when --cardinality-limit is omitted
+      # (#2043) — the call below omits it, so a change here changes every run.
+      - "components/threshold-exporter/app/pkg/config/max_metrics.go"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:
     inputs:
