@@ -4110,9 +4110,22 @@ def _as_typed_here(output_dir: str, rel: str) -> str:
     docker prefix mounts the current directory (`-v $(pwd):/workspace -w
     /workspace`), so the current directory is the base every printed path must
     use. Without `-o` both bases coincide and the spelling is unchanged.
+
+    ⛔ `abspath`, not `resolve()`: a symlinked `-o alerting` must print as the
+    reader typed it, not as the link's target. ⛔ Never raise: this runs after
+    every file is written, so a failure here turned a finished init into rc=1.
+    A deleted cwd (`getcwd` → FileNotFoundError) or a Windows cross-drive
+    `-o D:\\x` from C: (`relpath` → ValueError) falls back to the `-o`
+    spelling. ⚠️ A result that climbs out of the cwd (`../elsewhere/…`) is
+    right for a bare invocation but is not inside the docker prefix's
+    `$(pwd)` mount; that case is left as printed, not rewritten.
     """
     trail = '/' if rel.endswith('/') else ''
-    here = os.path.relpath(Path(output_dir, rel).resolve(), Path.cwd().resolve())
+    target = os.path.join(output_dir, rel)
+    try:
+        here = os.path.relpath(os.path.abspath(target), os.getcwd())
+    except (OSError, ValueError):
+        here = target
     return Path(here).as_posix() + trail
 
 
@@ -4194,9 +4207,12 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     step = 1
     if config['deploy'] == 'kustomize':
         if is_zh:
-            print(f"  {step}. 建立 conf.d/ 到 kustomize/base/ 的符號連結")
+            print(f"  {step}. 建立 {_as_typed_here(output_dir, 'conf.d/')} 到 "
+                  f"{_as_typed_here(output_dir, 'kustomize/base/')} 的符號連結")
         else:
-            print(f"  {step}. Create symlinks from conf.d/ to kustomize/base/")
+            print(f"  {step}. Create symlinks from "
+                  f"{_as_typed_here(output_dir, 'conf.d/')} to "
+                  f"{_as_typed_here(output_dir, 'kustomize/base/')}")
         step += 1
 
     # ⛔ Point at the file that carries the defaults. When the run skipped
@@ -4251,6 +4267,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     # attempted. `--deploy argocd` was the extreme case — the prerequisite was
     # an ArgoCD Application this generator never created — and it is why that
     # method is retired rather than patched (#1351).
+    values_rel = _as_typed_here(output_dir, 'environments/prod/values.yaml')
     _apply_needs = {
         'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
                       'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
@@ -4261,10 +4278,10 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
         # prerequisite stayed real, and a sentence that goes stale in the safe
         # direction is the one nobody re-reads.
         'helm': ('helm', 'KUBECONFIG',
-                 'environments/prod/values.yaml 的 thresholdConfig.tenants '
+                 f'{values_rel} 的 thresholdConfig.tenants '
                  '已填好——本工具產生骨架但不填任何租戶覆寫',
                  'thresholdConfig.tenants filled in in '
-                 'environments/prod/values.yaml — this tool generates the '
+                 f'{values_rel} — this tool generates the '
                  'skeleton but no tenant override'),
     }.get(config.get('deploy'),
           ('kubectl', 'KUBECONFIG', '目標叢集可連線', 'a reachable cluster'))
@@ -4679,7 +4696,9 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                   f"validate your config")
     step += 1
 
-    confd_rel = _as_typed_here(output_dir, 'conf.d/')
+    # shlex.quote: this line is a command, so `-o "alerting app"` must not
+    # split into two arguments (rc=2) when copied. Plain paths stay unquoted.
+    confd_rel = shlex.quote(_as_typed_here(output_dir, 'conf.d/'))
     print()
     if is_zh:
         print("  📖 完整指南: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/")
