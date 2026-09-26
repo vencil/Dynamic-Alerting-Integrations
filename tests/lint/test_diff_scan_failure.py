@@ -162,6 +162,101 @@ def test_non_ascii_named_legal_input_exits_0(name, in_repo, monkeypatch, capsys)
     assert rc == 0, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
 
 
+# A move that git detects as a rename has status R, and `--diff-filter=AM`
+# dropped it: `git mv` into a violating place -- with or without an edit on the
+# way -- read as clean (#2025). Each case: (committed path, committed bytes,
+# destination, bytes after the move or None for a pure rename). The files are
+# long enough that the edit keeps git's similarity above the rename threshold;
+# `_assert_git_sees_a_rename` checks that, or the case would test an A.
+_FILLER = "".join(f"rem line {i}\r\n" for i in range(40))
+_BAD_BAT = ("@echo off\r\ngit commit\r\n" + _FILLER).encode()
+_ASCII_BAT = ("@echo off\r\n" + _FILLER).encode()
+_NON_ASCII_BAT = ("@echo off\r\nrem café\r\n" + _FILLER).encode("utf-8")
+_WRONG_MD = (f"see https://{WRONG_URL}/x\n" + _FILLER.replace("\r", "")).encode()
+
+RENAME_INTO_VIOLATION = {
+    ("ad_hoc_git_scripts", "pure"): ("scripts/ops/tool.bat", _BAD_BAT, "tool.bat", None),
+    ("ad_hoc_git_scripts", "edit"): ("scripts/ops/tool.bat", _BAD_BAT, "tool.bat",
+                                     _BAD_BAT + b"rem edited\r\n"),
+    ("bat_ascii_purity", "pure"): ("scripts/ops/a.bat", _NON_ASCII_BAT, "scripts/ops/b.bat", None),
+    ("bat_ascii_purity", "edit"): ("scripts/ops/a.bat", _ASCII_BAT, "scripts/ops/b.bat",
+                                   _NON_ASCII_BAT),
+    ("repo_name", "pure"): ("tests/x.md", _WRONG_MD, "docs/x.md", None),
+    ("repo_name", "edit"): ("tests/x.md", _WRONG_MD, "docs/x.md", _WRONG_MD + b"edited\n"),
+}
+
+# The other direction: a move into a place the tool accepts stays clean.
+RENAME_INTO_ACCEPTED = {
+    "ad_hoc_git_scripts": ("tools/x.bat", _BAD_BAT, "scripts/ops/x.bat"),
+    "bat_ascii_purity": ("scripts/ops/a.bat", _ASCII_BAT, "scripts/ops/b.bat"),
+    "repo_name": ("docs/x.md", _WRONG_MD, "tests/x.md"),
+}
+
+
+def _commit_then_move(repo: Path, src: str, data: bytes, dst: str, after) -> None:
+    _stage(repo, src, data)
+    _git(repo, "commit", "-q", "-m", "second")
+    (repo / dst).parent.mkdir(parents=True, exist_ok=True)
+    _git(repo, "mv", src, dst)
+    if after is not None:
+        _stage(repo, dst, after)
+
+
+def _assert_git_sees_a_rename(repo: Path, src: str, dst: str) -> None:
+    out = subprocess.run(["git", "diff", "--name-status", "-z", "HEAD"], cwd=str(repo),
+                         check=True, capture_output=True, timeout=30).stdout
+    fields = out.decode("utf-8").split("\0")
+    assert fields[0].startswith("R") and fields[1:3] == [src, dst], fields
+
+
+@pytest.mark.parametrize("name,shape", sorted(RENAME_INTO_VIOLATION))
+def test_rename_into_violation_is_seen(name, shape, in_repo, monkeypatch, capsys):
+    module, *_rest, extra = CASES[name]
+    src, data, dst, after = RENAME_INTO_VIOLATION[(name, shape)]
+    _commit_then_move(in_repo, src, data, dst, after)
+    _assert_git_sees_a_rename(in_repo, src, dst)
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 1, f"{name}/{shape}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
+@pytest.mark.parametrize("name", sorted(RENAME_INTO_ACCEPTED))
+def test_rename_into_accepted_place_exits_0(name, in_repo, monkeypatch, capsys):
+    module, *_rest, extra = CASES[name]
+    src, data, dst = RENAME_INTO_ACCEPTED[name]
+    _commit_then_move(in_repo, src, data, dst, None)
+    _assert_git_sees_a_rename(in_repo, src, dst)
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 0, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
+# A symlink replaced by a regular file with violating content is status T,
+# which `AM` dropped too (#2025, found in review). The symlink is committed
+# through the index, so the case builds the same on a `core.symlinks=false`
+# checkout. ad_hoc is not listed: a type change does not move the file, so it
+# was already an offender by location before the change.
+TYPE_CHANGE_INTO_VIOLATION = {
+    "bat_ascii_purity": ("scripts/ops/a.bat", _NON_ASCII_BAT),
+    "repo_name": ("docs/a.md", _WRONG_MD),
+}
+
+
+@pytest.mark.parametrize("name", sorted(TYPE_CHANGE_INTO_VIOLATION))
+def test_type_change_into_violation_is_seen(name, in_repo, monkeypatch, capsys):
+    module, *_rest, extra = CASES[name]
+    rel, data = TYPE_CHANGE_INTO_VIOLATION[name]
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=str(in_repo), input=b"target",
+                          check=True, capture_output=True, timeout=30).stdout.decode().strip()
+    _git(in_repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},{rel}")
+    _git(in_repo, "commit", "-q", "-m", "symlink")
+    _git(in_repo, "rm", "-q", "--cached", rel)
+    _stage(in_repo, rel, data)
+    status = subprocess.run(["git", "diff", "--name-status", "HEAD"], cwd=str(in_repo),
+                            check=True, capture_output=True, text=True, timeout=30).stdout
+    assert status == f"T\t{rel}\n", status
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 1, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
 # ---------------------------------------------------------------------------
 # The helper itself
 # ---------------------------------------------------------------------------
@@ -191,6 +286,21 @@ def test_helper_lists_added_and_modified_but_not_deleted(repo):
 def test_helper_returns_non_ascii_paths_verbatim(repo):
     _stage(repo, "d/測試 x.bat", b"@echo off\r\n")
     assert diff_changed_paths("HEAD", repo) == ["d/測試 x.bat"]
+
+
+def test_helper_lists_a_copy_under_copy_detection_config(repo):
+    """``diff.renames=copies`` is the user's config; it must not hide a copy (#2025).
+
+    git reports the copy as ``C``, so a filter that adds ``R`` to ``AM`` still
+    drops it; only excluding ``D`` keeps every status that leaves a file.
+    """
+    _git(repo, "config", "diff.renames", "copies")
+    body = "".join(f"line {i}\n" for i in range(30)).encode()
+    _stage(repo, "src.txt", body)
+    _git(repo, "commit", "-q", "-m", "second")
+    _stage(repo, "src.txt", body + b"more\n")   # copy detection needs a modified source
+    _stage(repo, "copy.txt", body)
+    assert sorted(diff_changed_paths("HEAD", repo)) == ["copy.txt", "src.txt"]
 
 
 def test_helper_pathspec_limits_the_listing(repo):

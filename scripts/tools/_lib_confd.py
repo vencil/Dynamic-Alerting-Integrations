@@ -69,6 +69,8 @@ __all__ = [
     "is_hidden_name",
     "is_reserved_name",
     "iter_config_files",
+    "ConfigTreeListing",
+    "list_config_tree",
     "multi_carrier_warning",
     "readable_carriers",
     "warn_multi_carrier",
@@ -509,14 +511,88 @@ def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = T
             if _is_regular_file(p) and _is_config(p.name):
                 yield p
         return
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    yield from list_config_tree(root).files
+
+
+class ConfigTreeListing(NamedTuple):
+    """Both halves of ONE recursive walk of a conf.d (#2054).
+
+    `files` is exactly what `iter_config_files(root)` yields, `unusable`
+    exactly what `unusable_config_paths(root)` returns — for
+    `recursive=True`, those two are projections of this, so they cannot
+    drift from it (their flat branches are separate).
+
+    `unscannable` is the subset of `unusable` that is a directory the walk
+    could not enumerate. Kept apart because it is a different loss — a
+    whole subtree, not one entry — so a caller that filters `unusable` by
+    NAME (e.g. drops `_`-prefixed entries it never reads) must not filter
+    these: the exporter's walker descends `_`-prefixed directories.
+    """
+    files: list[Path]
+    unusable: list[Path]
+    unscannable: list[Path]
+
+
+def list_config_tree(config_dir: str | os.PathLike[str]) -> ConfigTreeListing:
+    """Walk `config_dir` ONCE; return what to read AND what was dropped.
+
+    For a reader that needs both lists: calling `iter_config_files` and
+    `unusable_config_paths` separately walks the tree twice, and two walks
+    can describe two DIFFERENT trees if anything changes under conf.d
+    mid-run — a file created between them is in neither list, one replaced
+    by a directory is in both. `describe_tenant` is such a reader
+    (`test_reader_walks_the_tree_once`).
+
+    The walk mirrors the exporter's (`pkg/config.ScanDirTree`): recursive,
+    `.`-prefixed directories pruned, `.`-prefixed files dropped (`_is_config`),
+    directory symlinks listed but never descended (`os.walk` default).
+    See `iter_config_files` for the ordering promise and
+    `unusable_config_paths` for what `unusable` carries and why the two
+    lists are disjoint (one `_is_regular_file` call per entry, whose
+    answer alone picks the list).
+    """
+    root = Path(config_dir)
+    if not root.is_dir():
+        return ConfigTreeListing([], [], [])
+
+    files: list[Path] = []
+    found: list[Path] = []
+    unscannable: list[Path] = []
+
+    def _walk_error(err: OSError) -> None:
+        # ⛔ `os.walk` defaults to onerror=None, which SWALLOWS a scandir
+        # failure: an unreadable sub-directory drops out of the walk with
+        # its whole subtree and no signal at all. Measured before this
+        # callback existed — a conf.d with one chmod-000 sub-directory
+        # holding a tenant file made `check_yaml_syntax` report
+        # `status: pass` / `1 files parsed successfully` /
+        # `unusable_files: []`. That is the #1911 shape ("a green light for
+        # a directory it never read") one level further down, inside the
+        # very list that exists to make such things audible.
+        if err.filename is not None:
+            unscannable.append(Path(err.filename))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error):
         dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
-        for fn in filenames:
-            if _is_config(fn) and _is_regular_file(Path(dirpath) / fn):
-                found.append(Path(dirpath) / fn)
-    for p in sorted(found, key=lambda q: q.relative_to(root).as_posix()):
-        yield p
+        # Directories too: a config-named DIRECTORY is the case that made
+        # `unusable_config_paths` necessary, and `os.walk` never puts it in
+        # filenames. ⛔ ONE `_is_regular_file` per entry decides which list
+        # it joins: asking twice (once per list) doubled the stat cost of
+        # every `iter_config_files` caller, and an entry swapped between the
+        # two asks could land in BOTH lists or in NEITHER — breaking the
+        # disjointness promised below.
+        for name in list(dirnames) + list(filenames):
+            if not _is_config(name):
+                continue
+            p = Path(dirpath) / name
+            (files if _is_regular_file(p) else found).append(p)
+    files.sort(key=lambda q: q.relative_to(root).as_posix())
+    # An unscannable directory is reported even when it is NOT config-named:
+    # what it costs the caller is not one file but everything underneath it.
+    found.extend(d for d in unscannable if d not in found)
+    found.sort(key=lambda q: q.relative_to(root).as_posix()
+               if q != root else "")
+    return ConfigTreeListing(files, found, unscannable)
 
 
 def _is_regular_file(p: Path) -> bool:
@@ -725,7 +801,9 @@ def unusable_config_paths(
     of this docstring rejected an alternative design for adding "an
     `os.access` syscall on every file", which did not square with paying
     for a whole extra walk here; the real reason to keep the two separate
-    is that they answer different questions, not syscall count.
+    is that they answer different questions, not syscall count. A reader
+    that needs both answers from ONE walk calls `list_config_tree` (#2054);
+    the recursive branch here is its `unusable` half.
     """
     root = Path(config_dir)
     if not root.is_dir():
@@ -747,35 +825,7 @@ def unusable_config_paths(
                 found.append(p)
         return found
 
-    unscannable: list[Path] = []
-
-    def _walk_error(err: OSError) -> None:
-        # ⛔ `os.walk` defaults to onerror=None, which SWALLOWS a scandir
-        # failure: an unreadable sub-directory drops out of the walk with
-        # its whole subtree and no signal at all. Measured before this
-        # callback existed — a conf.d with one chmod-000 sub-directory
-        # holding a tenant file made `check_yaml_syntax` report
-        # `status: pass` / `1 files parsed successfully` /
-        # `unusable_files: []`. That is the #1911 shape ("a green light for
-        # a directory it never read") one level further down, inside the
-        # very list that exists to make such things audible.
-        if err.filename is not None:
-            unscannable.append(Path(err.filename))
-
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error):
-        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
-        # Directories first: a config-named DIRECTORY is the case that made
-        # this function necessary, and `os.walk` never puts it in filenames.
-        for name in list(dirnames) + list(filenames):
-            p = Path(dirpath) / name
-            if _is_config(name) and not _is_regular_file(p):
-                found.append(p)
-    # An unscannable directory is reported even when it is NOT config-named:
-    # what it costs the caller is not one file but everything underneath it.
-    found.extend(d for d in unscannable if d not in found)
-    found.sort(key=lambda q: q.relative_to(root).as_posix()
-               if q != root else "")
-    return found
+    return list_config_tree(root).unusable
 
 
 # ── ConfigMap key legality (#1796; shared since #1791) ────────────────

@@ -2,7 +2,9 @@ package config
 
 // defaults_symlink_parity_test.go — Go's half of
 // tests/shared/defaults_symlink_parity_matrix.json (#1674 round 2): defaults
-// carriers that are symlinks. The Python half is
+// carriers that are symlinks; since #2054 also which entries the walker does
+// NOT read at all (hidden files, hidden directories, a ConfigMap mount's
+// `..data` payload), via `"absent": true` rows. The Python half is
 // tests/shared/test_defaults_symlink_parity.py (describe_tenant). Neither side
 // reads the other's source; both assert the table.
 //
@@ -11,6 +13,8 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,15 +34,121 @@ type symlinkParityMatrix struct {
 		// ConfD (optional, #1967): the tree-root-relative directory handed
 		// to ResolveEffective, so a tree can hold link targets outside
 		// conf.d. Empty = the tree root.
-		ConfD    string            `json:"conf_d"`
-		Files    map[string]string `json:"files"`
-		Symlinks map[string]string `json:"symlinks"`
-		Expect   map[string]struct {
-			ChainLen        int            `json:"chain_len"`
-			EffectiveConfig map[string]any `json:"effective_config"`
-			MergedHash      string         `json:"merged_hash"`
-		} `json:"expect"`
+		ConfD    string                  `json:"conf_d"`
+		Files    map[string]string       `json:"files"`
+		Symlinks map[string]string       `json:"symlinks"`
+		Expect   map[string]parityExpect `json:"expect"`
 	} `json:"trees"`
+}
+
+// parityExpect is one tenant's row. Exactly ONE shape per row, told apart by
+// which keys are PRESENT (hence the pointers): "resolved" (all of chain_len,
+// effective_config, merged_hash) or "absent" (`"absent": true` alone — the
+// walker must not see this tenant at all, #2054). ⛔ Mixing shapes is a
+// broken table, not a looser one: `absent` beside a merged_hash would let
+// either half go unchecked while the row stays green. A later shape (#2049's
+// `error`) is one more case in shape().
+type parityExpect struct {
+	Absent          *bool          `json:"absent"`
+	ChainLen        *int           `json:"chain_len"`
+	EffectiveConfig map[string]any `json:"effective_config"`
+	MergedHash      *string        `json:"merged_hash"`
+}
+
+// UnmarshalJSON rejects an explicit JSON null. ⛔ Without it `null` decodes
+// to a nil pointer / nil map — indistinguishable from an ABSENT key — so
+// `{"absent": true, "effective_config": null}` read as a clean absent row
+// here while the Python half (exact key sets) rejected it: the two halves
+// disagreed about which rows are mixed. It also re-applies
+// DisallowUnknownFields, which the outer decoder does NOT propagate into a
+// custom UnmarshalJSON.
+func (e *parityExpect) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for key, val := range fields {
+		if string(bytes.TrimSpace(val)) == "null" {
+			return fmt.Errorf("expect key %q is null — omit the key instead; null reads as absent and hides a mixed row", key)
+		}
+	}
+	type plain parityExpect // no methods: no recursion into this function
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return dec.Decode((*plain)(e))
+}
+
+const (
+	shapeResolved = "resolved"
+	shapeAbsent   = "absent"
+)
+
+func (e parityExpect) shape() (string, error) {
+	resolvedKeys := 0
+	for _, set := range []bool{e.ChainLen != nil, e.EffectiveConfig != nil, e.MergedHash != nil} {
+		if set {
+			resolvedKeys++
+		}
+	}
+	switch {
+	case e.Absent != nil && !*e.Absent:
+		return "", errors.New(`"absent" must be true when present — omit it for a tenant that resolves`)
+	case e.Absent != nil && resolvedKeys > 0:
+		return "", errors.New(`"absent" is exclusive with chain_len / effective_config / merged_hash`)
+	case e.Absent != nil:
+		return shapeAbsent, nil
+	case resolvedKeys == 3:
+		return shapeResolved, nil
+	default:
+		return "", errors.New("a resolving tenant needs all of chain_len, effective_config, merged_hash")
+	}
+}
+
+// TestParityExpectShapeRejectsMixedRows: the shape check itself must bite,
+// or a mixed row would be read as whichever half happened to match.
+func TestParityExpectShapeRejectsMixedRows(t *testing.T) {
+	t.Parallel()
+	yes, no, n, h := true, false, 1, "x"
+	for name, e := range map[string]parityExpect{
+		"absent-false":          {Absent: &no},
+		"absent-with-hash":      {Absent: &yes, MergedHash: &h},
+		"absent-with-chain":     {Absent: &yes, ChainLen: &n},
+		"absent-with-effective": {Absent: &yes, EffectiveConfig: map[string]any{}},
+		"resolved-missing-hash": {ChainLen: &n, EffectiveConfig: map[string]any{}},
+		"empty":                 {},
+	} {
+		if got, err := e.shape(); err == nil {
+			t.Errorf("%s: accepted as %q, want an error", name, got)
+		}
+	}
+}
+
+// TestParityExpectDecodeRejectsNullAndUnknownKeys: the rows as the MATRIX
+// spells them, through the real decoder. A null must not pass as a missing
+// key, and an unknown key must not be dropped, or a mixed row stays green on
+// the Go side while Python rejects it.
+func TestParityExpectDecodeRejectsNullAndUnknownKeys(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw     string
+		wantErr bool
+	}{
+		"absent-with-null-effective": {`{"absent":true,"effective_config":null}`, true},
+		"absent-with-null-hash":      {`{"absent":true,"merged_hash":null}`, true},
+		"resolved-with-null-chain":   {`{"chain_len":null,"effective_config":{},"merged_hash":"x"}`, true},
+		"unknown-key":                {`{"absent":true,"absnet":true}`, true},
+		"valid-absent":               {`{"absent":true}`, false},
+		"valid-resolved":             {`{"chain_len":1,"effective_config":{"cpu_pct":50},"merged_hash":"x"}`, false},
+	} {
+		var e parityExpect
+		err := json.Unmarshal([]byte(tc.raw), &e)
+		if err == nil {
+			_, err = e.shape()
+		}
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: %s → err %v, wantErr %v", name, tc.raw, err, tc.wantErr)
+		}
+	}
 }
 
 func TestDefaultsSymlinkParityMatrix(t *testing.T) {
@@ -60,6 +170,13 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 		t.Fatal("matrix has no trees — a vacuous table passes nothing")
 	}
 	for _, tree := range m.Trees {
+		for tenant, want := range tree.Expect {
+			if _, err := want.shape(); err != nil {
+				t.Fatalf("%s/%s: %v", tree.Name, tenant, err)
+			}
+		}
+	}
+	for _, tree := range m.Trees {
 		t.Run(tree.Name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
@@ -77,11 +194,17 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 			}
 			for tenant, want := range tree.Expect {
 				ec, err := ResolveEffective(confD, tenant)
+				if shape, _ := want.shape(); shape == shapeAbsent {
+					if !errors.Is(err, ErrTenantNotFound) {
+						t.Errorf("%s: pinned absent (the walker must not read it), got %+v, err %v", tenant, ec, err)
+					}
+					continue
+				}
 				if err != nil {
 					t.Fatalf("%s: %v", tenant, err)
 				}
-				if len(ec.DefaultsChain) != want.ChainLen {
-					t.Errorf("%s: chain %v, want %d levels", tenant, ec.DefaultsChain, want.ChainLen)
+				if len(ec.DefaultsChain) != *want.ChainLen {
+					t.Errorf("%s: chain %v, want %d levels", tenant, ec.DefaultsChain, *want.ChainLen)
 				}
 				gotJSON, _ := json.Marshal(ec.EffectiveConfig)
 				var got map[string]any
@@ -89,8 +212,8 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 				if !reflect.DeepEqual(got, want.EffectiveConfig) {
 					t.Errorf("%s: effective %v, want %v", tenant, got, want.EffectiveConfig)
 				}
-				if ec.MergedHash != want.MergedHash {
-					t.Errorf("%s: merged_hash %s, pinned %s", tenant, ec.MergedHash, want.MergedHash)
+				if ec.MergedHash != *want.MergedHash {
+					t.Errorf("%s: merged_hash %s, pinned %s", tenant, ec.MergedHash, *want.MergedHash)
 				}
 			}
 		})

@@ -47,7 +47,9 @@ from _confd_population import parse, population_keys
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 
-_RECURSIVE_CALLS = {"rglob", "walk"}
+# `list_config_tree` (#2054) is `_lib_confd`'s one recursive walk; unlike
+# `iter_config_files` it has no `recursive=` knob, so its name settles it.
+_RECURSIVE_CALLS = {"rglob", "walk", "list_config_tree"}
 # Every way a caller can list ONE directory level. Enumerated deliberately
 # and kept in one place — an enumerated guard is only as good as its list,
 # so both analysers below read this same function rather than each keeping

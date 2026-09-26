@@ -260,6 +260,43 @@ class TestDiffTenants:
         assert "only_in_t-b" in diff
 
 
+def test_unreadable_subdirs_are_named_even_when_underscore_prefixed(
+        tmp_path, monkeypatch, capsys):
+    """#2054: the `_`-prefix filter is for ENTRIES this scanner never reads.
+
+    The exporter descends `_`-prefixed directories (`_arch/arch.yaml` is a
+    tenant to it), so an unreadable `_locked/` hides tenants exactly like
+    `locked/` does — and must be named the same way. Blind review measured
+    `_locked/` silently dropped while `locked/` warned.
+
+    `os.scandir` is patched rather than `chmod 000`-ed: root ignores the
+    mode bits and this suite often runs as uid 0 (same seam as
+    tests/shared/test_lib_confd.py `_deny_scandir`).
+    """
+    conf_d = tmp_path / "conf.d"
+    for name in ("_locked", "locked"):
+        (conf_d / name).mkdir(parents=True)
+        (conf_d / name / "h.yaml").write_text(
+            f"tenants:\n  {name.strip('_')}x: {{}}\n", encoding="utf-8")
+    (conf_d / "a.yaml").write_text("tenants:\n  a: {}\n", encoding="utf-8")
+    denied = {os.fspath(conf_d / "_locked"), os.fspath(conf_d / "locked")}
+    real = os.scandir
+
+    def fake(path=".", *a, **kw):
+        if os.fspath(path) in denied:
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(os, "scandir", fake)
+    monkeypatch.setattr(dt, "_ca_loader", None)  # its own walk; not under test
+    scanner = dt.ConfDScanner(conf_d)
+    err = capsys.readouterr().err
+    assert "a" in scanner.tenants  # the rest of the scan still works
+    for name in ("_locked", "locked"):
+        assert f"WARNING: skipped {conf_d.resolve() / name} — is a directory that could not be read" in err, (
+            name, err)
+
+
 # ---------------------------------------------------------------------------
 # Test: CLI
 # ---------------------------------------------------------------------------
