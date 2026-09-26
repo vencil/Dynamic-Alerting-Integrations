@@ -72,8 +72,8 @@
 | `GET` | `/api/v1/me` | read | 當前呼叫者的 email + groups + RBAC 摘要 |
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失;每筆的 `config_derived`(`silent_targets` / `maintenance_active`)見下方「依設定推算的狀態」 |
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);與 `/tenants` 共用快照快取。回應頂層的 `config_derivation` 附推算時間,並列出解析失敗而被跳過的檔案(`parse_failed_files`) |
-| `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + 解析後的閾值;`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409 |
-| `GET` | `/api/v1/tenants/{id}/effective` | read | 最終生效設定(租戶覆寫與平台預設逐層合併後的值)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測) |
+| `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + `resolved_thresholds`(只套根目錄的 `_defaults.yaml`,見下方「單一租戶端點與 conf.d 範圍」);`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409 |
+| `GET` | `/api/v1/tenants/{id}/effective` | read | 沿 `_defaults.yaml` 鏈逐層合併租戶覆寫後的**設定**(對齊 `describe_tenant`),不是 exporter 會 emit 的值(見下方「單一租戶端點與 conf.d 範圍」)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測) |
 | `GET` | `/api/v1/tenants/{id}/access` | read | 輕量 RBAC 授權探測:可讀該租戶回 `200 {allow,tenant,permission}`、否則 `403`。供姊妹服務(如 recipe-preview #657)重用 tenant-isolation 決策、不重寫 RBAC 也不過度取得設定 |
 | `GET` | `/api/v1/audit/tenants/{id}/access-report` | platform admin(非 org-scoped) | 逆向存取稽核報告:列出「誰、經哪條規則、在什麼 org 條件下」能存取該租戶(shadow/enforce 雙態並列;audit-only,不參與授權)。`?include=org_values` 展開 org 值、`?view=redacted` 去識別化投影;非 admin 恆定 403(防租戶枚舉)。redacted 視圖無法消除 grant 存在性本身的 org-membership 推論(value-pinned org rule 的 grant entry 即弱識別)。**⚠️ environments/domains 為 rule 原文照錄、僅約束租戶清單可見性、不阻擋 read-by-id/write**——受影響 grant 以機器可讀欄 `constraints_not_evaluated` 標示,稽核判讀勿當作存取邊界 |
 | `POST` | `/api/v1/audit/tenants/{id}/access-report/dry-run` | platform admin(非 org-scoped) | what-if 稽核:body 送候選 `_rbac.yaml`(`{"candidate":{"rbac_yaml":"..."}}`),與 live 基準各算一份逆向報告並做結構化 diff(changed / added / removed;以 rule name 對齊,rename 呈現為 removed+added)。純模擬、不寫入;query 同上(`include` / `view`);orgs 沿用 live `_tenant_orgs.yaml`;候選解析失敗回 400 `CANDIDATE_INVALID`;非 admin 恆定 403(同上) |
@@ -88,12 +88,18 @@
 
 #### 依設定推算的狀態(`config_derived`)
 
-`GET /tenants` 與 `/tenants/search` 的每個租戶帶 `config_derived`:`silent_targets`(會被靜音的 severity)與 `maintenance_active`。它回答的是「依 tenant-api 手上這份 conf.d,threshold-exporter 會 emit 什麼」,**不是**從 Alertmanager 或線上 exporter 觀測到的狀態——ConfigMap 扁平組裝會丟掉子目錄租戶,rollout 也有時間差。UI 文案標「依設定推算」。
+`GET /tenants` 與 `/tenants/search` 的每個租戶帶 `config_derived`:`silent_targets`(會被靜音的 severity)與 `maintenance_active`。它回答的是「依 tenant-api 手上這份 conf.d,threshold-exporter 會 emit 什麼」,**不是**從 Alertmanager 或線上 exporter 觀測到的狀態——rollout 有時間差,conf.d 範圍也不同(見下方「單一租戶端點與 conf.d 範圍」)。UI 文案標「依設定推算」。
 
 - **同一份計算**:config 由 `config.LoadDir`(exporter 的冷載入)取得,狀態由 `OperationalStatesAt(now).ByTenant` 在每次請求時判讀,所以 `expires` 以請求當下為準。舊的 `silent_mode` / `maintenance` 欄位是租戶檔裡的原始值(`disable` 也是非空字串),不代表狀態。
 - **快取**:載入結果放在快照快取裡,不是每個請求都重載。載入只在**不必等待**就拿得到 GitOps writer 的鎖時進行,所以不會讀到寫入進行中的樹,讀取也不會等寫入;單次載入持鎖有時限,超時(例如讀到會卡住的檔案)就放開鎖、回傳不帶 `config_derived` 的清單,並在卡住的那次返回前不再開始新的載入。writer 每段寫入結束時(成功或失敗)會把快照標為過期,**過期的快照不會再被當成已知狀態回傳**:writer 正在寫入時,尚未過期的快照照常回傳(`config_loaded_at` 標出它的時間,可能超過 TTL),已過期的則回傳不帶 `config_derived` 的清單;同一時間只有一個請求在重載,其他請求等它的結果,不會把「另一個請求在重載」誤判成「寫入進行中」。PR 模式下,工作樹不在 base branch 上、或有 loader 會讀到的未提交變更(已追蹤檔案的修改,或未追蹤的 `.yaml`/`.yml`)時(例如 PR 寫入後切回 base 失敗),不推算、不快取,各租戶不帶 `config_derived`;其他未追蹤檔案(如寫入中斷留下的暫存檔)不影響。沒有推算時,原始的 `silent_mode` / `maintenance` 也不回傳。API 以外的變更(git pull、ConfigMap 更換)最慢在 TTL 到期後生效——tenant-api 沒有 conf.d watcher。
 - **解析失敗的檔案**:exporter 會跳過無法解析的檔案,這些租戶沒有 `config_derived`(根目錄的租戶檔以上方的降級列出現)。`/tenants/search` 的 `config_derivation.parse_failed_files` 列出這些檔案,讓呼叫端分得出「檔案壞了」與「沒有這個租戶」;子目錄的檔案與 `_` 平台檔只出現在這裡。
 - **誰看得到什麼**:只有不受限的呼叫者(open mode,或規則對 org、environments、domains 都不設限的 platform admin)拿到相對於 conf.d 的完整路徑,以及載入失敗時 loader 的原始訊息(`load_error`,已去掉伺服器上的絕對路徑)。其他呼叫者的 `load_error` 是固定字串,不含任何檔名或租戶 id;`parse_failed_files` 只給檔名(不含目錄),且只列出呼叫者依降級列規則看得到的租戶的檔案,其餘只計入 `parse_failed_hidden`。conf.d 整份載入失敗(例如同一租戶宣告在兩個檔)時,各租戶不帶 `config_derived`。
+
+#### 單一租戶端點與 conf.d 範圍
+
+- **不是 exporter 觀點**:`GET /{id}` 與 `/effective` 都不套用 `_profile`(`_profiles.yaml` 或 `profiles:`)與平台檔的 `tenants:` 區塊,用到這兩種設定的租戶,這兩個端點的值與 exporter 不同(#1385、#2019)。要看實際生效的值,看 exporter 的 `/metrics`。
+- **只管 conf.d 頂層**:子目錄裡的租戶,`GET` / `PUT` 回 404,寫入授權也讀不到它的 metadata(當成未標記)。這與 ConfigMap 部署一致——[扁平組裝](../../docs/integration/gitops-deployment.md#3-configmap-assembly)會丟掉子目錄檔並 WARN。例外:`/effective` 遞迴掃描整棵樹,找得到子目錄租戶;list 的 `config_derived` 與 `parse_failed_files` 走 `LoadDir` 遞迴讀取,也會算到子目錄租戶(#2078)。
+- **`_profile` 租戶無法寫入**:已用 `_profile` 的租戶,寫入驗證目前回 400(unknown profile),無法經 tenant-api / portal 寫入(#1385)。
 
 ### Custom Alerts(租戶自助告警)
 
