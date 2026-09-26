@@ -145,6 +145,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
   - 已知分歧（#1942）：exporter 完整解碼會丟棄的檔仍算載體，這類樹 describe_tenant 仍拒絕並請跑 validate-config。
   - `tenant_verify` 本次未改，重複租戶在那裡仍會挑一份。
 
+- **只改 mkdocs hook 的 PR 不再讓 `MkDocs Build Verification` 以 skip 過關（ci；[#2079](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2079)）**：`mkdocs.yml` 的 `hooks:` 在每次 build 執行 `scripts/mkdocs/rule_packs_bridge.py`，但 docs-ci 的 `docs` filter 沒涵蓋它，而 merge 前也沒有其他檢查會跑它，所以把它改壞的 PR 要到 main 的 push run 才會紅。`docs` filter 加上 `scripts/mkdocs/**`，並登記進 `TRACED_INDIRECT_INPUTS`，filter 行被刪會讓 `test_ci_path_filter_coverage.py` 轉紅。這是 #2079 以 strace 重播 docs-ci／validate 全部 gated leg 後，唯一沒有其他 required check 兜住的直接讀取；刪除／改名方向的缺口揭露在該票。
+
 - **threshold-exporter chart 移除從未生效的 `rules.operator.ruleLabels`／`receiverTemplate`／`secretRef`（helm、文件；[#2073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2073)）**：三個 key 自 #21 起就宣告在 `values.yaml`，但沒有任何 template 讀取——本 chart 不產生 PrometheusRule 或 AlertmanagerConfig（ADR-008：chart 保持 path-agnostic，CRD 由 `da-tools operator-generate` 產生），照 `prometheus-operator-integration.md` 的範例設定只會是 silent no-op。values 移除這三個 key，並改正 `rules.mode` 註解（兩種模式都不出貨 Rule Pack，`operator` 只多一個 ServiceMonitor）；文件範例改用 `operator-generate --receiver-template / --secret-name / --secret-key`；`test_values_operator_section` 改為斷言 `rules.operator` 只宣告 `serviceMonitor`。覆寫檔裡殘留這些 key 不會出錯，一如以往沒有作用。
 
 - **`generate_tenant_metadata` 與 `gitops-check local` 不再讀 conf.d 的隱藏檔（dx、ops；[#2055](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2055)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：exporter 略過所有 `.` 開頭的檔名，這兩支卻照讀。

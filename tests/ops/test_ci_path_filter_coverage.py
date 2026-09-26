@@ -2125,6 +2125,10 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
+    # mkdocs-build: the `hooks:` entry in mkdocs.yml runs this on every build.
+    # Found by the #2079 strace sweep, the one uncovered direct read no other
+    # pre-merge check backs up.
+    ("docs-ci.yaml", "docs", "scripts/mkdocs/rule_packs_bridge.py"),
     # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
     # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
     # pages it scans outside docs/ — all reached through validate_all.py's
