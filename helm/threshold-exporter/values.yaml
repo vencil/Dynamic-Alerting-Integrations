@@ -130,6 +130,14 @@ thresholdConfig:
     - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
     # <<< GENERATED:threshold-registry:helm-optional
 
+  # 每租戶指標上限（#2028）：一個租戶最多發射幾條 threshold series，超過的會被截斷，
+  # 並由 da_tenant_metrics_over_limit{tenant} > 0 回報。留空（null）或 0 ＝內建 500；
+  # ⚠️ 負值＝完全不截斷（關掉這道防線），只在確定需要時使用。
+  # 只會寫進根目錄的 _defaults.yaml——租戶檔、子目錄的 _defaults.yaml 裡的同名 key
+  # 一律被 exporter 忽略並記 WARN（租戶不能替自己調高上限）。
+  # 在 #2028 之前，目錄模式（本 chart 的執行模式）完全不讀這個 key。
+  max_metrics_per_tenant: null
+
   # Scenario C: State-based monitoring filters
   # Each filter maps to kube_pod_container_status_waiting_reason values.
   # Enabled by default for all tenants; per-tenant disable via _state_<name>: "disable"

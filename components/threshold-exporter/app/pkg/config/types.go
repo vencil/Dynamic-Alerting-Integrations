@@ -178,8 +178,10 @@ type ExpiryMeta struct {
 	Reason  string // human-readable reason (surfaced on expiry)
 }
 
-// DefaultMaxMetricsPerTenant is the default cardinality limit per tenant.
-// 0 means no limit (backward compatible).
+// DefaultMaxMetricsPerTenant is the per-tenant cardinality limit used when
+// ThresholdConfig.MaxMetricsPerTenant is 0 (unset). A NEGATIVE value there
+// disables truncation entirely (resolve.go only truncates when limit > 0).
+// In directory mode only the ROOT `_defaults.yaml` may set it (#2028).
 const DefaultMaxMetricsPerTenant = 500
 
 // ThresholdConfig represents the YAML config structure.

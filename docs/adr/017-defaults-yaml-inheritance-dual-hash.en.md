@@ -162,7 +162,7 @@ implementation).
    ⛔ **Do not infer "still takes effect" from "does not enter effective".** This document
    deliberately does **not** list which sibling keys take effect — every version of that list
    has been wrong (this ADR has been falsified on it three times). ⚠️ Two measured
-   counterexamples show why: `max_metrics_per_tenant` has **never** taken effect under
+   counterexamples show why: until #2028 `max_metrics_per_tenant` had **never** taken effect under
    `-config-dir` (see the end of item 2); `_routing` and `_routing_profile` at the top level are
    **silent no-ops**. ⇒ **Whether the key you changed takes effect: ask the consumer in item 3's
    table, and if it is not there, find it yourself before concluding.**
@@ -209,15 +209,17 @@ implementation).
    ⛔ `check_confd_schema.py` returns `RC=0` for **all** of the above (the `defaults` sub-schema
    says verbatim that its values are left loose) — **no schema gate blocks this**.
 
-   ⚠️ **`max_metrics_per_tenant` is a different story — do not explain it with indenting**: under
-   `-config-dir` (the mode Helm ships), `mergePartialInto` copies only `Defaults` /
-   `StateFilters` / `OptionalOverrides` / `Profiles` / `Tenants` — **not
-   `MaxMetricsPerTenant`** ⇒ whether you write it at the top level or indent it,
-   `ThresholdConfig.MaxMetricsPerTenant` is **0** either way and the runtime always falls back
-   to the built-in `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`). ⛔ In other
-   words **this key has never taken effect in directory mode** (only in single-file `-config`
-   mode) — the `$comment` in `platform-defaults.schema.json` currently lists it as readable at
-   the platform level, and that sentence does not match the directory-mode implementation.
+   ⚠️ **`max_metrics_per_tenant` is a different story — do not explain it with indenting**: it is
+   a top-level key honoured **at the root only** (#2028). Under `-config-dir` (the mode Helm
+   ships), only the value in the conf.d **root** `_defaults.yaml` reaches
+   `ThresholdConfig.MaxMetricsPerTenant`; a nested `_defaults.yaml`, any other `_*` file and any
+   tenant file are **ignored with a WARN** (tenant files are stripped for a security reason:
+   otherwise a tenant could raise its own cap). It does not follow subtree inheritance — it is one
+   global cap, not a per-tenant threshold. Unset or 0 = the built-in
+   `DefaultMaxMetricsPerTenant = 500`; negative = no truncation (`resolve.go` only truncates when
+   `limit > 0`). Helm users set it through the chart's `thresholdConfig.max_metrics_per_tenant`.
+   ⛔ History: before #2028 `mergePartialInto` did not copy this field, so the key **never took
+   effect in directory mode** (only in single-file `-config` mode).
 
 3. **After changing a sibling key, do not use `merged_hash` / `/effective` / `blast_radius` to
    confirm it took effect** (those three cannot see it, and the runtime labels it

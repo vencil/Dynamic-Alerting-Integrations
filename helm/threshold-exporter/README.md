@@ -47,3 +47,4 @@ helm install threshold-exporter ./helm/threshold-exporter \
 | `rules.mode` | `configmap` | Rule Pack 供應方式（`configmap` / `operator` / `disabled`） |
 | `config.directory` | `/etc/threshold-exporter/conf.d` | Tenant config 掛載路徑 |
 | `podDisruptionBudget.enabled` | `true` | 滾動升級期間保留最少可用副本 |
+| `thresholdConfig.max_metrics_per_tenant` | `null`（＝內建 500） | 每租戶 threshold series 上限；只寫進根目錄 `_defaults.yaml`，負值＝不截斷（#2028） |

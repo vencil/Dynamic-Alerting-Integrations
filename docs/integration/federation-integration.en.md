@@ -377,7 +377,7 @@ Mitigation measures:
 
 - Edge `write_relabel_configs` pushes only `{tenant!=""}` metrics
 - Federation `match[]` restricts pulling scope
-- threshold-exporter `max_metrics_per_tenant` limits metrics per tenant 
+- threshold-exporter `max_metrics_per_tenant` limits metrics per tenant (read only from the conf.d root `_defaults.yaml`; Helm: `thresholdConfig.max_metrics_per_tenant`; unset = 500)
 - Monitor `prometheus_tsdb_head_series` to track cardinality trends
 
 ### 7.3 High Availability

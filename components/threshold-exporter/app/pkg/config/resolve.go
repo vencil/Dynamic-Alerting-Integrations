@@ -113,7 +113,7 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
 	var result []ResolvedThreshold
 
-	// Cardinality limit per tenant (0 = no limit)
+	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
 	limit := c.MaxMetricsPerTenant
 	if limit == 0 {
 		limit = DefaultMaxMetricsPerTenant
