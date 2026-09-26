@@ -43,21 +43,28 @@ func RejectDuplicateTenant(scan *TreeScan) error {
 // them into its caller's log (see discardLogger). Nothing is counted: there is
 // no ScanObserver.
 //
+// parseFailed is the scan keys (root-relative slash paths, sorted) of the files
+// the load skipped because they did not parse — FlatBuild.ParseFailed, the
+// files the exporter counts on da_config_parse_failure_total and logs. Such a
+// file is skipped, not fatal, exactly as in the exporter, so err stays nil;
+// without this list a caller could not tell "this tenant's file is broken"
+// from "there is no such tenant" (#1988 W1). nil when every file parsed.
+//
 // ⚠️ Cold means every file is read and decoded on every call. A caller serving
 // requests should cache the result.
-func LoadDir(dir string, logger *log.Logger) (*ThresholdConfig, error) {
+func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed []string, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
 	scan, err := ScanDirTree(dir, nil, nil, logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := RejectDuplicateTenant(scan); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(scan.Files) == 0 {
-		return nil, fmt.Errorf("no .yaml files found in %s", dir)
+		return nil, nil, fmt.Errorf("no .yaml files found in %s", dir)
 	}
 
 	// Mirrors populateHierarchyStateFrom: a tree with neither a defaults file
@@ -76,9 +83,9 @@ func LoadDir(dir string, logger *log.Logger) (*ThresholdConfig, error) {
 		Logger:         logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &built.Config, nil
+	return &built.Config, built.ParseFailed, nil
 }
 
 // scanDefaultsSource serves ParseDefaultsFiles from the bytes this scan

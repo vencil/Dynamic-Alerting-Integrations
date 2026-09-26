@@ -70,8 +70,8 @@
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
 | `GET` | `/api/v1/me` | read | 當前呼叫者的 email + groups + RBAC 摘要 |
-| `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失 |
-| `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);內含短期快照快取,為大量租戶下的低延遲設計 |
+| `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失;每筆的 `config_derived`(`silent_targets` / `maintenance_active`)見下方「依設定推算的狀態」 |
+| `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);與 `/tenants` 共用快照快取。回應頂層的 `config_derivation` 附推算時間,並列出解析失敗而被跳過的檔案(`parse_failed_files`) |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + 解析後的閾值;`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409 |
 | `GET` | `/api/v1/tenants/{id}/effective` | read | 最終生效設定(租戶覆寫與平台預設逐層合併後的值)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測) |
 | `GET` | `/api/v1/tenants/{id}/access` | read | 輕量 RBAC 授權探測:可讀該租戶回 `200 {allow,tenant,permission}`、否則 `403`。供姊妹服務(如 recipe-preview #657)重用 tenant-isolation 決策、不重寫 RBAC 也不過度取得設定 |
@@ -85,6 +85,15 @@
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
 
 > **降級列(#1680)**:`GET /api/v1/tenants` 與 `/search` 對「conf.d 裡有這個租戶檔、但檔案無法使用」的租戶回一列 `{"id":"<id>","config_error":"<原因>"}`,其餘欄位全空——它的 metadata 是**未知**,不是「未標記」。`config_error` 的值是穩定契約:`unreadable`(stat/讀取失敗,例如斷掉的 symlink、權限不足)、`not_regular_file`(例如指向目錄的 symlink)、`malformed_yaml`(不是合法 YAML)、`invalid_config`(語法層面可解析為 YAML,但無法載入為租戶設定:結構不對,或只有型別化解碼才會抓到的錯誤,例如重複的 key);健康的列沒有這個欄位。空檔視為可用(列出一列無 metadata 的租戶,與過去相同)。**只有**命中規則對 `environments` 與 `domains` **都不設限**的呼叫者看得到降級列,shadow 與 enforce 模式皆然——受限呼叫者看不到,因為該租戶真實的環境/域讀不出來,不能當成未標記放行;org 軸照常判定(組織清單來自 `_tenant_orgs.yaml`,不受壞檔影響)。`/search` 的 metadata 篩選(`environment` / `tier` / `domain` / `db_type` / `tag`)不會命中降級列,`q` 仍比對其 `id`。federation 的 orphan 偵測、啟動時的 registry 完整性檢查與寫入平面的檔案解析刻意**不看檔案內容**,壞檔租戶在這些平面仍算活著——所以 `PUT` 仍能把壞檔修回來。
+
+#### 依設定推算的狀態(`config_derived`)
+
+`GET /tenants` 與 `/tenants/search` 的每個租戶帶 `config_derived`:`silent_targets`(會被靜音的 severity)與 `maintenance_active`。它回答的是「依 tenant-api 手上這份 conf.d,threshold-exporter 會 emit 什麼」,**不是**從 Alertmanager 或線上 exporter 觀測到的狀態——ConfigMap 扁平組裝會丟掉子目錄租戶,rollout 也有時間差。UI 文案標「依設定推算」。
+
+- **同一份計算**:config 由 `config.LoadDir`(exporter 的冷載入)取得,狀態由 `OperationalStatesAt(now).ByTenant` 在每次請求時判讀,所以 `expires` 以請求當下為準。舊的 `silent_mode` / `maintenance` 欄位是租戶檔裡的原始值(`disable` 也是非空字串),不代表狀態。
+- **快取**:載入結果放在快照快取裡,不是每個請求都重載。載入只在**不必等待**就拿得到 GitOps writer 的鎖時進行,所以不會讀到寫入進行中的樹,讀取也不會等寫入;單次載入持鎖有時限,超時(例如讀到會卡住的檔案)就放開鎖、回傳不帶 `config_derived` 的清單,並在卡住的那次返回前不再開始新的載入。writer 每段寫入結束時(成功或失敗)會把快照標為過期,**過期的快照不會再被當成已知狀態回傳**:writer 正在寫入時,尚未過期的快照照常回傳(`config_loaded_at` 標出它的時間,可能超過 TTL),已過期的則回傳不帶 `config_derived` 的清單;同一時間只有一個請求在重載,其他請求等它的結果,不會把「另一個請求在重載」誤判成「寫入進行中」。PR 模式下,工作樹不在 base branch 上、或有 loader 會讀到的未提交變更(已追蹤檔案的修改,或未追蹤的 `.yaml`/`.yml`)時(例如 PR 寫入後切回 base 失敗),不推算、不快取,各租戶不帶 `config_derived`;其他未追蹤檔案(如寫入中斷留下的暫存檔)不影響。沒有推算時,原始的 `silent_mode` / `maintenance` 也不回傳。API 以外的變更(git pull、ConfigMap 更換)最慢在 TTL 到期後生效——tenant-api 沒有 conf.d watcher。
+- **解析失敗的檔案**:exporter 會跳過無法解析的檔案,這些租戶沒有 `config_derived`(根目錄的租戶檔以上方的降級列出現)。`/tenants/search` 的 `config_derivation.parse_failed_files` 列出這些檔案,讓呼叫端分得出「檔案壞了」與「沒有這個租戶」;子目錄的檔案與 `_` 平台檔只出現在這裡。
+- **誰看得到什麼**:只有不受限的呼叫者(open mode,或規則對 org、environments、domains 都不設限的 platform admin)拿到相對於 conf.d 的完整路徑,以及載入失敗時 loader 的原始訊息(`load_error`,已去掉伺服器上的絕對路徑)。其他呼叫者的 `load_error` 是固定字串,不含任何檔名或租戶 id;`parse_failed_files` 只給檔名(不含目錄),且只列出呼叫者依降級列規則看得到的租戶的檔案,其餘只計入 `parse_failed_hidden`。conf.d 整份載入失敗(例如同一租戶宣告在兩個檔)時,各租戶不帶 `config_derived`。
 
 ### Custom Alerts(租戶自助告警)
 

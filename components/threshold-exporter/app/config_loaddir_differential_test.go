@@ -19,6 +19,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -107,9 +108,12 @@ func scrapedView(t *testing.T, dir string) (operationalView, *ThresholdConfig) {
 // sharedView is what a reader outside package main computes.
 func sharedView(t *testing.T, dir string) (operationalView, *ThresholdConfig) {
 	t.Helper()
-	cfg, err := config.LoadDir(dir, nil)
+	cfg, parseFailed, err := config.LoadDir(dir, nil)
 	if err != nil {
 		t.Fatalf("config.LoadDir: %v", err)
+	}
+	if parseFailed != nil {
+		t.Fatalf("config.LoadDir reported parse failures on a tree without any: %v", parseFailed)
 	}
 	ops := cfg.OperationalStatesAt(time.Now())
 	view := operationalView{States: ops.ByTenant(cfg), ExpiredSilences: []string{}}
@@ -194,5 +198,81 @@ func TestLoadDirOperationalStatesMatchTheScrape(t *testing.T) {
 				t.Fatalf("fixture no longer exercises maintenance under %s", name)
 			}
 		})
+	}
+}
+
+// ⛔ W1 (#1988): LoadDir skips a file that does not parse — as the exporter
+// does — and returns nil error, so its parse-failure list is the only thing
+// that tells a caller "this file is broken" apart from "there is no such
+// tenant". The oracle is again the exporter itself: the files it counts on
+// da_config_parse_failure_total after a real Load. The counter is labelled by
+// basename, so the comparison is over basenames; the fixture keeps them
+// distinct so the set equality still names every file.
+//
+// One file per place the exporter counts a failure: the walker's tenant-file
+// decode (a syntax error, and valid YAML of the wrong shape), the flat parse
+// of a root `_` file, and the syntax probe of a nested `_` file.
+func TestLoadDirParseFailuresMatchTheExporterCounter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	files := operationalFixture("")
+	files["t-broken-syntax.yaml"] = "tenants:\n  t-broken-syntax:\n    mysql_connections: {unclosed\n"
+	files["t-broken-shape.yaml"] = "tenants:\n  - t-broken-shape\n"
+	files["_profiles.yaml"] = "profiles:\n  quiet: {unclosed\n"
+	files["team/_defaults.yaml"] = "defaults: [unclosed\n"
+	writeConfTree(t, dir, files)
+
+	mgr := NewConfigManagerWithDebounce(dir, 0)
+	fresh, reg := freshMetrics(t)
+	mgr.SetMetrics(fresh)
+	mgr.SetLogger(log.New(io.Discard, "", 0))
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("ConfigManager.Load: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	counted := map[string]bool{}
+	for _, fam := range families {
+		if fam.GetName() != "da_config_parse_failure_total" {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "file_basename" && m.GetCounter().GetValue() > 0 {
+					counted[l.GetValue()] = true
+				}
+			}
+		}
+	}
+
+	cfg, parseFailed, err := config.LoadDir(dir, nil)
+	if err != nil {
+		t.Fatalf("config.LoadDir: %v", err)
+	}
+	reported := map[string]bool{}
+	for _, key := range parseFailed {
+		reported[path.Base(key)] = true
+	}
+	if !reflect.DeepEqual(counted, reported) {
+		t.Errorf("LoadDir's parse failures disagree with the exporter's counter\n counter: %v\n LoadDir: %v", counted, parseFailed)
+	}
+	want := []string{"_profiles.yaml", "t-broken-shape.yaml", "t-broken-syntax.yaml", "team/_defaults.yaml"}
+	if !reflect.DeepEqual(parseFailed, want) {
+		t.Errorf("LoadDir parse failures = %v, want %v (scan keys, sorted)", parseFailed, want)
+	}
+	// Skipped, not fatal: the rest of the tree still loads, and loads as the
+	// exporter loaded it.
+	if !reflect.DeepEqual(mgr.GetConfig(), cfg) {
+		t.Errorf("config.LoadDir built a different ThresholdConfig from ConfigManager.Load on a tree with broken files")
+	}
+	if _, ok := cfg.Tenants["t-plain"]; !ok {
+		t.Errorf("a broken sibling took down a valid tenant: t-plain missing")
+	}
+	for _, broken := range []string{"t-broken-syntax", "t-broken-shape"} {
+		if _, ok := cfg.Tenants[broken]; ok {
+			t.Errorf("tenant %s of an unparseable file is in the config", broken)
+		}
 	}
 }

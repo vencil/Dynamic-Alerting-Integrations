@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -40,10 +43,6 @@ import (
 //      disk scan amortised across the next 30s of requests.
 //
 // Honest scope (this PR / PR-1 of the C-1+C-2+C-2a bundle):
-//   - In-memory cache w/ TTL is the v1 design. File-watcher-based
-//     invalidation is a future improvement; the YAML files change
-//     infrequently enough that 30s staleness is acceptable for the
-//     UI search use case.
 //   - free-text search is a simple case-insensitive substring match
 //     across id / owner / domain / db_type / tags[]. Inverted index
 //     / fuzzy matching is out of scope; revisit if a customer needs
@@ -111,11 +110,21 @@ var validSortKeys = map[string]struct{}{
 //     page (so client can `?offset=<value>` directly).
 //   - `page_size` echoes back the effective page size (after
 //     defaulting to 50 when omitted, and after clamping rejection).
+//   - `config_derivation` (#1988) says when the items' config_derived
+//     states were evaluated and which conf.d files the load skipped
+//     as unparseable. Their tenants have no config_derived: a root
+//     tenant file shows as a degraded item (config_error, #1680); a
+//     subdirectory tenant or a platform `_` file is named only here.
+//
+// next_offset carries `x-nullable`: Swagger 2.0 has no `nullable`, and the
+// schemathesis contract test rejects a null it was not told about.
 type SearchResponse struct {
 	Items        []TenantSummary `json:"items"`
 	TotalMatched int             `json:"total_matched"`
 	PageSize     int             `json:"page_size"`
-	NextOffset   *int            `json:"next_offset"`
+	// Offset of the next page; null on the last page.
+	NextOffset       *int              `json:"next_offset" extensions:"x-nullable"`
+	ConfigDerivation ConfigDerivedMeta `json:"config_derivation"`
 }
 
 // ── handler ────────────────────────────────────────────────────────
@@ -142,6 +151,24 @@ type SearchResponse struct {
 // Response: SearchResponse (see above) on 200, structured JSON error
 // otherwise. RBAC filtering is applied identically to ListTenants —
 // callers without metadata access see fewer rows.
+//
+// @Summary     Search tenants
+// @Description Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.
+// @Tags        tenants
+// @Produce     json
+// @Param       q           query    string false "Case-insensitive substring over id / owner / domain / db_type / tags"
+// @Param       environment query    string false "Exact environment"
+// @Param       tier        query    string false "Exact tier"
+// @Param       domain      query    string false "Exact domain"
+// @Param       db_type     query    string false "Exact db_type"
+// @Param       tag         query    string false "A tag the tenant must carry (case-sensitive)"
+// @Param       page_size   query    int    false "Page size (default 50, max 500)"
+// @Param       offset      query    int    false "Offset (default 0)"
+// @Param       sort        query    string false "Sort key" Enums(id, environment, tier, domain)
+// @Success     200 {object} SearchResponse
+// @Failure     400 {object} ErrorResponse
+// @Failure     500 {object} ErrorResponse
+// @Router      /api/v1/tenants/search [get]
 func SearchTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := rbac.RequestPrincipal(r)
@@ -152,7 +179,7 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		all, err := d.SearchCache.snapshot(d.ConfigDir)
+		snap, err := d.SearchCache.snapshot(r.Context(), d.ConfigDir)
 		if err != nil {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
@@ -162,17 +189,19 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 		// THIS user can see, not what exists globally. UI consumers
 		// expect total_matched to equal "rows the user could ever
 		// reach by paging".
-		visible := filterTenantsByRBAC(all, d.RBAC, d.TenantOrg, p)
+		visible := filterTenantsByRBAC(snap.summaries, d.RBAC, d.TenantOrg, p)
 		matched := applyFilters(visible, params)
 		sortTenants(matched, params.sort)
 
 		page, nextOffset := paginate(matched, params.offset, params.pageSize)
 
+		now := time.Now()
 		resp := SearchResponse{
-			Items:        page,
-			TotalMatched: len(matched),
-			PageSize:     params.pageSize,
-			NextOffset:   nextOffset,
+			Items:            snap.withConfigDerived(page, now),
+			TotalMatched:     len(matched),
+			PageSize:         params.pageSize,
+			NextOffset:       nextOffset,
+			ConfigDerivation: snap.configDerivedMeta(d, p, now),
 		}
 
 		writeJSON(w, http.StatusOK, resp)
@@ -349,24 +378,127 @@ func paginate(in []TenantSummary, offset, pageSize int) ([]TenantSummary, *int) 
 
 // ── snapshot cache ─────────────────────────────────────────────────
 
+// tenantSnapshot is one load of the config dir: the per-file summaries
+// (loadAllTenants) and the exporter's view of the same tree (config.LoadDir,
+// #1988). Both are shared across requests — DO NOT mutate. Filter / sort
+// work on copies built downstream, and withConfigDerived copies before it
+// attaches the per-request reading.
+type tenantSnapshot struct {
+	summaries []TenantSummary
+	derived   configDerivation
+	loadedAt  time.Time
+}
+
+func loadTenantSnapshot(configDir string) (*tenantSnapshot, error) {
+	summaries, err := loadAllTenants(configDir)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantSnapshot{summaries: summaries, derived: loadConfigDerivation(configDir), loadedAt: time.Now()}, nil
+}
+
+// underivedSnapshot is what is served when there is no trustworthy tree to
+// derive from: the tenants, but no config_derived for any of them, with
+// loadErr saying why. (withConfigDerived drops the raw per-file state values
+// whenever there is no derivation — on every unknown path alike.)
+func underivedSnapshot(summaries []TenantSummary, loadedAt time.Time, loadErr string) *tenantSnapshot {
+	return &tenantSnapshot{summaries: summaries, derived: configDerivation{loadErr: loadErr}, loadedAt: loadedAt}
+}
+
+// Why a request got no derived state. All content-free: configDerivedMeta
+// replaces any load error with scopedLoadError for scoped callers anyway.
+const (
+	writerBusyLoadError = "a config write is in progress; state not derived yet"
+	stillLoadingError   = "config is still loading; state not derived yet"
+	loadTimeoutError    = "config load did not finish in time; state not derived"
+	loadPanicError      = "config load failed; state not derived"
+)
+
+// reloadWaitBound caps how long a request waits for ANOTHER request's reload
+// before it answers without it. A reload never waits for the writer and its
+// load is itself bounded (loadDeadline), so this only matters for a slow load.
+const reloadWaitBound = 2 * time.Second
+
+// defaultLoadDeadline bounds how long one load may hold the writer's tree
+// lock (see tenantSnapshotCache). It is therefore also the longest a write
+// can be delayed by a reader.
+const defaultLoadDeadline = 5 * time.Second
+
 // tenantSnapshotCache caches the disk scan + YAML parse of the full
-// tenant set. The first request after expiry rebuilds; subsequent
-// requests serve from memory. At 1000 tenants on a typical SSD a
-// rebuild is ~50-100ms; cached responses are sub-millisecond before
-// filter / sort. p99 across the 30s window is comfortably under the
-// 200ms budget called out in planning §C-1.
+// tenant set, and the config.LoadDir of the same dir, for the list and
+// the search endpoints. LoadDir is a cold load (every file read and
+// decoded), so per-request loading is exactly what this cache exists to
+// prevent.
 //
-// We deliberately do NOT couple to the file watcher in cmd/server.
-// Forcing the watcher to invalidate the cache would entangle two
-// otherwise-orthogonal subsystems; 30s staleness is acceptable for
-// the UI search use case (config changes propagate to the manager
-// view within at most one TTL). If a customer reports staleness as
-// a real problem, the watcher hook is a small follow-up.
+// Tied to the GitOps writer by WireTenantSnapshots:
+//   - a load runs only while it holds the writer's tree lock, taken
+//     WITHOUT waiting (TryWithTreeLock), so a write never delays a read;
+//   - ONE reload at a time (singleflight). Other requests that need a
+//     reload wait for it (bounded, and never past their own context)
+//     instead of racing it for the tree lock, so "writer-busy" means only
+//     that a write holds the tree. A request joins only a reload that
+//     started after every Invalidate it has seen;
+//   - every writer lock section ends with Invalidate, success or error.
+//     Invalidate marks the snapshot STALE: it is older than the latest
+//     write. ⛔ A stale snapshot is never served as known. When no fresh
+//     answer can be had — a write holds the tree, the wait for another
+//     request's reload ran out, the load failed — the answer is UNKNOWN:
+//     the tenants (from the last snapshot when there is one), no
+//     config_derived, raw values dropped, load_error saying why. A snapshot
+//     that is not stale is served as known even while a write runs;
+//   - one load holds the tree lock for at most loadDeadline. It runs in a
+//     goroutine: a read that never returns (a FIFO named *.yaml, a stuck
+//     network mount — the exporter's walker blocks on those, and must stay
+//     as it is) would otherwise keep the tree lock, and every write, forever.
+//     Past the deadline the reload releases the lock and answers unknown;
+//     the load's eventual result is discarded, and no other load starts
+//     until it returns — at most one such goroutine exists at a time. A
+//     panic in the load is recovered into an unknown answer as well;
+//   - in PR mode the load first checks the tree is on the base branch with
+//     nothing the loader would read uncommitted (gitops.TreeOnBase). A PR
+//     write whose return to base failed leaves its unmerged proposal
+//     checked out; that tree is never derived from.
+//
+// The TTL bounds how long a change made OUTSIDE this API (a git pull, a
+// ConfigMap swap) can go unseen. tenant-api has no conf.d watcher.
 type tenantSnapshotCache struct {
+	// mu guards the fields below. ⛔ Never held across a load or a wait.
 	mu       sync.Mutex
-	cached   []TenantSummary
-	loadedAt time.Time
+	cached   *tenantSnapshot
+	stale    bool   // Invalidate was called since cached was loaded
+	gen      uint64 // Invalidate count
+	inflight *snapshotReload
+	stuck    bool // a load passed its deadline and has not returned yet
 	ttl      time.Duration
+
+	// loadDeadline bounds one load (0 → defaultLoadDeadline).
+	loadDeadline time.Duration
+	// tryReadTree runs a load under the writer's tree lock, or reports
+	// false without running it when a write holds the lock; nil loads
+	// directly (no writer: tests, or a deployment that never writes).
+	tryReadTree func(func()) bool
+	// checkTree runs before a load; non-nil error means the tree must not
+	// be derived from (PR mode: TreeOnBase).
+	checkTree func() error
+	// afterLoad is a test seam, run after a load read conf.d and before its
+	// result is published.
+	afterLoad func()
+}
+
+// snapshotReload is one in-flight reload; done closes when snap/err are set.
+type snapshotReload struct {
+	gen  uint64 // c.gen when the reload started
+	done chan struct{}
+	snap *tenantSnapshot
+	err  error
+}
+
+// loadOutcome is what one bounded load produced.
+type loadOutcome struct {
+	snap     *tenantSnapshot
+	err      error
+	treeErr  error
+	panicked bool
 }
 
 // NewTenantSnapshotCache constructs a cache with the default TTL.
@@ -375,32 +507,214 @@ func NewTenantSnapshotCache() *tenantSnapshotCache {
 	return &tenantSnapshotCache{ttl: snapshotTTL}
 }
 
-// snapshot returns a fresh-or-cached []TenantSummary. The slice is
-// shared across callers — DO NOT mutate it. Filter / sort logic
-// works on copies built downstream of this call.
-func (c *tenantSnapshotCache) snapshot(configDir string) ([]TenantSummary, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// WireTenantSnapshots builds the cache Deps.SearchCache serves from, ties
+// it to writer (see tenantSnapshotCache) and loads it once, so a request
+// arriving during the first write still has a base snapshot to serve.
+// prMode enables the base-branch check. cmd/server calls it; a nil writer
+// yields an unwired cache.
+func WireTenantSnapshots(writer *gitops.Writer, configDir string, prMode bool) *tenantSnapshotCache {
+	c := wireTenantSnapshots(writer, prMode)
+	_, _ = c.snapshot(context.Background(), configDir) // prime; an error is retried by the first request
+	return c
+}
 
-	if c.cached != nil && time.Since(c.loadedAt) < c.ttl {
-		return c.cached, nil
+func wireTenantSnapshots(writer *gitops.Writer, prMode bool) *tenantSnapshotCache {
+	c := NewTenantSnapshotCache()
+	if writer != nil {
+		c.tryReadTree = writer.TryWithTreeLock
+		writer.SetOnTreeRelease(c.Invalidate)
+		if prMode {
+			c.checkTree = writer.TreeOnBase
+		}
 	}
+	return c
+}
 
-	fresh, err := loadAllTenants(configDir)
+// snapshot returns a fresh-or-cached snapshot, or an unknown one (see
+// tenantSnapshotCache). A nil cache (tests that build Deps literally) loads
+// on every call. ctx ends the wait for another request's reload.
+func (c *tenantSnapshotCache) snapshot(ctx context.Context, configDir string) (*tenantSnapshot, error) {
+	if c == nil {
+		return loadTenantSnapshot(configDir)
+	}
+	for {
+		c.mu.Lock()
+		cur, stale, gen := c.cached, c.stale, c.gen
+		if cur != nil && !stale && time.Since(cur.loadedAt) < c.ttl {
+			c.mu.Unlock()
+			return cur, nil
+		}
+		r := c.inflight
+		if r == nil {
+			r = &snapshotReload{gen: gen, done: make(chan struct{})}
+			c.inflight = r
+			c.mu.Unlock()
+			c.reload(configDir, r, cur)
+			return r.snap, r.err
+		}
+		c.mu.Unlock()
+
+		// Another request is reloading: wait for it, but not forever and
+		// not past this request's own life.
+		wait := time.NewTimer(reloadWaitBound)
+		select {
+		case <-r.done:
+			wait.Stop()
+		case <-ctx.Done():
+			wait.Stop()
+			return nil, ctx.Err()
+		case <-wait.C:
+			return c.answerWithout(configDir, cur, stillLoadingError)
+		}
+		// Its result answers this request only if it started after every
+		// Invalidate this request saw; otherwise loop and reload again.
+		if r.gen == gen {
+			return r.snap, r.err
+		}
+	}
+}
+
+// answerWithout answers when no fresh load is available: cur if it is still
+// the cached snapshot and not stale (known), otherwise unknown with why.
+func (c *tenantSnapshotCache) answerWithout(configDir string, cur *tenantSnapshot, why string) (*tenantSnapshot, error) {
+	c.mu.Lock()
+	known := cur != nil && c.cached == cur && !c.stale
+	c.mu.Unlock()
+	if known {
+		return cur, nil
+	}
+	return unknownSnapshot(configDir, cur, why)
+}
+
+// unknownSnapshot lists the tenants without derived state: from cur when
+// there is one, otherwise from conf.d as it stands (the pre-#1988 list read;
+// known limitation: that read is not under the tree lock).
+func unknownSnapshot(configDir string, cur *tenantSnapshot, why string) (*tenantSnapshot, error) {
+	if cur != nil {
+		return underivedSnapshot(cur.summaries, cur.loadedAt, why), nil
+	}
+	summaries, err := loadAllTenants(configDir)
 	if err != nil {
 		return nil, err
 	}
-	c.cached = fresh
-	c.loadedAt = time.Now()
-	return c.cached, nil
+	return underivedSnapshot(summaries, time.Now(), why), nil
 }
 
-// invalidate forces the next snapshot() call to re-read from disk.
-// Reserved for future watch-based invalidation hooks; not currently
-// wired but kept as the explicit contract for that future PR.
-func (c *tenantSnapshotCache) invalidate() {
+// reload performs r: at most one bounded load under the tree lock, published
+// to the cache and to every request waiting on r. Whatever happens — a
+// panic included — r is completed and the cache is free to reload again.
+func (c *tenantSnapshotCache) reload(configDir string, r *snapshotReload, cur *tenantSnapshot) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("tenant snapshot reload panicked", "panic", p)
+			r.snap, r.err = unknownSnapshot(configDir, cur, loadPanicError)
+		}
+		c.mu.Lock()
+		c.inflight = nil
+		c.mu.Unlock()
+		close(r.done)
+	}()
+
+	c.mu.Lock()
+	stuck := c.stuck
+	c.mu.Unlock()
+	if stuck {
+		// A previous load is still blocked; do not start a second one.
+		r.snap, r.err = c.answerWithout(configDir, cur, loadTimeoutError)
+		return
+	}
+
+	var out loadOutcome
+	var timedOut bool
+	work := func() { out, timedOut = c.boundedLoad(configDir) }
+	locked := true
+	if c.tryReadTree != nil {
+		locked = c.tryReadTree(work)
+	} else {
+		work()
+	}
+
+	switch {
+	case !locked:
+		// A WRITE holds the tree (readers never contend for it: this is the
+		// only reload in flight).
+		r.snap, r.err = c.answerWithout(configDir, cur, writerBusyLoadError)
+	case timedOut:
+		r.snap, r.err = unknownSnapshot(configDir, cur, loadTimeoutError)
+	case out.panicked:
+		r.snap, r.err = unknownSnapshot(configDir, cur, loadPanicError)
+	case out.treeErr != nil:
+		// Not cached: every reload re-checks until the tree is back on base.
+		r.snap, r.err = unknownSnapshot(configDir, cur, relativeToConfDir(out.treeErr.Error(), configDir))
+	case out.err != nil:
+		r.err = out.err
+	default:
+		r.snap = out.snap
+		c.mu.Lock()
+		c.cached = out.snap
+		// An Invalidate that landed while this load ran may describe a
+		// change the load did not see; keep the result, but reload next time.
+		c.stale = c.gen != r.gen
+		c.mu.Unlock()
+	}
+}
+
+// boundedLoad runs the tree check and the load in a goroutine and waits at
+// most loadDeadline for it. Past the deadline it marks the cache stuck until
+// the goroutine returns, and reports timedOut; the result is then discarded.
+func (c *tenantSnapshotCache) boundedLoad(configDir string) (loadOutcome, bool) {
+	done := make(chan loadOutcome, 1)
+	go func() {
+		var out loadOutcome
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Error("tenant snapshot load panicked", "panic", p)
+				out = loadOutcome{panicked: true}
+			}
+			done <- out
+		}()
+		if c.checkTree != nil {
+			if out.treeErr = c.checkTree(); out.treeErr != nil {
+				return
+			}
+		}
+		out.snap, out.err = loadTenantSnapshot(configDir)
+		if c.afterLoad != nil {
+			c.afterLoad()
+		}
+	}()
+	deadline := c.loadDeadline
+	if deadline <= 0 {
+		deadline = defaultLoadDeadline
+	}
+	t := time.NewTimer(deadline)
+	defer t.Stop()
+	select {
+	case out := <-done:
+		return out, false
+	case <-t.C:
+		slog.Warn("tenant snapshot load passed its deadline; releasing the tree lock", "deadline", deadline)
+		c.mu.Lock()
+		c.stuck = true
+		c.mu.Unlock()
+		go func() {
+			<-done // discarded
+			c.mu.Lock()
+			c.stuck = false
+			c.mu.Unlock()
+		}()
+		return loadOutcome{}, true
+	}
+}
+
+// Invalidate marks the snapshot stale: it is never served as known again, and
+// the next request reloads when it can take the tree lock. Nil-receiver safe.
+func (c *tenantSnapshotCache) Invalidate() {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cached = nil
-	c.loadedAt = time.Time{}
+	c.stale = true
+	c.gen++
 }

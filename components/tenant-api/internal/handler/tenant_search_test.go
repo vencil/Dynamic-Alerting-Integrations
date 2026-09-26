@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -428,27 +429,27 @@ func TestSnapshotCache_ReuseDuringTTL(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice"),
 	})
-	first, err := cache.snapshot(dir)
+	first, err := cache.snapshot(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	if len(first) != 1 {
-		t.Fatalf("first len = %d, want 1", len(first))
+	if len(first.summaries) != 1 {
+		t.Fatalf("first len = %d, want 1", len(first.summaries))
 	}
-	loadedAt1 := cache.loadedAt
+	loadedAt1 := first.loadedAt
 
 	// Mutate disk — add a second tenant. Within TTL the snapshot
 	// must NOT pick it up (proves cache reuse).
 	testutil.WriteYAML(t, dir, "b.yaml",
 		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
-	second, err := cache.snapshot(dir)
+	second, err := cache.snapshot(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
-	if len(second) != 1 {
-		t.Errorf("snapshot updated mid-TTL — wanted stale, got fresh (len=%d)", len(second))
+	if len(second.summaries) != 1 {
+		t.Errorf("snapshot updated mid-TTL — wanted stale, got fresh (len=%d)", len(second.summaries))
 	}
-	if !cache.loadedAt.Equal(loadedAt1) {
+	if !second.loadedAt.Equal(loadedAt1) {
 		t.Errorf("loadedAt changed mid-TTL")
 	}
 }
@@ -460,7 +461,7 @@ func TestSnapshotCache_RebuildsAfterTTL(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice"),
 	})
-	if _, err := cache.snapshot(dir); err != nil {
+	if _, err := cache.snapshot(context.Background(), dir); err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
 
@@ -468,12 +469,12 @@ func TestSnapshotCache_RebuildsAfterTTL(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	testutil.WriteYAML(t, dir, "b.yaml",
 		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
-	second, err := cache.snapshot(dir)
+	second, err := cache.snapshot(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
-	if len(second) != 2 {
-		t.Errorf("post-TTL snapshot len = %d, want 2 (rebuild)", len(second))
+	if len(second.summaries) != 2 {
+		t.Errorf("post-TTL snapshot len = %d, want 2 (rebuild)", len(second.summaries))
 	}
 }
 
@@ -483,17 +484,17 @@ func TestSnapshotCache_InvalidateForcesRebuild(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice"),
 	})
-	if _, err := cache.snapshot(dir); err != nil {
+	if _, err := cache.snapshot(context.Background(), dir); err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
 	testutil.WriteYAML(t, dir, "b.yaml",
 		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
-	cache.invalidate()
-	second, err := cache.snapshot(dir)
+	cache.Invalidate()
+	second, err := cache.snapshot(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
-	if len(second) != 2 {
-		t.Errorf("post-invalidate len = %d, want 2", len(second))
+	if len(second.summaries) != 2 {
+		t.Errorf("post-invalidate len = %d, want 2", len(second.summaries))
 	}
 }

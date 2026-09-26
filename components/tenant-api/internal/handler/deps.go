@@ -151,9 +151,11 @@ type Deps struct {
 	//   pr-gitlab   — GitLab MR (ADR-011)
 	WriteMode WriteMode
 
-	// SearchCache is the snapshot cache used by SearchTenants.
-	// Shared across requests so the 30s TTL has effect — see
-	// tenant_search.go for design notes.
+	// SearchCache is the snapshot cache used by ListTenants and
+	// SearchTenants (it also holds the config.LoadDir the tenants'
+	// config_derived states are read from, #1988). Shared across
+	// requests so the TTL has effect; nil loads on every request —
+	// see tenant_search.go for design notes.
 	SearchCache *tenantSnapshotCache
 
 	// MaxBodyBytes caps the request body every write handler will

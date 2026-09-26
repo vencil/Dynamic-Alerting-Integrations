@@ -25,7 +25,7 @@ purpose: |
     - isSelected:      bool — derived from orchestrator's `selected.has(name)`
     - isHovered:       bool — derived from `hoveredCard === name`
     - pendingPR:       { html_url, number } | null — `prByTenant[name] || null`
-    - modeColors:      { normal/silent/maintenance: cssVar } map (orchestrator-local)
+    - modeColors:      { normal/silent/maintenance/unknown: cssVar } map (orchestrator-local)
     - onToggleSelect:  () => void — orchestrator's `toggleSelect(name)` curried
     - onHoverEnter:    () => void — sets `hoveredCard = name`
     - onHoverLeave:    () => void — sets `hoveredCard = null`
@@ -114,7 +114,11 @@ function TenantCard({
       </div>
 
       <div style={styles.row}>
-        <span style={styles.rowLabel}>{t('模式', 'Mode')}</span>
+        <span style={styles.rowLabel}>
+          {data.operational_mode_source === 'config'
+            ? t('模式（依設定推算）', 'Mode (derived from config)')
+            : t('模式', 'Mode')}
+        </span>
         <span style={styles.rowValue}>
           <span style={{ ...styles.modeIndicator, backgroundColor: modeColors[data.operational_mode] }} />
           {data.operational_mode}

@@ -13,6 +13,8 @@ dependencies: [
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
+  "tenant-manager/components/ConfigDerivationBanner.jsx",
+  "tenant-manager/utils/operational-mode.js",
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/components/CustomAlertsModal.jsx",
   "tenant-manager/components/IdentityStrip.jsx",
@@ -41,6 +43,7 @@ import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
 import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
 import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
+import { ConfigDerivationBanner } from './tenant-manager/components/ConfigDerivationBanner.jsx';
 import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
 import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
@@ -139,6 +142,7 @@ export default function TenantManager() {
     groups, setGroups,
     loading,
     searchOverflow,
+    derivationNotice,
     dataSource,
   } = useTenantData({ setApiNotification, t, q: debouncedQ });
 
@@ -513,6 +517,7 @@ export default function TenantManager() {
     normal: 'var(--da-color-mode-normal)',
     silent: 'var(--da-color-mode-silent)',
     maintenance: 'var(--da-color-mode-maintenance)',
+    unknown: 'var(--da-color-muted)',
   };
 
   return (
@@ -665,6 +670,7 @@ export default function TenantManager() {
 
         {/* Search-result overflow banner — extracted to OverflowBanner (PR-2d Phase 2 #153). */}
         <OverflowBanner overflow={searchOverflow} t={t} />
+        <ConfigDerivationBanner notice={derivationNotice} t={t} />
 
         {/* v2.6.0: Pending PRs banner (ADR-011) */}
         {pendingPRs.length > 0 && (
@@ -814,6 +820,7 @@ export default function TenantManager() {
               <option value="normal">{t('正常', 'Normal')}</option>
               <option value="silent">{t('靜默', 'Silent')}</option>
               <option value="maintenance">{t('維護中', 'Maintenance')}</option>
+              <option value="unknown">{t('無法推算', 'Unknown')}</option>
             </select>
 
             <label style={styles.formLabel} htmlFor="filter-domain">

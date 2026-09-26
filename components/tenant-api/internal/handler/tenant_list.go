@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -14,8 +15,10 @@ import (
 // TenantSummary is the list-view representation of a single tenant.
 // v2.5.0: Extended with metadata fields for UI grouping and filtering.
 type TenantSummary struct {
-	ID          string   `json:"id"`
-	SilentMode  string   `json:"silent_mode,omitempty"`
+	ID string `json:"id"`
+	// Raw `_silent_mode` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.
+	SilentMode string `json:"silent_mode,omitempty"`
+	// Raw `_state_maintenance` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.
 	Maintenance string   `json:"maintenance,omitempty"`
 	Profile     string   `json:"profile,omitempty"`
 	Environment string   `json:"environment,omitempty"`
@@ -38,6 +41,8 @@ type TenantSummary struct {
 	// as duplicate keys). The first three come from confd.FileProblem;
 	// invalid_config is decided by this handler.
 	ConfigError string `json:"config_error,omitempty" enums:"unreadable,not_regular_file,malformed_yaml,invalid_config"`
+	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
+	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
 }
 
 // ListTenants handles GET /api/v1/tenants
@@ -50,8 +55,16 @@ type TenantSummary struct {
 // are unknown, so it is visible ONLY to a caller whose matching rule places
 // no restriction on either metadata axis (rbac.ScopeAllowedUnknownMetadata).
 //
+// #1988: served from the snapshot cache shared with SearchTenants, and each
+// tenant carries config_derived — its silent-mode / maintenance state as
+// threshold-exporter would compute it from the same conf.d (config.LoadDir).
+// The list has no envelope: the files the exporter skips as unparseable are
+// named on the search response (a degraded row's config_error says the same
+// thing per tenant, for the files this list reads).
+//
 // @Summary     List tenants
 // @Description Returns tenants visible to the authenticated user, filtered by RBAC.
+// @Description config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.
 // @Description A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
 // @Description (unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be
 // @Description loaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).
@@ -66,7 +79,7 @@ func ListTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := rbac.RequestPrincipal(r)
 
-		tenants, err := loadAllTenants(d.ConfigDir)
+		snap, err := d.SearchCache.snapshot(r.Context(), d.ConfigDir)
 		if err != nil {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
@@ -74,9 +87,9 @@ func ListTenants(d *Deps) http.HandlerFunc {
 
 		// v2.5.0: Filter by RBAC (tenant pattern + env/domain metadata).
 		// P4: also feeds the org-scope axis from _tenant_orgs.yaml (d.TenantOrg).
-		filtered := filterTenantsByRBAC(tenants, d.RBAC, d.TenantOrg, p)
+		filtered := filterTenantsByRBAC(snap.summaries, d.RBAC, d.TenantOrg, p)
 
-		writeJSON(w, http.StatusOK, filtered)
+		writeJSON(w, http.StatusOK, snap.withConfigDerived(filtered, time.Now()))
 	}
 }
 

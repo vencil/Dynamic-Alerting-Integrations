@@ -493,6 +493,40 @@ func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
 	return false
 }
 
+// PlatformAdminUnrestricted is PlatformAdminNonOrgScoped with the metadata
+// axes closed too: the caller passes iff at least ONE rule satisfies
+// ruleMatches && tenantMatches(rule.Tenants, "*") && ruleGrants(rule,
+// PermAdmin) && rule.OrgScope == "" && no rule.Environments && no
+// rule.Domains — an admin grant that sees every tenant on every axis.
+//
+// ⛔ PlatformAdminNonOrgScoped IS NOT THIS. It is the reverse-audit bar and
+// deliberately ignores Environments / Domains (the audit report lists grants,
+// it does not reveal tenant content). A surface that hands out text naming
+// arbitrary tenants — a loader error, a conf.d path (#1988) — must not treat
+// an environment- or domain-restricted admin as someone who may read about
+// every tenant. Both zero-group states return false, like its sibling.
+func (m *Manager) PlatformAdminUnrestricted(p *VerifiedPrincipal) bool {
+	cfg := m.Get()
+	subject := subjectFor(p)
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if rule.OrgScope != "" || len(rule.Environments) != 0 || len(rule.Domains) != 0 {
+			continue
+		}
+		if !subject.ruleMatches(rule) {
+			continue
+		}
+		if !tenantMatches(rule.Tenants, "*") {
+			continue
+		}
+		if !ruleGrants(rule, PermAdmin) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // RedactReverseReport projects a report for eyes wider than platform admins
 // (?view=redacted) by ALLOWLIST REBUILD: a brand-new ReverseReport is
 // constructed and ONLY the allowlisted fields are copied over — never a
