@@ -73,6 +73,11 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 				WriteJSONError(rw, r, http.StatusConflict, err.Error())
 				return
 			}
+			// #2078: the PUT this previews would be refused (409) — say so
+			// instead of showing a "new file" diff for a write that cannot land.
+			if writeTenantPlacementError(rw, r, err) {
+				return
+			}
 			WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
 			return
 		}

@@ -62,10 +62,15 @@ func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	if took := time.Since(start); took >= deadline/2 {
 		t.Errorf("second request took %v: it started another load behind the stuck one", took)
 	}
+	// The probe is a write that takes the tree lock WITHOUT walking conf.d.
+	// A tenant write can no longer serve: since #2078 it walks the tree to
+	// check where the id is declared, and in this tree that walk hits the same
+	// FIFO — it fails closed (ErrTenantTreeScan, bounded; pinned in gitops'
+	// TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers), which says
+	// nothing about the lock this test is about.
 	writeDone := make(chan error, 1)
 	go func() {
-		_, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML)
-		writeDone <- err
+		writeDone <- w.WriteViewsFile(context.Background(), "alice@example.com", "views: {}\n")
 	}()
 	select {
 	case err := <-writeDone:

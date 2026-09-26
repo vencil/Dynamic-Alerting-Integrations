@@ -8,8 +8,8 @@ package gitops
 //
 // Fault injection follows writer_hardening_test.go's fixture style: real
 // local git repos (initRepoOnMain / seedTenantRepo / addBareRemote) with the
-// failure induced structurally — a configDir that does not exist (os.WriteFile
-// fails), an empty commit ident (the in-repo `git commit` itself fails after
+// failure induced structurally — a tenant file committed as a dangling symlink
+// (os.WriteFile fails), an empty commit ident (the in-repo `git commit` itself fails after
 // write + add succeeded), or a MergeFunc that succeeds at pre-flight and
 // fails under the lock.
 
@@ -39,17 +39,37 @@ func assertCleanOnBase(t *testing.T, dir, base, branchPrefix string) {
 	}
 }
 
-// TestWritePR_WriteFileFailureRollsBack: os.WriteFile fails (configDir does
-// not exist) AFTER the feature branch was created → WritePR must delete the
-// branch and re-anchor on a clean base.
+// commitDanglingTenantLink commits `<id>.yaml` on main as a symlink into a
+// directory that does not exist: the resolver names it as the tenant's
+// (existing) file, reading it is ENOENT (a new tenant as far as the merge and
+// validators can tell), and os.WriteFile through it fails — a write-file
+// failure AFTER the feature branch was cut, on a clean committed tree.
+//
+// It replaced a missing configDir as the injection (#2078): the
+// declared-elsewhere guard walks configDir before creating a new tenant file
+// and fails closed when the walk cannot run, so a missing configDir is now
+// refused by the guard and no longer reaches os.WriteFile.
+func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
+	t.Helper()
+	link := filepath.Join(repo, tenantID+".yaml")
+	if err := os.Symlink(filepath.Join("no-such-dir", tenantID+".yaml"), link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gitRun(t, repo, "add", tenantID+".yaml")
+	gitRun(t, repo, "commit", "-m", "dangling tenant link")
+}
+
+// TestWritePR_WriteFileFailureRollsBack: os.WriteFile fails (the tenant file
+// is a dangling symlink) AFTER the feature branch was created → WritePR must
+// delete the branch and re-anchor on a clean base.
 func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	missingConfigDir := filepath.Join(repo, "conf.d-does-not-exist")
-	w := NewWriter(missingConfigDir, repo)
+	commitDanglingTenantLink(t, repo, "db-a")
+	w := NewWriter(repo, repo)
 
 	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err == nil {
-		t.Fatal("expected WritePR to fail when the config dir is missing, got nil")
+		t.Fatal("expected WritePR to fail writing through a dangling tenant symlink, got nil")
 	}
 	if !strings.Contains(err.Error(), "write file") {
 		t.Errorf("error = %q, want it to carry the 'write file' failure semantics", err.Error())
@@ -152,11 +172,12 @@ func TestWritePRBatch_SecondOpMergeFailureRollsBack(t *testing.T) {
 }
 
 // TestWritePRBatch_WriteFileFailureRollsBack: the os.WriteFile per-op failure
-// arm (configDir missing) — branch dropped, base clean, error names the tenant.
+// arm (dangling tenant symlink) — branch dropped, base clean, error names the
+// tenant.
 func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	missingConfigDir := filepath.Join(repo, "conf.d-does-not-exist")
-	w := NewWriter(missingConfigDir, repo)
+	commitDanglingTenantLink(t, repo, "db-a")
+	w := NewWriter(repo, repo)
 
 	merge := func(existing []byte) (string, error) {
 		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
@@ -164,7 +185,7 @@ func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 	_, err := w.WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
 	if err == nil {
-		t.Fatal("expected WritePRBatch to fail when the config dir is missing, got nil")
+		t.Fatal("expected WritePRBatch to fail writing through a dangling tenant symlink, got nil")
 	}
 	if !strings.Contains(err.Error(), "write file for db-a") {
 		t.Errorf("error = %q, want 'write file for db-a'", err.Error())

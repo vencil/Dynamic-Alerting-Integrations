@@ -31,6 +31,9 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Changed
 
+- **tenant-api README 揭露單一租戶端點的範圍（docs、tenant-api；[#2074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2074)、[#2078](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2078)、[#1385](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1385)）**：新增「單一租戶端點與 conf.d 範圍」一節。`GET /tenants/{id}` 的 `resolved_thresholds` 只套根目錄的 `_defaults.yaml`；它與 `/effective` 都不套 `_profile` 與平台檔的 `tenants:` 區塊，不是 exporter 的觀點。tenant-api 以 conf.d 頂層的 `<id>.yaml` 認租戶檔，宣告在其他檔的租戶 `GET` 回 404、寫入回 409（見 Fixed 的 #2078 條目）；已用 `_profile` 的租戶目前寫入會回 400。
+
+
 - **⚠️ 行為變更——`patch-config --diff` 不再顯示目前值（tools、docs；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`--json` 的 `before` 恆為 `null`，文字輸出不再印 `Before` 行，改印一行請讀者到 exporter 確認；`after` 只描述要寫入的值（`default` 為 `key removed`，不推斷刪掉後生效的值），`changed` 仍與 apply 同一判定。理由：要讀出單一 key 的現值，必須在 Python 端重做 exporter 的 key→series 對應，#1950 決策排除。`get_current_value`、`read_platform_tiers` 與 tier 措辭表一併刪除（repo 內零其他呼叫端）。順帶：`_defaults` 讀不了不再擋 `--diff`（與 apply 一致）。
 - **租戶列表帶「依設定推算」的靜音／維護狀態，解析失敗的檔案會被列出（tenant-api、exporter、portal；[#1988](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1988)）**：`GET /api/v1/tenants` 與 `/tenants/search` 的每個租戶新增 `config_derived`（`silent_targets`／`maintenance_active`），由 `config.LoadDir`＋`OperationalStatesAt(now)` 在請求當下算出，與 exporter `/metrics` 同一份計算，不是 Alertmanager 的觀測值；原有 `silent_mode`／`maintenance` 在推算可用時仍是原始值，推算不可用時清空。兩端點共用快照快取（`/tenants` 過去每請求讀磁碟），只在不必等待就拿得到 GitOps writer 的鎖時載入且有時限，過期的快照不當成已知狀態，工作樹不在 base 上時不推算。`/tenants/search` 新增 `config_derivation`（含 `parse_failed_files`、`load_error`）並寫進 OpenAPI；不受限者以外的呼叫者只拿到固定的錯誤字串與不含目錄的檔名。`pkg/config.LoadDir` 回傳改為 `(cfg, parseFailed, err)`，exporter 行為不變。Tenant Manager 改讀 `config_derived` 並標「依設定推算」，缺值顯示 `unknown`。
 
@@ -120,6 +123,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
 
 ### Fixed
+
+- **tenant-api 寫入不再為已由其他檔宣告的租戶另建 `<id>.yaml`，改回 409（tenant-api；[#2078](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2078)、[#2074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2074)、[#1385](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1385)）**：⚠️ 行為變更。租戶已由子目錄檔或頂層共用檔的 `tenants:` 宣告時，`PUT /tenants/{id}` 與 batch（直寫、PR 兩種模式）過去照樣寫入 `<id>.yaml`（不存在就新建，存在但沒宣告這個 id 就寫進去），造出「一個 id 兩個檔」：執行中的 exporter 保留舊值、新值永不生效，重啟時以 `mixed-mode duplicate tenant` 拒收整份設定。現在 `PUT` 與 PR 模式的 batch 回 409 `TENANT_DECLARED_ELSEWHERE`、不寫檔；直寫模式的 batch 整體仍回 200，該筆結果為 error 並帶 `code: TENANT_DECLARED_ELSEWHERE`（`BatchResult` 與 async task 結果新增 `code` 欄位）；`POST /{id}/diff` 與 custom-alerts 寫入同樣回 409。`<id>.yaml` 與另一個檔都宣告同一 id（exporter 本來就拒收的樹）時，連更新 `<id>.yaml` 也回 409，要先移除另一份宣告。回應不含宣告它的檔名，完整路徑只進 server log。判定沿用 exporter 自己的 conf.d walker；`_` 開頭平台檔的 `tenants:` 不算宣告，照常寫入。walk 有時限；walk 失敗或逾時時，寫入類端點不寫檔並回 500，直寫 batch 整體回 200、該筆 `code: INTERNAL_ERROR`。逾時的原因若是讀不完的檔（例如名為 `*.yaml` 的 FIFO），刪掉那個檔不會解除，要重啟 tenant-api。
 
 - **PR 模式寫入在 push 後切回 base 失敗時，不再回報成功（tenant-api；[#2070](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2070)）**：`WritePR`／`WritePRBatch` push 完 feature branch 後要把 conf.d 工作樹切回 base；這一步失敗時先前只印 WARN、照樣回成功並開 PR/MR，工作樹停在 feature branch，之後讀 conf.d 的端點會看到尚未合併的提議內容。現在會在同一個鎖區段內立即重試一次，仍失敗就印 ERROR（欄位 `base`／`branch`／`pushed`／`attempts`／`error`）並回 `500`，訊息帶 branch 名與是否已推上 origin，operator 可據以找到那條已推送但沒有 PR/MR 的 branch。⚠️ **行為變更**：這種情形過去回 `200 pending_review`，現在回 `500` 且不開 PR/MR。回的是 `500` 而不是可重試的 `503`：branch 已經推上去，重試會再切出第二條 branch。
 

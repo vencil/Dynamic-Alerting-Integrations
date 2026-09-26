@@ -37,6 +37,9 @@ type TaskResult struct {
 	TenantID string `json:"tenant_id"`
 	Status   string `json:"status"` // "ok" | "error"
 	Message  string `json:"message,omitempty"`
+	// Code mirrors handler.BatchResult.Code (#2078): the machine-readable
+	// failure code (e.g. TENANT_DECLARED_ELSEWHERE), empty when none applies.
+	Code string `json:"code,omitempty"`
 	// Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking
 	// deprecation advisories for an op that succeeded, so the async polling
 	// path (?async=true → GET /tasks/{id}) carries the same author-facing

@@ -14,7 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -104,6 +106,37 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // filepath.Base defense on the control-file write path. See internal/confd for
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
+
+// ErrTenantDeclaredElsewhere refuses a tenant write to `<configDir>/<id>.yaml`
+// (or its `.yml` spelling) when some OTHER conf.d file declares the id — a
+// subdirectory file (`team/x.yaml`) or a shared top-level file whose
+// `tenants:` map carries it (#2078). confd.TenantFilePathForWrite only looks
+// for `<id>.yaml|.yml` at the top level, so without this guard the write
+// "succeeds" and leaves one id in two files: the running exporter keeps the
+// old config (the new value never takes effect) and the next restart exits
+// with `config rejected (mixed-mode duplicate tenant)`. It applies whether or
+// not `<id>.yaml` already exists: an existing file need not declare the id.
+//
+// Also returned (wrapping the *cfg.DuplicateTenantError) when the id is
+// ALREADY declared by two or more files — including `<id>.yaml` itself plus
+// another: the exporter rejects that tree already, so even an update of
+// `<id>.yaml` is refused until the other declaration is removed.
+//
+// `_`-prefixed platform files are not declarations (the walker never parses
+// them for tenants), so a `tenants:` block in `_extra.yaml` does NOT trip this.
+//
+// ⛔ The wrapped message names the other file(s) and is for the server log
+// only; handlers render a fixed message (a caller restricted by RBAC must not
+// learn other files' names). Handlers map it to 409.
+var ErrTenantDeclaredElsewhere = errors.New("tenant is already declared by another conf.d file")
+
+// ErrTenantTreeScan reports that the conf.d walk the ErrTenantDeclaredElsewhere
+// guard depends on could not run or did not finish in time (see scanTree). The
+// guard fails CLOSED: when it cannot tell whether the write would duplicate a
+// declaration, nothing is written. It is a server-side condition (configDir
+// unreadable, or a file whose read never returns), so handlers map it to 500
+// with a fixed message.
+var ErrTenantTreeScan = errors.New("cannot scan conf.d to check where the tenant is declared")
 
 // ErrBaseRestore is returned by WritePR / WritePRBatch when, after the feature
 // branch was committed (and usually pushed), returning the worktree to a clean
@@ -215,6 +248,11 @@ type Writer struct {
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
+
+	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
+	// stuckTreeScans counts walks that outlived it and are still running.
+	treeScanTimeout time.Duration
+	stuckTreeScans  atomic.Int32
 
 	// beforeBaseRestore is a TEST-ONLY seam (#2070): restoreBase calls it, when
 	// non-nil, right before each checkoutBaseClean attempt (attempt is 1-based).
@@ -560,8 +598,141 @@ type MergeFunc func(existing []byte) (string, error)
 //
 // Callers that both READ the existing file and WRITE it back must resolve ONCE
 // and pass the path down, so the two halves of one flow cannot disagree.
+//
+// #2078: the answer must also be the ONLY file the exporter's walker would
+// attribute the id to — see ErrTenantDeclaredElsewhere. This is asked on EVERY
+// write, the ordinary update included: "`<id>.yaml` exists" does not mean it
+// declares the id (a `tenants: {}` shell, a file that does not parse, a file
+// declaring some other key), and writing the id into it while another file
+// declares it hands the exporter a duplicate. Consequently a tree that ALREADY
+// declares the id twice is refused even for an update of `<id>.yaml` — that
+// tree is one the exporter rejects anyway, and the fix is removing the other
+// declaration, not writing to either one.
+//
+// Every call walks the tree as it is NOW, so each op of a batch is judged
+// after the ops before it have written.
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
-	return confd.TenantFilePathForWrite(w.configDir, tenantID)
+	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if err := w.ensureNotDeclaredElsewhere(tenantID, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// discardScanLogger swallows the walker's per-file WARNs: this scan is a
+// yes/no question asked on a write, and the exporter already reports the same
+// tree's unreadable / unparseable files on its own reload loop.
+var discardScanLogger = log.New(io.Discard, "", 0)
+
+// defaultTreeScanTimeout bounds one #2078 conf.d walk. The walker reads every
+// file, and a file whose read never returns (a FIFO named *.yaml, a hung
+// network mount) would otherwise hang the write — inside WriteMerged / the PR
+// paths, while holding the single-writer lock, i.e. every later write too.
+// Measured on a 1000-file tree a walk takes ~20 ms.
+const defaultTreeScanTimeout = 5 * time.Second
+
+// errTreeScanTimeout / errTreeScanStuck are wrapped in ErrTenantTreeScan by
+// ensureNotDeclaredElsewhere: the guard fails closed on both. They reach the
+// server log only.
+var (
+	errTreeScanTimeout = errors.New("conf.d walk timed out")
+	errTreeScanStuck   = errors.New("an earlier conf.d walk is still blocked; restart tenant-api to recover")
+)
+
+// scanTree is the one call site of cfg.ScanDirTree on the write path, bounded
+// by treeScanTimeout. A walk that outlives it cannot be cancelled (the walker
+// takes no context), so it is left running and counted in stuckTreeScans
+// until it returns; while the count is non-zero, later calls fail at once.
+//
+// ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
+// before taking the writer token/lock — direct Write / WriteIfUnchanged and
+// Diff (which never takes the lock) — can each start a walk within the same
+// timeout window, and each of those can block too; walks under the lock
+// (WriteMerged, WritePR, WritePRBatch) are serialised. A blocked walk ends
+// only when the file it is reading is opened for writing or the process
+// restarts: removing the file does not unblock a read already in progress.
+func (w *Writer) scanTree() (*cfg.TreeScan, error) {
+	if w.stuckTreeScans.Load() > 0 {
+		return nil, errTreeScanStuck
+	}
+	timeout := w.treeScanTimeout
+	if timeout <= 0 {
+		timeout = defaultTreeScanTimeout
+	}
+	type result struct {
+		scan *cfg.TreeScan
+		err  error
+	}
+	done := make(chan result, 1) // buffered: an abandoned walk must not block on send
+	// mu orders "the walk finished" against "the caller gave up", so exactly
+	// one side accounts for an abandoned walk: the caller increments only if
+	// the walk has not finished, and the walk decrements only if abandoned.
+	var mu sync.Mutex
+	finished, abandoned := false, false
+	go func() {
+		// obs is a literal nil interface on purpose — see cfg.ScanObserver's
+		// typed-nil trap. No prior: a cold scan, nothing retained.
+		s, err := cfg.ScanDirTree(w.configDir, nil, nil, discardScanLogger)
+		mu.Lock()
+		finished = true
+		if abandoned {
+			w.stuckTreeScans.Add(-1)
+		}
+		mu.Unlock()
+		done <- result{s, err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.scan, r.err
+	case <-timer.C:
+		mu.Lock()
+		if finished { // lost the race to a walk that just completed: use it
+			mu.Unlock()
+			r := <-done
+			return r.scan, r.err
+		}
+		abandoned = true
+		w.stuckTreeScans.Add(1)
+		mu.Unlock()
+		return nil, fmt.Errorf("%w after %v", errTreeScanTimeout, timeout)
+	}
+}
+
+// ensureNotDeclaredElsewhere is the #2078 guard: target may be written only if
+// the exporter's own walker — the one whose duplicate verdict makes the
+// exporter refuse the tree — attributes tenantID to no file, or to target.
+//
+// Same walker, not a re-implementation: which files count (extensions, hidden
+// entries, `_` prefixes, symlinked roots) and what counts as a declaration (a
+// file the full decode accepts) cannot drift from what the exporter loads.
+func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
+	scan, err := w.scanTree()
+	if err != nil {
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
+	}
+	located, lerr := scan.Locate(tenantID)
+	var dup *cfg.DuplicateTenantError
+	switch {
+	case errors.Is(lerr, cfg.ErrTenantNotFound):
+		return nil
+	case errors.As(lerr, &dup):
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantDeclaredElsewhere, tenantID, lerr)
+	case lerr != nil:
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, lerr)
+	}
+	// Locate answers under scan.AbsRoot — absolute, and with a symlinked
+	// configDir already resolved — while target is configDir-relative in
+	// whatever form the operator passed. Compare in the walker's form: the
+	// target is always a top-level file, so its walker path is AbsRoot/<base>.
+	if filepath.Clean(located) == filepath.Join(scan.AbsRoot, filepath.Base(target)) {
+		return nil
+	}
+	return fmt.Errorf("%w: tenant %s is declared by %s", ErrTenantDeclaredElsewhere, tenantID, located)
 }
 
 // readMerge is the half of readMergeValidate that produces the content: read

@@ -44,6 +44,7 @@ func toTaskResults(results []BatchResult) []async.TaskResult {
 			TenantID: br.TenantID,
 			Status:   br.Status,
 			Message:  br.Message,
+			Code:     br.Code,
 			Warnings: br.Warnings,
 		}
 	}
