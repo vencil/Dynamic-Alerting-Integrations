@@ -4818,6 +4818,12 @@ def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
     empty answer yields `[]`, which `_validate_config` refuses (rc 2, "at
     least one tenant name is required") — no loop. EOF / Ctrl-C is rc 2 too;
     nothing has been written at this point.
+
+    The answer is split exactly like `--tenants`: an answer that names no
+    tenant is empty, but one with SOME names keeps its blanks, so `a,,b` is
+    refused by `_validate_config` here as it is on the flag — one pre-write
+    contract for both inputs, not a prompt that quietly repairs what the flag
+    rejects.
     """
     if _LANG == 'zh':
         text = "輸入租戶名稱（逗號分隔；下次可直接用 --tenants 帶入）:"
@@ -4831,7 +4837,8 @@ def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
                      if _LANG == 'zh' else
                      "no tenant names were read; pass --tenants "
                      "(nothing was written)")
-    return [t.strip() for t in raw.split(',') if t.strip()]
+    named = [t.strip() for t in raw.split(',')]
+    return named if any(named) else []
 
 
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:

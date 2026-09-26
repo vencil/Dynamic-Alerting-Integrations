@@ -3789,6 +3789,18 @@ class TestMissingTenantsOnATerminal:
         assert 'Invalid tenant names' in capsys.readouterr().err
         assert not out.exists()
 
+    def test_a_prompted_list_with_some_names_keeps_its_blanks(
+            self, monkeypatch, tmp_path, capsys):
+        """補問與 `--tenants` 同一份契約：回答 `db-x,,db-y` 同樣以名稱不合法
+        rc 2 拒絕、零寫入，不會被補問悄悄修成 `db-x,db-y`。"""
+        out = tmp_path / 'repo'
+        with pytest.raises(SystemExit) as exc:
+            self._drive(monkeypatch, out, ['--deploy', 'helm'],
+                        ['db-x,,db-y'], tty=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert 'Invalid tenant names' in capsys.readouterr().err
+        assert not out.exists()
+
 
 class TestGitOpsNativeModeIsRefused:
     """GitOps Native Mode（`--config-source git`）已撤下（issue #1349）。
