@@ -987,7 +987,17 @@ UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
         "would make the required check block on coverage, which is the shape "
         "the owner rejected; its skip cannot mislead because nothing reads its "
         "result. Closing this row means either promoting it into the gate "
-        "(a policy reversal) or deleting the job."),
+        "(a policy reversal) or deleting the job. Sharded 3-way (--shard=K/3); "
+        "the report, floor and artifact moved to python-coverage-combine."),
+    # The tail of the coverage leg once it was sharded: merges the shards'
+    # raw data, writes coverage-py3.13, applies pyproject's fail_under. Same
+    # advisory standing and same `python_changed` gate as the shards it reads.
+    ("ci.yml", "python-coverage-combine"): (
+        "ADVISORY: combines the sharded python-coverage legs into the "
+        "coverage-py3.13 artifact coverage-delta.yml reads and applies the "
+        "fail_under floor; backs no required check, for the same owner "
+        "decision as python-coverage (sharding: #2102). Closing this row "
+        "means the same as closing that one."),
     ("docs-ci.yaml", "i4-runbook-smoke-test"): (
         "NOT a required check (branch protection read 2026-09-25, #1398), so "
         "no gate owns a name for it: its failure shows as a red non-required "

@@ -32,6 +32,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Changed
 
+- **Python 測試與 coverage 在 CI 上切成三個平行分片（ci、tests；[#2102](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2102)）**：`Python Tests — run` 與 `Python Coverage` 各改為 3 片 matrix，以 `pytest --shard=K/3` 分配（`tests/_shard.py`：nodeid 的 crc32，各 job 算出同一個分割）。required check 名 `Python Tests (3.13)` 不變；coverage 由新 job `Python Coverage (3.13)` 合併三片後產出 `coverage-py3.13` 並套 `fail_under`。`tests/ops/test_ci_pytest_shards.py` 釘住 matrix 分片數與指令的 `/N` 一致、三片互斥且合起來是整棵樹。
+
 - **tenant-api README 揭露單一租戶端點的範圍（docs、tenant-api；[#2074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2074)、[#2078](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2078)、[#1385](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1385)）**：新增「單一租戶端點與 conf.d 範圍」一節。`GET /tenants/{id}` 的 `resolved_thresholds` 只套根目錄的 `_defaults.yaml`；它與 `/effective` 都不套 `_profile` 與平台檔的 `tenants:` 區塊，不是 exporter 的觀點。tenant-api 以 conf.d 頂層的 `<id>.yaml` 認租戶檔，宣告在其他檔的租戶 `GET` 回 404、寫入回 409（見 Fixed 的 #2078 條目）；已用 `_profile` 的租戶目前寫入會回 400。
 
 

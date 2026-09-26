@@ -300,6 +300,38 @@ SUBPROCESS_CONTEXT = "subprocess"
 # of the configuration rather than keeping it in step by hand. `serialize()`
 # absolutises paths, so a child started in another cwd still writes beside the
 # parent.
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="Run only the tests tests/_shard.py assigns to shard K of N "
+             "(1-based). CI's python-tests-run matrix uses it.",
+    )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    """Keep only this shard's tests when ``--shard=K/N`` is given."""
+    spec = config.getoption("--shard")
+    # `is None`, not falsiness: an explicit `--shard=` is a malformed spec and
+    # must be a usage error, not a silent full run.
+    if spec is None:
+        return
+    from _shard import parse_shard_spec, shard_of
+
+    try:
+        k, n = parse_shard_spec(spec)
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
+    keep, drop = [], []
+    for item in items:
+        (keep if shard_of(item.nodeid, n) == k else drop).append(item)
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+    items[:] = keep
+
+
 def pytest_configure(config):
     """Make subprocess-invoked tools visible to coverage, when coverage is on."""
     plugin = config.pluginmanager.get_plugin("_cov")

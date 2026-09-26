@@ -1194,7 +1194,7 @@ jobs:
     # (3.13)" — that name is now reported by the always-run python-tests
     # gate job below (same pattern as go-tests), so this job can be
     # path-skipped without ever leaving the required check un-reported.
-    name: Python Tests — run (${{ matrix.python }})
+    name: Python Tests — run (${{ matrix.python }}, ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
@@ -1204,8 +1204,17 @@ jobs:
     permissions:
       contents: read
     strategy:
+      # `shard`: the tree is split across parallel jobs by `--shard=K/3`
+      # (tests/_shard.py — a crc32 of the nodeid, so every job computes the
+      # same partition). This pytest step was the required path's longest
+      # step; splitting it is what shortens the path. The gate job below
+      # reads `needs.python-tests-run.result`, which is `failure` if ANY
+      # shard fails, so it needs no change. ⛔ The list and the `/3` in the
+      # pytest command must name the same N — a shorter list silently drops
+      # a shard's tests; tests/ops/test_ci_pytest_shards.py pins them.
       matrix:
         python: ["3.13"]
+        shard: [1, 2, 3]
       fail-fast: false
     # Fail-closed signal for the #908 mtail compile gate (guard against silent
     # disarmament): this job INSTALLS mtail below, so if mtail is missing at pytest
@@ -1519,6 +1528,14 @@ jobs:
             bash "$t"
           done
 
+      - name: Shard contract (unsharded, in every shard)
+        # tests/ops/test_ci_pytest_shards.py is what proves the matrix below
+        # covers 1..N. Left to the shard split, it lands in ONE shard — and if
+        # an edit drops that shard from the matrix, the only test that would
+        # notice is the one that no longer runs, with the required check green.
+        # So every shard runs it whole, before its own slice (~2s).
+        run: pytest tests/ops/test_ci_pytest_shards.py -q -p no:cacheprovider
+
       - name: Run pytest
         # ⛔ No --cov here, on purpose: this is the REQUIRED leg, and coverage
         # is the largest single multiplier on its wall time (measured in the
@@ -1547,7 +1564,8 @@ jobs:
         # suite's hot spots are measured in THIS coordinate system (4-core
         # runner + coverage), not inferred from a developer host. Cheap:
         # xdist reports per-test wall time it already has.
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --durations=40 --durations-min=1.0
+        # --shard: this job's slice of the tree (see the matrix comment).
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --durations=40 --durations-min=1.0 --shard=${{ matrix.shard }}/3
 
 
 
@@ -1564,7 +1582,7 @@ jobs:
     # and that sat on the required leg's critical path. The setup steps are
     # a verbatim copy of python-tests-run on purpose — every guard that reads
     # ci.yml (pinned versions, path filter, dep parity) keeps seeing them.
-    name: Python Coverage (${{ matrix.python }})
+    name: Python Coverage (${{ matrix.python }}, ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
@@ -1574,8 +1592,14 @@ jobs:
     permissions:
       contents: read
     strategy:
+      # Sharded like python-tests-run (same `--shard=K/3`, same pin in
+      # tests/ops/test_ci_pytest_shards.py). Each shard uploads its raw
+      # `.coverage` data; `python-coverage-combine` below merges them and
+      # owns the report, the fail_under floor and the coverage-py3.13
+      # artifact — a per-shard floor would judge a third of the tree.
       matrix:
         python: ["3.13"]
+        shard: [1, 2, 3]
       fail-fast: false
     # Fail-closed signal for the #908 mtail compile gate (guard against silent
     # disarmament): this job INSTALLS mtail below, so if mtail is missing at pytest
@@ -1893,13 +1917,90 @@ jobs:
         # suite's hot spots are measured in THIS coordinate system (4-core
         # runner + coverage), not inferred from a developer host. Cheap:
         # xdist reports per-test wall time it already has.
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75 --durations=40 --durations-min=1.0
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short --timeout=300 -n auto --cov --cov-report= --cov-fail-under=0 --durations=40 --durations-min=1.0 --shard=${{ matrix.shard }}/3
+
+      - name: Upload raw coverage data (this shard)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-data-py${{ matrix.python }}-shard${{ matrix.shard }}
+          path: .coverage
+          # ⛔ upload-artifact skips dot-files unless told otherwise, and
+          # `.coverage` is one: without this the artifact is empty and the
+          # combine job below measures nothing.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  python-coverage-combine:
+    # Merges the python-coverage shards into one report. ADVISORY like
+    # python-coverage (ledgered next to it in
+    # tests/ops/test_ci_aggregate_gate_contract.py): it backs no required
+    # check. It owns what used to be the single job's tail: the coverage.xml
+    # that coverage-delta.yml turns into the PR comment, and the fail_under
+    # floor from pyproject.toml [tool.coverage.report].
+    name: Python Coverage (3.13)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, python-coverage]
+    # `always()` so a shard whose tests failed still gets a combined report
+    # (the shards upload `if: always()` for the same reason); skipped with
+    # the shards when no Python-relevant path changed.
+    if: always() && needs.detect-changes.outputs.python_changed == 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        # coverage.xml / the report resolve measured files against the
+        # source tree, so it has to be here.
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install coverage
+        run: pip install pytest-cov -c requirements/ci-constraints.txt
+
+      - name: Download shard coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-py3.13-shard*
+          path: coverage-shards
+
+      - name: Combine shards, write coverage.xml, apply the floor
+        # Every shard must be present: a combined report missing a shard
+        # under-reports coverage (a smaller denominator), so none is written.
+        # ⛔ A missing shard is a WARNING here, not an error, and no signal is
+        # lost by that: each shard uploads `if: always()` with
+        # `if-no-files-found: error`, so a shard can be missing only if its
+        # own row is already red or cancelled. The case that made this an
+        # error a liability: the concurrency group cancels a superseded run,
+        # its cancelled shard uploads nothing, and this job — `always()` —
+        # went red on "found 2" for a run nobody reads (run 36253944192).
+        # The cancellation is detected by the count, not by reading
+        # `needs.*.result`: a job that reads a verdict is a gate
+        # (tests/ops/test_ci_aggregate_gate_contract.py).
+        run: |
+          set -euo pipefail
+          n=0
+          for f in coverage-shards/*/.coverage; do
+            n=$((n + 1))
+            cp "$f" ".coverage.shard$n"
+          done
+          if [ "$n" -ne 3 ]; then
+            echo "::warning::expected 3 shard coverage files, found $n; a shard failed before uploading or was cancelled (see its own row) — no combined report"
+            exit 0
+          fi
+          python -m coverage combine .coverage.shard*
+          python -m coverage xml -o coverage.xml
+          python -m coverage report --skip-covered --skip-empty
 
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-py${{ matrix.python }}
+          name: coverage-py3.13
           path: coverage.xml
           retention-days: 7
 

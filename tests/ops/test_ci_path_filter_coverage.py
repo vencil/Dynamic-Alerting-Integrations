@@ -2040,6 +2040,9 @@ GATED_LEGS = {
     # Advisory coverage leg: same `python_changed` gate as the run leg, backs
     # no required check (ledgered in test_ci_aggregate_gate_contract).
     ("ci.yml", "python-coverage"),
+    # Its combine tail (#2102): gated on the same `python_changed` output,
+    # advisory for the same reason.
+    ("ci.yml", "python-coverage-combine"),
     ("ci.yml", "portal-tests-run"),
     ("ci.yml", "go-tests-threshold-exporter"),
     ("ci.yml", "go-tests-tenant-api"),
