@@ -945,6 +945,75 @@ class TestRollbackAccounting:
         assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
             pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
 
+    # _observed_fallback's truth table (#1950 PR 2 round 3): `_conclude` fails,
+    # the answer follows only what the key is observed to hold.
+    # row: (where _conclude fails, FakeCluster kwargs, what happens to the key
+    #       as it fails, the fallback's first read fails,
+    #       -> status, exit code, written, rolled_back, patches sent)
+    _THEIRS = "tenants:\n  t-a: {mysql_connections: '99'}\n"
+    FALLBACK_ROWS = {
+        "E1-rollback-sent-first-read-unreadable": (
+            "after-rollback", {}, None, True,
+            "state-unknown", 7, None, False, 2),
+        "old-after-our-rollback": (
+            "after-rollback", {}, None, False,
+            "error-rolled-back", 6, False, True, 2),
+        "E2-write-call-failed-and-did-not-land": (
+            "conclude", {"fail_patch": {0}}, None, False,
+            "caller_error", 2, False, None, 1),
+        "old-written-no-rollback-sent": (
+            "conclude", {}, "old", False,
+            "overwritten-by-another-writer", 7, False, False, 1),
+        "new-rollback-lands": (
+            "conclude", {}, None, False,
+            "error-rolled-back", 6, False, True, 2),
+        "new-rollback-fails": (
+            "conclude", {"fail_patch": {1}}, None, False,
+            "rollback-failed", 5, True, False, 2),
+        "new-rollback-then-unreadable": (
+            "conclude", {"fail_get_cm_after": 2}, None, False,
+            "state-unknown", 7, None, False, 2),
+        "another-value": (
+            "conclude", {}, "theirs", False,
+            "overwritten-by-another-writer", 7, False, False, 1),
+    }
+
+    @pytest.mark.parametrize("row", FALLBACK_ROWS, ids=list(FALLBACK_ROWS))
+    def test_the_fallback_answers_from_the_key_it_observes(self, capsys, row):
+        where, kw, key_becomes, unreadable_once, status, rc, written, \
+            rolled_back, n_patches = self.FALLBACK_ROWS[row]
+        c = FakeCluster(dict(_ANCHOR_CM), **kw)
+        old = c.data["config.yaml"]
+        orig = c.__call__
+        state = {"armed": False}
+
+        def side(cmd):
+            if state["armed"] and cmd[:3] == ["kubectl", "get", "configmap"]:
+                state["armed"] = False
+                raise pc.KubectlError("transient")
+            return orig(cmd)
+
+        def fail(*_):
+            if key_becomes:
+                c.other_writer("config.yaml",
+                               old if key_becomes == "old" else self._THEIRS)
+            state["armed"] = unreadable_once
+            raise RuntimeError("bug in _conclude")
+        target = (mock.patch.object(pc._Signals, "cause", side_effect=fail)
+                  if where == "after-rollback"
+                  else mock.patch("patch_config._conclude", side_effect=fail))
+        with target, mock.patch("patch_config.run_cmd", side_effect=side), \
+                mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
+                                        "mysql_connections", "60", *FAST]):
+            try:
+                pc.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code
+        doc = json.loads(capsys.readouterr().out)
+        assert (code, doc["status"], doc["written"], doc.get("rolled_back"),
+                len(c.patches)) == (rc, status, written, rolled_back, n_patches)
+
     def test_t3_a_rollback_that_keeps_conflicting_stops_after_the_bound(self, capsys):
         """每次回滾都 409、key 仍是我們的位元組（只有別的 key 一直在變）⇒
         恰好送 ROLLBACK_CONFLICT_ATTEMPTS 次回滾就停，回報 rollback-failed。"""

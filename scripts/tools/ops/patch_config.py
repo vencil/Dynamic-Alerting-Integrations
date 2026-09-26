@@ -1131,32 +1131,49 @@ def _wait_rolled_back(write):
 
 
 def _observed_fallback(write):
-    """When _conclude itself fails: the bare observation, nothing else."""
+    """When _conclude itself fails: the answer is decided only by what the
+    key is observed to hold (read once; after a rollback it sends, once
+    more), plus what this process itself did (`write`). What a rollback
+    call returned is never used to infer the state: a call can fail and
+    land, and a 409 re-read cannot tell our rollback from another writer."""
     try:
         if not write.attempted:
             return _outcome("caller_error", "internal error before the write",
                             "unexpected_error", changed=False)
         if write.verified:
             return _outcome("applied", written=True)
-        # A rollback _conclude sent may have landed, whatever its call
-        # returned: resending it would conflict on the version it moved past
-        # and read the old bytes as another writer's. Observe first.
-        if write.rollback_sent and _read_key(write.key) == write.old:
-            return _outcome("error-rolled-back", "internal error; rolled back",
+        now = _read_key(write.key)
+        if now is _UNREADABLE:
+            pass  # -> state-unknown
+        elif now == write.old and write.rollback_sent:
+            return _outcome("error-rolled-back", "internal error; the key "
+                            "holds the old bytes after the rollback",
                             rolled_back=True)
-        failed = _send_rollback(write)
-        if isinstance(failed, Overwritten):
-            return _outcome("overwritten-by-another-writer", "internal "
-                            "error; another writer changed the key, not "
-                            "rolled back", written=False)
-        now = write.old if failed is None else _read_key(write.key)
-        if now == write.old:
-            return _outcome("error-rolled-back", "internal error; rolled back",
-                            rolled_back=True)
-        if now == write.new:
-            return _outcome("rollback-failed", "internal error; the rollback "
-                            "failed, the ConfigMap holds the new bytes",
-                            written=True)
+        elif now == write.old and not write.returned:
+            return _outcome("caller_error", "internal error; the write call "
+                            "failed and the key holds the old bytes (it did "
+                            "not land)", "unexpected_error", changed=False)
+        elif now == write.old:
+            return _outcome("overwritten-by-another-writer", "internal error; "
+                            "the key holds the old bytes, but this process "
+                            "wrote the new ones and sent no rollback: another "
+                            "writer changed it; check it by hand", written=False)
+        elif now == write.new:
+            _send_rollback(write)  # its result is not trusted; observe instead
+            again = _read_key(write.key)
+            if again == write.old:
+                return _outcome("error-rolled-back", "internal error; the key "
+                                "holds the old bytes after the rollback",
+                                rolled_back=True)
+            if again == write.new:
+                return _outcome("rollback-failed", "internal error; the key "
+                                "still holds the new bytes after the rollback",
+                                written=True)
+        else:
+            return _outcome("overwritten-by-another-writer", "internal error; "
+                            "the key holds neither the old nor the new bytes: "
+                            "another writer changed it, not rolled back",
+                            written=False)
     except BaseException:  # noqa: BLE001
         pass
     return _outcome("state-unknown", "internal error; check the ConfigMap "

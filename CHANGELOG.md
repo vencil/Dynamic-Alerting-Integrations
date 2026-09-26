@@ -121,7 +121,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
-- **`patch-config` apply：回滾已成功後的內部錯誤不再誤報 exit 7（tools；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`_conclude` 在回滾 patch 成功之後自己出錯時，備援會再送一次回滾；第二次以寫入產生的版本為前置條件必然 409，重讀到舊位元組又被當成「另一個寫者改了 key」，回報 `overwritten-by-another-writer`（exit 7），而 ConfigMap 其實已回滾。回滾 kubectl 回錯但其實已落地時亦同。現在回滾 patch 送出前即記錄「可能已送出」，備援先觀察 key：是舊位元組即回報 `error-rolled-back`（exit 6）、不重送；否則照原規則重送。另補一支測試守住回滾遇 409 時的重試上限 `ROLLBACK_CONFLICT_ATTEMPTS`（此前無測試）。
+- **`patch-config` apply：判定過程本身出錯時，回報改為只依 ConfigMap 的實況（tools；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`_conclude` 自己出錯時的備援，原本會依回滾呼叫的回傳與 409 後的重讀推論狀態，於是已成功（或回錯但已落地）的回滾被誤報成 `overwritten-by-another-writer`（exit 7），寫入沒落地的也被報成 7 而非 exit 2。現在備援只讀 key 的實況、結合本行程自己做過什麼（寫入是否正常返回、是否送過回滾）決定答案；需要回滾時送出後再讀一次，讀不到即 `state-unknown`。另補一支測試守住回滾遇 409 時的重試上限 `ROLLBACK_CONFLICT_ATTEMPTS`（此前無測試）。
 
 - **threshold-exporter chart README 的「常用覆寫」表不再列 chart 不存在的 key（helm、文件；[#2044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2044)）**：`config.directory` 與 `podDisruptionBudget.enabled` 在 `values.yaml` 裡不存在，照抄是 silent no-op——掛載路徑固定為 `/etc/threshold-exporter/conf.d`，PDB 由 `replicaCount > 1` 自動建立、沒有開關；`rules.mode` 沒有 `disabled` 分支，而且它只決定 `operator` 時要不要建 ServiceMonitor，本 chart 並不出貨 Rule Pack；`image.tag` 預設是空字串（由 appVersion 推導），不是 `v2.7.0`。新增 `tests/helm/test_readme_values_keys.py`：各 chart README 參數表列的每個 key 都必須存在於該 chart 的 `values.yaml`。
 
