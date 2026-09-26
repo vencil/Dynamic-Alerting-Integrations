@@ -184,13 +184,11 @@ lang: en
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
-| `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
 | `check_ha_threshold_aggregation.py` | HA-max invariant lint: `user_threshold` must be aggregated with `max`. |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
 | `check_helm_values_secrets.py` | Container/k8s IaC SAST, Layer 3. |
 | `check_hub_badge_drift.py` | detect hardcoded tool counts in the Hub UI (PR-portal-7). |
-| `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_iac_helm.py` | Container/k8s IaC SAST, Layer 2 (Helm templates). |
 | `check_iac_vibe_rules.py` | Container/k8s IaC SAST, Layer 1 (Dockerfile). |
 | `check_image_pin_capability.py` | a pinned da-tools image must actually CONTAIN the program the workload runs. |
@@ -220,7 +218,6 @@ lang: en
 | `check_portal_asset_shipping.py` | runtime-loaded portal assets must ship in the da-portal image. |
 | `check_portal_audience_enum.py` | portal `audience` values must come from a closed vocabulary. |
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
-| `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_portal_rulepack_claims.py` | Portal rule-pack claim guard — the portal must not advertise alerts we don't ship. |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |

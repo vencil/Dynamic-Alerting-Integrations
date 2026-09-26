@@ -196,8 +196,7 @@ def load_glossary(path: Path = GLOSSARY_PATH, internal_section_re=INTERNAL_SECTI
     content = path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
 
-    # Approved: every **Term** bold entry + parentheticals (matches the
-    # convention check_glossary_coverage.py already relies on).
+    # Approved: every **Term** bold entry + parentheticals.
     term_re = re.compile(r"^\*\*(.+?)\*\*")
     for line in lines:
         m = term_re.match(line)

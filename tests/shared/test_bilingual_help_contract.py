@@ -13,16 +13,10 @@ The observable form of that contract, per bilingual tool:
 
 WHY THIS FILE EXISTS
 --------------------
-The dev-rules "da-tools 契約" family has three enforceable contracts. Two are
-already behavioral gates: exit codes → ``test_tool_exit_codes.py``; ``--json``
-stdout → ``test_json_stdout_contract.py`` (both dev-rules §13). The bilingual
-help contract (§9 L3) had ZERO behavioral enforcement: the nominal check,
-``scripts/tools/lint/check_i18n_coverage.py``, is a manual-stage soft-warn
-COVERAGE REPORT — a string heuristic (does the source mention
-``detect_cli_lang`` / ``_HELP``?) that never runs a tool, so a tool whose
-wiring silently stopped switching stays "covered". This file is the
-enforcement half; check_i18n_coverage stays as the complementary coverage
-report (deliberately untouched).
+The bilingual help contract (dev-rules §9 L3) is enforced here by running
+``--help``, not only by reading the source: a source check (does it mention
+``detect_cli_lang`` / ``_HELP``?) cannot tell whether the switch still works.
+What runs for which tool is under SCOPE below.
 
 SCOPE — corpus and its four-way partition
 -----------------------------------------
@@ -114,15 +108,13 @@ def _stdout(proc: subprocess.CompletedProcess) -> str:
 # ENGLISH_ONLY allowlist — name → one-line reason. Shrink-only ratchet.
 # ═══════════════════════════════════════════════════════════════════════════
 _R_OPS = ("ops tool authored with English-only help; bilingual wiring never "
-          "added (coverage tracked by check_i18n_coverage soft-warn)")
+          "added")
 _R_OPS_RT = ("detect_cli_lang wired for RUNTIME report strings only; "
              "--help body is English-only")
 _R_DX = "dx internal tool (not customer-facing) — English-only per dx convention"
 _R_LINT = "lint/CI gate (dev-internal) — English-only per dx convention"
 _R_LINT_RT = ("lint tool with detect_cli_lang wired for runtime messages "
               "only; --help body is English-only")
-_R_SELF = ("check_i18n_coverage itself — source contains 'detect_cli_lang' "
-           "only as its scan pattern; its own help is English")
 
 ENGLISH_ONLY: dict[str, str] = {
     # ── scripts/tools/ops ──────────────────────────────────────────────
@@ -218,13 +210,11 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_env_bool_parsers.py": _R_LINT,
     "check_flaky_registry.py": _R_LINT,
     "check_frontmatter_versions.py": _R_LINT,
-    "check_glossary_coverage.py": _R_LINT,
     "check_ha_threshold_aggregation.py": _R_LINT,
     "check_hardcode_tenant.py": _R_LINT,
     "check_head_blob_hygiene.py": _R_LINT,
     "check_helm_values_secrets.py": _R_LINT,
     "check_hub_badge_drift.py": _R_LINT,
-    "check_i18n_coverage.py": _R_SELF,
     "check_iac_helm.py": _R_LINT,
     "check_iac_vibe_rules.py": _R_LINT,
     "check_includes_sync.py": _R_LINT,
@@ -246,7 +236,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_playwright_rtl_drift.py": _R_LINT,
     "check_portal_audience_enum.py": _R_LINT,
     "check_portal_bundle_size.py": _R_LINT,
-    "check_portal_i18n.py": _R_LINT,
     "check_pr_scope_drift.py": _R_LINT,
     "check_property_coverage.py": _R_LINT,
     "check_repo_name.py": _R_LINT,

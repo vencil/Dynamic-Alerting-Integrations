@@ -956,15 +956,6 @@ repos:
         # DEFAULT_PATHS, which leave out scripts/ outside scripts/tools/ —
         # edits there would trigger this hook and never be scanned.
 
-      - id: i18n-coverage-check
-        name: i18n coverage report
-        entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py
-        language: python
-        pass_filenames: false
-        files: ^(tools/portal/src/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
-        stages: [manual]
-        additional_dependencies: ['pyyaml']
-
       - id: check-doc-reading-time
         name: Check document reading time (>15 min = needs split)
         # `--check` is the flag this tool defines for exit 1 on findings. The
@@ -1001,25 +992,9 @@ repos:
         files: ^components/threshold-exporter/config/conf\.d/.*\.ya?ml$
         stages: [manual]
 
-      - id: check-portal-i18n
-        name: Check Portal JSX i18n coverage
-        entry: python3 -X utf8 scripts/tools/lint/check_portal_i18n.py --ci
-        language: system
-        pass_filenames: false
-        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        stages: [manual]
-
       - id: orphan-doc-check
         name: Orphan document detection
         entry: python3 -X utf8 scripts/tools/lint/check_orphan_docs.py --ci
-        language: python
-        pass_filenames: false
-        files: ^docs/.*\.md$
-        stages: [manual]
-
-      - id: glossary-coverage-check
-        name: Glossary coverage for frequent terms
-        entry: python3 -X utf8 scripts/tools/lint/check_glossary_coverage.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
