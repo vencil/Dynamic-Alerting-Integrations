@@ -251,7 +251,12 @@ kubectl get prometheusrule -n monitoring --show-labels
 
 # 3. 若 label 不匹配，使用 operator-generate 重新產出（自動帶雙 label）
 da-tools operator-generate --components rules --namespace monitoring
+
+# 4. Helm release 不叫 kube-prometheus-stack：用 --selector-label 對上實際的 selector
+da-tools operator-generate --selector-label release=my-prom
 ```
+
+`--selector-label` 可重複，同時加在 PrometheusRule 與 ServiceMonitor 上，同 key 覆寫預設（#2075）。chart 自己的 ServiceMonitor（`rules.mode: operator`）則用 values `rules.operator.serviceMonitor.labels` 加 label，預設同樣是 `release: kube-prometheus-stack`（設 `release: null` 可拿掉）。
 
 > **常見陷阱**：手動撰寫的 PrometheusRule 只帶 `release: kube-prometheus-stack`，但部分環境的 ruleSelector 要求 `prometheus: kube-prometheus`。使用 `operator-generate` 產出可避免此問題。
 

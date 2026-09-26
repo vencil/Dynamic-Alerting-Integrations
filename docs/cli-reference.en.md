@@ -1494,40 +1494,57 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 
 Generate Kubernetes Operator CRDs (PrometheusRule, AlertmanagerConfig, ServiceMonitor) from Rule Packs and Tenant configuration.
 
-**Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; multi-cluster config management for Federation scenarios.
+**Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
 
 **Syntax**
 
 ```bash
-da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
+da-tools operator-generate [options]
 ```
-
-**Required Parameters**
-
-| Parameter | Description |
-|-----------|-------------|
-| `--rule-packs-dir <DIR>` | Rule Pack directory path |
-| `--config-dir <DIR>` | Tenant configuration directory path |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--namespace <NS>` | Target K8s namespace | `monitoring` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
+| `--config-dir <DIR>` | Tenant configuration directory path | `conf.d/` |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
-| `--split` | Generate individual CRD files (split by Rule Pack) | false |
-| `--include-servicemonitor` | Also generate ServiceMonitor CRD | false |
-| `--dry-run` | Preview only | false |
-| `--apply` | Apply directly to Kubernetes | false |
+| `--namespace <NS>` | Target K8s namespace | `monitoring` |
+| `--api-version <VER>` | AlertmanagerConfig API version (`v1alpha1` / `v1beta1`) | `v1beta1` |
+| `--components <COMP>` | Components to generate (`all` / `rules` / `alertmanager` / `servicemonitor`) | `all` |
+| `--receiver-template <TYPE>` | Receiver template type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |
+| `--secret-name <NAME>` | K8s Secret name (receiver credential reference); use with `--receiver-template` | `da-{tenant}-{type}` |
+| `--secret-key <KEY>` | Key name inside the K8s Secret | inferred from the receiver type |
+| `--selector-label <KEY=VALUE>` | Label added to the PrometheusRule and ServiceMonitor (repeatable; overrides a default of the same key) so Prometheus's `ruleSelector` / `serviceMonitorSelector` matches. Use `release=<name>` when your Helm release is not named `kube-prometheus-stack` | PrometheusRule: `prometheus=kube-prometheus`, `release=kube-prometheus-stack`; ServiceMonitor: `release=kube-prometheus-stack` |
+| `--gitops` | GitOps mode (sorted keys, no timestamps) | false |
+| `--dry-run` | Print output instead of writing files | false |
+| `--json` | Output the result report as JSON | false |
+| `--kustomize` | Also generate `kustomization.yaml`. ⚠️ Without `--output-dir` it is **mixed into the stdout stream**, and a `Kustomization` is not accepted by `kubectl apply -f -` | false |
 
 **Examples**
 
 ```bash
-# Output CRD YAML to file
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ -o crds.yaml
+# Basic: CRDs go to stdout (no files written) and can be applied directly
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ | kubectl apply -f -
 
-# Split output and apply directly
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --split --apply --namespace monitoring
+# To write files, name the directory explicitly (#1582: writing is opt-in)
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --output-dir ./operator-crds
+
+# GitOps mode + Slack receiver
+da-tools operator-generate \
+  --config-dir conf.d/ \
+  --output-dir ./operator-crds \
+  --receiver-template slack \
+  --gitops
+
+# PagerDuty + custom Secret
+da-tools operator-generate \
+  --receiver-template pagerduty \
+  --secret-name org-pd-secret \
+  --secret-key routing-key
+
+# AlertmanagerConfig only
+da-tools operator-generate --components alertmanager --receiver-template email
 
 # Dry-run JSON report — stdout is a single JSON document:
 #   {"crds": [...], "kustomization": {...}|null, "summary": {...}}

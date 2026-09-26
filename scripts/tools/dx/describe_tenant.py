@@ -33,9 +33,9 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
+    list_config_tree,
     readable_carriers,
     select_defaults_carrier,
-    unusable_config_entries,
     warn_multi_carrier,
     unusable_reason,
 )
@@ -126,27 +126,22 @@ def _canonical_hash(data: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def _iter_confd_yaml(root, suffixes, entries=None):
-    """conf.d files carrying one of `suffixes`, CASE-INSENSITIVELY.
+def _iter_confd_yaml(entries, suffixes):
+    """The entries of an ALREADY-LISTED conf.d carrying one of `suffixes`,
+    CASE-INSENSITIVELY (#1588), sorted.
 
-    ⚠️ Recursion is unchanged — `rglob("*")` walks exactly what
-    `rglob("*.yaml")` walked, hidden directories included. Only the
-    name test moved to the shared predicate (#1588); widening this
-    reader's suffix set would be a separate behaviour change and is
-    deliberately not bundled here.
+    ⛔ `entries` is required and comes from `_scan`'s one
+    `list_config_tree` walk (#2054). The `rglob("*")` fallback that
+    used to live here walked hidden files and hidden directories, which
+    the exporter's `ScanDirTree` never reads — so this tool described
+    tenants the exporter does not have. With the fallback gone there is
+    no second way to list a conf.d in this module.
 
-    ⛔ `entries` lets `_scan` walk ONCE and still get this selection from the
-    one place that defines it. `_scan` calls this twice (`.yaml`, then
-    `.yml`) beside its own defaults pass, so it was walking the tree three
-    times and the three passes could describe three different trees if
-    anything changed under `conf.d` mid-run. Same reason `defaults_files_in`
-    and `unusable_config_entries` take already-listed input.
+    `_scan` calls this twice (`.yaml`, then `.yml`) beside its own defaults
+    pass; all three share one listing so they describe ONE tree even if
+    anything changes under `conf.d` mid-run.
     """
-    listing = root.rglob("*") if entries is None else entries
-    return sorted(
-        p for p in listing
-        if p.is_file() and has_yaml_extension(p.name, suffixes)
-    )
+    return sorted(p for p in entries if has_yaml_extension(p.name, suffixes))
 
 
 def _tenant_body(tconfig: Any) -> Any:
@@ -215,32 +210,39 @@ class ConfDScanner:
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
-        # #1607: the `is_file()` tests in this scanner (here and in
-        # `_yaml_files`) are a THIRD axis and were silent. This tool's whole
-        # job is to answer "what config does the exporter see for this
-        # tenant", so an entry it drops without a word is the same class of
-        # wrong answer as the `.YAML` blindness above. ⛔ Named ONCE here:
-        # `_scan` runs a single time, from `__init__`, whereas `_yaml_files`
-        # is called per lookup.
+        # #2054: the listing is `list_config_tree` — the shared mirror of
+        # the exporter's walker (`pkg/config.ScanDirTree`): recursive, prunes
+        # `.`-prefixed directories, drops `.`-prefixed files, never descends
+        # a directory symlink, lists regular files only. The `rglob("*")`
+        # this replaced read `.hidden.yaml`, `.snap/…` and a ConfigMap
+        # mount's `..2026_…/` payload, so it described tenants the exporter
+        # does not have (and read a ConfigMap tenant twice, via the root
+        # link and via the payload).
         #
-        # ⛔ ONE listing for both passes, not two `rglob("*")` calls. Blind
-        # review caught the first version walking the tree twice here: that
-        # is not only an extra scan, it lets the report and the defaults
-        # collection below describe two DIFFERENT trees if anything changes
-        # under `conf.d` mid-run — the exact reason `collect_instances` lists
-        # once and says so.
-        entries = sorted(self.conf_d.rglob("*"))
-        # ⛔ `_`-prefixed entries other than the defaults carriers are NOT read
-        # by this scanner at all, so naming an unusable one would report a
-        # loss that did not happen — the same false finding the `suffixes`
-        # parameter exists to prevent, one axis over. Defaults carriers stay
-        # in: this scanner really does read them.
-        for bad in unusable_config_entries(
-            [p for p in entries
-             if is_defaults_name(p.name) or not is_reserved_name(p.name)]
-        ):
-            print(f"WARNING: skipped {bad} — {unusable_reason(bad)}",
-                  file=sys.stderr)
+        # ⛔ ONE walk for everything below — the warnings and all three
+        # passes (defaults, `.yaml`, `.yml`): separate walks could describe
+        # DIFFERENT trees if anything changes under `conf.d` mid-run, the
+        # exact reason `collect_instances` lists once and says so
+        # (`test_reader_walks_the_tree_once`).
+        listing = list_config_tree(self.conf_d)
+        entries = listing.files
+        # #1607: what the listing DROPS must not be silent — this tool's job
+        # is "what config does the exporter see", so an entry skipped
+        # without a word is a wrong answer. `listing.unusable` is the
+        # disjoint complement of `listing.files` (same hidden pruning).
+        # ⛔ `_`-prefixed entries other than the defaults carriers are NOT
+        # read by this scanner at all, so naming an unusable one would
+        # report a loss that did not happen. Defaults carriers stay in: this
+        # scanner really does read them.
+        # ⛔ That name filter is for ENTRIES, never for a directory the walk
+        # could not read: the exporter descends `_`-prefixed directories
+        # (`_arch/arch.yaml` is a tenant to it), so a chmod-000 `_locked/`
+        # hides real tenants and must be named like `locked/` is (#2054).
+        for bad in listing.unusable:
+            if (bad in listing.unscannable or is_defaults_name(bad.name)
+                    or not is_reserved_name(bad.name)):
+                print(f"WARNING: skipped {bad} — {unusable_reason(bad)}",
+                      file=sys.stderr)
         # Collect all _defaults.yaml files
         defaults_files: dict[str, dict] = {}
         # #1588: matched by the shared predicate, not by two literal names.
@@ -261,7 +263,7 @@ class ConfDScanner:
         #     it). Pinned by tests/shared/defaults_symlink_parity_matrix.json.
         listed: dict[Path, list[tuple[Path, Path]]] = {}
         for dp in entries:
-            if dp.is_file() and is_defaults_name(dp.name):
+            if is_defaults_name(dp.name):
                 listed.setdefault(dp.parent.resolve(), []).append((dp, dp.resolve()))
         # #1674 (B8): ONE carrier per directory, chosen by the rule every
         # plane shares (`select_defaults_carrier`). Before, a directory with
@@ -289,7 +291,7 @@ class ConfDScanner:
         self.defaults_data = defaults_files
 
         # Collect all tenant files
-        for fp in _iter_confd_yaml(self.conf_d, (".yaml",), entries):
+        for fp in _iter_confd_yaml(entries, (".yaml",)):
             if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)
@@ -302,7 +304,7 @@ class ConfDScanner:
                 self.tenants[tid] = _tenant_body(tconfig)
                 self._record_tenant(tid, fp)
 
-        for fp in _iter_confd_yaml(self.conf_d, (".yml",), entries):
+        for fp in _iter_confd_yaml(entries, (".yml",)):
             if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)

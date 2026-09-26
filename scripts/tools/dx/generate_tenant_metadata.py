@@ -30,6 +30,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
+    is_hidden_name,
     is_reserved_name,
     unusable_config_entries,
     unusable_reason,
@@ -292,6 +293,8 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     # The exporter (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry name and
     # accepts both spellings, so it was serving a tenant the portal could not
     # name. Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's set.
+    # ⚠️ No `is_hidden_name` filter needed here (#2055): the helper itself
+    # already skips `.`-prefixed entries, mirroring the exporter's walker.
     for bad in unusable_config_entries(
         [p for p in entries if not is_reserved_name(p.name)],
     ):
@@ -301,7 +304,12 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
         p for p in entries
         if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
     ):
-        if yaml_file.name.startswith("_"):
+        # ⛔ #2055: skip what the exporter skips — `_` control files AND
+        # `.`-prefixed names. Reading a hidden file here minted portal
+        # tenants the exporter never serves, and `tenant_configs.update`
+        # let a hidden file replace a real tenant's WHOLE body whenever the
+        # real carrier sorts before `.` (0x2e), e.g. `-acme.yaml`.
+        if is_reserved_name(yaml_file.name) or is_hidden_name(yaml_file.name):
             continue
         try:
             data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
