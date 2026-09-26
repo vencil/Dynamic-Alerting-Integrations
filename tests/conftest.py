@@ -314,7 +314,9 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     """Keep only this shard's tests when ``--shard=K/N`` is given."""
     spec = config.getoption("--shard")
-    if not spec:
+    # `is None`, not falsiness: an explicit `--shard=` is a malformed spec and
+    # must be a usage error, not a silent full run.
+    if spec is None:
         return
     from _shard import parse_shard_spec, shard_of
 

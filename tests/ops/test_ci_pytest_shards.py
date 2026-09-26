@@ -106,11 +106,13 @@ def test_the_conftest_hook_partitions_a_real_collection():
     assert parts[0] | parts[1] == full
 
 
-def test_a_malformed_shard_option_is_a_usage_error():
+@pytest.mark.parametrize("option", ["--shard=4/3", "--shard="])
+def test_a_malformed_shard_option_is_a_usage_error(option):
+    """`--shard=` included: treated as "not given", it ran the whole tree."""
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q",
          "-p", "no:cacheprovider", "-p", "no:xdist",
-         str(Path(__file__).relative_to(REPO_ROOT)), "--shard=4/3"],
+         str(Path(__file__).relative_to(REPO_ROOT)), option],
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
     )
     # pytest's UsageError exit code; a silent "collected 0" would be rc 5.
