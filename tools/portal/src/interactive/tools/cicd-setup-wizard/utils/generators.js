@@ -256,294 +256,50 @@ function _cicdTriggerTrees(config) {
   return trees.sort();
 }
 
-// ⛔ `apply` must NOT declare `needs: generate` (#1356). `generate` is
-// pull_request-only and `apply` is workflow_dispatch-only; GitHub skips every
-// job that needs a SKIPPED job, so the two together left `apply` with zero
-// reachable events. The CLI generator (scripts/tools/ops/init_project.py,
-// _build_github_apply_stage) carries the identical constraint — this preview
-// is a second hand-written copy of that workflow (divergence tracked as
-// #1351), so a fix to one that is not applied to the other deepens the split.
-// Both are held by the reachability assertion in
-// tests/ops/test_generated_ci_artifacts.py.
+// ⛔ WHAT THIS FUNCTION RETURNS: the file `da-tools init --ci github` writes,
+// byte for byte, for the same settings — plus at most ONE comment line of the
+// wizard's own (the floating-tag note below). The wizard labels the block with
+// the exact filename `.github/workflows/dynamic-alerting.yaml`, so anything
+// less is a claim about a file the customer will not get. #1351 recorded what
+// the older, hand-shortened version of this preview was worth: first nine
+// divergent step lists, then — once those converged — a workflow-level `env:`
+// block, a different `name:`, and four step bodies, one of which dropped the
+// "conf.d does not exist in this commit" refusal the CLI puts in front of the
+// blast-radius diff. owner ruling (a) on #1351 (2026-09-25): the preview is
+// the complete, paste-ready file.
 //
-// ⛔ WHAT THIS FUNCTION IS. Not "a sample pipeline" — the wizard labels the
-// block with the exact filename `.github/workflows/dynamic-alerting.yaml` and
-// says nowhere that it is illustrative, so every line here is a claim about the
-// file `da-tools init` writes. #1351 measured what that claim was worth: the
-// preview watched one tree where the artifact watches three, and its nine
-// job × deploy step lists ALL differed from the artifact's — the preview
-// under-reported the CI the customer actually gets (no blast-radius PR comment,
-// no custom-rule lint, no kustomize dry-run, no Prometheus reload) and showed
-// `argocd app sync --force` where the artifact runs `--prune --timeout 300`,
-// two flags whose semantics do not overlap. (That deploy method is retired —
-// #1351 — so this particular row can no longer recur; the shape it illustrates
-// can, on any pair of branches.)
+// ⛔ The text below is transcribed from scripts/tools/ops/init_project.py's
+// output (`_gen_github_actions`), and it is still a SECOND copy — the two
+// generators stay two (#1351 待辦 1). What holds them together is
+// tests/ops/test_generated_ci_artifacts.py, which runs the real `run_init()`
+// and requires this function's output, with the one note line removed, to
+// EQUAL that file: every byte, comments included. So a change to the CLI
+// template turns that test red until this copy is updated to match; regenerate
+// rather than hand-edit (render both deploy methods with run_init and replace
+// the static text, keeping the five placeholders below).
 //
-// So: the trigger paths, the job set, the per-job step-name sequence and the
-// deploy commands' flags are now the artifact's, and
-// tests/ops/test_generated_ci_artifacts.py compares them against a real
-// `run_init()` run rather than against a transcription kept here.
+// ⛔ `apply` must NOT declare `needs: generate` (#1356): `generate` is
+// pull_request-only and `apply` is workflow_dispatch-only, and GitHub skips
+// every job that needs a SKIPPED job. That constraint now lives in the
+// transcribed text itself.
 //
-// ⚠️ ONE declared difference remains, and it is a product decision rather than
-// drift (#1351's `env:` row): the artifact declares DA_TOOLS_IMAGE / CONFIG_DIR
-// / MONITORING_NS in a workflow-level `env:` block and refers to them as
-// GitHub expressions, while this preview inlines the values — the image from
-// the wizard's own field, the config directory and namespace at the CLI's
-// defaults, which is also what the wizard's `da-tools init` command line asks
-// for. The workflow `name:` is the other face of that same row. Both are held
-// by the skeleton gate, which pins the difference to exactly `{env}` rather
-// than letting a new one ride in beside it.
-function cicdGenerateGitHubActionsPreview(config) {
-  // ⛔ Refuse an unknown deploy method instead of rendering around it. The apply
-  // block is a ternary chain, and when its last arm stopped being argocd
-  // (retired, #1351) the natural spelling left `''` there — which emits a job
-  // with an EMPTY `steps:`, i.e. valid JavaScript and an invalid workflow. The
-  // CLI leg's two builders raise for the same input; this is that refusal on
-  // this side of the pair.
-  if (config.deploy !== 'kustomize' && config.deploy !== 'helm') {
-    throw new Error(`cicdGenerateGitHubActionsPreview: unknown deploy method ${JSON.stringify(config.deploy)} — expected 'kustomize' or 'helm'. A new deploy method needs an apply block here AND in scripts/tools/ops/init_project.py.`);
-  }
-  const image = cicdDaToolsImage(config);
-  // ⚠️ Emitted only when the reference can actually be repointed, because this
-  // YAML is a file the customer pastes into their own repo: telling a reader
-  // who pinned a digest that their image "can change" ships a false statement
-  // into their tree. One sentence covers both remaining cases truthfully — our
-  // :latest, which we move on purpose, and a foreign tag, whose registry we
-  // cannot speak for — so there is only ever one claim to keep true. Not
-  // reusable from the prose leg: the warning in
-  // docs/scenarios/gitops-ci-integration.md is about the same tag but answers
-  // a different question (how to tell whether the artifact you already have
-  // carries a fix the doc describes, "不要看版號、直接看產物").
-  const pinNote = cicdImageIsMutable(image)
-    ? `# ${image} can be repointed at different code without this file changing - :latest moves by design, any other tag at its registry's discretion. Pin a digest if this pipeline has to be reproducible.\n`
-    : '';
-  const paths = `[${_cicdTriggerTrees(config).map((t) => `'${t}/**'`).join(', ')}]`;
-  return `name: Dynamic Alerting CI/CD
-on:
-  pull_request:
-    paths: ${paths}
-  # No branches: filter. on.push.branches takes literals only, so any value
-  # here guesses the customer's default branch and is wrong for master/trunk
-  # repos. Omitting it is correct everywhere and only adds runs - a push to
-  # the default branch is still a push. Same reasoning as the CLI generator.
-  push:
-    paths: ${paths}
-  workflow_dispatch:
-
-# Least-privilege at the workflow level; the one job that writes back to the
-# pull request raises its own scope below. A job-level block REPLACES this one
-# rather than merging, which is why that job restates contents: read.
-# (No backticks in this block — it lives inside a JS template literal.)
-permissions:
-  contents: read
-
-${pinNote}jobs:
-  validate:
-    runs-on: ubuntu-latest
-    # A job with no timeout gets GitHub's default of 6 hours, and nothing here
-    # takes minutes. Validation is read-only, so a superseded run has nothing
-    # left to contribute.
-    timeout-minutes: 10
-    concurrency:
-      group: dynamic-alerting-validate-\${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v6
-      - name: Validate config (schema + routing + policy)
+// The five placeholders, and nothing else, vary:
+//   * `triggerPaths`  — the trees that start the pipeline (`_cicdTriggerTrees`)
+//   * `image`         — the DA_TOOLS_IMAGE value; every `docker run` refers to
+//                       it as `${{ env.DA_TOOLS_IMAGE }}`, so it appears ONCE
+//   * `pinNote`       — the wizard's floating-tag note (see below)
+//   * the Stage 3 header comment and the apply steps, per deploy method
+// CONFIG_DIR and MONITORING_NS are the CLI's defaults (`conf.d`, `monitoring`),
+// which is also what the wizard's own `da-tools init` command line asks for.
+const _CICD_APPLY_BLOCKS = {
+  kustomize: {
+    header: `  # ── Stage 3: Apply (manual trigger only) ──────────────
+`,
+    steps: `      - name: Build ConfigMaps via Kustomize
         run: |
-          # docker -v CREATES a missing host path instead of failing, so a
-          # wrong config directory mounts an EMPTY one, validate-config parses
-          # zero files and exits 0. Refuse instead of passing silently.
-          if [ ! -d "conf.d" ]; then
-            echo "::error::conf.d does not exist in this commit. Refusing to validate, because mounting a path that is not there yields a PASS that checked nothing."
-            exit 1
-          fi
-          docker run --rm \\
-            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
-            ${image} \\
-            validate-config --config-dir /data/conf.d
-      - name: Lint custom rules (if any)
-        run: |
-          if [ -d "rule-packs/custom" ]; then
-            docker run --rm \\
-              -v "\${{ github.workspace }}/rule-packs/custom:/data/rules:ro" \\
-              ${image} \\
-              lint /data/rules --ci
-          fi
-
-  generate:
-    # No needs: on purpose. It used to be needs: validate, and the if: below
-    # carries no status function, so an implicit success() applied - one lint
-    # ERROR in the custom rule-packs tree, which has nothing to do with the
-    # tenant-config blast radius, took this comment away from every config pull
-    # request in the repository. apply still needs validate; that is the edge
-    # that protects the cluster.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    # Above the sum of the step caps below (6+1+5+5+5+2+2 = 26), or it fires
-    # first and CANCELS the run, which skips the !cancelled() steps. Every step
-    # below is capped for the same reason: an uncapped one can only end by
-    # taking the job cap with it.
-    timeout-minutes: 30
-    concurrency:
-      # The sticky comment is edited in place under a fixed header, so two runs
-      # race to overwrite the same body and the LAST to finish wins - not the
-      # newer commit.
-      group: dynamic-alerting-blast-radius-\${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-    # Load-bearing, not boilerplate: the blast-radius comment is this job's
-    # only output, and GITHUB_TOKEN defaults to read-only on repositories
-    # created after 2023-02. The scope sits on this job alone so that apply,
-    # which carries the production environment, never inherits it.
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v6
-        # The only step whose honest cap is not small: a full-history clone.
-        timeout-minutes: 6
-        with:
-          # The blast radius is computed against the pull request's base
-          # commit, which a shallow clone does not contain.
-          fetch-depth: 0
-      - name: Prepare output directory
-        timeout-minutes: 1
-        run: mkdir -p .output
-      - name: Generate Alertmanager routes
-        id: routes
-        # Every step in this job is capped and the caps sum to 26, under this
-        # job's 30, so a hung step FAILS instead of the job being cancelled - a
-        # cancelled run skips the !cancelled() fallback below and leaves the
-        # previous report standing.
-        timeout-minutes: 5
-        run: |
-          # Validate only (#1423 / #1650): --validate returns before -o is
-          # used, and the tool now refuses the two together.
-          docker run --rm \\
-            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
-            ${image} \\
-            generate-routes --config-dir /data/conf.d --validate
-      - name: Resolve base config snapshot
-        id: snapshot
-        timeout-minutes: 5
-        if: github.event_name == 'pull_request'
-        env:
-          # Through env, not interpolated into the script, so the expression
-          # cannot become shell syntax.
-          BASE_SHA: \${{ github.event.pull_request.base.sha }}
-        run: |
-          : "\${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"
-          mkdir -p .output/base/conf.d
-          if ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
-            echo "::error::base commit $BASE_SHA is not in this clone, so there is nothing to compare against. Either the checkout was narrowed (this workflow sets fetch-depth: 0) or the base ref was rewritten."
-            exit 1
-          fi
-          # ls-tree reads the ENTRY; git cat-file -t would resolve what it
-          # points at, and for a submodule that object is absent here - which
-          # would be misreported as "no config directory yet".
-          git ls-tree "$BASE_SHA" -- conf.d > "$RUNNER_TEMP"/entry.txt
-          kind=$(cut -d' ' -f2 "$RUNNER_TEMP"/entry.txt)
-          if [ -z "$kind" ]; then kind=missing; fi
-          if [ "$kind" = tree ]; then
-            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git read-tree "$BASE_SHA:conf.d"
-            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git checkout-index -a -f --prefix=.output/base/conf.d/
-          elif [ "$kind" = missing ]; then
-            echo "::notice::conf.d does not exist at $BASE_SHA; treating this as the first import, so every tenant is reported as added"
-          else
-            echo "::error::conf.d at $BASE_SHA is a $kind, not a directory, so no baseline can be built from it. Reporting that as a first import would hide the fault."
-            exit 1
-          fi
-      - name: Config diff (blast radius)
-        id: diff
-        timeout-minutes: 5
-        run: |
-          # config-diff signals findings through its exit code, so both 0 (no
-          # change) and 1 (changes) are ordinary outcomes here; 2 and above
-          # mean the run did not complete.
-          # ⚠️ It compares TENANT files only and skips every name starting
-          # with _, so a change to conf.d/_defaults.yaml - inherited by every
-          # tenant - reports "no changes". Review those by hand.
-          set +e
-          docker run --rm \\
-            -v "\${{ github.workspace }}/.output/base/conf.d:/data/conf.d.base:ro" \\
-            -v "\${{ github.workspace }}/conf.d:/data/conf.d:ro" \\
-            ${image} \\
-            config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
-              --format markdown > .output/blast-radius.md
-          rc=$?
-          set -e
-          if [ "$rc" -gt 1 ]; then
-            echo "::error::config-diff exited $rc (expected 0 or 1) — image pull, mount, or malformed config"
-            exit "$rc"
-          fi
-          if [ ! -s .output/blast-radius.md ]; then
-            echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"
-            exit 1
-          fi
-      - name: Explain a blast radius that could not be computed
-        # The comment below is edited in place, so skipping it on a failure
-        # leaves the PREVIOUS run's report standing as though it were current -
-        # and stale is worse than absent, because stale looks like the answer.
-        # !cancelled() rather than always(): a run the concurrency group
-        # superseded must not overwrite the winner's comment.
-        if: \${{ !cancelled() }}
-        timeout-minutes: 2
-        env:
-          ROUTES_OUTCOME: \${{ steps.routes.outcome }}
-          SNAPSHOT_OUTCOME: \${{ steps.snapshot.outcome }}
-          DIFF_OUTCOME: \${{ steps.diff.outcome }}
-        run: |
-          if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then
-            exit 0
-          fi
-          mkdir -p .output
-          {
-            echo "## Blast radius: NOT COMPUTED"
-            echo
-            echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run's report. **Nothing here says the change is safe - it says nobody measured it.**"
-            echo
-            echo "| step | outcome |"
-            echo "| --- | --- |"
-            echo "| Generate Alertmanager routes | \\\`\${ROUTES_OUTCOME:-did not run}\\\` |"
-            echo "| Resolve base config snapshot | \\\`\${SNAPSHOT_OUTCOME:-did not run}\\\` |"
-            echo "| Config diff (blast radius) | \\\`\${DIFF_OUTCOME:-did not run}\\\` |"
-            echo
-            echo "Open the failing step in this run's log: each failure path prints an ::error:: line naming the cause."
-          } > .output/blast-radius.md
-      - name: Post PR comment with blast radius
-        # Same condition as the step above, on purpose.
-        if: \${{ !cancelled() }}
-        # Capped too: this one talks to the GitHub API, and a hang here would
-        # eat the job cap after the report was written but before it was posted.
-        timeout-minutes: 2
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          path: .output/blast-radius.md
-          header: dynamic-alerting-blast-radius
-
-  apply:
-    needs: [validate]
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    environment: production
-    # Wider than the other two: this one talks to a cluster.
-    timeout-minutes: 30
-    concurrency:
-      # cancel-in-progress: FALSE - cancelling this interrupts kubectl apply or
-      # helm upgrade partway and leaves the cluster in a state no commit
-      # describes. The group still serialises two manual dispatches.
-      # Keyed on the target namespace, NOT on the ref: this job is
-      # workflow_dispatch-only, a dispatch can start from any branch, and every
-      # one of them deploys to the same namespace - a ref-keyed group would put
-      # two dispatches in different groups and let them apply at the same time.
-      group: dynamic-alerting-apply-monitoring
-      cancel-in-progress: false
-    steps:${config.deploy === 'kustomize' ? `
-      - uses: actions/checkout@v6
-      - name: Build ConfigMaps via Kustomize
-        run: |
-          # --load-restrictor: conf.d files are symlinked into kustomize/base/,
-          # and the default restrictor refuses a symlink pointing outside it.
+          # --load-restrictor: conf.d files are symlinked into
+          # kustomize/base/, and the default restrictor refuses a
+          # symlink whose target sits outside that directory.
           kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml
       - name: Apply to cluster (dry-run first)
         run: |
@@ -552,15 +308,517 @@ ${pinNote}jobs:
           kubectl apply -f /tmp/manifests.yaml
       - name: Reload Prometheus
         run: |
-          kubectl rollout restart deployment/prometheus -n monitoring` : config.deploy === 'helm' ? `
-      - uses: actions/checkout@v6
-      - name: Helm upgrade threshold-exporter
+          kubectl rollout restart deployment/prometheus -n \${{ env.MONITORING_NS }}
+`,
+  },
+  helm: {
+    header: `  # ── Stage 3: Apply via Helm (manual trigger only) ─────
+`,
+    steps: `      - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter \\
             -f "environments/prod/values.yaml" \\
-            -n monitoring \\
-            --wait --timeout 5m` : ''}`;
+            -n \${{ env.MONITORING_NS }} \\
+            --wait --timeout 5m
+`,
+  },
+};
+
+function cicdGenerateGitHubActionsPreview(config) {
+  // ⛔ Refuse an unknown deploy method instead of rendering around it. The CLI
+  // leg's builders raise for the same input; this is that refusal on this side
+  // of the pair.
+  if (config.deploy !== 'kustomize' && config.deploy !== 'helm') {
+    throw new Error(`cicdGenerateGitHubActionsPreview: unknown deploy method ${JSON.stringify(config.deploy)} — expected 'kustomize' or 'helm'. A new deploy method needs an apply block here AND in scripts/tools/ops/init_project.py.`);
+  }
+  const APPLY = _CICD_APPLY_BLOCKS;
+  const image = cicdDaToolsImage(config);
+  // ⚠️ Emitted only when the reference can actually be repointed, because this
+  // YAML is a file the customer pastes into their own repo: telling a reader
+  // who pinned a digest that their image "can change" ships a false statement
+  // into their tree. One sentence covers both remaining cases truthfully — our
+  // :latest, which we move on purpose, and a foreign tag, whose registry we
+  // cannot speak for — so there is only ever one claim to keep true. It is the
+  // ONE line this preview adds to what `da-tools init` writes, and the drift
+  // gate removes exactly this line before comparing.
+  const pinNote = cicdImageIsMutable(image)
+    ? `# ${image} can be repointed at different code without this file changing - :latest moves by design, any other tag at its registry's discretion. Pin a digest if this pipeline has to be reproducible.\n`
+    : '';
+  const triggerPaths = _cicdTriggerTrees(config).map((t) => `      - '${t}/**'`).join('\n');
+  return `# Dynamic Alerting CI/CD Pipeline
+# Generated by: da-tools init
+# Docs: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/
+#
+# Three stages:
+#   1. Validate: Schema + routing guardrails + domain policy
+#   2. Generate: Alertmanager routes + blast radius diff (PR comment)
+#   3. Apply:    Deploy to cluster (manual trigger only)
+
+name: Dynamic Alerting
+
+on:
+  pull_request:
+    paths:
+${triggerPaths}
+  # ⛔ No \`branches:\` filter, deliberately. \`on.push.branches\` takes literals
+  # only — no expressions — so any value we write here is a guess about the
+  # customer's default branch, and \`main\` is wrong for every \`master\` /
+  # \`trunk\` / \`develop\` repo. Enumerating the common names is the same
+  # denylist mistake one size larger. Omitting the filter is the only form
+  # that is correct for everyone, and it can only ADD runs: a push to the
+  # default branch is still a push, so the post-merge re-validation this leg
+  # exists for is unchanged. The extra runs are \`validate\` alone (\`generate\`
+  # is pull_request-only, \`apply\` is workflow_dispatch-only) — a read-only
+  # \`docker run validate-config\` with no credentials, already narrowed by
+  # the paths filter below. The GitLab leg gets portability from
+  # \`$CI_DEFAULT_BRANCH\`; this is the GitHub equivalent.
+  # ⛔ The SAME trees as the pull_request leg — one rendered list
+  # substituted twice, so the two cannot drift apart by editing one. It used
+  # to list \`conf.d/**\` alone, so a direct push touching only
+  # \`rule-packs/custom/**\` ran nothing — and the custom-rule governance lint
+  # inside \`validate\` is scoped to exactly that tree. A repo that permits
+  # direct pushes got no lint at all on tenant-authored PromQL pushed that
+  # way.
+  # ⛔ WHICH trees depends on this invocation's \`--deploy\` and
+  # \`--config-source\`, and both directions of getting that wrong are
+  # silent (issue 1473): a filter naming a tree nothing here writes and no
+  # job reads can never match, while a tree a job DOES read — helm's
+  # \`environments/prod/values.yaml\` — that is absent from the filter means
+  # editing it creates no job at all and the pull request goes green having
+  # validated nothing.
+  push:
+    paths:
+${triggerPaths}
+  workflow_dispatch:
+
+# Least-privilege, and \`pull-requests: write\` is LOAD-BEARING, not
+# boilerplate: the generate job's only output is a sticky PR comment, and
+# GITHUB_TOKEN defaults to read-only on repositories created after 2023-02.
+# Without this, Stage 2's comment step 403s and the customer's blast-radius
+# review never appears. Same declaration this platform's own backtest.yaml
+# carries for the same action.
+#
+# ⛔ SCOPE — on a pull_request from a FORK this block is not enough on its
+# own, and the reason is a repo SETTING rather than a hard platform lock.
+# By default a fork PR's GITHUB_TOKEN is read-only no matter what
+# \`permissions:\` asks for, so the comment step 403s. The documented
+# exception is the admin toggle "Send write tokens to workflows from pull
+# requests" — which lives under the settings for forks of PRIVATE
+# repositories, i.e. exactly the shape most customers deploy this in. With
+# that toggle on, this \`permissions:\` block is what grants the write, so it
+# is load-bearing in that configuration too.
+#
+# We deliberately do NOT use \`pull_request_target\` / \`workflow_run\` to buy
+# the elevated token, because both run trusted code against untrusted input.
+# So: same-repo branches work as-is; fork PRs need the customer's admin to
+# make that call knowingly. Stated here rather than silently implied either
+# way — the previous wording claimed the platform hard-locks this and that
+# a different design was required, which is not what the docs say.
+#
+# ⛔ The write scope sits on the \`generate\` job, NOT here. At workflow level
+# every job inherits it, including \`apply\` — the one carrying
+# \`environment: production\` and cluster credentials, which posts no comment
+# and needs no PR write. This is the shape this platform uses on itself in
+# 6 workflows / 9 jobs (bench-on-demand.yaml's \`gate\` job is identical:
+# \`contents: read\` at the top, \`pull-requests: write\` on the one job that
+# comments).
+permissions:
+  contents: read
+
+env:
+  DA_TOOLS_IMAGE: ${image}
+  CONFIG_DIR: conf.d
+  MONITORING_NS: monitoring
+
+${pinNote}jobs:
+  # ── Stage 1: Validate ─────────────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    # A job with no timeout gets GitHub's default of 6 hours. Nothing here
+    # takes minutes: it is one \`docker run\` per step. A wedged image pull or
+    # a hung container therefore holds a runner for the rest of the working
+    # day instead of failing while somebody is still looking at the PR.
+    timeout-minutes: 10
+    concurrency:
+      # Two pushes in a row used to run this twice, in parallel, with no
+      # ordering between them. Validation is read-only and idempotent, so
+      # the older run has nothing to contribute once a newer commit exists.
+      group: dynamic-alerting-validate-\${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate config (schema + routing + policy)
+        run: |
+          # ⛔ The same guard the config-diff step carries, and for the same
+          # reason: \`docker -v\` CREATES a missing host path instead of
+          # failing, so a wrong or moved CONFIG_DIR mounts an EMPTY
+          # directory, \`validate-config\` parses zero files and exits 0.
+          # Stage 2 refuses to compare in that case; Stage 1 went green and
+          # silent — the worse half, because nothing on the PR hints at it.
+          if [ ! -d "\${{ env.CONFIG_DIR }}" ]; then
+            echo "::error::CONFIG_DIR is set to '\${{ env.CONFIG_DIR }}', which does not exist in this commit. Refusing to validate, because mounting a path that is not there yields an empty directory and a PASS that checked nothing."
+            exit 1
+          fi
+          docker run --rm \\
+            -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
+            \${{ env.DA_TOOLS_IMAGE }} \\
+            validate-config --config-dir /data/conf.d
+
+      - name: Lint custom rules (if any)
+        run: |
+          if [ -d "rule-packs/custom" ]; then
+            docker run --rm \\
+              -v "\${{ github.workspace }}/rule-packs/custom:/data/rules:ro" \\
+              \${{ env.DA_TOOLS_IMAGE }} \\
+              lint /data/rules --ci
+          fi
+
+  # ── Stage 2: Generate routes + blast radius ────────────
+  generate:
+    # ⛔ NO \`needs:\` — deliberately, and this is a fix rather than an
+    # omission. It used to be \`needs: validate\`, and the \`if:\` below carries
+    # no status function, so an implicit \`success()\` applied: any red in
+    # \`validate\` skipped this whole job. \`validate\` lints custom Prometheus
+    # rules under the rule-packs tree, which has NO causal relationship to
+    # the tenant-config blast radius — so one unrelated lint ERROR anywhere
+    # in that tree took the blast-radius comment away from EVERY config pull
+    # request in the repository until somebody fixed it, and what reviewers
+    # saw meanwhile was the previous run's report, which looks current.
+    # This platform's own config-diff.yaml computes its blast radius with no
+    # \`needs:\` at all, for the same reason.
+    # ⚠️ This is not "validation no longer gates anything": \`apply\` still
+    # needs \`validate\`, and that is the edge that protects the cluster.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    # ⛔ The OUTER bound, and it has to stay above the sum of the step caps
+    # below (6+1+5+5+5+2+2 = 26). If the job cap fires first the run is
+    # CANCELLED, and every \`!cancelled()\` step — the fallback report and the
+    # comment — is skipped: the issue 1421 stale comment, reached through a
+    # timeout instead of through a failing step. Which is also why EVERY
+    # step below carries its own cap, including the cheap ones: an uncapped
+    # step has no way to end except by taking the job cap with it. Held by
+    # \`test_step_timeouts_leave_room_under_the_job_timeout\`, which grades
+    # both halves — no uncapped step, and the sum under this number.
+    timeout-minutes: 30
+    concurrency:
+      # ⛔ Load-bearing for the COMMENT, not just for runner minutes. The
+      # sticky comment is edited in place under a fixed header, so two runs
+      # of this job race to overwrite the same comment body and the loser is
+      # whichever finishes LAST — not whichever commit is newer. Push twice
+      # quickly and the PR can end up showing the older commit's blast
+      # radius, with nothing in the comment to say so.
+      group: dynamic-alerting-blast-radius-\${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    # The only job that writes anything back to the PR. A job-level block
+    # REPLACES the workflow one rather than merging, so \`contents: read\` is
+    # restated here — dropping it would 403 the checkout.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        # The one step here whose honest cap is not small — a full-history
+        # clone of a large repository takes minutes. It is still capped:
+        # see the job cap above for what an uncapped step costs.
+        timeout-minutes: 6
+        with:
+          # Load-bearing. The blast radius is computed against the PR's
+          # base commit, and checkout's default (fetch-depth: 1) does not
+          # put that object in the clone — the lookup below then fails and
+          # the report silently degrades to "every tenant is new", which
+          # docs/internal/lint-policy.md names as pretending to be
+          # diff-aware. Same value and same reason as this platform's own
+          # config-diff.yaml and blast-radius.yml — but note those reach
+          # for \`origin/<base branch>\`, which this depth guarantees,
+          # while a PR event's base SHA is only reachable while some
+          # branch still leads to it. The next step reports that case
+          # rather than papering over it.
+          fetch-depth: 0
+
+      - name: Prepare output directory
+        timeout-minutes: 1
+        run: mkdir -p .output
+
+      - name: Generate Alertmanager routes
+        id: routes
+        # ⛔ Step caps, and the arithmetic is the point: every step in this
+        # job is capped and the caps sum to 26, under this job's 30, so a hung
+        # computation FAILS AS A STEP and the fallback below still runs. If
+        # the JOB cap fired first the run would be CANCELLED, and both the
+        # fallback and the comment step carry \`!cancelled()\` — correct for a
+        # superseded run, but it would leave the previous report standing
+        # with nothing to say the new run died. Held by
+        # \`test_step_timeouts_leave_room_under_the_job_timeout\`.
+        timeout-minutes: 5
+        run: |
+          # Read-only, deliberately: this step VALIDATES the routes it
+          # would generate; nothing downstream consumes a written file.
+          # An earlier template mounted \`.output\` writable and asked for
+          # an output file together with \`--validate\` — but \`--validate\`
+          # returns before any file is written, so nothing ever landed
+          # there, and the writable mount was only a permission surface
+          # (the image runs as a non-root user, the directory belongs to
+          # the runner). The tool now refuses an output path under
+          # \`--validate\` (exit 2), so that pairing cannot come back
+          # quietly. With no writable mount there is nothing for a
+          # \`--user\` override to fix; the config-diff step below writes
+          # on the HOST via a shell redirect.
+          docker run --rm \\
+            -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
+            \${{ env.DA_TOOLS_IMAGE }} \\
+            generate-routes --config-dir /data/conf.d --validate
+
+      - name: Resolve base config snapshot
+        id: snapshot
+        timeout-minutes: 5
+        if: github.event_name == 'pull_request'
+        env:
+          # Passed through env rather than interpolated into the script, so
+          # the expression cannot become shell syntax. Same shape as this
+          # platform's config-diff.yaml.
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
+        run: |
+          # Two DIFFERENT conditions used to collapse into a single
+          # \`|| mkdir -p\` fallback here, and both produced an empty
+          # baseline that exits 0:
+          #   (a) the base commit is absent from the clone -> a fault; the
+          #       comparison is impossible and must not be faked.
+          #   (b) the base commit is present but carried no config
+          #       directory yet -> a genuine first import, where "every
+          #       tenant is new" is the correct answer.
+          # Telling them apart is the whole reason this is two lookups
+          # instead of one \`||\` chain.
+          # RUNNER_TEMP is a default runner variable, and assignments to
+          # those are ignored, so this should be unreachable on a hosted
+          # runner — it is a guard for anything replaying these steps
+          # elsewhere. Fail loudly rather than fall back:
+          # Measured with it unset: as a normal user the step dies on a
+          # bare \`/base.tar: Permission denied\` with no ::error:: to
+          # explain it, and as root it SUCCEEDS while writing five stray
+          # files into the filesystem root.
+          : "\${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"
+          # Trailing slash matters: \`git ls-tree -- conf.d/\` lists the
+          # directory's CHILDREN, while \`-- conf.d\` returns the entry
+          # itself. Reading a type out of the first form yields the types
+          # of the children, so a healthy repository whose CONFIG_DIR was
+          # written the natural way ("a directory, so it ends in /") was
+          # rejected as "a blob, not a directory".
+          config_dir="\${CONFIG_DIR%/}"
+          mkdir -p .output/base/"$config_dir"
+          if ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this clone, so there is nothing to compare against. Two causes: the checkout was narrowed (this workflow sets fetch-depth: 0 — check it is still there), or the base ref was rewritten and that commit no longer exists, which is what a force-push, or re-running an old job whose recorded base commit is gone, looks like."
+            exit 1
+          fi
+          # Read the entry from its PARENT tree rather than asking about
+          # the object at that path. \`git cat-file -t "$BASE_SHA:$dir"\`
+          # looks up the object the entry POINTS AT, and for a submodule
+          # that is a commit belonging to another repository — absent
+          # here, so it fails, and the fault would be filed as "no config
+          # directory at the base", i.e. a first import. Measured: a
+          # gitlink took the first-import branch and exited 0 with an
+          # empty baseline. \`ls-tree\` reads the entry itself, so it can
+          # say "commit" without ever resolving it.
+          git ls-tree "$BASE_SHA" -- "$config_dir" > "$RUNNER_TEMP"/entry.txt
+          kind=$(cut -d' ' -f2 "$RUNNER_TEMP"/entry.txt)
+          if [ -z "$kind" ]; then kind=missing; fi
+          if [ "$kind" = tree ]; then
+            # ⛔ Extracted through a scratch index, NOT through
+            # \`git archive\`. \`export-ignore\` is an ARCHIVE-ONLY attribute
+            # (git: "won't be added to archive files"), so a
+            # .gitattributes rule covering the config directory makes
+            # \`git archive\` emit a partial or empty baseline while every
+            # command reports success — and the diff then overstates or
+            # invents changes.
+            #
+            # Three separate attempts to DETECT that after the fact were
+            # each falsified by measurement: a file count disagreed with
+            # \`find\` over symlinks; a name set disagreed with the escaping
+            # \`core.quotePath\` applies to non-ASCII, quote and backslash
+            # paths; and "did anything arrive at all" was satisfied by a
+            # stray README while all three tenant files were missing.
+            # Reading the tree into an index and checking it out removes
+            # the failure mode instead of watching for it — no comparison,
+            # nothing to enumerate, and no pipeline to swallow a failure.
+            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git read-tree "$BASE_SHA:$config_dir"
+            GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git checkout-index -a -f --prefix=.output/base/"$config_dir"/
+          elif [ "$kind" = missing ]; then
+            echo "::notice::$config_dir does not exist at $BASE_SHA; treating this as the first import, so every tenant is reported as added"
+          else
+            echo "::error::$config_dir at $BASE_SHA is a $kind, not a directory, so no baseline can be built from it. A kind of 'commit' means a submodule is mounted there; 'blob' means either a file has that name, or the path is a symlink (git records those as blobs too). Reporting any of those as a first import would hide the fault."
+            exit 1
+          fi
+
+      - name: Config diff (blast radius)
+        id: diff
+        timeout-minutes: 5
+        run: |
+          # config-diff signals findings through its exit code, so a bare
+          # call cannot work: "changed" is exit 1, and this job runs on
+          # every pull request that touches ANY tree in this workflow's
+          # \`on.pull_request.paths\` above (not conf.d/ alone) — so both 0
+          # and 1 are ordinary outcomes here.
+          #   0 = no config change  -> the report says so in words, and the
+          #       comment below is refreshed with it. Not skipped: this job
+          #       also runs for edits to the other watched trees, which do
+          #       not touch tenant config at all, and skipping would leave
+          #       the PREVIOUS run's report standing as though it were
+          #       still current.
+          #       ⚠️ READ THIS BEFORE TRUSTING A "no changes" COMMENT.
+          #       config-diff compares TENANT files only — it skips every
+          #       file whose name starts with \`_\`, which includes
+          #       conf.d/_defaults.yaml. So a pull request that changes a
+          #       PLATFORM DEFAULT, inherited by every tenant that does
+          #       not override it, gets a comment that states "No changes
+          #       detected". Measured: raising _defaults.yaml's
+          #       mysql_connections exits 0 with a 325-byte "no changes"
+          #       report, while the same key changed in one tenant file
+          #       exits 1 and is listed. That is the widest-blast-radius
+          #       edit this job can be handed, and it is the one it cannot
+          #       see. Review _defaults.yaml changes by hand, or gate them
+          #       separately (the platform runs its own
+          #       guard-defaults-impact workflow for exactly this, which
+          #       \`da-tools init\` does not emit).
+          #   1 = changes detected  -> the report is the payload.
+          #   2 and above           -> the run did not complete; fail, and
+          #       the step below replaces the report with an explicit
+          #       "NOT COMPUTED" note naming which step failed. It used to
+          #       post nothing at all (the comment step inherited an
+          #       implicit success()), which left the previous run's report
+          #       on the pull request looking current.
+          #
+          # The head-side directory is checked FIRST because a bind mount
+          # creates a missing host path instead of failing. config-diff
+          # does guard this (\`ERROR: new-dir not found\`), but that guard
+          # can never fire through a \`-v\` mount: the path always exists by
+          # the time the tool looks. Measured, with CONFIG_DIR pointing at
+          # a path that is not in the repo: both sides mount as empty
+          # directories, the tool exits 0, and it prints a 322-byte
+          # "no changes" report — non-empty, so the empty-report guard
+          # below passes it too, and the comment is published. That is a
+          # blast-radius gate that is green and silent forever, which is
+          # the same failure this whole step was rewritten to remove.
+          if [ ! -d "\${{ env.CONFIG_DIR }}" ]; then
+            echo "::error::CONFIG_DIR is set to '\${{ env.CONFIG_DIR }}', which does not exist in this pull request's head commit. Either the workflow's CONFIG_DIR does not match where this repository actually keeps its tenant config, or this pull request removed that directory. Refusing to compare, because mounting a path that is not there yields an empty directory and a report that says 'no changes' on every future run."
+            exit 1
+          fi
+          set +e
+          # Two read-only mounts only: config-diff writes to stdout and the
+          # HOST redirect below lands it in .output/. A writable output
+          # mount used to ride along here too, unused.
+          docker run --rm \\
+            -v "\${{ github.workspace }}/.output/base/\${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" \\
+            -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
+            \${{ env.DA_TOOLS_IMAGE }} \\
+            config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
+              --format markdown > .output/blast-radius.md
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::config-diff exited $rc (expected 0 or 1) — image pull, mount, or malformed config"
+            exit "$rc"
+          fi
+          # rc alone is not enough. Anything in front of the tool can exit
+          # 1 with nothing on stdout — a mistyped or renamed subcommand
+          # leaves the entrypoint exiting 1, which is indistinguishable
+          # from "changes detected" by exit code alone, and the comment
+          # comment action would then fail with "Either message or path
+          # input is required" — an error pointing at an input that WAS
+          # supplied, which sends the reader to the wrong place. (It
+          # refuses to publish an empty body; what it cannot do is say
+          # why.) A one-byte file is worse: that publishes. The tool
+          # always prints a report on 0 and on 1, so an empty or
+          # near-empty file here means the run did not really happen.
+          if [ ! -s .output/blast-radius.md ]; then
+            echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"
+            exit 1
+          fi
+
+      - name: Explain a blast radius that could not be computed
+        # ⛔ The point of this step is that the comment below has something
+        # CURRENT to post on every path, including the failing ones. The
+        # sticky comment is edited in place under a fixed header: when a step
+        # above exits non-zero, the comment step used to be skipped by its
+        # implicit success() and the PREVIOUS run's report stayed on the pull
+        # request, timestamped when it was first posted and with no
+        # notification that anything changed. Stale is worse than absent
+        # here, because stale looks like the answer. There is a red X on the
+        # run, but nothing on the comment itself says it is out of date.
+        # \`!cancelled()\` rather than \`always()\`: a run cancelled by the
+        # concurrency group above has been SUPERSEDED, and a superseded run
+        # must not overwrite the winner's comment.
+        if: \${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          ROUTES_OUTCOME: \${{ steps.routes.outcome }}
+          SNAPSHOT_OUTCOME: \${{ steps.snapshot.outcome }}
+          DIFF_OUTCOME: \${{ steps.diff.outcome }}
+        run: |
+          # The diff step writes the report and then refuses to publish an
+          # empty one, so "the file is non-empty AND that step succeeded" is
+          # the only state in which the report is this run's own work.
+          if [ "$DIFF_OUTCOME" = success ] && [ -s .output/blast-radius.md ]; then
+            exit 0
+          fi
+          mkdir -p .output
+          {
+            echo "## Blast radius: NOT COMPUTED"
+            echo
+            echo "This run could not compute the tenant-config blast radius, so this comment replaces the previous run's report. **Nothing here says the change is safe — it says nobody measured it.**"
+            echo
+            echo "| step | outcome |"
+            echo "| --- | --- |"
+            echo "| Generate Alertmanager routes | \\\`\${ROUTES_OUTCOME:-did not run}\\\` |"
+            echo "| Resolve base config snapshot | \\\`\${SNAPSHOT_OUTCOME:-did not run}\\\` |"
+            echo "| Config diff (blast radius) | \\\`\${DIFF_OUTCOME:-did not run}\\\` |"
+            echo
+            echo "Open the failing step in this run's log: each failure path prints an \\\`::error::\\\` line naming the cause (base commit missing from the clone, a submodule or symlink where the config directory should be, \\\`CONFIG_DIR\\\` pointing at a path this commit does not have, or the tool exiting above 1)."
+          } > .output/blast-radius.md
+
+      - name: Post PR comment with blast radius
+        # See the step above: skipping this on a failure is what leaves a
+        # stale report standing. Both steps share one condition on purpose.
+        if: \${{ !cancelled() }}
+        # Capped like the rest: this step talks to the GitHub API, and a
+        # hang here is the one that would eat the job cap AFTER the report
+        # was written but BEFORE it was posted.
+        timeout-minutes: 2
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: .output/blast-radius.md
+          header: dynamic-alerting-blast-radius
+
+${APPLY[config.deploy].header}  # \`needs: [validate]\` only — \`generate\` is pull_request-only, and a
+  # skipped job skips everything that needs it (issue 1356).
+  apply:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: production
+    # Wider than the other two: this one talks to a cluster, and a rollout
+    # that is merely slow must not be killed halfway.
+    timeout-minutes: 30
+    concurrency:
+      # ⛔ \`cancel-in-progress: FALSE\`, and the difference from the other two
+      # jobs is the whole reason this block is spelled out per job rather
+      # than once at workflow level. Cancelling a read-only validate or a
+      # superseded diff costs nothing; cancelling this one interrupts
+      # \`kubectl apply\` / \`helm upgrade\` partway and leaves the cluster in a
+      # state no commit describes.
+      # ⛔ The group is keyed on the TARGET NAMESPACE, not on the ref. This
+      # job is workflow_dispatch-only and a dispatch can start from any
+      # branch, while every one of them deploys to the same namespace — so a
+      # ref-keyed group puts two dispatches in DIFFERENT groups and lets
+      # them run \`kubectl apply\` / \`helm upgrade\` at the same time, which is
+      # the exact interleaving this block exists to prevent. A job-level
+      # \`concurrency\` cannot read \`env:\`, so the namespace is baked in here
+      # at generation time.
+      group: dynamic-alerting-apply-monitoring
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+${APPLY[config.deploy].steps}`;
 }
 
 export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
