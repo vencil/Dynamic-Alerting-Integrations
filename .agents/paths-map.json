@@ -84,7 +84,7 @@
         {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"},
         {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "3. Pre-commit auto hooks"}
       ],
-      "note": "`## [Unreleased]` 已凍結（#2102）：新增條目會被 `changelog-format` 擋下，還沒發布的變更改寫成 `changelog.d/` 片段檔（格式見 `changelog.d/README.md`）。只剩發版收尾與修正既有條目會動這個檔；驗：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。"
+      "note": "`## [Unreleased]` 已凍結（#2102）：新增條目會被 `changelog-format` 擋下，還沒發布的變更改寫成 `changelog.d/` 片段檔（格式見 `changelog.d/README.md`）。只剩發版收尾與修正既有條目會動這個檔；驗：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。"
     },
     {
       "id": "changelog-fragments",
@@ -145,9 +145,9 @@
       "pattern": "\\bgit\\s+(?:-C\\s+\\S+\\s+)?(?:rebase|merge|cherry-pick)(?![\\w-])",
       "examples": ["git rebase origin/main", "git -C .claude/worktrees/x rebase --continue", "git merge origin/main", "git cherry-pick abc123"],
       "read": [
-        {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"}
+        {"file": "docs/internal/commit-convention.md", "section": "After a rebase or a merge from `main`"}
       ],
-      "note": "完成後跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`：兩支各自調過同一個計數的 PR 會乾淨地 rebase 成錯的數字。若這次動到 `CHANGELOG.md` 本身（凍結後只剩發版收尾與修正既有條目；`changelog.d/` 片段一檔一條，不會互相吃掉），再跑 `python3 scripts/tools/dx/changelog_rebase_check.py`。生成物衝突先問是誰生的，取一側後重生，不手併。"
+      "note": "完成後跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`：兩支各自調過同一個計數的 PR 會乾淨地 rebase 成錯的數字。生成物衝突先問是誰生的，取一側後重生，不手併。"
     },
     {
       "id": "branch-delete",

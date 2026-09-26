@@ -341,30 +341,9 @@ scripts/ops/win_git_escape.bat push origin <branch>
 
 ## 9. Conflict patterns（多 PR 並行）
 
-### 9.1 CHANGELOG `### Security` rebase chain
+### 9.1 CHANGELOG 條目
 
-✅ **自 #2102 起不再發生**：每個 audit PR 各寫一份 `changelog.d/` 片段檔，不會改到同一行。下面的 SOP 只剩一種情況適用——分支還停在 #2102 之前、仍在 `CHANGELOG.md` 加條目（那樣的條目 rebase 後也會被 `changelog-format` 的凍結擋下，應改寫成片段）。
-
-以前的情況：每個 audit PR 都加新 entry → 後 merge 的 PR 都會跟前一個 conflict。
-
-解法 SOP（舊）：
-
-```bash
-git fetch origin main
-git checkout chore/<branch>
-git rebase origin/main
-
-# 每次都會在 CHANGELOG.md 同位置 conflict
-# 解法：保留兩個 entry，按 merge 順序排
-# （已 merged 的在上面，自己這次的接在後面）
-
-# 編輯 CHANGELOG.md 移除 <<< === >>> 標記
-git add CHANGELOG.md
-git rebase --continue
-
-# Force-push 需要 user 明確授權（hook 會擋）
-git push --force-with-lease origin <branch>
-```
+每個 audit PR 各寫一份 `changelog.d/` 片段檔（`section: Security`），不會跟其他 PR 改到同一行，所以沒有衝突要解。分支若還在 `CHANGELOG.md` 的 `[Unreleased]` 加條目，會被 `changelog-format` 的凍結擋下，改寫成片段即可（#2102）。
 
 ### 9.2 同檔多次改動（k8s+helm 並行）
 

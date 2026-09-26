@@ -248,9 +248,15 @@ Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped an
 
 Since the freeze this is release wrap-up and corrections to existing entries only; new entries go to `changelog.d/` (above).
 
-- **A rebase can silently drop or duplicate a bullet with zero conflict markers** — equal bullet *counts* hide it. After any rebase that touched `CHANGELOG.md`, compare line **multisets** (a set hides a duplicated bullet) against the oracle `expected = (main − (base − mine)) + (mine − base)` — upstream's lines, minus the ones I deleted, plus the ones I added (`base` = the fork point before this rebase) — run `python3 scripts/tools/dx/changelog_rebase_check.py` right after the rebase (it reads `ORIG_HEAD`; also works mid-conflict on the working tree; exit 1 lists the missing and extra lines). `mine ∪ main` is the wrong oracle: it reports bullets that upstream legitimately rewrote as "missing". A union-style conflict resolution errs the other way — it keeps both the old and the rewritten text of one bullet — so look for extras, not only losses. Then run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`: two PRs that each bumped the same count rebase cleanly into a wrong number.
-- **An edit at a section boundary can swallow the next `### heading`** (the last bullet under `### Added`, right above `### Fixed`): every entry below then files under the wrong section, and nothing is red. After editing, list the headings: `sed -n '/^## \[Unreleased\]/,/^## \[v/p' CHANGELOG.md | grep '^###'` (keep both `^` anchors: bullets and the placeholder comment quote those headings mid-line, and an unanchored range skips headings).
+- **After rebasing such a change, read `git diff origin/main -- CHANGELOG.md`**: it must show only the lines you meant to change. A bullet the rebase dropped shows up as an unexpected `-` line, a duplicated one as an unexpected `+` line. (With every PR appending to `[Unreleased]` that diff was too noisy to read and needed a dedicated checker; a correction touches a few lines.)
+
+- **An edit at a section boundary can swallow the next `### heading`** (the last bullet under one `###`, right above the next): every entry below then files under the wrong section, and nothing is red. While distilling the assembled fragments into `## [vX.Y.Z]`, list that block's headings afterwards: `awk '/^## \[/{n++} n==2 && /^### /' CHANGELOG.md` (the newest release is the second `## [` heading, after the frozen `[Unreleased]`; keep the `^` anchors, since bullets quote headings mid-line).
 - **Links from `CHANGELOG.md` to anything outside `docs/` use the absolute GitHub URL.** The mkdocs strict gate exempts only `CHANGELOG.md` → `docs/<…>.md` links (`mkdocs_strict_check.sh`); a link to a non-`.md` file under `docs/`, or to `helm/`, `scripts/`, `try-local/`, fails `MkDocs Build Verification`.
+
+### After a rebase or a merge from `main`
+
+- **Counts can rebase cleanly into a wrong number**: two PRs that each bumped the same count merge without a conflict. Run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`.
+- **A conflict in a generated file is resolved by regenerating it**, not by merging by hand: take either side, then rerun the generator that owns it.
 
 ## CI Validation
 
