@@ -5,8 +5,9 @@ package handler
 // ============================================================
 //
 // Returns the *merged* effective config for one tenant: _defaults.yaml chain
-// (L0..Ln) deep-merged with the tenant's own overrides, plus two SHA-256[:16]
-// hashes for change detection.
+// (L0..Ln), then the root platform files' `tenants:` entries for it (#2019),
+// then the tenant's own overrides, plus two SHA-256[:16] hashes for change
+// detection.
 //
 // The handler is stateless — it re-scans `configDir` on every request. That's
 // acceptable because (a) this endpoint is low-traffic (UI + support tooling,
@@ -38,7 +39,11 @@ import (
 //
 // @Summary     Get tenant effective (merged) config
 // @Description Returns the tenant config after merging the _defaults.yaml
-// @Description chain from L0 (conf.d root) down to the tenant's own file.
+// @Description chain from L0 (conf.d root) down to the tenant's own file,
+// @Description with the root platform files' per-tenant `tenants:` entries
+// @Description applied between the chain and the tenant file (the tenant
+// @Description file wins key by key); platform_overlay names the files and
+// @Description keys that layer supplied and is omitted when it supplied none.
 // @Description Includes two SHA-256 hashes (truncated to 16 hex chars):
 // @Description source_hash for raw file content and merged_hash for the
 // @Description canonical-JSON of the merged dict. Parity target:

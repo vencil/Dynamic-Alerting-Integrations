@@ -1031,3 +1031,83 @@ class TestConfDSearchIsBounded:
         err = capsys.readouterr().err
         assert exit_code in (0, None), err
         assert "conf.d/ not found" not in err
+
+
+class TestPlatformOverlayCLI:
+    """#2019: the CLI surfaces of the platform per-tenant layer. The merge
+    semantics themselves are pinned by the shared matrix
+    (tests/shared/platform_tenant_overlay_matrix.json `walker` column)."""
+
+    PLATFORM = ("defaults:\n  mysql_connections: 80\n"
+                "tenants:\n  tx:\n    mysql_connections: \"60\"\n")
+
+    def _tree(self, tmp_path, **extra):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(self.PLATFORM, encoding="utf-8")
+        (conf_d / "tx.yaml").write_text("tenants:\n  tx: {}\n", encoding="utf-8")
+        (conf_d / "ty.yaml").write_text("tenants:\n  ty: {}\n", encoding="utf-8")
+        for name, body in extra.items():
+            (conf_d / name.replace("__", ".")).write_text(body, encoding="utf-8")
+        return conf_d
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
+            capture_output=True, text=True, timeout=10)
+
+    def test_default_output_carries_platform_overlay_only_when_supplied(self, tmp_path):
+        conf_d = self._tree(tmp_path)
+        tx = self._run("tx", "--conf-d", str(conf_d))
+        assert tx.returncode == 0, tx.stderr
+        out = json.loads(tx.stdout)
+        assert out["effective_config"] == {"mysql_connections": "60"}
+        assert out["platform_overlay"] == [{"file": "_defaults.yaml", "keys": ["mysql_connections"]}]
+        ty = self._run("ty", "--conf-d", str(conf_d))
+        assert ty.returncode == 0, ty.stderr
+        assert "platform_overlay" not in json.loads(ty.stdout)
+
+    def test_what_if_substituting_the_platform_file_keeps_the_layer(self, tmp_path):
+        """--what-if on the carrier itself (same bytes): the simulated side
+        applies the same platform layer as the baseline — no phantom diff."""
+        conf_d = self._tree(tmp_path)
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(conf_d / "_defaults.yaml"))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["substitution_type"] == "substitute"
+        assert out["merged_hash_changed"] is False, out
+
+    def test_what_if_edit_of_the_platform_tenants_block_is_simulated(self, tmp_path):
+        conf_d = self._tree(tmp_path)
+        edited = tmp_path / "edited.yaml"
+        edited.write_text(self.PLATFORM.replace('"60"', '"55"'), encoding="utf-8")
+        scanner = dt.ConfDScanner(conf_d)
+        blocks = scanner.platform_blocks(
+            "tx", replace={str((conf_d / "_defaults.yaml").resolve()): yaml.safe_load(edited.read_text())})
+        assert blocks == [("_defaults.yaml", {"mysql_connections": "55"})]
+
+    def test_multi_document_and_unparseable_tenant_files_do_not_end_the_run(self, tmp_path):
+        conf_d = self._tree(tmp_path, tm__yaml="tenants:\n  tm: {}\n---\nfoo: 1\n",
+                            tb__yaml="tenants:\n  tb: [\n")
+        res = self._run("--all", "--conf-d", str(conf_d))
+        assert res.returncode == 0, res.stderr
+        assert set(json.loads(res.stdout)) == {"tx", "ty", "tm"}
+        assert "tb.yaml" in res.stderr and "does not parse" in res.stderr
+
+    def test_an_unparseable_file_declares_nothing_for_the_duplicate_check(self, tmp_path):
+        """#2049 × #2019: a tenant file skipped as unparseable declares no
+        tenant, so it cannot make its neighbour's tenant a duplicate."""
+        conf_d = self._tree(tmp_path, tx2__yaml="tenants:\n  tx: [\n")
+        res = self._run("tx", "--conf-d", str(conf_d))
+        assert res.returncode == 0, res.stderr
+        assert "duplicate" not in res.stderr
+
+    def test_a_numeric_tenant_id_is_one_id_for_the_duplicate_check(self, tmp_path):
+        """#2049 × #2019: `123:` and `"123":` are the same tenant to the
+        exporter (yaml.v3 reads both into the string "123"), so declaring it
+        both ways is a duplicate here too."""
+        conf_d = self._tree(tmp_path, a__yaml="tenants:\n  123: {}\n",
+                            b__yaml="tenants:\n  \"123\": {}\n")
+        res = self._run("123", "--conf-d", str(conf_d))
+        assert res.returncode == dt.EXIT_VIOLATION, (res.returncode, res.stderr)
+        assert "duplicate tenant ID '123'" in res.stderr and "a.yaml" in res.stderr and "b.yaml" in res.stderr

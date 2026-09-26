@@ -573,6 +573,32 @@ func mergePartialConfigs(configs map[string]ThresholdConfig, exists map[string]s
 	return merged
 }
 
+// isRootPlatformKey reports whether a scan key is a ROOT platform file whose
+// `tenants:` block the flat merge reads: `_`-prefixed (isPlatformKey), not
+// below the root (isNestedPlatformFile, #1576), and not a root carrier the
+// chain did not select (isUnselectedRootCarrier, #1674). It is the
+// conjunction BuildFlatConfig applies file by file before
+// mergePartialConfigs, stated once so the walker plane (#2019) reads the
+// same files instead of restating the rules.
+func isRootPlatformKey(key, rootCarrier string) bool {
+	return isPlatformKey(key) && !isNestedPlatformFile(key) && !isUnselectedRootCarrier(key, rootCarrier)
+}
+
+// rootPlatformKeys returns the scan keys isRootPlatformKey accepts, in the
+// order the flat merge applies them (sortFlatMergeOrder's platform group,
+// sort.Strings).
+func rootPlatformKeys(scan *TreeScan) []string {
+	carrier := selectedRootCarrierKey(scan)
+	var out []string
+	for _, k := range scan.Keys {
+		if isRootPlatformKey(k, carrier) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // isRootCarrierKey reports whether a scan key is a defaults carrier at the
 // conf.d ROOT (nested carriers never reach the flat merge at all).
 func isRootCarrierKey(key string) bool {
@@ -622,11 +648,17 @@ func anyRootCarrierKey(groups ...[]string) bool {
 // deletes a chain file can leave the exporter's cached merged_hash stale
 // (#1964, pre-existing, not addressed here).
 func rootCarrierKey(scan *TreeScan, logger *log.Logger) string {
-	sel := scan.DefaultsCarriers()
-	for _, w := range sel.AmbiguityWarnings() {
+	for _, w := range scan.DefaultsCarriers().AmbiguityWarnings() {
 		logger.Print(w)
 	}
-	chosen, ok := sel.ByDir[scan.AbsRoot]
+	return selectedRootCarrierKey(scan)
+}
+
+// selectedRootCarrierKey is rootCarrierKey's selection without its WARNs,
+// for readers that must not log per call: the walker plane's resolver and a
+// reload tick's platform-overlay rebuild (#2019).
+func selectedRootCarrierKey(scan *TreeScan) string {
+	chosen, ok := scan.DefaultsCarriers().ByDir[scan.AbsRoot]
 	if !ok {
 		return ""
 	}

@@ -8,6 +8,10 @@ tenant file does not write keeps the platform value, and a platform file
 cannot create a tenant. The Go half
 (components/threshold-exporter/app/config_platform_tenant_overlay_test.go)
 asserts the same table on /metrics.
+
+The `walker` column (#2019) is the walker plane: describe_tenant.py's
+`--show-sources` view here, `pkg/config.ResolveEffective` (/effective) on the
+Go side — the same effective config and the same `platform_overlay` field.
 """
 from __future__ import annotations
 
@@ -20,7 +24,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "dx"))
 from _grar_parse import load_tenant_tree  # noqa: E402
+from describe_tenant import ConfDScanner  # noqa: E402
 from _lib_confd import declared_tenant_ids, overlay_platform_tenants  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.json")
@@ -31,8 +37,10 @@ MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.jso
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "expect"}
 # `metric` / `exporter_dedup` / `silent_mode` are the Go half's columns;
-# this half asserts `dedup` / `group_wait` and only pins the key set of the rest.
-EXPECT_KEYS = {"metric", "dedup", "group_wait", "exporter_dedup", "silent_mode"}
+# this half asserts `dedup` / `group_wait` / `walker` and only pins the key
+# set of the rest.
+EXPECT_KEYS = {"metric", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
+WALKER_KEYS = {"effective_config", "platform_overlay"}
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -51,6 +59,15 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
         assert set(tree) == TREE_KEYS, (tree.get("name"), set(tree) ^ TREE_KEYS)
         for tenant, want in tree["expect"].items():
             assert set(want) == EXPECT_KEYS, (tree["name"], tenant, set(want) ^ EXPECT_KEYS)
+            walker = want["walker"]
+            if walker is not None:
+                assert set(walker) == WALKER_KEYS, (tree["name"], tenant, set(walker) ^ WALKER_KEYS)
+                assert isinstance(walker["effective_config"], dict), (tree["name"], tenant)
+                overlay = walker["platform_overlay"]
+                # null = omitted; an empty list would be a shape neither side emits.
+                assert overlay is None or (
+                    overlay and all(set(e) == {"file", "keys"} and e["keys"] for e in overlay)
+                ), (tree["name"], tenant, overlay)
 
 
 def _build(tree: dict, root: Path) -> None:
@@ -73,6 +90,29 @@ def test_routing_plane_matches_the_table(tree, tmp_path: Path, capsys) -> None:
     # No tenant the table does not name appears (the orphan rows would
     # otherwise pass by checking only the tenants they list).
     assert parsed_tenants <= set(tree["expect"]), (tree["name"], parsed_tenants)
+
+
+@pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
+def test_walker_plane_matches_the_table(tree, tmp_path: Path) -> None:
+    """describe_tenant (the walker-plane reference) serves the `walker` column:
+    the root platform files' per-tenant values in the effective config, the
+    `platform_overlay` attribution (omitted when empty), and no tenant a
+    platform file alone names."""
+    _build(tree, tmp_path)
+    scanner = ConfDScanner(tmp_path)
+    for tenant, want in tree["expect"].items():
+        if want["walker"] is None:
+            assert tenant not in scanner.tenants, (tree["name"], tenant)
+            continue
+        info = scanner.source_info(tenant)
+        assert info["effective_config"] == want["walker"]["effective_config"], (
+            tree["name"], tenant, info["effective_config"])
+        assert info.get("platform_overlay") == want["walker"]["platform_overlay"], (
+            tree["name"], tenant, info.get("platform_overlay"))
+        # Omitted, not null/empty, when the layer supplies nothing — the Go
+        # field is `platform_overlay,omitempty`.
+        assert ("platform_overlay" in info) == (want["walker"]["platform_overlay"] is not None)
+    assert set(scanner.tenants) <= set(tree["expect"]), (tree["name"], set(scanner.tenants))
 
 
 def test_an_orphan_is_named_with_its_file_and_tenant(tmp_path: Path, capsys) -> None:

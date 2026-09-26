@@ -145,6 +145,86 @@ def _iter_confd_yaml(entries, suffixes):
     return sorted(p for p in entries if has_yaml_extension(p.name, suffixes))
 
 
+def _load_first_document(path: Path) -> Any:
+    """The FIRST YAML document of `path`, as the exporter's walker reads a
+    config file (yaml.v3 `Unmarshal` decodes one document).
+
+    Raises on a file whose first document does not parse — the caller
+    decides what that costs. A failure in a LATER document does not matter:
+    the generator is never advanced past the first one. Before #2019 a
+    multi-document tenant file (`tenants: …` then `---`) killed the whole
+    run with ComposerError while the exporter served its tenants.
+    """
+    if not yaml:
+        raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
+    with open(path, "r", encoding="utf-8") as f:
+        return next(yaml.safe_load_all(f), None)
+
+
+def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
+                    chain: "dict | None" = None) -> "tuple[Any, list[dict]]":
+    """The override merged over the defaults chain, and its attribution.
+
+    `blocks` is the tenant's entries in the ROOT platform files' `tenants:`
+    blocks, in merge order (#2019). Every top-level key the tenant file does
+    not write is taken from them — a later file over an earlier one — so the
+    tenant file wins KEY BY KEY, replacing a platform value wholesale (its
+    `_routing` map, its scheduled value) exactly as the exporter's /metrics
+    plane does. The attribution lists, per file, the keys it supplied: never
+    `_metadata` (not inherited) and never a null on a threshold key
+    (deep_merge ignores it); a null on a RESERVED (`_`-prefixed) key deletes
+    the inherited value, so it is listed exactly when `chain` (the merged
+    defaults chain) has that key. MUST stay in lockstep with pkg/config/platform_overlay.go
+    `overlayTenant` — tests/shared/platform_tenant_overlay_matrix.json's
+    `walker` column pins both.
+    """
+    if not blocks or not isinstance(tenant_raw, dict):
+        return tenant_raw, []
+    combined: dict = {}
+    owner: dict = {}
+    for i, (_fname, block) in enumerate(blocks):
+        for k, v in block.items():
+            combined[k] = v
+            owner[k] = i
+    for k, v in tenant_raw.items():
+        combined[k] = v
+        owner.pop(k, None)
+    by_file: dict[int, list[str]] = {}
+    for k, i in owner.items():
+        if k == "_metadata":
+            continue
+        if combined[k] is None and not (k.startswith("_") and k in (chain or {})):
+            continue
+        by_file.setdefault(i, []).append(k)
+    sources = [{"file": blocks[i][0], "keys": sorted(by_file[i])}
+               for i in range(len(blocks)) if i in by_file]
+    return combined, sources
+
+
+def _platform_tenant_blocks(doc: Any) -> dict:
+    """`{tenant: body}` of a root platform file's `tenants:` block, keeping
+    only bodies that are non-empty mappings (anything else supplies no key).
+    Ids go through `_tenant_id` like the tenant files' do."""
+    tenants = doc.get("tenants") if isinstance(doc, dict) else None
+    if not isinstance(tenants, dict):
+        return {}
+    return {_tenant_id(tid): body for tid, body in tenants.items()
+            if isinstance(body, dict) and body}
+
+
+def _tenant_id(tid: Any) -> str:
+    """A tenant id as the exporter reads it: a string.
+
+    PyYAML turns an unquoted `123:` key into the int 123, while yaml.v3
+    decodes the same key into Go's `map[string]…` as "123" — so a tenant
+    file and a platform file naming tenant 123 must both land on "123" here
+    or they never meet. ⚠️ `str()` of the decoded value, not the source
+    text: spellings PyYAML re-reads as another number or a bool (`0123`,
+    `1.50`, `true`) still come out differently from Go's verbatim key.
+    """
+    return tid if isinstance(tid, str) else str(tid)
+
+
 def _tenant_body(tconfig: Any) -> Any:
     """Normalise one tenant's body at ingest.
 
@@ -294,6 +374,7 @@ class ConfDScanner:
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
+        self._platform_files = self._read_platform_files(entries)
 
         # Collect all tenant files.
         # #2049: every carrier that declares a tenant is recorded in
@@ -308,13 +389,14 @@ class ConfDScanner:
         for fp in _iter_confd_yaml(entries, (".yaml",)):
             if is_reserved_name(fp.name):
                 continue
-            data = _load_yaml(fp)
+            data = self._load_tenant_file(fp)
             if not isinstance(data, dict):
                 continue
             tenants_block = data.get("tenants", {})
             if not isinstance(tenants_block, dict):
                 continue
             for tid, tconfig in tenants_block.items():
+                tid = _tenant_id(tid)
                 declared.setdefault(tid, []).append(self._entry_label(fp))
                 self.tenants[tid] = _tenant_body(tconfig)
                 self._record_tenant(tid, fp)
@@ -322,13 +404,14 @@ class ConfDScanner:
         for fp in _iter_confd_yaml(entries, (".yml",)):
             if is_reserved_name(fp.name):
                 continue
-            data = _load_yaml(fp)
+            data = self._load_tenant_file(fp)
             if not isinstance(data, dict):
                 continue
             tenants_block = data.get("tenants", {})
             if not isinstance(tenants_block, dict):
                 continue
             for tid, tconfig in tenants_block.items():
+                tid = _tenant_id(tid)
                 declared.setdefault(tid, []).append(self._entry_label(fp))
                 if tid not in self.tenants:
                     self.tenants[tid] = _tenant_body(tconfig)
@@ -379,6 +462,73 @@ class ConfDScanner:
                 f"rejects declares nothing there. Not describing any of "
                 f"them — run validate-config, and keep the tenant in "
                 f"exactly one file.")
+
+    @staticmethod
+    def _load_tenant_file(fp: Path) -> Any:
+        """A tenant file's first document, or None when it does not parse.
+
+        The exporter's walker skips such a file (it declares no tenant, and
+        the exporter logs it) rather than refusing the whole tree, so this
+        tool names it on stderr and describes the rest — before #2019 one
+        broken tenant file ended the run with a traceback.
+        """
+        try:
+            return _load_first_document(fp)
+        except Exception as exc:  # noqa: BLE001 — named, then skipped
+            print(f"WARNING: skipped {fp} — does not parse: {exc}", file=sys.stderr)
+            return None
+
+    def _read_platform_files(self, entries) -> "list[tuple[str, Path, dict]]":
+        """Every ROOT platform file's `tenants:` block, in merge order (#2019).
+
+        `(name, resolved path, {tenant: body})` for each `_`-prefixed config
+        file directly in conf.d, sorted by name — the files the exporter's
+        flat merge reads per-tenant platform values from
+        (`rootPlatformKeys`): a NESTED platform file's block is read by no
+        plane (#1576), and a root defaults carrier the chain did NOT select
+        contributes nothing (#1674). A tenant body that is not a non-empty
+        mapping supplies nothing.
+
+        ⚠️ Not mirrored: the exporter also drops a platform file its typed
+        decode rejects (a `defaults:` value of the wrong type, say). This
+        reader keeps its syntactically valid `tenants:` block — the same
+        stated difference as `_lib_confd.declared_tenant_ids`.
+        """
+        chosen_root = {entry for entry, _resolved in self._defaults_by_dir.get(self.conf_d, [])}
+        out: list[tuple[str, Path, dict]] = []
+        for fp in sorted((p for p in entries if p.parent == self.conf_d
+                          and is_reserved_name(p.name)), key=lambda p: p.name):
+            if is_defaults_name(fp.name) and fp not in chosen_root:
+                continue
+            try:
+                doc = _load_first_document(fp)
+            except Exception:  # noqa: BLE001 — contributes nothing, like Go
+                doc = None
+            # Kept even when it supplies nothing: `--what-if` may stand a
+            # new version of it in (platform_blocks' `replace`).
+            out.append((fp.name, fp.resolve(), _platform_tenant_blocks(doc)))
+        return out
+
+    def platform_blocks(self, tenant_id: str,
+                        replace: "dict[str, dict] | None" = None
+                        ) -> "list[tuple[str, dict]]":
+        """`tenant_id`'s entries in the root platform files, merge order.
+
+        `replace` maps a resolved path to a document that stands in for that
+        file's `tenants:` block (`--what-if` on the root defaults carrier,
+        which it substitutes in the chain). ⚠️ `--what-if` on a root
+        platform file OUTSIDE the chain (`_profiles.yaml`) is not a faithful
+        simulation: the what-if path also inserts it as a chain level, which
+        predates #2019 and is not addressed here.
+        """
+        out: list[tuple[str, dict]] = []
+        for name, resolved, blocks in self._platform_files:
+            if replace and str(resolved) in replace:
+                blocks = _platform_tenant_blocks(replace[str(resolved)])
+            block = blocks.get(tenant_id)
+            if block is not None:
+                out.append((name, block))
+        return out
 
     def _record_tenant(self, tid: str, fp: Path) -> None:
         """Record where tenant `tid` came from: conf.d entry `fp`."""
@@ -477,15 +627,12 @@ class ConfDScanner:
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found in {self.conf_d}")
 
-        merged = {}
-        # Apply defaults chain (L0 → L3)
-        for dp in self.defaults_chain[tenant_id]:
-            ddata = self.defaults_data.get(str(dp), {})
-            defaults_block = ddata.get("defaults", ddata)
-            merged = deep_merge(merged, defaults_block)
+        merged = self._chain_merged(tenant_id)
 
-        # Apply tenant config (highest priority)
-        tenant_raw = self.tenants[tenant_id]
+        # Apply tenant config (highest priority), with every key it does not
+        # write taken from the root platform files' entries for it (#2019).
+        tenant_raw, _sources = _overlay_tenant(self.tenants[tenant_id],
+                                               self.platform_blocks(tenant_id), merged)
         merged = deep_merge(merged, tenant_raw)
 
         # #772: when the compiler resolved any `_custom_alerts` for this tenant,
@@ -515,6 +662,25 @@ class ConfDScanner:
 
         return merged
 
+    def platform_overlay(self, tenant_id: str) -> list[dict]:
+        """`[{file, keys}]`: the root platform files whose `tenants:` entry
+        supplied values to `tenant_id`'s effective config, merge order, each
+        with the keys it supplied (#2019). Empty when that layer supplies
+        nothing. Same name and shape as the Go EffectiveConfig field."""
+        _combined, sources = _overlay_tenant(self.tenants[tenant_id],
+                                             self.platform_blocks(tenant_id),
+                                             self._chain_merged(tenant_id))
+        return sources
+
+    def _chain_merged(self, tenant_id: str) -> dict:
+        """The tenant's defaults chain merged L0 → Ln (no tenant layer)."""
+        merged: dict = {}
+        for dp in self.defaults_chain[tenant_id]:
+            ddata = self.defaults_data.get(str(dp), {})
+            defaults_block = ddata.get("defaults", ddata)
+            merged = deep_merge(merged, defaults_block)
+        return merged
+
     def source_info(self, tenant_id: str) -> dict:
         """Return source traceability for a tenant."""
         if tenant_id not in self.tenants:
@@ -525,7 +691,7 @@ class ConfDScanner:
         source_h = _file_hash(self.tenant_files[tenant_id])
         merged_h = _canonical_hash(effective)
 
-        return {
+        info = {
             "tenant_id": tenant_id,
             "source_file": self._report_path(self._tenant_entries[tenant_id],
                                              self.tenant_files[tenant_id]),
@@ -535,8 +701,13 @@ class ConfDScanner:
                 self._report_path(entry, p)
                 for entry, p in zip(self._defaults_chain_entries[tenant_id], chain)
             ],
-            "effective_config": effective,
         }
+        # Omitted when empty, as Go's `platform_overlay,omitempty`.
+        overlay = self.platform_overlay(tenant_id)
+        if overlay:
+            info["platform_overlay"] = overlay
+        info["effective_config"] = effective
+        return info
 
     def diff_tenants(self, id_a: str, id_b: str) -> dict:
         """Compare effective configs of two tenants."""
@@ -803,7 +974,14 @@ def main() -> None:
             ddata = simulated_defaults_data.get(str(dp), {})
             defaults_block = ddata.get("defaults", ddata) if isinstance(ddata, dict) else {}
             simulated = deep_merge(simulated, defaults_block)
-        simulated = deep_merge(simulated, scanner.tenants[tid])
+        # #2019: the same platform per-tenant layer as the baseline — taken
+        # from the what-if document when it stands in for a root platform
+        # file, so an edit to its `tenants:` block is simulated too.
+        sim_tenant, _sources = _overlay_tenant(
+            scanner.tenants[tid],
+            scanner.platform_blocks(tid, replace={str(what_if_path): what_if_data}),
+            simulated)
+        simulated = deep_merge(simulated, sim_tenant)
         what_if_merged_hash = _canonical_hash(simulated)
 
         # Compute per-key diff
@@ -839,10 +1017,11 @@ def main() -> None:
     if args.show_sources:
         result = scanner.source_info(tid)
     else:
-        result = {
-            "tenant_id": tid,
-            "effective_config": scanner.effective_config(tid),
-        }
+        result = {"tenant_id": tid}
+        overlay = scanner.platform_overlay(tid)
+        if overlay:
+            result["platform_overlay"] = overlay
+        result["effective_config"] = scanner.effective_config(tid)
     print(_output(result))
 
 

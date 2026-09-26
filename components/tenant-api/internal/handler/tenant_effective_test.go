@@ -17,10 +17,12 @@ package handler
 // pkg/config/hierarchy.go implementation to stay in lockstep.
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -340,5 +342,53 @@ func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 	}
 	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "85" {
 		t.Errorf("mysql_threads_running = %v, want \"85\"", got)
+	}
+}
+
+// #2019: a ROOT platform file's `tenants:` block is the platform's
+// per-tenant default, and /effective serves it — the values /metrics
+// serves — plus `platform_overlay` naming each file and the keys it
+// supplied. The field is omitted for a tenant no platform file names.
+func TestGetTenantEffective_PlatformOverlay(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _silent_mode: warning\n")
+	writeFile(t, filepath.Join(dir, "_profiles.yaml"),
+		"tenants:\n  tx:\n    mysql_connections: \"55\"\n")
+	writeFile(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx: {}\n")
+	writeFile(t, filepath.Join(dir, "ty.yaml"), "tenants:\n  ty: {}\n")
+
+	get := func(id string) []byte {
+		t.Helper()
+		h := GetTenantEffective(&Deps{ConfigDir: dir})
+		w := httptest.NewRecorder()
+		h(w, newRequestWithChiParam("GET", "/api/v1/tenants/"+id+"/effective", "id", id, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, body: %s", id, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+
+	var ec cfg.EffectiveConfig
+	if err := json.Unmarshal(get("tx"), &ec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := ec.EffectiveConfig["mysql_connections"]; got != "55" {
+		t.Errorf("mysql_connections = %v, want \"55\" (the later platform file)", got)
+	}
+	if got := ec.EffectiveConfig["_silent_mode"]; got != "warning" {
+		t.Errorf("_silent_mode = %v, want warning", got)
+	}
+	want := []cfg.PlatformOverlaySource{
+		{File: "_defaults.yaml", Keys: []string{"_silent_mode"}},
+		{File: "_profiles.yaml", Keys: []string{"mysql_connections"}},
+	}
+	if !reflect.DeepEqual(ec.PlatformOverlay, want) {
+		t.Errorf("platform_overlay = %+v, want %+v", ec.PlatformOverlay, want)
+	}
+
+	if body := get("ty"); bytes.Contains(body, []byte(`"platform_overlay"`)) {
+		t.Errorf("ty: no platform file names it, yet the response carries platform_overlay: %s", body)
 	}
 }

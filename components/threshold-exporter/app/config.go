@@ -72,6 +72,9 @@ type hierarchyState struct {
 	mergedHashes   map[string]string         // tenantID → 16-char merged_hash
 	graph          *InheritanceGraph         // defaults↔tenants dependency map
 	parsedDefaults map[string]map[string]any // absolute Clean path → parsed defaults dict
+	// platform is the root platform files' `tenants:` blocks the
+	// mergedHashes above were computed with (#2019), in merge order.
+	platform []config.PlatformTenants
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
 	// subtree defaults chain supplies but that NO emitter can iterate
@@ -1485,10 +1488,16 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 		return
 	}
 
+	// #2019: the root platform files' per-tenant blocks are merge input,
+	// decoded once from this scan's bytes for every tenant they name.
+	platform := config.LoadRootPlatformTenants(scan, nil, func(f *config.TreeFile) ([]byte, error) {
+		return in.bytesOf(f.AbsPath)
+	})
+
 	newMergedHashes := make(map[string]string, len(tenants))
 	for tid, srcPath := range tenants {
 		chain := graph.TenantDefaults[tid]
-		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in)
+		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in, config.PlatformOverlayFor(platform, tid)...)
 		if mergeErr != nil {
 			logMergeSkip(m.getLogger(), tid, "initial-hierarchy-scan", mergeErr)
 			continue
@@ -1518,6 +1527,7 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.hierarchy.mergedHashes = newMergedHashes
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
+	m.hierarchy.platform = platform
 	m.mu.Unlock()
 }
 
@@ -1602,7 +1612,7 @@ func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ChainD
 // emitParseFailureSignal on a merge failure. Read errors keep their
 // precedence over parse errors (recomputeMergedHash reads the tenant file
 // and every chain file before it parses anything).
-func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs) (string, error) {
+func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs, overlay ...config.PlatformBlock) (string, error) {
 	tenantBytes, err := in.bytesOf(tenantFile)
 	if err != nil {
 		return "", err
@@ -1615,7 +1625,7 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 		}
 		chain = append(chain, e.parsed)
 	}
-	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain)
+	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain, overlay...)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
@@ -1857,6 +1867,11 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 		chain = append(chain, m.hierarchy.graph.TenantDefaults[tenantID]...)
 	}
 	cachedHash := m.hierarchy.mergedHashes[tenantID]
+	// #2019: the cached merged_hash includes the root platform files'
+	// entries for this tenant, so the config served next to it must be
+	// merged with the SAME entries (the ones that hash was computed from),
+	// or the two contradict each other.
+	overlay := config.PlatformOverlayFor(m.hierarchy.platform, tenantID)
 	m.mu.RUnlock()
 
 	if !known {
@@ -1888,7 +1903,7 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 		chainBytes = append(chainBytes, b)
 	}
 
-	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes)
+	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes, overlay...)
 	if err != nil {
 		return &EffectiveConfig{
 			TenantID:      tenantID,
@@ -1903,7 +1918,7 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 	if mergedHash == "" {
 		// Cold path: cache miss (first /effective before any reload).
 		// Compute on the fly.
-		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes); mErr == nil {
+		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes, overlay...); mErr == nil {
 			mergedHash = mh
 		}
 	}
