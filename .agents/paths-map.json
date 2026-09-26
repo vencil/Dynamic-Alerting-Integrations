@@ -147,7 +147,7 @@
       "read": [
         {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"}
       ],
-      "note": "若這次 rebase／merge／cherry-pick 動到 `CHANGELOG.md`，完成後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`（預設讀 `ORIG_HEAD` 與 working tree；條目被靜默吃掉或重複時，數量常常不變），再跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`。生成物衝突先問是誰生的，取一側後重生，不手併。"
+      "note": "完成後跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`：兩支各自調過同一個計數的 PR 會乾淨地 rebase 成錯的數字。若這次動到 `CHANGELOG.md` 本身（凍結後只剩發版收尾與修正既有條目；`changelog.d/` 片段一檔一條，不會互相吃掉），再跑 `python3 scripts/tools/dx/changelog_rebase_check.py`。生成物衝突先問是誰生的，取一側後重生，不手併。"
     },
     {
       "id": "branch-delete",
