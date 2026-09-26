@@ -13,10 +13,10 @@ The observable form of that contract, per bilingual tool:
 
 WHY THIS FILE EXISTS
 --------------------
-The bilingual help contract (dev-rules §9 L3) is enforced here behaviorally:
-each tool is run with ``--help`` under both languages. A check that only reads
-the source (does it mention ``detect_cli_lang`` / ``_HELP``?) cannot tell
-whether the switch still works.
+The bilingual help contract (dev-rules §9 L3) is enforced here by running
+``--help``, not only by reading the source: a source check (does it mention
+``detect_cli_lang`` / ``_HELP``?) cannot tell whether the switch still works.
+What runs for which tool is under SCOPE below.
 
 SCOPE — corpus and its four-way partition
 -----------------------------------------
