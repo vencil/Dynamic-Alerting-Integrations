@@ -94,6 +94,7 @@ lang: zh
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
+| `changelog_rebase_check.py` | did a rebase keep exactly the right CHANGELOG lines? |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |

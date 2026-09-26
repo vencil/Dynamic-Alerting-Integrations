@@ -84,7 +84,7 @@
         {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"},
         {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "3. Pre-commit auto hooks"}
       ],
-      "note": "只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。"
+      "note": "只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。rebase／解衝突碰到這個檔，之後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`：條目被靜默吃掉或重複時，數量常常不變。"
     },
     {
       "id": "agents-ssot",
