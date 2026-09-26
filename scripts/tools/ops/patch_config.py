@@ -21,7 +21,9 @@ Three-state logic (for keys `_defaults.yaml` gives a value to, under `defaults:`
 
 Diff preview (terraform plan analogy):
   - patch_config.py --diff db-a mysql_connections 50
-  Shows before/after comparison without applying any changes.
+  Shows the value to be written and whether apply would write anything,
+  without applying. It does not show the current value: that is the
+  exporter's to tell (its /metrics), not this tool's (#1950).
 
 Dimensional metrics (Phase 2B):
   - patch_config.py db-a 'redis_queue_length{queue="tasks"}' 500
@@ -404,59 +406,6 @@ def patch_multifile(cm_data, tenant, metric_key, value):
                           create_key=f"{tenant}.yaml")
 
 
-def read_platform_tiers(cm_data, mode):
-    """(defaults_mapping, declared_key_list) — the platform side of the ConfigMap.
-
-    ONE read path for both platform tiers, so nothing downstream has to re-parse
-    the same document with its own idea of where the tiers live (#1321):
-
-      * ``defaults``          — key → platform value text. The platform ASSERTS these.
-      * ``optional_overrides`` — key NAMES only. The platform RECOGNISES these
-        and asserts NO value; a tenant that does not set one gets no value at
-        all, which is silence, not a fallback.
-
-    Legacy mode keeps both tiers in the single ``config.yaml``; multi-file mode
-    in the ``_defaults`` key.
-    """
-    data = _cm_keys(cm_data)
-    key = LEGACY_KEY if mode == "legacy" else find_defaults_key(data)
-    root = read_node(data.get(key), key)
-    if not _mapping_or_null(root):
-        raise ConfigMapShapeError(f"{key} is not a YAML mapping.")
-    top = _entries(root, key)
-    defaults = {k: _text(v) for k, v in _entries(top.get("defaults"), key).items()}
-    listed = top.get("optional_overrides")
-    declared = ([n.value for n in listed.value if isinstance(n, yaml.ScalarNode)]
-                if isinstance(listed, yaml.SequenceNode) else [])
-    return defaults, declared
-
-
-def get_current_value(cm_data, mode, tenant, metric_key):
-    """Get the current value of a metric key from the ConfigMap.
-
-    Returns (current_value, source) where source is 'tenant', 'defaults',
-    'declared', or 'none'. The value is source text (`_text`); null is None.
-
-    ``'declared'`` (#1321) is the tier the platform recognises but assigns no
-    value to. It is deliberately NOT folded into ``'none'``: for a declared key
-    the tenant may set a value and it takes effect, while ``'none'`` means the
-    platform does not know the key at all — the only two states that look alike
-    from the outside (both currently valueless) but differ in what the tenant
-    can do about it.
-    """
-    _, own = tenant_block(cm_data, tenant)
-    if metric_key in own:
-        return _text(own[metric_key]), "tenant"
-
-    defaults_section, declared = read_platform_tiers(cm_data, mode)
-    if metric_key in defaults_section:
-        return defaults_section[metric_key], "defaults"
-    if metric_key in declared:
-        return None, "declared"
-
-    return None, "none"
-
-
 def find_affected_alerts(metric_key):
     """Identify alert rules that reference this metric.
 
@@ -480,90 +429,40 @@ def find_affected_alerts(metric_key):
     return alerts
 
 
-# ---------------------------------------------------------------------------
-# Valueless-state wording, per platform tier (#1321)
-# ---------------------------------------------------------------------------
-_AFTER_KEY_REMOVED = {
-    "declared": ("no value (key removed — the platform DECLARES this key but "
-                 "asserts no value, so nothing falls back: the metric goes "
-                 "silent)"),
-    "platform-default": "default (key removed)",
-    "unknown": ("no value (key removed — no platform default for this key to "
-                "fall back to)"),
-}
-_BEFORE_NOT_SET = {
-    "declared": ("no value (declared key, not set — the platform asserts no "
-                 "value here, so it is silent)"),
-    "platform-default": "default (not set)",
-    "unknown": "no value (not set — no platform default for this key)",
-}
-_NO_VALUE_DISPLAY = {
-    "declared": "(no value — declared, unset)",
-    "platform-default": "(platform default)",
-    "unknown": "(no value)",
-}
+CURRENT_VALUE_NOTE = (
+    "Current value: not read by this tool (#1950). What is in effect is what "
+    "the exporter emits: the `user_*` series with tenant=\"{tenant}\" on its "
+    "/metrics.")
 
 
 def diff_preview(cm_data, mode, tenant, metric_key, value):
-    """Show before/after preview of a config change without applying it.
+    """What apply would do, without doing it.
 
-    Returns dict with diff details.
+    `before` is None: the value in effect is not read here. Telling it for
+    one key would mean redoing the exporter's key -> series mapping in
+    Python, which #1950 ruled out; the exporter's /metrics is where it is
+    (CURRENT_VALUE_NOTE). `after` describes only the requested value, and
+    `changed` is apply's own verdict (`build_patch`).
     """
-    current_value, source = get_current_value(cm_data, mode, tenant, metric_key)
-    affected_alerts = find_affected_alerts(metric_key)
-
-    # Which platform tier the key sits in decides every valueless-state string
-    # below (see the tables above). Read once, from the same path
-    # `get_current_value` used.
-    platform_defaults, declared_keys = read_platform_tiers(cm_data, mode)
-    if metric_key in declared_keys:
-        tier = "declared"
-    elif source == "defaults" or metric_key in platform_defaults:
-        # Sourced from `defaults:`, or merely landing there once the tenant key
-        # goes away — either way deletion has something to fall back to.
-        tier = "platform-default"
-    else:
-        tier = "unknown"
-
-    # Determine new state description
-    new_value = value
-    if str(value).lower() == "default":
-        new_state = _AFTER_KEY_REMOVED[tier]
-        new_value = _NO_VALUE_DISPLAY[tier]
+    if _is_default(value):
+        # Only what is written; what applies once the key is gone is the
+        # exporter's to say, not this tool's.
+        new_value, new_state = None, "key removed"
     elif str(value).lower() in ("disable", "disabled", "off", "false"):
-        new_state = "disabled"
+        new_value, new_state = value, "disabled"
     else:
-        new_state = f"custom: {value}"
-
-    # Determine old state description
-    if current_value is None:
-        old_state = _BEFORE_NOT_SET[tier]
-        old_display = _NO_VALUE_DISPLAY[tier]
-    elif str(current_value).lower() in ("disable", "disabled", "off", "false"):
-        old_state = "disabled"
-        old_display = str(current_value)
-    elif source == "defaults":
-        old_state = f"platform default: {current_value}"
-        old_display = str(current_value)
-    else:
-        old_state = f"custom: {current_value}"
-        old_display = str(current_value)
-
-    # Build diff result
-    diff = {
+        new_value, new_state = value, f"custom: {value}"
+    return {
         "tenant": tenant,
         "metric_key": metric_key,
         "configmap_mode": mode,
-        "before": {"value": current_value, "source": source, "state": old_state},
-        "after": {"value": new_value if str(value).lower() != "default" else None,
-                  "state": new_state},
+        "before": None,
+        "after": {"value": new_value, "state": new_state},
         # The same patch apply would send: unchanged iff none.
         "changed": build_patch(cm_data, mode, tenant, metric_key,
                                value) is not None,
-        "affected_alerts": affected_alerts,
+        "affected_alerts": find_affected_alerts(metric_key),
     }
-
-    return diff
 
 
 def print_diff(diff):
@@ -578,14 +477,11 @@ def print_diff(diff):
     print(f"  Mode:     {diff['configmap_mode']}")
     print()
 
-    before = diff["before"]
-    after = diff["after"]
-
     if diff["changed"]:
-        print(f"  - Before: {before['state']}  (source: {before['source']})")
-        print(f"  + After:  {after['state']}")
+        print(f"  + After:  {diff['after']['state']}")
     else:
-        print(f"    No change (already: {before['state']})")
+        print("    No change: apply would write nothing.")
+    print(f"  {CURRENT_VALUE_NOTE.format(tenant=diff['tenant'])}")
 
     if diff["affected_alerts"]:
         print()
@@ -926,6 +822,7 @@ class _Write:
         self.verified = False    # every pod verified it
         self.rv_read = None      # resourceVersion the write is based on
         self.rv_written = None   # resourceVersion the write produced
+        self.rolled_back = False  # a rollback patch went through
 
 
 def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
@@ -1207,6 +1104,7 @@ def _send_rollback(write):
             if rv is None:
                 raise PatchConflict("the version our write produced is unknown")
             _kubectl_patch({"data": {write.key: write.old}}, rv)
+            write.rolled_back = True  # never sent twice (_observed_fallback)
             return None
         except PatchConflict as exc:
             now = _read_cm()
@@ -1243,6 +1141,14 @@ def _observed_fallback(write):
                             "unexpected_error", changed=False)
         if write.verified:
             return _outcome("applied", written=True)
+        if write.rolled_back:
+            # _conclude failed after its rollback went through: sending it
+            # again would conflict on the version the rollback moved past and
+            # read the old bytes as someone else's. Observe instead.
+            if _read_key(write.key) == write.old:
+                return _outcome("error-rolled-back", "internal error; "
+                                "rolled back", rolled_back=True)
+            raise RuntimeError("the key changed after the rollback")
         failed = _send_rollback(write)
         if isinstance(failed, Overwritten):
             return _outcome("overwritten-by-another-writer", "internal "
@@ -1281,7 +1187,9 @@ def build_parser():
     parser.add_argument("value", help="New value, 'default', or 'disable'")
     parser.add_argument(
         "--diff", action="store_true",
-        help="Preview change without applying (like terraform plan)",
+        help="Preview the change without applying (like terraform plan): "
+             "the value to be written and whether apply would write; the "
+             "current value is not shown (see the exporter's /metrics)",
     )
     parser.add_argument(
         "--json", action="store_true",

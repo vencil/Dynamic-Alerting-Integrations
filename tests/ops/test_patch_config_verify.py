@@ -896,3 +896,49 @@ class TestCompareAndSwap:
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["reason"]) == (2, "configmap_shape")
         assert c.patches == []
+
+
+class TestRollbackAccounting:
+    """#1950 PR 2 的 T2／T3：回滾已經做完或做不完時，回報要跟著 ConfigMap 走。"""
+
+    def test_t2_a_done_rollback_is_not_redone_when_conclude_fails_after_it(self, capsys):
+        """回滾成功之後 `_conclude` 自己丟例外 ⇒ 備援不得再送一次回滾。
+
+        再送一次必然 409（前置條件是寫入產生的版本，回滾已把它推過去），
+        重讀時 key 是舊位元組 ≠ 新位元組，會被讀成「另一個寫者改了」而回 7——
+        但 ConfigMap 實際上已經回滾完成。"""
+        c = FakeCluster(dict(_ANCHOR_CM))
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 2  # the write and ONE rollback
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
+    def test_t3_a_rollback_that_keeps_conflicting_stops_after_the_bound(self, capsys):
+        """每次回滾都 409、key 仍是我們的位元組（只有別的 key 一直在變）⇒
+        恰好送 ROLLBACK_CONFLICT_ATTEMPTS 次回滾就停，回報 rollback-failed。"""
+        churn = {"n": 0}
+
+        def other_key_keeps_changing(n, cl):
+            if n > 1 + 4 * pc.ROLLBACK_CONFLICT_ATTEMPTS:
+                # an unbounded retry would spin forever: end it (as a failed
+                # rollback) so the count below turns red instead of hanging
+                raise RuntimeError("the rollback is not bounded")
+            if n >= 1:  # before every rollback attempt, never before the write
+                churn["n"] += 1
+                cl.other_writer("t-b.yaml",
+                                f"tenants:\n  t-b: {{m: '{churn['n']}'}}\n")
+        c = FakeCluster(_multi(), render=TestCompareAndSwap._verify_fails,
+                        concurrent=other_key_keeps_changing)
+        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        doc = json.loads(capsys.readouterr().out)
+        rollbacks = [p for p in c.patches[1:] if "t-a.yaml" in p["data"]]
+        assert len(rollbacks) == pc.ROLLBACK_CONFLICT_ATTEMPTS
+        assert len(c.patches) == 1 + pc.ROLLBACK_CONFLICT_ATTEMPTS
+        assert "'65'" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
+        assert (code, doc["status"], doc["written"]) == (
+            pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True)

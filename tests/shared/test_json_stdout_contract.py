@@ -1003,11 +1003,14 @@ RECIPES: list[Recipe] = [
                               "b.yaml": "tenants:\n  tenant-x: {}\n"}})),
         ("diff-data-not-mapping", _PC_DIFF, "configmap_shape",
          json.dumps({"data": ["_defaults.yaml"]})),
+        # `--diff` reads only tenant keys since #1950 PR 2 (not `_defaults`),
+        # so the unreadable key that reaches these two paths is a tenant key.
         ("diff-too-deep", _PC_DIFF, "configmap_shape",
-         json.dumps({"data": {"_defaults.yaml": "[" * 5000 + "]" * 5000}})),
+         json.dumps({"data": {"_defaults.yaml": "defaults: {}",
+                              "t.yaml": "[" * 5000 + "]" * 5000}})),
         ("diff-kubectl-failed", _PC_DIFF, "kubectl_failed", "fail"),
         ("diff-unexpected-error", _PC_DIFF, "unexpected_error",
-         json.dumps({"data": {"_defaults.yaml": 5}})),
+         json.dumps({"data": {"_defaults.yaml": "defaults: {}", "t.yaml": 5}})),
       ]],
 
     # ── policy_engine ──────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Changed
 
+- **⚠️ 行為變更——`patch-config --diff` 不再顯示目前值（tools、docs；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`--json` 的 `before` 恆為 `null`，文字輸出不再印 `Before` 行，改印一行指向 exporter 的 `/metrics`（該租戶的 `user_*` series）；`after` 只描述要寫入的值（`default` 為 `key removed`，不推斷刪掉後生效的值），`changed` 仍與 apply 同一判定。理由：要讀出單一 key 的現值，必須在 Python 端重做 exporter 的 key→series 對應，#1950 決策排除。`get_current_value`、`read_platform_tiers` 與 tier 措辭表一併刪除（repo 內零其他呼叫端）；本段先前 #1928 的「`before.value` 一律是原文字串」與 #1321 的 `--diff` 依 tier 分述，由本條取代。順帶：`_defaults` 讀不了不再擋 `--diff`（與 apply 一致）。
 - **租戶列表帶「依設定推算」的靜音／維護狀態，解析失敗的檔案會被列出（tenant-api、exporter、portal；[#1988](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1988)）**：`GET /api/v1/tenants` 與 `/tenants/search` 的每個租戶新增 `config_derived`（`silent_targets`／`maintenance_active`），由 `config.LoadDir`＋`OperationalStatesAt(now)` 在請求當下算出，與 exporter `/metrics` 同一份計算，不是 Alertmanager 的觀測值；原有 `silent_mode`／`maintenance` 在推算可用時仍是原始值，推算不可用時清空。兩端點共用快照快取（`/tenants` 過去每請求讀磁碟），只在不必等待就拿得到 GitOps writer 的鎖時載入且有時限，過期的快照不當成已知狀態，工作樹不在 base 上時不推算。`/tenants/search` 新增 `config_derivation`（含 `parse_failed_files`、`load_error`）並寫進 OpenAPI；不受限者以外的呼叫者只拿到固定的錯誤字串與不含目錄的檔名。`pkg/config.LoadDir` 回傳改為 `(cfg, parseFailed, err)`，exporter 行為不變。Tenant Manager 改讀 `config_derived` 並標「依設定推算」，缺值顯示 `unknown`。
 
 - **靜音／維護的判讀只剩一份：`pkg/config` 新增 `LoadDir` 與 `OperationalStatesAt`，collector 改讀後者，`IsMaintenanceActive` 移除（exporter；[#1988](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1988)）**：#1988 方案 D1 的第二步。`LoadDir(dir, logger)` 走 exporter 冷載入的同一串步驟（冷掃描、重複租戶拒絕、subtree 鏈、`BuildFlatConfig`）。`OperationalStatesAt(now)` 收進原本只寫在 collector 裡的兩件事：過期靜音改發 `da_config_event`，以及「維護中＝有 `maintenance` state filter 那一列」。collector 輸出的 metric 不變；靜音與 state filter 改用與 threshold 同一個 scrape `now`。`IsMaintenanceActive` 在 production 已無呼叫者，而且它對 `""`／`~` 以及「平台沒定義 filter」的判讀和 collector 相反，所以移除。新增 differential test，用真的 collector Gather 對拍 `LoadDir`＋`OperationalStatesAt`。
@@ -119,6 +120,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
 
 ### Fixed
+
+- **`patch-config` apply：回滾已成功後的內部錯誤不再誤報 exit 7（tools；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`_conclude` 在回滾 patch 成功之後自己出錯時，備援會再送一次回滾；第二次以寫入產生的版本為前置條件必然 409，重讀到舊位元組又被當成「另一個寫者改了 key」，回報 `overwritten-by-another-writer`（exit 7），而 ConfigMap 其實已回滾。現在記錄回滾已送達，備援改為觀察 key：是舊位元組即回報 `error-rolled-back`（exit 6）。另補一支測試守住回滾遇 409 時的重試上限 `ROLLBACK_CONFLICT_ATTEMPTS`（此前無測試）。
 
 - **threshold-exporter chart README 的「常用覆寫」表不再列 chart 不存在的 key（helm、文件；[#2044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2044)）**：`config.directory` 與 `podDisruptionBudget.enabled` 在 `values.yaml` 裡不存在，照抄是 silent no-op——掛載路徑固定為 `/etc/threshold-exporter/conf.d`，PDB 由 `replicaCount > 1` 自動建立、沒有開關；`rules.mode` 沒有 `disabled` 分支，而且它只決定 `operator` 時要不要建 ServiceMonitor，本 chart 並不出貨 Rule Pack；`image.tag` 預設是空字串（由 appVersion 推導），不是 `v2.7.0`。新增 `tests/helm/test_readme_values_keys.py`：各 chart README 參數表列的每個 key 都必須存在於該 chart 的 `values.yaml`。
 

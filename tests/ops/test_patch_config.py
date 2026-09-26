@@ -2,8 +2,8 @@
 """test_patch_config.py — patch_config.py pytest 風格測試。
 
 驗證:
-  1. get_current_value() — 從 ConfigMap 讀取當前值
-  2. diff_preview() — 變更預覽邏輯
+  1. tenant_block() — 定位租戶區塊並讀原文（寫入正確性的回讀也走它）
+  2. diff_preview() — 變更預覽（不宣稱目前值，#1950）
   3. find_affected_alerts() — Alert 影響分析
   4. print_diff() — 格式化輸出
   5. patch_legacy() / patch_multifile() — 實際 patch 邏輯
@@ -28,52 +28,6 @@ def _signals_reset():
     pc.SIGNALS.reset()
 
 
-class TestGetCurrentValue:
-    """get_current_value() 測試。"""
-
-    def test_multifile_tenant_value(self):
-        """應從 tenant YAML 讀取值。"""
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults:\n  mysql_connections: 70",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50",
-            }
-        }
-        val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "mysql_connections")
-        assert val == "50"
-        assert source == "tenant"
-
-    def test_multifile_defaults_fallback(self):
-        """Tenant 無值時應 fallback 到 defaults。"""
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults:\n  mysql_connections: 70",
-                "db-a.yaml": "tenants:\n  db-a: {}",
-            }
-        }
-        val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "mysql_connections")
-        assert val == "70"
-        assert source == "defaults"
-
-    def test_multifile_not_found(self):
-        """完全找不到值時應返回 None。"""
-        cm_data = {"data": {"_defaults.yaml": "defaults: {}"}}
-        val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "unknown_metric")
-        assert val is None
-        assert source == "none"
-
-    def test_legacy_tenant_value(self):
-        """Legacy 模式應從 config.yaml 讀取。"""
-        cm_data = {
-            "data": {
-                "config.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\ndefaults:\n  mysql_connections: 70",
-            }
-        }
-        val, source = pc.get_current_value(cm_data, "legacy", "db-a", "mysql_connections")
-        assert val == "50"
-        assert source == "tenant"
-
-
 class TestDiffPreview:
     """diff_preview() 測試。"""
 
@@ -86,9 +40,9 @@ class TestDiffPreview:
             }
         }
         diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
-        assert diff["changed"]
-        assert "custom: 70" in diff["before"]["state"]
-        assert "custom: 50" in diff["after"]["state"]
+        assert diff["changed"] is True
+        assert diff["before"] is None
+        assert diff["after"] == {"value": "50", "state": "custom: 50"}
 
     def test_custom_to_default(self):
         """Custom → Default (刪除) 變更。"""
@@ -99,8 +53,10 @@ class TestDiffPreview:
             }
         }
         diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "default")
-        assert diff["changed"]
-        assert "default" in diff["after"]["state"]
+        assert diff["changed"] is True
+        assert diff["before"] is None
+        # 只說寫了什麼；刪掉後生效的是什麼由 exporter 決定，不在這裡推斷。
+        assert diff["after"] == {"value": None, "state": "key removed"}
 
     def test_custom_to_disable(self):
         """Custom → Disable 變更。"""
@@ -111,8 +67,9 @@ class TestDiffPreview:
             }
         }
         diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "disable")
-        assert diff["changed"]
-        assert "disabled" in diff["after"]["state"]
+        assert diff["changed"] is True
+        assert diff["before"] is None
+        assert diff["after"] == {"value": "disable", "state": "disabled"}
 
     def test_no_change(self):
         cm_data = {
@@ -122,95 +79,8 @@ class TestDiffPreview:
             }
         }
         diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
-        assert not diff["changed"]
-
-
-class TestDiffPreviewDeclaredTier:
-    """⛔ 執行期輸出也是一種宣稱（#1321）。
-
-    `--diff` 印出來的那兩行是 operator 套用前唯一會讀的東西，而它們原本無條件說
-    「default」——等於承諾每個 key 背後都有平台值。對宣告層（`optional_overrides:`
-    只有 key 名、沒有值）沒有：`default` 不是還原成平台值，而是**沒有值**，series
-    停掉、告警下線（PREVENT #656 的形狀）。
-
-    `get_current_value` 本來就算得出 `source`（而且就印在同一行），資訊在手上，
-    只是字串沒用它。
-    """
-
-    DECLARED = "oracle_process_count"
-
-    def _cm(self, tenant_yaml="tenants:\n  db-a: {}"):
-        return {
-            "data": {
-                "_defaults.yaml": (
-                    "defaults:\n  mysql_connections: 70\n"
-                    f"optional_overrides:\n  - {self.DECLARED}\n"
-                ),
-                "db-a.yaml": tenant_yaml,
-            }
-        }
-
-    def test_declared_key_is_its_own_source(self):
-        """宣告 ≠ 未知：兩者現在都沒有值，但租戶能對前者做的事不同。"""
-        val, source = pc.get_current_value(
-            self._cm(), "multi-file", "db-a", self.DECLARED)
-        assert val is None
-        assert source == "declared"
-        val, source = pc.get_current_value(
-            self._cm(), "multi-file", "db-a", "totally_unknown_key")
-        assert source == "none"
-
-    def test_revert_of_a_declared_key_does_not_claim_a_default(self):
-        """租戶設過、現在要 revert：刪掉＝沒有值，不是「回到平台預設」。"""
-        diff = pc.diff_preview(
-            self._cm(f"tenants:\n  db-a:\n    {self.DECLARED}: '400'"),
-            "multi-file", "db-a", self.DECLARED, "default")
-        after = diff["after"]["state"]
-        assert "default (key removed)" not in after
-        assert "no value" in after
-        assert "silent" in after
-
-    def test_unset_declared_key_does_not_claim_a_default(self):
-        diff = pc.diff_preview(
-            self._cm(), "multi-file", "db-a", self.DECLARED, "400")
-        before = diff["before"]
-        assert before["source"] == "declared"
-        assert "default (not set)" not in before["state"]
-        assert "no value" in before["state"]
-
-    def test_key_with_a_platform_default_still_says_default(self):
-        """⛔ 反向：有平台預設的 key，原本的說法本來就是對的，不能一起改掉。"""
-        diff = pc.diff_preview(
-            self._cm("tenants:\n  db-a:\n    mysql_connections: '90'"),
-            "multi-file", "db-a", "mysql_connections", "default")
-        assert diff["after"]["state"] == "default (key removed)"
-
-    def test_platform_default_is_not_called_a_tenant_custom_value(self):
-        diff = pc.diff_preview(
-            self._cm(), "multi-file", "db-a", "mysql_connections", "90")
-        assert diff["before"]["source"] == "defaults"
-        assert diff["before"]["state"] == "platform default: 70"
-
-    def test_unknown_key_claims_neither_a_default_nor_a_declaration(self):
-        diff = pc.diff_preview(
-            self._cm(), "multi-file", "db-a", "totally_unknown_key", "default")
-        assert "no platform default" in diff["after"]["state"]
-        assert "declare" not in diff["after"]["state"].lower()
-
-    def test_legacy_mode_reads_the_same_two_tiers(self):
-        cm_data = {
-            "data": {
-                "config.yaml": (
-                    "tenants:\n  db-a: {}\n"
-                    "defaults:\n  mysql_connections: 70\n"
-                    f"optional_overrides:\n  - {self.DECLARED}\n"
-                )
-            }
-        }
-        assert pc.get_current_value(
-            cm_data, "legacy", "db-a", self.DECLARED)[1] == "declared"
-        assert pc.get_current_value(
-            cm_data, "legacy", "db-a", "mysql_connections") == ("70", "defaults")
+        assert diff["changed"] is False
+        assert diff["before"] is None
 
 
 class TestFindAffectedAlerts:
@@ -242,29 +112,33 @@ class TestDetectMode:
 
 
 class TestPrintDiff:
-    """print_diff() 不崩潰測試。"""
+    """print_diff()：不印 Before，改印一行「目前值不由本工具判讀」。"""
 
-    def test_changed_diff(self):
-        """測試已變更的 diff 不崩潰。"""
-        diff = {
+    @staticmethod
+    def _diff(changed):
+        return {
             "tenant": "db-a", "metric_key": "mysql_connections",
-            "configmap_mode": "multi-file", "changed": True,
-            "before": {"value": 70, "source": "tenant", "state": "custom: 70"},
-            "after": {"value": 50, "state": "custom: 50"},
+            "configmap_mode": "multi-file", "changed": changed,
+            "before": None, "after": {"value": "50", "state": "custom: 50"},
             "affected_alerts": ["*MysqlConnections*"],
         }
-        pc.print_diff(diff)  # Should not raise
 
-    def test_unchanged_diff(self):
-        """測試未變更的 diff 不崩潰。"""
-        diff = {
-            "tenant": "db-a", "metric_key": "mysql_connections",
-            "configmap_mode": "multi-file", "changed": False,
-            "before": {"value": 50, "source": "tenant", "state": "custom: 50"},
-            "after": {"value": 50, "state": "custom: 50"},
-            "affected_alerts": [],
-        }
-        pc.print_diff(diff)  # Should not raise
+    def test_changed_diff(self, capsys):
+        pc.print_diff(self._diff(True))
+        out = capsys.readouterr().out
+        assert "+ After:  custom: 50" in out
+        assert "Before" not in out
+        assert "Current value: not read by this tool" in out
+        assert 'tenant="db-a"' in out
+        assert "To apply" in out
+
+    def test_unchanged_diff(self, capsys):
+        pc.print_diff(self._diff(False))
+        out = capsys.readouterr().out
+        assert "No change: apply would write nothing." in out
+        assert "already" not in out and "Before" not in out
+        assert "Current value: not read by this tool" in out
+        assert "To apply" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -397,68 +271,6 @@ class TestPatchMultifile:
 
 
 # ---------------------------------------------------------------------------
-# get_current_value — additional cases
-# ---------------------------------------------------------------------------
-
-class TestGetCurrentValueExtended:
-    """get_current_value() 額外測試。"""
-
-    def test_legacy_defaults_fallback(self):
-        cm_data = {
-            "data": {
-                "config.yaml": "tenants:\n  db-a: {}\ndefaults:\n  mysql_connections: 70",
-            }
-        }
-        val, source = pc.get_current_value(cm_data, "legacy", "db-a", "mysql_connections")
-        assert val == "70"
-        assert source == "defaults"
-
-    def test_legacy_not_found(self):
-        cm_data = {"data": {"config.yaml": "tenants: {}"}}
-        val, source = pc.get_current_value(cm_data, "legacy", "db-a", "unknown")
-        assert val is None
-        assert source == "none"
-
-    def test_legacy_empty_config(self):
-        cm_data = {"data": {}}
-        val, source = pc.get_current_value(cm_data, "legacy", "db-a", "cpu")
-        assert val is None
-        assert source == "none"
-
-    def test_multifile_empty_defaults(self):
-        cm_data = {"data": {"_defaults.yaml": ""}}
-        val, source = pc.get_current_value(cm_data, "multi-file", "db-a", "cpu")
-        assert val is None
-        assert source == "none"
-
-
-# ---------------------------------------------------------------------------
-# diff_preview — additional cases
-# ---------------------------------------------------------------------------
-
-class TestDiffPreviewExtended:
-    """diff_preview() 額外測試。"""
-
-    def test_disabled_old_value(self):
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: disable",
-            }
-        }
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
-        assert "disabled" in diff["before"]["state"]
-        assert diff["changed"]
-
-    def test_not_set_to_default(self):
-        """Metric not set -> set to 'default' (still no change since both are default)."""
-        cm_data = {"data": {"_defaults.yaml": "defaults: {}"}}
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "unknown_metric", "default")
-        assert "default" in diff["before"]["state"]
-        assert "default" in diff["after"]["state"]
-
-
-# ---------------------------------------------------------------------------
 # apply_patch
 # ---------------------------------------------------------------------------
 
@@ -498,6 +310,8 @@ class TestMainCLI:
             pc.main()
         out = capsys.readouterr().out
         assert "Config Change Preview" in out
+        assert "Before" not in out
+        assert "Current value: not read by this tool" in out
 
     @mock.patch("patch_config.run_cmd")
     def test_diff_json_mode(self, mock_run, capsys):
@@ -511,6 +325,8 @@ class TestMainCLI:
         import json
         out = json.loads(capsys.readouterr().out)
         assert out["changed"] is True
+        assert out["before"] is None
+        assert out["after"] == {"value": "90", "state": "custom: 90"}
 
     def test_json_without_diff_applies_and_prints_one_envelope(self, capsys):
         """`--json` 無 `--diff` 是 apply：stdout 恰好一份 envelope，其餘走 stderr。"""
@@ -565,6 +381,13 @@ def _cm(**data):
 
 def _decl(tenant, **metrics):
     return yaml.safe_dump({"tenants": {tenant: metrics}})
+
+
+def _own(cm, tenant, metric):
+    """(key, source text) of `metric` in `tenant`'s block, read the way
+    build_patch reads it — the read-back for locating and write tests."""
+    key, block = pc.tenant_block(cm, tenant)
+    return key, pc._text(block[metric])
 
 
 class TestLocateTenantKey:
@@ -668,11 +491,6 @@ class TestDefaultsKeyDetection:
         cm = _cm(**{"_DEFAULTS.YAML": _DEFAULTS})
         assert pc.detect_mode(cm) == "multi-file"
 
-    def test_platform_tiers_are_read_from_defaults_yml(self):
-        cm = _cm(**{"_defaults.yml": "defaults:\n  cpu: 70\n"
-                                     "optional_overrides: [mem]\n"})
-        assert pc.read_platform_tiers(cm, "multi-file") == ({"cpu": "70"}, ["mem"])
-
     def test_two_keys_folding_to_defaults_is_refused(self):
         cm = _cm(**{"_defaults.yaml": _DEFAULTS, "_Defaults.yml": _DEFAULTS})
         with pytest.raises(pc.ConfigMapShapeError) as exc:
@@ -770,13 +588,13 @@ class TestCarrierAndValueShapes:
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "tx.yaml": f"tenants:\n  {tid}:\n    cpu: '5'\n"})
         assert pc.locate_tenant_key(cm, tid) == "tx.yaml"
-        assert pc.get_current_value(cm, "multi-file", tid, "cpu") == ("5", "tenant")
+        assert _own(cm, tid, "cpu") == ("tx.yaml", "5")
 
-    def test_legacy_get_current_value_reads_a_carrier_other_than_config_yaml(self):
+    def test_legacy_reads_a_carrier_other_than_config_yaml(self):
         """legacy 版面下租戶在 `extra.yaml`，不是 `config.yaml`。"""
         cm = _cm(**{"config.yaml": "defaults:\n  m: 1\n",
                     "extra.yaml": "tenants:\n  tb: {m: '2'}\n"})
-        assert pc.get_current_value(cm, "legacy", "tb", "m") == ("2", "tenant")
+        assert _own(cm, "tb", "m") == ("extra.yaml", "2")
 
     def test_legacy_default_keeps_the_empty_block_outside_config_yaml(self):
         """`config.yaml` 以外的載體裡，刪掉空區塊會把租戶除名。"""
@@ -803,11 +621,10 @@ class TestCarrierAndValueShapes:
         """讀 → 用 patch-config 寫回 → 再讀：兩次都是 exporter 看到的原文。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "tenant-x.yaml": f"tenants:\n  tenant-x:\n    cpu: {raw}\n"})
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == (
-            exporter_text, "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", exporter_text)
         written = pc.patch_multifile(cm, "tenant-x", "cpu", exporter_text)["data"]
-        assert pc.get_current_value(_cm(**{**cm["data"], **written}), "multi-file",
-                                    "tenant-x", "cpu") == (exporter_text, "tenant")
+        assert _own(_cm(**{**cm["data"], **written}), "tenant-x", "cpu") == (
+            "tenant-x.yaml", exporter_text)
 
     @pytest.mark.parametrize("block", ["5", "[a]", "'str'"])
     def test_tenant_block_that_is_not_a_mapping_is_refused(self, block):
@@ -825,13 +642,12 @@ class TestCarrierAndValueShapes:
         assert pc.tenant_block(cm, "tenant-x") == ("tenant-x.yaml", {})
 
     @pytest.mark.parametrize("defaults", ["defaults: [unclosed\n", "- a\n"])
-    def test_unusable_defaults_is_refused_only_by_diff(self, defaults):
+    def test_unusable_defaults_blocks_neither_apply_nor_diff(self, defaults):
+        """`--diff` 不再讀平台層（#1950），所以與 apply 一樣不被它擋。"""
         cm = _cm(**{"_defaults.yaml": defaults,
                     "tenant-x.yaml": _decl("tenant-x", cpu="5")})
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
         assert pc.build_patch(cm, pc.detect_mode(cm), "tenant-x", "cpu", "9")
-        with pytest.raises(pc.ConfigMapShapeError, match="_defaults.yaml"):
-            pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["changed"]
 
     @pytest.mark.parametrize("tenant", ["_x", ".x", "_defaults"])
     def test_new_key_that_is_not_a_carrier_is_refused(self, tenant):
@@ -880,12 +696,11 @@ class TestNodeReader:
     def test_value_pyyaml_cannot_construct_does_not_block_other_tenants(
             self, other):
         cm = _two(_T, other)
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == (
-            "5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
 
     def test_custom_tag_value_is_its_text(self):
         cm = _two("tenants:\n  tenant-x:\n    cpu: !foo 80\n")
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("80", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "80")
 
     @pytest.mark.parametrize("text", [
         "tenants:\n  tenant-x:\n    cpu: '1'\n    cpu: '2'\n",
@@ -906,14 +721,13 @@ class TestNodeReader:
     def test_merge_key_off_the_lookup_path_is_read_past(self):
         """他租戶區塊裡的 `<<` 不擋 tenant-x。"""
         other = "b: &b {cpu: '1'}\ntenants:\n  other-t:\n    <<: *b\n"
-        assert pc.get_current_value(_two(_T, other), "multi-file", "tenant-x",
-                                    "cpu") == ("5", "tenant")
+        assert _own(_two(_T, other), "tenant-x", "cpu") == ("tenant-x.yaml", "5")
 
     def test_null_tenant_key_declares_nothing(self):
         """null key 不宣告任何租戶。"""
         cm = _two("tenants:\n  ~: {cpu: '1'}\n  tenant-x: {cpu: '5'}\n")
         assert pc.locate_tenant_key(cm, "~") is None
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
 
     def test_non_scalar_key_on_the_lookup_path_is_refused(self):
         text = "tenants:\n  ? [a]\n  : {}\n  tenant-x: {cpu: '5'}\n"
@@ -924,39 +738,21 @@ class TestNodeReader:
         """第二份文件以後的宣告、重複 key、語法錯都不讀。"""
         cm = _two(_T + "---\ntenants:\n  other-t: {}\n  other-t: {}\n"
                        "---\nx: [unclosed\n")
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
         assert pc.locate_tenant_key(cm, "other-t") is None
 
     @pytest.mark.parametrize("text", ["\ufeff" + _T, _T.replace("\n", "\r\n")],
                              ids=["bom", "crlf"])
     def test_bom_and_crlf_carriers(self, text):
         cm = _two(text)
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
         written = pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]
-        assert pc.get_current_value(_cm(**{**cm["data"], **written}), "multi-file",
-                                    "tenant-x", "cpu") == ("6", "tenant")
+        assert _own(_cm(**{**cm["data"], **written}), "tenant-x", "cpu") == (
+            "tenant-x.yaml", "6")
 
 
-class TestDiffBeforeAndChanged:
-
-    def test_before_value_is_source_text_in_both_tiers(self):
-        cm = _cm(**{"_defaults.yaml": "defaults:\n  mem: !!float 80\n",
-                    "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu: !!int 010\n"})
-        for metric, text in (("cpu", "010"), ("mem", "80")):
-            diff = pc.diff_preview(cm, "multi-file", "tenant-x", metric, "9")
-            assert diff["before"]["value"] == text
-
-    def test_null_tenant_value_is_none(self):
-        cm = _two("tenants:\n  tenant-x:\n    cpu: ~\n")
-        before = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["before"]
-        assert (before["value"], before["source"]) == (None, "tenant")
-
-    def test_mapping_value_is_its_yaml_text(self):
-        cm = _two("tenants:\n  tenant-x:\n    cpu: {default: '5', overrides: []}\n")
-        value = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu",
-                                "9")["before"]["value"]
-        assert isinstance(value, str)
-        assert yaml.safe_load(value) == {"default": "5", "overrides": []}
+class TestDiffChanged:
+    """`--diff` 的 `changed` 是 apply 自己的判定；`before` 一律 None（#1950）。"""
 
     @pytest.mark.parametrize("data", [
         {"_defaults.yaml": _DEFAULTS},
@@ -966,6 +762,7 @@ class TestDiffBeforeAndChanged:
         cm = _cm(**data)
         diff = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "default")
         assert diff["changed"] is False
+        assert diff["before"] is None
         assert pc.patch_multifile(cm, "tenant-x", "cpu", "default") is None
 
     def test_default_that_removes_a_value_is_a_change(self):
@@ -1020,8 +817,8 @@ class TestWriteScope:
     def test_self_referential_alias_is_written_without_recursing(self):
         cm = _two("a: &x [*x]\n" + _T)
         patch = pc.patch_multifile(cm, "tenant-x", "cpu", "6")
-        assert pc.get_current_value(_cm(**{**cm["data"], **patch["data"]}),
-                                    "multi-file", "tenant-x", "cpu") == ("6", "tenant")
+        assert _own(_cm(**{**cm["data"], **patch["data"]}), "tenant-x", "cpu") == (
+            "tenant-x.yaml", "6")
 
 
 _UNREADABLE = {
@@ -1051,7 +848,7 @@ class TestUnreadableKeyWithUndeclaredTenant:
     def test_declared_tenant_is_unaffected(self, text):
         """對照組：本組「必須成功」的成員。"""
         cm = _two(_T, text)
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
         assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "default")
         assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["changed"]
 
@@ -1105,7 +902,7 @@ class TestSameValueAndUnrelatedCarriers:
     ], ids=["nested-duplicate", "root-non-scalar-key"])
     def test_unrelated_carrier_shape_does_not_block_the_target(self, other):
         cm = _two(_T, other)
-        assert pc.get_current_value(cm, "multi-file", "tenant-x", "cpu") == ("5", "tenant")
+        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
         assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "6")["changed"]
         assert pc.patch_multifile(cm, "tenant-x", "cpu", "6") is not None
 
