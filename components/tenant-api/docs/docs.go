@@ -871,6 +871,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written). Direct mode reports this per op in results[].code instead.",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "413": {
                         "description": "Request Entity Too Large",
                         "schema": {
@@ -1100,7 +1106,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2376,6 +2382,10 @@ const docTemplate = `{
         "internal_handler.BatchResult": {
             "type": "object",
             "properties": {
+                "code": {
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return) and\nINTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten). Empty for every other failure and for a successful op.",
+                    "type": "string"
+                },
                 "message": {
                     "type": "string"
                 },

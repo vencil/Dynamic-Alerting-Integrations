@@ -325,7 +325,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		// loop resolves again and refuses there, with abortFeatureBranch, so no
 		// dangling branch survives. ⚠️ Only THIS error is tolerated: every
 		// other one is about reaching configDir at all, not about its shape.
-		opPath, err := w.tenantFilePath(op.TenantID)
+		//
+		// Placement only — confd directly, NOT tenantFilePath: the #2078
+		// "declared elsewhere" walk is a verdict on the whole tree, and this is
+		// not the tree the write lands on, so it is taken only after checkout.
+		opPath, err := confd.TenantFilePathForWrite(w.configDir, op.TenantID)
 		if err != nil {
 			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 				continue
