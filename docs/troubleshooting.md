@@ -162,8 +162,9 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - 診斷：比對 `kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'` 輸出與 PrometheusRule labels
    - 修正：確保 PrometheusRule 同時包含 `prometheus: kube-prometheus` 和 `release: kube-prometheus-stack`
    ```bash
-   # 使用 operator-generate 自動產出正確 label
-   da-tools operator-generate --tenant <name> --output-dir ./crds/
+   # 使用 operator-generate 自動產出正確 label（預設即帶上述兩個；Helm release 名稱不同時用 --selector-label 覆寫）
+   da-tools operator-generate --config-dir conf.d/ --output-dir ./crds/
+   da-tools operator-generate --config-dir conf.d/ --selector-label release=<你的 release> --output-dir ./crds/
    # 或手動 patch 現有 CRD
    kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
    ```
@@ -174,7 +175,7 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - 修正：擴展 namespace selector 或將 PrometheusRule 部署至已納入監控的 namespace
    ```bash
    # 方案 A：將 CRD 部署到 monitoring namespace
-   da-tools operator-generate --tenant <name> --namespace monitoring --output-dir ./crds/
+   da-tools operator-generate --config-dir conf.d/ --namespace monitoring --output-dir ./crds/
    # 方案 B：修改 Prometheus CRD 的 ruleNamespaceSelector 納入目標 namespace
    kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
    # 在 spec.ruleNamespaceSelector.matchLabels 加入目標 namespace label
@@ -185,8 +186,8 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - 診斷：`kubectl api-versions | grep monitoring.coreos.com`
    - 修正：
    ```bash
-   # 指定與叢集相符的 API 版本
-   da-tools operator-generate --tenant <name> --api-version v1 --output-dir ./crds/
+   # 指定與叢集相符的 AlertmanagerConfig API 版本（v1alpha1 / v1beta1，預設 v1beta1）
+   da-tools operator-generate --config-dir conf.d/ --api-version v1alpha1 --output-dir ./crds/
    ```
 
 **Rollback 程序**（從 Operator 退回 ConfigMap 模式）：
