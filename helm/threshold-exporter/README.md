@@ -42,9 +42,7 @@ helm install threshold-exporter ./helm/threshold-exporter \
 
 | 參數 | 預設 | 說明 |
 |------|------|------|
-| `replicaCount` | `2` | HA 副本數（搭配 PDB） |
-| `image.tag` | `v2.7.0` | threshold-exporter 映像版本 |
-| `rules.mode` | `configmap` | Rule Pack 供應方式（`configmap` / `operator` / `disabled`） |
-| `config.directory` | `/etc/threshold-exporter/conf.d` | Tenant config 掛載路徑 |
-| `podDisruptionBudget.enabled` | `true` | 滾動升級期間保留最少可用副本 |
+| `replicaCount` | `2` | HA 副本數；`> 1` 時自動建立 PDB（`minAvailable: 1`），沒有另外的開關 |
+| `image.tag` | `""`（＝`v<Chart appVersion>`） | 留空由 chart appVersion 推導；需要釘版本才設 |
+| `rules.mode` | `configmap` | `configmap` 或 `operator`。`operator` 時依 `rules.operator.serviceMonitor.*` 建立 ServiceMonitor；兩種模式都掛同一個 `threshold-config` 到 `/etc/threshold-exporter/conf.d`（固定路徑，不可設定）。⚠️ 本 chart 不出貨 Rule Pack——Rule Pack 是 `k8s/03-monitoring/configmap-rules-*.yaml`，需自行掛進 Prometheus |
 | `thresholdConfig.max_metrics_per_tenant` | `null`（＝內建 500） | 每租戶 threshold series 上限；只寫進根目錄 `_defaults.yaml`，負值＝不截斷（#2028） |
