@@ -4100,6 +4100,22 @@ def run_init(config: dict, output_dir: str,
     return created
 
 
+def _as_typed_here(output_dir: str, rel: str) -> str:
+    """`rel` (output-relative POSIX) spelled for a reader standing where init ran.
+
+    ⛔ The next steps used to print output-relative paths. From `-o alerting`
+    the reader is still at the repository root, so the copied
+    `validate-config --config-dir conf.d/` answered `config-dir not found`,
+    rc=2, and "Edit conf.d/t1.yaml" opened a new, empty file. The guide's
+    docker prefix mounts the current directory (`-v $(pwd):/workspace -w
+    /workspace`), so the current directory is the base every printed path must
+    use. Without `-o` both bases coincide and the spelling is unchanged.
+    """
+    trail = '/' if rel.endswith('/') else ''
+    here = os.path.relpath(Path(output_dir, rel).resolve(), Path.cwd().resolve())
+    return Path(here).as_posix() + trail
+
+
 def _print_summary(created: list[str], output_dir: str, config: dict,
                    pre_existing: set[str] | None = None,
                    plan: Optional[_ConfdPlan] = None) -> None:
@@ -4138,12 +4154,13 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print(f"  ⚠️  上列 {len(overwritten)} 個檔案在此之前就存在，"
                   f"內容已被取代，沒有備份。")
             print("     若其中有你手動調整過的閾值，請從版本控制取回"
-                  "（例如 git checkout -- conf.d/）。")
+                  f"（例如 git checkout -- {_as_typed_here(output_dir, 'conf.d/')}）。")
         else:
             print(f"  ⚠️  {len(overwritten)} of the files above already "
                   f"existed and were replaced. No backup was made.")
             print("     If any held hand-tuned thresholds, recover them from "
-                  "version control (e.g. git checkout -- conf.d/).")
+                  f"version control (e.g. git checkout -- "
+                  f"{_as_typed_here(output_dir, 'conf.d/')}).")
 
     # #1942: what the run did NOT write, and why — the receipt for the skip
     # notices already printed on stderr.
@@ -4186,8 +4203,9 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     # `_defaults.yaml` (#1942) that is the customer's own carrier; naming the
     # init spelling would send them to a file that does not exist — or,
     # created by hand, one that silently shadows theirs.
-    defaults_rel = (plan.defaults_carriers[0] if plan.defaults_carriers
-                    else 'conf.d/_defaults.yaml')
+    defaults_rel = _as_typed_here(
+        output_dir, plan.defaults_carriers[0] if plan.defaults_carriers
+        else 'conf.d/_defaults.yaml')
     if is_zh:
         print(f"  {step}. 編輯 {defaults_rel} — 調整平台預設閾值")
     else:
@@ -4197,17 +4215,19 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
     # Only the tenants this run generated: a skipped tenant's carrier is the
     # customer's own file, already listed above.
     for t in plan.generate:
+        tenant_rel = _as_typed_here(output_dir, f'conf.d/{t}.yaml')
         if is_zh:
-            print(f"  {step}. 編輯 conf.d/{t}.yaml — 設定租戶覆寫閾值與路由")
+            print(f"  {step}. 編輯 {tenant_rel} — 設定租戶覆寫閾值與路由")
         else:
-            print(f"  {step}. Edit conf.d/{t}.yaml — set tenant override thresholds and routing")
+            print(f"  {step}. Edit {tenant_rel} — set tenant override thresholds and routing")
         step += 1
 
+    precommit_rel = _as_typed_here(output_dir, '.pre-commit-config.da.yaml')
     if is_zh:
-        print(f"  {step}. 把 .pre-commit-config.da.yaml 裡的 `- repo: local` 這一項，"
+        print(f"  {step}. 把 {precommit_rel} 裡的 `- repo: local` 這一項，"
               f"接進你既有 .pre-commit-config.yaml 的 repos: 清單（整份貼上會覆蓋掉原有 hook）")
     else:
-        print(f"  {step}. Copy the `- repo: local` item from .pre-commit-config.da.yaml "
+        print(f"  {step}. Copy the `- repo: local` item from {precommit_rel} "
               f"into your existing repos: list (pasting the file whole drops your hooks)")
     step += 1
 
@@ -4659,10 +4679,11 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                   f"validate your config")
     step += 1
 
+    confd_rel = _as_typed_here(output_dir, 'conf.d/')
     print()
     if is_zh:
         print("  📖 完整指南: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/")
-        print("  🛠️  驗證: da-tools validate-config --config-dir conf.d/")
+        print(f"  🛠️  驗證: da-tools validate-config --config-dir {confd_rel}")
         # #1447: `da-tools` is the entry point *inside the image*; there is no
         # binary of that name to install, so a bare copy-paste ends in
         # `command not found`. The guide declares the docker prefix once — say
@@ -4671,7 +4692,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
               "本機執行請加上指南裡的 docker run 前綴）")
     else:
         print("  📖 Full guide: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/")
-        print("  🛠️  Validate: da-tools validate-config --config-dir conf.d/")
+        print(f"  🛠️  Validate: da-tools validate-config --config-dir {confd_rel}")
         print("     (`da-tools` is the entry point inside the image, not an "
               "installable binary — prefix it with the docker run line from "
               "the guide)")

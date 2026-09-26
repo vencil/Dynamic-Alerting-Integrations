@@ -6002,3 +6002,68 @@ class TestTheRetiredDeployMethodStaysRetired:
             'and it needs the nightly delivered-scan entry restored with it.')
         refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()]
         assert not any('argoproj' in ref for ref in refs), refs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 結尾「下一步」印的路徑：以執行 init 的目錄為基準（issue 1379 的載體之一）
+# ═══════════════════════════════════════════════════════════════════════════
+_TOOL = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "init_project.py")
+_ENTRYPOINT = os.path.join(REPO_ROOT, "components", "da-tools", "app",
+                           "entrypoint.py")
+
+
+def _init_in(repo, out, lang):
+    import subprocess
+    env = dict(os.environ, LANG=lang, PYTHONUTF8="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    env.pop("DA_LANG", None)
+    env.pop("LC_ALL", None)
+    run = subprocess.run(
+        [sys.executable, _TOOL, "--non-interactive", "--ci", "both",
+         "--deploy", "helm", "--tenants", "t1", "-o", out],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=300, env=env)
+    assert run.returncode == 0, run.stderr[-800:]
+    return run.stdout
+
+
+@pytest.mark.parametrize("lang", ["en_US.UTF-8", "zh_TW.UTF-8"])
+@pytest.mark.parametrize("out", ["alerting", "."])
+def test_next_step_paths_work_where_init_was_run(lang, out, tmp_path):
+    """⛔ 照抄結尾的 Validate 提示必須 rc=0，「編輯 X」的 X 必須存在。
+
+    子目錄模式（`-o alerting`）原本印 `validate-config --config-dir conf.d/`：
+    讀者還站在 repo 根目錄，照抄得到 `config-dir not found`、rc=2；「編輯
+    conf.d/t1.yaml」會在編輯器裡開一個新的空檔。指南的 docker 前綴掛的是目前
+    目錄，所以這裡以 init 的執行目錄（cwd）為基準判定。
+
+    ⚠️ 在真的 work-tree 裡量（有 `.git`）：非 repo 目錄走的是另一條分支，
+    曾因此得到假陰性。`-o .` 是對照組：兩個基準重合，拼法不能變。
+    """
+    import shlex
+    import subprocess
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    summary = _init_in(repo, out, lang)
+
+    validate = [ln for ln in summary.splitlines()
+                if "da-tools validate-config" in ln]
+    assert len(validate) == 1, summary
+    argv = shlex.split(validate[0].split("da-tools", 1)[1])
+    assert argv[0] == "validate-config", argv
+    run = subprocess.run([sys.executable, _ENTRYPOINT, *argv], cwd=repo,
+                         capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=300)
+    assert run.returncode == 0, (
+        f"copying the printed hint from {repo} gave rc={run.returncode}:\n"
+        f"{validate[0]}\n{run.stdout[-400:]}{run.stderr[-400:]}")
+
+    edits = re.findall(r"(?:Edit|編輯) (\S+) — ", summary)
+    edits += re.findall(r"from (\S+) into your|把 (\S+) 裡的", summary)
+    paths = [p for group in edits
+             for p in (group if isinstance(group, tuple) else (group,)) if p]
+    assert len(paths) == 3, (paths, summary)
+    for p in paths:
+        assert (repo / p).is_file(), f"{p} does not exist from {repo}\n{summary}"
+    if out == ".":
+        assert "--config-dir conf.d/" in validate[0], validate[0]
