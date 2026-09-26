@@ -72,6 +72,8 @@ type flags struct {
 	scopeDir             string
 	requiredFields       string
 	cardinalityLimit     int
+	cardinalityLimitSet  bool // --cardinality-limit given explicitly (else: root _defaults.yaml)
+	baselineConfigDir    string
 	cardinalityWarnRatio float64
 	format               string
 	output               string
@@ -94,8 +96,13 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		"Comma-separated dotted paths every tenant's effective config must have "+
 			"(e.g. 'thresholds.cpu,routing.receiver.type'). Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
-		"Per-tenant predicted-metric-count ceiling. 0 disables. "+
-			"Mirror DefaultMaxMetricsPerTenant=500 to match runtime truncation.")
+		"Per-tenant predicted-metric-count ceiling; 0 disables. When omitted, the cap the exporter "+
+			"enforces is used: max_metrics_per_tenant from the ROOT _defaults.yaml of --config-dir "+
+			"(unset/0 = 500, negative = no check).")
+	fs.StringVar(&f.baselineConfigDir, "baseline-config-dir", "",
+		"The same conf.d/ tree BEFORE the change (e.g. the PR base). When set and the root "+
+			"_defaults.yaml's max_metrics_per_tenant is raised or disabled relative to it, the report "+
+			"opens with a notice. Never affects the exit code.")
 	fs.Float64Var(&f.cardinalityWarnRatio, "cardinality-warn-ratio", 0.0,
 		"Warn-tier ratio of --cardinality-limit (0 < r < 1). 0 = library default (0.8).")
 	fs.StringVar(&f.format, "format", "md",
@@ -120,6 +127,11 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	fs.Visit(func(fl *flag.Flag) {
+		if fl.Name == "cardinality-limit" {
+			f.cardinalityLimitSet = true
+		}
+	})
 	return f, nil
 }
 
@@ -167,6 +179,32 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 
+	// #2043: without an explicit --cardinality-limit, predict against the cap
+	// the exporter will actually enforce for this tree, not a constant. The
+	// root carrier is read from --config-dir, never from --scope: the cap is
+	// one global value (#2028), so a scoped run must use the same one.
+	if !f.cardinalityLimitSet {
+		limit, source, err := config.RootMaxMetricsPerTenant(f.configDir)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		if limit < 0 {
+			limit = 0 // exporter: negative = no truncation; guard: 0 = no check
+		}
+		f.cardinalityLimit = limit
+		if source == "" {
+			source = "built-in default (no root _defaults.yaml)"
+		}
+		fmt.Fprintf(errOut, "%s: cardinality limit %d from %s (0 = no check; override with --cardinality-limit)\n",
+			programName, limit, source)
+	}
+
+	notices := capChangeNotices(f)
+	for _, n := range notices {
+		fmt.Fprintf(errOut, "%s: NOTICE: %s\n", programName, n)
+	}
+
 	// No tenants in scope: this is "vacuously safe". Print a friendly
 	// message in the chosen format and exit clean. We deliberately
 	// don't return exitCallerErr here because GitHub Actions wrappers
@@ -188,7 +226,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 
-	if err := writeReport(stdout, errOut, f, scoped, report); err != nil {
+	if err := writeReport(stdout, errOut, f, scoped, report, notices); err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		return exitCallerErr
 	}
@@ -291,21 +329,23 @@ func splitNonEmpty(s string) []string {
 // path also drops a one-line summary on errOut so a CI log
 // surfaces "errors=N, warnings=M" without the user having to cat
 // the file separately.
-func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenants, report *guard.GuardReport) error {
+func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenants, report *guard.GuardReport, notices []string) error {
 	var body string
 	switch f.format {
 	case "md":
-		body = renderMarkdown(scoped, report)
+		body = renderMarkdown(scoped, report, notices)
 	case "json":
 		b, err := json.MarshalIndent(struct {
 			ConfigDir   string             `json:"config_dir"`
 			Scope       string             `json:"scope,omitempty"`
 			SourceFiles []string           `json:"source_files"`
+			Notices     []string           `json:"notices,omitempty"`
 			Report      *guard.GuardReport `json:"report"`
 		}{
 			ConfigDir:   f.configDir,
 			Scope:       f.scopeDir,
 			SourceFiles: scoped.SourceFiles,
+			Notices:     notices,
 			Report:      report,
 		}, "", "  ")
 		if err != nil {
@@ -334,8 +374,11 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 // preamble (config dir, scanned files) so the PR-comment reader
 // has the context they need without scrolling back to the workflow
 // definition.
-func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport) string {
+func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, notices []string) string {
 	var b strings.Builder
+	for _, n := range notices {
+		b.WriteString("> ⚠️ " + n + "\n\n")
+	}
 	b.WriteString(report.Markdown())
 	if len(scoped.SourceFiles) > 0 {
 		b.WriteString("\n<details><summary>Scanned files</summary>\n\n")

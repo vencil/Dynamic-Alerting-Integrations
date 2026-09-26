@@ -244,11 +244,11 @@ type CheckInput struct {
 	// check (PR-3) compares each tenant's predicted metric count
 	// against. ≤ 0 disables the cardinality check entirely.
 	//
-	// Mirrors `DefaultMaxMetricsPerTenant = 500` from the main
-	// package's config_types.go — caller should usually pass that
-	// constant or whatever the tenant's deployment overrides it to
-	// (`max_metrics_per_tenant` field at the top of the threshold
-	// config).
+	// Should equal the cap the exporter enforces for the tree:
+	// config.RootMaxMetricsPerTenant (the ROOT `_defaults.yaml`'s
+	// `max_metrics_per_tenant`, unset = DefaultMaxMetricsPerTenant),
+	// which is what cmd/da-guard passes when --cardinality-limit is
+	// omitted (#2043). A negative cap (no truncation) maps to 0 here.
 	CardinalityLimit int `json:"cardinality_limit,omitempty"`
 
 	// CardinalityWarnRatio is the fraction of CardinalityLimit that

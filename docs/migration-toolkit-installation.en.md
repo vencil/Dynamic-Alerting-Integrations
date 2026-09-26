@@ -150,7 +150,6 @@ Expand-Archive -Path da-guard.zip -DestinationPath .
 ```bash
 da-guard --config-dir conf.d/ \
     --required-fields cpu,memory \
-    --cardinality-limit 500 \
     --format md
 ```
 

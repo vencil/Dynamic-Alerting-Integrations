@@ -232,7 +232,7 @@ tenants:
 在 CI / pre-commit 階段攔 schema / routing / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
 ```bash
-da-guard --config-dir conf.d/ --required-fields cpu,memory --cardinality-limit 500
+da-guard --config-dir conf.d/ --required-fields cpu,memory   # 上限取根 _defaults.yaml 的 max_metrics_per_tenant（未設 = 500）
 da-guard --config-dir conf.d/ --format json --output guard-report.json
 ```
 

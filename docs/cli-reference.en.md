@@ -2667,8 +2667,9 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | `--config-dir <path>` | (required) | conf.d/ root |
 | `--scope <path>` | whole tree | Limit to this subdirectory (CI uses dirname of changed `_defaults.yaml`) |
 | `--required-fields <a,b,c>` | empty | CSV of dotted-path fields every tenant must have |
-| `--cardinality-limit <n>` | 0 (disabled) | Per-tenant predicted-metric ceiling; pass 500 to mirror runtime |
+| `--cardinality-limit <n>` | the root `_defaults.yaml`'s `max_metrics_per_tenant` (unset = 500; negative = no check) | Per-tenant predicted-metric ceiling; an explicit value overrides, `0` disables |
 | `--cardinality-warn-ratio <r>` | 0.8 | Warn-tier ratio (0 < r < 1) |
+| `--baseline-config-dir <path>` | empty | The same conf.d before the change (CI passes the PR's merge-base); when the root `_defaults.yaml`'s `max_metrics_per_tenant` is raised or disabled, the report opens with a notice. Never affects the exit code |
 | `--format md\|json` | md | Output format |
 | `--output <path>` | stdout | Write report to file (parent dir must exist) |
 | `--warn-as-error` | false | Treat warnings as errors for exit code |
@@ -2687,9 +2688,9 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 # Validate the whole conf.d/ tree against a required-fields list
 da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 
-# CI hook: limit to the subtree of the changed _defaults.yaml + cardinality ceiling
+# CI hook: limit to the subtree of the changed _defaults.yaml (ceiling read from the root _defaults.yaml)
 da-tools guard defaults-impact --config-dir conf.d/ \
-    --scope conf.d/db/ --cardinality-limit 500
+    --scope conf.d/db/
 
 # JSON output for downstream PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \
