@@ -151,7 +151,7 @@
     },
     {
       "id": "branch-delete",
-      "pattern": "\\bgit\\s+(?:-C\\s+\\S+\\s+)?(?:branch\\s+(?:\\S+\\s+)*-[dD]\\b|branch\\s+--delete\\b|worktree\\s+remove\\b)",
+      "pattern": "\\bgit\\s+(?:-C\\s+\\S+\\s+)?(?:branch\\s+(?:[^\\s;&|]+\\s+)*-[dD]\\b|branch\\s+--delete\\b|worktree\\s+remove\\b)",
       "examples": ["git branch -D feat/x", "git branch --delete feat/x", "git -C /repo worktree remove .claude/worktrees/x"],
       "read": [],
       "note": "刪之前確認本機 tip 等於該 PR 的 `headRefOid`（`gh pr view <N> --json headRefOid`）——squash、rebase、Update branch 都會改寫 SHA，用 ancestry 判斷會誤判；不相等時改比對改過的那組路徑的內容。查證與刪除分兩次呼叫，不要在同一條指令裡查完就刪。"

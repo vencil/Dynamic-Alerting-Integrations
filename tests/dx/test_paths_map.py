@@ -483,6 +483,10 @@ def test_every_command_read_target_exists_and_its_section_heading_is_present():
     "git branch -a",
     "git worktree list",
     "gh pr view 2101 --json state",
+    # branch-delete's skipped words must not cross a shell separator: the
+    # `-d`/`-D` here belong to a different command (CodeRabbit on #2108).
+    "git branch --show-current && rm -d tmpdir",
+    "git branch -a | grep -D x",
     "git log --oneline -1",
 ])
 def test_everyday_commands_hit_no_command_entry_of_the_checked_in_map(command):
