@@ -43,6 +43,7 @@ from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
+    is_hidden_name,
     is_reserved_name,
     resolve_defaults_file,
     warn_nested,
@@ -297,7 +298,13 @@ def check_local(dir_path: str) -> CheckResult:
             # of the tenants the exporter is serving out of it
             # (`config_hierarchy.go:195` suffixes on both spellings). Omitting
             # the argument takes `CONFIG_SUFFIXES`, which is the exporter's set.
-            if not has_yaml_extension(filename) or is_reserved_name(filename):
+            # ⛔ #2055: `.`-prefixed names are skipped by the exporter's
+            # walker, so they are not tenant files. Counting them inflated
+            # `tenant_files`, and a broken editor leftover (`.acme.yaml`)
+            # failed readiness over a file the exporter never reads.
+            if (not has_yaml_extension(filename)
+                    or is_reserved_name(filename)
+                    or is_hidden_name(filename)):
                 continue
 
             file_path = str(entry)
