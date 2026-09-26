@@ -406,17 +406,17 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | 工具 | 用途 | 常用命令 |
 |------|------|--------|
-| **scaffold_tenant.py** | 新租戶上線 | `--tenant <name> --db <type> --output-dir conf.d/` |
+| **scaffold_tenant.py** | 新租戶上線 | `--tenant <name> --db <type> --non-interactive --output-dir scaffold_output`（再只把租戶檔複製進 conf.d，見 1.1.2） |
 | **diagnose.py** | 健康檢查 | `<tenant> --prometheus <url>` |
 | **check_alert.py** | 告警狀態查詢 | `<alertname> <tenant>` |
 | **baseline_discovery.py** | 閾值建議 | `--tenant <name> --duration 604800` |
-| **backtest_threshold.py** | 回測閾值變更 | `--tenant <name> --old-threshold 80 --new-threshold 75` |
+| **backtest_threshold.py** | 回測閾值變更 | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | 多租戶報告 | `--output report.json` |
 | **lint_custom_rules.py** | 自訂規則驗證 | `custom-rules.yaml` |
-| **offboard_tenant.py** | 租戶下架 | `--tenant <name> --archival-dir ./archive/` |
+| **offboard_tenant.py** | 租戶下架 | `<name> --config-dir conf.d/`（預設只做預檢，加 `--execute` 才刪；不做歸檔，先自己 `cp`，見 4.1） |
 | **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --execute` |
-| **onboard_platform.py** | 遷移前掃描 | `--legacy-config /path/ --output migration_input/` |
-| **migrate_rule.py** | 規則遷移轉換 | `--input hints.json --tenant <name> --output migration_output/` |
+| **onboard_platform.py** | 遷移前掃描 | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
+| **migrate_rule.py** | 規則遷移轉換 | `<legacy-rules.yaml> --output-dir migration_output/` |
 | **validate_migration.py** | 並行驗證 | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | 遷移切換 | `--tenant <name> --readiness-json file.json --dry-run` |
 

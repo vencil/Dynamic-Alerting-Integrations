@@ -2165,8 +2165,8 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定（YAML 或 ConfigMap） | — |
-| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）。⚠️ 要加引號：沒加時 shell 先展開成多個檔名，只有第一個被當成值，其餘變成 `unrecognized arguments`，rc=2 | — |
+| `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2 | — |
+| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`） | — |
 | `--scrape-config <FILE>` | Phase 3：Prometheus scrape config | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
 | `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
@@ -2182,9 +2182,9 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 | `phase1-routing/routing-summary.csv` | Phase 1 | 每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval`、severity dedup 判定 |
 | `phase1-routing/<tenant>.yaml` | Phase 1 | 可併入 `conf.d/<tenant>.yaml` 的路由片段 |
 | `phase2-rules/migration-plan.csv` | Phase 2 | 每條告警規則的 metric、閾值、運算子、建議聚合方式與可否自動轉換（`perfect`／`complex`／`unparseable`） |
-| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議 |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不寫這個檔 |
 | `phase3-scrape/scrape-analysis.yaml`、`<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs` |
-| `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、各租戶 DB 類型與路由提示，給 `scaffold --from-onboard` 用；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
+| `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、路由提示，以及 DB 類型——⚠️ Phase 2 推得的每一種 DB 類型都掛到**每一個**租戶上（所有租戶共用同一份聯集），`scaffold --from-onboard` 因此會替每個租戶開同一組 pack；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
 
 **範例**
 

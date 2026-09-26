@@ -2403,8 +2403,8 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--alertmanager-config <FILE>` | Phase 1: Alertmanager config (YAML or ConfigMap) | — |
-| `--rule-files '<GLOB>'` | Phase 2: glob of Prometheus rule files (`**` supported). ⚠️ Quote it: unquoted, the shell expands it into several file names, only the first becomes the value and the rest are `unrecognized arguments`, rc=2 | — |
+| `--alertmanager-config <FILE>` | Phase 1: Alertmanager config — the config file itself, or a ConfigMap YAML. ⚠️ The ConfigMap key must be `alertmanager.yml`; any other key (e.g. `alertmanager.yaml`, common with prometheus-operator) and Secrets fail to parse, rc=2 | — |
+| `--rule-files '<GLOB>'` | Phase 2: glob of Prometheus rule files (`**` supported). ⚠️ Quote it: unquoted, the shell expands it first — several matches make only the first the value and the rest `unrecognized arguments` (rc=2); a single match exits 0 having analysed only that file (e.g. bash without globstar treats `**` as `*`) | — |
 | `--scrape-config <FILE>` | Phase 3: Prometheus scrape config | — |
 | `--tenant-label <NAME>` | Tenant label name | `tenant` |
 | `-o, --output-dir <DIR>` | Output **directory** (a file name yields a directory of that name) | `onboard_output` |
@@ -2420,9 +2420,9 @@ Progress and the `Found N tenant route(s)` / `SKIP` lines go to stderr. Under `-
 | `phase1-routing/routing-summary.csv` | Phase 1 | Per tenant route: receiver type, `group_wait` / `group_interval` / `repeat_interval`, severity-dedup verdict |
 | `phase1-routing/<tenant>.yaml` | Phase 1 | Routing snippet to merge into `conf.d/<tenant>.yaml` |
 | `phase2-rules/migration-plan.csv` | Phase 2 | Per alert rule: metric, threshold, operator, suggested aggregation, and whether it converts automatically (`perfect` / `complex` / `unparseable`) |
-| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | Defaults inferred from the rule thresholds, to merge into `conf.d/_defaults.yaml` |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | Defaults inferred from the rule thresholds, to merge into `conf.d/_defaults.yaml`. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; not written when every rule is `unparseable` |
 | `phase3-scrape/scrape-analysis.yaml`, `<job>-relabel-suggestion.yaml` | Phase 3 | Whether each job maps to a tenant, and suggested `relabel_configs` |
-| `onboard-hints.json` | Phase 1 (plus DB types inferred in Phase 2) | Tenant list, per-tenant DB types and routing hints, consumed by `scaffold --from-onboard`; not written when Phase 1 finds no tenant route, or under `--dry-run` / `--json` |
+| `onboard-hints.json` | Phase 1 (plus DB types inferred in Phase 2) | Tenant list, routing hints, and DB types — ⚠️ every DB type Phase 2 infers is attached to **every** tenant (one shared union), so `scaffold --from-onboard` enables the same packs for all tenants; not written when Phase 1 finds no tenant route, or under `--dry-run` / `--json` |
 
 **Examples**
 

@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**預期輸出**：stdout 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定。分析要點：
+**預期輸出**：stderr 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`；要存檔記得導 `2>`，只導 stdout 會拿到只有檔案清單的輸出），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定；找到租戶 route 時另有每個租戶一份 `phase1-routing/<租戶>.yaml` 路由片段，以及 `onboard-hints.json`。分析要點：
 - Receiver 數量 → 潛在租戶數量
 - 現有 group_wait / repeat_interval → 後續 Dynamic Alerting 的 Routing Guardrails 參考值
 - Inhibit rules → 是否需要遷移至 Dynamic Alerting 的 severity dedup 機制
@@ -72,7 +72,7 @@ da-tools onboard \
 
 **預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出目錄 `rule-audit/phase2-rules/`：
 - `migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
-- `_defaults-suggestion.yaml`：由既有閾值推得的平台預設值建議
+- `_defaults-suggestion.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
 
 依 `status` 排遷移順序：`perfect` 先遷，`complex` 逐條人工確認，`unparseable` 留到最後或保留原規則。
 
@@ -88,7 +88,7 @@ da-tools blind-spot \
   > blind-spot-report.json
 ```
 
-**預期輸出**：`blind-spot-report.json` 是一個陣列，每個元素對應一種由 scrape job 名稱推得的 DB 類型：`live_instances`（叢集裡的實例）、`monitored_tenants`（已有哪些租戶在監控），以及 `status`。此時還沒有任何租戶配置（`--config-dir /dev/null`，stderr 會印一行 `WARN: config-dir not found` 屬預期），所以每種辨識得出的 DB 類型都是 `blind_spot`；job 名稱對不上任何 DB 類型的實例歸在 `unrecognized`。這份清單就是步驟 0.4 挑試點域時的候選範圍。
+**預期輸出**：`blind-spot-report.json` 是一個陣列，每個元素對應一種由 scrape job 名稱推得的 DB 類型：`live_instances`（叢集裡的實例）、`monitored_tenants`（已有哪些租戶在監控），以及 `status`。此時還沒有任何租戶配置（`--config-dir /dev/null`，stderr 會印一行 `WARN: config-dir not found` 屬預期），所以每種辨識得出的 DB 類型都是 `blind_spot`；job 名稱對不上任何 DB 類型的實例歸在 `unrecognized`。這份清單就是步驟 0.4 挑試點域時的候選範圍；決策矩陣的 `rule_pack_coverage` 就拿這裡的 DB 類型對照 [Rule Packs README](../rule-packs/README.md) 評。⚠️ Prometheus 連不到時輸出是 `[]`、結束碼仍是 0（stderr 會有 `WARN: Cannot reach Prometheus`），不要讀成「叢集裡沒有東西」。
 
 ### 步驟 0.4：決策矩陣 — 選擇試點域
 

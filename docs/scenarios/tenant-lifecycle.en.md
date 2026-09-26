@@ -405,17 +405,17 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | Tool | Purpose | Common command |
 |------|---------|--------|
-| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --output-dir conf.d/` |
+| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --non-interactive --output-dir scaffold_output` (then copy only the tenant file into conf.d, see 1.1.2) |
 | **diagnose.py** | Health check | `<tenant> --prometheus <url>` |
 | **check_alert.py** | Alert status query | `<alertname> <tenant>` |
 | **baseline_discovery.py** | Threshold suggestions | `--tenant <name> --duration 604800` |
-| **backtest_threshold.py** | Test threshold changes | `--tenant <name> --old-threshold 80 --new-threshold 75` |
+| **backtest_threshold.py** | Test threshold changes | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | Multi-tenant report | `--output report.json` |
 | **lint_custom_rules.py** | Custom rule validation | `custom-rules.yaml` |
-| **offboard_tenant.py** | Tenant offboarding | `--tenant <name> --archival-dir ./archive/` |
+| **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/` (pre-check only by default, `--execute` deletes; no archiving — `cp` first, see 4.1) |
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --execute` |
-| **onboard_platform.py** | Pre-migration scan | `--legacy-config /path/ --output migration_input/` |
-| **migrate_rule.py** | Rule migration transform | `--input hints.json --tenant <name> --output migration_output/` |
+| **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
+| **migrate_rule.py** | Rule migration transform | `<legacy-rules.yaml> --output-dir migration_output/` |
 | **validate_migration.py** | Parallel migration test | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | Migration switch | `--tenant <name> --readiness-json file.json --dry-run` |
 
