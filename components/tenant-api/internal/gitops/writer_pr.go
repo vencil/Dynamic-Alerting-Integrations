@@ -86,8 +86,8 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	// Step 2: generate branch name
 	ts := time.Now().UTC().Format("20060102-150405")
@@ -295,8 +295,8 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	ts := time.Now().UTC().Format("20060102-150405")
 	branchName := fmt.Sprintf("tenant-api/batch/%s", ts)

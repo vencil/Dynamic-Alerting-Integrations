@@ -161,6 +161,32 @@ type ScanObserver interface {
 	IncParseFailure(fileBasename string)
 }
 
+// IsScannedFileName reports whether the conf.d walker reads a file with this
+// base name: not hidden, and a `.yaml` / `.yml` extension in any case. It is
+// the walker's own test (ScanDirTree), exported so a reader outside this
+// package can ask "would the loader read this file" without restating it.
+func IsScannedFileName(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml")
+}
+
+// IsScannedPath reports whether the walker reads the file at rel, a path
+// relative to the conf.d root (either separator): no directory on the way is
+// hidden (the walker skips those whole) and IsScannedFileName holds for the
+// base name.
+func IsScannedPath(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, dir := range parts[:len(parts)-1] {
+		if strings.HasPrefix(dir, ".") && dir != "." {
+			return false
+		}
+	}
+	return IsScannedFileName(parts[len(parts)-1])
+}
+
 // TreeFile is one YAML file the walk kept.
 type TreeFile struct {
 	AbsPath string // Clean absolute path under the RESOLVED root (hierarchy key)
@@ -444,11 +470,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			}
 			return nil
 		}
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+		if !IsScannedFileName(name) {
 			return nil
 		}
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {

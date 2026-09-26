@@ -443,6 +443,49 @@ definitions:
       to:
         type: boolean
     type: object
+  internal_handler.ConfigDerivedMeta:
+    properties:
+      config_loaded_at:
+        description: When conf.d was last loaded into the cache the states were evaluated
+          from.
+        type: string
+      evaluated_at:
+        description: Request time the states were evaluated at (silences and maintenance
+          windows with `expires` are judged against it).
+        type: string
+      load_error:
+        description: Set when conf.d could not be loaded at all; no tenant then has
+          config_derived. The loader's own message (paths relative to conf.d) only
+          for unrestricted callers; any other caller gets a fixed message, since the
+          loader's names other tenants.
+        type: string
+      parse_failed_files:
+        description: conf.d files threshold-exporter skips because they fail to parse
+          — a broken file, not a missing tenant. Unrestricted callers (open mode,
+          or an admin restricted on no org, environment or domain) get root-relative
+          paths; any other caller gets only the file name, and only for a file named
+          after a tenant it could see as a degraded list row.
+        items:
+          type: string
+        type: array
+      parse_failed_hidden:
+        description: Parse-failed files not named in parse_failed_files because the
+          caller's RBAC scope does not cover them.
+        type: integer
+    type: object
+  internal_handler.ConfigDerivedState:
+    properties:
+      maintenance_active:
+        description: Whether the exporter would emit user_state_filter{filter="maintenance"}
+          for this tenant.
+        type: boolean
+      silent_targets:
+        description: Severities whose notifications the exporter's user_silent_mode
+          would silence ("critical" / "warning"), sorted; [] when none.
+        items:
+          type: string
+        type: array
+    type: object
   internal_handler.DiffRequest:
     properties:
       proposed:
@@ -784,6 +827,23 @@ definitions:
     - filters
     - label
     type: object
+  internal_handler.SearchResponse:
+    properties:
+      config_derivation:
+        $ref: '#/definitions/internal_handler.ConfigDerivedMeta'
+      items:
+        items:
+          $ref: '#/definitions/internal_handler.TenantSummary'
+        type: array
+      next_offset:
+        description: Offset of the next page; null on the last page.
+        type: integer
+        x-nullable: true
+      page_size:
+        type: integer
+      total_matched:
+        type: integer
+    type: object
   internal_handler.StringDelta:
     properties:
       from:
@@ -835,6 +895,14 @@ definitions:
     type: object
   internal_handler.TenantSummary:
     properties:
+      config_derived:
+        allOf:
+        - $ref: '#/definitions/internal_handler.ConfigDerivedState'
+        description: 'Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」)
+          at request time — what threshold-exporter would emit for this conf.d, not
+          a reading from Alertmanager. Absent when it cannot be derived: a degraded
+          row (config_error), a file the exporter skips, or conf.d not loading (see
+          config_derivation on the search response).'
       config_error:
         description: |-
           ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
@@ -866,6 +934,9 @@ definitions:
       id:
         type: string
       maintenance:
+        description: Raw `_state_maintenance` value from the tenant's own config file,
+          not the tenant's state (see config_derived); omitted when config_derived
+          cannot be derived.
         type: string
       owner:
         type: string
@@ -874,6 +945,9 @@ definitions:
       region:
         type: string
       silent_mode:
+        description: Raw `_silent_mode` value from the tenant's own config file, not
+          the tenant's state (see config_derived); omitted when config_derived cannot
+          be derived.
         type: string
       tags:
         items:
@@ -1545,6 +1619,7 @@ paths:
     get:
       description: |-
         Returns tenants visible to the authenticated user, filtered by RBAC.
+        config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.
         A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
         (unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be
         loaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).
@@ -2027,6 +2102,73 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
+      tags:
+      - tenants
+  /api/v1/tenants/search:
+    get:
+      description: Server-side filter / sort / pagination over the tenants visible
+        to the caller (RBAC-filtered). Each item's config_derived is derived from
+        config at request time (「依設定推算」), not observed from Alertmanager; the response's
+        config_derivation names the conf.d files skipped as unparseable.
+      parameters:
+      - description: Case-insensitive substring over id / owner / domain / db_type
+          / tags
+        in: query
+        name: q
+        type: string
+      - description: Exact environment
+        in: query
+        name: environment
+        type: string
+      - description: Exact tier
+        in: query
+        name: tier
+        type: string
+      - description: Exact domain
+        in: query
+        name: domain
+        type: string
+      - description: Exact db_type
+        in: query
+        name: db_type
+        type: string
+      - description: A tag the tenant must carry (case-sensitive)
+        in: query
+        name: tag
+        type: string
+      - description: Page size (default 50, max 500)
+        in: query
+        name: page_size
+        type: integer
+      - description: Offset (default 0)
+        in: query
+        name: offset
+        type: integer
+      - description: Sort key
+        enum:
+        - id
+        - environment
+        - tier
+        - domain
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.SearchResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Search tenants
       tags:
       - tenants
   /api/v1/views:

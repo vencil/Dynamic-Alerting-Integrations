@@ -67,8 +67,8 @@ func (w *Writer) MutateConfigFile(ctx context.Context, filename, entityType, aut
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	// Defence-in-depth: callers pass a bare constant filename, but clamp to a
 	// basename so the file can never escape configDir even if a future caller

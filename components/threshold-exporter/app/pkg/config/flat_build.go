@@ -48,12 +48,24 @@ type FlatBuildInput struct {
 
 // FlatBuild is BuildFlatConfig's result: the merged config the collector
 // serves, the per-file partials it was merged from (the next commit's
-// PriorConfigs), and applySubtreeDefaults' two returns.
+// PriorConfigs), applySubtreeDefaults' two returns, and the files this build
+// dropped because they did not parse.
 type FlatBuild struct {
 	Config        ThresholdConfig
 	FileConfigs   map[string]ThresholdConfig
 	SubtreeFilled int
 	Unreachable   map[string][]string
+	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
+	// order, which is sorted) of the files that contribute nothing to Config
+	// because they failed to parse: a tenant file the walker rejected
+	// (TreeFile.ParseFailed), a `_`-prefixed file parsePartialConfig
+	// rejected, and a nested `_` file the syntax probe rejected — the three
+	// places that count da_config_parse_failure_total on this build (#1988
+	// W1). nil when every file parsed. The exporter does not read it: it has
+	// the counter and the log line. A reader without either (tenant-api via
+	// LoadDir) would otherwise see a broken tenant file as a tenant that
+	// does not exist.
+	ParseFailed []string
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
@@ -85,6 +97,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	rootCarrier := rootCarrierKey(scan, logger)
 
 	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
+	var parseFailed []string
 	for _, name := range scan.Keys {
 		if isUnselectedRootCarrier(name, rootCarrier) {
 			continue
@@ -95,6 +108,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		// re-reading it here would count it twice per scan (the historical
 		// double count for syntax errors) and log it twice.
 		if f.ParseFailed {
+			parseFailed = append(parseFailed, name)
 			continue
 		}
 		// ⛔ THE WALKER ALREADY DECODED IT (#1957). A tenant file this scan
@@ -149,11 +163,14 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		if isNestedPlatformFile(name) {
 			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, in.Obs, logger); ok {
 				reportNestedPlatformTenants(fullPath, probe, logger)
+			} else {
+				parseFailed = append(parseFailed, name)
 			}
 			continue
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, in.Obs, logger)
 		if !ok {
+			parseFailed = append(parseFailed, name)
 			continue
 		}
 		applyBoundaryRules(name, &partial, logger)
@@ -169,7 +186,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	merged.ApplyProfiles()
 
 	n, unreachable := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
-	return FlatBuild{Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n, Unreachable: unreachable}, nil
+	return FlatBuild{Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n, Unreachable: unreachable, ParseFailed: parseFailed}, nil
 }
 
 // scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,

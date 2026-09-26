@@ -84,8 +84,8 @@ func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, author
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	// Resolved under w.mu so no other write through this Writer can create
 	// or rename the tenant's subset file between the answer and the write.
@@ -118,8 +118,8 @@ func (w *Writer) writeSpecialFile(ctx context.Context, filename, entityType, aut
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	return w.commitFileChange(
 		filepath.Join(w.configDir, filename),

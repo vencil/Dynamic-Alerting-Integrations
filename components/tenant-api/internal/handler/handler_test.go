@@ -402,7 +402,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 	// #1680: bad.yaml is no longer silently skipped — it is a degraded row,
 	// so the tenant does not vanish while every other plane still counts it.
 	want := []TenantSummary{
-		{ID: "acme"},
+		{ID: "acme", ConfigDerived: &ConfigDerivedState{SilentTargets: []string{}}},
 		{ID: "bad", ConfigError: "malformed_yaml"},
 	}
 	if !reflect.DeepEqual(tenants, want) {

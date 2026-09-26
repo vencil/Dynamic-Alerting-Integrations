@@ -787,7 +787,7 @@
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nA tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
                 "produces": [
                     "application/json"
                 ],
@@ -878,6 +878,100 @@
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tenants/search": {
+            "get": {
+                "description": "Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Search tenants",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive substring over id / owner / domain / db_type / tags",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact environment",
+                        "name": "environment",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact tier",
+                        "name": "tier",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact domain",
+                        "name": "domain",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact db_type",
+                        "name": "db_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "A tag the tenant must carry (case-sensitive)",
+                        "name": "tag",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 50, max 500)",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Offset (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "id",
+                            "environment",
+                            "tier",
+                            "domain"
+                        ],
+                        "type": "string",
+                        "description": "Sort key",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.SearchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2284,6 +2378,50 @@
                 }
             }
         },
+        "internal_handler.ConfigDerivedMeta": {
+            "type": "object",
+            "properties": {
+                "config_loaded_at": {
+                    "description": "When conf.d was last loaded into the cache the states were evaluated from.",
+                    "type": "string"
+                },
+                "evaluated_at": {
+                    "description": "Request time the states were evaluated at (silences and maintenance windows with `expires` are judged against it).",
+                    "type": "string"
+                },
+                "load_error": {
+                    "description": "Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's names other tenants.",
+                    "type": "string"
+                },
+                "parse_failed_files": {
+                    "description": "conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "parse_failed_hidden": {
+                    "description": "Parse-failed files not named in parse_failed_files because the caller's RBAC scope does not cover them.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_handler.ConfigDerivedState": {
+            "type": "object",
+            "properties": {
+                "maintenance_active": {
+                    "description": "Whether the exporter would emit user_state_filter{filter=\"maintenance\"} for this tenant.",
+                    "type": "boolean"
+                },
+                "silent_targets": {
+                    "description": "Severities whose notifications the exporter's user_silent_mode would silence (\"critical\" / \"warning\"), sorted; [] when none.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "internal_handler.DiffRequest": {
             "type": "object",
             "properties": {
@@ -2727,6 +2865,31 @@
                 }
             }
         },
+        "internal_handler.SearchResponse": {
+            "type": "object",
+            "properties": {
+                "config_derivation": {
+                    "$ref": "#/definitions/internal_handler.ConfigDerivedMeta"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_handler.TenantSummary"
+                    }
+                },
+                "next_offset": {
+                    "description": "Offset of the next page; null on the last page.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "page_size": {
+                    "type": "integer"
+                },
+                "total_matched": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_handler.StringDelta": {
             "type": "object",
             "properties": {
@@ -2783,6 +2946,14 @@
         "internal_handler.TenantSummary": {
             "type": "object",
             "properties": {
+                "config_derived": {
+                    "description": "Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_handler.ConfigDerivedState"
+                        }
+                    ]
+                },
                 "config_error": {
                     "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, or errors the YAML library only detects on a typed decode, such\nas duplicate keys). The first three come from confd.FileProblem;\ninvalid_config is decided by this handler.",
                     "type": "string",
@@ -2812,6 +2983,7 @@
                     "type": "string"
                 },
                 "maintenance": {
+                    "description": "Raw `_state_maintenance` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.",
                     "type": "string"
                 },
                 "owner": {
@@ -2824,6 +2996,7 @@
                     "type": "string"
                 },
                 "silent_mode": {
+                    "description": "Raw `_silent_mode` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.",
                     "type": "string"
                 },
                 "tags": {

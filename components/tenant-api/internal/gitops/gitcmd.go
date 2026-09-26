@@ -149,6 +149,24 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
 }
 
+// gitReadErr renders the failure of a read-only git command (gitOutput). It
+// is gitErr without the #638 sweep: a reader running with
+// --no-optional-locks takes no lock, so a lock present when it times out was
+// taken by someone else — a concurrent write, an operator's shell — and is
+// not this reader's to delete. Nor does a reader hold the write lock, so the
+// message does not claim to release one.
+func (w *Writer) gitReadErr(ctx context.Context, op string, err error, out []byte) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		timeout := w.gitTimeout
+		if timeout <= 0 {
+			timeout = defaultGitTimeout
+		}
+		return fmt.Errorf("git %s (read-only) timed out after %s: %w — %s",
+			op, timeout, context.DeadlineExceeded, string(out))
+	}
+	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
+}
+
 // isGitLockContention reports whether git's output is the "another process holds
 // the index lock" failure (`fatal: Unable to create '…/index.lock': File
 // exists.`). Matched on the stable substrings git emits rather than an errno so

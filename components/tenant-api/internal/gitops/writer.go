@@ -10,9 +10,11 @@
 package gitops
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -191,6 +193,7 @@ type Writer struct {
 	committerName  string        // cached from GIT_COMMITTER_NAME env var
 	committerEmail string        // cached from GIT_COMMITTER_EMAIL env var
 	onWrite        OnWriteFunc   // v2.6.0: callback for post-write notifications (e.g. SSE hub)
+	onTreeRelease  func()        // #1988: after EVERY w.mu section (success or error), post-unlock; see lockTree
 	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
@@ -247,6 +250,172 @@ func NewWriter(configDir, gitDir string) *Writer {
 // This is used by v2.6.0 WebSocket/SSE hub to broadcast config change events.
 func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 	w.onWrite = fn
+}
+
+// lockTree / unlockTree bracket every section that may change the conf.d
+// tree: the single-writer lock (w.mu), plus the onTreeRelease callback on the
+// way out (#1988 D1).
+//
+// ⛔ WHY ON RELEASE AND NOT ON COMMIT. onWrite fires only after a successful
+// commit, but the tree changes earlier and more often than that: a PR-mode
+// write checks out a feature branch, writes, pushes and returns to base
+// without ever calling onWrite, and a direct write whose commit fails (or
+// hits ErrConflict) has already replaced the file. A reader that caches what
+// it derived from the tree must drop that cache whenever ANY of these
+// sections ends — success, error or panic unwind alike — which a deferred
+// unlockTree gives for free.
+//
+// ⛔ AFTER THE UNLOCK, NOT UNDER IT. The callback takes its reader's own lock;
+// calling it while still holding w.mu would order the two locks opposite to a
+// reader that holds its lock and then tries the tree lock.
+func (w *Writer) lockTree() { w.mu.Lock() }
+
+func (w *Writer) unlockTree() {
+	w.mu.Unlock()
+	if w.onTreeRelease != nil {
+		w.onTreeRelease()
+	}
+}
+
+// SetOnTreeRelease registers fn to run after every write section releases
+// the writer lock, whether the write succeeded or not (see lockTree). Set it
+// once at startup, before the server serves.
+func (w *Writer) SetOnTreeRelease(fn func()) {
+	w.onTreeRelease = fn
+}
+
+// TryWithTreeLock runs fn while holding the writer lock and reports true, or
+// — when a write section holds the lock — does nothing and reports false. It
+// never waits: a reader that must answer promptly cannot queue behind a git
+// push that may run until the git timeout.
+//
+// What it guarantees is only that fn does not run DURING a write section. It
+// does not guarantee the tree fn sees is the base branch: a PR write whose
+// return to base failed leaves the tree on its feature branch after the lock
+// is released (see TreeOnBase). fn may call TreeOnBase and nothing else on
+// the Writer.
+func (w *Writer) TryWithTreeLock(fn func()) bool {
+	if !w.mu.TryLock() {
+		return false
+	}
+	defer w.mu.Unlock()
+	fn()
+	return true
+}
+
+// ErrTreeNotOnBase reports that the git worktree is not on a clean base
+// branch — a state a PR-mode write leaves behind when its return to base
+// fails. Readers must not treat such a tree as the configuration.
+var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
+
+// TreeOnBase reports nil when the git worktree is checked out on the base
+// branch with no change the conf.d loader would read, ErrTreeNotOnBase
+// (wrapped with what was found) otherwise. It is the PR-mode invariant
+// between writes; direct mode commits on whatever branch the tree is on and
+// has no such invariant. Call it under the tree lock (inside
+// TryWithTreeLock); it only reads, so it is also harmless outside it.
+//
+// What counts as a change: any tracked modification, and an untracked OR
+// gitignored file the loader would read (config.IsScannedPath relative to
+// configDir — a gitignored *.yaml in conf.d is still read by the loader).
+// Other files — a crashed writeFileAtomic's hidden temp file, anything
+// outside conf.d — do not change what the loader builds.
+//
+// Paths: git reports them relative to the repository TOPLEVEL, which need
+// not be gitDir, and configDir may be reached through a symlink; both sides
+// are resolved (rev-parse --show-toplevel, EvalSymlinks) before comparing.
+//
+// ⛔ READ-ONLY, INCLUDING LOCKS. Every git call here runs with
+// --no-optional-locks and NEVER clears a lock on failure (gitOutput): this is
+// a reader, it took no lock, and a lock present in .git belongs to someone
+// else. #638's stale-lock sweep is for the writer's own killed commands only.
+func (w *Writer) TreeOnBase() error {
+	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil { // detached HEAD exits non-zero, as does a timeout
+		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
+	}
+	if branch := strings.TrimSpace(string(out)); branch != w.base() {
+		return fmt.Errorf("%w: HEAD is %q, base is %q", ErrTreeNotOnBase, branch, w.base())
+	}
+	out, err = w.gitOutput(w.gitDir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
+	}
+	top, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+	if err != nil {
+		return fmt.Errorf("%w: toplevel: %v", ErrTreeNotOnBase, err)
+	}
+	confAbs, err := filepath.Abs(w.configDir)
+	if err == nil {
+		confAbs, err = filepath.EvalSymlinks(confAbs)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: config dir: %v", ErrTreeNotOnBase, err)
+	}
+	out, err = w.gitOutput(top, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
+	}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		if len(entry) < 4 {
+			continue // empty tail
+		}
+		code, path := entry[:2], entry[3:]
+		if code != "??" && code != "!!" {
+			return fmt.Errorf("%w: uncommitted change to %s", ErrTreeNotOnBase, path)
+		}
+		if rel, ok := loaderReads(confAbs, filepath.Join(top, filepath.FromSlash(path))); ok {
+			return fmt.Errorf("%w: untracked config file %s", ErrTreeNotOnBase, rel)
+		}
+	}
+	return nil
+}
+
+// loaderReads reports whether the conf.d loader rooted at confAbs would read
+// abs, or — for a directory entry, which is how git reports an ignored
+// directory — any file under it; rel is that file relative to confAbs.
+func loaderReads(confAbs, abs string) (string, bool) {
+	rel, err := filepath.Rel(confAbs, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		// Outside conf.d — unless conf.d is INSIDE this (directory) entry.
+		if inner, ierr := filepath.Rel(abs, confAbs); ierr != nil || strings.HasPrefix(inner, "..") {
+			return "", false
+		}
+		rel = "."
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.IsDir() {
+		return rel, rel != "." && cfg.IsScannedPath(rel)
+	}
+	var found string
+	_ = filepath.WalkDir(abs, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil || d.IsDir() || found != "" {
+			return nil
+		}
+		if r, rerr := filepath.Rel(confAbs, p); rerr == nil && !strings.HasPrefix(r, "..") && cfg.IsScannedPath(r) {
+			found = r
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found, found != ""
+}
+
+// gitOutput runs a READ-ONLY git command in dir and returns its stdout. It
+// passes --no-optional-locks (no opportunistic index lock), and on failure —
+// a deadline kill included — it reports the error WITHOUT touching any lock:
+// see gitReadErr.
+func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
+	fullArgs := append([]string{"--no-optional-locks", "-C", dir}, args...)
+	cmd, ctx, cancel := w.gitCmd(fullArgs...)
+	defer cancel()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return out, w.gitReadErr(ctx, args[0], err, append(out, stderr.Bytes()...))
+	}
+	return out, nil
 }
 
 // Write validates, persists, and commits a tenant's config YAML.
@@ -322,8 +491,8 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	// Optimistic concurrency, under the lock and immediately before the write:
 	// anything that lands between here and commitFileChange would have to hold
@@ -459,8 +628,8 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	defer w.releaseWrite()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.lockTree()
+	defer w.unlockTree()
 
 	// #1673: one resolution for the whole flow — the file we read below and the
 	// file we commit at the end must be the same one.

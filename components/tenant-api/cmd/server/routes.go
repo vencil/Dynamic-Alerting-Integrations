@@ -95,7 +95,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			Get("/tenants", handler.ListTenants(deps))
 
 		// v2.8.0 Phase .c C-1: server-side search / filter / pagination.
-		// Snapshot cache (30s TTL) shared across requests via Deps.SearchCache.
+		// Snapshot cache shared with /tenants via Deps.SearchCache.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 			Get("/tenants/search", handler.SearchTenants(deps))
 

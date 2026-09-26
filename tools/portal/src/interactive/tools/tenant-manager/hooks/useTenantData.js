@@ -34,6 +34,7 @@ purpose: |
 
 import { useState, useEffect } from "react";  // TRK-233 ESM import
 import { DEMO_TENANTS, DEMO_GROUPS } from '../fixtures/demo-tenants.js';
+import { operationalModeFromSummary, derivationNoticeFromSearch } from '../utils/operational-mode.js';
 
 function useTenantData({ setApiNotification, t, q = '' }) {
   const [tenants, setTenants] = useState({});
@@ -41,6 +42,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
   const [loading, setLoading] = useState(true);
   const [searchOverflow, setSearchOverflow] = useState(null); // {totalMatched: N} | null
   const [dataSource, setDataSource] = useState(null);         // 'api' | 'static' | 'demo'
+  const [derivationNotice, setDerivationNotice] = useState(null); // #1988: search's config_derivation | null
 
   useEffect(() => {
     const loadData = async () => {
@@ -50,6 +52,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         if (apiData) {
           setTenants(apiData.tenants);
           setSearchOverflow(apiData.overflow);
+          setDerivationNotice(apiData.derivationNotice);
           setDataSource('api');
           // Seed groups for the group filter: prefer the live API (GET
           // /api/v1/groups) so a PUT-created group survives reload, then
@@ -163,12 +166,12 @@ function useTenantData({ setApiNotification, t, q = '' }) {
           rule_packs: [],
           owner: summary.owner || '',
           routing_channel: '',
-          // operational_mode is the UI's three-state column. The
-          // tenant-api summary surfaces silent_mode + maintenance
-          // separately; map maintenance first since it's the
-          // stronger override (a tenant in maintenance overrides
-          // any silent-mode setting).
-          operational_mode: summary.maintenance ? 'maintenance' : (summary.silent_mode ? 'silent' : 'normal'),
+          // operational_mode is the UI's mode column. #1988: read from
+          // config_derived (derived with the exporter's own load,
+          // 「依設定推算」), never from the raw silent_mode /
+          // maintenance file values — `disable` is non-empty.
+          operational_mode: operationalModeFromSummary(summary),
+          operational_mode_source: 'config',
           metric_count: 0,
           last_config_commit: '',
           tags: summary.tags || [],
@@ -178,7 +181,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       const overflow = (typeof body.total_matched === 'number' && body.total_matched > items.length)
         ? { totalMatched: body.total_matched, shown: items.length }
         : null;
-      return { tenants: apiTenants, overflow };
+      return { tenants: apiTenants, overflow, derivationNotice: derivationNoticeFromSearch(body) };
     }
 
     // fetchWithRateLimitRetry handles 429 by parsing Retry-After
@@ -320,6 +323,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
     groups, setGroups,
     loading,
     searchOverflow,
+    derivationNotice,
     dataSource,
   };
 }

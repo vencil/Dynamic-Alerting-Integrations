@@ -494,6 +494,11 @@ func main() {
 	// Wire all handler dependencies into a single struct (PR-4/11).
 	// Every handler is now a method on *deps; pass-through positional
 	// args are gone.
+	// #1988: the tenant list / search snapshot (a config.LoadDir of conf.d)
+	// loads only under the writer's tree lock, never waits for it, and goes
+	// stale whenever a write section ends — see handler.WireTenantSnapshots.
+	tenantSnapshots := handler.WireTenantSnapshots(writer, *configDir, wm.IsPRMode())
+
 	deps := &handler.Deps{
 		ConfigDir:          *configDir,
 		Writer:             writer,
@@ -513,7 +518,7 @@ func main() {
 		PRTracker:          prTracker,
 		WriteMode:          wm,
 		HumanSocketPath:    *humanSocket,
-		SearchCache:        handler.NewTenantSnapshotCache(),
+		SearchCache:        tenantSnapshots,
 		// #609 CodeRabbit: the fleet-wide AccountID backfill must be bounded by
 		// the operator's --write-timeout, NOT the global 30s request Timeout
 		// middleware — the handler detaches from the request deadline and uses
