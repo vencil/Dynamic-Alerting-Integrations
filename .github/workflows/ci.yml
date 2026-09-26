@@ -1528,6 +1528,14 @@ jobs:
             bash "$t"
           done
 
+      - name: Shard contract (unsharded, in every shard)
+        # tests/ops/test_ci_pytest_shards.py is what proves the matrix below
+        # covers 1..N. Left to the shard split, it lands in ONE shard — and if
+        # an edit drops that shard from the matrix, the only test that would
+        # notice is the one that no longer runs, with the required check green.
+        # So every shard runs it whole, before its own slice (~2s).
+        run: pytest tests/ops/test_ci_pytest_shards.py -q -p no:cacheprovider
+
       - name: Run pytest
         # ⛔ No --cov here, on purpose: this is the REQUIRED leg, and coverage
         # is the largest single multiplier on its wall time (measured in the

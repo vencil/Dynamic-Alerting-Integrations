@@ -146,3 +146,15 @@ def test_matrix_and_command_name_the_same_shard_count(job_id):
         f"by {n}; any shard missing from the matrix is a slice of the tree "
         "that runs nowhere while every job stays green"
     )
+
+
+def test_every_required_shard_runs_this_contract_unsharded():
+    """Sharded like everything else, this file would run in ONE shard, and a
+    matrix edit dropping that shard would silence the only check that notices
+    (CodeRabbit on #2103). Pin the unsharded step that runs it in every shard."""
+    this = str(Path(__file__).relative_to(REPO_ROOT).as_posix())
+    runs = _pytest_runs(_ci_jobs()["python-tests-run"])
+    unsharded = [r for r in runs if this in r and "--shard" not in r]
+    assert unsharded, (
+        f"python-tests-run has no unsharded step running {this}; without it "
+        "the matrix check runs in a single shard and can be dropped with it")
