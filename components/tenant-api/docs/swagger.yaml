@@ -420,6 +420,13 @@ definitions:
     type: object
   internal_handler.BatchResult:
     properties:
+      code:
+        description: |-
+          Code is a machine-readable error code for an op that FAILED, set only
+          for failure classes a client is expected to branch on — currently
+          TENANT_DECLARED_ELSEWHERE (#2078), the per-op analogue of the 409 the
+          single-tenant PUT and the PR-mode batch return. Empty otherwise.
+        type: string
       message:
         type: string
       status:
@@ -1720,7 +1727,9 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: Conflict
+          description: 'Conflict: base hash mismatch, pending PR, ambiguous tenant
+            file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE;
+            nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -2087,6 +2096,12 @@ paths:
             type: object
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "409":
+          description: 'PR write-back mode: a tenant in the batch is already declared
+            by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written).
+            Direct mode reports this per op in results[].code instead.'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":

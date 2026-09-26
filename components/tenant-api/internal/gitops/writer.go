@@ -14,7 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -104,6 +106,34 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // filepath.Base defense on the control-file write path. See internal/confd for
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
+
+// ErrTenantDeclaredElsewhere refuses a tenant write that would CREATE
+// `<configDir>/<id>.yaml` for an id some other conf.d file already declares —
+// a subdirectory file (`team/x.yaml`) or a shared top-level file whose
+// `tenants:` map carries the id (#2078). confd.TenantFilePathForWrite only
+// looks for `<id>.yaml|.yml` at the top level, so without this guard the write
+// "succeeds" and leaves one id in two files: the running exporter keeps the
+// old config (the new value never takes effect) and the next restart exits
+// with `config rejected (mixed-mode duplicate tenant)`.
+//
+// Also returned (wrapping the *cfg.DuplicateTenantError) when the id is
+// ALREADY declared by two or more other files: a new `<id>.yaml` would only
+// add a third declaration to a tree the exporter already rejects.
+//
+// `_`-prefixed platform files are not declarations (the walker never parses
+// them for tenants), so a `tenants:` block in `_extra.yaml` does NOT trip this.
+//
+// ⛔ The wrapped message names the other file(s) and is for the server log
+// only; handlers render a fixed message (a caller restricted by RBAC must not
+// learn other files' names). Handlers map it to 409.
+var ErrTenantDeclaredElsewhere = errors.New("tenant is already declared by another conf.d file")
+
+// ErrTenantTreeScan reports that the conf.d walk the ErrTenantDeclaredElsewhere
+// guard depends on could not run. The guard fails CLOSED: when it cannot tell
+// whether a new `<id>.yaml` would duplicate a declaration, nothing is written.
+// It is a server-side condition (the configDir itself is unreadable), so
+// handlers map it to 500 with a fixed message.
+var ErrTenantTreeScan = errors.New("cannot scan conf.d to check where the tenant is declared")
 
 // extraDocumentsWithContent counts the YAML documents after the first that
 // decode to something non-nil. A body whose YAML is invalid returns 0 — that is
@@ -538,8 +568,65 @@ type MergeFunc func(existing []byte) (string, error)
 //
 // Callers that both READ the existing file and WRITE it back must resolve ONCE
 // and pass the path down, so the two halves of one flow cannot disagree.
+//
+// #2078: when the answer is a file that does not exist yet (a new tenant as
+// far as the top level can tell), the id must also be declared nowhere else
+// in the tree — see ErrTenantDeclaredElsewhere. An existing file (the ordinary
+// update) is returned without walking the tree, so the guard costs a full
+// conf.d scan only on tenant creation.
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
-	return confd.TenantFilePathForWrite(w.configDir, tenantID)
+	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if _, serr := os.Lstat(path); serr == nil {
+		return path, nil
+	} else if !os.IsNotExist(serr) {
+		return "", fmt.Errorf("stat tenant file for %s: %w", tenantID, serr)
+	}
+	if err := ensureNotDeclaredElsewhere(w.configDir, tenantID, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// discardScanLogger swallows the walker's per-file WARNs: this scan is a
+// yes/no question asked on a write, and the exporter already reports the same
+// tree's unreadable / unparseable files on its own reload loop.
+var discardScanLogger = log.New(io.Discard, "", 0)
+
+// ensureNotDeclaredElsewhere is the #2078 guard: target (not yet on disk) may
+// be created only if the exporter's own walker — the one whose duplicate
+// verdict makes the exporter refuse the tree — attributes tenantID to no file.
+//
+// Same walker, not a re-implementation: which files count (extensions, hidden
+// entries, `_` prefixes, symlinked roots) and what counts as a declaration (a
+// file the full decode accepts) cannot drift from what the exporter loads.
+func ensureNotDeclaredElsewhere(configDir, tenantID, target string) error {
+	// obs is a literal nil interface on purpose — see cfg.ScanObserver's
+	// typed-nil trap. No prior: a cold scan, nothing retained.
+	scan, err := cfg.ScanDirTree(configDir, nil, nil, discardScanLogger)
+	if err != nil {
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
+	}
+	located, lerr := scan.Locate(tenantID)
+	var dup *cfg.DuplicateTenantError
+	switch {
+	case errors.Is(lerr, cfg.ErrTenantNotFound):
+		return nil
+	case errors.As(lerr, &dup):
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantDeclaredElsewhere, tenantID, lerr)
+	case lerr != nil:
+		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, lerr)
+	}
+	// Locate answers under scan.AbsRoot — absolute, and with a symlinked
+	// configDir already resolved — while target is configDir-relative in
+	// whatever form the operator passed. Compare in the walker's form: the
+	// target is always a top-level file, so its walker path is AbsRoot/<base>.
+	if filepath.Clean(located) == filepath.Join(scan.AbsRoot, filepath.Base(target)) {
+		return nil
+	}
+	return fmt.Errorf("%w: tenant %s is declared by %s", ErrTenantDeclaredElsewhere, tenantID, located)
 }
 
 // readMerge is the half of readMergeValidate that produces the content: read

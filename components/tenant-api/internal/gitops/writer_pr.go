@@ -281,11 +281,14 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		// not be turned away here while WritePR accepts it. Skipping the
 		// pre-flight for that op costs nothing that matters — the post-checkout
 		// loop resolves again and refuses there, with abortFeatureBranch, so no
-		// dangling branch survives. ⚠️ Only THIS error is tolerated: every
+		// dangling branch survives. ⚠️ Only THESE errors are tolerated: every
 		// other one is about reaching configDir at all, not about its shape.
+		// ErrTenantDeclaredElsewhere (#2078) is the same kind of verdict as
+		// ambiguity — "which files declare this id" on a tree the write does
+		// not land on — so it is deferred to the post-checkout resolution too.
 		opPath, err := w.tenantFilePath(op.TenantID)
 		if err != nil {
-			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
+			if errors.Is(err, confd.ErrAmbiguousTenantFile) || errors.Is(err, ErrTenantDeclaredElsewhere) {
 				continue
 			}
 			return nil, err

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -39,6 +40,11 @@ type BatchResult struct {
 	TenantID string `json:"tenant_id"`
 	Status   string `json:"status"` // "ok" | "error"
 	Message  string `json:"message,omitempty"`
+	// Code is a machine-readable error code for an op that FAILED, set only
+	// for failure classes a client is expected to branch on — currently
+	// TENANT_DECLARED_ELSEWHERE (#2078), the per-op analogue of the 409 the
+	// single-tenant PUT and the PR-mode batch return. Empty otherwise.
+	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// (#1231 deprecated-key alias notices from the direct WriteMerged path).
 	// Error results never carry warnings — Message owns the failure text.
@@ -84,6 +90,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written). Direct mode reports this per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
@@ -338,12 +345,23 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 	notices, err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge)
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, gitops.ErrConflict) {
+		code := ""
+		switch {
+		case errors.Is(err, gitops.ErrConflict):
 			msg = "conflict: retry after refresh"
-		} else if errors.Is(err, gitops.ErrWriteOverloaded) {
+		case errors.Is(err, gitops.ErrWriteOverloaded):
 			msg = "write plane busy: retry shortly"
+		case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
+			// #2078: fixed text — err names the other file, which only the
+			// server log may see.
+			slog.Warn("batch op refused: tenant declared by another conf.d file",
+				"tenant", op.TenantID, "error", err)
+			msg, code = msgTenantDeclaredElsewhere, CodeTenantDeclaredElsewhere
+		case errors.Is(err, gitops.ErrTenantTreeScan):
+			slog.Error("batch op refused: conf.d scan failed", "tenant", op.TenantID, "error", err)
+			msg, code = msgTenantTreeScan, CodeInternal
 		}
-		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg}
+		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg, Code: code}
 	}
 	// #1231 1b: a successful op surfaces its non-blocking deprecation notices
 	// per tenant, so the operator sees exactly which member of the batch still

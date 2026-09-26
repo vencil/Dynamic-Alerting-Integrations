@@ -77,9 +77,9 @@
 | `GET` | `/api/v1/tenants/{id}/access` | read | 輕量 RBAC 授權探測:可讀該租戶回 `200 {allow,tenant,permission}`、否則 `403`。供姊妹服務(如 recipe-preview #657)重用 tenant-isolation 決策、不重寫 RBAC 也不過度取得設定 |
 | `GET` | `/api/v1/audit/tenants/{id}/access-report` | platform admin(非 org-scoped) | 逆向存取稽核報告:列出「誰、經哪條規則、在什麼 org 條件下」能存取該租戶(shadow/enforce 雙態並列;audit-only,不參與授權)。`?include=org_values` 展開 org 值、`?view=redacted` 去識別化投影;非 admin 恆定 403(防租戶枚舉)。redacted 視圖無法消除 grant 存在性本身的 org-membership 推論(value-pinned org rule 的 grant entry 即弱識別)。**⚠️ environments/domains 為 rule 原文照錄、僅約束租戶清單可見性、不阻擋 read-by-id/write**——受影響 grant 以機器可讀欄 `constraints_not_evaluated` 標示,稽核判讀勿當作存取邊界 |
 | `POST` | `/api/v1/audit/tenants/{id}/access-report/dry-run` | platform admin(非 org-scoped) | what-if 稽核:body 送候選 `_rbac.yaml`(`{"candidate":{"rbac_yaml":"..."}}`),與 live 基準各算一份逆向報告並做結構化 diff(changed / added / removed;以 rule name 對齊,rename 呈現為 removed+added)。純模擬、不寫入;query 同上(`include` / `view`);orgs 沿用 live `_tenant_orgs.yaml`;候選解析失敗回 400 `CANDIDATE_INVALID`;非 admin 恆定 403(同上) |
-| `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR);body 格式錯誤回 400;同一 id 兩種拼法並存回 409 |
+| `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR);body 格式錯誤回 400;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE`(見下方「單一租戶端點與 conf.d 範圍」) |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
-| `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff;同一 id 兩種拼法並存回 409 |
+| `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE` |
 | `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
@@ -98,7 +98,7 @@
 #### 單一租戶端點與 conf.d 範圍
 
 - **不是 exporter 觀點**:`GET /{id}` 與 `/effective` 都不套用 `_profile`(`_profiles.yaml` 或 `profiles:`)與平台檔的 `tenants:` 區塊,用到這兩種設定的租戶,這兩個端點的值與 exporter 不同(#1385、#2019)。要看實際生效的值,看 exporter 的 `/metrics`。
-- **只管 conf.d 頂層**:子目錄裡的租戶,`GET` / `PUT` 回 404。這與 ConfigMap 部署一致——[扁平組裝](../../docs/integration/gitops-deployment.md#3-configmap-assembly)會丟掉子目錄檔並 WARN。例外:`/effective` 遞迴掃描整棵樹,找得到子目錄租戶;list 的 `config_derived` 與 `parse_failed_files` 走 `LoadDir` 遞迴讀取,也會算到子目錄租戶(#2078)。
+- **只認 `<id>.yaml` 租戶檔**:tenant-api 以 conf.d 頂層的 `<id>.yaml`(或 `.yml`)認租戶檔。宣告在其他檔(子目錄檔,或頂層共用檔的 `tenants:`)的租戶,`GET` 回 404、寫入(`PUT` / batch)回 409 `TENANT_DECLARED_ELSEWHERE`,不會另建 `<id>.yaml`——同一 id 出現在兩個檔,exporter 會拒收整份設定(#2078)。直寫模式的 batch 整體仍回 200,該筆結果帶 `status: error` 與 `code: TENANT_DECLARED_ELSEWHERE`。回應不含宣告它的那個檔名。子目錄檔在 ConfigMap 部署本就不生效——[扁平組裝](../../docs/integration/gitops-deployment.md#3-configmap-assembly)會丟掉子目錄檔並 WARN。`/effective` 遞迴掃描整棵樹,找得到這些租戶。list 只列 `<id>.yaml` 租戶;子目錄檔解析失敗只出現在 `parse_failed_files`。
 - **`_profile` 租戶無法寫入**:已用 `_profile` 的租戶,寫入驗證目前回 400(unknown profile),無法經 tenant-api / portal 寫入(#1385)。
 
 ### Custom Alerts(租戶自助告警)

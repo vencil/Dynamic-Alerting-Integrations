@@ -62,7 +62,7 @@ type PutTenantResponse struct {
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)"
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
@@ -179,6 +179,11 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// the on-disk state is ambiguous — 409, not the 400 fallback.
 			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 				WriteJSONError(rw, r, http.StatusConflict, err.Error())
+				return
+			}
+			// #2078: the id is declared by another conf.d file → 409
+			// TENANT_DECLARED_ELSEWHERE (fixed message, path only in the log).
+			if writeTenantPlacementError(rw, r, err) {
 				return
 			}
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
