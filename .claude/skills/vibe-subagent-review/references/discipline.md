@@ -70,6 +70,16 @@
 
 ⇒ 只 resolve 你**真的處置過**的：三種處置都必須先有那一則回覆。沒修、也沒寫理由就順手清掉，等於用 resolve 把 finding 埋掉。
 
+**6. ⛔ 摘要留言裡的區塊也要分流，而且處置要寫在 PR 上——「No actionable comments」只代表沒有 inline finding。**
+
+CodeRabbit 的摘要留言除了 walkthrough，還有 **Security Architecture Review**（Retained concerns，以及每條標 _observed_／_inferred_／_proposed_ 的項目）、**Merge Risk**、**Pre-merge checks**。這些區塊不是 review thread，不擋 merge，沒讀也不會有任何東西變紅——所以上面第 5 步的「走到 resolved」管不到它們。
+
+⇒ CodeRabbit 審完後：
+
+- 先核對摘要標的 `up to <sha>` 是不是目前的 head；不是就是在讀舊狀態（CLAUDE.md「Agent 開的 PR」第 2 項）。
+- 逐項標 `take`／`reframe`／`reject`，或「屬既有問題，歸 #N」——與 inline finding 同一套分流，同樣要驗過才下結論。
+- 沒有 thread 可 resolve，所以處置以**一則 PR 留言**寫下來；`_proposed_` 的 hardening 若已有機制或票涵蓋，指名它，不要默默略過。
+
 ## 鷹架准入：兩道門，缺一不可
 
 修 finding 最常見的產物是**一支新測試或一支新守衛**，而那正是本 repo 缺陷密度最高的地方。動手寫之前過兩道門：
