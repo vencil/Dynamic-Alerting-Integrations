@@ -20,6 +20,7 @@ GitHub remote.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -442,7 +443,7 @@ def test_a_marker_on_head_does_not_vouch_for_a_different_pushed_commit(
     r = _run_gate(
         tmp_path, _refspec("feat/p", feat_sha),
         path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
-        env_extra={"GIT_PREFLIGHT_STRICT": "1"},
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(tmp_path.parent)},
     )
     assert r.returncode == 1, (
         "an unverified commit was approved because an unrelated commit had a "
@@ -455,13 +456,10 @@ def test_a_marker_on_head_does_not_vouch_for_a_different_pushed_commit(
         "the banner must name the commit that is actually missing a marker, "
         f"not the one the pusher is standing on. stderr={r.stderr}"
     )
-    # ⛔ By sha, not by branch name: `git checkout <remote-branch>` either does
-    # not exist locally, points at a different commit, or exits 128 when that
-    # branch is checked out in another worktree.
-    assert f"git checkout --detach {feat_sha}" in r.stderr, (
-        "the recovery instruction must reach green: running preflight where "
-        f"the pusher stands re-marks the wrong commit. stderr={r.stderr}"
-    )
+    # The recovery instruction must reach the pushed commit, not re-mark the
+    # one the pusher stands on.
+    head, _ = _follow_the_hint(r.stderr, tmp_path)
+    assert head == feat_sha
 
 
 def test_every_pushed_commit_needs_its_own_marker_not_just_one(
@@ -606,18 +604,188 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     )
     assert r_main.returncode == 0, f"stderr={r_main.stderr}"
 
-    # CONTROL: remove it and the gate must block again, pointing at that
-    # worktree rather than at a `git checkout` git would refuse (exit 128).
+    # CONTROL: remove it and the gate must block again.
     (Path(common) / f".preflight-ok.{sib_sha}").unlink()
     r2 = _run_gate(
         tmp_path, _refspec("sibling", sib_sha),
         path_prepend=shim, env_extra={"GIT_PREFLIGHT_STRICT": "1"},
     )
     assert r2.returncode == 1, f"control did not fire. stderr={r2.stderr}"
-    assert "cd " in r2.stderr and str(wt.name) in r2.stderr, (
-        "the branch is checked out in another worktree, so `git checkout` "
-        f"exits 128 there; the hint must point at it. stderr={r2.stderr}"
+
+
+def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
+    """Paste the banner's instruction into a shell standing in `cwd`, with
+    `make pr-preflight` swapped for a probe; return (HEAD, directory) where the
+    probe ran.
+
+    ⛔ The shell must end where it started: a relative refspec is re-read from
+    there on the next push.
+    """
+    r = _paste_the_hint(stderr, cwd, 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"')
+    assert r.returncode == 0, f"the instruction failed: {r.stderr}"
+    assert "\0probe\0" in r.stdout, f"the instruction did not reach the probe: {r.stderr}"
+    head, landed, _ = r.stdout.split("\0probe\0", 1)[1].split("\0", 2)
+    assert Path(r.stdout.split("\0after\0", 1)[1]) == cwd.resolve(), (
+        "the instruction moved the shell you push from"
     )
+    return head, Path(landed)
+
+
+def _paste_the_hint(stderr: str, cwd: Path, preflight: str) -> subprocess.CompletedProcess:
+    """Run the banner's one instruction line with `make pr-preflight` replaced
+    by `preflight`, then report where the shell ended; rc is the line's."""
+    lines = [ln.strip() for ln in stderr.splitlines() if "make pr-preflight" in ln]
+    assert len(lines) == 1, f"expected one instruction line: {stderr}"
+    script = (lines[0].replace("make pr-preflight", preflight)
+              + '; r=$?; printf "\\0after\\0%s" "$(pwd -P)"; exit $r')
+    return subprocess.run(  # subprocess-timeout: ignore
+        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
+    )
+
+
+def _held_worktree(tmp_path: Path, name: str, commits: int = 1,
+                   parent: Path | None = None) -> tuple[Path, list[str]]:
+    """Main repo + a worktree `name` (under `parent`, default a directory next
+    to the repo that also holds a plain `sibling`) on branch `held`,
+    `commits` commits past main. Returns (wt, shas)."""
+    _init_git(tmp_path)
+    if parent is None:
+        parent = tmp_path.parent / f"wts-{tmp_path.name}"
+        (parent / "sibling").mkdir(parents=True)
+    wt = parent / name
+    assert _git(tmp_path, "worktree", "add", "-q", "-b", "held", str(wt), "main").returncode == 0
+    shas = []
+    for i in range(commits):
+        assert _git(wt, "commit", "-q", "--allow-empty", "-m", f"held {i}").returncode == 0
+        shas.append(_git(wt, "rev-parse", "HEAD").stdout.strip())
+    return wt, shas
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    return subprocess.run(  # subprocess-timeout: ignore
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env,
+    )
+
+
+def _blocked(pushing_from: Path, sha: str, tmpdir: Path | None = None) -> subprocess.CompletedProcess:
+    r = _run_gate(
+        pushing_from, _refspec("held", sha),
+        path_prepend=_make_fake_gh(pushing_from.parent / f"bin-{pushing_from.name}", state="OPEN"),
+        # CDPATH: a `cd` that consults it prints the directory, doubling a captured path.
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "CDPATH": ".:/",
+                   "TMPDIR": str(tmpdir or pushing_from.parent)},
+    )
+    assert r.returncode == 1, f"stderr={r.stderr}"
+    return r
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["sibling-wt", "sibling wt", "sibling'wt", "sibling$HOME", "sibling ",
+     "sib\\ling", "sibling\nwt"],
+    ids=["plain", "space", "quote", "dollar", "trailing-space", "backslash", "newline"],
+)
+def test_pushing_a_clean_tree_at_the_pushed_commit_points_back_at_it(tmp_path: Path, name: str):
+    """#1952 — the printed `cd` is executed, not substring-matched.
+
+    Pushed with `git -C <tree>` from a shell in the main checkout. A plain
+    directory `sibling` sits next to the tree: where a path cut at its space or
+    newline would land.
+    """
+    wt, (sha,) = _held_worktree(tmp_path, name)
+    head, landed = _follow_the_hint(_blocked(wt, sha).stderr, tmp_path)
+    assert (head, landed) == (sha, wt.resolve())
+
+
+@pytest.mark.parametrize("shape", [
+    "another-tree-sits-at-the-pushed-commit", "pushing-tree-is-dirty", "pushing-older-commit",
+    "pushing-tree-status-fails",
+])
+def test_otherwise_preflight_runs_in_a_throwaway_worktree(tmp_path: Path, shape: str):
+    """#1952 — no other tree is reused: it may be dirty or someone else's. The
+    tree you push from stays where it is, and the throwaway goes afterwards.
+    Followed from outside the repository: `git -C <tree> push` is one way in.
+    """
+    wt, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    pushing_from, sha = tmp_path, shas[-1]
+    if shape == "pushing-tree-is-dirty":
+        pushing_from = wt
+        (wt / "a.txt").write_text("uncommitted\n")
+    elif shape == "pushing-older-commit":
+        pushing_from, sha = wt, shas[0]
+    elif shape == "pushing-tree-status-fails":
+        # A corrupt index: `status` fails, so cleanliness is unknown.
+        pushing_from = wt
+        Path(_git(wt, "rev-parse", "--git-path", "index").stdout.strip()).write_bytes(b"not an index")
+    before = (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout)
+
+    head, landed = _follow_the_hint(_blocked(pushing_from, sha).stderr, tmp_path.parent)
+
+    assert head == sha
+    assert landed != pushing_from.resolve(), "ran in the tree you push from"
+    assert landed.parent == pushing_from.parent.resolve(), "not under the gate's TMPDIR"
+    assert (_git(pushing_from, "rev-parse", "HEAD").stdout, _git(pushing_from, "symbolic-ref", "HEAD").stdout) == before
+    assert str(landed) not in _git(tmp_path, "worktree", "list", "--porcelain").stdout, (
+        "the throwaway worktree is still registered"
+    )
+
+
+def test_a_failing_preflight_in_the_throwaway_worktree_fails_the_line_and_cleans_up(tmp_path: Path):
+    """#1952 — preflight runs, the line exits with its code, and the throwaway goes."""
+    _, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    ran = tmp_path.parent / "preflight-ran"
+    listed = _git(tmp_path, "worktree", "list", "--porcelain").stdout
+    r = _paste_the_hint(_blocked(tmp_path, shas[0]).stderr, tmp_path, f": > '{ran}'; exit 3")
+    assert (r.returncode, ran.exists()) == (3, True)
+    assert _git(tmp_path, "worktree", "list", "--porcelain").stdout == listed
+
+
+def test_a_failed_add_removes_nothing(tmp_path: Path):
+    """#1952 — the throwaway's path is already a worktree: `add` fails, and the
+    clean-up must not take that worktree with it."""
+    _, shas = _held_worktree(tmp_path, "sibling wt", commits=2)
+    stderr = _blocked(tmp_path, shas[0]).stderr
+    taken = Path(re.search(r"worktree add --detach (\S+) ", stderr).group(1))
+    assert _git(tmp_path, "worktree", "add", "-q", "--detach", str(taken), "main").returncode == 0
+    (taken / "keep.txt").write_text("someone else's work\n")
+
+    r = _paste_the_hint(stderr, tmp_path, ":")
+
+    assert r.returncode != 0
+    assert (taken / "keep.txt").exists()
+    assert str(taken) in _git(tmp_path, "worktree", "list", "--porcelain").stdout
+
+
+def test_the_throwaway_worktree_line_quotes_its_paths(tmp_path: Path):
+    """#1952 — a repository and a TMPDIR whose names need quoting."""
+    repo, tmpdir = tmp_path / "repo x'$HOME", tmp_path / "t d$HOME"
+    tmpdir.mkdir()
+    _, shas = _held_worktree(repo, "sibling wt", commits=2)
+    head, landed = _follow_the_hint(_blocked(repo, shas[0], tmpdir=tmpdir).stderr, tmp_path)
+    assert (head, landed.parent) == (shas[0], tmpdir.resolve())
+
+
+def test_a_bare_repository_pushing_its_head_gets_the_instruction(tmp_path: Path):
+    """#1952 — a bare repository has no toplevel; asking for one must not end
+    the gate before it prints anything."""
+    _init_git(tmp_path)
+    bare = tmp_path.parent / f"bare-{tmp_path.name}.git"
+    assert _git(tmp_path, "clone", "-q", "--bare", str(tmp_path), str(bare)).returncode == 0
+    sha = _git(bare, "rev-parse", "HEAD").stdout.strip()
+    r = _run_gate(
+        bare, _refspec("held", sha),
+        path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
+        env_extra={"GIT_PREFLIGHT_STRICT": "1", "TMPDIR": str(tmp_path.parent)},
+    )
+    assert r.returncode == 1, f"stderr={r.stderr}"
+    head, landed = _follow_the_hint(r.stderr, bare)
+    assert head == sha
+    assert str(landed) not in _git(bare, "worktree", "list", "--porcelain").stdout
 
 
 def test_an_empty_gh_answer_is_unknown_not_no_pr(tmp_path: Path):
