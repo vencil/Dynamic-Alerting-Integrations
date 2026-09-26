@@ -579,8 +579,17 @@ def diff_changed_paths(base: str, cwd: Path, pathspecs: tuple = (),
                        timeout: int = 10) -> List[str]:
     """Return repo-relative paths Added/Modified in the working tree vs ``base``.
 
-    Runs ``git diff --name-only -z --diff-filter=AM <base> [-- <pathspecs>]``.
-    Deleted files are excluded on purpose: deleting an offender is the fix.
+    Runs ``git diff --name-only -z --no-renames --diff-filter=AM <base>
+    [-- <pathspecs>]``. Deleted files are excluded on purpose: deleting an
+    offender is the fix.
+
+    ``--no-renames`` is load-bearing (#2025): git detects renames by default,
+    and a renamed file has status ``R``, which ``AM`` drops -- so ``git mv``
+    into a violating position, even with an edit on the way, was invisible.
+    Without rename detection the move is D + A and the new path arrives as A.
+    Adding ``R`` to the filter is not enough: under ``diff.renames=copies`` a
+    config the user owns turns a copy into ``C``, which ``AMR`` drops too.
+    ``--no-renames`` overrides that config, so no pairing status can appear.
 
     ``-z`` is load-bearing: without it git C-quotes any path with a non-ASCII
     byte (``"_\\346\\270\\254.bat"``, per ``core.quotePath``), the caller's
@@ -592,7 +601,7 @@ def diff_changed_paths(base: str, cwd: Path, pathspecs: tuple = (),
     returns ``[]`` for a failed scan — that is the #1987 shape, where "could
     not measure" and "measured, nothing found" became the same output.
     """
-    cmd = ["git", "diff", "--name-only", "-z", "--diff-filter=AM", base]
+    cmd = ["git", "diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", base]
     if pathspecs:
         cmd += ["--", *pathspecs]
     try:

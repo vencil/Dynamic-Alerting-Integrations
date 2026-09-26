@@ -116,8 +116,9 @@ def scan_full(repo: Path) -> list[Path]:
 def scan_diff(repo: Path, base: str) -> list[Path]:
     """Diff-only scan: return offenders newly added/modified in current diff vs base.
 
-    Uses ``git diff --name-only --diff-filter=AM`` so deleted files don't
-    trigger the lint (deleting an offender is the right move).
+    Uses ``diff_changed_paths`` (Added/Modified, renames split into D + A) so
+    deleted files don't trigger the lint (deleting an offender is the right
+    move) while a file moved into a non-allowlisted place still does.
 
     Raises ``DiffScanError`` when git fails or times out (#1987).
     """
