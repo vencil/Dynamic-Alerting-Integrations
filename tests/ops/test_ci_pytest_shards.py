@@ -158,3 +158,27 @@ def test_every_required_shard_runs_this_contract_unsharded():
     assert unsharded, (
         f"python-tests-run has no unsharded step running {this}; without it "
         "the matrix check runs in a single shard and can be dropped with it")
+
+
+def _combine_script() -> str:
+    job = _ci_jobs()["python-coverage-combine"]
+    runs = [s["run"] for s in job["steps"]
+            if s.get("name", "").startswith("Combine shards")]
+    assert len(runs) == 1, "the combine step moved or was renamed"
+    return runs[0]
+
+
+@pytest.mark.parametrize("present", [0, 2])
+def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, present):
+    """A superseded run is cancelled by the concurrency group; its cancelled
+    shards upload nothing. With zero files the unmatched glob used to reach
+    `cp` literally ("cannot stat") and `set -e` failed the step before the
+    warning branch — a red on a run nobody reads. Run the real step script."""
+    for k in range(1, present + 1):
+        d = tmp_path / "coverage-shards" / f"coverage-data-py3.13-shard{k}"
+        d.mkdir(parents=True)
+        (d / ".coverage").write_bytes(b"")
+    proc = subprocess.run(["bash", "-c", _combine_script()], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"found {present}" in proc.stdout, proc.stdout
