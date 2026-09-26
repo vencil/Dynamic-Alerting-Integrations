@@ -2111,7 +2111,9 @@ PINNED_STEP_INPUTS = {
 # the tracked files no pattern covered. Re-run that when a leg's commands
 # change — a NEW indirect read still arrives unannounced, and no assertion here
 # will say so. (`drift-checks` was excluded: validate_all.py fans out through
-# subprocess, so an in-process recorder under-reports it.)
+# subprocess, so an in-process recorder under-reports it.) Entries do not all
+# come from that one sweep — each says where it came from; #2079 re-measured
+# every leg under strace, subprocesses included.
 TRACED_INDIRECT_INPUTS = {
     # check-links: the waiver list decides what that required check ENFORCES.
     ("docs-ci.yaml", "docs", ".doclinkignore"),
@@ -2125,6 +2127,10 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
+    # mkdocs-build: the `hooks:` entry in mkdocs.yml runs this on every build.
+    # Found by the #2079 strace sweep, the one uncovered direct read no other
+    # pre-merge check backs up.
+    ("docs-ci.yaml", "docs", "scripts/mkdocs/rule_packs_bridge.py"),
     # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
     # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
     # pages it scans outside docs/ — all reached through validate_all.py's
