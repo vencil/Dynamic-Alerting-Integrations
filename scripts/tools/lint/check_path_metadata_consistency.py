@@ -109,9 +109,10 @@ def iter_tenant_files(config_dir: Path,
     # (`scanDirHierarchical`, `config_hierarchy.go`) reads both spellings.
     #
     # ⛔ NOT `rglob("*")` (#2081). The exporter's walker
-    # (`pkg/config.ScanDirTree`) prunes `.`-prefixed directories, drops
-    # `.`-prefixed files and never descends a directory symlink; `rglob`
-    # does none of that. Measured before this change: `.old.yaml` and
+    # (`pkg/config.ScanDirTree`) prunes `.`-prefixed directories and drops
+    # `.`-prefixed files; `rglob` prunes no `.`-prefixed name, so it also
+    # walks into a ConfigMap mount's `..<ts>/` payload. Measured before this
+    # change: `.old.yaml` and
     # `.snap/acme.yaml` were scanned and reported, and on a ConfigMap-mount
     # layout (`..2026_09_25/acme.yaml` + `..data` link + `acme.yaml` link)
     # the one tenant file was read twice — `2 mismatch(es) across 2 tenant

@@ -13,6 +13,11 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -624,6 +629,96 @@ class TestHiddenAxis:
         # `Path(m.file).resolve()` relative to the repo root, which follows
         # the link into `..2026_09_25/` — a display choice that predates
         # #2081 and is not what this class pins (which files are READ).
+
+    def test_hidden_ancestor_of_conf_d_does_not_hide_the_tree(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Only names BELOW conf.d count. A checkout under `.claude/worktrees/`
+        or a cache dir puts a `.`-segment in every ABSOLUTE path, so a filter
+        that tests all of `p.parts` would call the tree `0 across 0`."""
+        (tmp_path / ".git").mkdir()
+        conf = self._seed(tmp_path / ".cache" / "conf.d", "file", hidden=False)
+
+        assert len(cpmc.scan(conf)) == 1
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(conf), "--ci")
+        assert "1 mismatch(es) across 2 tenant file(s)" in err, (out, err)
+
+    def test_not_checked_report_skips_hidden_entries_only(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The "not checked" report walks what the selection walks: a broken
+        link under a visible name is named, the same link under `.snap/`
+        is not (the exporter never looks there)."""
+        (tmp_path / ".git").mkdir()
+        conf = self._seed(tmp_path / "conf.d", "file", hidden=False)
+        (conf / "staging" / ".snap").mkdir()
+        _symlink_or_skip(conf / "staging" / "brk.yaml", "missing.yaml")
+        _symlink_or_skip(conf / "staging" / ".snap" / "brk.yaml",
+                         "missing.yaml")
+
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(conf), "--ci")
+        warned = [ln for ln in err.splitlines() if "not checked" in ln]
+        # 必響對照: the visible broken link IS named.
+        assert any(ln.startswith(f"{conf / 'staging' / 'brk.yaml'}:0:")
+                   for ln in warned), err
+        assert not any(".snap" in ln for ln in warned), err
+
+
+def _run_as_unprivileged(argv: list[str], cwd: str):
+    """Run `argv` where a chmod-000 directory really cannot be read.
+
+    Under uid 0 the mode bits do not stop a read, so drop to `nobody` via
+    `setpriv`; as any other uid (CI runners) run it as is.
+    """
+    if os.name == "nt":
+        pytest.skip("chmod 000 does not make a directory unreadable on Windows")
+    if os.geteuid() == 0:
+        setpriv = shutil.which("setpriv")
+        if setpriv is None:
+            pytest.skip("running as root and `setpriv` is not installed, so "
+                        "no chmod-000 directory can be made unreadable")
+        argv = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups",
+                *argv]
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+
+
+def test_unreadable_directories_are_named_even_when_underscored():
+    """A directory the walk cannot enumerate hides every tenant under it, so
+    it is named — `_locked/` exactly like `locked/`: the `_` filter is for
+    ENTRIES (the exporter descends `_`-prefixed directories)."""
+    # Not `tmp_path`: under root it sits in a 0700 directory `nobody` cannot
+    # traverse, which would make conf.d itself the unreadable thing.
+    base = Path(tempfile.mkdtemp(prefix="cpmc-2081-"))
+    locked = [base / "conf.d" / "_locked", base / "conf.d" / "locked"]
+    try:
+        base.chmod(0o755)
+        conf = base / "conf.d"
+        _write(conf / "staging" / "acme.yaml",
+               _tenant_yaml("acme", environment="prod"))
+        for d in locked:
+            _write(d / "t.yaml", _tenant_yaml("t", environment="prod"))
+        for d in (conf, conf / "staging"):
+            d.chmod(0o755)
+        (conf / "staging" / "acme.yaml").chmod(0o644)
+        for d in locked:
+            d.chmod(0)
+        script = Path(cpmc.__file__).resolve()
+        r = _run_as_unprivileged(
+            [sys.executable, str(script), "--config-dir", str(conf), "--ci"],
+            cwd=str(base),
+        )
+        # 必響對照: the readable part of the tree WAS scanned.
+        assert "1 mismatch(es) across 1 tenant file(s)" in r.stderr, r
+        for d in locked:
+            assert f"{d}:0: warning: not checked" in r.stderr, (d, r.stderr)
+    finally:
+        for d in locked:
+            if d.exists():
+                d.chmod(0o755)
+        shutil.rmtree(base, ignore_errors=True)
 
 
 # ── the hook's trigger must not be narrower than the script's selection ──
