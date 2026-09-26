@@ -216,6 +216,9 @@ PR 新增 lint 須在 PR description 答：
 - [ ] 這件事的本質是不是 parser？要追狀態機／巢狀／跳脫層級 ⇒ 那不是一條規則，停手找現成 engine（並先讀它的規則清單，確認它真的說得出你要的那個述詞）
 - [ ] `language: python` 的 hook 用到第三方套件（如 pyyaml）嗎？→ 在該 hook 加 `additional_dependencies`；hook 跑在自己的 isolated venv，吃不到系統直譯器的套件
 - [ ] 改既有 lint 的**預設行為**、或改任何被測試以字串鍵住的識別字（rule 描述、dict key、函式名、印出來的訊息）之前，先 grep 整個 `tests/`，同一顆 commit 一起改——只跑同名測試檔會漏掉別處釘著舊字串的斷言
+- [ ] 新工具有 argparse `--help` 嗎？→ `tests/shared/test_bilingual_help_contract.py` 把每支工具分進恰好一格，**沒登記就預設要求雙語**。二選一，不要停在中間：真的接 `_lib_validation.i18n_text` 讓 help 隨 `DA_LANG` 切換，**或**登記進 `ENGLISH_ONLY`（附一行理由，並在同一顆 commit 調 `test_allowlists_shrink_only_count_pin`）且 help 完全不含 CJK。英文 description 夾一個中文 `help=` 的中間態，兩格都會紅
+- [ ] 本地驗證跑 `pytest tests/`，不是只跑 `tests/<自己那層>/`——管「新增 CLI 工具」的契約測試住在 `tests/shared/`（雙語 help、`test_every_cli_entrypoint_imports_a_hardening_carrier` 要求 entrypoint **直接** import stdout hardening carrier、`test_sast.py::TestFileWritePermissions`）與 `tests/ops/`，只跑自己那支一定漏
+- [ ] 工具會寫檔嗎？→ 用 `_lib_python` 的 `write_text_secure`／`write_json_secure`；裸 `open(path, "w")` 要在**同一個函式體內** chmod，否則 `TestFileWritePermissions` 紅
 
 ### JS-toolchain-first gate（codified，#444 follow-up）
 

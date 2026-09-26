@@ -5,6 +5,7 @@ applyTo: "tools/portal/**,docs/assets/dist/**"
 # vibe-paths-portal
 
 先讀：
+- `tools/portal/CLAUDE.md`
 - `docs/internal/jsx-multi-file-pattern.md` §Build & verify loop
 
 約束：改 source 後自己跑 `make portal-build` 重生提交的 dist——「改了 source 忘了重 build」沒有任何 hook 擋（`dist-source-consistency-check` 只抓反向：提交了 dist 卻沒有 source 變更）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build。
