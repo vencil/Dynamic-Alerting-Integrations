@@ -625,11 +625,11 @@ var (
 // takes no context), so it is left running and counted in stuckTreeScans
 // until it returns; while the count is non-zero, later calls fail at once.
 //
-// ⚠️ That bounds new walks only AFTER the first timeout: every write or diff
-// that enters within the same timeout window has already started its own walk,
-// and each of those can block too — the leak is bounded by the number of
-// requests concurrent within that window, not by one. (Diff does not hold the
-// writer lock, so diffs are not serialised behind writes.) A blocked walk ends
+// ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
+// before taking the writer token/lock — direct Write / WriteIfUnchanged and
+// Diff (which never takes the lock) — can each start a walk within the same
+// timeout window, and each of those can block too; walks under the lock
+// (WriteMerged, WritePR, WritePRBatch) are serialised. A blocked walk ends
 // only when the file it is reading is opened for writing or the process
 // restarts: removing the file does not unblock a read already in progress.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {

@@ -48,7 +48,7 @@ func assertCleanOnBase(t *testing.T, dir, base, branchPrefix string) {
 // It replaced a missing configDir as the injection (#2078): the
 // declared-elsewhere guard walks configDir before creating a new tenant file
 // and fails closed when the walk cannot run, so a missing configDir is now
-// refused before any branch exists and no longer reaches os.WriteFile.
+// refused by the guard and no longer reaches os.WriteFile.
 func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
 	t.Helper()
 	link := filepath.Join(repo, tenantID+".yaml")

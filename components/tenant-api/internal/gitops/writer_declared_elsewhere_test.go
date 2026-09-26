@@ -288,6 +288,11 @@ func TestWritePRBatch_OpSeesEarlierOpsWrites(t *testing.T) {
 	if _, _, err := cfg.LoadDir(dir, nil); err != nil {
 		t.Fatalf("LoadDir on the PR branch: %v", err)
 	}
+	// op2 must have landed, not silently become a no-op (mv-y would then be
+	// declared nowhere and still load cleanly).
+	if _, err := os.Stat(filepath.Join(dir, "mv-y.yaml")); err != nil {
+		t.Fatalf("mv-y.yaml missing on the PR branch: %v", err)
+	}
 }
 
 // WritePRBatch decides "declared elsewhere" only after checking out the fresh
