@@ -320,8 +320,11 @@ func TestWireTenantSnapshots_TreeOffBaseIsNeverDerived(t *testing.T) {
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 
 	done := startHeldPR(t, w, bare, "touch '"+lock+"'\n")
-	if err := <-done; err != nil {
-		t.Fatalf("WritePR: %v", err)
+	// #2070: the write now FAILS when both return-to-base attempts do (it used
+	// to warn and report success); the tree is still left off base, which is
+	// the state this test needs.
+	if err := <-done; !errors.Is(err, gitops.ErrBaseRestore) {
+		t.Fatalf("WritePR error = %v, want ErrBaseRestore", err)
 	}
 	out, _ := exec.Command("git", "-C", work, "symbolic-ref", "--short", "HEAD").Output()
 	if string(out) == "main\n" {
