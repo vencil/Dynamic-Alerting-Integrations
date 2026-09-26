@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -383,7 +384,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"bad.yaml":  "{{not valid yaml",
-		"db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"80\"\n",
+		"acme.yaml": "tenants:\n  acme:\n    mysql_threads_running: \"80\"\n",
 	})
 
 	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
@@ -398,9 +399,14 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &tenants); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// bad.yaml should be skipped, only db-a remains
-	if len(tenants) != 1 {
-		t.Errorf("expected 1 tenant (skip malformed), got %d", len(tenants))
+	// #1680: bad.yaml is no longer silently skipped — it is a degraded row,
+	// so the tenant does not vanish while every other plane still counts it.
+	want := []TenantSummary{
+		{ID: "acme"},
+		{ID: "bad", ConfigError: "malformed_yaml"},
+	}
+	if !reflect.DeepEqual(tenants, want) {
+		t.Errorf("tenants = %+v, want %+v", tenants, want)
 	}
 }
 

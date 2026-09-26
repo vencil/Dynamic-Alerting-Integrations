@@ -114,6 +114,9 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **設定檔壞掉的租戶不再從 `GET /api/v1/tenants` 靜默消失（tenant-api；[#1680](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1680)、conf.d 家族 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）**：YAML 壞掉、symlink 斷掉或指向目錄的租戶，清單回 `200 []`，federation、啟動檢查與寫入平面卻仍算它活著。五個 conf.d 列舉器改共用 `confd.ListTenantFiles`（不讀內容），只有清單另以 `confd.ReadTenantFile` 判定可用性；federation 與寫入平面刻意不看內容。
+  - ⚠️ **API 變更**：壞檔租戶改回降級列 `{id, config_error}`，值為穩定契約：`unreadable`、`not_regular_file`、`malformed_yaml`、`invalid_config`（語法可解析但無法載入為租戶設定，含重複 key；由 handler 判定）。空檔仍可用。`/search` 的 `q` 比對其 id，metadata 篩選不命中。
+  - ⛔ **只有 `environments` 與 `domains` 皆不設限的呼叫者看得到**（新 `rbac.ScopeAllowedUnknownMetadata`，shadow／enforce 皆同；org 軸照常）。不沿用 `ScopeAllowed` 帶空值：那會被當未標記而在 shadow 放行。portal 尚未顯示 `config_error`。
 - **federation subset 存成 `<id>.yml` 時，`GET /api/v1/tenants/{id}/federation` 回空子集、PUT 在旁邊另建 `<id>.yaml`（tenant-api；[#1698](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1698)）**：`conf.d/_federation/` 的孤兒偵測器接受 `.yaml`/`.yml`（副檔名不分大小寫），讀取與寫入端卻硬寫 `<id>.yaml`。於是讀取端對 `.yml` 租戶回 `200 {"metrics":[]}`，PUT 則新建第二個檔、舊檔留著且無人讀。本次把 [#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673) 的 `confd.ResolveTenantFile` / `TenantFilePathForWrite` 原樣套到 `_federation/` 目錄：讀取解析**實際**檔案（不存在仍是空子集），寫入寫回**既有**檔案（只有全新 subset 才用 `<id>.yaml`）。
   - **同一租戶兩種拼法並存 → 409**，GET 與 PUT 皆然、不寫任何檔；對映與租戶平面 `GET`／`PUT /tenants/{id}` 的 `ErrAmbiguousTenantFile` 相同。孤兒偵測器對這種租戶只計一次（先前算 2）並噴 WARN 列出檔名，仍只觀測。
   - ⚠️ **行為變更**：`_federation/` 下同時有 `<id>.yaml` 與 `<id>.yml` 的租戶，GET 先前回 `200` 與 `.yaml` 那份內容、PUT 只改 `.yaml`，現在兩者都回 `409`，須在 git 刪掉其中一個。OpenAPI spec 的 GET 補上 `409`。`tenant_api_federation_orphaned_subset_files` 的 HELP 改為「以租戶計」（名稱不變）。
