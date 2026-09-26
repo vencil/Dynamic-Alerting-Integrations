@@ -121,6 +121,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **PR 模式寫入在 push 後切回 base 失敗時，不再回報成功（tenant-api；[#2070](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2070)）**：`WritePR`／`WritePRBatch` push 完 feature branch 後要把 conf.d 工作樹切回 base；這一步失敗時先前只印 WARN、照樣回成功並開 PR/MR，工作樹停在 feature branch，之後讀 conf.d 的端點會看到尚未合併的提議內容。現在會在同一個鎖區段內立即重試一次，仍失敗就印 ERROR（欄位 `base`／`branch`／`pushed`／`attempts`／`error`）並回 `500`，訊息帶 branch 名與是否已推上 origin，operator 可據以找到那條已推送但沒有 PR/MR 的 branch。⚠️ **行為變更**：這種情形過去回 `200 pending_review`，現在回 `500` 且不開 PR/MR。回的是 `500` 而不是可重試的 `503`：branch 已經推上去，重試會再切出第二條 branch。
+
 - **`patch-config` apply：判定過程本身出錯時，回報改為只依 ConfigMap 的實況（tools；[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950)）**：`_conclude` 自己出錯時的備援，原本會依回滾呼叫的回傳與 409 後的重讀推論狀態，於是已成功（或回錯但已落地）的回滾被誤報成 `overwritten-by-another-writer`（exit 7），寫入沒落地的也被報成 7 而非 exit 2。現在備援只讀 key 的實況、結合本行程自己做過什麼（寫入是否正常返回、是否送過回滾）決定答案；需要回滾時送出後再讀一次，讀不到即 `state-unknown`。另補一支測試守住回滾遇 409 時的重試上限 `ROLLBACK_CONFLICT_ATTEMPTS`（此前無測試）。
 
 - **英文 cli-reference 與速查表的 `operator-generate` 旗標對齊工具（docs；[#2090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2090)）**：`cli-reference.en.md` 列了工具沒有的 `--split`／`--apply`／`--include-servicemonitor`、範例用了不存在的 `-o`，漏列 8 個實際旗標，並把 `--rule-packs-dir`／`--config-dir` 寫成必填（實為選填、有預設值）；中英速查表也寫著 `--split, --apply`；`troubleshooting(.en).md` 的三個範例用了不存在的 `--tenant`，其中一個還給了 `--api-version v1`（只接受 `v1alpha1`／`v1beta1`）。照打會被 argparse 以 exit 2 拒絕。英文版該節改依中文版與 parser 重寫，速查表改列實際旗標，troubleshooting 範例改用 `--config-dir`，並刪掉 `cli-contract-baseline.yaml` 對應的 8 列已知債；新增 `tests/ops/test_operator_generate_doc_flags.py`，補 `cli-contract-check` 看不到的兩處：速查表的純文字旗標須存在於 `build_arg_parser()`，cli-reference 中英選項表須列齊全部旗標。
