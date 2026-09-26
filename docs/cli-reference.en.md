@@ -1494,41 +1494,57 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 
 Generate Kubernetes Operator CRDs (PrometheusRule, AlertmanagerConfig, ServiceMonitor) from Rule Packs and Tenant configuration.
 
-**Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; multi-cluster config management for Federation scenarios.
+**Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
 
 **Syntax**
 
 ```bash
-da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
+da-tools operator-generate [options]
 ```
-
-**Required Parameters**
-
-| Parameter | Description |
-|-----------|-------------|
-| `--rule-packs-dir <DIR>` | Rule Pack directory path |
-| `--config-dir <DIR>` | Tenant configuration directory path |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--namespace <NS>` | Target K8s namespace | `monitoring` |
-| `--selector-label <KEY=VALUE>` | Label added to the PrometheusRule and ServiceMonitor (repeatable; overrides a default of the same key) so Prometheus's `ruleSelector` / `serviceMonitorSelector` matches. Use `release=<name>` when your Helm release is not named `kube-prometheus-stack` | PrometheusRule: `prometheus=kube-prometheus`, `release=kube-prometheus-stack`; ServiceMonitor: `release=kube-prometheus-stack` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
+| `--config-dir <DIR>` | Tenant configuration directory path | `conf.d/` |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
-| `--split` | Generate individual CRD files (split by Rule Pack) | false |
-| `--include-servicemonitor` | Also generate ServiceMonitor CRD | false |
-| `--dry-run` | Preview only | false |
-| `--apply` | Apply directly to Kubernetes | false |
+| `--namespace <NS>` | Target K8s namespace | `monitoring` |
+| `--api-version <VER>` | AlertmanagerConfig API version (`v1alpha1` / `v1beta1`) | `v1beta1` |
+| `--components <COMP>` | Components to generate (`all` / `rules` / `alertmanager` / `servicemonitor`) | `all` |
+| `--receiver-template <TYPE>` | Receiver template type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |
+| `--secret-name <NAME>` | K8s Secret name (receiver credential reference); use with `--receiver-template` | `da-{tenant}-{type}` |
+| `--secret-key <KEY>` | Key name inside the K8s Secret | inferred from the receiver type |
+| `--selector-label <KEY=VALUE>` | Label added to the PrometheusRule and ServiceMonitor (repeatable; overrides a default of the same key) so Prometheus's `ruleSelector` / `serviceMonitorSelector` matches. Use `release=<name>` when your Helm release is not named `kube-prometheus-stack` | PrometheusRule: `prometheus=kube-prometheus`, `release=kube-prometheus-stack`; ServiceMonitor: `release=kube-prometheus-stack` |
+| `--gitops` | GitOps mode (sorted keys, no timestamps) | false |
+| `--dry-run` | Print output instead of writing files | false |
+| `--json` | Output the result report as JSON | false |
+| `--kustomize` | Also generate `kustomization.yaml`. ⚠️ Without `--output-dir` it is **mixed into the stdout stream**, and a `Kustomization` is not accepted by `kubectl apply -f -` | false |
 
 **Examples**
 
 ```bash
-# Output CRD YAML to file
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ -o crds.yaml
+# Basic: CRDs go to stdout (no files written) and can be applied directly
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ | kubectl apply -f -
 
-# Split output and apply directly
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --split --apply --namespace monitoring
+# To write files, name the directory explicitly (#1582: writing is opt-in)
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --output-dir ./operator-crds
+
+# GitOps mode + Slack receiver
+da-tools operator-generate \
+  --config-dir conf.d/ \
+  --output-dir ./operator-crds \
+  --receiver-template slack \
+  --gitops
+
+# PagerDuty + custom Secret
+da-tools operator-generate \
+  --receiver-template pagerduty \
+  --secret-name org-pd-secret \
+  --secret-key routing-key
+
+# AlertmanagerConfig only
+da-tools operator-generate --components alertmanager --receiver-template email
 
 # Dry-run JSON report — stdout is a single JSON document:
 #   {"crds": [...], "kustomization": {...}|null, "summary": {...}}
@@ -1912,7 +1928,7 @@ Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubec
 
 **Post-write verification (apply)**: new bytes equal to the key's current bytes ⇒ nothing is written or waited for, exit `0`. Otherwise it first reads each pod's `/api/v1/config` `Last reload` and `/metrics` through `kubectl get --raw …/pods/<pod>:<port>/proxy/…` (GET only) on every Running pod not being deleted, patches, waits until every pod's `Last reload` changes, then compares every `user_*` series and `da_config_parse_failure_total` on each pod. For a key starting with `_` (`_silent_mode`, `_profile`, ...) the target tenant's own series are not judged, only listed on stderr (and in `--json`). A mismatch, a timeout, an unreachable pod on the way, Ctrl-C / SIGTERM or an unexpected error after the write ⇒ the old bytes are patched back (a key that did not exist is removed) and it exits non-zero; The write and the rollback are both conditional on the ConfigMap's `resourceVersion`: changed since it was read ⇒ nothing is written; the patched key changed by someone else before the rollback ⇒ no rollback; verification also requires the ConfigMap to still be at the version the write produced. If the patch call itself fails, the ConfigMap is re-read to tell whether it landed. The exact rules and known residuals: `patch-config --help`.
 
-**`--diff`**: `changed` is apply's own verdict — `false` when apply would send no patch. Under `--json`, `before.value` is the source text (`null` for null, the YAML text for a mapping or sequence).
+**`--diff`**: says only what would be written (`after`) and whether apply would write (`changed`, apply's own verdict — `false` when apply would send no patch). **It does not show the current value**: under `--json`, `before` is always `null`, and the text output prints one line saying to check the exporter instead (reading one key's current value here would mean redoing the exporter's key→series mapping in Python, which [#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950) ruled out). For `default`, `after.state` is `key removed`; what applies once the key is gone is not inferred.
 
 **`--json`**: stdout is one JSON document on every terminal path (except when stdout is closed, or a signal ends the process before anything is written); `--json --help` exits `0` with `status: "help"`. On exit `2` it carries the preview keys with empty values plus `status: "caller_error"` and `reason` (`bad_arguments` / `configmap_shape` / `configmap_changed` / `kubectl_failed` / `unexpected_error`). Apply's document keeps the preview keys (`before` / `after` are `null`) and adds `status` (`no-op` / `applied` / `verify-failed-rolled-back` / `timeout` / `unreachable` / `rollback-failed` / `interrupted-rolled-back` / `error-rolled-back` / `state-unknown` / `overwritten-by-another-writer`), `exit_code`, `written` (the ConfigMap holds the new bytes as it exits; `null` when unknown), `rolled_back`, `message`, and `pods.<pod>` with `problems` / `warnings` / `target_changes` (the target tenant's changed series; `before` / `after` `null` means absent).
 
