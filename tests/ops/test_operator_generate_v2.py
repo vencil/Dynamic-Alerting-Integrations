@@ -1127,10 +1127,24 @@ class TestSelectorLabels:
             "selector labels are for Prometheus selection, not AlertmanagerConfig"
         )
 
+    @pytest.mark.parametrize("good", [
+        "team=",                                # empty value is allowed
+        "example.com/team=db",
+        "a-b.c1.example.com/Team_1.x=v-1",
+    ])
+    def test_valid_selector_label_is_accepted(self, good):
+        args = og.build_arg_parser().parse_args(["--selector-label", good])
+        assert args.selector_label == [tuple(good.split("=", 1))]
+
     @pytest.mark.parametrize("bad", [
         "no-equals-sign",
         "bad key=x",
         "k=" + "a" * 64,                        # value over 63 chars
+        "team..example.com/name=x",             # empty DNS label in the prefix
+        "a-.example.com/name=x",                # DNS label ending in '-'
+        "a/b/c=x",                              # '/' inside the prefix
+        "example.com/=x",                       # prefix with an empty name
+        "team=db\n",                            # trailing newline
         "app.kubernetes.io/part-of=other",      # identifies this tool's CRDs
     ])
     def test_invalid_selector_label_is_a_caller_error(self, bad, capsys):

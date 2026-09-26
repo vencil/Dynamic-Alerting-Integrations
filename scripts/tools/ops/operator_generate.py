@@ -739,19 +739,25 @@ def build_kustomization(crd_files: List[str], namespace: str) -> dict:
     }
 
 
-# Kubernetes label syntax: an optional DNS-subdomain prefix and '/', then a
-# name of at most 63 chars; a value of at most 63 chars (may be empty).
-_LABEL_NAME = r"[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?"
-_LABEL_KEY_RE = re.compile(
-    r"^(?:[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?/)?" + _LABEL_NAME + r"$"
-)
-_LABEL_VALUE_RE = re.compile(r"^(?:" + _LABEL_NAME + r")?$")
+# Kubernetes label syntax: an optional DNS-subdomain prefix (dot-separated
+# DNS labels, at most 253 chars) and '/', then a name of at most 63 chars;
+# a value of at most 63 chars (may be empty).
+_LABEL_NAME_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?")
+_DNS_LABEL_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _valid_label_key(key: str) -> bool:
+    prefix, slash, name = key.rpartition("/")
+    if slash and (len(prefix) > 253
+                  or not all(_DNS_LABEL_RE.fullmatch(p) for p in prefix.split("."))):
+        return False
+    return bool(_LABEL_NAME_RE.fullmatch(name))
 
 
 def _selector_label_arg(value: str) -> tuple:
     """argparse type for --selector-label: `key=value` with valid K8s syntax."""
     key, sep, val = value.partition("=")
-    if not sep or not _LABEL_KEY_RE.match(key) or not _LABEL_VALUE_RE.match(val):
+    if not sep or not _valid_label_key(key) or not (val == "" or _LABEL_NAME_RE.fullmatch(val)):
         raise argparse.ArgumentTypeError(
             i18n_text(
                 f"--selector-label 需為合法的 Kubernetes label key=value：{value!r}",

@@ -256,7 +256,7 @@ da-tools operator-generate --components rules --namespace monitoring
 da-tools operator-generate --selector-label release=my-prom
 ```
 
-`--selector-label` is repeatable, lands on both the PrometheusRule and the ServiceMonitor, and overrides a default of the same key (#2075). The chart's own ServiceMonitor (`rules.mode: operator`) takes extra labels from the values key `rules.operator.serviceMonitor.labels`.
+`--selector-label` is repeatable, lands on both the PrometheusRule and the ServiceMonitor, and overrides a default of the same key (#2075). The chart's own ServiceMonitor (`rules.mode: operator`) takes extra labels from the values key `rules.operator.serviceMonitor.labels`, which also defaults to `release: kube-prometheus-stack` (set `release: null` to drop it).
 
 > **Common pitfall**: Manually-written PrometheusRules often only carry `release: kube-prometheus-stack`, but some environments require `prometheus: kube-prometheus` in the ruleSelector. Using `operator-generate` avoids this issue.
 

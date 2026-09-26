@@ -45,5 +45,5 @@ helm install threshold-exporter ./helm/threshold-exporter \
 | `replicaCount` | `2` | HA 副本數；`> 1` 時自動建立 PDB（`minAvailable: 1`），沒有另外的開關 |
 | `image.tag` | `""`（＝`v<Chart appVersion>`） | 留空由 chart appVersion 推導；需要釘版本才設 |
 | `rules.mode` | `configmap` | `configmap` 或 `operator`。`operator` 時依 `rules.operator.serviceMonitor.*` 建立 ServiceMonitor；兩種模式都掛同一個 `threshold-config` 到 `/etc/threshold-exporter/conf.d`（固定路徑，不可設定）。⚠️ 本 chart 不出貨 Rule Pack——Rule Pack 是 `k8s/03-monitoring/configmap-rules-*.yaml`，需自行掛進 Prometheus |
-| `rules.operator.serviceMonitor.labels` | `{}` | `operator` 模式下加在 ServiceMonitor 上的 label，讓 Prometheus 的 `serviceMonitorSelector` 對得上（kube-prometheus-stack 預設比對 `release: <Helm release 名稱>`）；不可覆寫 `app`／`app.kubernetes.io/part-of`（#2075） |
+| `rules.operator.serviceMonitor.labels` | `{release: kube-prometheus-stack}` | `operator` 模式下加在 ServiceMonitor 上的 label，讓 Prometheus 的 `serviceMonitorSelector` 對得上（kube-prometheus-stack 預設比對 `release: <Helm release 名稱>`）；預設與 `da-tools operator-generate` 一致，stack 的 release 名稱不同就改 `release`，設 `release: null` 可拿掉；不可覆寫 `app`／`app.kubernetes.io/part-of`（#2075） |
 | `thresholdConfig.max_metrics_per_tenant` | `null`（＝內建 500） | 每租戶 threshold series 上限；只寫進根目錄 `_defaults.yaml`，負值＝不截斷（#2028） |

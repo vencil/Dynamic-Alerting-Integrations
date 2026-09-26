@@ -5,8 +5,10 @@ serviceMonitorSelector; kube-prometheus-stack's default selector matches
 `release: <its Helm release name>`. The chart's ServiceMonitor had no way to
 carry such a label. Pins:
 
-  * no labels configured → only the chart's own two labels;
-  * `rules.operator.serviceMonitor.labels` lands on the ServiceMonitor;
+  * by default → the chart's own two labels plus the same
+    `release: kube-prometheus-stack` that `da-tools operator-generate` sets;
+  * `rules.operator.serviceMonitor.labels` lands on the ServiceMonitor, and
+    `release: null` drops the default;
   * a key the chart already sets fails the render (a duplicate YAML key would
     otherwise be silently resolved by whichever parser reads it).
 
@@ -45,16 +47,25 @@ def _monitor_labels(stdout: str) -> dict:
     raise AssertionError("no ServiceMonitor in the operator-mode render")
 
 
-def test_default_carries_only_the_chart_labels(repo_root: Path):
+def test_default_matches_the_operator_generate_default(repo_root: Path):
+    # Same `release` default as `da-tools operator-generate`'s ServiceMonitor,
+    # so a chart-default install is not silently left unscraped.
     res = _render(repo_root)
     assert res.returncode == 0, res.stderr
-    assert _monitor_labels(res.stdout) == _BASE
+    assert _monitor_labels(res.stdout) == {**_BASE, "release": "kube-prometheus-stack"}
 
 
 def test_configured_labels_land_on_the_servicemonitor(repo_root: Path):
-    res = _render(repo_root, "--set", "rules.operator.serviceMonitor.labels.release=my-prom")
+    res = _render(repo_root, "--set", "rules.operator.serviceMonitor.labels.release=my-prom",
+                  "--set", "rules.operator.serviceMonitor.labels.team=db")
     assert res.returncode == 0, res.stderr
-    assert _monitor_labels(res.stdout) == {**_BASE, "release": "my-prom"}
+    assert _monitor_labels(res.stdout) == {**_BASE, "release": "my-prom", "team": "db"}
+
+
+def test_the_default_release_label_can_be_dropped(repo_root: Path):
+    res = _render(repo_root, "--set", "rules.operator.serviceMonitor.labels.release=null")
+    assert res.returncode == 0, res.stderr
+    assert _monitor_labels(res.stdout) == _BASE
 
 
 @pytest.mark.parametrize("key", ["app", "app\\.kubernetes\\.io/part-of"])
