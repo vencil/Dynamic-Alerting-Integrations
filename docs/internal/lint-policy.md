@@ -173,7 +173,7 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 
 ### (a) class — ~36 個
 
-`check_bilingual_*` (3) / `check_doc_*` (5) / `check_frontmatter_versions.py` / `check_glossary_*` (2) / `check_includes_sync.py` / `check_jsx_loader_compat.py` / `check_makefile_targets.py` / `check_metric_dictionary.py` / `check_path_metadata_consistency.py` / `check_playbook_freshness.py` / `check_property_pilot_*` (2) / `check_rule_pack_*` (3) / `check_structure.py` / `check_subprocess_timeout.py` / `check_tool_consistency.py` / `check_translation_*` (2) / `lint_*.py` (~5) 等。
+`check_bilingual_*` (3) / `check_doc_*` (5) / `check_frontmatter_versions.py` / `check_includes_sync.py` / `check_jsx_loader_compat.py` / `check_makefile_targets.py` / `check_metric_dictionary.py` / `check_path_metadata_consistency.py` / `check_playbook_freshness.py` / `check_property_pilot_*` (2) / `check_rule_pack_*` (3) / `check_structure.py` / `check_subprocess_timeout.py` / `check_tool_consistency.py` / `check_translation_*` (2) / `lint_*.py` (~5) 等。
 
 特徵：列舉是 SOT 的鏡像，policy 變動才需要更新。
 
