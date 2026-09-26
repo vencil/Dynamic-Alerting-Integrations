@@ -69,7 +69,7 @@ func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
 
 	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err == nil {
-		t.Fatal("expected WritePR to fail when the config dir is missing, got nil")
+		t.Fatal("expected WritePR to fail writing through a dangling tenant symlink, got nil")
 	}
 	if !strings.Contains(err.Error(), "write file") {
 		t.Errorf("error = %q, want it to carry the 'write file' failure semantics", err.Error())
@@ -185,7 +185,7 @@ func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 	_, err := w.WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
 	if err == nil {
-		t.Fatal("expected WritePRBatch to fail when the config dir is missing, got nil")
+		t.Fatal("expected WritePRBatch to fail writing through a dangling tenant symlink, got nil")
 	}
 	if !strings.Contains(err.Error(), "write file for db-a") {
 		t.Errorf("error = %q, want 'write file for db-a'", err.Error())

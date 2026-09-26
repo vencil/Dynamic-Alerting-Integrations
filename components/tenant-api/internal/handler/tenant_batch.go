@@ -40,10 +40,11 @@ type BatchResult struct {
 	TenantID string `json:"tenant_id"`
 	Status   string `json:"status"` // "ok" | "error"
 	Message  string `json:"message,omitempty"`
-	// Code is a machine-readable error code for an op that FAILED, set only
-	// for failure classes a client is expected to branch on — currently
-	// TENANT_DECLARED_ELSEWHERE (#2078), the per-op analogue of the 409 the
-	// single-tenant PUT and the PR-mode batch return. Empty otherwise.
+	// Code is a machine-readable error code for a FAILED op, set only for the
+	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
+	// (the per-op form of the 409 that PUT and the PR-mode batch return) and
+	// INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
+	// written). Empty for every other failure and for a successful op.
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// (#1231 deprecated-key alias notices from the direct WriteMerged path).

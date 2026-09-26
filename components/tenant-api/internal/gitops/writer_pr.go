@@ -126,7 +126,7 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// base has already cleaned up would refuse a write that is fine where it
 	// lands (#1718). WritePRBatch resolves inside its post-checkout loop for the
 	// same reason.
-	filePath, err := w.tenantFilePath(tenantID)
+	filePath, err := w.tenantFilePath(tenantID, nil)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
@@ -263,6 +263,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// below (against the fresh origin base), but rejecting here keeps a single
 	// invalid op from creating a dangling branch and preserves the
 	// ErrValidation→400 mapping without requiring a git repo to reach it.
+	//
+	// #2078: one conf.d walk for the whole pre-flight (it writes nothing, so
+	// every op reads the same tree); the post-checkout loop walks its own tree
+	// once more — two trees, two walks, never N.
+	preScan := w.newSectionScan()
 	for _, op := range ops {
 		// Reserved-id backstop per op (defense-in-depth; see guardTenantID).
 		if err := guardTenantID(op.TenantID); err != nil {
@@ -286,7 +291,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		// ErrTenantDeclaredElsewhere (#2078) is the same kind of verdict as
 		// ambiguity — "which files declare this id" on a tree the write does
 		// not land on — so it is deferred to the post-checkout resolution too.
-		opPath, err := w.tenantFilePath(op.TenantID)
+		opPath, err := w.tenantFilePath(op.TenantID, preScan)
 		if err != nil {
 			if errors.Is(err, confd.ErrAmbiguousTenantFile) || errors.Is(err, ErrTenantDeclaredElsewhere) {
 				continue
@@ -329,10 +334,14 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// bytes still re-committed to a body carrying a deprecated spelling.
 	changed := false
 	var notices []string
+	// #2078: ONE walk of the checked-out tree shared by every op below, taken
+	// lazily on the first resolution — i.e. before any op has written. Why
+	// the ops' own writes cannot invalidate it: see sectionScan.
+	branchScan := w.newSectionScan()
 	for _, op := range ops {
 		// #1673: one resolution per op — the file read by readMergeValidate and
 		// the file written below must be the same one.
-		filePath, err := w.tenantFilePath(op.TenantID)
+		filePath, err := w.tenantFilePath(op.TenantID, branchScan)
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,6 +100,43 @@ func TestTenantWrite_RefusesIDDeclaredElsewhere(t *testing.T) {
 			tenant:  "dup-t",
 			wantDup: true,
 		},
+		// Round 2 (M1): `<id>.yaml` EXISTS but does not declare the id, while
+		// another file does. "The target exists" is not "the id lives there".
+		{
+			name: "own file is a tenants:{} shell",
+			files: map[string]string{
+				"shell-t.yaml":      "tenants: {}\n",
+				"team/shell-t.yaml": tenantBody("shell-t"),
+			},
+			tenant: "shell-t",
+		},
+		{
+			name: "own file does not parse",
+			files: map[string]string{
+				"broken-t.yaml":      "tenants: [not, a, map\n",
+				"team/broken-t.yaml": tenantBody("broken-t"),
+			},
+			tenant: "broken-t",
+		},
+		{
+			name: "own file declares another key",
+			files: map[string]string{
+				"key-t.yaml":      tenantBody("key-other"),
+				"team/key-t.yaml": tenantBody("key-t"),
+			},
+			tenant: "key-t",
+		},
+		// …and when it DOES declare the id, a second declaration elsewhere is
+		// a duplicate the exporter already rejects: refused even as an update.
+		{
+			name: "own file plus a declaration elsewhere",
+			files: map[string]string{
+				"both-t.yaml":      tenantBody("both-t"),
+				"team/both-t.yaml": tenantBody("both-t"),
+			},
+			tenant:  "both-t",
+			wantDup: true,
+		},
 	}
 	for _, tc := range cases {
 		for _, mode := range allWriteModes {
@@ -106,6 +144,8 @@ func TestTenantWrite_RefusesIDDeclaredElsewhere(t *testing.T) {
 				dir := seedTreeRepo(t, tc.files)
 				w := NewWriter(dir, dir)
 				mainHead := gitOut(t, dir, "rev-parse", "main")
+				ownPath := filepath.Join(dir, tc.tenant+".yaml")
+				ownBefore, ownErrBefore := os.ReadFile(ownPath)
 
 				err := writeVia(t, mode, w, tc.tenant)
 				if !errors.Is(err, ErrTenantDeclaredElsewhere) {
@@ -115,8 +155,12 @@ func TestTenantWrite_RefusesIDDeclaredElsewhere(t *testing.T) {
 				if got := errors.As(err, &dup); got != tc.wantDup {
 					t.Errorf("errors.As(*DuplicateTenantError) = %v, want %v (err=%v)", got, tc.wantDup, err)
 				}
-				if _, serr := os.Stat(filepath.Join(dir, tc.tenant+".yaml")); !os.IsNotExist(serr) {
-					t.Errorf("%s.yaml was created (stat err=%v) — the duplicate #2078 exists to prevent", tc.tenant, serr)
+				// The top-level `<id>.yaml` is exactly as it was: still absent,
+				// or byte-identical.
+				ownAfter, ownErrAfter := os.ReadFile(ownPath)
+				if os.IsNotExist(ownErrBefore) != os.IsNotExist(ownErrAfter) || string(ownBefore) != string(ownAfter) {
+					t.Errorf("%s.yaml changed on a refused write: before=%q (%v) after=%q (%v)",
+						tc.tenant, ownBefore, ownErrBefore, ownAfter, ownErrAfter)
 				}
 				if got := gitOut(t, dir, "rev-parse", "main"); got != mainHead {
 					t.Errorf("main moved %s → %s on a refused write", mainHead, got)
@@ -177,18 +221,16 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 			})
 		}
 	})
-	// An existing top-level `<id>.yaml` is an ordinary update and is resolved
-	// WITHOUT walking the tree. Pinned observably: the tree below already
-	// declares upd-t twice (the exporter rejects it), and the update still
-	// goes through — had the guard scanned, Locate would have reported the
-	// duplicate and refused. This pins "no scan on update", not an
-	// endorsement of the tree.
-	t.Run("existing file is updated without a tree scan", func(t *testing.T) {
+	// An existing `<id>.yaml` that declares the id (and nothing else does) is
+	// the ordinary update: the walker attributes the id to the target itself.
+	// The "existing file plus a declaration elsewhere" row of
+	// TestTenantWrite_RefusesIDDeclaredElsewhere is the refused counterpart.
+	t.Run("existing file is updated", func(t *testing.T) {
 		for _, mode := range []string{"Write", "WriteMerged"} {
 			t.Run(mode, func(t *testing.T) {
 				dir := seedTreeRepo(t, map[string]string{
-					"upd-t.yaml":      tenantBody("upd-t"),
-					"team/upd-t.yaml": tenantBody("upd-t"),
+					"upd-t.yaml":            tenantBody("upd-t"),
+					"team/neighbour-t.yaml": tenantBody("neighbour-t"),
 				})
 				w := NewWriter(dir, dir)
 				body := "tenants:\n  upd-t:\n    _silent_mode: \"critical\"\n"
@@ -209,12 +251,98 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 			})
 		}
 	})
+	// An existing `<id>.yaml` that does NOT declare the id, with nothing else
+	// declaring it either, is still writable: after the write the id lives in
+	// exactly one file.
+	t.Run("existing shell file is filled in", func(t *testing.T) {
+		for _, mode := range allWriteModes {
+			t.Run(mode, func(t *testing.T) {
+				dir := seedTreeRepo(t, map[string]string{"fill-t.yaml": "tenants: {}\n"})
+				if err := writeVia(t, mode, NewWriter(dir, dir), "fill-t"); err != nil {
+					t.Fatalf("%s(fill-t): %v", mode, err)
+				}
+			})
+		}
+	})
+}
+
+// The PR batch shares ONE walk across its post-checkout ops (sectionScan).
+// Ops that create tenants, including the same new tenant twice, must still
+// land: the walk predates the first op's write, and a write in the section
+// can only add the op's own id to its own target.
+func TestWritePRBatch_SharedScanAcrossOps(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"team/sub-t.yaml": tenantBody("sub-t")})
+	w := NewWriter(dir, dir)
+	body := func(id, mode string) MergeFunc {
+		return func([]byte) (string, error) {
+			return "tenants:\n  " + id + ":\n    _silent_mode: \"" + mode + "\"\n", nil
+		}
+	}
+	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
+		{TenantID: "new-a", Merge: body("new-a", "warning")},
+		{TenantID: "new-a", Merge: body("new-a", "critical")},
+		{TenantID: "new-b", Merge: body("new-b", "warning")},
+	}, "op@example.com")
+	if err != nil {
+		t.Fatalf("WritePRBatch: %v", err)
+	}
+	gitRun(t, dir, "fetch", "origin", res.BranchName)
+	if got := gitOut(t, dir, "show", "FETCH_HEAD:new-a.yaml"); !strings.Contains(got, "critical") {
+		t.Errorf("new-a.yaml on the branch = %q, want the second op's body", got)
+	}
+	gitOut(t, dir, "show", "FETCH_HEAD:new-b.yaml")
+
+	// …and a shared walk still refuses: one refused op aborts the whole batch.
+	_, err = w.WritePRBatch(context.Background(), []PRBatchOp{
+		{TenantID: "new-c", Merge: body("new-c", "warning")},
+		{TenantID: "sub-t", Merge: body("sub-t", "warning")},
+	}, "op@example.com")
+	if !errors.Is(err, ErrTenantDeclaredElsewhere) {
+		t.Fatalf("second batch err = %v, want ErrTenantDeclaredElsewhere", err)
+	}
+	assertCleanOnBase(t, dir, "main", "tenant-api/")
+}
+
+// m2: WritePRBatch's pre-flight TOLERATES ErrTenantDeclaredElsewhere because it
+// reads the local tree, not the one the write lands on. Here the local base
+// still declares fix-t in a subdirectory file, but origin/main has already
+// removed that file: the batch branches from origin/main, where the id is
+// declared nowhere, so the write must go through.
+func TestWritePRBatch_PreflightDefersDeclaredElsewhereToFreshBase(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"team/fix-t.yaml": tenantBody("fix-t")})
+	gitRun(t, dir, "push", "-q", "origin", "main")
+	remote := gitOut(t, dir, "remote", "get-url", "origin")
+
+	// Another clone removes the declaration upstream; the writer's local main
+	// is left stale on purpose.
+	other := t.TempDir()
+	gitRun(t, other, "clone", "-q", "-b", "main", remote, ".")
+	gitRun(t, other, "config", "user.email", "o@o.com")
+	gitRun(t, other, "config", "user.name", "O")
+	gitRun(t, other, "rm", "-q", "team/fix-t.yaml")
+	gitRun(t, other, "commit", "-q", "-m", "drop the subdirectory declaration")
+	gitRun(t, other, "push", "-q", "origin", "HEAD:main")
+
+	if _, err := os.Stat(filepath.Join(dir, "team", "fix-t.yaml")); err != nil {
+		t.Fatalf("fixture: local tree must still declare fix-t elsewhere: %v", err)
+	}
+	w := NewWriter(dir, dir)
+	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "fix-t",
+		Merge: func([]byte) (string, error) { return tenantBody("fix-t"), nil }}}, "op@example.com")
+	if err != nil {
+		t.Fatalf("WritePRBatch against a fresh base without the other declaration: %v", err)
+	}
+	gitRun(t, dir, "fetch", "origin", res.BranchName)
+	gitOut(t, dir, "show", "FETCH_HEAD:fix-t.yaml")
+	if out, err := exec.Command("git", "-C", dir, "cat-file", "-e", "FETCH_HEAD:team/fix-t.yaml").CombinedOutput(); err == nil {
+		t.Errorf("the PR branch still carries team/fix-t.yaml — it was not cut from origin/main (%s)", out)
+	}
 }
 
 // The guard fails CLOSED when the walk itself cannot run.
 func TestEnsureNotDeclaredElsewhere_ScanFailureFailsClosed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-conf.d")
-	err := ensureNotDeclaredElsewhere(missing, "fresh-t", filepath.Join(missing, "fresh-t.yaml"))
+	err := (&Writer{configDir: missing}).newSectionScan().ensureNotDeclaredElsewhere("fresh-t", filepath.Join(missing, "fresh-t.yaml"))
 	if !errors.Is(err, ErrTenantTreeScan) {
 		t.Fatalf("err = %v, want ErrTenantTreeScan", err)
 	}
@@ -240,12 +368,12 @@ func TestEnsureNotDeclaredElsewhere_PathFormDoesNotMisjudge(t *testing.T) {
 	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if err := ensureNotDeclaredElsewhere(link, "own-t", filepath.Join(link, "own-t.yaml")); err != nil {
+	if err := (&Writer{configDir: link}).newSectionScan().ensureNotDeclaredElsewhere("own-t", filepath.Join(link, "own-t.yaml")); err != nil {
 		t.Errorf("symlinked configDir: %v", err)
 	}
 	t.Chdir(filepath.Dir(realDir))
 	rel := filepath.Base(realDir)
-	if err := ensureNotDeclaredElsewhere(rel, "own-t", filepath.Join(rel, "own-t.yaml")); err != nil {
+	if err := (&Writer{configDir: rel}).newSectionScan().ensureNotDeclaredElsewhere("own-t", filepath.Join(rel, "own-t.yaml")); err != nil {
 		t.Errorf("relative configDir: %v", err)
 	}
 }

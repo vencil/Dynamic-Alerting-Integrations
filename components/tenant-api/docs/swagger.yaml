@@ -422,10 +422,11 @@ definitions:
     properties:
       code:
         description: |-
-          Code is a machine-readable error code for an op that FAILED, set only
-          for failure classes a client is expected to branch on — currently
-          TENANT_DECLARED_ELSEWHERE (#2078), the per-op analogue of the 409 the
-          single-tenant PUT and the PR-mode batch return. Empty otherwise.
+          Code is a machine-readable error code for a FAILED op, set only for the
+          failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
+          (the per-op form of the 409 that PUT and the PR-mode batch return) and
+          INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
+          written). Empty for every other failure and for a successful op.
         type: string
       message:
         type: string

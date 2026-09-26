@@ -2362,7 +2362,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is a machine-readable error code for an op that FAILED, set only\nfor failure classes a client is expected to branch on — currently\nTENANT_DECLARED_ELSEWHERE (#2078), the per-op analogue of the 409 the\nsingle-tenant PUT and the PR-mode batch return. Empty otherwise.",
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return) and\nINTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten). Empty for every other failure and for a successful op.",
                     "type": "string"
                 },
                 "message": {
