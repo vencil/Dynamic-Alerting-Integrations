@@ -445,20 +445,10 @@ class TestCheckLocal:
 #   * Recursion: `check_local` is flat by construction (`base.iterdir()`).
 #     That is `test_confd_enumeration_contract.py`'s axis; nested carriers do
 #     get a `WARN` on stderr, so this one at least speaks.
-#   * Hidden names: this reader COUNTS `.hidden.yaml` as a tenant file while
-#     the exporter skips dot-prefixed entries (`scanDirHierarchical`, `config_hierarchy.go`).
-#     Measured on the tree before this change and unchanged by it, so it is
-#     pre-existing — but it is also the same shape as the bug fixed here: the
-#     shared predicates say `is_hidden_name(".secret.yaml") is True` and
-#     `config_stem(".secret.yaml") == ""` (this file carries no tenant id),
-#     while the loop two lines below counts it as tenant #2. This module
-#     does not import `is_hidden_name` at all.
-#     ⛔ Closing it DELETES tenants that count today, so it is a separate
-#     behaviour change; the fixtures below therefore contain no dot-prefixed
-#     name at all, rather than pinning today's answer for them.
-#     ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
-#     several enumerators — not this reader's hidden-axis answer, so the
-#     disclosure has to carry itself.
+#   * Hidden names: closed by #2055 — `check_local` now skips dot-prefixed
+#     entries as the exporter's walker does. Pinned by
+#     `TestCheckLocalHiddenEntries` below, not by this class; the fixtures
+#     here still contain no dot-prefixed name.
 #   * Entries `is_file()` drops (a directory named `notes.yml/`, a broken
 #     symlink) are still silently skipped rather than named. ⚠️ #1607's
 #     closing comment verifies `operator_generate`

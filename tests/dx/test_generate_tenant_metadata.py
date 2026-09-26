@@ -19,18 +19,9 @@ read the per-axis notes below rather than the ticket numbers:
   * Recursion: this reader is flat (`config_dir.iterdir()`) and says so out
     loud — `warn_nested` prints the nested files it cannot see. That is
     `test_confd_enumeration_contract.py`'s axis.
-  * Hidden names: dot-prefixed carriers reach the loop below (the module
-    imports `is_reserved_name` but not `is_hidden_name`) while the exporter
-    skips them (`scanDirHierarchical`, `config_hierarchy.go`). Pre-existing and unchanged
-    here; closing it DELETES tenants that appear today, so it is a separate
-    behaviour change.
-    ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
-    several enumerators — not this reader's hidden-axis answer. The
-    hidden-axis tickets filed so far are about other readers: #1589 is
-    the exporter's `pkg/config` enumerator (path-vs-basename) and #1827
-    is `assemble_config_dir` assembling `.`-prefixed carriers — neither
-    covers a Python reader counting `.hidden.yaml` as a tenant, so this
-    disclosure still has to carry itself.
+  * Hidden names: closed by #2055 — dot-prefixed carriers are now skipped
+    as the exporter's walker skips them. Pinned by `TestHiddenEntriesAxis`
+    below, not by the spelling tests.
   * Entries `is_file()` drops are named on stderr here — that half of #1607
     IS wired up in this module, unlike `gitops_check`.
 """
