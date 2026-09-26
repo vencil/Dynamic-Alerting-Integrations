@@ -1505,7 +1505,7 @@ def _gated_jobs(workflow_path: Path) -> dict[str, list[str]]:
          with `always()`. GitHub SKIPS a job whose dependency was skipped, so
          such a job is path-gated in fact while carrying no `if:` of its own.
          This workflow tree already relies on the escape hatch — every
-         aggregate gate (`python-tests`, `all-checks`, …) writes `if: always()`
+         aggregate gate (`python-tests`, `go-lint-gate`, …) writes `if: always()`
          precisely to opt out — so the first contributor who forgets it creates
          a silently gated leg. When this was written it changed nothing: every
          such job carried `always()`, which is what made it cheap to add.

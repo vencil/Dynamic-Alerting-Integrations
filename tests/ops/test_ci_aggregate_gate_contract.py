@@ -82,23 +82,15 @@ mirrored constant, correct on the date stamped beside it and stale the moment
 GitHub settings change); and it says nothing about 16 of the 19 required
 checks.
 
-⛔ Its scope is `ci.yml`, with two exceptions:
-`test_gate_shaped_jobs_are_either_modelled_or_ledgered` asks whether a
-gate-shaped job in any dorny workflow is modelled or ledgered, and
-`test_the_required_check_names_belong_to_the_gates_and_nothing_else` sweeps
-every workflow, because branch protection matches a check NAME regardless of
-which file produced it. Everything else is bound to `CI_WORKFLOW`. That leaves the LARGER half of the problem untouched
-and it is worth naming precisely, because #1398's summary is easy to read as
-"docs-ci's `all-checks` is weak": of the 19 required checks, **ten are
-path-gated jobs registered as required directly, with no REQUIRED aggregate
-layer above them** — `Go Lint`, `Version Consistency`, `Validate Tenant Config & Routes`
-(validate.yaml), and `Check Documentation Links` / `Front Matter` / `Coverage`
-/ `MkDocs Build Verification` / `Validate Mermaid Diagrams` / `Documentation
-Line Count Monitor` / `Drift Detection (validate_all.py)` (docs-ci.yaml). A
-broken detect job in either workflow skips all of them, and a skipped required
-check reports Success. `All Documentation Checks` is NOT itself required
-(verified against the branch-protection API), so repairing that one job closes
-none of this. That is #1398's real subject.
+⛔ Scope: every workflow that owns a `dorny/paths-filter` detect job —
+`ci.yml`, `docs-ci.yaml` and `validate.yaml` today. Until #1398 it was
+`ci.yml` only, and the larger half of the problem sat outside it: ten of the
+19 required checks were path-gated jobs registered as required directly
+(`Go Lint`, `Version Consistency`, `Validate Tenant Config & Routes` in
+validate.yaml; seven in docs-ci.yaml), so a broken detect job skipped all of
+them and a skipped required check reports Success. #1398 gave each of those
+names to an `always()` gate job in the same shape as ci.yml's, which is what
+brings them under the assertions below.
 
 ## How a gate is FOUND (derived, not a list of three job ids)
 
@@ -187,6 +179,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # ⛔ ONE literal path string each — a `/ ".github" / "workflows"` split form
 # registers this module against nothing in verify_diff's text_map.
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+# Not read through these names — discovery globs WORKFLOW_DIR — but they are
+# the literal paths that tell verify_diff this module depends on them (#1398).
+_ALSO_SCANNED = (ROOT / ".github/workflows/docs-ci.yaml",
+                 ROOT / ".github/workflows/validate.yaml")
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 BASH = shutil.which("bash")
@@ -210,13 +206,11 @@ def _load(path: Path) -> dict:
 def _paths_filter_workflows() -> tuple[Path, ...]:
     """Every workflow that owns a `dorny/paths-filter` detect job.
 
-    Derived from the tree rather than listed. ⚠️ But "scanned" is a narrow
-    word: a workflow entering this set is only asked whether a gate-shaped
-    job in it is modelled or ledgered. It does NOT bring its jobs under the
-    rest of the assertions here — the required-check NAME sweep covers every
-    workflow separately, and everything else is `ci.yml` only. The sibling module carries the same
-    correction for the same reason — a workflow being scanned says nothing
-    about its jobs being seen. `sorted` keeps failure messages stable.
+    Derived from the tree rather than listed. Every gate assertion in this
+    module iterates the gates of these workflows (#1398 widened that from
+    `ci.yml` alone); the required-check NAME sweep additionally covers every
+    workflow, dorny or not, because branch protection matches names across
+    all of them. `sorted` keeps failure messages stable.
     """
     return tuple(
         path for path in sorted(WORKFLOW_DIR.glob("*.y*ml"))
@@ -283,10 +277,8 @@ def _step_bindings(path: Path, job_id: str, step: dict) -> _Bindings | None:
                 "unparsed one removes the job from the gate set silently. "
                 "⛔ Teach the parser the shape. Moving the reference out of "
                 "`env:` also makes this message go away — and it is the "
-                "anti-pattern this module already has to ledger for "
-                "`docs-ci.yaml::all-checks`: the job then leaves the gate set "
-                "entirely and no assertion here covers that required check at "
-                "all.")
+                "anti-pattern: the job then leaves the gate set entirely and "
+                "no assertion here covers that required check at all.")
 
     detect_results = {n: j for n, j in results.items() if j in detect}
     leg_results = {n: j for n, j in results.items() if j not in detect}
@@ -420,7 +412,8 @@ def _discover_gates_or_fail() -> tuple[tuple[Gate, ...], AssertionError | None]:
     of them say so rather than to claim an isolation that is not implemented.
     """
     try:
-        return _gates(CI_WORKFLOW), None
+        return tuple(gate for path in _paths_filter_workflows()
+                     for gate in _gates(path)), None
     except AssertionError as refusal:  # noqa: PERF203 - one call, one catch
         return (), refusal
 
@@ -430,6 +423,10 @@ _CI_GATES, _CI_GATE_REFUSAL = _discover_gates_or_fail()
 
 def _ci_gates() -> tuple[Gate, ...]:
     return _CI_GATES
+
+
+def _workflow_of(gate: Gate) -> Path:
+    return WORKFLOW_DIR / gate.workflow
 
 
 def _gates_or_fail() -> tuple[Gate, ...]:
@@ -535,35 +532,17 @@ def _path_gated_jobs(path: Path) -> dict[str, frozenset[str]]:
 # cannot model, with the reason and the
 # ticket. Asserted as an exact set, so a new one cannot join a silent majority
 # and a fixed one cannot leave a stale excuse behind.
-UNMODELLED_GATE_SHAPED_JOBS = {
-    ("docs-ci.yaml", "all-checks"):
-        "interpolates `${{ needs.*.result }}` straight into `run:` instead of "
-        "binding it through `env:`, and consults no `*_changed` output at all "
-        "— so it cannot express the contract asserted here: it tolerates "
-        "EVERY `skipped`, including one caused by a broken detect job. "
-        "⚠️ Do not read this entry as 'the docs-ci exposure lives here'. "
-        "`All Documentation Checks` is not itself a required check (checked "
-        "against the branch-protection API on 2026-08-13); of the eight legs "
-        "it waits for, seven are required INDIVIDUALLY (the eighth, "
-        "`i4-runbook-smoke-test`, is required nowhere — and `Documentation "
-        "Line Count Monitor` IS required while not being among its `needs:` "
-        "at all), so fixing this job "
-        "closes none of the exposure. Tracked as #1398, whose real subject is "
-        "those ten directly-required path-gated jobs across docs-ci.yaml and "
-        "validate.yaml — see the module docstring. Deliberately out of scope "
-        "for #1397. ⛔ Do not silence this entry by widening discovery — "
-        "widening it without also changing the job would make this module "
-        "assert a contract that job does not implement, and the assertion "
-        "would then have to be weakened to fit.",
-}
+UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 
 
 # ⛔ The branch-protection contract, mirrored. This is the one thing here that
 # CANNOT be derived from the tree: the required-check list lives in GitHub
-# settings. Verified 2026-08-13 with
+# settings. Verified 2026-09-25 with
 #   gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection\
-#     /required_status_checks --jq '.contexts[]'
-# which returned 19 contexts including exactly these three.
+#     --jq '.required_status_checks.checks[] | "\(.context)@\(.app_id)"'
+# which returned 19 contexts, all app 15368 (GitHub Actions), including every
+# name below — i.e. every required check reported by a job whose verdict can
+# depend on a path filter.
 #
 # ⛔ A pin in the same file is not tamper-proof, and this comment used to
 # imply otherwise. Blind review deleted one name from the set and swapped the
@@ -582,6 +561,18 @@ REQUIRED_CHECK_NAMES = frozenset({
     "Python Tests (3.13)",
     "Go Tests (1.26)",
     "Portal Tests",
+    # validate.yaml (#1398)
+    "Go Lint",
+    "Validate Tenant Config & Routes",
+    "Version Consistency",
+    # docs-ci.yaml (#1398)
+    "Validate Mermaid Diagrams",
+    "Check Documentation Links",
+    "Check Documentation Front Matter",
+    "Check Documentation Coverage",
+    "MkDocs Build Verification",
+    "Documentation Line Count Monitor",
+    "Drift Detection (validate_all.py)",
 })
 
 
@@ -977,7 +968,7 @@ def test_gate_discovery_did_not_refuse() -> None:
 # coverage-delta step that merely `needs:` a leg is path-gated by inheritance
 # and backs no required check) — a guard with no legitimate exit turns into a
 # guard people delete.
-UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {
+UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
     # The coverage leg is ADVISORY by owner decision (2026-09-19): it runs the
     # same tree as `python-tests-run` plus `--cov`, uploads `coverage-py3.13`
     # for coverage-delta.yml, and fails on `--cov-fail-under` — visibly, as a
@@ -987,7 +978,7 @@ UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {
     # required leg's critical path. Skipping with the same `python_changed`
     # gate as the run leg cannot mislead a required check because no check
     # reads its result.
-    "python-coverage": (
+    ("ci.yml", "python-coverage"): (
         "ADVISORY coverage leg (owner decision, PR #1910): same tree and flags "
         "as python-tests-run plus --cov; uploads coverage-py3.13 for "
         "coverage-delta.yml and reddens on --cov-fail-under, but backs no "
@@ -997,11 +988,17 @@ UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {
         "the owner rejected; its skip cannot mislead because nothing reads its "
         "result. Closing this row means either promoting it into the gate "
         "(a policy reversal) or deleting the job."),
+    ("docs-ci.yaml", "i4-runbook-smoke-test"): (
+        "NOT a required check (branch protection read 2026-09-25, #1398), so "
+        "no gate owns a name for it: its failure shows as a red non-required "
+        "job and its skip decides nothing. Closing this row means giving it a "
+        "gate job first, then enrolling that gate's name in branch "
+        "protection."),
 }
 
 
 def _unwatched_ledger_problems(ledger, unwatched: set[str],
-                               jobs: dict) -> list[str]:
+                               jobs: dict, workflow: str = "ci.yml") -> list[str]:
     """PURE. The ledger is not a place to park a gate.
 
     Blind review laundered a gate-shaped job to invisibility in three moves:
@@ -1019,13 +1016,13 @@ def _unwatched_ledger_problems(ledger, unwatched: set[str],
     for job_id in sorted(ledger):
         if job_id not in unwatched:
             problems.append(
-                f"UNWATCHED_PATH_GATED_JOBS names ci.yml::{job_id}, which is "
+                f"UNWATCHED_PATH_GATED_JOBS names {workflow}::{job_id}, which is "
                 "not an unwatched path-gated job today. A row that outlives "
                 "its job keeps whatever id it holds outside the check above, "
                 "silently and forever — delete it.")
         elif _READS_A_RESULT.search(json.dumps(jobs.get(job_id, {}))):
             problems.append(
-                f"ci.yml::{job_id} is in UNWATCHED_PATH_GATED_JOBS but reads "
+                f"{workflow}::{job_id} is in UNWATCHED_PATH_GATED_JOBS but reads "
                 "another job's `.result`. A job that consults a verdict is a "
                 "gate, not a downstream consumer, and this ledger is the "
                 "wrong answer for it — ⛔ particularly if it reached this "
@@ -1051,19 +1048,37 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
     # if it collapses to empty, pytest reports zero tests as a pass. Blind
     # review reached that state by renaming the `dorny/paths-filter` action.
     assert gates, (
-        "no aggregate gate was discovered in ci.yml at all. Every assertion "
-        "parametrised over the gate set silently becomes zero tests, which "
-        "reads as green.")
+        "no aggregate gate was discovered in any dorny workflow. Every "
+        "assertion parametrised over the gate set silently becomes zero "
+        "tests, which reads as green.")
+    problems: list[str] = []
+    scanned = {path.name for path in _paths_filter_workflows()}
+    # ⛔ A row keyed to a workflow outside the scan is never checked for
+    # staleness below — a typo'd name (`validate.yml`) would sit there until
+    # that name ever gained a detect job, and then silently exempt a leg.
+    problems += [
+        f"UNWATCHED_PATH_GATED_JOBS row {key!r} names a workflow with no "
+        "dorny detect job, so nothing can ever check it — delete or fix it."
+        for key in sorted(UNWATCHED_PATH_GATED_JOBS) if key[0] not in scanned]
+    for path in _paths_filter_workflows():
+        problems += _watch_problems(path, [g for g in gates if g.workflow == path.name])
+    assert not problems, (
+        f"{len(problems)} gate/leg mismatch(es):\n  " + "\n  ".join(problems)
+        + f"\n(gates discovered: {sorted(str(g) for g in gates)})")
+
+
+def _watch_problems(path: Path, gates: list[Gate]) -> list[str]:
+    wf = path.name
     watched = {
         job_id: gate.job_id
         for gate in gates for _name, job_id in gate.bindings.legs
     }
-    gated = _path_gated_jobs(CI_WORKFLOW)
-
-    jobs = _load(CI_WORKFLOW)["jobs"]
+    gated = _path_gated_jobs(path)
+    jobs = _load(path)["jobs"]
+    ledger = {job: why for (w, job), why in UNWATCHED_PATH_GATED_JOBS.items() if w == wf}
     unwatched = set(gated) - set(watched)
     problems = [
-        f"ci.yml::{job_id} is path-gated on {sorted(gated[job_id])} but no "
+        f"{wf}::{job_id} is path-gated on {sorted(gated[job_id])} but no "
         "aggregate gate weighs its `.result`. When it path-skips, nothing "
         "decides whether that skip was legitimate.\nAsk first: SHOULD this "
         "job's outcome decide a required check? If yes, add it to a gate's "
@@ -1073,20 +1088,14 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
         "with the argument. The two are not interchangeable: doing the first "
         "to a job that is not a test leg makes a required check start "
         "blocking on it."
-        for job_id in sorted(unwatched - set(UNWATCHED_PATH_GATED_JOBS))
+        for job_id in sorted(unwatched - set(ledger))
     ] + [
-        f"ci.yml::{job_id} is weighed by the {watched[job_id]} gate but is no "
+        f"{wf}::{job_id} is weighed by the {watched[job_id]} gate but is no "
         "longer path-gated. Either the gate watches the wrong job, or the leg "
         "lost its `if:` and the gate's skip-tolerance branch is now dead code."
         for job_id in sorted(set(watched) - set(gated))
     ]
-    problems += _unwatched_ledger_problems(
-        UNWATCHED_PATH_GATED_JOBS, unwatched, jobs)
-    assert not problems, (
-        f"{len(problems)} gate/leg mismatch(es) in ci.yml:\n  "
-        + "\n  ".join(problems)
-        + f"\n(gates discovered: {sorted(g.job_id for g in _gates_or_fail())}; "
-          f"path-gated jobs: {sorted(gated)})")
+    return problems + _unwatched_ledger_problems(ledger, unwatched, jobs, wf)
 
 
 _EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
@@ -1161,7 +1170,7 @@ def test_the_required_check_names_belong_to_the_gates_and_nothing_else() -> None
             "more. Branch protection still asks for it, so either a gate was "
             "renamed (update GitHub settings in the same breath) or the check "
             "is now reported by something that is not a gate. Re-check with "
-            "the `gh api` command above; the pin was taken on 2026-08-13.")
+            "the `gh api` command above the set, whose comment dates the pin.")
 
     # ⛔ Deliberately ONE direction. An earlier version also refused a gate
     # whose name was not yet in the pinned set — which makes adding a fourth
@@ -1230,31 +1239,33 @@ def test_every_changed_output_a_gate_or_a_leg_consults_is_declared() -> None:
     catch it: both check that the FILTER exists in the dorny block, not that
     the OUTPUT is declared on the detect job.
     """
-    workflow = _load(CI_WORKFLOW)
-    jobs = workflow["jobs"]
-    declared = {
-        detect: set((jobs[detect].get("outputs") or {}))
-        for detect in _detect_jobs(CI_WORKFLOW)
-    }
     problems = []
-    for gate in _gates_or_fail():
-        for _name, detect, output in gate.bindings.changed:
-            if output not in declared.get(detect, set()):
-                problems.append(
-                    f"{gate} binds `needs.{detect}.outputs.{output}`, which "
-                    f"{detect} does not declare. It renders as the empty "
-                    "string, so the gate tolerates every skip.")
-    for job_id, job in jobs.items():
-        for detect, output in _IF_GATE_REF.findall(str(job.get("if", ""))):
-            if detect in declared and output not in declared[detect]:
-                problems.append(
-                    f"ci.yml::{job_id} gates on "
-                    f"`needs.{detect}.outputs.{output}`, which {detect} does "
-                    "not declare — the job can never run.")
+    for path in _paths_filter_workflows():
+        jobs = _load(path)["jobs"]
+        declared = {
+            detect: set((jobs[detect].get("outputs") or {}))
+            for detect in _detect_jobs(path)
+        }
+        assert declared and all(declared.values()), (
+            f"no detect job in {path.name} declares any outputs "
+            f"({declared!r}) — this assertion would pass on an empty tree.")
+        for gate in _gates_or_fail():
+            if gate.workflow != path.name:
+                continue
+            for _name, detect, output in gate.bindings.changed:
+                if output not in declared.get(detect, set()):
+                    problems.append(
+                        f"{gate} binds `needs.{detect}.outputs.{output}`, which "
+                        f"{detect} does not declare. It renders as the empty "
+                        "string, so the gate tolerates every skip.")
+        for job_id, job in jobs.items():
+            for detect, output in _IF_GATE_REF.findall(str(job.get("if", ""))):
+                if detect in declared and output not in declared[detect]:
+                    problems.append(
+                        f"{path.name}::{job_id} gates on "
+                        f"`needs.{detect}.outputs.{output}`, which {detect} does "
+                        "not declare — the job can never run.")
     assert not problems, "\n  ".join([""] + problems)
-    assert declared and all(declared.values()), (
-        f"no detect job declares any outputs ({declared!r}) — this assertion "
-        "would pass on an empty tree.")
 
 
 def test_every_job_a_gate_waits_for_is_also_weighed() -> None:
@@ -1266,20 +1277,20 @@ def test_every_job_a_gate_waits_for_is_also_weighed() -> None:
     ignores: it can fail, or skip while it was needed, and the gate never
     looks. This turns that comment into a machine check.
     """
-    jobs = _load(CI_WORKFLOW)["jobs"]
-    detect = _detect_jobs(CI_WORKFLOW)
     problems = []
     for gate in _gates_or_fail():
+        jobs = _load(_workflow_of(gate))["jobs"]
+        detect = _detect_jobs(_workflow_of(gate))
         awaited = set(_needs(jobs[gate.job_id])) - detect
         weighed = {job_id for _name, job_id in gate.bindings.legs}
         for job_id in sorted(awaited - weighed):
             problems.append(
-                f"{gate} waits for ci.yml::{job_id} but never reads its "
+                f"{gate} waits for {gate.workflow}::{job_id} but never reads its "
                 "`.result` — the gate blocks on it and then ignores its "
                 "verdict.")
         for job_id in sorted(weighed - awaited):
             problems.append(
-                f"{gate} reads ci.yml::{job_id}'s `.result` but does not "
+                f"{gate} reads {gate.workflow}::{job_id}'s `.result` but does not "
                 "`needs:` it, so the expression renders empty regardless of "
                 "what that job did.")
     assert not problems, "\n  ".join([""] + problems)
@@ -1659,11 +1670,10 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
       * command substitution, which can read the runner's environment without
         naming anything in `env:`.
     """
-    workflow = _load(CI_WORKFLOW)
-    jobs = workflow["jobs"]
     problems = []
     for gate in _gates_or_fail():
-        job = jobs[gate.job_id]
+        workflow = _load(_workflow_of(gate))
+        job = workflow["jobs"][gate.job_id]
         steps = job.get("steps") or []
         step = steps[gate.step]
         bound_for_redirects = {gate.bindings.detect_result[0]}
@@ -1828,7 +1838,7 @@ def test_the_gate_verdict_cannot_be_skipped() -> None:
                 "`always()`, it is the COMPARISON that needs teaching, not "
                 "the workflow: `_normalised_condition` strips one `${{ }}` "
                 "wrapper and nothing else. Do not delete the condition.")
-        step = (_load(CI_WORKFLOW)["jobs"][gate.job_id]["steps"])[gate.step]
+        step = (_load(_workflow_of(gate))["jobs"][gate.job_id]["steps"])[gate.step]
         condition = _normalised_condition(str(step.get("if", "")))
         if condition and condition != "always()":
             problems.append(
@@ -1906,25 +1916,25 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
     routinely not the commit under discussion. Cite `git -C <the tree you
     mean>` or a blob, not "I grepped it".
     """
-    jobs = _load(CI_WORKFLOW)["jobs"]
     problems: list[str] = []
-    checked: set[str] = set()
+    checked: set[tuple[str, str]] = set()
     for gate in _gates_or_fail():
+        jobs = _load(_workflow_of(gate))["jobs"]
         in_path = {gate.job_id, gate.bindings.detect_result[1],
                    *(job for _n, job, _o in gate.bindings.changed)}
         in_path |= {job_id for _name, job_id in gate.bindings.legs}
         for job_id in sorted(in_path):
-            checked.add(job_id)
+            checked.add((gate.workflow, job_id))
             job = jobs[job_id]
             if "continue-on-error" in job:
                 problems.append(
-                    f"ci.yml::{job_id} (decision path of {gate}) sets "
+                    f"{gate.workflow}::{job_id} (decision path of {gate}) sets "
                     f"job-level `continue-on-error: "
                     f"{job['continue-on-error']!r}`")
             for step in (job.get("steps") or []):
                 if "continue-on-error" in step:
                     problems.append(
-                        f"ci.yml::{job_id} step "
+                        f"{gate.workflow}::{job_id} step "
                         f"{step.get('name', step.get('uses'))!r} (decision "
                         f"path of {gate}) sets `continue-on-error: "
                         f"{step['continue-on-error']!r}`")
@@ -1938,15 +1948,16 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
     # decision paths. Whether every path-gated job is weighed is asserted by
     # `test_every_path_gated_leg_is_watched_by_a_gate`, and saying it twice
     # in two voices helps nobody.
-    missing = ({gate.job_id for gate in _gates_or_fail()}
-               | set(_detect_jobs(CI_WORKFLOW))) - checked
+    missing = ({(gate.workflow, gate.job_id) for gate in _gates_or_fail()}
+               | {(path.name, job) for path in _paths_filter_workflows()
+                  for job in _detect_jobs(path)}) - checked
     assert not missing, (
         f"{sorted(missing)} never entered any gate's decision path, so this "
         "assertion never looked at them.")
 
 
 @needs_bash
-@pytest.mark.parametrize("gate", _ci_gates(), ids=lambda gate: gate.job_id)
+@pytest.mark.parametrize("gate", _ci_gates(), ids=str)
 def test_gate_exit_codes_match_the_contract(gate: Gate) -> None:
     """Run the real gate script over every documented detect and `*_changed`
     value, against the full product over the leg axis."""
@@ -2003,13 +2014,13 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
     forgives a skip the leg's condition did not cause — so the approximation
     has to be recorded, with why it is unreachable, rather than assumed.
     """
-    gated = _path_gated_jobs(CI_WORKFLOW)
     found = {}
     for gate in _gates_or_fail():
+        gated = _path_gated_jobs(_workflow_of(gate))
         for _name, job_id in gate.bindings.legs:
             missing = gated.get(job_id, frozenset()) - gate.bindings.changed_outputs
             if missing:
-                found[("ci.yml", gate.job_id, job_id)] = missing
+                found[(gate.workflow, gate.job_id, job_id)] = missing
 
     # ⛔ The ledger pins the FILTER SET; what made the gap survivable is the
     # reachability argument in its prose, and prose is not read by anything.
@@ -2018,11 +2029,11 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
     # here stayed green: `lint` fails on a docs-only PR, the leg skips, and
     # `go_changed != 'true'` forgives a skip its own `if:` did not cause. So
     # the premise is asserted, not narrated.
-    jobs = _load(CI_WORKFLOW)["jobs"]
     for _wf, _gate_id, leg_id in KNOWN_SKIP_TOLERANCE_GAPS:
+        jobs = _load(WORKFLOW_DIR / _wf)["jobs"]
         deps = set(_needs(jobs[leg_id]))
-        if deps != _detect_jobs(CI_WORKFLOW):
-            found[("ci.yml", _gate_id, leg_id)] = frozenset({
+        if deps != _detect_jobs(WORKFLOW_DIR / _wf):
+            found[(_wf, _gate_id, leg_id)] = frozenset({
                 f"__reachability__ {leg_id} now needs {sorted(deps)}"})
         # ⛔ And its `if:` must be gate references only. The premise is "this
         # leg can skip for NO reason other than its own path filters"; adding
@@ -2033,7 +2044,7 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
         residue = _IF_GATE_REF.sub("", residue)
         residue = re.sub(r"==\s*'true'|\|\||[()\s]", "", residue)
         if residue:
-            found[("ci.yml", _gate_id, leg_id)] = frozenset({
+            found[(_wf, _gate_id, leg_id)] = frozenset({
                 f"__reachability__ {leg_id}'s `if:` has a non-filter term "
                 f"({residue!r}), so it can skip for a reason the gate's "
                 "skip-tolerance does not model"})
