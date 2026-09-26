@@ -83,16 +83,21 @@ python3 scripts/tools/ops/scaffold_tenant.py \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
   --non-interactive \
-  --output conf.d/
+  --output-dir scaffold_output
+# Copy only the tenant file: scaffold regenerates _defaults.yaml on every run,
+# so pointing it at conf.d would overwrite the platform's existing defaults
+cp scaffold_output/db-product-01.yaml conf.d/
 
-# Output:
-# - conf.d/db-product-01.yaml (tenant config framework)
+# Output (scaffold_output/):
+# - db-product-01.yaml (tenant config framework)
+# - _defaults.yaml (platform defaults template; do not overwrite the one in conf.d)
+# - relabel_configs-db-product-01.yaml (Prometheus relabel snippet for multi-namespace mapping)
 # - scaffold-report.txt (planning document)
 ```
 
 #### 1.1.3 Plan Rule Packs and Exporters
 
-`scaffold-report.txt` includes recommended Rule Pack list. Select required Rule Packs based on DB type (see [Rule Packs README](../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
+`scaffold_output/scaffold-report.txt` lists the Rule Packs for this DB type (all preloaded on the platform). Select required Rule Packs based on DB type (see [Rule Packs README](../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
 
 #### 1.1.4 Negotiate Initial Thresholds with DBA
 

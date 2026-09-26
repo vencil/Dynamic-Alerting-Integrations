@@ -64,12 +64,17 @@ da-tools onboard \
 
 ```bash
 da-tools onboard \
-  --prometheus-rules prometheus-rules.yaml \
-  --prometheus-rules /etc/prometheus/rules.d/*.yaml \
-  --output rule-audit.json
+  --rule-files '/etc/prometheus/rules.d/*.yaml' \
+  --output-dir rule-audit
 ```
 
-**預期輸出**：`rule-audit.json` 匯總告警規則統計、逐條遷移優先級評分、rule-pack 對應建議。建議優先遷移高優先級規則（如 Redis、MariaDB 相關），延後自定義業務規則。
+`--rule-files` 只收一個 glob（支援 `**`），規則檔散在多處時先集中到同一個目錄；⚠️ glob 要加引號，否則 shell 先展開成多個檔名，rc=2。
+
+**預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出目錄 `rule-audit/phase2-rules/`：
+- `migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
+- `_defaults-suggestion.yaml`：由既有閾值推得的平台預設值建議
+
+依 `status` 排遷移順序：`perfect` 先遷，`complex` 逐條人工確認，`unparseable` 留到最後或保留原規則。
 
 ### 步驟 0.3：掃描叢集中的現有告警活動
 
@@ -79,11 +84,11 @@ da-tools onboard \
 da-tools blind-spot \
   --config-dir /dev/null \
   --prometheus http://prometheus:9090 \
-  --json \
+  --json-output \
   > blind-spot-report.json
 ```
 
-**預期輸出**：`blind-spot-report.json` 列舉 scrape targets、已有 rule-pack 覆蓋的數據庫類型、推薦直接使用的 Rule Pack。
+**預期輸出**：`blind-spot-report.json` 是一個陣列，每個元素對應一種由 scrape job 名稱推得的 DB 類型：`live_instances`（叢集裡的實例）、`monitored_tenants`（已有哪些租戶在監控），以及 `status`。此時還沒有任何租戶配置（`--config-dir /dev/null`，stderr 會印一行 `WARN: config-dir not found` 屬預期），所以每種辨識得出的 DB 類型都是 `blind_spot`；job 名稱對不上任何 DB 類型的實例歸在 `unrecognized`。這份清單就是步驟 0.4 挑試點域時的候選範圍。
 
 ### 步驟 0.4：決策矩陣 — 選擇試點域
 

@@ -167,9 +167,13 @@ cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 Scan and analyze current config
 python3 scripts/tools/ops/onboard_platform.py \
-  --legacy-config /path/to/old_rules/ \
-  --output migration_input/
-# Output: onboard-hints.json (rule mapping hints, manual adjustments needed, estimated effort)
+  --rule-files '/path/to/old_rules/*.yaml' \
+  --output-dir migration_input/
+# Quote the glob, or the shell expands it into several file names and it exits 2
+# Output (migration_input/phase2-rules/):
+#   - migration-plan.csv (per old alert rule: metric, threshold, suggested aggregation,
+#     and status: perfect converts directly / complex needs a human check / unparseable)
+#   - _defaults-suggestion.yaml (platform defaults inferred from the old thresholds)
 
 # 1.3 Verify environment readiness
 python3 scripts/tools/ops/validate_config.py \

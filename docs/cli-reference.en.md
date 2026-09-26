@@ -2384,7 +2384,7 @@ docker run --rm \
 
 #### onboard
 
-Analyze existing Alertmanager or Prometheus config, output migration hints.
+Reverse-analyze an existing Alertmanager config, Prometheus rule files and scrape config, and write migration CSVs, suggested snippets and `onboard-hints.json`. Each of the three inputs drives one phase; at least one is required. No positional arguments are read.
 
 **Purpose**: Incorporate existing monitoring configs; reduce manual migration work.
 
@@ -2393,51 +2393,63 @@ Analyze existing Alertmanager or Prometheus config, output migration hints.
 ```bash
 docker run --rm \
   --user $(id -u):$(id -g) \
-  -v <config_file>:/data/config.yml:ro \
-  [-v <output>:/data/output] \
+  -v $(pwd):/data \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  onboard <config_file> [options]
+  onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
+  [--scrape-config <FILE>] [options]
 ```
-
-**Required Parameters**
-
-| Parameter | Description |
-|-----------|-------------|
-| `<config_file>` | Alertmanager or Prometheus config file |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--alertmanager-config <FILE>` | Alertmanager config file (alternate location) | (positional) |
-| `--output <FILE>` | Output hints JSON | stdout |
+| `--alertmanager-config <FILE>` | Phase 1: Alertmanager config (YAML or ConfigMap) | — |
+| `--rule-files '<GLOB>'` | Phase 2: glob of Prometheus rule files (`**` supported). ⚠️ Quote it: unquoted, the shell expands it into several file names, only the first becomes the value and the rest are `unrecognized arguments`, rc=2 | — |
+| `--scrape-config <FILE>` | Phase 3: Prometheus scrape config | — |
+| `--tenant-label <NAME>` | Tenant label name | `tenant` |
+| `-o, --output-dir <DIR>` | Output **directory** (a file name yields a directory of that name) | `onboard_output` |
+| `--dry-run` | Analyze only, write nothing, print a per-phase summary | false |
+| `--json` | Print one JSON report on stdout instead (for CI); phase files are still written, `onboard-hints.json` is not | false |
 
 **Output**
 
-JSON format migration hints (`onboard-hints.json`), including:
-- Detected receiver types and endpoints
-- Recommended tenant groupings
-- Initial threshold suggestions
+Progress and the `Found N tenant route(s)` / `SKIP` lines go to stderr. Under `--output-dir`, depending on the inputs given:
+
+| Path | Phase | Content |
+|------|-------|---------|
+| `phase1-routing/routing-summary.csv` | Phase 1 | Per tenant route: receiver type, `group_wait` / `group_interval` / `repeat_interval`, severity-dedup verdict |
+| `phase1-routing/<tenant>.yaml` | Phase 1 | Routing snippet to merge into `conf.d/<tenant>.yaml` |
+| `phase2-rules/migration-plan.csv` | Phase 2 | Per alert rule: metric, threshold, operator, suggested aggregation, and whether it converts automatically (`perfect` / `complex` / `unparseable`) |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | Defaults inferred from the rule thresholds, to merge into `conf.d/_defaults.yaml` |
+| `phase3-scrape/scrape-analysis.yaml`, `<job>-relabel-suggestion.yaml` | Phase 3 | Whether each job maps to a tenant, and suggested `relabel_configs` |
+| `onboard-hints.json` | Phase 1 (plus DB types inferred in Phase 2) | Tenant list, per-tenant DB types and routing hints, consumed by `scaffold --from-onboard`; not written when Phase 1 finds no tenant route, or under `--dry-run` / `--json` |
 
 **Examples**
 
 ```bash
-# Analyze Alertmanager config
+# Alertmanager only
 docker run --rm \
   --user $(id -u):$(id -g) \
-  -v $(pwd)/alertmanager.yaml:/data/config.yml:ro \
-  -v $(pwd)/output:/data/output \
+  -v $(pwd):/data \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  onboard /data/config.yml -o /data/output/onboard-hints.json
+  onboard --alertmanager-config /data/alertmanager.yaml -o /data/onboard_output
+
+# Alertmanager plus rule files; quote the glob
+docker run --rm \
+  --user $(id -u):$(id -g) \
+  -v $(pwd):/data \
+  ghcr.io/vencil/da-tools:v2.9.0 \
+  onboard --alertmanager-config /data/alertmanager.yaml \
+  --rule-files '/data/rules/*.yaml' -o /data/onboard_output
 ```
 
 **Exit Codes**
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Invalid config file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
+| `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs` |
+| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 

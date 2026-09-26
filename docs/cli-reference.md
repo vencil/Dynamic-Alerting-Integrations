@@ -2150,49 +2150,60 @@ da-tools lint ./rule-packs --ci
 
 #### onboard
 
-分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示。
+反向分析既有的 Alertmanager 設定、Prometheus 規則檔與 scrape config，產出遷移用的 CSV、建議片段與 `onboard-hints.json`。三個輸入各自對應一個 phase，至少要給一個；不讀位置參數。
 
 **用途**：引入現有監控配置；減少手動遷移工作量。
 
 **語法**
 
 ```bash
-da-tools onboard <config_file> [options]
+da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
+  [--scrape-config <FILE>] [options]
 ```
-
-**必需參數**
-
-| 參數 | 說明 |
-|------|------|
-| `<config_file>` | Alertmanager 或 Prometheus 配置檔案 |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--alertmanager-config <FILE>` | Alertmanager 配置檔案（替代位置式參數） | （位置式） |
-| `--output <FILE>` | 輸出提示 JSON | stdout |
+| `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定（YAML 或 ConfigMap） | — |
+| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）。⚠️ 要加引號：沒加時 shell 先展開成多個檔名，只有第一個被當成值，其餘變成 `unrecognized arguments`，rc=2 | — |
+| `--scrape-config <FILE>` | Phase 3：Prometheus scrape config | — |
+| `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
+| `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
+| `--dry-run` | 只分析、不寫檔，印出各 phase 摘要 | false |
+| `--json` | stdout 改印一份 JSON 報告（CI 用）；各 phase 的檔照寫，但不寫 `onboard-hints.json` | false |
 
 **輸出**
 
-JSON 格式的遷移提示（`onboard-hints.json`），包含：
-- 偵測到的 receiver 類型和端點
-- 建議的 tenant 分組
-- 初始化閾值建議
+進度與 `Found N tenant route(s)`／`SKIP` 等訊息印在 stderr；`--output-dir` 底下依給的輸入寫出：
+
+| 路徑 | 來源 | 內容 |
+|------|------|------|
+| `phase1-routing/routing-summary.csv` | Phase 1 | 每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval`、severity dedup 判定 |
+| `phase1-routing/<tenant>.yaml` | Phase 1 | 可併入 `conf.d/<tenant>.yaml` 的路由片段 |
+| `phase2-rules/migration-plan.csv` | Phase 2 | 每條告警規則的 metric、閾值、運算子、建議聚合方式與可否自動轉換（`perfect`／`complex`／`unparseable`） |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議 |
+| `phase3-scrape/scrape-analysis.yaml`、`<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs` |
+| `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、各租戶 DB 類型與路由提示，給 `scaffold --from-onboard` 用；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
 
 **範例**
 
 ```bash
-da-tools onboard ./alertmanager.yaml -o onboard-hints.json
+# 只分析 Alertmanager
+da-tools onboard --alertmanager-config ./alertmanager.yaml -o onboard_output
+
+# Alertmanager 加規則檔，glob 要加引號
+da-tools onboard --alertmanager-config ./alertmanager.yaml \
+  --rule-files './rules/*.yaml' -o onboard_output
 ```
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 配置檔案無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
+| `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs` |
+| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
 
