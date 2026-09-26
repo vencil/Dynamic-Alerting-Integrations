@@ -918,6 +918,33 @@ class TestRollbackAccounting:
         assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
             pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
 
+    def test_f1_a_rollback_that_errored_but_landed_is_not_redone(self, capsys):
+        """回滾的 kubectl 回錯、但 patch 其實已落地，之後 `_conclude` 又出錯 ⇒
+        備援先觀察：key 已是舊位元組就不重送（重送必然 409 並誤判成 7）。"""
+        c = FakeCluster(dict(_ANCHOR_CM), fail_patch={1}, patch_lands={1})
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 2  # the write and the one rollback that landed
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
+    def test_f1_a_sent_rollback_that_did_not_land_is_sent_again(self, capsys):
+        """回滾已送出但沒落地（key 仍是新位元組）⇒ 備援照原規則重送，成功即回滾。"""
+        c = FakeCluster(dict(_ANCHOR_CM), fail_patch={1})
+        old = c.data["config.yaml"]
+        with mock.patch.object(pc._Signals, "cause",
+                               side_effect=RuntimeError("bug after the rollback")):
+            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+        doc = json.loads(capsys.readouterr().out)
+        assert c.data["config.yaml"] == old
+        assert len(c.patches) == 3  # the write, the failed rollback, the resend
+        assert (code, doc["status"], doc["rolled_back"], doc["written"]) == (
+            pc.EXIT_ABORTED_ROLLED_BACK, "error-rolled-back", True, False)
+
     def test_t3_a_rollback_that_keeps_conflicting_stops_after_the_bound(self, capsys):
         """每次回滾都 409、key 仍是我們的位元組（只有別的 key 一直在變）⇒
         恰好送 ROLLBACK_CONFLICT_ATTEMPTS 次回滾就停，回報 rollback-failed。"""

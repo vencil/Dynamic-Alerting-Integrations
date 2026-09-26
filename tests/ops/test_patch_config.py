@@ -129,7 +129,6 @@ class TestPrintDiff:
         assert "+ After:  custom: 50" in out
         assert "Before" not in out
         assert "Current value: not read by this tool" in out
-        assert 'tenant="db-a"' in out
         assert "To apply" in out
 
     def test_unchanged_diff(self, capsys):

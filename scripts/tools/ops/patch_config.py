@@ -23,7 +23,7 @@ Diff preview (terraform plan analogy):
   - patch_config.py --diff db-a mysql_connections 50
   Shows the value to be written and whether apply would write anything,
   without applying. It does not show the current value: that is the
-  exporter's to tell (its /metrics), not this tool's (#1950).
+  exporter's to tell, not this tool's (#1950).
 
 Dimensional metrics (Phase 2B):
   - patch_config.py db-a 'redis_queue_length{queue="tasks"}' 500
@@ -429,10 +429,7 @@ def find_affected_alerts(metric_key):
     return alerts
 
 
-CURRENT_VALUE_NOTE = (
-    "Current value: not read by this tool (#1950). What is in effect is what "
-    "the exporter emits: the `user_*` series with tenant=\"{tenant}\" on its "
-    "/metrics.")
+CURRENT_VALUE_NOTE = "Current value: not read by this tool (#1950); check the exporter."
 
 
 def diff_preview(cm_data, mode, tenant, metric_key, value):
@@ -440,7 +437,7 @@ def diff_preview(cm_data, mode, tenant, metric_key, value):
 
     `before` is None: the value in effect is not read here. Telling it for
     one key would mean redoing the exporter's key -> series mapping in
-    Python, which #1950 ruled out; the exporter's /metrics is where it is
+    Python, which #1950 ruled out; the exporter is where to look
     (CURRENT_VALUE_NOTE). `after` describes only the requested value, and
     `changed` is apply's own verdict (`build_patch`).
     """
@@ -481,7 +478,7 @@ def print_diff(diff):
         print(f"  + After:  {diff['after']['state']}")
     else:
         print("    No change: apply would write nothing.")
-    print(f"  {CURRENT_VALUE_NOTE.format(tenant=diff['tenant'])}")
+    print(f"  {CURRENT_VALUE_NOTE}")
 
     if diff["affected_alerts"]:
         print()
@@ -822,7 +819,7 @@ class _Write:
         self.verified = False    # every pod verified it
         self.rv_read = None      # resourceVersion the write is based on
         self.rv_written = None   # resourceVersion the write produced
-        self.rolled_back = False  # a rollback patch went through
+        self.rollback_sent = False  # a rollback patch may have been sent
 
 
 def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
@@ -1103,8 +1100,8 @@ def _send_rollback(write):
         try:
             if rv is None:
                 raise PatchConflict("the version our write produced is unknown")
+            write.rollback_sent = True  # may land even if the call fails
             _kubectl_patch({"data": {write.key: write.old}}, rv)
-            write.rolled_back = True  # never sent twice (_observed_fallback)
             return None
         except PatchConflict as exc:
             now = _read_cm()
@@ -1141,14 +1138,12 @@ def _observed_fallback(write):
                             "unexpected_error", changed=False)
         if write.verified:
             return _outcome("applied", written=True)
-        if write.rolled_back:
-            # _conclude failed after its rollback went through: sending it
-            # again would conflict on the version the rollback moved past and
-            # read the old bytes as someone else's. Observe instead.
-            if _read_key(write.key) == write.old:
-                return _outcome("error-rolled-back", "internal error; "
-                                "rolled back", rolled_back=True)
-            raise RuntimeError("the key changed after the rollback")
+        # A rollback _conclude sent may have landed, whatever its call
+        # returned: resending it would conflict on the version it moved past
+        # and read the old bytes as another writer's. Observe first.
+        if write.rollback_sent and _read_key(write.key) == write.old:
+            return _outcome("error-rolled-back", "internal error; rolled back",
+                            rolled_back=True)
         failed = _send_rollback(write)
         if isinstance(failed, Overwritten):
             return _outcome("overwritten-by-another-writer", "internal "
@@ -1189,7 +1184,7 @@ def build_parser():
         "--diff", action="store_true",
         help="Preview the change without applying (like terraform plan): "
              "the value to be written and whether apply would write; the "
-             "current value is not shown (see the exporter's /metrics)",
+             "current value is not shown (check the exporter)",
     )
     parser.add_argument(
         "--json", action="store_true",
