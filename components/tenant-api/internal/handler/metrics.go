@@ -121,11 +121,15 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// ADR-020 #521: federation artifacts left by an incomplete tenant
 	// offboarding. Non-zero ⇒ work docs/internal/tenant-offboarding-runbook.md.
+	// The subset gauge's NAME says "files" but it has always been computed
+	// per tenant id; since #1698 that is also true when one tenant's subset
+	// is stored under two spellings, so the HELP says tenants. The name is
+	// kept — renaming a published series breaks every query on it.
 	orphanTokens, orphanSubsets := orphan.OrphanCounts()
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_tokens gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_tokens %d\n", orphanTokens)
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Stale conf.d/_federation/<tenant>.yaml subset files whose tenant is no longer in conf.d.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a conf.d/_federation/ subset file (counted once per tenant, whatever the file's spelling).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_subset_files gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_subset_files %d\n", orphanSubsets)
 
