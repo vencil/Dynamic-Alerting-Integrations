@@ -27,6 +27,12 @@ What it does
    the map costs tokens once or twice, not on every tool call, and a
    read-only `cat` does not spend the injection the later `Edit` is for.
    A directory token (`ls helm`) matches `helm/**` like a file under it.
+4. For Bash, also search the whole command string with each regex of the
+   map's top-level `commands` list (a rebase, a branch deletion, opening a
+   PR — moments no path marks). Each command entry fires at most once per
+   session. Claude-only: the other vendors' projections have no such
+   trigger. The hook runs *before* the command, so a note phrases its advice
+   as "after this, run X".
 
 Failure policy: never blocks. An unreadable map is reported once per session
 through `additionalContext` (fail-loud, like run-hooks.sh does for a missing
@@ -96,26 +102,79 @@ def validate_map(data: object) -> list[dict]:
             # Copilot's `applyTo` is one comma-joined string; a comma inside a
             # glob would split it into globs the map never declared.
             raise MapError(f"{where} ({eid}): a glob may not contain a comma")
-        reads = e.get("read")
-        if not isinstance(reads, list) or not all(
-                isinstance(r, dict) and isinstance(r.get("file"), str) and r["file"]
-                and (r.get("section") is None or isinstance(r["section"], str))
-                for r in reads):
-            raise MapError(f"{where} ({eid}): `read` must be a list of {{file, section?}}")
-        note = e.get("note")
-        if not isinstance(note, str) or not note.strip():
-            raise MapError(f"{where} ({eid}): `note` must be a non-empty string")
+        _check_read_and_note(e, f"{where} ({eid})")
         entries.append(e)
+    validate_commands(data)
     return entries
 
 
-def load_map(path: Path) -> list[dict]:
+def _check_read_and_note(e: dict, where: str) -> None:
+    reads = e.get("read")
+    if not isinstance(reads, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("file"), str) and r["file"]
+            and (r.get("section") is None or isinstance(r["section"], str))
+            for r in reads):
+        raise MapError(f"{where}: `read` must be a list of {{file, section?}}")
+    note = e.get("note")
+    if not isinstance(note, str) or not note.strip():
+        raise MapError(f"{where}: `note` must be a non-empty string")
+
+
+def validate_commands(data: dict) -> list[dict]:
+    """The optional top-level `commands` list: guidance keyed on a Bash command
+    (a regex searched in the whole command string) instead of on a path.
+
+    Claude-only: Cursor and Copilot have no command trigger, so
+    gen_agent_adapters.py projects `entries` and never reads this list.
+    Every command carries `examples` that its own pattern must match — a regex
+    typo would otherwise leave an entry that never fires and says nothing.
+    """
+    cmds = data.get("commands", [])
+    if not isinstance(cmds, list):
+        raise MapError("`commands` must be a list")
+    seen: set[str] = set()
+    out: list[dict] = []
+    for i, c in enumerate(cmds):
+        where = f"commands[{i}]"
+        if not isinstance(c, dict):
+            raise MapError(f"{where}: must be an object")
+        cid = c.get("id")
+        if not isinstance(cid, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", cid):
+            raise MapError(f"{where}: `id` must be a lowercase-hyphen slug")
+        if cid in seen:
+            raise MapError(f"{where}: duplicate id {cid!r}")
+        seen.add(cid)
+        pat = c.get("pattern")
+        if not isinstance(pat, str) or not pat.strip():
+            raise MapError(f"{where} ({cid}): `pattern` must be a non-empty regex string")
+        try:
+            rx = re.compile(pat)
+        except re.error as exc:
+            raise MapError(f"{where} ({cid}): `pattern` is not a valid regex: {exc}") from exc
+        examples = c.get("examples")
+        if not isinstance(examples, list) or not examples or not all(
+                isinstance(x, str) and x for x in examples):
+            raise MapError(f"{where} ({cid}): `examples` must be a non-empty list of commands")
+        dead = [x for x in examples if not rx.search(x)]
+        if dead:
+            raise MapError(f"{where} ({cid}): `pattern` does not match its example {dead[0]!r}")
+        _check_read_and_note(c, f"{where} ({cid})")
+        out.append(c)
+    return out
+
+
+def load_all(path: Path) -> tuple[list[dict], list[dict]]:
+    """(entries, commands) of a valid map, or raise MapError."""
     try:
         with path.open(encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
         raise MapError(f"cannot read {path}: {exc}") from exc
-    return validate_map(data)
+    return validate_map(data), validate_commands(data)
+
+
+def load_map(path: Path) -> list[dict]:
+    return load_all(path)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +401,43 @@ def select_hits(entries: list[dict], paths: list[str], fired: set[str],
     return hits
 
 
+COMMAND_CLASS = "cmd"  # fired-key class for command entries: once per session each
+
+
+def command_text(payload: dict) -> str:
+    tool_input = payload.get("tool_input") or {}
+    cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return cmd if isinstance(cmd, str) else ""
+
+
+def select_command_hits(commands: list[dict], command: str,
+                        fired: set[str]) -> list[tuple[dict, str]]:
+    """(command entry, matched text) for every entry whose pattern occurs in
+    `command` and that has not fired yet this session."""
+    hits: list[tuple[dict, str]] = []
+    if not command:
+        return hits
+    for c in commands:
+        if fired_key(c["id"], COMMAND_CLASS) in fired:
+            continue
+        m = re.search(c["pattern"], command)
+        if m:
+            hits.append((c, m.group(0)))
+    return hits
+
+
+def render_command_hit(entry: dict, matched: str) -> str:
+    reads = "；".join(
+        f"{r['file']} §{r['section']}" if r.get("section") else r["file"]
+        for r in entry.get("read") or []
+    )
+    lines = [f"[{TAG}] 指令 `{matched}` 命中（{entry['id']}）"]
+    if reads:
+        lines.append(f"  先讀：{reads}")
+    lines.append(f"  約束：{entry['note']}")
+    return "\n".join(lines)
+
+
 def emit_context(text: str) -> None:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": text}},
@@ -356,7 +452,7 @@ def run_hook(payload: dict, map_path: Path) -> int:
     marker = marker_path(payload)
     fired = load_fired(marker)
     try:
-        entries = load_map(map_path)
+        entries, commands = load_all(map_path)
     except MapError as exc:
         if LOAD_ERROR_ID not in fired:
             fired.add(LOAD_ERROR_ID)
@@ -370,15 +466,18 @@ def run_hook(payload: dict, map_path: Path) -> int:
     if klass is None:
         return 0
     paths = candidate_paths(payload)
-    if not paths:
-        return 0
-    hits = select_hits(entries, paths, fired, klass)
-    if not hits:
+    hits = select_hits(entries, paths, fired, klass) if paths else []
+    cmd_hits = (select_command_hits(commands, command_text(payload), fired)
+                if klass == "bash" else [])
+    if not hits and not cmd_hits:
         return 0
     for entry, _rel, _pat in hits:
         fired.add(fired_key(entry["id"], klass))
+    for entry, _m in cmd_hits:
+        fired.add(fired_key(entry["id"], COMMAND_CLASS))
     save_fired(marker, fired)
-    emit_context("\n".join(render_hit(e, rel, pat) for e, rel, pat in hits))
+    emit_context("\n".join([render_hit(e, rel, pat) for e, rel, pat in hits]
+                           + [render_command_hit(e, m) for e, m in cmd_hits]))
     return 0
 
 
@@ -389,18 +488,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validate", action="store_true", help="validate the map and exit (rc 1 on error)")
     parser.add_argument("--match", nargs="*", default=None,
                         help="print the entries these repo-relative paths hit, then exit")
+    parser.add_argument("--match-command", nargs="*", default=None,
+                        help="print the command entries these Bash commands hit, then exit")
     args = parser.parse_args(argv)
 
     map_path = Path(args.map) if args.map else gl.repo_root_from(__file__) / MAP_REL
 
-    if args.validate or args.match is not None:
+    if args.validate or args.match is not None or args.match_command is not None:
         try:
-            entries = load_map(map_path)
+            entries, commands = load_all(map_path)
         except MapError as exc:
             print(f"[{TAG}] INVALID: {exc}", file=sys.stderr)
             return 1
         if args.validate:
-            print(f"[{TAG}] ok: {len(entries)} entries in {map_path}")
+            print(f"[{TAG}] ok: {len(entries)} entries, {len(commands)} commands in {map_path}")
+            return 0
+        if args.match_command is not None:
+            for cmd in args.match_command:
+                chit = select_command_hits(commands, cmd, set())
+                for entry, m in chit:
+                    print(render_command_hit(entry, m))
+                if not chit:
+                    print(f"[{TAG}] `{cmd}`: no command entry")
             return 0
         for rel in args.match:
             hit = select_hits(entries, [_norm(rel)], set())
