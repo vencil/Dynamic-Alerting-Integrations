@@ -28,7 +28,7 @@ PR #375 cleanup 過程中暴露：
 |---|---|---|---|
 | **(a) Bounded enumeration** | 列舉是政策 SOT 的鏡像；新增條目就是政策變動 | commit scope（`.commitlintrc.yaml` 定義 17 個）/ Rule Pack 數 / valid frontmatter 欄位 / Go test build tag enum | `check_commit_scope_doc.py` / `check_changelog_no_tbd.py` / `check_hardcode_tenant.py` |
 | **(b) Negative pattern + false-positive escape** | 規則本身是 negative（找壞東西的 regex / AST），allowlist 列舉「這個 pattern 命中但其實合法」的少數例外 | 偵測代號 / 路徑 / 命名違反 + 已知合法例外 | `check_codename_leak.py` / `check_codename_gate.py` / `check_repo_name.py` / `check_ad_hoc_git_scripts.py`（~12 個） |
-| **(c) Fuzzy semantic enumeration** | 試圖列舉一個本質模糊的概念（語義空間不可窮舉） | 「使用者可見字串」/「推銷語言」/「過時敘述」 | `check_portal_i18n.py` / `check_i18n_coverage.py`（~2 個） |
+| **(c) Fuzzy semantic enumeration** | 試圖列舉一個本質模糊的概念（語義空間不可窮舉） | 「使用者可見字串」/「推銷語言」/「過時敘述」 | 目前沒有 |
 
 ### 判定邊界（Decision Tree）
 
@@ -173,7 +173,7 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 
 ### (a) class — ~36 個
 
-`check_bilingual_*` (3) / `check_doc_*` (5) / `check_frontmatter_versions.py` / `check_glossary_*` (2) / `check_includes_sync.py` / `check_jsx_loader_compat.py` / `check_makefile_targets.py` / `check_metric_dictionary.py` / `check_path_metadata_consistency.py` / `check_playbook_freshness.py` / `check_property_pilot_*` (2) / `check_rule_pack_*` (3) / `check_structure.py` / `check_subprocess_timeout.py` / `check_tool_consistency.py` / `check_translation_*` (2) / `lint_*.py` (~5) 等。
+`check_bilingual_*` (3) / `check_doc_*` (5) / `check_frontmatter_versions.py` / `check_includes_sync.py` / `check_jsx_loader_compat.py` / `check_makefile_targets.py` / `check_metric_dictionary.py` / `check_path_metadata_consistency.py` / `check_playbook_freshness.py` / `check_property_pilot_*` (2) / `check_rule_pack_*` (3) / `check_structure.py` / `check_subprocess_timeout.py` / `check_tool_consistency.py` / `check_translation_*` (2) / `lint_*.py` (~5) 等。
 
 特徵：列舉是 SOT 的鏡像，policy 變動才需要更新。
 
@@ -197,12 +197,9 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 
 **Action item**：上述 6 個 (b) class lint 在 PR ship 後（V-2 phase）批次 refactor 為 diff-only。
 
-### (c) class — 2 個
+### (c) class
 
-| Lint | 為什麼 (c) | 處置 |
-|---|---|---|
-| `check_portal_i18n.py` | UI keyword 集合（"Click", "Save", "Enter"...）試圖匡列「使用者可見字串」 — UI 詞彙無限多、業務字串有時也使用者可見、新業務帶新術語 | 改 `[manual]` stage + soft-warn |
-| `check_i18n_coverage.py` | "all_strings" heuristic 計算 i18n 覆蓋率，無語意邊界 | 改 `[manual]` stage + soft-warn |
+目前沒有。
 
 ## 7. 新增 lint 的審核 checklist
 
@@ -233,10 +230,9 @@ Python 掃描是重造輪子。repo 已有 ESLint toolchain（`tests/e2e/eslint.
 「以 `glob`/`rglob` 掃 `*.jsx`/`*.tsx`/`*.css`/`*.scss` 內容」的 lint；新增且未列入
 `ALLOWLIST` 者 → **BLOCK**。逃生門（同 (b) class bypass 精神）：ESLint/stylelint
 確實無法覆蓋者（cross-file registry parity、雙語語意、diff-only + PR-body bypass
-plumbing），在該 script 的 `ALLOWLIST` 加一行 justification 即放行。既有 11 個
+plumbing），在該 script 的 `ALLOWLIST` 加一行 justification 即放行。既有的
 JS-targeting DIY lint 已 grandfather（**不做 retroactive migration**，符合 §2 +
-lint-adoption hybrid policy）。逃生門**實際被用過一次**（ALLOWLIST 因此為 12
-條）：`check_portal_asset_shipping.py` 的斷言對象是 **da-portal Dockerfile 的 COPY
+lint-adoption hybrid policy）。逃生門用過的例子：`check_portal_asset_shipping.py` 的斷言對象是 **da-portal Dockerfile 的 COPY
 集合**，JSX 只是「URL 被讀出來的地方」——ESLint 看不見 container build，屬上述
 cross-file parity 類別。判準是**斷言對象**而非**掃描對象**：掃到 JSX 不等於它是
 JS lint。偵測刻意**窄**（只認目錄 content-scanning、排除
@@ -291,9 +287,7 @@ cheatsheet 的逐值對照表屬一次性易腐內容，已隨 Phase 1 收尾移
 | `check_jsx_i18n.py` | YES | jsx-loader.html 的 `window.__t` dup-param + language-toggle 同值偵測 |
 | `check_window_x_no_fallback.py` | YES | module-scope `const X = window.__X` pattern（ESLint no-restricted-syntax 適配） |
 | `check_undefined_tokens.py` | YES | `--da-*` token refs 未定義於 design-tokens.css |
-| `check_i18n_coverage.py` | YES | JSX i18n key 覆蓋率 |
 | `check_tool_registry_jsx_parity.py` | NO | registry↔filesystem parity，本質非單檔 JS lint |
-| `check_portal_i18n.py` | NO | 交叉引用 tool-registry.yaml |
 | `check_jsx_loader_compat.py` | NO | 綁定自訂 JSX loader allowlist + babel |
 | `lint_jsx_babel.py` | NO | 已呼叫 @babel/node，本身即 toolchain |
 | `lint_tool_consistency.py` | NO | registry↔JSX↔markdown graph lint |

@@ -63,8 +63,7 @@ sentence being rewritten exits 0.
 
 ## Other corpora (this module is not their definition)
 
-  - `tests/shared/test_tool_exit_codes.py` and
-    `scripts/tools/lint/check_i18n_coverage.py` share a corpus drawn with
+  - `tests/shared/test_tool_exit_codes.py` draws its corpus with
     `startswith("_")` as the boundary, so it is smaller than
     `count_scope`. Nothing explains why the published count draws the line
     at `_lib` instead.
