@@ -112,6 +112,44 @@ class TestValidate:
         mod.validate_map(_valid_map(_entry(read=[{"file": "AGENTS.md"}])))
 
 
+def _cmd(cid="rebase", pattern=r"\bgit\s+rebase\b", examples=("git rebase main",),
+         note="cmd note", read=None):
+    return {"id": cid, "pattern": pattern, "examples": list(examples), "note": note,
+            "read": read if read is not None else [{"file": "docs/c.md", "section": "C"}]}
+
+
+def _with_commands(*cmds):
+    return {**_valid_map(), "commands": list(cmds)}
+
+
+class TestValidateCommands:
+    def test_commands_are_optional_and_returned_separately(self):
+        mod = _load_module()
+        assert mod.validate_commands(_valid_map()) == []
+        assert [c["id"] for c in mod.validate_commands(_with_commands(_cmd(), _cmd("b")))] == ["rebase", "b"]
+
+    @pytest.mark.parametrize("data,needle", [
+        ({**_valid_map(), "commands": "x"}, "must be a list"),
+        (_with_commands("x"), "must be an object"),
+        (_with_commands(_cmd(cid="Bad")), "slug"),
+        (_with_commands(_cmd(), _cmd()), "duplicate"),
+        (_with_commands(_cmd(pattern="")), "non-empty regex"),
+        (_with_commands(_cmd(pattern="(")), "not a valid regex"),
+        (_with_commands(_cmd(examples=())), "examples"),
+        (_with_commands(_cmd(examples=("git status",))), "does not match its example"),
+        (_with_commands(_cmd(note=" ")), "note"),
+        (_with_commands(_cmd(read=[{"section": "S"}])), "read"),
+    ])
+    def test_each_violation_is_named(self, data, needle):
+        """validate_map runs the command checks too, so the generator and the
+        hook both refuse a broken command list."""
+        mod = _load_module()
+        for fn in (mod.validate_commands, mod.validate_map):
+            with pytest.raises(mod.MapError) as excinfo:
+                fn(data)
+            assert needle in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # candidate paths
 # ---------------------------------------------------------------------------
@@ -308,6 +346,56 @@ class TestHook:
         proc = _run(p, map_path)
         assert proc.returncode == 0 and proc.stdout == ""
 
+    @pytest.fixture
+    def cmd_env(self, env):
+        main, map_path, scratch = env
+        data = json.loads(map_path.read_text(encoding="utf-8"))
+        data["commands"] = [_cmd("rebase", r"\bgit\s+rebase\b", ("git rebase main",), "rebase note")]
+        map_path.write_text(json.dumps(data), encoding="utf-8")
+        return main, map_path, scratch
+
+    def test_a_command_hit_injects_once_per_session(self, cmd_env):
+        main, map_path, scratch = cmd_env
+        p = self._payload(main, scratch, tool_name="Bash",
+                          tool_input={"command": "git fetch -q && git rebase origin/main"})
+        ctx = _context(_run(p, map_path))
+        assert ctx and "rebase note" in ctx and "`git rebase`" in ctx and "docs/c.md §C" in ctx
+        assert _context(_run(p, map_path)) is None, "same session, same command entry"
+
+    def test_a_command_with_no_path_token_still_fires(self, cmd_env):
+        """The whole point: a rebase names no file, so the path half is empty."""
+        main, map_path, scratch = cmd_env
+        p = self._payload(main, scratch, tool_name="Bash", tool_input={"command": "git rebase main"})
+        assert "rebase note" in (_context(_run(p, map_path)) or "")
+
+    def test_path_and_command_hits_share_one_injection(self, cmd_env):
+        main, map_path, scratch = cmd_env
+        p = self._payload(main, scratch, tool_name="Bash",
+                          tool_input={"command": "git rebase main && cat helm/values.yaml"})
+        ctx = _context(_run(p, map_path)) or ""
+        assert "rebase note" in ctx and "helm-chart" in ctx
+
+    def test_editing_tools_never_trigger_command_entries(self, cmd_env):
+        main, map_path, scratch = cmd_env
+        (main / "notes.txt").write_text("x", encoding="utf-8")
+        p = self._payload(main, scratch, tool_name="Write",
+                          tool_input={"file_path": str(main / "notes.txt"),
+                                      "command": "git rebase main"})
+        assert _run(p, map_path).stdout == ""
+
+    def test_match_command_cli(self, cmd_env):
+        _main, map_path, _scratch = cmd_env
+        proc = subprocess.run([sys.executable, "-X", "utf8", str(_SCRIPT), "--map", str(map_path),
+                               "--match-command", "git rebase main", "git status"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert proc.returncode == 0
+        assert "rebase note" in proc.stdout and "no command entry" in proc.stdout
+
+    def test_a_non_matching_command_emits_nothing(self, cmd_env):
+        main, map_path, scratch = cmd_env
+        p = self._payload(main, scratch, tool_name="Bash", tool_input={"command": "git status"})
+        assert _run(p, map_path).stdout == ""
+
     def test_validate_and_match_cli(self, env):
         _main, map_path, _scratch = env
         proc = subprocess.run([sys.executable, "-X", "utf8", str(_SCRIPT), "--map", str(map_path),
@@ -373,3 +461,33 @@ def test_every_pattern_of_the_checked_in_map_matches_at_least_one_tracked_path()
 def test_an_unmapped_path_hits_nothing_in_the_checked_in_map():
     mod = _load_module()
     assert mod.select_hits(mod.load_map(_MAP), ["LICENSE"], set()) == []
+
+
+def test_every_command_read_target_exists_and_its_section_heading_is_present():
+    mod = _load_module()
+    _entries, commands = mod.load_all(_MAP)
+    assert commands, "the checked-in map declares command entries"
+    for c in commands:
+        for r in c["read"]:
+            target = _REPO_ROOT / r["file"]
+            assert target.is_file(), f"{c['id']}: {r['file']} missing"
+            if r.get("section"):
+                assert any(r["section"] in h for h in _heading_lines(target)), \
+                    f"{c['id']}: no heading containing {r['section']!r} in {r['file']}"
+
+
+@pytest.mark.parametrize("command", [
+    "git merge-base HEAD origin/main",   # `merge` must not match inside `merge-base`
+    "git pull --ff-only origin main",
+    "git branch --show-current",
+    "git branch -a",
+    "git worktree list",
+    "gh pr view 2101 --json state",
+    "git log --oneline -1",
+])
+def test_everyday_commands_hit_no_command_entry_of_the_checked_in_map(command):
+    """Negative controls: an entry that fires on routine commands teaches the
+    agent to ignore it (the checked-in examples are the positive controls)."""
+    mod = _load_module()
+    _entries, commands = mod.load_all(_MAP)
+    assert mod.select_command_hits(commands, command, set()) == []

@@ -1,5 +1,5 @@
 {
-  "$comment": "路徑觸發指引的 SSOT（agent 指引改善計畫 PR-D，#1737 線）。每一列：paths（glob，對 repo 相對路徑比對）→ read（先讀哪份文件的哪一節）＋ note（一句約束）。Claude Code 由 scripts/session-guards/paths_map.py 在 Edit/Write/Bash 前注入；Cursor（.cursor/skills/vibe-paths-*/SKILL.md 的 paths:）與 Copilot（.github/instructions/vibe-paths-*.instructions.md 的 applyTo）由 gen_agent_adapters.py 投影，三家共用這一份。JSON 而非 YAML：hook 跑在 host 直譯器、產生器跑在 pre-commit venv，兩處都沒有 pyyaml。note 是會被注入到 agent 上下文的宣稱，寫之前對照 Makefile／.pre-commit-config.yaml／被點名的測試核對；read 的檔與章節有測試釘住，note 沒有。",
+  "$comment": "路徑觸發指引的 SSOT（agent 指引改善計畫 PR-D，#1737 線）。每一列：paths（glob，對 repo 相對路徑比對）→ read（先讀哪份文件的哪一節）＋ note（一句約束）。Claude Code 由 scripts/session-guards/paths_map.py 在 Edit/Write/Bash 前注入；Cursor（.cursor/skills/vibe-paths-*/SKILL.md 的 paths:）與 Copilot（.github/instructions/vibe-paths-*.instructions.md 的 applyTo）由 gen_agent_adapters.py 投影，三家共用這一份。JSON 而非 YAML：hook 跑在 host 直譯器、產生器跑在 pre-commit venv，兩處都沒有 pyyaml。note 是會被注入到 agent 上下文的宣稱，寫之前對照 Makefile／.pre-commit-config.yaml／被點名的測試核對；read 的檔與章節有測試釘住，note 沒有。頂層 commands 是以 Bash 指令觸發的另一種列（pattern＝對整條指令做 re.search 的正規式），只有 Claude Code 的 hook 讀它、不投影給 Cursor／Copilot；每列的 examples 必須被自己的 pattern 命中，否則 --validate 失敗。",
   "version": 1,
   "entries": [
     {
@@ -137,6 +137,34 @@
         {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "2. PreToolUse session-guards"}
       ],
       "note": "hook 命令一律經 `run-hooks.sh`（裸 `python` 在 Windows 是 Store stub，#824）；新 hook 的 AC 必含 live-fire 證據；`check_session_guard_liveness.py --ci` 在 commit 時驗接線與直譯器。"
+    }
+  ],
+  "commands": [
+    {
+      "id": "rebase-merge",
+      "pattern": "\\bgit\\s+(?:-C\\s+\\S+\\s+)?(?:rebase|merge|cherry-pick)(?![\\w-])",
+      "examples": ["git rebase origin/main", "git -C .claude/worktrees/x rebase --continue", "git merge origin/main", "git cherry-pick abc123"],
+      "read": [
+        {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"}
+      ],
+      "note": "若這次 rebase／merge／cherry-pick 動到 `CHANGELOG.md`，完成後跑 `python3 scripts/tools/dx/changelog_rebase_check.py`（預設讀 `ORIG_HEAD` 與 working tree；條目被靜默吃掉或重複時，數量常常不變），再跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`。生成物衝突先問是誰生的，取一側後重生，不手併。"
+    },
+    {
+      "id": "branch-delete",
+      "pattern": "\\bgit\\s+(?:-C\\s+\\S+\\s+)?(?:branch\\s+(?:\\S+\\s+)*-[dD]\\b|branch\\s+--delete\\b|worktree\\s+remove\\b)",
+      "examples": ["git branch -D feat/x", "git branch --delete feat/x", "git -C /repo worktree remove .claude/worktrees/x"],
+      "read": [],
+      "note": "刪之前確認本機 tip 等於該 PR 的 `headRefOid`（`gh pr view <N> --json headRefOid`）——squash、rebase、Update branch 都會改寫 SHA，用 ancestry 判斷會誤判；不相等時改比對改過的那組路徑的內容。查證與刪除分兩次呼叫，不要在同一條指令裡查完就刪。"
+    },
+    {
+      "id": "pr-create",
+      "pattern": "\\bgh\\s+pr\\s+create\\b",
+      "examples": ["gh pr create --base main --title t --body-file b.md"],
+      "read": [
+        {"file": "docs/internal/commit-convention.md", "section": "GitHub issue auto-close"},
+        {"file": ".agents/skills/vibe-subagent-review/references/discipline.md", "section": "收 review：拿到 finding 之後"}
+      ],
+      "note": "開完之後：`gh pr view <N> --json closingIssuesReferences` 確認沒有意外連結（closing 動詞只看相鄰、不讀否定）；CodeRabbit 審完照收 review 第 0 步抓齊三端點——只有摘要留言時 `Review limit reached` 與「審過且乾淨」同形，「審過了」只認 `commit_id` 等於 head 的新 review。"
     }
   ]
 }
