@@ -9,7 +9,7 @@
 ⛔ **`git commit --amend` 補 dist 一定失敗，要用 `git reset --soft HEAD~1`。**
 `dist-source-consistency-check` 要求「有 dist 進 index，就必須有對應 source 也在 index」。amend 時 source 已經在 HEAD、不在 index，於是 hook 看到的是一顆 dist-only commit。正解是 soft-reset 後把 source 與 dist 一起重新 stage。（`BYPASS_DIST_CHECK=1` 存在但不要用。）
 
-⛔ **rebase／merge 撞到 dist 衝突時不要手併壓縮後的 bundle。** 只手解 source（`.jsx`／`.tsx`／CHANGELOG），然後刪掉 `docs/assets/dist/chunk-*.js` 與 `chunk-*.js.map`（清掉孤兒 hash）、`make portal-build` 從合併後的 source 重生、整個 `docs/assets/dist` 一起 stage。
+⛔ **rebase／merge 撞到 dist 衝突時不要手併壓縮後的 bundle。** 先手解**所有**衝突的 source（含 `images.js` 這類 `.js` 資料模組，不只 `.jsx`／`.tsx`；留著衝突標記 esbuild 會直接拒絕 build）與 CHANGELOG，然後刪掉 `docs/assets/dist/chunk-*.js` 與 `chunk-*.js.map`（清掉孤兒 hash）、`make portal-build` 從合併後的 source 重生、整個 `docs/assets/dist` 一起 stage。
 
 ## 重建 dist 前：工作樹要是 LF、cwd 要是 `tools/portal`
 
