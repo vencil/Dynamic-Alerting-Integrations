@@ -21,7 +21,7 @@ This hook makes the failure mode physically impossible:
 
 Lint class: (b) per docs/internal/lint-policy.md (negative pattern + path
 allowlist as false-positive escape). Default scope: **diff-only** — only
-shell scripts ADDED or MODIFIED in current diff are checked. Override
+shell scripts changed (anything but deleted) in current diff are checked. Override
 with --full-scan for periodic manual audit of the whole tree.
 
 Usage:
@@ -116,8 +116,9 @@ def scan_full(repo: Path) -> list[Path]:
 def scan_diff(repo: Path, base: str) -> list[Path]:
     """Diff-only scan: return offenders newly added/modified in current diff vs base.
 
-    Uses ``git diff --name-only --diff-filter=AM`` so deleted files don't
-    trigger the lint (deleting an offender is the right move).
+    Uses ``diff_changed_paths`` (every changed path except deletions) so
+    deleted files don't trigger the lint (deleting an offender is the right
+    move) while a file moved into a non-allowlisted place still does.
 
     Raises ``DiffScanError`` when git fails or times out (#1987).
     """
@@ -132,7 +133,7 @@ def scan_diff(repo: Path, base: str) -> list[Path]:
             continue
         if is_allowlisted(rel.replace("\\", "/")):
             continue
-        # File should still exist (filter=AM excludes deleted but be safe)
+        # File should still exist (the diff excludes deletions but be safe)
         full_path = repo / rel
         if not full_path.is_file():
             continue
