@@ -947,16 +947,24 @@ func (m *Manager) ScopeAllowed(p *VerifiedPrincipal, tenantID, environment, doma
 // wildcard, wrong tenant pattern) plus rule B (right pattern,
 // environment-restricted) grants nothing.
 //
-// Records NO would-deny observation. The scope_would_deny series measure how
-// many grants hinge on the unlabeled-tenant leniency, and their
-// increase()==0 is the flip criterion for the enforce flags. This decision
-// grants no leniency on the metadata axis at all, and a broken file is an
-// incident state rather than a labeling gap — counting it would let a
-// transient broken commit hold a soak counter off zero (or, worse, be read as
-// migration progress) for a reason no flag flip addresses.
+// Would-deny recording: the ORG axis only, never the metadata axis.
+//
+//   - Metadata axis: nothing to record. The scope_would_deny series measure
+//     how many grants hinge on the unlabeled-tenant leniency, and their
+//     increase()==0 is the flip criterion for the enforce flags. This
+//     decision grants no metadata leniency at all (unrestricted-only in both
+//     modes), so flipping --rbac-metadata-scope-enforce can never change it,
+//     and a broken file is an incident state rather than a labeling gap.
+//   - Org axis: recorded exactly as ScopeAllowed records it, with the
+//     metadata side held at "unrestricted-only". tenantOrgs comes from
+//     _tenant_orgs.yaml, which the broken file does not touch, so an
+//     unlabeled tenant here is a GENUINE labeling gap: a degraded row that is
+//     visible only through the org axis's shadow leniency would otherwise
+//     vanish, unannounced, the moment --rbac-org-scope-enforce is flipped
+//     after the {axis="org"} soak showed increase()==0.
 //
 // Open mode (no groups) matches ScopeAllowed: failClosedOnEmpty denies,
-// otherwise visible.
+// otherwise visible (and records nothing, as ScopeAllowed does).
 func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID string, tenantOrgs []string) bool {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
@@ -964,7 +972,7 @@ func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID str
 	}
 
 	subject := subjectFor(p)
-	orgFlag := m.orgScopeEnforce
+	var visShadow, visEnforce bool // per org mode; metadata fixed at unrestricted-only
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
 		if !subject.ruleMatches(rule) {
@@ -976,15 +984,22 @@ func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID str
 		if len(rule.Environments) != 0 || len(rule.Domains) != 0 {
 			continue // restricted on a metadata axis whose value is unknown
 		}
-		if rule.OrgScope == "" {
-			return true // no org restriction on this rule
+		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
+		if rule.OrgScope != "" {
+			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
 		}
-		orgShadow, orgEnforce := scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
-		if (orgFlag && orgEnforce) || (!orgFlag && orgShadow) {
-			return true
+		visShadow = visShadow || orgShadow
+		visEnforce = visEnforce || orgEnforce
+		if visShadow && visEnforce {
+			break // both org modes decided; further rules cannot change either
 		}
 	}
-	return false
+
+	m.recordScopeShadowGap(visShadow, visEnforce, scopeAxisOrg)
+	if m.orgScopeEnforce {
+		return visEnforce
+	}
+	return visShadow
 }
 
 // visAt selects one of the four aggregate visibility booleans by the effective

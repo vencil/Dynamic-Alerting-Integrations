@@ -32,9 +32,11 @@ type TenantSummary struct {
 	// its metadata is UNKNOWN, not unlabeled. Absent on a healthy row.
 	// Values: unreadable (stat/read failed, e.g. a dangling symlink or a
 	// permission error), not_regular_file (e.g. a symlink to a directory),
-	// malformed_yaml (not parseable as YAML), invalid_config (valid YAML that
-	// does not match the tenant config schema). The first three come from
-	// confd.FileProblem; invalid_config is decided by this handler.
+	// malformed_yaml (not parseable as YAML), invalid_config (parses as YAML
+	// at the syntax level but cannot be loaded as a tenant config — wrong
+	// shape, or errors the YAML library only detects on a typed decode, such
+	// as duplicate keys). The first three come from confd.FileProblem;
+	// invalid_config is decided by this handler.
 	ConfigError string `json:"config_error,omitempty" enums:"unreadable,not_regular_file,malformed_yaml,invalid_config"`
 }
 
@@ -51,7 +53,9 @@ type TenantSummary struct {
 // @Summary     List tenants
 // @Description Returns tenants visible to the authenticated user, filtered by RBAC.
 // @Description A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
-// @Description (unreadable | not_regular_file | malformed_yaml | invalid_config). Its environment/domain are unknown, so the
+// @Description (unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be
+// @Description loaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).
+// @Description Its environment/domain are unknown, so the
 // @Description row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
 // @Tags        tenants
 // @Produce     json
@@ -117,11 +121,14 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 }
 
 // configErrorInvalidConfig is the one TenantSummary.ConfigError reason the
-// handler decides rather than package confd: the bytes are well-formed YAML
-// (so confd.ReadTenantFile calls the file usable — confd deliberately knows
-// nothing about the threshold-exporter schema) but they do not unmarshal into
-// cfg.ThresholdConfig, e.g. `tenants:` holding a list instead of a map. Same
-// stability contract as the confd.FileProblem values.
+// handler decides rather than package confd: the bytes parse as YAML at the
+// syntax level (confd.ReadTenantFile's generic yaml.Node parse calls the file
+// usable — confd deliberately knows nothing about the threshold-exporter
+// schema) but they cannot be loaded as a tenant config by the typed decode
+// into cfg.ThresholdConfig. That covers a wrong shape (e.g. `tenants:`
+// holding a list instead of a map) AND errors the YAML library only detects
+// on a typed decode, such as a duplicate mapping key (`tenants:` twice).
+// Same stability contract as the confd.FileProblem values.
 const configErrorInvalidConfig = "invalid_config"
 
 // loadAllTenants scans configDir for tenant config files and extracts tenant

@@ -1,6 +1,7 @@
 package confd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 
@@ -102,15 +103,19 @@ const (
 	ProblemUnreadable FileProblem = "unreadable"
 
 	// ProblemNotRegularFile: the path (after following symlinks) exists but
-	// is not a regular file — typically a symlink to a directory. Checked
-	// BEFORE reading, which also keeps a FIFO from blocking the reader
-	// forever.
+	// is not a regular file — typically a symlink to a directory, or a FIFO /
+	// device (a symlink to /dev/null lands here too). Decided by fstat on the
+	// opened fd BEFORE any read, so a FIFO cannot block the reader.
 	ProblemNotRegularFile FileProblem = "not_regular_file"
 
 	// ProblemMalformedYAML: the bytes do not parse as YAML at all. This is a
-	// SYNTAX judgement only — confd deliberately knows nothing about the
-	// threshold-exporter schema, so a well-formed document of the wrong shape
-	// is usable here and left to the caller to judge.
+	// SYNTAX-level judgement only (a generic yaml.Node parse) — confd
+	// deliberately knows nothing about the threshold-exporter schema. Bytes
+	// that pass it are "usable" here even when they cannot be loaded as a
+	// tenant config: a document of the wrong shape, or one with errors the
+	// YAML library only detects on a TYPED decode (e.g. a duplicate mapping
+	// key such as `tenants:` twice). That judgement is the caller's — the list
+	// handler reports it as invalid_config.
 	ProblemMalformedYAML FileProblem = "malformed_yaml"
 )
 
@@ -127,14 +132,26 @@ const (
 // so a caller cannot reach outside dir through it.
 func ReadTenantFile(dir, name string) (data []byte, problem FileProblem) {
 	path := filepath.Join(dir, filepath.Base(name))
-	fi, err := os.Stat(path)
+	// Open FIRST, then fstat the opened fd, then read from that same fd.
+	// A stat(path)-then-ReadFile(path) pair has a window in which the entry
+	// can be swapped for a FIFO, and a read (or a blocking open) of a FIFO
+	// with no writer never returns — while /search holds its snapshot-cache
+	// mutex around this load. openNoBlock keeps the open itself from
+	// blocking; fstat on the fd classifies exactly the object that will be
+	// read.
+	f, err := openNoBlock(path)
+	if err != nil {
+		return nil, ProblemUnreadable
+	}
+	defer func() { _ = f.Close() }() // read-only fd: a close error cannot lose data
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, ProblemUnreadable
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, ProblemNotRegularFile
 	}
-	data, err = os.ReadFile(path)
+	data, err = io.ReadAll(f)
 	if err != nil {
 		return nil, ProblemUnreadable
 	}

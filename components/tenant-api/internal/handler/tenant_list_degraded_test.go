@@ -211,6 +211,9 @@ func TestListTenants_DegradedRowVisibleOnlyToMetadataUnrestricted(t *testing.T) 
 
 	// The unrestricted caller gets the reason, not just the id.
 	rows := listTenantsAs(t, dir, newRBACManager(t, degradedRBACYAML), "all-tenants")
+	if len(rows) != 2 {
+		t.Fatalf("unrestricted caller got %d rows (%+v), want 2 (broken + healthy)", len(rows), rows)
+	}
 	if rows[0].ID != "broken" || rows[0].ConfigError != "malformed_yaml" {
 		t.Errorf("degraded row = %+v, want {ID:broken ConfigError:malformed_yaml}", rows[0])
 	}
@@ -276,4 +279,20 @@ func TestSearchTenants_DegradedRows(t *testing.T) {
 			t.Errorf("next_offset = %v, want 1", resp.NextOffset)
 		}
 	})
+}
+
+// Duplicate mapping keys pass confd's syntax-level parse (yaml.Node) but fail
+// the typed decode into cfg.ThresholdConfig, so they surface as the
+// handler-decided invalid_config — not malformed_yaml.
+func TestLoadAllTenants_DuplicateKeysAreInvalidConfig(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{"acme.yaml": "tenants: {}\ntenants: {}\n"})
+	got, err := loadAllTenants(dir)
+	if err != nil {
+		t.Fatalf("loadAllTenants: %v", err)
+	}
+	want := []TenantSummary{{ID: "acme", ConfigError: configErrorInvalidConfig}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
 }

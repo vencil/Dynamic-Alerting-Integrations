@@ -186,39 +186,69 @@ func TestScopeAllowedUnknownMetadata_CrossRuleNoLeak(t *testing.T) {
 	}
 }
 
-// TestScopeAllowedUnknownMetadata_RecordsNoWouldDeny: the decision must not
-// feed the enforce-flip soak series (see the method's doc comment).
-func TestScopeAllowedUnknownMetadata_RecordsNoWouldDeny(t *testing.T) {
+// TestScopeAllowedUnknownMetadata_WouldDenyRecording: the decision records the
+// ORG-axis shadow gap exactly like ScopeAllowed (a tenant unlabeled in
+// _tenant_orgs.yaml is a genuine labeling gap, independent of the broken file)
+// and NEVER records the metadata axis (it grants no metadata leniency).
+func TestScopeAllowedUnknownMetadata_WouldDenyRecording(t *testing.T) {
 	t.Parallel()
+	envRule := GroupRule{Name: "g", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, Environments: []string{"staging"}}
+	orgRule := GroupRule{Name: "g", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, OrgScope: "org"}
+	openRule := GroupRule{Name: "g", Tenants: []string{"*"}, Permissions: []Permission{PermRead}}
 	cases := []struct {
-		name string
-		rule GroupRule
-		axis string
+		name       string
+		rules      []GroupRule
+		tenantOrgs []string
+		orgEnforce bool
+		wantVis    bool
+		wantOrg    int
 	}{
-		// ScopeAllowed with an empty environment shadow-allows here and
-		// records a metadata would-deny; the unknown decision denies and
-		// records nothing.
-		{"environment-restricted", GroupRule{Name: "g", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, Environments: []string{"staging"}}, scopeAxisMetadata},
-		// Unlabeled org → both decisions shadow-grant; only ScopeAllowed
-		// records the org would-deny.
-		{"org-scoped, unlabeled tenant", GroupRule{Name: "g", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, OrgScope: "org"}, scopeAxisOrg},
+		// Visible ONLY via the org axis's unlabeled leniency → exactly one
+		// org observation, so the {axis="org"} soak announces the flip.
+		{"org-scoped rule, unlabeled tenant, org shadow", []GroupRule{orgRule}, nil, false, true, 1},
+		// Under enforce the same row is hidden and the counter keeps doubling
+		// as the "denied by scope" signal — as ScopeAllowed does.
+		{"org-scoped rule, unlabeled tenant, org enforce", []GroupRule{orgRule}, nil, true, false, 1},
+		// Nothing hinges on leniency → zero.
+		{"org-scoped rule, labeled member tenant", []GroupRule{orgRule}, []string{"ORG-A"}, false, true, 0},
+		{"no org-scope, unrestricted", []GroupRule{openRule}, nil, false, true, 0},
+		{"environment-restricted only (hidden in both modes)", []GroupRule{envRule}, nil, false, false, 0},
+		// An unrestricted non-org rule grants under org enforce too → no gap.
+		{"org-scoped + unrestricted non-org rule", []GroupRule{orgRule, openRule}, nil, false, true, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m := NewForTest(&RBACConfig{Groups: []GroupRule{c.rule}})
+			m := NewForTest(&RBACConfig{Groups: c.rules})
+			if c.orgEnforce {
+				m.EnableOrgScopeEnforce()
+			}
 			rec := newFakeScopeRecorder()
 			m.SetScopeAuditor(rec)
 			p := &VerifiedPrincipal{Groups: []string{"g"}, Claims: map[string]string{"org": "ORG-A"}}
-			m.ScopeAllowedUnknownMetadata(p, "acme", nil)
-			if len(rec.counts) != 0 {
-				t.Errorf("would-deny recorded: %v, want none", rec.counts)
+			if got := m.ScopeAllowedUnknownMetadata(p, "acme", c.tenantOrgs); got != c.wantVis {
+				t.Errorf("visible = %v, want %v", got, c.wantVis)
 			}
-			// Control: the same inputs through ScopeAllowed DO record, so
-			// the recorder is live and the zero above is meaningful.
-			m.ScopeAllowed(p, "acme", "", "", nil)
-			if rec.counts[c.axis] == 0 {
-				t.Errorf("control: ScopeAllowed recorded %v, want a %q observation", rec.counts, c.axis)
+			if rec.counts[scopeAxisOrg] != c.wantOrg {
+				t.Errorf("org would-deny = %d, want %d (all counts %v)", rec.counts[scopeAxisOrg], c.wantOrg, rec.counts)
+			}
+			if n := rec.counts[scopeAxisMetadata]; n != 0 {
+				t.Errorf("metadata would-deny = %d, want 0 — this decision grants no metadata leniency", n)
+			}
+			if len(rec.counts) > 1 || (len(rec.counts) == 1 && rec.counts[scopeAxisOrg] == 0) {
+				t.Errorf("unexpected axes recorded: %v", rec.counts)
 			}
 		})
+	}
+
+	// Control: ScopeAllowed with the empty (unlabeled) pair DOES record a
+	// metadata would-deny for the environment-restricted rule, so the zero
+	// metadata count above is a property of the new decision, not a dead
+	// recorder.
+	m := NewForTest(&RBACConfig{Groups: []GroupRule{envRule}})
+	rec := newFakeScopeRecorder()
+	m.SetScopeAuditor(rec)
+	m.ScopeAllowed(&VerifiedPrincipal{Groups: []string{"g"}}, "acme", "", "", nil)
+	if rec.counts[scopeAxisMetadata] == 0 {
+		t.Errorf("control: ScopeAllowed recorded %v, want a metadata observation", rec.counts)
 	}
 }
