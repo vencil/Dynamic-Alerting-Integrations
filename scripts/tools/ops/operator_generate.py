@@ -13,11 +13,13 @@ Usage:
     da-tools operator-generate --gitops --json
     da-tools operator-generate --receiver-template slack --secret-name da-slack --secret-key webhook-url
     da-tools operator-generate --receiver-template pagerduty --secret-name da-pd --secret-key routing-key
+    da-tools operator-generate --selector-label release=my-prom   # match a Prometheus selector (#2075)
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -69,6 +71,11 @@ _HELP = {
         "secret_name": "K8s Secret 名稱（receiver 機密引用）",
         "secret_key": "K8s Secret 中的 key 名稱（預設依 receiver 類型自動推斷）",
         "kustomize": "生成 kustomization.yaml，列出所有 CRD 檔案為資源",
+        "selector_label": (
+            "加在 PrometheusRule 與 ServiceMonitor 上的 label（key=value，可重複；"
+            "同 key 覆寫預設）。預設已帶 release=kube-prometheus-stack，"
+            "Helm release 名稱不同時用這個對上 Prometheus 的 selector"
+        ),
     },
     "en": {
         "desc": "Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)",
@@ -85,23 +92,54 @@ _HELP = {
         "secret_name": "K8s Secret name (for receiver credential reference)",
         "secret_key": "Key within the K8s Secret (auto-inferred from receiver type if omitted)",
         "kustomize": "Generate kustomization.yaml listing all CRD files as resources",
+        "selector_label": (
+            "Label added to the PrometheusRule and ServiceMonitor CRDs (key=value, repeatable; "
+            "overrides a default of the same key). release=kube-prometheus-stack is set by default; "
+            "use this when your Helm release name differs, so Prometheus's selector matches"
+        ),
     },
 }
 
 _LANG = detect_cli_lang()
+
+# Selector labels on the CRDs Prometheus has to SELECT (#2075). A Prometheus
+# Operator only loads a PrometheusRule / ServiceMonitor whose labels match its
+# ruleSelector / serviceMonitorSelector, and installs differ on which label
+# that is (docs/integration/operator-prometheus-integration.md § ruleSelector
+# 雙 Label 匹配). The docs promised both labels below on generated
+# PrometheusRules while only `prometheus` was emitted.
+# --selector-label adds / overrides per key, e.g. for a Helm release that is
+# not named kube-prometheus-stack.
+_RULE_SELECTOR_LABELS = {
+    "prometheus": "kube-prometheus",
+    "release": "kube-prometheus-stack",
+}
+_MONITOR_SELECTOR_LABELS = {
+    "release": "kube-prometheus-stack",
+}
+# Identifies every CRD this tool emits (drift detection, cleanup) — a
+# selector label must not be able to rewrite it.
+_PART_OF_KEY = "app.kubernetes.io/part-of"
+_PART_OF = {_PART_OF_KEY: "dynamic-alerting"}
 
 # ---------------------------------------------------------------------------
 # CRD Builders
 # ---------------------------------------------------------------------------
 
 
-def build_prometheus_rule(rule_pack_name: str, rule_pack_data: dict, namespace: str) -> dict:
+def build_prometheus_rule(
+    rule_pack_name: str,
+    rule_pack_data: dict,
+    namespace: str,
+    selector_labels: Optional[Dict[str, str]] = None,
+) -> dict:
     """Build a PrometheusRule CRD from a rule pack YAML.
 
     Args:
         rule_pack_name: Name of the rule pack (e.g., 'mariadb')
         rule_pack_data: Parsed YAML dict with 'groups' key
         namespace: Target Kubernetes namespace
+        selector_labels: Extra labels; each overrides the default of that key
 
     Returns:
         PrometheusRule CRD dict
@@ -114,10 +152,7 @@ def build_prometheus_rule(rule_pack_name: str, rule_pack_data: dict, namespace: 
         "metadata": {
             "name": f"da-rule-pack-{rule_pack_name}",
             "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/part-of": "dynamic-alerting",
-                "prometheus": "kube-prometheus",
-            },
+            "labels": {**_RULE_SELECTOR_LABELS, **(selector_labels or {}), **_PART_OF},
         },
         "spec": {
             "groups": groups,
@@ -125,11 +160,15 @@ def build_prometheus_rule(rule_pack_name: str, rule_pack_data: dict, namespace: 
     }
 
 
-def build_servicemonitor(namespace: str) -> dict:
+def build_servicemonitor(
+    namespace: str,
+    selector_labels: Optional[Dict[str, str]] = None,
+) -> dict:
     """Build a ServiceMonitor CRD for threshold-exporter.
 
     Args:
         namespace: Target Kubernetes namespace
+        selector_labels: Extra labels; each overrides the default of that key
 
     Returns:
         ServiceMonitor CRD dict
@@ -140,9 +179,7 @@ def build_servicemonitor(namespace: str) -> dict:
         "metadata": {
             "name": "da-threshold-exporter",
             "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/part-of": "dynamic-alerting",
-            },
+            "labels": {**_MONITOR_SELECTOR_LABELS, **(selector_labels or {}), **_PART_OF},
         },
         "spec": {
             "selector": {
@@ -595,6 +632,7 @@ def generate_crds(
     receiver_template: Optional[str] = None,
     secret_name: Optional[str] = None,
     secret_key: Optional[str] = None,
+    selector_labels: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Generate all CRDs from input directories.
 
@@ -607,6 +645,7 @@ def generate_crds(
         receiver_template: Receiver type for AlertmanagerConfig
         secret_name: K8s Secret name for credential reference
         secret_key: Key within the K8s Secret
+        selector_labels: Extra labels on the PrometheusRule / ServiceMonitor CRDs
 
     Returns:
         Dict with generated CRDs and metadata
@@ -628,7 +667,9 @@ def generate_crds(
                     rule_pack_data = load_yaml_file(str(rule_pack_file))
                     if rule_pack_data and "groups" in rule_pack_data:
                         rule_pack_name = rule_pack_file.stem.replace("rule-pack-", "")
-                        crd = build_prometheus_rule(rule_pack_name, rule_pack_data, namespace)
+                        crd = build_prometheus_rule(
+                            rule_pack_name, rule_pack_data, namespace, selector_labels,
+                        )
                         result["prometheus_rules"].append({
                             "name": crd["metadata"]["name"],
                             "file": rule_pack_file.name,
@@ -666,7 +707,7 @@ def generate_crds(
 
     # ServiceMonitor CRD
     if components in ("all", "servicemonitor"):
-        crd = build_servicemonitor(namespace)
+        crd = build_servicemonitor(namespace, selector_labels)
         result["service_monitor"] = {
             "name": crd["metadata"]["name"],
             "crd": crd,
@@ -696,6 +737,41 @@ def build_kustomization(crd_files: List[str], namespace: str) -> dict:
         },
         "namespace": namespace,
     }
+
+
+# Kubernetes label syntax: an optional DNS-subdomain prefix (dot-separated
+# DNS labels, at most 253 chars) and '/', then a name of at most 63 chars;
+# a value of at most 63 chars (may be empty).
+_LABEL_NAME_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?")
+_DNS_LABEL_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _valid_label_key(key: str) -> bool:
+    prefix, slash, name = key.rpartition("/")
+    if slash and (len(prefix) > 253
+                  or not all(_DNS_LABEL_RE.fullmatch(p) for p in prefix.split("."))):
+        return False
+    return bool(_LABEL_NAME_RE.fullmatch(name))
+
+
+def _selector_label_arg(value: str) -> tuple:
+    """argparse type for --selector-label: `key=value` with valid K8s syntax."""
+    key, sep, val = value.partition("=")
+    if not sep or not _valid_label_key(key) or not (val == "" or _LABEL_NAME_RE.fullmatch(val)):
+        raise argparse.ArgumentTypeError(
+            i18n_text(
+                f"--selector-label 需為合法的 Kubernetes label key=value：{value!r}",
+                f"--selector-label must be a valid Kubernetes label key=value: {value!r}",
+            )
+        )
+    if key == _PART_OF_KEY:
+        raise argparse.ArgumentTypeError(
+            i18n_text(
+                f"--selector-label 不可改寫 {_PART_OF_KEY}（它標示本工具產生的 CRD）",
+                f"--selector-label cannot rewrite {_PART_OF_KEY} (it marks this tool's CRDs)",
+            )
+        )
+    return key, val
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -780,6 +856,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--kustomize",
         action="store_true",
         help=i18n_text(_HELP["zh"]["kustomize"], _HELP["en"]["kustomize"]),
+    )
+    parser.add_argument(
+        "--selector-label",
+        type=_selector_label_arg,
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=i18n_text(_HELP["zh"]["selector_label"], _HELP["en"]["selector_label"]),
     )
     return parser
 
@@ -1046,6 +1130,7 @@ def main():
             receiver_template=args.receiver_template,
             secret_name=args.secret_name,
             secret_key=args.secret_key,
+            selector_labels=dict(args.selector_label),
         )
     except Exception as exc:
         print(f"ERROR: {safe_label(exc)}", file=sys.stderr)

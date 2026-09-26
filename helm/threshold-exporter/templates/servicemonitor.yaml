@@ -8,6 +8,14 @@ metadata:
   labels:
     app: threshold-exporter
     app.kubernetes.io/part-of: dynamic-alerting
+    {{- with .Values.rules.operator.serviceMonitor.labels }}
+    {{- range $k, $_ := . }}
+    {{- if or (eq $k "app") (eq $k "app.kubernetes.io/part-of") }}
+    {{- fail (printf "rules.operator.serviceMonitor.labels must not set %q — the chart sets it" $k) }}
+    {{- end }}
+    {{- end }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
