@@ -244,8 +244,9 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// reader would serve the un-merged proposal — so the write FAILS (500)
 	// instead of reporting success, and the error names the branch and whether
 	// it reached origin. Step 8 is skipped: we are still on that branch, so it
-	// cannot be deleted. The next write's Step 3 re-anchor on the base is the
-	// second line of defense that eventually clears the stranded tree.
+	// cannot be deleted. The next PR-mode write's Step 3 re-anchor on the base
+	// clears the stranded tree; the special-file writes (writer_special.go)
+	// commit to whatever is checked out and do NOT re-anchor.
 	if err := w.restoreBase(base, branchName, pushed); err != nil {
 		return nil, err
 	}
