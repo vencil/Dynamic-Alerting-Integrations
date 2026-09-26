@@ -18,7 +18,22 @@
     "Optional `conf_d`: the tree-root-relative directory handed to the tool as",
     "conf.d (default: the tree root), so a tree can hold targets OUTSIDE conf.d.",
     "`files` / `symlinks` keys are tree-root-relative; link targets are relative",
-    "to the link, as os.symlink takes them."
+    "to the link, as os.symlink takes them. A link may target a DIRECTORY",
+    "(a ConfigMap mount's `..data -> ..<timestamp>`); it need not exist yet.",
+    "#2054: an `expect` row is ONE of two shapes, never a mix (both sides",
+    "reject a mixed or partial row): resolved = all of chain_len /",
+    "effective_config / merged_hash; absent = {\"absent\": true} alone, meaning",
+    "the exporter's walker does not see this tenant (Go: ResolveEffective",
+    "returns ErrTenantNotFound; Python: describe_tenant exits 'not found').",
+    "It pins what is NOT read: `.`-prefixed files, `.`-prefixed directories",
+    "and a mount's `..<timestamp>/` payload. Measured on main 3b8f71cb:",
+    "describe_tenant described ghosthidden, ghostsnap and ghostdot (rc 0).",
+    "cm's ghostpayload is un-linked with a non-hidden name, so ONLY pruning the",
+    "`..<timestamp>/` directory keeps it out (ghostdot is also a hidden file).",
+    "Every such tree keeps a visible control tenant, so an empty walk fails.",
+    "Scope: tenant bodies and the defaults chain only. describe_tenant's",
+    "`_custom_alerts` view comes from custom_alerts/loader.collect_instances,",
+    "which lists conf.d on its own and still reads those paths (#2086)."
   ],
   "trees": [
     {
@@ -84,6 +99,52 @@
       "symlinks": {"conf.d/_defaults.yaml": "../shared/base.yaml"},
       "expect": {
         "tk": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"}
+      }
+    },
+    {
+      "name": "hf-hidden-file-is-not-read",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "acme.yaml": "tenants:\n  acme: {}\n",
+        ".hidden.yaml": "tenants:\n  ghosthidden: {}\n"
+      },
+      "symlinks": {},
+      "expect": {
+        "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
+        "ghosthidden": {"absent": true}
+      }
+    },
+    {
+      "name": "hd-hidden-dir-is-not-walked",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "acme.yaml": "tenants:\n  acme: {}\n",
+        ".snap/_defaults.yaml": "defaults:\n  cpu_pct: 90\n",
+        ".snap/acme2.yaml": "tenants:\n  ghostsnap: {}\n"
+      },
+      "symlinks": {},
+      "expect": {
+        "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
+        "ghostsnap": {"absent": true}
+      }
+    },
+    {
+      "name": "cm-configmap-mount-dotdot-payload-is-not-walked",
+      "files": {
+        "..2026_09_25/_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "..2026_09_25/acme.yaml": "tenants:\n  acme: {}\n",
+        "..2026_09_25/.ghost.yaml": "tenants:\n  ghostdot: {}\n",
+        "..2026_09_25/ghostpayload.yaml": "tenants:\n  ghostpayload: {}\n"
+      },
+      "symlinks": {
+        "..data": "..2026_09_25",
+        "acme.yaml": "..data/acme.yaml",
+        "_defaults.yaml": "..data/_defaults.yaml"
+      },
+      "expect": {
+        "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
+        "ghostdot": {"absent": true},
+        "ghostpayload": {"absent": true}
       }
     }
   ]
