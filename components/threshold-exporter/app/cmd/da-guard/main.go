@@ -72,6 +72,7 @@ type flags struct {
 	scopeDir             string
 	requiredFields       string
 	cardinalityLimit     int
+	cardinalityLimitSet  bool // --cardinality-limit given explicitly (else: root _defaults.yaml)
 	cardinalityWarnRatio float64
 	format               string
 	output               string
@@ -94,8 +95,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		"Comma-separated dotted paths every tenant's effective config must have "+
 			"(e.g. 'thresholds.cpu,routing.receiver.type'). Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
-		"Per-tenant predicted-metric-count ceiling. 0 disables. "+
-			"Mirror DefaultMaxMetricsPerTenant=500 to match runtime truncation.")
+		"Per-tenant predicted-metric-count ceiling; 0 disables. When omitted, the cap the exporter "+
+			"enforces is used: max_metrics_per_tenant from the ROOT _defaults.yaml of --config-dir "+
+			"(unset/0 = 500, negative = no check).")
 	fs.Float64Var(&f.cardinalityWarnRatio, "cardinality-warn-ratio", 0.0,
 		"Warn-tier ratio of --cardinality-limit (0 < r < 1). 0 = library default (0.8).")
 	fs.StringVar(&f.format, "format", "md",
@@ -120,6 +122,11 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	fs.Visit(func(fl *flag.Flag) {
+		if fl.Name == "cardinality-limit" {
+			f.cardinalityLimitSet = true
+		}
+	})
 	return f, nil
 }
 
@@ -165,6 +172,27 @@ func run(args []string, stdout, errOut io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		return exitCallerErr
+	}
+
+	// #2043: without an explicit --cardinality-limit, predict against the cap
+	// the exporter will actually enforce for this tree, not a constant. The
+	// root carrier is read from --config-dir, never from --scope: the cap is
+	// one global value (#2028), so a scoped run must use the same one.
+	if !f.cardinalityLimitSet {
+		limit, source, err := config.RootMaxMetricsPerTenant(f.configDir)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		if limit < 0 {
+			limit = 0 // exporter: negative = no truncation; guard: 0 = no check
+		}
+		f.cardinalityLimit = limit
+		if source == "" {
+			source = "built-in default (no root _defaults.yaml)"
+		}
+		fmt.Fprintf(errOut, "%s: cardinality limit %d from %s (0 = no check; override with --cardinality-limit)\n",
+			programName, limit, source)
 	}
 
 	// No tenants in scope: this is "vacuously safe". Print a friendly

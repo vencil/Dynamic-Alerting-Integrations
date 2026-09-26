@@ -2414,7 +2414,7 @@ da-tools guard <subcommand> [flags]
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 | `--scope <path>` | 整棵樹 | 限定子目錄（CI 由變更 `_defaults.yaml` 的 dirname 推算） |
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV |
-| `--cardinality-limit <n>` | 0（停用） | per-tenant 預測 metric 上限；建議 500 對齊 runtime |
+| `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
 | `--format md\|json` | md | 輸出格式 |
 | `--output <path>` | stdout | 寫入指定檔；parent dir 必須存在 |
@@ -2434,9 +2434,9 @@ da-tools guard <subcommand> [flags]
 # 整棵 conf.d/ 跑 schema check
 da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 
-# CI hook：限定 _defaults.yaml 變更目錄 + 上限
+# CI hook：限定 _defaults.yaml 變更目錄（上限自動取根 _defaults.yaml）
 da-tools guard defaults-impact --config-dir conf.d/ \
-    --scope conf.d/db/ --cardinality-limit 500
+    --scope conf.d/db/
 
 # JSON 輸出供下游 PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \

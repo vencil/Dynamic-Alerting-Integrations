@@ -4,7 +4,8 @@ package guard
 //
 // Premise: the runtime in components/threshold-exporter/app/
 // config_resolve.go::ResolveAt enforces a per-tenant ceiling on
-// resolved metric thresholds (DefaultMaxMetricsPerTenant = 500).
+// resolved metric thresholds (the root `_defaults.yaml`'s
+// max_metrics_per_tenant, else DefaultMaxMetricsPerTenant = 500).
 // Tenants over the ceiling have their excess silently truncated
 // with a WARN log line. Two failure modes that motivates this guard:
 //

@@ -114,10 +114,7 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	var result []ResolvedThreshold
 
 	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
-	limit := c.MaxMetricsPerTenant
-	if limit == 0 {
-		limit = DefaultMaxMetricsPerTenant
-	}
+	limit := EffectiveMaxMetricsPerTenant(c.MaxMetricsPerTenant)
 	tenantCount := make(map[string]int)
 	// #652: per-tenant over-limit magnitudes for the
 	// da_tenant_metrics_over_limit gauge. Populated for every visited

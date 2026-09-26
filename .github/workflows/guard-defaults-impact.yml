@@ -333,11 +333,15 @@ jobs:
             # and the sticky comment attributes them to a tree that was
             # never validated — the #1219 shape.
             : > "$part"
+            # No --cardinality-limit (#2043): da-guard then predicts against
+            # the cap the exporter enforces for THIS tree — the root
+            # _defaults.yaml's max_metrics_per_tenant, unset = 500. A
+            # hard-coded 500 here disagreed with the runtime whenever a tree
+            # set its own cap (false errors above 500, missed truncation below).
             set +e
             "$RUNNER_TEMP/da-guard" \
                 --config-dir "$config_dir" \
                 --scope "$scope" \
-                --cardinality-limit 500 \
                 --format md \
                 --output "$part"
             local rc=$?

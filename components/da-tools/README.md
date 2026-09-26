@@ -276,7 +276,6 @@ docker run --rm \
   guard defaults-impact \
     --config-dir /data/conf.d \
     --required-fields cpu,memory \
-    --cardinality-limit 500 \
     --warn-as-error
 # exit 0 = clean, 1 = guard found errors, 2 = caller error
 ```
