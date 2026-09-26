@@ -98,7 +98,7 @@
 #### 單一租戶端點與 conf.d 範圍
 
 - **不是 exporter 觀點**:`GET /{id}` 與 `/effective` 都不套用 `_profile`(`_profiles.yaml` 或 `profiles:`)與平台檔的 `tenants:` 區塊,用到這兩種設定的租戶,這兩個端點的值與 exporter 不同(#1385、#2019)。要看實際生效的值,看 exporter 的 `/metrics`。
-- **只管 conf.d 頂層**:子目錄裡的租戶,`GET` / `PUT` 回 404,寫入授權也讀不到它的 metadata(當成未標記)。這與 ConfigMap 部署一致——[扁平組裝](../../docs/integration/gitops-deployment.md#3-configmap-assembly)會丟掉子目錄檔並 WARN。例外:`/effective` 遞迴掃描整棵樹,找得到子目錄租戶;list 的 `config_derived` 與 `parse_failed_files` 走 `LoadDir` 遞迴讀取,也會算到子目錄租戶(#2078)。
+- **只管 conf.d 頂層**:子目錄裡的租戶,`GET` / `PUT` 回 404。這與 ConfigMap 部署一致——[扁平組裝](../../docs/integration/gitops-deployment.md#3-configmap-assembly)會丟掉子目錄檔並 WARN。例外:`/effective` 遞迴掃描整棵樹,找得到子目錄租戶;list 的 `config_derived` 與 `parse_failed_files` 走 `LoadDir` 遞迴讀取,也會算到子目錄租戶(#2078)。
 - **`_profile` 租戶無法寫入**:已用 `_profile` 的租戶,寫入驗證目前回 400(unknown profile),無法經 tenant-api / portal 寫入(#1385)。
 
 ### Custom Alerts(租戶自助告警)
