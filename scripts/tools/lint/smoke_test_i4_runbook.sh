@@ -41,20 +41,25 @@ assert_jq() {
 assert_amtool() {
     local name="$1"
     local cmd="$2"
-    # amtool with --alertmanager.url=invalid will fail to connect, but
-    # we're checking argument parsing not connectivity. If error is
-    # connection-related, args parsed OK. If error is flag-related, fail.
+    # The commands point at an unreachable Alertmanager / a missing config
+    # file, so a correctly-parsed invocation always fails at RUN time. Pass
+    # only on those two run-time errors; anything else — unknown flag, bad
+    # value, unknown subcommand, missing argument, amtool not installed —
+    # fails. Fail-closed on purpose: amtool exits 1 for usage errors and
+    # run-time errors alike, and its usage-error wording ("unknown long
+    # flag", "not a valid duration string") matched no deny-list we had
+    # (#1949).
     local out
     out=$(eval "$cmd" 2>&1)
-    if echo "$out" | grep -qE "unknown flag|unknown argument|invalid value|usage:"; then
+    if echo "$out" | grep -qE "dial tcp|path '[^']*' does not exist"; then
+        echo -e "  ${GREEN}✅${NC} $name (args parsed; run-time error expected)"
+        PASS=$((PASS + 1))
+    else
         echo -e "  ${RED}❌${NC} $name"
         echo "      cmd: $cmd"
         echo "      error: $(echo "$out" | head -2)"
         FAIL=$((FAIL + 1))
         FAILURES+=("$name")
-    else
-        echo -e "  ${GREEN}✅${NC} $name (args parsed; connectivity error expected)"
-        PASS=$((PASS + 1))
     fi
 }
 
@@ -198,7 +203,6 @@ assert_jq "§1.2.2 AM alerts .[].labels" "$AM_ALERTS" '.[].labels'
 echo
 echo "── §1.3.1 AM matcher order ──"
 assert_amtool "§1.3.1 amtool config routes test syntax" "amtool config routes test --config.file=/nonexistent severity=critical alertname=Test 2>&1 || true"
-# Note: the amtool config routes test command actually reads --config.file, so we expect file-not-found error not flag error
 
 # =============================================================================
 # §1.3.2 Silencer disablement drift
