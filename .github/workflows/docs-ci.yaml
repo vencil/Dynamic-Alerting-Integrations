@@ -22,12 +22,6 @@
 #
 # A job with no `if:` is unconditional on purpose; its own comment says why.
 #
-# Jobs:
-#   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
-#   2. check-links: Cross-reference validation (internal links, anchors, files)
-#   3. check-frontmatter: YAML front matter consistency check
-#   4. check-coverage: Documentation coverage thresholds (80% minimum)
-#
 # Uses caching (npm + pip) for speed.
 
 name: Documentation CI
