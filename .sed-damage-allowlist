@@ -137,3 +137,10 @@ components/recipe-preview/promtool.openvex.json
 # truncated copy of either file reds that test.
 tests/alertmanager-inhibit/.golangci.yml
 scripts/tools/ops/bench-canary/.golangci.yml
+
+# check_cli_contract's baseline ledger: written by `--write-baseline`, never
+# by sed, and designed to shrink to `entries: []` as doc debt is paid (批 13e
+# took it 4520 → 434 bytes). Damage is caught independently: a truncated
+# ledger drops rows, so their findings come back open (gate rc=1), and an
+# unparseable one is fatal (rc=2).
+docs/internal/cli-contract-baseline.yaml

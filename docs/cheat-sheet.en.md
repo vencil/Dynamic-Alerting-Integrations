@@ -17,13 +17,13 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | Command | Description | Key Flags | Example |
 |---------|-------------|-----------|---------|
 | `check-alert` | Query alert status for a specific tenant | - | `da-tools check-alert --help` |
-| `diagnose` | Full health check for a single tenant | --config-dir <PATH>, --namespace <NS> | `da-tools diagnose --help` |
+| `diagnose` | Full health check for a single tenant | --config-dir <PATH>, --prometheus <URL> | `da-tools diagnose --help` |
 | `batch-diagnose` | Parallel health check for all tenants | --tenants <LIST>, --workers <N>, --timeout <SEC> | `da-tools batch-diagnose --help` |
 | `baseline` | Observe metric time series, compute stats (p50/p90/p95/p99/max), suggest thresholds | --tenant <NAME>, --duration <SEC>, --interval <SEC> | `da-tools baseline --help` |
 | `validate` | Shadow Monitoring validation: compare old/new Recording Rule values | --watch, --interval <SEC>, --rounds <N> | `da-tools validate --help` |
 | `cutover` | Shadow Monitoring one-click switchover: stop old rules, enable new, verify health | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
 | `blind-spot` | Scan Prometheus active targets, cross-check with tenant config for blind spots | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
-| `maintenance-scheduler` | Evaluate scheduled maintenance windows (`_state_maintenance`) | --config-dir <PATH>, --output <FILE>, --timezone <TZ> | `da-tools maintenance-scheduler --help` |
+| `maintenance-scheduler` | Evaluate scheduled maintenance windows (`_state_maintenance`) | --config-dir <PATH>, --alertmanager <URL>, --dry-run | `da-tools maintenance-scheduler --help` |
 | `backtest` | Historical backtest for PR threshold changes | --lookback <DURATION>, --output <FILE> | `da-tools backtest --help` |
 | `shadow-verify` | Shadow Monitoring readiness & convergence 3-phase verification | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
 | `byo-check` | Automated BYO Prometheus & Alertmanager integration verification | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
@@ -36,15 +36,15 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
 | `evaluate-policy` | Policy-as-Code evaluation: declarative DSL policy checks | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
 | `generate-routes` | Generate Alertmanager route + receiver + inhibit from tenant YAML | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
-| `patch-config` | ConfigMap partial update with preview (--diff) | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
+| `patch-config` | ConfigMap partial update with preview (--diff) | --diff, --json, --exporter-namespace <NS> | `da-tools patch-config --help` |
 | `scaffold` | Generate new tenant config (interactive or non-interactive) | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
-| `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
+| `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --execute | `da-tools offboard --help` |
 | `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | --config-dir <PATH>, --execute, --plane {root,subtree} | `da-tools deprecate --help` |
-| `lint` | Check Custom Rule governance compliance (`custom_` prefix rules) | --strict, --json-output | `da-tools lint --help` |
+| `lint` | Check Custom Rule governance compliance (`custom_` prefix rules) | --policy <FILE>, --ci | `da-tools lint --help` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
-| `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --tenant-config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
+| `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --tenant-config <PATH>, --output <FILE>, --json | `da-tools analyze-gaps --help` |
 | `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
 | `test-notification` | Multi-channel notification connectivity testing | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
@@ -61,7 +61,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN, detect-only) | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
-| `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --scenario | `da-tools rule-pack-split --help` |
+| `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard (v2.8.0); shells out to the `da-guard` Go binary to validate conf.d/ schema + routing + cardinality | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
 | `batch-pr` | Migration Batch PR Pipeline (v2.8.0); shells out to the `da-batchpr` Go binary for apply / refresh / refresh-source orchestration | apply\|refresh\|refresh-source subcommands + --plan, --emit-dir, --input, --patches-dir, --workdir, --repo, --dry-run | `da-tools batch-pr --help` |

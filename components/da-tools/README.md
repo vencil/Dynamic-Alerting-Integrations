@@ -126,11 +126,11 @@ docker run --rm \
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
 | `guard` ✨v2.8.0 | 子命令 `defaults-impact`：schema + routing + cardinality 三層檢查 | `defaults-impact --config-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code 宣告式 DSL（10 運算子） | `--config-dir <dir>` |
-| `opa-evaluate` | OPA Rego 政策評估橋接 | `--config-dir <dir> --policy <file>` |
+| `opa-evaluate` | OPA Rego 政策評估橋接 | `--config-dir <dir> --policy-path <file>`（或 `--opa-url <url>`） |
 | `lint` | Custom Rule 治理合規檢查 | `<path...>` |
 | `analyze-gaps` | Custom Rule vs Rule Pack 缺口分析 | `--tenant-config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
-| `drift-detect` | 跨叢集 SHA-256 配置漂移偵測 | `--clusters <a,b>` |
+| `drift-detect` | 跨叢集 SHA-256 配置漂移偵測 | `--dirs <a,b>` |
 
 ### 4.4 Cutover
 
@@ -148,9 +148,9 @@ docker run --rm \
 | `diagnose` | 單 tenant 健康檢查（config + metric + alert） | `<tenant>` |
 | `batch-diagnose` | 多 tenant 並行健康檢查（auto-discover） | （自動探索） |
 | `check-alert` | 查 alert 觸發狀態 | `<alert_name> <tenant>` |
-| `alert-quality` | 警報品質四指標評估（噪音 / 陳腐 / 延遲 / 壓制） | `--tenant <name>` 或 `--all` |
-| `alert-correlate` | 告警關聯分析（時間窗聚類 + 根因推斷） | `--tenant <name>` |
-| `cardinality-forecast` | 基數線性回歸預測 + 觸頂天數 | `--tenant <name>` 或 `--all` |
+| `alert-quality` | 警報品質四指標評估（噪音 / 陳腐 / 延遲 / 壓制） | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
+| `alert-correlate` | 告警關聯分析（時間窗聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
+| `cardinality-forecast` | 基數線性回歸預測 + 觸頂天數 | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
 | `maintenance-scheduler` | 評估排程式維護窗、自動建 Alertmanager silence | `--config-dir <dir>` |
 
 ### 4.6 Tune
@@ -158,7 +158,7 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `baseline` | 觀測指標 + 閾值建議 | `--tenant <name>` |
-| `threshold-recommend` | 閾值推薦引擎（歷史 P50/P95/P99） | `--tenant <name> --metric <key>` |
+| `threshold-recommend` | 閾值推薦引擎（歷史 P50/P95/P99） | `--config-dir <dir>`（可加 `--tenant <name>`） |
 | `threshold-govern` | 閾值治理迴路（#656）：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR | `--config-dir <dir> --apply --tenant-api-url <url>` |
 | `patch-config` | ConfigMap 局部更新（`--diff` 模式預覽） | `<tenant> <metric> <value>` 或 `--diff` |
 | `explain-route` | 路由 merge pipeline 除錯器（四層展開 + profile） | `--tenant <name>` |
@@ -169,8 +169,8 @@ docker run --rm \
 |------|------|----------|
 | `generate-routes` | tenant YAML → AM route + receiver + inhibit fragment 或完整 ConfigMap | `--config-dir <dir>` |
 | `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`） | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
-| `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `snapshot --config-dir <dir>` |
-| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar 三模式） | `--mode <m> --config-dir <dir>` |
+| `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `--config-dir <dir> snapshot` |
+| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar 三模式） | `local --dir <dir>`（或 `repo --url <url>`、`sidecar`） |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
 | `state-reconcile` ✨v2.8.0 | 遷移狀態目錄聲明式一致化（`.da/state/*.json` schema 驗證 + `.da/manifest.json` 重建），取代手動 jq 校正流程 | `--state-dir <dir>`（預設 `.da/state`） |
 
@@ -182,7 +182,7 @@ docker run --rm \
 | `operator-generate` | 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--config-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（5 項檢查 + 診斷） | `--namespace <ns>` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |
-| `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-pack <file>` |
+| `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-packs-dir <dir> --output-dir <dir>` |
 | `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），供 upgrade audit | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑 | `--silences-file <json> --rule-source <path>` |
 
