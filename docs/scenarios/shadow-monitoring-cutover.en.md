@@ -65,18 +65,18 @@ Organizations migrating from legacy alerting systems (vendor-specific rule sets 
 
 Dynamic Alerting provides an end-to-end migration workflow:
 
-1. **Compliance scanning** (`onboard_platform.py`) — Parse legacy config, generate migration hints
-2. **Rule transformation** (`migrate_rule.py`) — Convert old rules to new rules, auto-mark as shadow
+1. **Compliance scanning** (`onboard_platform.py`) — Parse the legacy Alertmanager config and rule files, generate routing snippets and a migration plan
+2. **Rule transformation** (`migrate_rule.py`) — Convert old rules into platform recording / alert rules plus tenant config; the alert rules carry a `migration_status: shadow` label
 3. **Parallel validation** (`validate_migration.py`) — Continuously compare new vs old outputs until auto-detecting convergence
-4. **One-click cutover** (`cutover_tenant.py`) — Automate all cutover steps (remove old rules, unshadow new rules, verify notifications)
-5. **Automatic rollback** (rollback mechanism) — Fast recovery if cutover issues detected
+4. **One-click cutover** (`cutover_tenant.py`) — In order: stop the shadow monitor job, delete the old recording rules, remove the shadow label and the Alertmanager intercept, then confirm the tenant's threshold metrics exist
+5. **Rollback** — The tool has no automatic rollback; if cutover fails, restore by hand per [Shadow Monitoring SOP §7.2](../shadow-monitoring-sop.en.md) (`cutover_tenant.py` prints the same pointer when it fails)
 
 ## Workflow Diagram
 
 ```mermaid
 graph LR
     A["Existing Alerts<br/>(Legacy System)"] -->|Import| B["onboard_platform.py<br/>Reverse-engineer"]
-    B -->|Generate| C["onboard-hints.json<br/>Migration hints"]
+    B -->|Generate| C["migration-plan.csv<br/>Migration plan"]
     C -->|Reference| D["migrate_rule.py<br/>Transform rules"]
     D -->|Deploy| E["New Rules<br/>migration_status: shadow<br/>(Alertmanager blocks)"]
     A -->|Run in parallel| E
@@ -87,12 +87,12 @@ graph LR
     I -->|Yes| J["cutover_tenant.py<br/>Execute cutover"]
     I -->|No| K["Adjust config<br/>Re-validate"]
     K -->|Re-check| F
-    J -->|Step 1| L["Delete old rules<br/>(Stop shadow-monitor job)"]
-    L -->|Step 2| M["Remove migration_status<br/>shadow label"]
-    M -->|Step 3| N["Alertmanager remove<br/>shadow intercept route"]
-    N -->|Step 4| O["Verify alerts fire<br/>check-alert + diagnose"]
+    J -->|Step 1–2| L["Stop shadow-monitor job<br/>Delete old recording rules"]
+    L -->|Step 3| M["Remove migration_status<br/>shadow label"]
+    M -->|Step 4| N["Alertmanager remove<br/>shadow intercept route"]
+    N -->|Step 5| O["Confirm tenant threshold metrics<br/>count(user_threshold)"]
     O -->|Pass| P["Cutover complete ✓"]
-    O -->|Fail| Q["Auto-rollback<br/>(rollback mechanism)"]
+    O -->|Fail| Q["Manual rollback<br/>(SOP §7.2)"]
     Q -->|Restore| E
 ```
 
@@ -122,7 +122,7 @@ python3 scripts/tools/ops/validate_migration.py \
   # stability-window=5: 5 consecutive rounds of zero mismatch → convergence declared
 ```
 
-Output: `validation_output/cutover-readiness.json` (contains `converged`, `convergence_timestamp`, `tenants_verified`, `recommendation` fields). Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
+Output: `validation_output/cutover-readiness.json` (contains `ready`, `timestamp`, `convergence_percentage`, `converged_count`, `total_pairs`, `unconverged_pairs`, `recommendation` and other fields). Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
 
 ### 2. Tolerance Thresholds
 
@@ -147,7 +147,7 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ### 3. Rollback Triggers
 
-Post-cutover, these conditions trigger automatic rollback:
+Post-cutover, these conditions call for an immediate manual rollback per [SOP §7.2](../shadow-monitoring-sop.en.md) (the tool has no automatic rollback):
 
 | Condition | Detection | Rollback action |
 |-----------|-----------|-----------------|
@@ -189,17 +189,23 @@ python3 scripts/tools/ops/validate_config.py \
 ### Phase 2: Transformation (Day 0)
 
 ```bash
-# 2.1 Execute rule transformation
-python3 scripts/tools/ops/migrate_rule.py \
-  --input migration_input/onboard-hints.json \
-  --tenant db-a,db-b \
-  --output migration_output/
-# Output:
-#   - migration_output/custom_rules.yaml (new rules with migration_status: shadow)
-#   - migration_output/prefix-mapping.yaml (old_query ↔ new_query mapping)
+# 2.1 Execute rule transformation (input is a legacy Prometheus rule file, one file per run)
+python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
+  --output-dir migration_output/
+# Output (migration_output/):
+#   - platform-recording-rules.yaml, platform-alert-rules.yaml
+#     (new rules; the alert rules carry the migration_status: shadow label)
+#   - tenant-config.yaml (threshold keys to paste into each tenant's conf.d file)
+#   - prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
+#   - migration-report.txt, triage-report.csv (conversion reports)
+# There is no "only these tenants" option; the tenant is decided by which tenant file
+# you paste tenant-config.yaml into.
+# ⚠️ The threshold recording rules it emits currently do not match the labels the exporter
+#    emits, and the keys are only emitted once declared in _defaults.yaml (tracked in
+#    issue 1818); review them by hand before deploying.
 
-# 2.2 Deploy new rules (shadow state)
-kubectl apply -f migration_output/custom_rules.yaml
+# 2.2 Deploy the new rules (shadow state): merge both rule files into Prometheus's rule
+#     ConfigMap (environment-specific: ConfigMap or Helm)
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -244,13 +250,25 @@ python3 scripts/tools/ops/cutover_tenant.py \
   --prometheus http://localhost:9090 \
   --dry-run
 
-# Expected output:
-# [DRY RUN] Would stop shadow-monitor job in namespace monitoring
-# [DRY RUN] Would delete old recording rules for tenant db-a
-# [DRY RUN] Would remove migration_status:shadow label from custom_* rules
-# [DRY RUN] Would remove Alertmanager shadow route for db-a
-# [DRY RUN] Would run: check-alert MariaDBHighConnections db-a
-# [DRY RUN] Would run: diagnose db-a
+# Expected output (stderr; lists the kubectl commands it would run, changes nothing):
+# ▸ Stop Shadow Monitor Job...
+#   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove old Recording Rules...
+#   [dry-run] kubectl delete configmap prometheus-rules-old -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove shadow label from rules...
+#   [dry-run] kubectl label configmap prometheus-rules -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Remove Alertmanager shadow route...
+#   [dry-run] kubectl label configmap alertmanager-config -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Verify tenant health...
+#   [dry-run] query http://localhost:9090 for tenant=db-a health
+#   ✓ (dry-run)
+#
+# ✅ Cutover completed successfully.
+# Next: run 'da-tools batch-diagnose' for full health report.
 
 # 4.3 Confirm preview and execute cutover
 ```
@@ -264,13 +282,16 @@ python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --prometheus http://localhost:9090
 
-# Expected flow (auto-executed):
-# [STEP 1/4] Stopping shadow monitor job...
-# [STEP 2/4] Removing old recording rules for tenant db-a...
-# [STEP 3/4] Removing migration_status:shadow label...
-# [STEP 4/4] Verifying alert triggers post-cutover...
-# ✓ db-a cutover completed successfully
-# ✓ All validation checks passed
+# Expected flow (auto-executed: the same five steps as 4.2, this time running kubectl):
+# ▸ Stop Shadow Monitor Job...
+# ▸ Remove old Recording Rules...
+# ▸ Remove shadow label from rules...
+# ▸ Remove Alertmanager shadow route...
+# ▸ Verify tenant health...
+#   ✓ tenant=db-a: <N> threshold metrics active
+#
+# ✅ Cutover completed successfully.
+# If any step fails it prints ❌ Cutover failed at step: <step> with the reason, and points to SOP §7.2 for rollback.
 
 # 5.2 Batch cutover multiple tenants (sequential execution)
 for tenant in db-a db-b db-c; do
@@ -283,18 +304,19 @@ for tenant in db-a db-b db-c; do
   sleep 60  # 60-second interval between tenants to avoid Prometheus reload conflicts
 done
 
-# 5.3 Verify all cutovers succeeded
+# 5.3 Verify all cutovers succeeded (multi-tenant health report)
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 \
-  --check-shadow-removal
+  --tenants db-a,db-b,db-c \
+  --prometheus http://localhost:9090
 ```
 
 ### Phase 6: Cleanup (Day 15+)
 
 ```bash
-# 6.1 Verify old rules completely removed (batch-diagnose includes shadow-removal check)
-python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 --check-shadow-removal
+# 6.1 Verify old rules completely removed: both objects cutover deleted should be gone (NotFound)
+#     batch-diagnose has no shadow-leftover check (not implemented yet); query kubectl directly
+kubectl get job shadow-monitor -n monitoring
+kubectl get configmap prometheus-rules-old -n monitoring
 
 # 6.2 Clean up migration artifacts and backups
 rm -rf migration_input/ migration_output/ validation_output/
@@ -370,11 +392,9 @@ python3 scripts/tools/ops/diagnose.py db-a
 kubectl patch configmap alertmanager-config -n monitoring \
   --patch-file alertmanager-block-custom.patch  # Temporarily intercept custom_* alerts
 
-# 3.2 Execute full rollback
-python3 scripts/tools/ops/cutover_tenant.py \
-  --tenant db-a \
-  --rollback --prometheus http://localhost:9090
-# Auto: restores old rules, old AM config, re-starts validation
+# 3.2 Execute full rollback: cutover has no rollback option (not implemented yet); follow
+#     shadow-monitoring-sop.md §7.2 to restore the old recording rules and Alertmanager
+#     config by hand, then restart validate_migration
 
 # 3.3 Root cause analysis
 # - Check new rule logic for bugs
@@ -436,15 +456,18 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ### Option B: --force Skip Readiness Check
 
-When manual validation is thorough, skip auto-readiness checks:
+When manual validation is thorough, skip the readiness verdict:
 
 ```bash
-# Skip cutover-readiness.json validation, proceed directly
+# Proceed even when the readiness JSON says ready: false
 python3 scripts/tools/ops/cutover_tenant.py \
+  --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090 \
-  --force  # Does not require --readiness-json
+  --force
 ```
+
+`--force` only skips the `ready` verdict; `--readiness-json` is still required, and omitting it exits with rc=2 (`the following arguments are required: --readiness-json`).
 
 **When to use**: Manual CSV review confirms 7 days zero-mismatch; test/dev environments
 
@@ -456,7 +479,7 @@ Before starting migration:
 
 - [ ] Current config backed up (`conf.d.bak`, `alertmanager.yml.bak`)
 - [ ] `validate_config.py` passes
-- [ ] `onboard_platform.py` complete, `onboard-hints.json` reviewed
+- [ ] `onboard_platform.py` complete, its output (`phase2-rules/migration-plan.csv` etc.) reviewed
 - [ ] `migrate_rule.py` complete, new rules deployed
 - [ ] Alertmanager shadow route deployed
 - [ ] Prometheus reload complete
