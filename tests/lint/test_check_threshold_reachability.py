@@ -107,6 +107,63 @@ def test_supplied_key_is_not_flagged():
     assert result["errors"] == []
 
 
+# ── supply without demand (issue 1196) ────────────────────────────────────
+
+def test_written_key_no_alert_reads_is_an_error():
+    """init's old `defaults:` wrote `jvm_heap_usage`; the JVM pack reads
+    `jvm_memory`. A written key that no alert reads is UNDEMANDED."""
+    result = gate.run_check(
+        demand={"jvm_memory"},
+        supply={"jvm_memory"},
+        deferred=set(),
+        known_unwired={},
+        written_faces={"probe face": {"jvm_memory", "jvm_heap_usage"}},
+    )
+    undemanded = [e for e in result["errors"] if "UNDEMANDED" in e]
+    assert len(undemanded) == 1, result
+    assert "'jvm_heap_usage'" in undemanded[0] and "probe face" in undemanded[0]
+
+
+def test_written_critical_key_counts_as_read_through_its_base():
+    """The exporter renders `<base>_critical` as the base metric's
+    severity="critical" row, so a read base is enough — and a critical key
+    whose base nobody reads is flagged like any other."""
+    result = gate.run_check(
+        demand={"container_cpu"},
+        supply={"container_cpu"},
+        deferred=set(),
+        known_unwired={},
+        written_faces={"probe face": {"container_cpu_critical",
+                                      "es_heap_usage_critical"}},
+    )
+    undemanded = [e for e in result["errors"] if "UNDEMANDED" in e]
+    assert len(undemanded) == 1, result
+    assert "'es_heap_usage_critical'" in undemanded[0]
+
+
+def test_injected_demand_does_not_pull_in_the_real_producers():
+    """With a synthetic demand set and no `written_faces`, the real producers
+    stay out — otherwise every hermetic test above would drown in UNDEMANDED."""
+    result = gate.run_check(
+        demand={"oracle_sessions_active"},
+        supply={"oracle_sessions_active"},
+        deferred=set(),
+        known_unwired={},
+    )
+    assert not any("UNDEMANDED" in e for e in result["errors"]), result
+
+
+def test_real_producers_write_only_keys_some_alert_reads():
+    """The live check over the real producers — and a non-vacuity floor on
+    each face, so a face that silently rendered nothing cannot pass."""
+    faces = gate._written_faces()
+    assert len(faces) == 3, sorted(faces)
+    for face, keys in faces.items():
+        assert len(keys) >= 10, (face, len(keys))
+    result = gate.run_check()
+    assert not any("UNDEMANDED" in e for e in result["errors"]), result["errors"]
+
+
 # ── _critical reachability rule ───────────────────────────────────────────
 
 def test_critical_key_reachable_when_base_is_supplied():
@@ -4016,7 +4073,8 @@ def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():
 
       GENERATORS — true as written, and the floor is the FIRST responder:
         EMPTY-FACE lives in `run_check`, i.e. after `_defaults_faces` has
-        already run this floor. Measured: `init` (51 keys) losing 23 trips it.
+        already run this floor. Measured: `init` (42 keys) losing 14 trips it
+        (13 stays silent).
 
       ARTIFACTS — the arithmetic still holds, but the SCENARIO is unreachable
         here: `_assert_shipped_roots_intact` and `_assert_every_root_contributes`
@@ -4113,8 +4171,8 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # DOWN: how many keys may disappear before the floor itself speaks.
     down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
     down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
-    assert (down_art, down_gen) == (12, 22), (
-        f"the note says artifacts 12 / generators 22 downward — and the fifth "
+    assert (down_art, down_gen) == (12, 13), (
+        f"the note says artifacts 12 / generators 13 downward — and the fifth "
         f"floor's own comment repeats the artifact one as '12 keys of slack'; "
         f"measured {down_art} / {down_gen}. Both places move together.")
 

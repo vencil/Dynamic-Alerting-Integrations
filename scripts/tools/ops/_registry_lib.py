@@ -955,10 +955,10 @@ def shipped_optional_keys_for_packs(
     a 400 for a key the platform believes it declared.
 
     ⛔ Both call this instead of re-spelling ``not endswith("_critical")``.
-    ``init_project`` keeps its OWN ``RULE_PACK_CATALOG`` for the ``defaults:``
-    values — that copy is a KNOWN divergence from ``scaffold_tenant.RULE_PACKS``
-    with its own consolidation tracked separately, and this function is
-    deliberately NOT that consolidation: it unifies only the declared-key
+    Since #1196 ``init_project`` also takes its ``defaults:`` VALUES from
+    ``scaffold_tenant.RULE_PACKS`` (its former own copy spelled keys the
+    exporter never read); this function stays the declared-key half of that
+    sharing — it unifies only the declared-key
     derivation, so the two generators cannot disagree about which keys a tenant
     may set. Splitting that derivation in two would just have created a fourth
     hand-copy of the predicate (#1189).
