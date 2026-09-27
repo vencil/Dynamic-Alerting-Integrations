@@ -681,6 +681,15 @@ def _run_as_unprivileged(argv: list[str], cwd: str):
                         "no chmod-000 directory can be made unreadable")
         argv = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups",
                 *argv]
+        # A root checkout can sit where `nobody` cannot traverse (`/root` is
+        # 0700), and then the child fails before it scans anything. Probe the
+        # interpreter + script + imports as the same uid; skip, not fail.
+        probe = subprocess.run([*argv[:6], "--help"], cwd=cwd,
+                               capture_output=True, text=True,
+                               encoding="utf-8", timeout=60)
+        if probe.returncode != 0:
+            pytest.skip("uid 65534 cannot run the script from this checkout: "
+                        + (probe.stderr.strip().splitlines() or ["?"])[-1])
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                           encoding="utf-8", timeout=60)
 
