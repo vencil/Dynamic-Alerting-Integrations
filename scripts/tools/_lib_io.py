@@ -149,13 +149,7 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
 # comparison to the implementation and the exporter is the reader that
 # counts. yaml.v3 (`decode.go`, `mapping()`, uniqueKeys) compares two keys
 # of one mapping by node kind + raw text — measured on this repo's pinned
-# v3.0.1 (#2123):
-#
-#   rejected: `a:`/`a:`, `"1":`/`1:`, `!!str a:`/`a:`, two literal `<<:`,
-#             a duplicate inside a `<<: {…}` value or inside a list item
-#   accepted: `true:`/`True:`, `~:`/`null:` (different text), and an
-#             explicit key overriding one that came in through `<<:`
-#
+# v3.0.1 (#2123; matrix: tests/shared/test_yaml_strict_loader.py _IDENTITY).
 # So keys that arrive through a merge are not compared with the mapping's
 # own keys; everything else is compared by what was written. Nothing here
 # decides what a key MEANS (`true` vs `True`, `tenants: null`, scalars where
@@ -274,9 +268,8 @@ def reject_equal_constructed_keys(loader: Any, pairs: Any, mapping: "yaml.Node",
     ``True``, ``1`` / ``01``) — STRICTER than yaml.v3, which compares text.
 
     Not the default and not the YAML-standard check above: it exists only
-    so the two lints that already compared constructed keys before #2123
-    (``check_admin_config_schema``, ``check_image_pin_capability``) keep
-    refusing everything they refused when their private loaders were folded
+    so lints that compared constructed keys before #2123 (see callers of
+    reject_equal_constructed_keys) keep refusing everything they refused when their private loaders were folded
     into this module. *pairs* is the caller's choice of key/value node
     pairs — flattened or not — because each lint compared a different set,
     and changing that set would change what it refuses.

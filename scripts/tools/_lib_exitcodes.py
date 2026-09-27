@@ -45,8 +45,8 @@ extensions today:
   say; its verification failure stays EXIT_VIOLATION (1). Table in
   docs/cli-reference.md §patch-config.
 * da-guard's exitParseFailed = 3 (#2123; `da-tools guard` passes it
-  through): the exporter cannot decode a non-`_` YAML file in scope, or
-  the `_defaults.yaml` in a resolved tenant's chain. Author-actionable
+  through): config files the exporter cannot decode (docs/cli-reference.md
+  §guard). Author-actionable
   like 1 (fix the file, re-run), but not a finding about the
   tenants the guard DID check — which is why it is not 1. Contract in the
   comment at the top of cmd/da-guard/main.go; docs/cli-reference.md §guard.

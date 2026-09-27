@@ -74,9 +74,8 @@ type ScopedTenants struct {
 	SourceFiles []string
 
 	// ParseFailed is every config file at-or-below the scope whose bytes
-	// the exporter's decode REJECTS (TreeFile.ParseFailed: invalid YAML, a
-	// key written twice in one mapping, a value of the wrong type), as
-	// root-relative slash paths, sorted; nil when there are none (#2123).
+	// the exporter's decode REJECTS (TreeFile.ParseFailed), as root-relative
+	// slash paths, sorted; nil when there are none (#2123).
 	//
 	// ⛔ Not an error of ScopeEffective, on purpose: the walker skips such a
 	// file and serves the rest of the tree, and callers that mirror the

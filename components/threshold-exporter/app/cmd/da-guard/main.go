@@ -31,24 +31,12 @@
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
 //	2  caller error (bad flags, missing/invalid path, IO failure)
-//	3  the exporter cannot decode a non-`_` YAML file in scope, or the
-//	   `_defaults.yaml` in the chain of a tenant being resolved (#2123).
-//	   "A non-`_` YAML file in scope" is exactly the set the walker
-//	   parses (config.IsScannedFileName): every file at or below --scope,
-//	   recursively, whose name ends in .yaml / .yml in any case, and that
-//	   neither starts with `_` nor sits under a `.`-prefixed directory or
-//	   starts with `.` itself. The chain's `_defaults.yaml` is the defaults
-//	   carrier the exporter selects at each level (`.yml` and any casing
-//	   included), and may sit above --scope. No reason is enumerated: any
-//	   decode failure of those files counts. The report names the file(s)
-//	   (relative to --config-dir); the author fixes them and re-runs.
-//	   Two sources: tenant files the walker's decode rejects (the other
-//	   tenants are still checked), and a file whose decode fails while a
-//	   tenant is being resolved — a `_defaults.yaml` in its chain, or a
-//	   tenant file whose repeated key sits under a field the walker's
-//	   typed decode ignores. The second stops the run before any tenant
-//	   is checked, and the report names only that first file
-//	   (config.DecodeError); other broken files are not listed.
+//	3  config files the exporter cannot decode (#2123; operator-facing
+//	   wording: docs/cli-reference.md §guard): the files ScopeEffective
+//	   reports in ParseFailed, or a config.DecodeError met while
+//	   resolving. The report names them (relative to --config-dir). A
+//	   DecodeError stops the run before any tenant is checked, so only
+//	   that first file is named.
 //
 // 3 wins over 1: findings computed over a tree with a skipped file
 // describe only part of it, so "fix the file first" is the one
@@ -148,8 +136,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
-			"  3  the exporter cannot decode a non-_ YAML file in scope, or the _defaults.yaml\n"+
-			"     in a resolved tenant's chain; the report names it (fix it, re-run)\n")
+			"  3  config files the exporter cannot decode; the report names them (fix, re-run)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {

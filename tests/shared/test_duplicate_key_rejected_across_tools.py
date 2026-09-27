@@ -1,12 +1,10 @@
 """A conf.d file with a key written twice is refused by every judging tool,
 the way that tool refuses a syntax error (#2123).
 
-The exporter (yaml.v3) rejects such a file; before #2123 every tool below
-took PyYAML's last value and exited 0 (measured on the #2123 fixture: 10
-tools, all rc 0). The three shapes are the ones the exporter was measured to
-reject: one threshold twice under a tenant, one tenant id twice, the
-top-level `tenants:` twice — plus a repeated key in `_defaults.yaml` for the
-tools that read it.
+The exporter (yaml.v3) rejects such a file; before #2123 every tool in
+`_TOOLS` took PyYAML's last value and exited 0. The fixture shapes
+(`_TENANT_VARIANTS`, `_DEFAULTS_VARIANTS`) are ones the exporter was
+measured to reject.
 
 ⛔ The expected outcome is NOT written down per tool. Each tool is run on the
 same tree with a real syntax error in the same file, and a duplicate must

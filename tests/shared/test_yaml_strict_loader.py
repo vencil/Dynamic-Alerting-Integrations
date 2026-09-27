@@ -195,7 +195,7 @@ def test_image_pin_still_refuses_a_merge_key():
 @pytest.mark.parametrize("name,doc,rejected",
                          [r for r in _IDENTITY if r[2]], ids=[r[0] for r in _IDENTITY if r[2]])
 def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected):
-    """The raw-text half now reaches the two lints that compared values only
+    """The raw-text half now reaches the lints that compared values only
     (`"1"` / `1` used to pass both), and the three node walkers keep it."""
     import check_admin_config_schema as adm
     import check_image_pin_capability as pin

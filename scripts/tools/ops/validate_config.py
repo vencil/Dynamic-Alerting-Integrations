@@ -1008,8 +1008,8 @@ class _ExporterKeyLoader(StrictSafeLoader):
       ``yaml.compose``: compose would report a tenant literally named ``<<``.
     * a ``null`` / ``~`` key is dropped — measured: Go drops it as well.
 
-    A key repeated in one mapping (``tenants:`` twice, one tenant id twice,
-    one threshold twice) is refused by the ``StrictSafeLoader`` base (#2123):
+    A key repeated in one mapping is refused by the ``StrictSafeLoader``
+    base (#2123):
     Go rejects the whole file (``mapping key "tenants" already defined``), so
     such a file is unreadable here and ``yaml_syntax`` names it — this check
     no longer takes PyYAML's last block as the file's declaration.

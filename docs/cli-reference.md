@@ -2440,7 +2440,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | scope 內任一非 `_` 開頭的 YAML 檔，或解析租戶時繼承鏈上的 `_defaults.yaml`，exporter 無法 decode。「scope 內的 YAML 檔」就是 exporter walker 會解析的那一組：`--scope` 以下（遞迴）副檔名為 `.yaml`／`.yml`（不分大小寫）、檔名不以 `_` 或 `.` 開頭、也不在 `.` 開頭目錄底下的檔；繼承鏈上的 `_defaults.yaml` 指各層被選為 defaults 載體的那個檔（含 `.yml` 與大小寫拼法），可能在 `--scope` 之外。不列舉原因，這些檔 decode 失敗都算。依賴它的租戶**沒有被檢查**。報告的「Files the exporter cannot parse」段落列出檔案（相對於 `--config-dir` 的路徑），修好後重跑。`_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
+| 3 | exporter 無法 decode 的設定檔（報告的「Files the exporter cannot parse」段落列出，路徑相對於 `--config-dir`），修好後重跑。`_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
 
 **範例**
 

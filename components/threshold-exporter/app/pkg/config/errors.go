@@ -2,13 +2,10 @@ package config
 
 import "fmt"
 
-// DecodeError is a resolve failure caused by one file's bytes failing the
-// YAML decode (#2123): invalid YAML, a key written twice in one mapping —
-// including under a key the exporter's typed ThresholdConfig does not know,
-// which the walker's decode accepts and the effective-config merge (into
-// `any`) rejects — or a defaults file in the tenant's chain that does not
-// parse (`_`-prefixed files are never decoded by the walker, so
-// TreeFile.ParseFailed cannot name them).
+// DecodeError is a resolve failure caused by one file's bytes failing decode
+// during resolve (chainParseError / tenantParseError; #2123). It exists
+// because `_`-prefixed files are never decoded by the walker, so
+// TreeFile.ParseFailed cannot name a broken defaults file.
 //
 // Error() is Err's text unchanged — `parse defaults[i]: …` / `parse tenant:
 // …`, which package main maps back to a file by that text — so wrapping
