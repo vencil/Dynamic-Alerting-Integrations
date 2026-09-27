@@ -307,9 +307,10 @@ class TestNoRegressionVsInPlace:
     def test_an_output_with_xattrs_keeps_them_and_its_inode(
         self, monkeypatch, confd, tmp_path, capsys,
     ):
-        """A replace makes a new inode and drops every xattr — ACLs and the
-        SELinux label are xattrs too. Measured: the in-place writer kept a
-        ``user.*`` xattr, a replace lost it. So such a file goes in place."""
+        """A replace makes a new inode and drops every xattr the directory
+        does not give it — ACLs and the SELinux label are xattrs too.
+        Measured: the in-place writer kept a ``user.*`` xattr, a replace
+        lost it. So such a file goes in place."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         if not hasattr(os, "setxattr"):
@@ -322,10 +323,70 @@ class TestNoRegressionVsInPlace:
 
         assert _run(monkeypatch, confd, out) == 0
 
+        err = capsys.readouterr().err
         assert out.stat().st_ino == ino
         assert os.getxattr(out, "user.label") == b"keep"
         assert _is_fresh_metadata(out)
-        assert "extended attributes" in capsys.readouterr().err
+        assert "WARN" in err and "user.label" in err
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    @staticmethod
+    def _fake_xattrs(monkeypatch, target: Path, on_path: dict, on_fd: dict):
+        """xattrs keyed on path (the target) vs fd (the tmp)."""
+        real = os.path.realpath(target)
+
+        def pick(ref):
+            if isinstance(ref, int):
+                return on_fd
+            assert os.fspath(ref) == real, ref
+            return on_path
+
+        monkeypatch.setattr(gtm.os, "listxattr",
+                            lambda ref, *a, **k: list(pick(ref)), raising=False)
+        monkeypatch.setattr(gtm.os, "getxattr",
+                            lambda ref, name, *a, **k: pick(ref)[name], raising=False)
+
+    def test_equal_xattrs_on_both_sides_stay_atomic(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """The SELinux host: target and tmp both get the directory's default
+        ``security.selinux`` ⇒ nothing is lost ⇒ still atomic."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        ino = out.stat().st_ino
+        label = {"security.selinux": b"system_u:object_r:etc_t:s0"}
+        self._fake_xattrs(monkeypatch, out, dict(label), dict(label))
+        _forbid_in_place_write(monkeypatch, out)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert rc == 0
+        assert out.stat().st_ino != ino
+        assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_a_label_the_replacement_would_not_keep_goes_in_place(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """A custom SELinux label on the target, the directory default on the
+        tmp ⇒ a replace would change the label ⇒ in place, with a WARN."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        ino = out.stat().st_ino
+        self._fake_xattrs(
+            monkeypatch, out,
+            {"security.selinux": b"system_u:object_r:custom_t:s0"},
+            {"security.selinux": b"system_u:object_r:etc_t:s0"},
+        )
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        assert out.stat().st_ino == ino
+        assert _is_fresh_metadata(out)
+        assert "WARN" in err and "security.selinux" in err
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
     def test_a_filesystem_without_xattrs_still_gets_an_atomic_write(
         self, monkeypatch, confd, tmp_path, capsys,
@@ -335,8 +396,8 @@ class TestNoRegressionVsInPlace:
         out.write_text(_PREVIOUS, encoding="utf-8")
         ino = out.stat().st_ino
 
-        def listxattr(path, *a, **k):
-            raise OSError(errno.ENOTSUP, "Operation not supported", path)
+        def listxattr(ref, *a, **k):
+            raise OSError(errno.ENOTSUP, "Operation not supported")
 
         monkeypatch.setattr(gtm.os, "listxattr", listxattr, raising=False)
         _forbid_in_place_write(monkeypatch, out)
@@ -348,7 +409,7 @@ class TestNoRegressionVsInPlace:
         assert _is_fresh_metadata(out)
         assert "WARN" not in capsys.readouterr().err
 
-    def test_xattrs_that_cannot_be_listed_go_in_place_with_a_warn(
+    def test_xattrs_that_cannot_be_compared_go_in_place_with_a_warn(
         self, monkeypatch, confd, tmp_path, capsys,
     ):
         """Any other listxattr failure = cannot tell ⇒ conservative."""
@@ -356,8 +417,8 @@ class TestNoRegressionVsInPlace:
         out.write_text(_PREVIOUS, encoding="utf-8")
         ino = out.stat().st_ino
 
-        def listxattr(path, *a, **k):
-            raise PermissionError(errno.EACCES, "Permission denied", path)
+        def listxattr(ref, *a, **k):
+            raise PermissionError(errno.EACCES, "Permission denied")
 
         monkeypatch.setattr(gtm.os, "listxattr", listxattr, raising=False)
         rc = _run(monkeypatch, confd, out)
@@ -368,6 +429,7 @@ class TestNoRegressionVsInPlace:
         assert out.stat().st_ino == ino
         assert _is_fresh_metadata(out)
         assert f"errno {errno.EACCES}" in err and "WARN" in err
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
     @pytest.mark.parametrize("before", [None, 0o600, 0o666])
     def test_the_mode_is_0644_as_before(self, monkeypatch, confd, tmp_path, before):

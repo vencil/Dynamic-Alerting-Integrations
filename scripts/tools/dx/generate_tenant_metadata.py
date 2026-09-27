@@ -477,8 +477,8 @@ _TMP_PREFIX_NAME_CAP = 64
 # case: measured, that never reaches the rename (a non-root run falls back
 # at the fchown first, root has CAP_FOWNER).
 _REPLACE_REFUSED_ERRNOS = frozenset({errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES})
-# listxattr errnos that mean "this filesystem has no xattrs", i.e. nothing a
-# replace could drop. Any OTHER listxattr failure is "cannot tell" ⇒ in place.
+# listxattr / getxattr errnos that mean "this filesystem has no xattrs": that
+# side reads as {}. Any OTHER failure is "cannot compare" ⇒ in place.
 _XATTR_UNSUPPORTED_ERRNOS = frozenset(
     e for e in (getattr(errno, "ENOTSUP", None), getattr(errno, "EOPNOTSUPP", None))
     if e is not None
@@ -541,28 +541,55 @@ def _write_in_place(out: Path, content: str, *, set_mode: bool) -> None:
         raise _output_error(out, exc, previous_kept=False) from exc
 
 
-def _xattr_fallback_reason(out: Path) -> str | None:
-    """The WARN text when *out*'s real target has (or may have) xattrs, else ``None``.
+def _xattrs(ref: str | int) -> dict[str, bytes]:
+    """Every extended attribute of *ref* (a path or an fd), as ``{name: value}``.
+
+    A filesystem without xattr support reads as ``{}``; a name that vanished
+    between list and get (ENODATA) is skipped. Any other ``OSError`` is raised.
+    """
+    try:
+        names = os.listxattr(ref)
+    except OSError as exc:
+        if exc.errno in _XATTR_UNSUPPORTED_ERRNOS:
+            return {}
+        raise
+    found: dict[str, bytes] = {}
+    for name in names:
+        try:
+            found[name] = os.getxattr(ref, name)
+        except OSError as exc:
+            if exc.errno in _XATTR_UNSUPPORTED_ERRNOS:
+                return {}
+            if exc.errno == getattr(errno, "ENODATA", None):
+                continue
+            raise
+    return found
+
+
+def _xattr_mismatch(target: Path, fd: int) -> str | None:
+    """The WARN text when the tmp *fd* would not reproduce *target*'s xattrs.
 
     A replace makes a NEW inode, and POSIX ACLs (``system.posix_acl_*``),
     the SELinux label (``security.selinux``) and ``user.*`` / ``trusted.*``
-    are all xattrs of the OLD one: measured, a ``user.*`` xattr is gone after
-    a replace and kept by the in-place write. Not copied — setting
-    ``security.*`` / ``trusted.*`` needs privileges this tool does not have.
+    are all xattrs: measured, a ``user.*`` xattr is gone after a replace and
+    kept by the in-place write. So the tmp's xattrs — whatever the directory
+    gave it (default ACL, SELinux default context) — are compared with the
+    target's, and only a difference sends the write in place. On an SELinux
+    host both usually get the same ``security.selinux`` ⇒ atomic stays.
+    Not copied: setting ``security.*`` / ``trusted.*`` needs privileges.
     """
     if not hasattr(os, "listxattr"):
         return None
     try:
-        names = os.listxattr(os.path.realpath(out))
+        old, new = _xattrs(str(target)), _xattrs(fd)
     except OSError as exc:
-        if exc.errno in _XATTR_UNSUPPORTED_ERRNOS:
-            return None
-        return (f"its extended attributes cannot be listed (errno {exc.errno}) "
-                f"and replacing it could drop them")
-    if not names:
+        return (f"its extended attributes cannot be compared (errno {exc.errno}) "
+                f"and a replacement might not keep them")
+    if old == new:
         return None
-    return ("it carries extended attributes (ACLs / security labels) that "
-            "replacing it would drop")
+    differ = sorted(n for n in old.keys() | new.keys() if old.get(n) != new.get(n))
+    return ("it carries extended attributes (ACLs / security labels) that a "
+            f"replacement would not keep: {', '.join(differ)}")
 
 
 def atomic_replace_output(out: Path, content: str) -> None:
@@ -588,10 +615,6 @@ def atomic_replace_output(out: Path, content: str) -> None:
       a directory still ends in rc 2;
     * a hard-linked file — a replace would detach this name from the other
       links without a word; WARN and write in place so every name updates;
-    * a file with extended attributes (POSIX ACLs, SELinux label, ``user.*``
-      …), or whose xattrs cannot be listed — a replace would drop them
-      without a word; WARN and write in place so they survive. A filesystem
-      without xattr support (ENOTSUP) counts as "none";
     * a read-only file — it is refused with EACCES (rc 2) as before, instead
       of being replaced through a writable directory.
 
@@ -603,8 +626,9 @@ def atomic_replace_output(out: Path, content: str) -> None:
     What makes :func:`_try_atomic` give up is listed there.
 
     ⚠️ A replace makes a NEW inode: extended attributes, POSIX ACLs and the
-    SELinux label of the old file would not be carried over — which is why a
-    file that has any goes in place (above). Mode and owner are carried.
+    SELinux label of the old file are not carried over — the new inode gets
+    the directory's defaults. :func:`_try_atomic` compares the two sets and
+    gives up where they differ. Mode and owner are carried.
 
     Every ``OSError`` leaves as :class:`OutputWriteError` (or
     :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
@@ -621,10 +645,6 @@ def atomic_replace_output(out: Path, content: str) -> None:
     eligible = st is None or (
         regular and st.st_nlink == 1 and os.access(out, os.W_OK)
     )
-    xattr_why = None
-    if eligible and st is not None:
-        xattr_why = _xattr_fallback_reason(out)
-        eligible = xattr_why is None
     if eligible:
         done, why = _try_atomic(out, content, st)
         if done:
@@ -633,8 +653,6 @@ def atomic_replace_output(out: Path, content: str) -> None:
         # the real failure itself: a WARN would only be noise ahead of it.
         if why is not None and st is not None:
             _warn_not_atomic(out, why)
-    elif xattr_why is not None:
-        _warn_not_atomic(out, xattr_why)
     elif regular and st.st_nlink > 1:
         _warn_not_atomic(
             out,
@@ -666,8 +684,14 @@ def _try_atomic(out: Path, content: str,
       file, so the replace goes ahead (the group becomes ours);
     * ``os.replace`` refused with one of ``_REPLACE_REFUSED_ERRNOS``.
 
-    (A target with extended attributes never reaches here: the caller's
-    eligibility check sends it in place, see :func:`atomic_replace_output`.)
+    * the tmp's extended attributes differ from the target's
+      (:func:`_xattr_mismatch`) — a ``user.*`` xattr, a named ACL, a custom
+      SELinux label the directory defaults would not reproduce — or cannot
+      be compared (any errno but ENOTSUP / ENODATA). WARN, in place, where
+      they survive. Compared AFTER ``fchown`` / ``fchmod``: a ``chmod`` of a
+      file whose access ACL was inherited from a default ACL rewrites the
+      mask entry inside ``system.posix_acl_access``, and the in-place writer
+      chmods too, so this is the state a replace would really leave.
 
     A real write failure (write / fsync: ENOSPC, EIO, …) is NOT a fallback:
     the tmp is removed, the target is untouched, and it is raised as
@@ -712,6 +736,10 @@ def _try_atomic(out: Path, content: str,
             os.fchmod(fd, _OUTPUT_MODE)
         else:  # Windows before 3.13: only the read-only bit exists anyway
             os.chmod(tmp_name, _OUTPUT_MODE)
+        if st is not None:
+            why = _xattr_mismatch(target, fd)
+            if why is not None:
+                return False, why
         fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
         fd = -1  # the file object owns it now
         with fh:
