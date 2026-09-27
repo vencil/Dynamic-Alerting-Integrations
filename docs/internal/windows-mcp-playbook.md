@@ -1111,3 +1111,5 @@ default_stages: ['pre-commit']
 python3 scripts/tools/dx/reword_chain.py mapping.tsv --dry-run   # 先看計畫
 python3 scripts/tools/dx/reword_chain.py mapping.tsv
 ```
+
+mapping 從最舊列到**目前分支的 tip**：要改的 commit 之後還有 commit，就把它們也列上、第二欄填 `-`（subject 不變，但因 parent 改變仍會換新 SHA）。只列要改的那幾顆時，工具會以 exit 2 拒絕、不寫任何 ref（`--dry-run` 也一樣），因為照做會讓後面的 commit 從分支上消失。
