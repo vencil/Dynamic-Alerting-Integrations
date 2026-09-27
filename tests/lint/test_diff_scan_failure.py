@@ -257,6 +257,39 @@ def test_type_change_into_violation_is_seen(name, in_repo, monkeypatch, capsys):
     assert rc == 1, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
 
 
+# git lists paths with "/" only; on POSIX a backslash is an ordinary file-name
+# character. Splitting on it turned a root-level `build\\evil.bat` into a file
+# under build/ (skipped) and `scripts\\ops\\_x.bat` into an allowlisted one, so a
+# staged violation read as clean (#2024). Each case: (violating name that only
+# looks like it sits in a skipped / allowlisted dir, the real-dir twin that the
+# tool must keep accepting). Windows cannot create such names at all.
+BACKSLASH_NAMES = {
+    ("ad_hoc_git_scripts", "skip-dir"): ("build\\evil.bat", "build/evil.bat"),
+    ("ad_hoc_git_scripts", "allowlist"): ("scripts\\ops\\_x.bat", "scripts/ops/_x.bat"),
+    ("repo_name", "skip-dir"): ("tests\\x.md", "tests/x.md"),
+}
+_posix_only = pytest.mark.skipif(os.name == "nt", reason="Windows file names cannot contain a backslash")
+
+
+@_posix_only
+@pytest.mark.parametrize("name,shape", sorted(BACKSLASH_NAMES))
+def test_backslash_in_a_file_name_is_not_a_separator(name, shape, in_repo, monkeypatch, capsys):
+    module, (_rel, data), _legal, extra = CASES[name]
+    rel = BACKSLASH_NAMES[(name, shape)][0]
+    _stage(in_repo, rel, data)
+    assert diff_changed_paths("HEAD", in_repo) == [rel]
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 1, f"{name}/{shape}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
+@pytest.mark.parametrize("name,shape", sorted(BACKSLASH_NAMES))
+def test_real_skipped_or_allowlisted_dir_still_accepted(name, shape, in_repo, monkeypatch, capsys):
+    module, (_rel, data), _legal, extra = CASES[name]
+    _stage(in_repo, BACKSLASH_NAMES[(name, shape)][1], data)
+    rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
+    assert rc == 0, f"{name}/{shape}: rc={rc}\nstdout={out}\nstderr={err}"
+
+
 # ---------------------------------------------------------------------------
 # The helper itself
 # ---------------------------------------------------------------------------

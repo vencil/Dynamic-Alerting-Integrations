@@ -127,11 +127,13 @@ def scan_diff(repo: Path, base: str) -> list[Path]:
         # Only check Windows shell scripts
         if not any(rel.endswith(ext) for ext in EXTS):
             continue
-        # Skip sandbox / vendored dirs
-        parts = rel.replace("\\", "/").split("/")
+        # Skip sandbox / vendored dirs. git lists paths with "/" only; a
+        # backslash is part of a file name here, so splitting on it would let
+        # `build\evil.bat` pass as a file under build/ (#2024).
+        parts = rel.split("/")
         if any(p in SKIP_ANY for p in parts):
             continue
-        if is_allowlisted(rel.replace("\\", "/")):
+        if is_allowlisted(rel):
             continue
         # File should still exist (the diff excludes deletions but be safe)
         full_path = repo / rel

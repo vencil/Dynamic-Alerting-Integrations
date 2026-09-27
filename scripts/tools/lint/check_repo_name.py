@@ -171,8 +171,9 @@ def iter_scan_targets(full_scan, base):
             ext = os.path.splitext(fname)[1].lower()
             if ext not in SCAN_EXTENSIONS:
                 continue
-            # Prune skipped directories
-            parts = rel.replace('\\', '/').split('/')
+            # Prune skipped directories. git lists paths with '/' only; a
+            # backslash is part of a file name, not a separator (#2024).
+            parts = rel.split('/')
             if any(p in SKIP_DIRS for p in parts):
                 continue
             filepath = os.path.join(REPO_ROOT, rel)
