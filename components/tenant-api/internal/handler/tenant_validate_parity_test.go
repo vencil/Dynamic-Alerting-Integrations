@@ -4,13 +4,35 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
+
+// dryRunAnswerFor is what the dry-run must answer for a body Write refused
+// with werr — compared as the WHOLE warning text, not per error class:
+//
+//   - ErrValidation: Write wraps the same []string the dry-run returns, joined
+//     with "; " behind the sentinel's prefix, so the two must be equal after
+//     stripping it. That pins both which check fired first and its message,
+//     with no list of classes to keep in sync.
+//   - any other (typed) refusal: dryRunRefusalMessage — the handler's own
+//     rendering of that error. Each class it distinguishes has its own text,
+//     so a dry-run that hit a DIFFERENT typed error renders differently.
+//     Borrowing the renderer is deliberate: it is presentation, not the
+//     decision under test (which check refused first).
+func dryRunAnswerFor(werr error) string {
+	if errors.Is(werr, gitops.ErrValidation) {
+		return strings.TrimPrefix(werr.Error(), gitops.ErrValidation.Error()+": ")
+	}
+	return dryRunRefusalMessage(werr)
+}
 
 // TestValidateTenant_VerdictMatchesWrite pins #2124: for the SAME body against
 // the SAME tree, POST /{id}/validate says valid exactly when Writer.Write
@@ -49,6 +71,12 @@ func TestValidateTenant_VerdictMatchesWrite(t *testing.T) {
 		{name: "declared_elsewhere",
 			files: map[string]string{"shared.yaml": body("    container_cpu: \"1\"\n")},
 			body:  body("    container_cpu: \"70\"\n")},
+		// Two refusals at once: Write's body-only pre-flight answers before its
+		// placement check, so the dry-run must report the YAML error, not the
+		// declared-elsewhere one.
+		{name: "invalid_yaml_and_declared_elsewhere",
+			files: map[string]string{"shared.yaml": body("    container_cpu: \"1\"\n")},
+			body:  body("    container_cpu: \"70\"\n    container_cpu: \"90\"\n")},
 		{name: "ambiguous_file",
 			files: map[string]string{tid + ".yaml": body("    container_cpu: \"1\"\n"), tid + ".yml": body("    container_cpu: \"2\"\n")},
 			body:  body("    container_cpu: \"70\"\n")},
@@ -99,6 +127,12 @@ func TestValidateTenant_VerdictMatchesWrite(t *testing.T) {
 			}
 			if !vresp.Valid && len(vresp.Warnings) == 0 {
 				t.Error("valid=false with no warnings: the caller cannot tell why")
+			}
+			if werr != nil {
+				if want := dryRunAnswerFor(werr); strings.Join(vresp.Warnings, "; ") != want {
+					t.Fatalf("dry-run refused for a different reason than Write:\n dry-run: %q\n write:   %v\n want:    %q",
+						vresp.Warnings, werr, want)
+				}
 			}
 			if werr == nil && !reflect.DeepEqual(vresp.Notices, notices) {
 				t.Errorf("notices differ: validate %q, write %q", vresp.Notices, notices)

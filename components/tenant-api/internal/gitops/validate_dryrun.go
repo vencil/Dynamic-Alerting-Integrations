@@ -14,10 +14,12 @@ import (
 // so answered `valid: true` for every body whose refusal it had not copied
 // (invalid YAML among them).
 //
-// It runs the sequence write() judges the tree it lands on with, in the same
-// order: guardTenantID → w.tenantFilePath (ambiguous tenant file, #2078
-// declared-elsewhere) → validate(configDir, …). If that sequence changes, this
-// must change with it.
+// It runs write()'s refusal sequence in the same order: guardTenantID → the
+// body-only pre-flight (validateBodyOnly) → w.tenantFilePath (ambiguous tenant
+// file, #2078 declared-elsewhere) → validate(configDir, …). write() runs the
+// last two under its lock; the ORDER is what makes a body that is both
+// malformed and misplaced get the same first answer here as from Write. If
+// that sequence changes, this must change with it.
 //
 // ⚠️ DIRECT MODE ONLY. A PR-mode write judges the tree-derived checks against
 // the fresh base it checks out, not the local tree — use DryRunValidateBodyOnly
@@ -34,12 +36,15 @@ import (
 //
 // err is a refusal that would come BEFORE validation, typed exactly as Write
 // returns it (reserved id, ErrAmbiguousTenantFile, ErrTenantDeclaredElsewhere,
-// ErrTenantTreeScan, or a resolver read error). errs / notices are validate()'s
-// blocking and advisory sets; like validate, a structural failure is reported
-// alone.
+// ErrTenantTreeScan, or a resolver read error). errs is the blocking set Write
+// would wrap in ErrValidation — the pre-flight's, or else validate()'s — and
+// notices is validate()'s advisory set; a structural failure is reported alone.
 func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []string, err error) {
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, nil, err
+	}
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
+		return errs, nil, nil
 	}
 	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
