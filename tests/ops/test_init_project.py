@@ -145,19 +145,32 @@ class TestRulePackCatalog:
         """Verify catalog contains exactly 15 rule packs."""
         assert len(ip.RULE_PACK_CATALOG) == 15
 
-    def test_all_packs_have_required_keys(self):
-        """All packs must have 'label' and 'defaults' keys."""
+    def test_all_packs_have_label_and_no_own_defaults(self):
+        """Every pack has a label; none carries its own `defaults:` copy.
+
+        issue 1196: the catalog's own `defaults:` values had drifted into key
+        names no alert reads. Values now come from scaffold only, so a
+        `defaults` key reappearing here is a second copy coming back.
+        """
         for pack_name, pack_data in ip.RULE_PACK_CATALOG.items():
             assert 'label' in pack_data, f"{pack_name} missing 'label'"
-            assert 'defaults' in pack_data, f"{pack_name} missing 'defaults'"
+            assert 'defaults' not in pack_data, (
+                f"{pack_name} carries its own 'defaults' again — values come "
+                f"from scaffold_tenant.RULE_PACKS (issue 1196)")
 
     def test_selectable_packs_have_defaults(self):
-        """Selectable packs (non-auto) must have non-empty defaults."""
-        selectable = ip._selectable_rule_packs()
-        for pack_name in selectable:
-            pack = ip.RULE_PACK_CATALOG[pack_name]
-            assert isinstance(pack['defaults'], dict)
-            assert len(pack['defaults']) > 0, f"{pack_name} has empty defaults"
+        """Selectable packs (non-auto) render a non-empty `defaults:` mapping."""
+        for pack_name in ip._selectable_rule_packs():
+            assert ip._catalog_defaults([pack_name]), (
+                f"{pack_name} renders empty defaults")
+
+    def test_defaults_are_scaffold_values_verbatim(self):
+        """`_catalog_defaults` is scaffold's `defaults:` — same keys, same values."""
+        scaffold = ip._load_scaffold().RULE_PACKS
+        for pack_name in ip._selectable_rule_packs():
+            expected = {k: v['value']
+                        for k, v in scaffold[pack_name]['defaults'].items()}
+            assert ip._catalog_defaults([pack_name]) == expected, pack_name
 
     def test_auto_enabled_packs_have_label(self):
         """Auto-enabled packs must have 'auto_enabled': True."""
@@ -178,19 +191,21 @@ class TestRulePackCatalog:
             assert pack in ip.RULE_PACK_CATALOG, f"{pack} not in catalog"
 
     def test_mariadb_pack_defaults(self):
-        """MariaDB pack must have expected metric keys, in the right tier."""
-        mariadb = ip.RULE_PACK_CATALOG['mariadb']['defaults']
-        critical = ip.RULE_PACK_CATALOG['mariadb']['critical_overrides']
+        """MariaDB renders the expected metric keys, in the right tier."""
+        mariadb = ip._catalog_defaults(['mariadb'])
+        critical = ip._catalog_critical(['mariadb'])
         assert 'mysql_connections' in mariadb
         assert 'mysql_replication_lag' in mariadb
         assert mariadb['mysql_connections'] == 80
-        # #1218: the critical twin keeps its value and changes SECTION — it is
-        # asserted against `critical_overrides`, not merely "somewhere in the
-        # pack", because the section is the whole difference between a critical
-        # threshold and an unconsumed warning series.
-        assert critical['mysql_connections_critical'] == 150
-        # #1231 rename guard: the catalog must carry the canonical spelling,
-        # never the retired mysql_cpu one.
+        # #1218: the critical twin is asserted against the TENANT-stub tier,
+        # not merely "somewhere in the pack", because the section is the whole
+        # difference between a critical threshold and an unconsumed warning
+        # series. issue 1196: its value is the registry's (120), not the old
+        # hand-copied 150.
+        assert critical['mysql_connections_critical'] == 120
+        assert 'mysql_connections_critical' not in mariadb
+        # #1231 rename guard: the canonical spelling, never the retired
+        # mysql_cpu one.
         assert 'mysql_threads_running' in mariadb
         assert 'mysql_threads_running_critical' in critical
         assert 'mysql_cpu' not in mariadb
@@ -201,7 +216,8 @@ class TestRulePackCatalog:
         for pack_name in ['operational', 'platform']:
             pack = ip.RULE_PACK_CATALOG[pack_name]
             assert pack.get('auto_enabled') is True
-            assert pack['defaults'] == {}
+            assert ip._catalog_defaults([pack_name]) == {}
+            assert ip._catalog_critical([pack_name]) == {}
 
 
 # ============================================================
@@ -341,8 +357,10 @@ class TestGenDefaultsYaml:
         defaults = config['defaults']
         # MariaDB keys
         assert 'mysql_connections' in defaults
-        # Redis keys
-        assert 'redis_memory_usage' in defaults
+        # Redis keys — the key the Redis pack reads (issue 1196: the old
+        # catalog's `redis_memory_usage` matched no alert)
+        assert 'redis_memory_used_bytes' in defaults
+        assert 'redis_memory_usage' not in defaults
 
     def test_state_filters_structure(self):
         """state_filters has expected entries."""
@@ -484,7 +502,7 @@ class TestGenTenantYaml:
         yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
         config = yaml.safe_load(yaml_str)
         tenant_config = config['tenants']['db-a']
-        mariadb_keys = list(ip.RULE_PACK_CATALOG['mariadb']['defaults'].keys())[:3]
+        mariadb_keys = list(ip._catalog_defaults(['mariadb']).keys())[:3]
         for key in mariadb_keys:
             assert key in tenant_config
 
@@ -493,7 +511,7 @@ class TestGenTenantYaml:
         yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
         config = yaml.safe_load(yaml_str)
         tenant_config = config['tenants']['db-a']
-        mariadb_keys = list(ip.RULE_PACK_CATALOG['mariadb']['defaults'].keys())[:3]
+        mariadb_keys = list(ip._catalog_defaults(['mariadb']).keys())[:3]
         for key in mariadb_keys:
             # Values should be strings in final YAML
             assert isinstance(tenant_config[key], str)
@@ -867,27 +885,69 @@ def _flat_header(text: str) -> str:
                     for line in text.split('\ntenants:')[0].splitlines())
 
 
+def _pack_critical_keys(pack: dict) -> list:
+    """Every `<base>_critical` key a catalog pack seeds, from both sources."""
+    return list(pack.get('critical_seeds', ())) + list(pack.get('critical_overrides', {}))
+
+
 class TestCriticalTierPlacement:
     """#1218 — no `<base>_critical` in `defaults:`, all of them in the stub."""
 
     def test_catalog_tiers_do_not_overlap_and_are_suffix_correct(self):
         """The split is a partition, and the suffix decides which side.
 
-        Enumerating the 16 key names here would pass just as well after someone
-        added a 17th to the wrong dict, so the assertion is over EVERY pack.
+        Enumerating the key names here would pass just as well after someone
+        added one more to the wrong tier, so the assertion is over EVERY pack.
         """
         for name, pack in ip.RULE_PACK_CATALOG.items():
-            base = pack['defaults']
-            crit = pack.get('critical_overrides', {})
+            base = ip._catalog_defaults([name])
+            crit = _pack_critical_keys(pack)
+            assert len(crit) == len(set(crit)), f'{name}: key seeded twice'
             assert not (set(base) & set(crit)), f'{name}: key in both tiers'
             misfiled = [k for k in base if k.endswith('_critical')]
             assert misfiled == [], (
                 f'{name}: {misfiled} sit in `defaults`, where the critical tier '
-                f'cannot see them — move them to `critical_overrides`')
+                f'cannot see them — move them to the tenant-stub tier')
             stray = [k for k in crit if not k.endswith('_critical')]
             assert stray == [], (
-                f'{name}: {stray} are in `critical_overrides` without the '
-                f'suffix — resolveCriticalRows would never look at them')
+                f'{name}: {stray} are seeded without the suffix — '
+                f'resolveCriticalRows would never look at them')
+
+    def test_critical_values_have_one_source(self):
+        """issue 1196: a critical key the registry carries takes the
+        registry's value (`critical_seeds`); a local value in
+        `critical_overrides` is allowed ONLY for keys the registry lacks.
+        The old hand-copied values had drifted (pg_connections_critical 150
+        vs the registry's 90), which is the fork this pins shut both ways.
+        """
+        scaffold = ip._load_scaffold().RULE_PACKS
+        seeded_from_registry = 0
+        for name, pack in ip.RULE_PACK_CATALOG.items():
+            registry = scaffold.get(name, {}).get('optional_overrides', {})
+            for key in pack.get('critical_seeds', ()):
+                assert key in registry, (
+                    f'{name}: seed {key} has no registry value to read')
+                assert ip._catalog_critical([name])[key] == registry[key]['value']
+                seeded_from_registry += 1
+            forked = [k for k in pack.get('critical_overrides', {}) if k in registry]
+            assert forked == [], (
+                f'{name}: {forked} carry a local value although the registry has '
+                f'one — move them to critical_seeds')
+        assert seeded_from_registry >= 7, seeded_from_registry
+
+    def test_seeded_critical_is_above_its_warning(self):
+        """Every seeded critical value sits above the warning value the same
+        run writes — except the lower-is-worse keys, which this catalog does
+        not seed. rabbitmq_queue_messages_critical: 50000 would have landed
+        BELOW the registry's 100000 warning once defaults moved (issue 1196).
+        """
+        packs = list(ip.RULE_PACK_CATALOG)
+        defaults = ip._catalog_defaults(packs)
+        critical = ip._catalog_critical(packs)
+        assert critical
+        for key, value in critical.items():
+            base = key[: -len('_critical')]
+            assert float(value) > float(defaults[base]), (key, value, defaults[base])
 
     def test_every_critical_key_has_its_base_in_the_same_pack(self):
         """resolveCriticalRows admits on `defaults[<base>]`, and since #1227 a
@@ -902,12 +962,13 @@ class TestCriticalTierPlacement:
         """
         checked = 0
         for name, pack in ip.RULE_PACK_CATALOG.items():
-            for key in pack.get('critical_overrides', {}):
+            defaults = ip._catalog_defaults([name])
+            for key in _pack_critical_keys(pack):
                 base = key[: -len('_critical')]
-                assert base in pack['defaults'], (
+                assert base in defaults, (
                     f'{name}: {key} has no base {base!r} under `defaults`')
                 checked += 1
-        assert checked >= 16, checked
+        assert checked >= 11, checked
 
     def test_generated_defaults_never_carry_a_critical_key(self):
         """Over every pack individually AND the full selection — a per-pack loop
@@ -927,22 +988,21 @@ class TestCriticalTierPlacement:
         """
         packs = ['mariadb', 'kubernetes']
         stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
-        expected = {}
-        for p in packs:
-            expected.update(ip.RULE_PACK_CATALOG[p]['critical_overrides'])
-        assert expected, 'fixture: both packs are supposed to have a critical tier'
+        expected = ip._catalog_critical(packs)
+        assert {k[: k.index('_')] for k in expected} >= {'mysql', 'container'}, 'fixture: both packs are supposed to have a critical tier'
         for key, value in expected.items():
             assert stub.get(key) == str(value), (key, stub.get(key), value)
 
-    def test_full_selection_seeds_all_sixteen(self):
-        """The count the issue was written about, derived from the catalog on
-        both sides so it tracks a 17th key instead of going stale — with a
-        literal floor so an empty derivation cannot satisfy it vacuously."""
+    def test_full_selection_seeds_every_catalog_critical_key(self):
+        """Derived from the catalog on both sides so it tracks one more key
+        instead of going stale — with a literal floor so an empty derivation
+        cannot satisfy it vacuously. (#1218 counted sixteen; issue 1196 left
+        eleven: five named keys no alert reads.)"""
         packs = list(ip.RULE_PACK_CATALOG)
         stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
         catalog_critical = {k for p in packs
-                            for k in ip.RULE_PACK_CATALOG[p].get('critical_overrides', {})}
-        assert len(catalog_critical) >= 16
+                            for k in _pack_critical_keys(ip.RULE_PACK_CATALOG[p])}
+        assert len(catalog_critical) >= 11
         assert catalog_critical <= set(stub)
 
     def test_stub_header_count_matches_what_it_actually_seeded(self):
@@ -1371,22 +1431,19 @@ class TestCriticalTierPlacement:
         """A guard for a state the catalog is not in today, so it is exercised
         on a mutated copy rather than asserted to be unreachable.
 
-        `_catalog_critical` reads the module global at call time, so patching
-        `ip.RULE_PACK_CATALOG` patches the name the consumer resolves — and the
-        first assertion below is the proof the patch took, not a formality: a
-        patch aimed at the wrong binding makes the real assertion pass for the
-        wrong reason.
+        `_catalog_critical` reads the module global `_catalog_defaults` at call
+        time, so patching `ip._catalog_defaults` patches the name the consumer
+        resolves — and the first assertion below is the proof the patch took,
+        not a formality: a patch aimed at the wrong binding makes the real
+        assertion pass for the wrong reason.
         """
-        pack = ip.RULE_PACK_CATALOG['mariadb']
-        broken = {
-            'mariadb': {
-                'label': pack['label'],
-                'defaults': {k: v for k, v in pack['defaults'].items()
-                             if k != 'mysql_connections'},
-                'critical_overrides': dict(pack['critical_overrides']),
-            }
-        }
-        monkeypatch.setattr(ip, 'RULE_PACK_CATALOG', broken)
+        real = ip._catalog_defaults
+
+        def without_base(packs):
+            return {k: v for k, v in real(packs).items()
+                    if k != 'mysql_connections'}
+
+        monkeypatch.setattr(ip, '_catalog_defaults', without_base)
         assert 'mysql_connections' not in ip._catalog_defaults(['mariadb']), (
             'the patch did not take — everything below would be vacuous')
 
@@ -3511,8 +3568,10 @@ class TestEdgeCases:
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
             with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults = yaml.safe_load(f)
-            # Should have metrics from all packs
-            assert len(defaults['defaults']) > 50  # 65 keys from 13 packs
+            # Should have metrics from all packs — exactly scaffold's keys
+            # (issue 1196: the old catalog's 65 included 36 no alert read)
+            assert defaults['defaults'] == ip._catalog_defaults(selectable)
+            assert len(defaults['defaults']) > 30
 
     def test_custom_namespace(self):
         """Initialization with custom namespace works."""

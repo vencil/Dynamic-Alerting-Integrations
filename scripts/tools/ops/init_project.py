@@ -61,17 +61,17 @@ from _lib_confd import (  # noqa: E402
 # shared so the two customer-side `_defaults.yaml` producers cannot disagree
 # about which keys a tenant may set.
 #
-# ⛔ SCOPE of the sharing, deliberately narrow: the DECLARED-KEY list and the
-# `<base>_critical` SUFFIX constant (`CRITICAL_SUFFIX`, #1218) — both are
-# contract shape, not content. `RULE_PACK_CATALOG` below stays this module's own
-# copy of the `defaults:` VALUES — that copy is a known divergence from
-# `scaffold_tenant.RULE_PACKS` (different key spellings, e.g. db2_log_usage vs
-# db2_log_usage_percent) whose consolidation is tracked separately. This change
-# deliberately does NOT start that merge, and must not be read as a first
-# instalment of it: splitting the consolidation into stages is explicitly warned
-# against, because a half-merged contract is a fourth contract.
+# ⛔ SCOPE of the sharing: the DECLARED-KEY list and the `<base>_critical`
+# SUFFIX constant (`CRITICAL_SUFFIX`, #1218) are contract shape; the `defaults:`
+# VALUES are content, and since #1196 they are ALSO read from
+# `scaffold_tenant.RULE_PACKS` (see `_catalog_defaults`) instead of this
+# module's former hand-copy, whose diverging key spellings the exporter never
+# read. `RULE_PACK_CATALOG` below keeps only what is init-specific (label,
+# auto-enable, per-tenant critical seeds) — the reachability gate's UNDEMANDED
+# face reads those seeds too, so a key nothing reads cannot come back here.
 from _registry_lib import (  # noqa: E402
     CRITICAL_SUFFIX,
+    _load_scaffold,
     annotate_defaults_counterexamples,
     append_tenant_declared_stub,
     render_tenant_critical_note_lines,
@@ -329,20 +329,39 @@ def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
 
 
 # ============================================================
-# Rule Pack catalog (metric keys per rule pack)
+# Rule Pack catalog (labels + the critical tier seeded into tenant stubs)
 # ============================================================
-# TWO TIERS, and the split is not cosmetic — it is where the key ends up in the
-# generated files, which is what decides whether it produces anything (#1218 /
-# TRK-344):
+# ⛔ NO `defaults:` VALUES LIVE HERE any more (issue 1196). This dict used to
+# carry its own copy of every pack's `defaults:` — a known divergence from
+# `scaffold_tenant.RULE_PACKS` — and the copy had drifted into key names no
+# alert reads: 36 of its 67 keys matched no `alert_threshold:<key>` in any rule
+# pack (`jvm_heap_usage`, `redis_memory_usage`, `oracle_active_sessions`, every
+# nginx / clickhouse / db2 key…), while the keys the packs DO read
+# (`jvm_memory`, `kafka_broker_count`, …) were absent — and `resolveBaseRows`
+# walks only `defaults:`, so a tenant who set them got no series either
+# (measured through `config.LoadDir` + `ResolveAt`). `_catalog_defaults` now
+# reads `scaffold_tenant.RULE_PACKS`, the working copy that
+# `check_threshold_registry.py` holds equal to `rule-packs/threshold-registry.yaml`
+# (epic 1200 D2), so both `_defaults.yaml` producers render one contract.
+# `check_threshold_reachability.py` fails if a key this module writes is one no
+# alert reads.
 #
-#   'defaults'           → the `defaults:` section of `_defaults.yaml`.
-#                          `resolveBaseRows` walks that map, so every key here
-#                          emits `user_threshold{...,severity="warning"}` for
-#                          every tenant.
-#   'critical_overrides' → the `<tenant>.yaml` stub. `resolveCriticalRows`
-#                          iterates TENANT OVERRIDES only and admits on
-#                          `defaults[<base>]`, so this is the ONLY section in
-#                          which a `<base>_critical` key does anything.
+# What stays is init-specific: the display label, `auto_enabled`, and WHICH
+# `<base>_critical` keys get seeded into the `<tenant>.yaml` stub:
+#
+#   'critical_seeds'     → keys whose VALUE is read from the registry's
+#                          `optional_overrides` (via scaffold), same single
+#                          source as `defaults:`. The old hand-copied values
+#                          had drifted too (pg_connections_critical 150 vs 90;
+#                          rabbitmq_queue_messages_critical 50000, below the
+#                          registry's 100000 WARNING tier once defaults moved).
+#   'critical_overrides' → key → value, ONLY for keys the registry does not
+#                          carry (`test_init_project` fails if one it does
+#                          carry lands here, which would re-fork the value).
+#
+#   Both land in the tenant stub because `resolveCriticalRows` iterates TENANT
+#   OVERRIDES only and admits on `defaults[<base>]` — the tenant file is the
+#   ONLY place a `<base>_critical` key does anything.
 #
 # ⛔ A `<base>_critical` written into 'defaults' does not "also work, just less
 # neatly" — it silently becomes a DIFFERENT metric. `parseMetricKey` splits on
@@ -358,159 +377,64 @@ def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
 RULE_PACK_CATALOG = {
     'mariadb': {
         'label': 'MariaDB / MySQL',
-        'defaults': {
-            'mysql_connections': 80,
-            'mysql_threads_running': 30,  # running-thread saturation warning (NOT host CPU%); 80→30 PMM/Nichter (#944); renamed from mysql_cpu (#1231)
-            'mysql_slow_queries': 10,
-            'mysql_replication_lag': 30,
-            'mysql_aborted_connections': 50,
-            'mysql_table_locks_waited': 100,
-        },
-        'critical_overrides': {
-            'mysql_connections_critical': 150,
+        'critical_seeds': (
+            'mysql_connections_critical',
             # ⛔ #951 added this key "for parity" and put it under `defaults:`,
             # where it could not do the job the commit message claimed it did.
             # 30/50 is the saturation pair from #944 (PMM pt-osc, Nichter); it
             # only ever reaches MariaDBHighThreadsRunningCritical from here.
-            'mysql_threads_running_critical': 50,
-            'mysql_replication_lag_critical': 120,
-        },
+            'mysql_threads_running_critical',
+            'mysql_replication_lag_critical',
+        ),
     },
     'postgresql': {
         'label': 'PostgreSQL',
-        'defaults': {
-            'pg_connections': 80,
-            'pg_replication_lag': 30,
-            'pg_cache_hit_ratio': 95,
-            'pg_deadlocks': 5,
-            'pg_long_queries': 300,
-        },
-        'critical_overrides': {
-            'pg_connections_critical': 150,
-            'pg_replication_lag_critical': 120,
-        },
+        'critical_seeds': (
+            'pg_connections_critical',
+            'pg_replication_lag_critical',
+        ),
     },
     'redis': {
         'label': 'Redis',
-        'defaults': {
-            'redis_memory_usage': 80,
-            'redis_connected_clients': 500,
-            'redis_evicted_keys': 100,
-            # redis_keyspace_misses_ratio removed (#1196 E): supply-side orphan —
-            # no alert consumes it, and this catalog's 50 vs the registry's 0.3
-            # was a third hand-copied unit universe (ratio vs percent).
-        },
-        'critical_overrides': {
-            'redis_memory_usage_critical': 95,
-        },
     },
     'mongodb': {
         'label': 'MongoDB',
-        'defaults': {
-            'mongodb_connections': 80,
-            'mongodb_replication_lag': 10,
-            'mongodb_opcounters': 10000,
-            'mongodb_page_faults': 100,
-        },
-        'critical_overrides': {
-            'mongodb_connections_critical': 150,
-        },
     },
     'elasticsearch': {
         'label': 'Elasticsearch',
-        'defaults': {
-            'es_heap_usage': 80,
-            'es_cluster_status': 1,
-            'es_pending_tasks': 50,
-            'es_query_latency': 500,
-            'es_indexing_latency': 200,
-        },
-        'critical_overrides': {
-            'es_heap_usage_critical': 90,
-        },
     },
     'oracle': {
         'label': 'Oracle',
-        'defaults': {
-            'oracle_tablespace_used_percent': 85,
-            'oracle_active_sessions': 100,
-            'oracle_blocking_sessions': 5,
-        },
+        # Not in the registry (the pack reads it via `severity="critical"`),
+        # so this value has no other home.
         'critical_overrides': {
             'oracle_tablespace_used_percent_critical': 95,
         },
     },
     'db2': {
         'label': 'IBM DB2',
-        'defaults': {
-            'db2_connections': 80,
-            'db2_lock_waits': 50,
-            'db2_tablespace_usage': 85,
-            'db2_log_usage': 80,
-        },
     },
     'clickhouse': {
         'label': 'ClickHouse',
-        'defaults': {
-            'clickhouse_queries': 100,
-            'clickhouse_merge_latency': 300,
-            'clickhouse_replication_lag': 30,
-            'clickhouse_memory_usage': 80,
-        },
     },
     'kafka': {
         'label': 'Apache Kafka',
-        'defaults': {
-            'kafka_consumer_lag': 10000,
-            'kafka_under_replicated_partitions': 0,
-            'kafka_active_controllers': 1,
-            'kafka_offline_partitions': 0,
-        },
-        'critical_overrides': {
-            'kafka_consumer_lag_critical': 50000,
-        },
+        'critical_seeds': ('kafka_consumer_lag_critical',),
     },
     'rabbitmq': {
         'label': 'RabbitMQ',
-        'defaults': {
-            'rabbitmq_queue_messages': 10000,
-            'rabbitmq_consumers': 1,
-            'rabbitmq_unacked_messages': 5000,
-            'rabbitmq_memory_usage': 80,
-        },
-        'critical_overrides': {
-            'rabbitmq_queue_messages_critical': 50000,
-        },
+        'critical_seeds': ('rabbitmq_queue_messages_critical',),
     },
     'jvm': {
         'label': 'JVM Applications',
-        'defaults': {
-            'jvm_heap_usage': 80,
-            'jvm_gc_pause': 500,
-            'jvm_threads': 500,
-        },
-        'critical_overrides': {
-            'jvm_heap_usage_critical': 95,
-        },
     },
     'nginx': {
         'label': 'Nginx',
-        'defaults': {
-            'nginx_error_rate': 5,
-            'nginx_request_latency_p99': 1000,
-            'nginx_active_connections': 1000,
-        },
-        'critical_overrides': {
-            'nginx_error_rate_critical': 15,
-        },
     },
     'kubernetes': {
         'label': 'Kubernetes',
-        'defaults': {
-            'container_cpu': 80,
-            'container_cpu_throttle': 25,  # chronic CFS throttle: % of ACTIVE periods throttled (#944 PR-2c)
-            'container_memory': 85,
-        },
+        # Not in the registry: the pack reads these as
+        # `container_*{severity="critical"}`, so the values live only here.
         'critical_overrides': {
             'container_cpu_critical': 95,
             'container_cpu_throttle_critical': 50,
@@ -520,12 +444,10 @@ RULE_PACK_CATALOG = {
     'operational': {
         'label': 'Operational (auto-enabled)',
         'auto_enabled': True,
-        'defaults': {},
     },
     'platform': {
         'label': 'Platform Self-Monitoring (auto-enabled)',
         'auto_enabled': True,
-        'defaults': {},
     },
 }
 
@@ -553,11 +475,20 @@ def _catalog_defaults(rule_packs: list[str]) -> dict:
     from BOTH generated files — no warning row, no critical row, no gate — which
     is strictly worse than the bug being fixed. A misfile now flows through to
     `defaults:`, where the gate names it and CI fails.
+
+    The VALUES come from `scaffold_tenant.RULE_PACKS` (issue 1196): the same
+    per-pack `defaults` tier `scaffold_tenant.generate_defaults` renders, held
+    equal to `rule-packs/threshold-registry.yaml` by
+    `check_threshold_registry.py`. Only the packs the caller selected, in the
+    caller's order — unlike `generate_defaults`, which always adds kubernetes,
+    this run's kubernetes pack is an explicit selection like any other. Packs
+    scaffold does not define (`operational`, `platform`) carry no threshold key.
     """
+    rule_packs_def = _load_scaffold().RULE_PACKS
     defaults: dict = {}
     for rp in rule_packs:
-        if rp in RULE_PACK_CATALOG:
-            defaults.update(RULE_PACK_CATALOG[rp]['defaults'])
+        for key, info in rule_packs_def.get(rp, {}).get('defaults', {}).items():
+            defaults[key] = info['value']
     return defaults
 
 
@@ -579,11 +510,16 @@ def _catalog_critical(rule_packs: list[str]) -> dict:
     this drops nothing — it is a guard against a pack losing a base key later.
     """
     defaults = _catalog_defaults(rule_packs)
+    rule_packs_def = _load_scaffold().RULE_PACKS
     critical: dict = {}
     for rp in rule_packs:
         if rp not in RULE_PACK_CATALOG:
             continue
-        for key, value in RULE_PACK_CATALOG[rp].get('critical_overrides', {}).items():
+        registry_crit = rule_packs_def.get(rp, {}).get('optional_overrides', {})
+        seeds = [(key, registry_crit[key]['value'])
+                 for key in RULE_PACK_CATALOG[rp].get('critical_seeds', ())]
+        seeds += list(RULE_PACK_CATALOG[rp].get('critical_overrides', {}).items())
+        for key, value in seeds:
             # Suffix-guard before slicing: a key without `_critical` would have
             # nine arbitrary characters chopped off it, and the membership test
             # below would then pass or fail for a reason unrelated to this key.

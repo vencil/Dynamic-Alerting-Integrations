@@ -374,6 +374,35 @@ def _declared_faces() -> dict[str, set[str]]:
     }
 
 
+def _written_faces() -> dict[str, set[str]]:
+    """{face label: keys a customer-side producer WRITES} for the demand check.
+
+    The reverse of the reachability question above (issue 1196). That one asks
+    "can every key an alert reads be produced"; this one asks "does an alert
+    read every key we write". `init_project.RULE_PACK_CATALOG` carried its own
+    `defaults:` copy that answered no for 36 of 67 keys (`jvm_heap_usage`,
+    `redis_memory_usage`, every nginx / clickhouse / db2 key) — each one a
+    number the customer could tune forever with no effect, and none of them
+    visible to any face here, because every face asked only about the keys the
+    ALERTS name. The init stub's critical seeds are a separate face: a
+    `<base>_critical` whose base no alert reads is the same defect one tier up.
+    """
+    if str(_OPS) not in sys.path:
+        sys.path.insert(0, str(_OPS))
+    import init_project  # noqa: E402
+
+    init_packs = sorted(init_project.RULE_PACK_CATALOG)
+    scaffold_packs = list(scaffold_tenant.RULE_PACKS)
+    return {
+        "onboarding/scaffold defaults (scaffold_tenant.generate_defaults)":
+            set(scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
+        "onboarding/init defaults (init_project._catalog_defaults)":
+            set(init_project._catalog_defaults(init_packs)),
+        "onboarding/init tenant critical seeds (init_project._catalog_critical)":
+            set(init_project._catalog_critical(init_packs)),
+    }
+
+
 # ── FOURTH FACE — defaults-tier placement (#1218 / TRK-344) ─────────────────
 #
 # A different QUESTION from everything above. The faces so far ask "can this
@@ -521,15 +550,20 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # own. That is the same "one class props up another" shape as the file floors
 # above, one level down.
 #
-# Measured today — generators 102 (chart 8 / scaffold 42 / init 51 / onboard 1),
+# Measured today — generators 93 (chart 8 / scaffold 42 / init 42 / onboard 1),
 # artifacts 62 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
 # fixtures 39) plus 13 read but NOT counted by the key floor (e2e-bench, see
 # `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 75 scanned in all. Each floor sits
 # below its class's value; what it would read if a whole group stopped yielding:
 #
-#   generators   chart 94 / scaffold 60 / init 51 / onboard 101
+#   generators   chart 85 / scaffold 51 / init 51 / onboard 92
 #   artifacts    exporter 43 / golden 23 / try-local 58 / recipes 62 /
 #                e2e-bench 62 (unchanged — it was never in the total)
+#
+# (issue 1196: init stopped rendering its own 51-key copy — 36 of whose keys no
+#  alert read — and now renders scaffold's 42, so the generator total went
+#  102 -> 93. The floor did not move: this was dead keys leaving, not a reader
+#  going quiet, and 93 still clears 80.)
 #
 # ⚠️ The e2e-bench row is kept rather than deleted, so the row count stays nine
 # and so the reader can see that this floor has NOTHING to say about that group
@@ -569,10 +603,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # put this row count next to two figures from different (scenario × grouping ×
 # floor subset) worlds and read them as comparable.
 #
-#   * generator floor 80 does NOT catch chart (94) or onboard (101) going to
+#   * generator floor 80 does NOT catch chart (85) or onboard (92) going to
 #     zero — 2 of its 4 rows. Both are caught by EMPTY-FACE instead, which fires
 #     at exactly zero — so what this floor uniquely watches is a producer that
-#     SHRANK without emptying ("init dropped 40 of its 51 keys"), which nothing
+#     SHRANK without emptying ("init dropped 30 of its 42 keys"), which nothing
 #     else sees.
 #   * artifact floor 50 does NOT catch try-local (58) or the recipes roots (62,
 #     they carry no keys) — and cannot catch e2e-bench (62) at all, its keys
@@ -641,7 +675,8 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
 #     is the floor doing its job. Today the slack is total − floor: artifacts 12
-#     keys, generators 22. Red here means REPAIR THE PRODUCER — and only if keys
+#     keys, generators 13 (was 22 until issue 1196 retired init's 9 surplus
+#     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
 #     in the same commit, naming what went.
 #
@@ -2901,8 +2936,8 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
     """The only non-vacuity signal that moves when a reader silently stops reading.
 
     One floor per class, because a single combined floor lets the bigger class
-    hold the number up for the smaller one (measured: generators are 102 of the
-    172 keys).
+    hold the number up for the smaller one (measured when the floor was split:
+    generators were 102 of the 172 keys).
     """
     # ⛔ Per-class WORDING as well as per-class numbers. The two classes had one
     # shared message and blind review measured two sentences in it that are false
@@ -3358,12 +3393,17 @@ def run_check(
     not_chart_armed: frozenset[str] | None = None,
     declared_faces: dict[str, set[str]] | None = None,
     defaults_faces: tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str, KeyInfo]]] | None = None,
+    written_faces: dict[str, set[str]] | None = None,
 ) -> dict[str, object]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
     Inputs default to the real extractors; hermetic tests inject synthetic sets
     to exercise each branch without editing repo artifacts.
     """
+    # A caller that injected a synthetic demand set is exercising another
+    # branch; the real producers would flag every key its made-up demand lacks.
+    if written_faces is None:
+        written_faces = {} if demand is not None else _written_faces()
     if demand is None:
         demand = observed_map_lib.all_threshold_keys(observed_map_lib.default_pack_paths())
     injected_supply = supply is not None
@@ -3467,6 +3507,23 @@ def run_check(
             errors.append(
                 f"STALE-EXEMPTION: {k!r} is in KNOWN_UNWIRED but no alert demands it "
                 "anymore — remove it from KNOWN_UNWIRED."
+            )
+
+    # ── Supply without demand (issue 1196) ───────────────────────────────────
+    # A written key no alert reads is a value the customer can tune with no
+    # effect. `<base>_critical` counts as read when its base is (the exporter
+    # renders it as the base metric's severity="critical" row).
+    for face, keys in written_faces.items():
+        for k in sorted(keys):
+            base = k[: -len("_critical")] if k.endswith("_critical") else k
+            if ({k, base} & demand) or ({k, base} & deferred):
+                continue
+            errors.append(
+                f"UNDEMANDED: {face} writes threshold key {k!r}, but no rule-pack "
+                "alert reads it (no alert_threshold:<key> for it or its base) — "
+                "the customer can set it forever with no effect. Use the key the "
+                "alert reads (scaffold_tenant.RULE_PACKS is the source both "
+                "producers render), or drop it. (issue 1196)"
             )
 
     # ── Defaults-tier placement (#1218 / TRK-344) ────────────────────────────
