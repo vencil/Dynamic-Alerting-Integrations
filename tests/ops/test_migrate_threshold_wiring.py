@@ -202,3 +202,63 @@ def test_generated_rules_fire_end_to_end_under_promtool(tmp_path):
     proc = subprocess.run(["promtool", "test", "rules", str(test_file)],
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def _migrate_rules(tmp_path, body):
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n" + body, encoding="utf-8")
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [sys.executable, str(Path(_TOOLS_DIR) / "migrate_rule.py"), str(rules), "-o", str(out),
+         "--no-dictionary"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return out, proc.stdout
+
+
+def test_critical_only_rule_reads_the_base_row_so_defaults_arm_it(tmp_path):
+    """只有 critical 的舊規則原本對所有實例生效。critical 層不能放進 defaults，
+    所以它的告警改讀 base（warning 層）那一列、label 仍標 critical；否則遷移後
+    沒有任何租戶會響，除非每個租戶手動補 `<key>_critical`。"""
+    out, _ = _migrate_rules(tmp_path, (
+        "  - alert: OnlyCritical\n    expr: mysql_global_status_threads_connected > 200\n"
+        "    labels: {severity: critical}\n"))
+    rec = (out / "platform-recording-rules.yaml").read_text(encoding="utf-8")
+    alert = (out / "platform-alert-rules.yaml").read_text(encoding="utf-8")
+    assert ("tenant:alert_threshold:custom_mysql_global_status_threads_connected\n"
+            in rec.replace("\r", ""))
+    assert 'metric="mysql_global_status_threads_connected", severity="warning"' in rec
+    assert "_critical" not in rec
+    assert "tenant:alert_threshold:custom_mysql_global_status_threads_connected\n" in alert
+    assert "severity: critical" in alert
+    tenant_cfg = yaml.safe_load((out / "tenant-config.yaml").read_text(encoding="utf-8"))
+    assert tenant_cfg == {"custom_mysql_global_status_threads_connected": "200"}
+
+
+def test_paired_rules_keep_the_critical_tier(tmp_path):
+    out, _ = _migrate_rules(tmp_path, (
+        "  - alert: W\n    expr: mysql_global_status_threads_connected > 150\n"
+        "    labels: {severity: warning}\n"
+        "  - alert: C\n    expr: mysql_global_status_threads_connected > 200\n"
+        "    labels: {severity: critical}\n"))
+    rec = (out / "platform-recording-rules.yaml").read_text(encoding="utf-8")
+    assert "tenant:alert_threshold:custom_mysql_global_status_threads_connected_critical" in rec
+
+
+def test_two_thresholds_on_one_key_are_reported_not_silently_merged(tmp_path):
+    """兩條舊規則對同一個指標設不同門檻時，遷移後只能有一個 key。
+    不能悄悄留下其中一個：要在輸出與報告點名衝突，tenant-config 也不能出現
+    重複的 YAML key。"""
+    out, stdout = _migrate_rules(tmp_path, (
+        "  - alert: Low\n    expr: http_requests_total > 5\n    labels: {severity: warning}\n"
+        "  - alert: High\n    expr: http_requests_total > 50\n    labels: {severity: warning}\n"))
+    tenant_text = (out / "tenant-config.yaml").read_text(encoding="utf-8")
+    live = [ln for ln in tenant_text.splitlines()
+            if ln.startswith("custom_http_requests_total:")]
+    assert live == ['custom_http_requests_total: "5"'], tenant_text
+    defaults = yaml.safe_load((out / "defaults-snippet.yaml").read_text(encoding="utf-8"))
+    assert defaults == {"defaults": {"custom_http_requests_total": 5}}
+    report = (out / "migration-report.txt").read_text(encoding="utf-8")
+    for text in (stdout, report, tenant_text):
+        assert "custom_http_requests_total" in text and "Low" in text and "High" in text
+    assert "50" in report

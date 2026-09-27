@@ -200,7 +200,8 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 #     warning tier applies to every tenant)
 #   - tenant-config.yaml (for the warning tier, only tenants that need a value different
 #     from the default; <key>_critical cannot go in defaults, so every tenant that wants
-#     the critical tier pastes it into its own conf.d file)
+#     the critical tier pastes it into its own conf.d file; a legacy rule that only had a
+#     critical tier is the exception: it reads the base row, already in defaults-snippet.yaml)
 #   - prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
 #   - migration-report.txt, triage-report.csv (conversion reports)
 # There is no "only these tenants" option; to keep a tenant from getting this alert, set

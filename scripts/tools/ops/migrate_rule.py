@@ -743,6 +743,67 @@ def apply_auto_suppression(results):
     return paired
 
 
+def _emitting(results):
+    return [r for r in results
+            if r.status != "unparseable" and r.triage_action != "use_golden"
+            and r.tenant_config]
+
+
+def route_unpaired_critical_to_base(results):
+    """只有 critical、沒有同指標 warning 的規則，改讀 base 閾值列（in-place）。
+
+    原本那條規則對所有實例生效。遷移後 warning 層靠 defaults-snippet 對所有
+    租戶生效，critical 層卻不能放進 defaults（exporter 只在租戶自己設了
+    `<base>_critical` 時才發射 critical 列）。所以只有 critical 的規則若照常
+    讀 `<key>_critical`，遷移後沒有任何租戶會響（issue 1818）。改讀 base 那
+    一列、alert label 仍標 critical，與原規則「全域生效」的語意相同。
+    有 warning 配對的 critical 維持讀 critical 層。
+    回傳改寫的條數。
+    """
+    warning_bases = {k for r in _emitting(results) if r.severity != "critical"
+                     for k in r.tenant_config}
+    routed = 0
+    for r in _emitting(results):
+        if r.severity != "critical":
+            continue
+        key = next(iter(r.tenant_config))
+        if not key.endswith("_critical"):
+            continue
+        base = key[:-len("_critical")]
+        if base in warning_bases:
+            continue
+        old_thr = f"tenant:alert_threshold:{key}"
+        new_thr = f"tenant:alert_threshold:{base}"
+        r.tenant_config = {base: r.tenant_config[key]}
+        for rr in r.recording_rules:
+            if rr["record"] == old_thr:
+                rr["record"] = new_thr
+                rr["expr"] = rr["expr"].replace('severity="critical"', 'severity="warning"')
+        for ar in r.alert_rules:
+            ar["expr"] = ar["expr"].replace(old_thr, new_thr)
+        r.notes.append(
+            f"只有 critical、沒有 warning 的規則：閾值寫在 {base}（base 列），"
+            f"告警仍標 severity=critical。這樣 defaults-snippet 才能對所有租戶生效；"
+            f"critical 層（{key}）無法放進 defaults。")
+        routed += 1
+    return routed
+
+
+def detect_threshold_conflicts(results):
+    """同一個閾值 key 被多條規則以不同值設定時，回傳 {key: [(alert, value), ...]}。
+
+    遷移後同一個 key 只能有一個值，讀它的告警都會用這個值。先前是後寫的
+    規則悄悄勝出，tenant-config 還寫出重複的 YAML key（issue 1818）。現在一律
+    取第一條規則的值，衝突逐條點名。
+    """
+    seen = {}
+    for r in _emitting(results):
+        for k, v in r.tenant_config.items():
+            seen.setdefault(k, []).append((r.alert_name, v))
+    return {k: entries for k, entries in seen.items()
+            if len({v for _, v in entries}) > 1}
+
+
 # ============================================================
 # v3: Triage Mode — CSV 報告
 # ============================================================
@@ -881,7 +942,8 @@ def render_tenant_config(results):
         if r.triage_action == "use_golden":
             continue  # 建議使用黃金標準的不輸出到 tenant config
         for k, v in r.tenant_config.items():
-            tenant_configs[k] = v
+            tenant_configs.setdefault(k, v)
+    conflicts = detect_threshold_conflicts(results)
 
     buf = io.StringIO()
     buf.write("# ============================================================\n")
@@ -895,7 +957,12 @@ def render_tenant_config(results):
     buf.write("#   my-tenant-name:\n")
     for k, v in tenant_configs.items():
         buf.write(f'#     {k}: "{v}"\n')
+    for k, entries in conflicts.items():
+        listed = ", ".join(f"{a}={v}" for a, v in entries)
+        buf.write(f"# ⚠️ 閾值衝突：{k} 被多條規則設定（{listed}），"
+                  f"一律取第一條的值 {entries[0][1]}；讀它的告警都用這個值。\n")
     buf.write("\n")
+    written = set()
     for r in results:
         if r.status == "unparseable" or r.triage_action == "use_golden":
             continue
@@ -904,6 +971,12 @@ def render_tenant_config(results):
             for note in r.notes:
                 buf.write(f"# 📖 {note}\n")
         for k, v in r.tenant_config.items():
+            if k in written:
+                # 同一個 key 只能出現一次（重複的 YAML key 會被後者蓋掉，
+                # 嚴格的 loader 則直接拒收）。
+                buf.write(f'# {k}: "{v}"  ← 與上方同一個 key，未採用（見檔頭的閾值衝突）\n')
+                continue
+            written.add(k)
             buf.write(f'{k}: "{v}"\n')
         if r.dim_hints:
             buf.write("# 維度標籤替代語法:\n")
@@ -946,7 +1019,8 @@ def render_defaults_snippet(results):
             if k.endswith("_critical"):
                 critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
             else:
-                defaults[k] = _defaults_value(v)
+                # 與 tenant-config 相同：第一條規則的值勝出（衝突另行點名）
+                defaults.setdefault(k, _defaults_value(v))
     for base, v in critical_bases.items():
         defaults.setdefault(base, v)
 
@@ -959,8 +1033,9 @@ def render_defaults_snippet(results):
     buf.write("# 警告，不發射任何 user_threshold，上面的告警規則永遠不會響。\n")
     buf.write("#\n")
     buf.write("# 值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域\n")
-    buf.write("# 規則相同。critical 層不能用 defaults 宣告：要 critical 的租戶，各自把\n")
-    buf.write("# tenant-config.yaml 裡的 <key>_critical 寫進自己的檔案。\n")
+    buf.write("# 規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical\n")
+    buf.write("# 的租戶，各自把 tenant-config.yaml 裡的 <key>_critical 寫進自己的檔案。\n")
+    buf.write("# 只有 critical 的舊規則已改讀 base 列，它的值就在這裡，對所有租戶生效。\n")
     buf.write("# ⚠️ 值必須是數字：寫 \"disable\" 之類的字串，exporter 會丟掉整個\n")
     buf.write("#    defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 \"disable\"。\n")
     buf.write("# ============================================================\n")
@@ -1078,6 +1153,13 @@ def render_report(results):
     buf.write(f"  ⚠️  複雜表達式 (已自動猜測): {len(complex_rules)}\n")
     buf.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
     buf.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
+    conflicts = detect_threshold_conflicts(results)
+    if conflicts:
+        buf.write("⚠️ 閾值衝突（同一個 key 被多條規則設不同值，遷移後只能有一個值）:\n")
+        for k, entries in conflicts.items():
+            listed = ", ".join(f"{a}={v}" for a, v in entries)
+            buf.write(f"  - {k}: {listed} → 採用 {entries[0][1]}\n")
+        buf.write("  讀這個 key 的告警都會用採用的值；原本各自不同門檻的告警請改寫成不同的 key。\n\n")
 
     # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
     golden_parseable = len([r for r in results
@@ -1330,6 +1412,13 @@ def main():
     n_paired = apply_auto_suppression(results)
     if n_paired:
         print(f"[🔗] Auto-Suppression: {n_paired} 組 warning↔critical 配對完成")
+    n_routed = route_unpaired_critical_to_base(results)
+    if n_routed:
+        print(f"[↪] {n_routed} 條只有 critical 的規則改讀 base 閾值列，"
+              "defaults-snippet 才能對所有租戶生效")
+    for k, entries in detect_threshold_conflicts(results).items():
+        listed = ", ".join(f"{a}={v}" for a, v in entries)
+        print(f"⚠️  閾值衝突：{k} 被多條規則設不同值（{listed}），採用第一條的 {entries[0][1]}")
 
     # 輸出
     if args.triage:
