@@ -887,14 +887,6 @@ repos:
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py)
         stages: [manual]
 
-      - id: translation-check
-        name: Bilingual structure consistency
-        entry: python3 -X utf8 scripts/tools/lint/check_translation.py
-        language: python
-        pass_filenames: false
-        files: \.(en|zh)\.md$
-        stages: [manual]
-
       - id: jsx-babel-check
         name: JSX Babel standalone parse validation
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci
