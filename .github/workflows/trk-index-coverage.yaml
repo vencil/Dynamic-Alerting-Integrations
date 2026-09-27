@@ -4,32 +4,31 @@ name: TRK Index Coverage
 # (commits surface only) cannot see. New tracking items are numbered
 # TRK-<issue number> (ADR-019) and never need a table row; the tool only reads
 # three-digit numbers, so a red here means someone hand-allocated a new
-# three-digit TRK instead — caught at the moment the title is written.
+# three-digit TRK instead.
 #
-# Triggers:
-#   * issues opened/edited — attributes the red to the issue that caused it.
-#   * pull_request on the three files that define the check — a PR changing
-#     the table or the tool is verified before it lands. Deliberately NOT on
-#     every PR: someone else's issue title would red an unrelated PR.
-#   * workflow_dispatch — manual re-check.
-# Not a required check. rc 2 (token missing / API failure / page cap hit)
-# fails the job the same as rc 1: "could not measure" never reports green.
+# Issue and PR events check ONLY the title that fired them, read from the event
+# payload: the red lands on the issue/PR that caused it (never on an unrelated
+# PR), and the payload is authoritative where a fresh list call may lag.
+# `issues` does not fire for pull requests, so PR titles need their own trigger,
+# and `edited` must be listed (the pull_request default types omit it).
+# workflow_dispatch scans every issue/PR title.
+#
+# The freeze itself (no row past TRK-392) is checked from the table alone, so it
+# runs in Python Tests via tests/lint/test_check_trk_index_coverage.py.
+# Not a required check. rc 2 ("could not measure") fails the job like rc 1.
 
 on:
   issues:
     types: [opened, edited]
   pull_request:
-    paths:
-      - docs/internal/planning-id-mapping.md
-      - scripts/tools/lint/check_trk_index_coverage.py
-      - .github/workflows/trk-index-coverage.yaml
+    types: [opened, edited, reopened]
   workflow_dispatch:
 
 permissions:
   contents: read
   issues: read
-  # ⛔ Required, not optional: without it the issues endpoint silently omits
-  # pull requests and PR-only TRK titles go unseen while the job still exits 0/1.
+  # ⛔ Required for the dispatch scan: without it the issues endpoint silently
+  # omits pull requests and PR-only TRK titles go unseen while the job exits 0/1.
   pull-requests: read
 
 jobs:
@@ -49,9 +48,18 @@ jobs:
           python-version: '3.13'
 
       - name: Check titles against the TRK index
+        # Titles are bound via env, never interpolated into the script (#1021).
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          REF: '#${{ github.event.issue.number || github.event.pull_request.number }}'
         run: |
-          python3 -X utf8 scripts/tools/lint/check_trk_index_coverage.py \
-            --surface titles --ci \
-            --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"
+          set -euo pipefail
+          tool=scripts/tools/lint/check_trk_index_coverage.py
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            python3 -X utf8 "$tool" --surface titles --ci \
+              --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"
+          else
+            python3 -X utf8 "$tool" --surface titles --ci --title "$TITLE" --title-ref "$REF"
+          fi

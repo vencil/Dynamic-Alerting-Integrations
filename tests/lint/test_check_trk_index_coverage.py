@@ -286,3 +286,30 @@ def test_titles_follow_link_next_and_cap_is_rc2(
         # 第 2、3 頁的 URL 必須是上一頁 Link 給的那一個，不是自己拼的 page=N
         assert seen[1:] == ["https://api.github.com/repositories/1/issues?after=c1",
                             "https://api.github.com/repositories/1/issues?after=c2"]
+
+
+@pytest.mark.parametrize("title, expect_rc", [
+    ("feat: TRK-393 照舊手配的新號", 1),  # 表上沒有的三位數新號 ⇒ 紅
+    ("fix: 修 TRK-301 那件事", 0),         # 對照：引用表上既有的號 ⇒ 綠
+])
+def test_single_title_mode_needs_no_token(tmp_path: Path, title: str, expect_rc: int) -> None:
+    """workflow 對 issue／PR 事件只驗觸發它的那一個標題（event payload），不打 API。"""
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["chore: x"])
+    env = {k: v for k, v in __import__("os").environ.items()
+           if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    proc = subprocess.run(
+        [sys.executable, str(_CHECKER), "--repo", str(repo), "--surface", "titles", "--ci",
+         "--title", title, "--title-ref", "#9999"],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    assert proc.returncode == expect_rc, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("rows, expect_rc", [
+    ("| TRK-392 | #1 | x | — |\n| TRK-393 | #2 | x | — |\n", 1),  # 凍結之後又加一列 ⇒ 紅
+    ("| TRK-392 | #1 | x | — |\n", 0),                              # 對照：凍結線上 ⇒ 綠
+])
+def test_rows_past_the_freeze_are_red(tmp_path: Path, rows: str, expect_rc: int) -> None:
+    """⛔ 表凍結在 TRK-392 要有機制：照舊取號的人會順手補列，讓自己的引用「在表上」。"""
+    repo = _fixture(tmp_path, rows, ["chore: x"])
+    assert _run(repo, "--ci").returncode == expect_rc
