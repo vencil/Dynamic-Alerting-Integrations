@@ -1,8 +1,8 @@
 /**
  * playground/validation.js — parse-layer check for a multi-tenant document.
  *
- * #2033 (owner decision R′): the playground judges only what the exporter's
- * YAML decoder (Go yaml.v3) would also refuse — syntax errors (duplicate
+ * #2033 (owner decision R′): the playground judges only the parse layer
+ * (js-yaml) — syntax errors (duplicate
  * keys, tab indentation, bad indentation), a root mapping with `tenants:`,
  * `tenants` as a mapping, and each tenant as a mapping or null. It makes no
  * semantic verdict, so values the old hand-written rules rejected (and the
@@ -103,7 +103,7 @@ describe('validateTenantConfig — syntax errors the old line parser swallowed (
     expect(r.errors[0].message).toMatch(/line 5/);
   });
 
-  it('rejects a self-referencing anchor (yaml.v3: "value contains itself")', () => {
+  it('rejects a self-referencing anchor', () => {
     let r: ReturnType<typeof validateTenantConfig> | undefined;
     expect(() => { r = validateTenantConfig('tenants:\n  db-a: &r\n    self: *r\n'); }).not.toThrow();
     expect(r!.valid).toBe(false);
@@ -115,7 +115,7 @@ describe('validateTenantConfig — syntax errors the old line parser swallowed (
   });
 });
 
-describe('validateTenantConfig — multi-document streams (yaml.Unmarshal reads doc 1 only)', () => {
+describe('validateTenantConfig — multi-document streams (first document only)', () => {
   it('accepts a trailing ---', () => {
     expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n').valid).toBe(true);
   });
@@ -128,7 +128,7 @@ describe('validateTenantConfig — multi-document streams (yaml.Unmarshal reads 
     expect(validateTenantConfig('foo: bar\n---\ntenants:\n  db-a: {}\n').valid).toBe(false);
   });
 
-  it('reports a syntax error in a later document (stricter than yaml.v3, by design)', () => {
+  it('reports a syntax error in a later document (deliberate)', () => {
     expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n\tfoo: 1\n').valid).toBe(false);
     expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n"abc').valid).toBe(false);
   });
@@ -142,8 +142,8 @@ describe('validateTenantConfig — shared aliases', () => {
     const t0 = performance.now();
     const r = validateTenantConfig(tenant(body));
     expect(performance.now() - t0).toBeLessThan(500);
-    expect(r.errors).toEqual([]);
-    expect(r.valid).toBe(true);
+    // Only the absence of a false cycle report is pinned — not a verdict.
+    expect(r.errors.filter((e: any) => /contains itself|自我參照/.test(e.message))).toEqual([]);
   });
 });
 

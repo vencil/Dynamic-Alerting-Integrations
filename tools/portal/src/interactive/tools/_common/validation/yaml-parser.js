@@ -11,27 +11,22 @@ purpose: |
   zero-build, js-yaml would need a CDN dep") no longer holds: portal tools
   are esbuild bundles and js-yaml lands in a shared chunk.
 
-  Schema = js-yaml CORE_SCHEMA + the merge key (`<<`). That is chosen to
-  sit closest to yaml.v3 decoding into interface{}: `<<` is expanded (as
-  yaml.v3 does), and timestamps stay strings (js-yaml's default schema
-  would turn them into Date objects).
+  Schema = js-yaml CORE_SCHEMA + the merge key (`<<`): `<<` is expanded
+  and timestamps stay strings (js-yaml's default schema would turn them
+  into Date objects).
 
-  Multi-document streams: the value is the FIRST document (a trailing
-  `---` is fine; an empty stream is null), as with the exporter's
-  `yaml.Unmarshal`. Any error anywhere in the stream is a parse error —
-  stricter than yaml.v3, which only looks one token into document 2; the
-  direction is deliberately "report red rather than miss".
+  Deliberate choices:
+    - Multi-document streams: the value is the FIRST document (a trailing
+      `---` is fine; an empty stream is null). Any error anywhere in the
+      stream, including a later document, is a parse error.
+    - A self-referencing alias (`a: &r\n  b: *r`) is a parse error instead
+      of a cyclic object that would send recursive consumers into a stack
+      overflow.
 
-  A self-referencing alias (`a: &r\n  b: *r`) is a parse error (yaml.v3:
-  "anchor 'r' value contains itself") instead of a cyclic object that
-  would send every recursive consumer into a stack overflow.
-
-  Known differences from yaml.v3 v3.0.1 (measured): `010` is 10 here but 8
-  there (`0o10` is 8 in both); `1_000` is the string "1_000" here but 1000
-  there; errors after the first document are reported here; a
-  self-reference through a merge key (`<<: *r` inside `&r`) is an error
-  there but not here; a `%YAML 1.2` directive is rejected there but
-  accepted here.
+  js-yaml is not yaml.v3 (the exporter's decoder): they read some edge
+  cases differently, in both directions. This module does not try to
+  emulate yaml.v3 and does not claim to list every difference; the
+  exporter is the authority.
 
   Public API:
     parseDuration(str)     parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
@@ -55,7 +50,7 @@ purpose: |
     Values keep their YAML types: `80` is a number, `"80"` a string,
     `true` a boolean, block and flow lists are arrays, nested maps are
     objects at any depth. Duplicate keys, tab indentation and other
-    syntax errors are errors (js-yaml default), same as yaml.v3.
+    syntax errors are errors (js-yaml default).
     A non-mapping document root yields an error and config = {}.
 
   Closure deps: window.__t (host-page i18n thunk, per-call). UNSAFE_KEYS

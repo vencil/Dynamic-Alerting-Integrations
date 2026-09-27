@@ -3,10 +3,11 @@ title: "YAML Playground — tenant config syntax + structure check"
 purpose: |
   Playground-local parse-layer check for a multi-tenant `tenants:` document.
   Parsing is js-yaml via the shared loadYamlDocument (same schema as the
-  rest of the portal: CORE + merge key, closest to the exporter's yaml.v3).
+  rest of the portal: CORE + merge key). js-yaml and the exporter's yaml.v3
+  read some edge cases differently, in both directions.
 
-  Scope (#2033, owner decision R′): this module judges ONLY what the
-  exporter would also refuse at decode time —
+  Scope (#2033, owner decision R′): this module judges only the parse
+  layer —
     - YAML syntax errors (incl. duplicate keys, tab indentation), with the
       line/column from the js-yaml mark
     - the document root is a mapping with a `tenants:` key
