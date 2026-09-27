@@ -285,26 +285,58 @@ func TestWritePRRefusesContentAfterTheFirstDocument(t *testing.T) {
 }
 
 // An empty trailer is not a smuggling channel, and refusing it would reject
-// bodies a YAML emitter may legitimately produce.
-func TestExtraDocumentsWithContent(t *testing.T) {
+// bodies a YAML emitter may legitimately produce. Content after the first
+// document is refused and its COUNT is reported, so a caller can find it.
+// Invalid YAML is refused by this gate itself (#1721): the struct Unmarshal in
+// validateShape stops after the first document, so it cannot own the rest.
+func TestYAMLDocumentShapeErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
-		want int
+		// want is a substring the single error must contain; "" = accepted.
+		want string
 	}{
-		{"single document", ownOnly, 0},
-		{"leading marker", "---\n" + ownOnly, 0},
-		{"trailing marker, no content", ownOnly + "---\n", 0},
-		{"trailing end-of-document marker", ownOnly + "...\n", 0},
-		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", 0},
-		{"second document with a tenant", smuggledDoc2, 1},
-		{"second document with a root key", rootKeyDoc2, 1},
-		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", 2},
-		{"invalid YAML is the earlier check's business", "{{not yaml", 0},
+		{"single document", ownOnly, ""},
+		{"leading marker", "---\n" + ownOnly, ""},
+		{"trailing marker, no content", ownOnly + "---\n", ""},
+		{"trailing end-of-document marker", ownOnly + "...\n", ""},
+		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", ""},
+		{"second document with a tenant", smuggledDoc2, "YAML has 1 document(s) with content after the first"},
+		{"second document with a root key", rootKeyDoc2, "YAML has 1 document(s) with content after the first"},
+		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", "YAML has 2 document(s) with content after the first"},
+		{"invalid YAML in the first document", "{{not yaml", "invalid YAML in document 1"},
+		{"invalid YAML after an end-of-document marker",
+			ownOnly + "...\ntenants:\n  other:\n    _silent_mode: \"true\"\n", "invalid YAML in document 2"},
+		{"bad tag under an unknown root key",
+			ownOnly + "zzz: !!int \"abc\"\n", "invalid YAML in document 1"},
+		{"root merge key", "<<: {tenants: {other: {}}}\n" + ownOnly, "merge key (<<) at the root"},
+		{"merge key inside a tenant section", "tenants:\n  db-a:\n    <<: {_silent_mode: \"warning\"}\n", ""},
+		{"null root key", ownOnly + "~: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
+		{"integer root key", ownOnly + "1: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
+		{"complex root key", ownOnly + "? [a, b]\n: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
+		// A string root key other than `tenants` is NOT this gate's to refuse:
+		// CheckTenantRootKeys owns it and names the key.
+		{"unknown string root key is left to CheckTenantRootKeys", ownOnly + "defaults: {}\n", ""},
+		// DELIBERATE BEHAVIOUR CHANGE (#1721): a value in the body's own tenant
+		// section whose explicit tag cannot be constructed used to be accepted
+		// (the struct decode reads it as a string) and committed verbatim; the
+		// generic decode now refuses it. The exporter reads those bytes, so a
+		// body that is not constructable YAML is not written.
+		{"unconstructable !!int value in the own section",
+			"tenants:\n  db-a:\n    _silent_mode: !!int \"abc\"\n", "invalid YAML in document 1"},
+		{"unconstructable !!bool value in the own section",
+			"tenants:\n  db-a:\n    _silent_mode: !!bool \"warning\"\n", "invalid YAML in document 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := extraDocumentsWithContent(tc.body); got != tc.want {
-				t.Errorf("got %d want %d", got, tc.want)
+			errs := yamlDocumentShapeErrors(tc.body)
+			if tc.want == "" {
+				if len(errs) > 0 {
+					t.Fatalf("legal body refused: %v", errs)
+				}
+				return
+			}
+			if len(errs) != 1 || !strings.Contains(errs[0], tc.want) {
+				t.Errorf("got %v, want one error containing %q", errs, tc.want)
 			}
 		})
 	}
