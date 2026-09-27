@@ -35,7 +35,12 @@ gate would see it); a name tainted by augmented / tuple / walrus assignment
 or by a `for` target (only plain `name = …` propagates); a single
 `_defaults.yaml` read outside any loop (`gitops_check`, `policy_engine`,
 `policy_opa_bridge` — migrated by hand too); readers outside the
-population. Those tools' behaviour is pinned by
+population. And spellings `_is_lenient` does not recognise at all, so a
+lenient read written this way is invisible even inside a conf.d loop:
+`from yaml import safe_load` (bare name), `import yaml as y` (`y.safe_load`),
+a local alias (`ld = yaml.safe_load; ld(f)`), and passing the reader as a
+value instead of calling it (`map(yaml.safe_load, …)`,
+`map(load_yaml_file, …)`). Those tools' behaviour is pinned by
 `test_duplicate_key_rejected_across_tools.py` instead.
 """
 from __future__ import annotations

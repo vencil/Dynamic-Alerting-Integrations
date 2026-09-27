@@ -33,9 +33,10 @@ at the top of cmd/da-guard/main.go):
   0  clean
   1  guard found errors
   2  caller error / binary missing
-  3  a config file in scope, or a _defaults.yaml in a tenant's chain, fails
-     the YAML decode (#2123): the tenants depending on it were not checked —
-     the report names the file; fix it and re-run
+  3  a tenant file in scope, or a _defaults.yaml in a resolved tenant's
+     chain, fails the exporter's YAML decode (syntax error, duplicate key;
+     #2123): the tenants depending on it were not checked — the report names
+     the file; fix it and re-run
 
 Usage:
   da-tools guard defaults-impact --config-dir conf.d/
@@ -77,8 +78,9 @@ _USAGE_EN = (
     "\n"
     "Exit codes (from da-guard):\n"
     "  0  clean    1  guard found errors    2  caller error / binary missing\n"
-    "  3  a config file in scope (or a _defaults.yaml in a tenant's chain)\n"
-    "     fails the YAML decode; the report names it — fix it and re-run\n"
+    "  3  a tenant file in scope (or a _defaults.yaml in a resolved tenant's\n"
+    "     chain) fails the exporter's YAML decode (syntax error, duplicate key);\n"
+    "     the report names it — fix it and re-run\n"
     "\n"
     "Binary resolution:\n"
     "  1. --da-guard-binary <path>\n"
@@ -111,8 +113,8 @@ _USAGE_ZH = (
     "\n"
     "Exit code (來自 da-guard):\n"
     "  0  通過    1  guard 偵測到 error    2  caller error / 找不到 binary\n"
-    "  3  scope 內（或租戶繼承鏈上的 _defaults.yaml）有 YAML 解析失敗的\n"
-    "     設定檔；報告列出檔名，修檔後重跑\n"
+    "  3  scope 內的租戶檔（或解析租戶時繼承鏈上的 _defaults.yaml）exporter\n"
+    "     YAML decode 失敗（語法錯、重複鍵）；報告列出檔名，修檔後重跑\n"
     "\n"
     "Binary 解析順序:\n"
     "  1. --da-guard-binary <path>\n"

@@ -122,7 +122,7 @@
 | 0 | clean | parse OK | 全部目標成功 |
 | 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
 | 2 | caller error（旗標 / 路徑） | caller error | caller error |
-| 3 | scope 內（或租戶繼承鏈上的 `_defaults.yaml`）有 YAML 解析失敗的設定檔（報告列出，修檔重跑；#2123） | — | — |
+| 3 | scope 內的租戶檔（或解析租戶時繼承鏈上的 `_defaults.yaml`）exporter YAML decode 失敗（語法錯、重複鍵；報告列出，修檔重跑；#2123） | — | — |
 
 ---
 
