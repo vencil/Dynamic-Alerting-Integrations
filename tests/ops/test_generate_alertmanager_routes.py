@@ -112,6 +112,18 @@ class TestBuildReceiverConfig:
         assert config is None
         assert any("unknown receiver type" in w for w in warnings)
 
+    @pytest.mark.parametrize("receiver", [
+        {"type": "webhook", "url": "https://h.example/x\n"},
+        {"type": "email", "to": ["a@example.com"], "smarthost": "smtp:25\n",
+         "from": "alerts@example.com"},
+    ], ids=["url", "smarthost"])
+    def test_format_rejects_final_newline(self, receiver):
+        """值結尾帶換行時產生器必須擋下（#2180）：Python `re.search` 的 `$` 也會在結尾換行前成立，
+        所以格式檢查只靠 `re.fullmatch`；這一列不經 schema，單獨守住產生器那一方。"""
+        config, warnings = build_receiver_config(receiver, "t1")
+        assert config is None
+        assert any("is not in the format" in w for w in warnings)
+
     def test_optional_fields_included(self):
         """有提供的 optional 欄位會被包含在 AM config 中。"""
         receiver = {

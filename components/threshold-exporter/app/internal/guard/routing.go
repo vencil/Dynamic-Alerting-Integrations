@@ -119,7 +119,7 @@ type receiverTypeSpec struct {
 // schema at run time. TestReceiverTypeSpecs_MatchSchema fails on any
 // difference.
 const (
-	receiverHTTPURLPattern      = `^[Hh][Tt][Tt][Pp][Ss]?://([^\x00-\x20\x7f/?#@\\]+@)?([^\x00-\x20\x7f/?#@\\:\[\]]+|\[[0-9A-Fa-f:.]+\])(:[0-9]*)?([/?#][^\x00-\x20\x7f]*)?$`
+	receiverHTTPURLPattern      = `^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>"-]|[^\x00-\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\[[0-9A-Fa-f:.]+\])(:[0-9]*)?(/([^\x00-\x20\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\?[^\x00-\x20\x7f#]*)?(#([^\x00-\x20\x7f%]|%[0-9A-Fa-f]{2})*)?$`
 	receiverSMTPHostPortPattern = `^([^\x00-\x20\x7f:/?#@\[\]\\]+|\[[0-9A-Fa-f:.]+\]):[0-9]+$`
 )
 

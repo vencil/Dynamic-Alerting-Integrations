@@ -209,7 +209,9 @@ def validate_receiver_url(
     Returns:
         (url, error) — url string on success, error message on failure.
     """
-    rtype = receiver.get("type", "").strip().lower()
+    # Exact match, no case folding or trimming (#2180): the route generator,
+    # the schema (`const`) and the Go guard all reject `Webhook` / ` webhook`.
+    rtype = receiver.get("type", "")
     if rtype not in RECEIVER_URL_FIELDS:
         return None, f"unknown receiver type '{rtype}'"
 
@@ -346,7 +348,9 @@ def test_receiver(
         ReceiverTestResult with status and timing.
     """
     label = receiver.get("_label", "unknown")
-    rtype = receiver.get("type", "").strip().lower()
+    # Exact match, no case folding or trimming (#2180): the route generator,
+    # the schema (`const`) and the Go guard all reject `Webhook` / ` webhook`.
+    rtype = receiver.get("type", "")
 
     # Validate receiver type
     if rtype not in RECEIVER_TYPES:

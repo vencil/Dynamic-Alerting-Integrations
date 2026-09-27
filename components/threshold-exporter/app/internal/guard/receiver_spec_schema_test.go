@@ -134,6 +134,15 @@ func schemaPattern(t *testing.T, defs map[string]json.RawMessage, where string, 
 		for k := range target {
 			switch k {
 			case "type", "title", "description", "$comment", "pattern":
+			case "not":
+				// Only the final-newline guard for Python re.search's `$`
+				// (#2180). RE2's `$` is end of text and the pattern's
+				// classes exclude control characters, so the Go copy needs
+				// no counterpart; any other `not` is unmodelled.
+				var not map[string]string
+				if json.Unmarshal(target[k], &not) != nil || len(not) != 1 || not["pattern"] != `\n` {
+					t.Fatalf("%s: %s `not` is not {\"pattern\": \"\\\\n\"}", where, r["$ref"])
+				}
 			default:
 				t.Fatalf("%s: %s uses %q, which this parity check does not model", where, r["$ref"], k)
 			}

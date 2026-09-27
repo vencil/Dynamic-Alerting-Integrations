@@ -763,15 +763,17 @@
       "type": "string",
       "title": "Receiver HTTP(S) URL format",
       "description": "An http:// or https:// URL with a host and no whitespace or control characters. Alertmanager rejects a receiver URL without a scheme or host, or one with a leading space, and the whole Alertmanager config then fails to reload.",
-      "$comment": "#2180: the ONE copy of this pattern (webhook.url, slack.api_url, teams.webhook_url and rocketchat.url reference it via allOf). Derived from Alertmanager v0.33.1 config.Load, measured: it accepts http/https in any letter case, userinfo, a port, an IPv6 literal, a query and a fragment, and rejects \" \", a leading space, no scheme, a non-http scheme and an empty host. Stricter than Alertmanager on purpose for a trailing space or a space inside the path (it accepts those). Syntax is kept to what ECMA-262, Python re and Go RE2 all read the same way (no \\s, no lookaround); the one engine difference is Python's `$`, which also matches before a final newline, so the Python pipeline uses re.fullmatch (scripts/tools/_lib_validation.py). The Go guard holds a copy, pinned by TestReceiverTypeSpecs_MatchSchema.",
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://([^\\x00-\\x20\\x7f/?#@\\\\]+@)?([^\\x00-\\x20\\x7f/?#@\\\\:\\[\\]]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?([/?#][^\\x00-\\x20\\x7f]*)?$"
+      "$comment": "#2180: the one authored copy of this pattern, derived from Alertmanager v0.33.1 config.Load (receiver_presence_cases.json rows are asserted against it), in syntax ECMA-262, Python re and Go RE2 read alike; `not` covers Python re.search letting `$` match before a final newline, and the Go guard's copy is pinned by TestReceiverTypeSpecs_MatchSchema.",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>\"-]|[^\\x00-\\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^\\x00-\\x20\\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\\?[^\\x00-\\x20\\x7f#]*)?(#([^\\x00-\\x20\\x7f%]|%[0-9A-Fa-f]{2})*)?$",
+      "not": { "pattern": "\\n" }
     },
     "receiverSmtpHostPort": {
       "type": "string",
       "title": "Receiver SMTP host:port format",
       "description": "host:port with a numeric port; an IPv6 host is bracketed ([2001:db8::1]:25). Alertmanager rejects a smarthost without a port and the whole Alertmanager config then fails to reload.",
-      "$comment": "#2180: the ONE copy of this pattern (email.smarthost references it via allOf). Derived from Alertmanager v0.33.1 config.Load, measured: it rejects \" \", a missing or empty port and an unbracketed IPv6 host (too many colons). Stricter than Alertmanager on purpose for an empty host, a non-numeric port and surrounding whitespace (it accepts those at load time). Same portable-syntax and fullmatch notes as receiverHttpUrl; the Go guard's copy is pinned by TestReceiverTypeSpecs_MatchSchema.",
-      "pattern": "^([^\\x00-\\x20\\x7f:/?#@\\[\\]\\\\]+|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$"
+      "$comment": "#2180: same derivation, portable syntax, `not` and Go-copy pin as receiverHttpUrl.",
+      "pattern": "^([^\\x00-\\x20\\x7f:/?#@\\[\\]\\\\]+|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$",
+      "not": { "pattern": "\\n" }
     },
     "httpConfig": {
       "type": "object",
