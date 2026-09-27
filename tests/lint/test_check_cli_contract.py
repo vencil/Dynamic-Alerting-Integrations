@@ -814,6 +814,24 @@ class TestV5ParseArgs:
         r = _fence_scan(tmp_path, "da-tools widget db-a --config-dir $(pwd)/conf.d")
         assert _open(r.findings) == []
 
+    @pytest.mark.parametrize("target", [
+        "out-$(date +%F).json", "$(pwd)/out.json", "--config-dir=$(pwd)/conf.d"])
+    def test_a_substitution_the_argv_never_sees_still_counts(self, tmp_path, target):
+        """`> out-$(date).json`：重導向連目標丟掉，argv 只剩殘段 `.json`（量過
+        incremental-migration-playbook 的 alert-quality 那行，實跑不會 rc=2）；
+        `--config-dir=$(pwd)/conf.d` 的 `$(…)` 黏在旗標上，不是獨立一個字。"""
+        line = (f"da-tools widget db-a {target}" if target.startswith("--")
+                else f"da-tools widget db-a > {target}")
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == []
+        assert r.stats["cmd_parse_placeholder_value"] == 1
+
+    def test_without_a_substitution_the_same_residue_is_red(self, tmp_path):
+        """正控制：同一個多出來的字，行上沒有 `$(…)` 就照判。"""
+        r = _fence_scan(tmp_path, "da-tools widget db-a > out.json .json")
+        assert _open(r.findings) == [
+            ("V5", "widget", "unrecognized arguments: .json")]
+
     def test_inline_spans_are_not_parse_checked(self, tmp_path):
         r = _scan(tmp_path, docs=[_doc(tmp_path, "Run `da-tools widget --config-dir x`.\n")])
         assert _open(r.findings) == []
