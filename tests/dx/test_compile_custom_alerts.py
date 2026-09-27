@@ -1821,15 +1821,11 @@ def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
     site-2 mutant stayed green through it. So the extra carrier declares a
     tenant only IT can introduce.
 
-    ⚠️ THE NAME OVERSTATES WHAT THIS PINS: only the EXTENSION axis. There is a
-    carrier the exporter does not serve that this reader does — a hidden one.
-    `scanDirHierarchical` prunes `.`-prefixed dirs and skips `.`-prefixed files
-    (`config_hierarchy.go`); this reader reads both. Measured on the
-    tree BEFORE #1603 widened anything: `.hidden.yaml` and `.draft/db.yaml`
-    already produced tenants, so that divergence is pre-existing and #1603 only
-    extends it to the second spelling. Closing it removes tenants that compile
-    today, which is its own behaviour change — the hidden-path axis of the conf.d
-    family (#1911), filed separately. Do not read a green run here as "the two planes agree".
+    ⚠️ THE NAME OVERSTATES WHAT THIS PINS: only the EXTENSION axis. The
+    hidden-path axis (a `.`-prefixed file or directory, a ConfigMap mount's
+    `..<timestamp>/` payload — carriers `scanDirHierarchical` never serves) was
+    read by this compiler until #2086 and is pinned separately, in section N
+    below. Do not read a green run HERE as "the two planes agree" on that axis.
     """
     json_only = _RECIPE_BODY.replace("db-b:", "db-json-only:")
     assert "db-json-only:" in json_only, "the fixture rewrite missed — test is vacuous"
@@ -1848,3 +1844,170 @@ def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
         f"a .json carrier introduced a tenant the exporter does not serve: {triples}"
     assert not [e for e in file_errors if ".json" in str(e)], \
         f"a .json entry was named as an unreadable config: {file_errors}"
+
+
+# --- N. what the exporter does not walk is not a recipe source (#2086) --------
+# `collect_instances` used to list conf.d with `rglob("*")`, which descends
+# `.`-prefixed directories and yields `.`-prefixed files — carriers the
+# exporter's walker (`pkg/config.ScanDirTree` / `IsScannedFileName`) never
+# serves. Measured on main 42db84e4 with the trees below: the hidden tree
+# compiled 2 shapes (one for a GHOST recipe nothing serves) and describe_tenant
+# showed `_custom_alerts=['GHOST', 'a1']`; the ConfigMap-mount tree read every
+# tenant twice and quarantined one false `duplicate custom-alert name` each.
+# Every test here carries a VISIBLE control with the same bytes, so a reader
+# that reads nothing, or one that stopped reading everything, cannot pass.
+_DESCRIBE = _REPO / "scripts" / "tools" / "dx" / "describe_tenant.py"
+
+
+def _ca_tenant(tenant: str, *alerts: str) -> str:
+    return (f"tenants:\n  {tenant}:\n    _custom_alerts:\n"
+            + "".join(f"      - {a}\n" for a in alerts))
+
+
+def _ca(name: str, metric: str = "node_cpu") -> str:
+    return (f'{{recipe: threshold, name: {name}, metric: {metric}, op: ">", '
+            f'window: 5m, threshold: "80:warning"}}')
+
+
+def _described_alert_names(conf_d: Path, tenant: str) -> list:
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, str(_DESCRIBE), tenant, "--conf-d", str(conf_d),
+         "--format", "json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stderr
+    return [a.get("name") for a in
+            json.loads(r.stdout)["effective_config"].get("_custom_alerts", [])]
+
+
+def _hidden_or_visible_tree(root: Path, hidden: bool) -> None:
+    snap, ghost = (".snap", ".ghost.yaml") if hidden else ("snap", "ghost.yaml")
+    _write_tree(root, {
+        "acme.yaml": _ca_tenant("acme", _ca("a1")),
+        f"{snap}/acme.yaml": _ca_tenant("acme", _ca("GHOST", "ghost_metric")),
+        ghost: _ca_tenant("ghost", _ca("GHOST", "ghost_metric")),
+    })
+
+
+def test_a_hidden_path_is_not_a_recipe_source(tmp_path):
+    """`.snap/acme.yaml` and `.ghost.yaml` compile nothing and add nothing to
+    acme's `_custom_alerts` view; the SAME bytes under visible names do."""
+    hid, vis = tmp_path / "hid", tmp_path / "vis"
+    _hidden_or_visible_tree(hid, hidden=True)
+    _hidden_or_visible_tree(vis, hidden=False)
+
+    # ⛔ Control first: visible, the GHOST recipe IS a second shape.
+    vis_shapes, _p, _s = ld.build_shapes(vis)
+    assert len(vis_shapes) == 2, f"visible control lost the GHOST shape: {vis_shapes}"
+
+    shapes, _per, skipped = ld.build_shapes(hid)
+    assert [s["metric"] for s in shapes] == ["node_cpu"], shapes
+    assert skipped == [], skipped
+    assert cc.build_pack(hid)["_meta"]["shapes"] == 1
+    triples, file_errors = ld.collect_instances(hid)
+    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
+    assert file_errors == []
+    assert _described_alert_names(hid, "acme") == ["a1"]
+
+
+def _configmap_tree(root: Path, payload: str, data: str) -> None:
+    """A ConfigMap volume: files live in `payload/`, `data` links to it, and
+    each key at the root is a link through `data`. The kubelet's names are
+    `..<timestamp>` / `..data`; the control renames them visible."""
+    _write_tree(root, {f"{payload}/acme.yaml": _ca_tenant("acme", _ca("a1"))})
+    os.symlink(payload, root / data, target_is_directory=True)
+    os.symlink(f"{data}/acme.yaml", root / "acme.yaml")
+
+
+def test_a_configmap_mount_reads_each_tenant_once(tmp_path):
+    cm, vis = tmp_path / "cm", tmp_path / "vis"
+    cm.mkdir()
+    vis.mkdir()
+    try:
+        _configmap_tree(cm, "..2026_09_25", "..data")
+        _configmap_tree(vis, "v2026_09_25", "data")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable here: {exc}")
+
+    def dup_skips(root):
+        return [s for s in ld.build_shapes(root)[2]
+                if "duplicate custom-alert name" in s["reason"]]
+
+    # ⛔ Control: once the payload directory is visible it IS a second carrier.
+    assert dup_skips(vis), "visible control no longer reads the payload twice"
+
+    assert dup_skips(cm) == []
+    triples, file_errors = ld.collect_instances(cm)
+    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
+    assert file_errors == []
+    assert _described_alert_names(cm, "acme") == ["a1"]
+
+
+def test_the_cap_survivor_follows_path_order_not_posix_string_order(tmp_path):
+    """⛔ Triple order decides which OWN recipe survives the cap (greedy
+    first-fit). `list_config_tree` orders by POSIX string, where `a-b.yaml`
+    precedes `a/x.yaml` ('-' < '/'); `Path` ordering — what `sorted(rglob)`
+    gave before #2086 — puts `a/x.yaml` first. Taking the listing's order as
+    is flips the survivor and changes the compiled pack."""
+    _write_tree(tmp_path, {
+        "a/x.yaml": _ca_tenant("acme", _ca("from_dir", "m_dir")),
+        "a-b.yaml": _ca_tenant("acme", _ca("from_dash", "m_dash")),
+    })
+    # The two orders really do disagree on this tree, or the test is vacuous.
+    assert sorted(["a/x.yaml", "a-b.yaml"])[0] == "a-b.yaml"
+    assert sorted([Path("a/x.yaml"), Path("a-b.yaml")])[0] == Path("a/x.yaml")
+
+    shapes, _per, skipped = ld.build_shapes(tmp_path, max_custom_recipes=1)
+    assert [s["metric"] for s in shapes] == ["m_dir"], shapes
+    assert [(s["tenant"], s["name"]) for s in skipped] == [("acme", "from_dash")]
+
+
+def test_a_broken_defaults_in_a_hidden_dir_is_not_a_file_error(tmp_path):
+    """`_dir_defaults_alerts` walks with `os.walk`; it must prune the same
+    `.`-prefixed directories, or a `_defaults.yaml` nothing else reads is
+    loaded — and a broken one reported — here."""
+    hid, vis = tmp_path / "hid", tmp_path / "vis"
+    for root, sub in ((hid, ".snap"), (vis, "snap")):
+        _write_tree(root, {"ok.yaml": _ca_tenant("acme", _ca("a1")),
+                           f"{sub}/_defaults.yaml": "_custom_alerts: [\n"})
+
+    # ⛔ Control: the same broken file in a visible directory IS reported.
+    _t, vis_errors = ld.collect_instances(vis)
+    assert [e["origin"] for e in vis_errors] == ["snap/_defaults.yaml"], vis_errors
+
+    triples, file_errors = ld.collect_instances(hid)
+    assert file_errors == [], file_errors
+    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
+
+
+def test_an_unlistable_subdirectory_is_named_not_dropped(tmp_path, monkeypatch):
+    """A sub-directory the walk cannot enumerate is a whole subtree NOT read,
+    and it must land in `file_errors` (via `listing.unusable`, which carries
+    `list_config_tree`'s `unscannable`). `rglob` dropped such a subtree with
+    no record at all; this pins that #2086 now names it.
+
+    ⛔ Fault injected at `os.scandir` — the call `os.walk` (inside
+    `list_config_tree`) makes per directory — NOT by `chmod 000`: under uid 0
+    the mode bits are ignored, the directory stays readable, and the test
+    would pass without ever exercising the failure."""
+    _write_tree(tmp_path, {"ok.yaml": _ca_tenant("acme", _ca("a1")),
+                           "locked/inner.yaml": _ca_tenant("inner", _ca("i1"))})
+
+    # ⛔ Control: readable, the subtree is read and nothing is reported.
+    triples, file_errors = ld.collect_instances(tmp_path)
+    assert sorted(t for t, *_ in triples) == ["acme", "inner"]
+    assert file_errors == [], file_errors
+
+    locked = os.fspath(tmp_path / "locked")
+    real_scandir = os.scandir
+
+    def scandir(path="."):
+        if os.fspath(path) == locked:
+            raise PermissionError(13, "Permission denied", locked)
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    triples, file_errors = ld.collect_instances(tmp_path)
+    assert [t for t, *_ in triples] == ["acme"]
+    assert [e["origin"] for e in file_errors] == ["locked"], file_errors
+    assert "NOT scanned" in file_errors[0]["reason"], file_errors

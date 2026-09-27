@@ -25,12 +25,12 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    has_yaml_extension,
     is_defaults_name,
+    is_hidden_name,
     defaults_files_in,
+    list_config_tree,
     readable_carriers,
     select_defaults_carrier,
-    unusable_config_entries,
     unusable_reason,
     warn_multi_carrier,
 )
@@ -98,7 +98,14 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
     _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
     not raised."""
     out: Dict[Path, List[dict]] = {}
-    for root, _dirs, files in os.walk(config_dir):
+    for root, dirs, files in os.walk(config_dir):
+        # #2086: prune `.`-prefixed directories the way the exporter's walker
+        # (and `list_config_tree`, which `collect_instances` reads through)
+        # does. Without it a `_defaults.yaml` under `.snap/` or a ConfigMap
+        # `..<timestamp>/` payload was loaded here — a broken one landed in
+        # `file_errors` for a file no other plane reads. Same predicate as
+        # the tenant pass, not a second local `startswith(".")`.
+        dirs[:] = [d for d in dirs if not is_hidden_name(d)]
         # #1588: the carrier is matched by the shared predicate, not by a
         # literal name. `_DEFAULTS.YAML` used to be invisible here, so a
         # platform-level `_custom_alerts` list declared in it vanished for
@@ -205,9 +212,28 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     #
     # rc=0 in every row: the tenant's self-service alerts (ADR-024 Capability B,
     # shipped in v2.9.0) simply did not exist for this reader, and nothing said so.
-    # Omitting the argument takes `CONFIG_SUFFIXES`, which is the exporter's set.
-    entries = sorted(config_dir.rglob("*"))
-    for bad in unusable_config_entries(entries):
+    # `list_config_tree` reads `CONFIG_SUFFIXES`, which is the exporter's set.
+    #
+    # ⛔ #2086: the tree is `list_config_tree`, NOT `rglob("*")`. `rglob`
+    # descends `.`-prefixed directories, which the exporter's walker
+    # (`pkg/config.ScanDirTree` / `IsScannedFileName`) prunes. Measured on
+    # `main` 42db84e4: a `.snap/acme.yaml` declaring a recipe compiled one
+    # extra shape (2 vs 1) for a file the exporter never serves, and a
+    # ConfigMap mount (`..<ts>/acme.yaml` + the `acme.yaml` symlink into it)
+    # read every tenant twice → one false `duplicate custom-alert name` skip
+    # per tenant. `listing.unusable` keeps the other half of the #1607
+    # contract: what the walk could not read is NAMED, not dropped.
+    #
+    # ⛔ `sorted(listing.files)` — a `Path` sort — NOT `listing.files` as is.
+    # The listing is ordered by POSIX string, where `a-b.yaml` sorts before
+    # `a/x.yaml` ('-' < '/'); `Path` compares part by part and puts
+    # `a/x.yaml` first, which is the order `sorted(rglob)` always produced.
+    # Triple order decides the first-fit cap survivor below, so taking the
+    # listing's order would flip which recipe a tenant over the cap keeps
+    # and change the compiled pack (measured: `from_dir` → `from_dash`).
+    listing = list_config_tree(config_dir)
+    entries = sorted(listing.files)
+    for bad in listing.unusable:
         # ⛔ Defaults carriers are skipped ONLY when `_dir_defaults_alerts`
         # can see them, and the dividing line is exactly `os.walk`'s: it
         # classifies by `is_dir()`, putting a directory in `dirs` and
@@ -228,10 +254,9 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
             continue
         file_errors.append(_file_record(
             str(bad.relative_to(config_dir)), unusable_reason(bad)))
-    for path in (
-        p for p in entries
-        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
-    ):
+    # `entries` are regular, non-hidden files with either YAML spelling
+    # (#1603) — `list_config_tree` already applied all three filters.
+    for path in entries:
         if is_defaults_name(path.name):
             continue
         try:
@@ -458,8 +483,10 @@ def build_shapes(config_dir: Path,
             # Cost guardrail (S4): cap TENANT-OWN recipes (inherited policy is vectorized,
             # O(1) in tenant count → uncapped). Enforced per-recipe — the OWN recipes
             # BEYOND the cap are quarantined instead of aborting the whole compile. The
-            # survivor set is deterministic — triples come from sorted(rglob) + in-file
-            # list order, so `--check` stays stable. ADR-024 §Custom Alerts cost guardrail.
+            # survivor set is deterministic — triples come from the `Path`-sorted
+            # `list_config_tree` files (the order `sorted(rglob)` gave before #2086; see
+            # `collect_instances`) + in-file list order, so `--check` stays stable.
+            # ADR-024 §Custom Alerts cost guardrail.
             #
             # ⚠️ Deterministic, but NOT "the first `cap` recipes", which is what this
             # comment used to say. A refused recipe does not increment the counter, so
