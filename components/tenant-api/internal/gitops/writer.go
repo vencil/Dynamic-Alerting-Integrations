@@ -481,10 +481,9 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 // Write validates, persists, and commits a tenant's config YAML.
 //
 // Flow (steps 6–9 are shared with writeSpecialFile via commitFileChange):
-//  1. Pre-flight: resolve the tenant's file and validate the body against the
-//     tree as it is now — early refusal only, verdict and notices discarded
+//  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
 //  2. Admission (single-writer token), then lock the tree
-//  3. Resolve the tenant's file again, under the lock (#1673 / #2078)
+//  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
 //  5. Validate again, under the lock — the authoritative verdict and the
 //     notices returned (#1681)
@@ -535,29 +534,26 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	// Step 1: PRE-FLIGHT resolve + validate, before taking an admission slot.
+	// Step 1: PRE-FLIGHT, body only — the same validateBodyOnly WritePR's
+	// Step 1 runs, and for the same reason.
 	//
-	// ⛔ THIS IS NOT THE AUTHORITATIVE RUN — Step 3 is. Both calls read the
-	// tree as it is RIGHT NOW (tenantFilePath walks conf.d for the #2078
-	// declared-elsewhere verdict; validate reads the tenant file for the
-	// addedTenantKeys baseline and the eol guard, and the root defaults), and
-	// every write already queued ahead of this one may change that tree before
-	// this one runs. Deciding here let three writes that each passed their own
-	// checks commit, in order, one id declared by two files (#1681): a write
-	// that drops a shared section, a WriteMerged that then creates that id's
-	// own file, and a write whose stale baseline still grandfathered the
-	// section and put it back.
+	// ⛔ NOTHING HERE MAY READ THE TREE. Every write queued ahead of this one
+	// may change conf.d before this one runs, so a verdict taken on the tree
+	// now is a verdict on a tree the write does not land on, in both
+	// directions (#1681):
 	//
-	// It is kept anyway, as WritePR keeps its Step 1: a bad body or an
-	// ambiguous/duplicated tenant is refused with the same typed error without
-	// consuming the single-writer token or waiting behind the queue. Its
-	// notices are DISCARDED — Step 3 collects them once, against the tree the
-	// write lands on.
-	preflightPath, err := w.tenantFilePath(tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if errs, _ := validate(w.configDir, tenantID, preflightPath, yamlContent); len(errs) > 0 {
+	//   - BYPASS: a stale addedTenantKeys baseline still grandfathers a
+	//     section an earlier write removed, and the write puts it back beside
+	//     the id's own file — one id declared by two files.
+	//   - OVER-REJECT: a stale #2078 walk (tenantFilePath) or baseline refuses
+	//     a write that is legal where it lands — an id whose other declaration
+	//     an earlier write is about to remove, or a WriteIfUnchanged whose base
+	//     is stale and should hear ErrPrecondition, not a validation verdict.
+	//
+	// What is left — is this body well-formed? — cannot go stale, and
+	// rejecting it here keeps a bad body from consuming the single-writer
+	// token. Step 3 is the authoritative run.
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -573,12 +569,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// Step 3: AUTHORITATIVE resolve + validate, under the lock, against the
 	// tree the commit below lands on. Every in-process write that changes
 	// conf.d holds w.mu, which this goroutine now holds until the commit — so
-	// no other write can make this verdict stale, unlike Step 1's.
+	// no other write can make this verdict stale.
 	//
 	// #1673: resolve ONCE here and use that path for the base-hash read, for
-	// validate's baseline and for the commit, so the three cannot disagree —
-	// a path resolved before queueing may no longer be the tenant's file (or
-	// the only one declaring it) by the time this write runs.
+	// validate's baseline and for the commit, so the three cannot disagree.
 	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return nil, err
@@ -683,11 +677,10 @@ var (
 // until it returns; while the count is non-zero, later calls fail at once.
 //
 // ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
-// before taking the writer token/lock — the pre-flight of direct Write /
-// WriteIfUnchanged, and Diff (which never takes the lock) — can each start a
-// walk within the same timeout window, and each of those can block too; walks
-// under the lock (Write / WriteIfUnchanged's authoritative pass, WriteMerged,
-// WritePR, WritePRBatch) are serialised. A blocked walk ends
+// without the writer lock — Diff — can each start a walk within the same
+// timeout window, and each of those can block too; walks under the lock
+// (Write / WriteIfUnchanged, WriteMerged, WritePR, WritePRBatch) are
+// serialised. A blocked walk ends
 // only when the file it is reading is opened for writing or the process
 // restarts: removing the file does not unblock a read already in progress.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {
@@ -840,9 +833,6 @@ func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (
 //
 // Validation runs only under the lock — unlike Write(), there is no
 // pre-flight, because the final content is not known until the base is read.
-// What it costs while holding the lock is the same as Write's authoritative
-// pass: the #2078 walk plus validate(), whose body parse is bounded by
-// CheckTenantDocSize but whose read of the existing file and the walk are not.
 //
 // notices is validate()'s advisory deprecation channel (#1231 1b), meaningful
 // only when err is nil — note it is populated even on the no-op short-circuit
@@ -1335,8 +1325,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 //
 // ⚠️ It is NOT a weaker validate — it is a DIFFERENT question ("is this body
 // well-formed?"). The authoritative answer still comes from validate, run
-// against the tree the write lands on. A caller that has no checkout between
-// the two — Write, WriteMerged — must keep calling validate directly.
+// against the tree the write lands on: every write path runs validate under
+// the lock before it commits.
 func validateBodyOnly(tenantID, yamlContent string) []string {
 	tcfg, errs := validateShape(tenantID, yamlContent)
 	if len(errs) > 0 {
