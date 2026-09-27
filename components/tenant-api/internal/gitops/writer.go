@@ -485,7 +485,7 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 //  2. Admission (single-writer token), then lock the tree
 //  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
-//  5. Validate again, under the lock — the authoritative verdict and the
+//  5. validate, under the lock — the authoritative verdict and the
 //     notices returned (#1681)
 //  6. Record HEAD before write
 //  7. Write the file resolved in step 3
