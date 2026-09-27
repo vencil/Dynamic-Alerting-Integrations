@@ -31,13 +31,9 @@ package guard
 //      before merge.
 //
 //   2. Missing required receiver fields (error)
-//      Each receiver type has type-specific required fields per
-//      scripts/tools/_lib_constants.py::RECEIVER_TYPES (the SSOT
-//      shared with the Python tooling). e.g. webhook needs `url`,
-//      slack needs `api_url`, email needs `to` + `smarthost` +
-//      `from`. Some types instead need EXACTLY ONE of a field group:
-//      pagerduty needs `service_key` or `routing_key`, never both and
-//      never neither. Same checks for receivers embedded in overrides.
+//      Contract per type: receiverTypeSpecs, pinned to the hub
+//      docs/schemas/tenant-config.schema.json (see its comment). Same
+//      checks for receivers embedded in overrides.
 //
 //   3. Override matcher contract (error)
 //      The route generator
@@ -325,9 +321,9 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 	var out []Finding
 	for _, field := range spec.Required {
 		v, ok := receiver[field]
-		// A YAML key with no value (`from:`) decodes to nil. The Python
-		// generator's `not receiver_obj[field]` and Alertmanager (nil → "",
-		// the zero value) both read that as not given, so it is missing here too.
+		// A YAML key with no value (`from:`) decodes to nil, which
+		// Alertmanager reads as the zero value = not given. Cases shared
+		// with Python: testdata/receiver_presence_cases.json.
 		if !ok || v == nil {
 			out = append(out, Finding{
 				Severity: SeverityError,
@@ -365,14 +361,10 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 
 // exactlyOneFinding checks one ExactlyOneOf group, by the schema's type
 // rule (tenant-config.schema.json: `type: ["string", "null"]`), the same
-// rule as _lib_validation.receiver_field_state on the Python side:
-//
-//   - absent, nil or "" → unset
-//   - a non-empty string → set (" " counts, as with minLength: 1)
-//   - any other type (number, bool, list, map) → error "must be a string".
-//     Stricter than Alertmanager on purpose: it renders 0 as "0" but
-//     fails to load a list, so no "counts as given" rule fits all of them.
-//
+// rule as _lib_validation.receiver_field_state on the Python side; cases
+// in testdata/receiver_presence_cases.json. A non-string value is an
+// error — stricter than Alertmanager on purpose: it renders 0 as "0" but
+// fails to load a list, so no "counts as given" rule fits all of them.
 // "Exactly one" is judged only once every field's type is valid.
 func exactlyOneFinding(tenantID, fieldPath, rtype string, receiver map[string]any, group []string) (Finding, bool) {
 	var set []string

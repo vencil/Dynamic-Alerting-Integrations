@@ -1,7 +1,7 @@
 """Python RECEIVER_TYPES ↔ tenant-config.schema.json receiver parity (#2137).
 
 The receiver presence contract — which fields are required, and which groups
-need EXACTLY ONE field set — is declared three times:
+need EXACTLY ONE field set — is declared in:
 
   - JSON Schema: docs/schemas/tenant-config.schema.json (`required` + a `oneOf`
     whose branches each require one non-empty field)
@@ -23,10 +23,8 @@ every required field and every exactly-one branch — otherwise an empty or
 null key would count as "given" in the schema only, and
 {service_key: "" | null, routing_key: "r"} would match both branches.
 
-The shared case table
-(components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json)
-runs here through the schema AND the Python route generator, and through the
-Go guard in TestReceiverPresenceCases — one verdict per row in all three.
+Shared case table (also read by the Go guard's TestReceiverPresenceCases):
+components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
 
 It also pins the ACCEPTED field set (schema `properties` vs Python
 required + optional + metadata): the schema is `additionalProperties: false`,

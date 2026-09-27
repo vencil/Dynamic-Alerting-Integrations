@@ -53,13 +53,11 @@ function silentModeNode() {
   };
 }
 
-// Required field(s) per receiver type, per
-// tenant-config.schema.json#/definitions/receiver — the same contract the
-// routing generator (RECEIVER_TYPES) and the Go guard (receiverTypeSpecs)
-// enforce; a receiver breaking it has its whole route dropped (#2033).
-// pagerduty takes exactly one of service_key / routing_key (#2137).
-// The examples inserted from here are pinned by tests/receiver-required.drift.test.ts.
-const RECEIVER_RANGE = 'type: webhook→url | slack→api_url | email→to+smarthost+from | teams→webhook_url | rocketchat→url | pagerduty→service_key XOR routing_key';
+// Not enumerated here: the per-type contract lives in
+// tenant-config.schema.json#/definitions/receiver, and a receiver breaking it
+// has its whole route dropped (#2033). The examples inserted from here are
+// pinned by tests/receiver-required.drift.test.ts.
+const RECEIVER_RANGE = 'type decides the required fields (see tenant-config.schema.json)';
 
 /* ── Tenant-file schema tree ──
  * Every key below is written under tenants.<id>: in a tenant file

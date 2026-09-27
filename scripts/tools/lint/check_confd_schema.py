@@ -132,9 +132,9 @@ def _explain(exc, validator) -> str:
     surfaces as "... is not valid under any of the given schemas" — naming
     neither the type nor the field. When exactly one branch did NOT fail on its
     `type` const, that branch is the one the author meant: report its error
-    instead (repeating inward), and for a failing `oneOf` inside it append the
-    branch's `description`, which states the rule (pagerduty: exactly one of
-    service_key / routing_key). Anything else keeps the original message.
+    instead (repeating inward), and for a failing `oneOf` inside it report the
+    branch's `description` instead, which states the rule. Anything else keeps
+    the original message.
     """
     err = exc
     while err.validator == "oneOf" and err.context:

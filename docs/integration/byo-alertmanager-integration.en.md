@@ -274,15 +274,17 @@ _routing:
     send_resolved: true  # optional: send resolved alerts
 ```
 
-Quick reference for other five receiver types:
+Quick reference for other five receiver types (each type's required fields are defined by [`tenant-config.schema.json`](../schemas/tenant-config.schema.json)):
 
-| Type | Required Fields | Example |
-|------|-----------------|---------|
-| **Email** | `to`, `smarthost`, `from` | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
-| **Slack** | `api_url` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
-| **Microsoft Teams** | `webhook_url` | `webhook_url: "https://outlook.office.com/webhook/..."` |
-| **Rocket.Chat** | `url` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
-| **PagerDuty** | exactly one of `routing_key` or `service_key` (both is rejected: Alertmanager would use v1 and ignore `routing_key`) | `routing_key: "key-123"`, `severity: "critical"` |
+| Type | Example |
+|------|---------|
+| **Email** | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
+| **Slack** | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
+| **Microsoft Teams** | `webhook_url: "https://outlook.office.com/webhook/..."` |
+| **Rocket.Chat** | `url: "https://chat.example.com/hooks/xxx/yyy"` |
+| **PagerDuty** | `routing_key: "key-123"`, `severity: "critical"` |
+
+Setting both PagerDuty `routing_key` and `service_key` is rejected: Alertmanager would use v1 and ignore `routing_key`.
 
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 

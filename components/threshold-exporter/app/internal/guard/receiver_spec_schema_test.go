@@ -23,9 +23,9 @@ import (
 //     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}},
 //     read as one ExactlyOneOf group
 //
-// Emptiness is part of the contract: this guard (exactlyOneFinding)
-// and the Python pipeline treat "" and null as unset, as Alertmanager
-// does (its config is a Go struct; both decode to the zero value). So
+// Emptiness is part of the contract (cases:
+// testdata/receiver_presence_cases.json): "" and null are unset, as in
+// Alertmanager (its config is a Go struct; both decode to the zero value). So
 // every required field must reject "" and null in the schema (a single
 // type plus minLength >= 1, or minItems >= 1 for an array), and every
 // exactly-one branch must carry `type: string` + minLength >= 1 —
@@ -69,11 +69,8 @@ func TestReceiverTypeSpecs_MatchSchema(t *testing.T) {
 }
 
 // TestReceiverPresenceCases runs the shared case table
-// (testdata/receiver_presence_cases.json) through the guard. The same
-// table runs through the schema and the Python generator in
-// tests/shared/test_receiver_spec_parity.py, so all three reach the
-// same verdict on each row (e.g. an empty service_key next to a set
-// routing_key is valid everywhere).
+// (testdata/receiver_presence_cases.json) through the guard; the table
+// is shared with tests/shared/test_receiver_spec_parity.py.
 func TestReceiverPresenceCases(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "receiver_presence_cases.json"))
 	if err != nil {

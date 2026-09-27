@@ -4,19 +4,14 @@
  * service_key / routing_key). A receiver that breaks it makes the routing
  * pipeline WARN-and-skip the whole route.
  *
- * Read from docs/schemas/tenant-config.schema.json, the hub of the three
- * copies of this contract: the Python route generator's RECEIVER_TYPES
- * (scripts/tools/_lib_constants.py) is pinned to it by
- * tests/shared/test_receiver_spec_parity.py, and the Go guard's
- * receiverTypeSpecs by TestReceiverTypeSpecs_MatchSchema. Each copy is
+ * Read from docs/schemas/tenant-config.schema.json, the hub of this contract:
+ * the Python route generator's RECEIVER_TYPES (scripts/tools/_lib_constants.py)
+ * is pinned to it by tests/shared/test_receiver_spec_parity.py, and the Go
+ * guard's receiverTypeSpecs by TestReceiverTypeSpecs_MatchSchema. Each copy is
  * compared as data against the schema's JSON, so none is regex-parsed out of
- * another language's source. Read shape, identical in all three readers:
- *   `required` minus "type"                                  → required
- *   `oneOf` whose every branch is
- *     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}} → one group
- *   (both are required: "" and null count as unset, as in Python and Go)
- * Any other presence keyword on a receiver definition throws (fail loud,
- * never read as "no constraint").
+ * another language's source. The read shape is RECEIVER_SPECS below. Any
+ * other presence keyword on a receiver definition throws (fail loud, never
+ * read as "no constraint").
  */
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';

@@ -130,16 +130,12 @@ FIELD_NOT_STRING = "not_string"
 def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
     """State of an exactly-one group field, by the schema's type rule (#2137).
 
-    The value may only be absent, ``None`` (YAML ``key:`` with no value) or a
-    string — as in tenant-config.schema.json (``type: ["string", "null"]``):
-
-    - ``FIELD_UNSET``: absent, ``None`` or ``""``.
-    - ``FIELD_SET``: a non-empty string (``" "`` counts, as with the schema's
-      ``minLength: 1``).
-    - ``FIELD_NOT_STRING``: any other type (number, bool, list, map). This is
-      an error, stricter than Alertmanager on purpose: it renders ``0`` as
-      ``"0"`` but fails to load ``[]`` (``cannot unmarshal !!seq``), so no
-      "counts as given" rule for non-strings is right for all of them.
+    Cases:
+    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+    ``FIELD_NOT_STRING`` is an error,
+    stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
+    fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
+    rule for non-strings is right for all of them.
 
     Same rule as the Go guard (internal/guard/routing.go exactlyOneFinding).
     """
@@ -155,12 +151,10 @@ def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Option
     """Check the ``exactly_one_of`` groups of ``RECEIVER_TYPES[rtype]``.
 
     Each field's state comes from ``receiver_field_state``; a non-string value
-    is reported first (``"field 'x' must be a string, got int"``), and only
-    when every field's type is valid is "exactly one" checked. Returns the
-    first problem as ``"requires exactly one of 'a' or 'b', ..."`` (callers
-    prefix tenant / receiver context), or ``None`` when every group has
-    exactly one field set. Unknown types return ``None``; callers reject those
-    separately.
+    is reported first, and only when every field's type is valid is "exactly
+    one" checked. Returns the first problem (callers prefix tenant / receiver
+    context), or ``None`` when every group has exactly one field set. Unknown
+    types return ``None``; callers reject those separately.
     """
     spec = RECEIVER_TYPES.get(rtype, {})
     for group in spec.get("exactly_one_of", []):
