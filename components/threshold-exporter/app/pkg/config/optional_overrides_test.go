@@ -88,7 +88,7 @@ optional_overrides:
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	merged := mergeTenantConfig(dir, ThresholdConfig{
+	merged := mergeTenantConfig(loadRootPlatform(dir), ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{"t1": {}},
 	})
 	if len(merged.OptionalOverrides) != 1 || merged.OptionalOverrides[0] != "db2_log_usage_percent" {

@@ -393,6 +393,27 @@ func TestMergeTenantLegacyKeyShadowedByPlatformCanonical(t *testing.T) {
 	}
 }
 
+// TestZeroRootPlatformIsAnEmptyRoot: the zero RootPlatform is a usable value
+// — "no carrier, no platform files" — not a panic waiting for a caller that
+// did not go through LoadRootPlatform.
+func TestZeroRootPlatformIsAnEmptyRoot(t *testing.T) {
+	t.Parallel()
+	body := []byte("tenants:\n  tx:\n    mysql_connections: \"90\"\n")
+	var zero RootPlatform
+	got := MergeTenantOverRootPlatform(zero, "tx", body)
+	want := MergeTenantWithRootDefaults(t.TempDir(), "tx", body)
+	if a, b := resolvedRows(&got, "tx"), resolvedRows(&want, "tx"); strings.Join(a, "\n") != strings.Join(b, "\n") {
+		t.Errorf("zero root rows %v, empty root rows %v", a, b)
+	}
+	if len(got.Defaults) != 0 || len(got.Tenants["tx"]) != 1 {
+		t.Errorf("zero root merged to Defaults %v, Tenants %v", got.Defaults, got.Tenants)
+	}
+	gv, wv := got.ValidateTenantKeys(), want.ValidateTenantKeys()
+	if strings.Join(gv.Errors, "|") != strings.Join(wv.Errors, "|") || strings.Join(gv.Notices, "|") != strings.Join(wv.Notices, "|") {
+		t.Errorf("zero root validation %+v, empty root %+v", gv, wv)
+	}
+}
+
 // TestMergeTenantPlatformLayerSeesAnEdit: the decode cache is keyed by the
 // bytes' hash, so an edited platform file is decoded again, not served stale.
 func TestMergeTenantPlatformLayerSeesAnEdit(t *testing.T) {

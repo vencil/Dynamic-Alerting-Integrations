@@ -1,10 +1,10 @@
 package handler
 
-// The bounded GET merge (Deps.loadMergedConfig) runs on boundedcall's own
-// goroutine, out of reach of chi's Recoverer. A panic in the merge must come
-// back as a 500 with the fixed message — not take the process down (before
-// the bound, the merge ran on the handler goroutine and Recoverer turned a
-// panic into a 500).
+// The bounded GET root read (Deps.loadMergedConfig) runs on boundedcall's own
+// goroutine, out of reach of chi's Recoverer. A panic in it must come back as
+// a 500 with the fixed message — not take the process down (before the bound,
+// the read ran on the handler goroutine and Recoverer turned a panic into a
+// 500).
 
 import (
 	"net/http"
@@ -15,13 +15,13 @@ import (
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
-func TestGetTenant_MergePanicIsA500(t *testing.T) {
+func TestGetTenant_RootReadPanicIsA500(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"90\"\n",
 	})
 	d := &Deps{ConfigDir: configDir}
-	d.mergeTenant = func(string, string, []byte) cfg.TenantMerge { panic("merge exploded: secret detail") }
+	d.loadRoot = func(string) cfg.RootPlatform { panic("root read exploded: secret detail") }
 
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/tx", "id", "tx", nil)
 	w := httptest.NewRecorder()
@@ -34,7 +34,7 @@ func TestGetTenant_MergePanicIsA500(t *testing.T) {
 	}
 
 	// The guard is still usable: the next GET (real merge) succeeds.
-	d.mergeTenant = nil
+	d.loadRoot = nil
 	w = httptest.NewRecorder()
 	GetTenant(d)(w, newRequestWithChiParam("GET", "/api/v1/tenants/tx", "id", "tx", nil))
 	if w.Code != http.StatusOK {

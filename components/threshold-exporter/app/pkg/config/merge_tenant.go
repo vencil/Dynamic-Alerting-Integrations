@@ -177,7 +177,7 @@ func platformLayerNotice(file, tenantID, msg string) string {
 //
 // This is the single source of truth for the lightweight, root-only merge used
 // across the tenant-api boundary:
-//   - GET  /api/v1/tenants/{id}            (handler.loadMergedConfig, raw bytes)
+//   - GET  /api/v1/tenants/{id}            (handler, via the split halves)
 //   - POST /api/v1/tenants/{id}/validate   (dry-run validation, via the write
 //     gate's validate)
 //   - PUT  /api/v1/tenants/{id}            (gitops write-boundary validation,
@@ -195,11 +195,43 @@ func platformLayerNotice(file, tenantID, msg string) string {
 // _defaults.yaml cascades are out of scope here, matching the historical
 // loadMergedConfig behavior this consolidates.
 //
-// ⚠️ It reads every root `_` file, and a read can block (a FIFO, a hung
-// mount): it takes no deadline. The tenant-api GET path bounds it
-// (handler.loadMergedConfig); the write paths walk the whole tree, bounded,
-// before they get here.
+// It is LoadRootPlatform + MergeTenantOverRootPlatform. ⚠️ The read can
+// block (see LoadRootPlatform); the tenant-api GET path calls the two halves
+// itself so it can bound and share the read.
 func MergeTenantWithRootDefaults(configDir, tenantID string, tenantData []byte) TenantMerge {
+	return MergeTenantOverRootPlatform(LoadRootPlatform(configDir), tenantID, tenantData)
+}
+
+// RootPlatform is ONE read of a conf.d root's platform surface — the
+// selected defaults carrier and every root platform file, each decoded (from
+// the content-hash cache when its bytes are unchanged). It is independent of
+// any tenant, which is why it is split out of the per-tenant merge: the
+// tenant-api GET shares one in-flight read among concurrent requests
+// (#2208, PR #2214 review) and then merges each tenant over it.
+//
+// ⛔ A SNAPSHOT, NOT A CACHE. It holds what the files said when
+// LoadRootPlatform ran. Callers merge over it and drop it; keeping one
+// across requests would serve stale platform values. Read-only and safe
+// for concurrent MergeTenantOverRootPlatform calls. The zero value is an
+// empty root: no carrier, no platform files.
+type RootPlatform struct {
+	r rootPlatform
+}
+
+// LoadRootPlatform reads configDir's root platform surface (one root-only
+// walk, scanRootPlatform). A root that cannot be walked yields an empty
+// surface — the historical "no platform defaults" answer.
+//
+// ⚠️ It reads files and takes no deadline: a read can block (a FIFO, a hung
+// mount). The tenant-api GET path bounds it; the write paths walk the whole
+// tree, bounded, before they get here.
+func LoadRootPlatform(configDir string) RootPlatform {
+	return RootPlatform{r: loadRootPlatform(configDir)}
+}
+
+// MergeTenantOverRootPlatform is MergeTenantWithRootDefaults over a root
+// surface already read by LoadRootPlatform. It reads no file.
+func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData []byte) TenantMerge {
 	// Decode the tenant body into the typed config. A decode error contributes
 	// no overrides (the historical behavior: the merge loop was guarded by
 	// `err == nil`); YAML validity is the caller's gate.
@@ -208,7 +240,7 @@ func MergeTenantWithRootDefaults(configDir, tenantID string, tenantData []byte) 
 		tenantCfg = ThresholdConfig{}
 	}
 
-	merged := mergeTenantConfig(configDir, tenantCfg)
+	merged := mergeTenantConfig(root.r, tenantCfg)
 
 	// Fallback: a flat key-value document (no `tenants:` wrapper) is wrapped
 	// under tenantID. Preserves the historical loadMergedConfig behavior. This
@@ -250,14 +282,14 @@ func MergeTenantWithRootDefaults(configDir, tenantID string, tenantData []byte) 
 // and ApplyProfiles are otherwise identical, so for a tenants-block body this
 // returns the same result as the byte entry point.
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
-	merged := mergeTenantConfig(configDir, tenantCfg)
+	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
 	merged.ApplyProfiles()
 	return merged
 }
 
 // mergeTenantConfig is the shared core behind both Merge*TenantWithRootDefaults
 // entry points: it builds a fresh ThresholdConfig, overlays the root defaults
-// carrier (Defaults + OptionalOverrides + StateFilters) from configDir, then
+// carrier (Defaults + OptionalOverrides + StateFilters) from root, then
 // per tenant the root platform files' `tenants:` entries, then the
 // already-decoded tenantCfg's `tenants:` block. It does NOT run the flat-KV
 // fallback or ApplyProfiles — the entry points layer those on so each
@@ -288,7 +320,7 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 // `_profile` — the tenant's own or one a platform entry elects — changes
 // nothing here, exactly as before this layer was read. /metrics does expand
 // them; closing that is #1385's step.
-func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) TenantMerge {
+func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge {
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
 		StateFilters: make(map[string]StateFilter),
@@ -297,7 +329,7 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) TenantMerge 
 	}
 	out := TenantMerge{own: make(map[string]map[string]ScheduledValue, len(tenantCfg.Tenants))}
 
-	// Load the root platform surface. A missing carrier is fine — the tenant
+	// The root platform surface (read by the caller). A missing carrier is fine — the tenant
 	// may legitimately rely on metric keys that simply have no default yet,
 	// in which case ValidateTenantKeys still flags genuinely unknown keys.
 	//
@@ -306,7 +338,6 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) TenantMerge 
 	// join a root holding only `_defaults.yml` or `_DEFAULTS.YAML` — both served
 	// by the exporter — read as NO platform surface, so the tenant-api write
 	// gate refused valid keys as unknown and GET under-reported (blind review).
-	root := loadRootPlatform(configDir)
 	if c := root.carrier(); c != nil {
 		if c.parsed.err != nil {
 			// A file that EXISTS but cannot be decoded is not the benign case
@@ -378,9 +409,15 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) TenantMerge 
 
 // rootPlatform is one read of configDir's root platform files: every file
 // rootPlatformKeys selects, in merge order, with its (cached) decode.
+//
+// ⛔ Shared read-only by concurrent merges (RootPlatform): nothing may write
+// to it, its files or their decodes after loadRootPlatform returns.
 type rootPlatform struct {
-	files      []rootPlatformFile
-	carrierIdx int // index into files of the selected root carrier; -1 = none
+	files []rootPlatformFile
+	// carrierPos is 1 + the index into files of the selected root carrier;
+	// 0 = none. Offset by one so the ZERO rootPlatform (and so the zero
+	// RootPlatform) means "no carrier" instead of indexing an empty files.
+	carrierPos int
 }
 
 type rootPlatformFile struct {
@@ -390,17 +427,17 @@ type rootPlatformFile struct {
 }
 
 func (r rootPlatform) carrier() *rootPlatformFile {
-	if r.carrierIdx < 0 {
+	if r.carrierPos <= 0 || r.carrierPos > len(r.files) {
 		return nil
 	}
-	return &r.files[r.carrierIdx]
+	return &r.files[r.carrierPos-1]
 }
 
 // loadRootPlatform walks the root once (scanRootPlatform) and decodes each
 // selected file through rootPlatformParses. A root that cannot be walked
 // yields no files — the historical "no platform surface" answer.
 func loadRootPlatform(configDir string) rootPlatform {
-	out := rootPlatform{carrierIdx: -1}
+	var out rootPlatform
 	scan, err := scanRootPlatform(configDir)
 	if err != nil {
 		return out
@@ -414,7 +451,7 @@ func loadRootPlatform(configDir string) rootPlatform {
 			continue
 		}
 		if k == carrierKey {
-			out.carrierIdx = len(out.files)
+			out.carrierPos = len(out.files) + 1
 		}
 		out.files = append(out.files, rootPlatformFile{
 			key:     k,

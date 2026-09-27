@@ -2,9 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -155,35 +157,121 @@ var defaultRootReadGuard = &boundedcall.Guard{}
 
 // loadMergedConfig merges the tenant file over the conf.d root platform
 // surface — the defaults carrier and the root platform files' per-tenant
-// `tenants:` layer. Thin wrapper over the shared cfg.MergeTenantWithRootDefaults
-// so the GET / validate / write-boundary paths all merge identically (the
-// consolidation that closed the ADR-024 PR4 / #704 write-vs-read asymmetry).
+// `tenants:` layer. Same merge core as validate and the write gate
+// (cfg.MergeTenantWithRootDefaults is exactly these two halves), so GET /
+// validate / write all merge identically (the consolidation that closed the
+// ADR-024 PR4 / #704 write-vs-read asymmetry).
 //
-// ⛔ BOUNDED (#2208). The merge reads every root `_*.yaml`, and a read that
-// never returns (a FIFO, a hung mount) would hang this GET — before #2208
-// only a file named like the defaults carrier could. The writer's paths are
-// already bounded by their conf.d walk; this is the same mechanism
-// (boundedcall), on its own guard so a stuck GET read does not fail writes.
+// ⛔ THE ROOT READ IS BOUNDED AND SHARED (#2208, PR #2214 review). It reads
+// every root `_*.yaml`, and a read that never returns (a FIFO, a hung mount)
+// would hang this GET — before #2208 only a file named like the defaults
+// carrier could. So:
+//
+//   - bounded: the read runs under RootReadGuard (boundedcall, the writer's
+//     conf.d-walk mechanism, on its own guard so a stuck GET read does not
+//     fail writes);
+//   - shared: the read is tenant-independent, so concurrent GETs for one
+//     conf.d join ONE in-flight read (rootReads) instead of each starting
+//     their own. A stuck file therefore costs one stuck goroutine, not one
+//     per GET that arrived inside the first timeout window; after it times
+//     out, the guard fails new GETs at once until the read returns.
+//
+// ⚠️ WHAT A JOINER SEES. A GET that arrives while a read is in progress
+// joins it and gets what the files said when THAT read started — not
+// necessarily what they say when the GET arrived: a platform file rewritten
+// after the read began is not seen by GETs that join it. That staleness
+// window is at most the duration of the one read, and at most the guard's
+// timeout. A GET that starts after the read FINISHED always reads again
+// (nothing is kept; unchanged files still hit the content-hash decode
+// cache). The per-tenant merge then runs on this goroutine — a panic there
+// reaches chi's Recoverer, as before the bound.
 func (d *Deps) loadMergedConfig(tenantID string, tenantData []byte) (cfg.TenantMerge, error) {
 	guard := d.RootReadGuard
 	if guard == nil {
 		guard = defaultRootReadGuard
 	}
-	merge := d.mergeTenant
-	if merge == nil {
-		merge = loadMergedConfig
+	load := d.loadRoot
+	if load == nil {
+		load = cfg.LoadRootPlatform
 	}
-	// A panic in the merge comes back as boundedcall.ErrPanicked (the merge
-	// runs on boundedcall's goroutine, where chi's Recoverer cannot reach);
-	// the caller logs it and answers with the same fixed 500.
-	return boundedcall.Do(guard, func() cfg.TenantMerge {
-		return merge(d.ConfigDir, tenantID, tenantData)
+	// Keyed by guard as well as directory: callers with different bounds
+	// (tests) must not wait on each other's read.
+	key := fmt.Sprintf("%p\x00%s", guard, d.ConfigDir)
+	root, err := rootReads.do(key, func() (cfg.RootPlatform, error) {
+		// A panic in the read comes back as boundedcall.ErrPanicked (it runs
+		// on boundedcall's goroutine, where chi's Recoverer cannot reach);
+		// the caller logs it and answers with the same fixed 500.
+		return boundedcall.Do(guard, func() cfg.RootPlatform { return load(d.ConfigDir) })
 	})
+	if err != nil {
+		return cfg.TenantMerge{}, err
+	}
+	return cfg.MergeTenantOverRootPlatform(root, tenantID, tenantData), nil
 }
 
-// loadMergedConfig is the unbounded merge (see Deps.loadMergedConfig).
+// loadMergedConfig is the unbounded, unshared merge (see Deps.loadMergedConfig).
 func loadMergedConfig(configDir, tenantID string, tenantData []byte) cfg.TenantMerge {
 	return cfg.MergeTenantWithRootDefaults(configDir, tenantID, tenantData)
+}
+
+// rootReads is the process-wide in-flight set behind Deps.loadMergedConfig.
+var rootReads = &rootReadFlight{}
+
+// rootReadFlight merges concurrent calls with the same key into one: the
+// first caller runs fn, the others wait for its result. A single-purpose
+// singleflight (the module has no direct dependency on x/sync, and this
+// needs nothing beyond "wait for the one in flight").
+//
+// ⛔ NOTHING IS REMEMBERED. The entry is removed the moment fn returns, so a
+// call that starts afterwards runs fn again. Waiters get the leader's result
+// exactly, error included — when the leader's read times out, every GET that
+// joined it fails with it, and none of them started a read of its own.
+//
+// ⚠️ A joiner gets the result of a read that began BEFORE it arrived, so it
+// sees the files as they were when the leader started reading them; a
+// rewrite in between is invisible to it. The window is bounded by the one
+// read's duration, hence by the guard's timeout. Pinned by
+// TestGetTenant_ConcurrentGETsGetTheirOwnTenantAndFreshFiles (no read is
+// reused once it finished) and TestRootReadFlightMergesOnlyWhatIsInFlight.
+type rootReadFlight struct {
+	mu    sync.Mutex
+	calls map[string]*rootReadCall
+}
+
+type rootReadCall struct {
+	done    chan struct{}
+	val     cfg.RootPlatform
+	err     error
+	waiters int // joined callers, under rootReadFlight.mu (observability for tests)
+}
+
+func (f *rootReadFlight) do(key string, fn func() (cfg.RootPlatform, error)) (cfg.RootPlatform, error) {
+	f.mu.Lock()
+	if c, ok := f.calls[key]; ok {
+		c.waiters++
+		f.mu.Unlock()
+		<-c.done
+		return c.val, c.err
+	}
+	c := &rootReadCall{done: make(chan struct{})}
+	if f.calls == nil {
+		f.calls = make(map[string]*rootReadCall)
+	}
+	f.calls[key] = c
+	f.mu.Unlock()
+
+	// fn is boundedcall.Do, which neither panics nor outlives its bound, so
+	// the entry is always removed and the waiters always released. The defer
+	// keeps that true should fn ever change.
+	defer func() {
+		f.mu.Lock()
+		delete(f.calls, key)
+		f.mu.Unlock()
+		close(c.done)
+	}()
+	c.err = errors.New("root platform read did not complete")
+	c.val, c.err = fn()
+	return c.val, c.err
 }
 
 // tenantIDFromPath is a helper for chi URL param extraction used by middleware.

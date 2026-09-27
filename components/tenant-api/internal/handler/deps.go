@@ -167,12 +167,14 @@ type Deps struct {
 	// which has no reason to tune it — uses one process-wide guard with
 	// boundedcall.DefaultTimeout. A test that stalls a read must pass its
 	// own: a stuck read fails every GET sharing the guard until it returns.
+	// Concurrent GETs for one ConfigDir under one guard share a single
+	// in-flight read (see loadMergedConfig).
 	RootReadGuard *boundedcall.Guard
 
-	// mergeTenant replaces the merge GET runs under RootReadGuard; nil (every
-	// production Deps) is cfg.MergeTenantWithRootDefaults. A test seam, per
+	// loadRoot replaces the root platform read GET runs under RootReadGuard;
+	// nil (every production Deps) is cfg.LoadRootPlatform. A test seam, per
 	// Deps so parallel tests do not share it.
-	mergeTenant func(configDir, tenantID string, tenantData []byte) cfg.TenantMerge
+	loadRoot func(configDir string) cfg.RootPlatform
 
 	// MaxBodyBytes caps the request body every write handler will
 	// read via `io.LimitReader`. Wired from `TA_MAX_BODY_BYTES`
