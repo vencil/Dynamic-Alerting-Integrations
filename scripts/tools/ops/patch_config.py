@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import find_duplicate_key  # noqa: E402  (#2123 shared check)
+from _threshold_alerts import alerts_for_key  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_defaults_name,
@@ -437,26 +438,15 @@ def patch_multifile(cm_data, tenant, metric_key, value):
 
 
 def find_affected_alerts(metric_key):
-    """Identify alert rules that reference this metric.
+    """Alert names that read ``metric_key`` in the rule packs.
 
-    Returns list of alert rule names (best-effort, based on naming convention).
+    [] when no rule-pack alert reads the key; None when the rule packs were
+    not found (stderr says so) — never a pattern guessed from the key's
+    spelling, which named no real alert (``*MysqlConnections*`` for what the
+    pack calls ``MariaDBHighConnections``).
     """
-    # Strip dimensional suffix for matching
-    base_metric = metric_key.split("{")[0] if "{" in metric_key else metric_key
-
-    # Common alert naming patterns based on metric names
-    alerts = []
-    parts = base_metric.split("_")
-
-    # Build likely alert name patterns
-    # e.g., mysql_connections → MariaDBHighConnections
-    # e.g., container_cpu → PodContainerHighCPU
-    if len(parts) >= 2:
-        # CamelCase conversion
-        camel = "".join(p.capitalize() for p in parts)
-        alerts.append(f"*{camel}*")
-
-    return alerts
+    alerts = alerts_for_key(metric_key)
+    return None if alerts is None else list(alerts)
 
 
 CURRENT_VALUE_NOTE = "Current value: not read by this tool (#1950); check the exporter."
@@ -510,9 +500,14 @@ def print_diff(diff):
         print("    No change: apply would write nothing.")
     print(f"  {CURRENT_VALUE_NOTE}")
 
-    if diff["affected_alerts"]:
-        print()
-        print(f"  Affected alerts (pattern): {', '.join(diff['affected_alerts'])}")
+    alerts = diff["affected_alerts"]
+    print()
+    if alerts is None:
+        print("  Affected alerts: unknown (rule packs not found)")
+    elif alerts:
+        print(f"  Affected alerts: {', '.join(alerts)}")
+    else:
+        print("  Affected alerts: none (no rule-pack alert reads this key)")
 
     print()
     if diff["changed"]:

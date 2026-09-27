@@ -87,14 +87,19 @@ class TestFindAffectedAlerts:
     """find_affected_alerts() 測試。"""
 
     def test_normal_metric(self):
-        """測試常規 metric 查詢。"""
-        alerts = pc.find_affected_alerts("mysql_connections")
-        assert len(alerts) > 0
+        """告警名取自 rule pack（舊版回 key 拼法猜的 *MysqlConnections*）。"""
+        assert pc.find_affected_alerts("mysql_connections") == [
+            "MariaDBHighConnections", "MariaDBSystemBottleneck"]
 
     def test_dimensional_metric(self):
         """帶維度的 metric 應 strip {} 後匹配。"""
-        alerts = pc.find_affected_alerts('redis_queue_length{queue="tasks"}')
-        assert len(alerts) > 0
+        assert pc.find_affected_alerts('redis_connected_clients{instance="a"}') == \
+            pc.find_affected_alerts("redis_connected_clients") != []
+
+    def test_unknown_is_none_not_empty(self, monkeypatch):
+        """找不到 rule pack 是「不知道」，與「沒有告警讀它」（[]）分開。"""
+        monkeypatch.setattr(pc, "alerts_for_key", lambda key: None)
+        assert pc.find_affected_alerts("mysql_connections") is None
 
 
 class TestDetectMode:
@@ -120,7 +125,7 @@ class TestPrintDiff:
             "tenant": "db-a", "metric_key": "mysql_connections",
             "configmap_mode": "multi-file", "changed": changed,
             "before": None, "after": {"value": "50", "state": "custom: 50"},
-            "affected_alerts": ["*MysqlConnections*"],
+            "affected_alerts": ["MariaDBHighConnections"],
         }
 
     def test_changed_diff(self, capsys):
@@ -138,6 +143,20 @@ class TestPrintDiff:
         assert "already" not in out and "Before" not in out
         assert "Current value: not read by this tool" in out
         assert "To apply" not in out
+
+    @pytest.mark.parametrize("alerts, line", [
+        (["MariaDBHighConnections"], "Affected alerts: MariaDBHighConnections"),
+        ([], "Affected alerts: none (no rule-pack alert reads this key)"),
+        (None, "Affected alerts: unknown (rule packs not found)"),
+    ])
+    def test_affected_alerts_line(self, capsys, alerts, line):
+        """三種狀態分開印：有名字、沒有告警讀它、不知道。"""
+        diff = self._diff(True)
+        diff["affected_alerts"] = alerts
+        pc.print_diff(diff)
+        out = capsys.readouterr().out
+        assert line in out
+        assert "(pattern)" not in out
 
 
 # ---------------------------------------------------------------------------
