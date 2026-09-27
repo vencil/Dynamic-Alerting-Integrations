@@ -94,7 +94,6 @@ lang: zh
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
 | `path-metadata-consistency-check` | path/metadata 一致（warn） | 移檔後 |
 | `orphan-doc-check` | 孤兒文件偵測 | 新增/刪文件後 |
-| `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 
 ---
