@@ -1362,6 +1362,120 @@ def scan_commands(doc: Path, rel: str, ctx: _Ctx, errors: list[str]) -> list[Fin
     return findings
 
 
+_TABLE_CMD = re.compile(r"^`(?:da-tools\s+)?([A-Za-z][\w-]*)`")
+# A column that carries a command's flags: 常用 Flag / Key Flags / 最小參數 /
+# Minimum Parameters. Matched on the header, not on the cell shape, so a
+# prose column that merely mentions a flag stays prose.
+_FLAG_COLUMN = re.compile(r"flag|參數|param", re.I)
+
+
+def _flag_union(model: ParserModel) -> ParserModel:
+    """Every option of the parser and all its sub-parsers, as one flat model.
+
+    A flag-list cell names flags without saying which action they belong to,
+    so a tool with sub-commands is judged against the union: a flag no action
+    declares is still caught, a flag declared by a different action than the
+    reader needs is not (disclosed as NOT scored).
+    """
+    options = set(model.options)
+    arity = dict(model.arity)
+    for sub in (model.subparsers or {}).values():
+        u = _flag_union(sub)
+        options |= u.options
+        arity.update(u.arity)
+    return ParserModel(frozenset(options), arity, (), None, None)
+
+
+def scan_command_tables(doc: Path, rel: str, ctx: _Ctx,
+                        errors: list[str]) -> list[Finding]:
+    """Carrier D (本輪決策 D1): a command column paired with its flag column.
+
+    A row whose first cell is a subcommand (`` `diagnose` ``) and whose header
+    names a flag column is read as that command's flags. A cell of code spans
+    (`` `--config-dir <dir>` ``) is an argv fragment and gets V0–V2 like a
+    fenced line would, minus V5 (a fragment is not a whole command line); a
+    cell of bare text (``--config-dir <PATH>, --namespace <NS>``) is a list
+    and each flag is resolved on its own. A span that already starts with
+    ``da-tools`` is the inline-span carrier's.
+    """
+    findings: list[Finding] = []
+    lines = doc.read_text(encoding="utf-8").splitlines()
+    header: list[str] | None = None
+    for number, line, fence in walk_lines(lines):
+        if fence is not None or not line.lstrip().startswith("|"):
+            header = None
+            continue
+        cells = _cells(line)
+        if header is None:
+            header = cells
+            continue
+        if set("".join(cells)) <= set("-: |"):
+            continue
+        m = _TABLE_CMD.match(cells[0].strip()) if cells else None
+        if not m or m.group(1) not in ctx.command_map:
+            continue
+        columns = [i for i, h in enumerate(header[1:], 1)
+                   if _FLAG_COLUMN.search(h) and i < len(cells)]
+        if not columns:
+            continue
+        command = m.group(1)
+        model = ctx.parsers.get(command)
+        injected = ctx.injected_for.get(command, frozenset())
+        reason = None
+        ig = _ROW_IGNORE.search(line) if INLINE_IGNORE in line else None
+        if ig:
+            reason = _ignore_reason(ig)
+            if not reason:
+                errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
+                              f"write `<!-- {INLINE_IGNORE}: <why> -->`")
+                continue
+            ctx.stats["ignored"] += 1
+            ctx.ignore_sites.add((rel, number))
+        ctx.stats["table_cmd_rows"] += 1
+        found: list[Finding] = []
+        for i in columns:
+            cell = cells[i]
+            if ig:
+                cell = _ROW_IGNORE.sub("", cell)
+            spans = _SPAN.findall(cell)
+            if model is None:
+                ctx.stats["cmd_no_parser"] += 1
+                continue
+            if spans:
+                for span in spans:
+                    tokens = tokenize(span)
+                    if tokens is None:
+                        ctx.stats["cmd_unparseable"] += 1
+                        continue
+                    if tokens[:1] == ["da-tools"]:
+                        continue
+                    found += judge_argv(tokens, command, model, injected,
+                                        ctx.stats, rel, number)
+                continue
+            union = _flag_union(model)
+            if model.subparsers:
+                ctx.stats["table_flags_by_union"] += 1
+            for flag in _FLAG_IN_CELL.findall(cell):
+                ctx.stats["scored"] += 1
+                if flag in injected:
+                    continue
+                res = resolve_flag(flag, union)
+                if res.verdict == "V1":
+                    found.append(Finding(
+                        "V1", rel, number, command, flag,
+                        f"the `{command}` row lists `{flag}`, which `{command}` "
+                        f"does not declare — a reader who copies it gets "
+                        f"`unrecognized arguments`, rc=2 (本輪決策 D1)."))
+                elif res.verdict == "V2":
+                    found.append(Finding(
+                        "V2", rel, number, command, flag,
+                        f"the `{command}` row lists `{flag}`, which argparse "
+                        f"only accepts as an abbreviation of `{res.option}` "
+                        f"(#1514). Spell it out."))
+        findings += _dedupe(found, reason)
+    return findings
+
+
 def _dedupe(found: list[Finding], reason: str | None) -> list[Finding]:
     if reason is not None:
         found = [f._replace(ignored=reason) for f in found]
@@ -1736,7 +1850,7 @@ _STAT_KEYS = (
     "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
     "unscanned_carrier_files", "portal_commands", "portal_unavailable",
     "cmd_synopsis", "cmd_injected_assumed", "cmd_parse_placeholder_value",
-    "cmd_parse_crashed")
+    "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union")
 
 
 class PortalCommand(NamedTuple):
@@ -1892,6 +2006,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     findings: list[Finding] = []
     for doc in docs:
         findings += scan_commands(doc, _rel(doc, repo_root), ctx, errors)
+        findings += scan_command_tables(doc, _rel(doc, repo_root), ctx, errors)
     portal_dir = repo_root / PORTAL_PLAYGROUND_DIR.relative_to(REPO_ROOT)
     scanned_js: frozenset[Path] = frozenset()
     if portal is None:
@@ -1966,7 +2081,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     s = stats
     return [
         f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
-        f"inline code spans, {s['cmd_manifest_argvs']} manifest args lists, "
+        f"inline code spans, {s['table_cmd_rows']} command-table rows, {s['cmd_manifest_argvs']} manifest args lists, "
         f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
         f"Playground command lines"
         + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
@@ -2000,7 +2115,11 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
         f"(portal JS/JSX, shell scripts) outside this scan set",
-        f"NOT parse-checked (V5): inline code spans and CLI Playground lines, "
+        f"NOT scored per action: {s['table_flags_by_union']} command-table flag "
+        f"lists of a tool with sub-commands, judged against the union of every "
+        f"action's flags (a flag that exists on a different action passes)",
+        f"NOT parse-checked (V5): inline code spans, command-table cells and "
+        f"CLI Playground lines, "
         f"{s['cmd_synopsis']} synopsis lines (`[options]`, `...`), "
         f"{s['cmd_parse_placeholder_value']} lines whose parse error is about a "
         f"value while a placeholder is on the line (or a stray word beside a "

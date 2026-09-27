@@ -858,6 +858,62 @@ class TestV5ParseArgs:
         assert "V5" in mod.VERDICTS
 
 
+class TestCommandTables:
+    """表格載體（本輪決策 D1）：命令欄＋旗標欄同列配對。"""
+
+    _HEAD = "| 命令 | 說明 | 常用 Flag |\n|------|------|------|\n"
+
+    def _table(self, tmp_path, *rows, head=None):
+        return _scan(tmp_path, docs=[_doc(tmp_path, (head or self._HEAD) + "".join(rows))])
+
+    def test_a_flag_list_cell_is_judged_flag_by_flag(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --config-dir <PATH>, --bogus, --verb |\n")
+        assert _open(r.findings) == [("V1", "widget", "--bogus"),
+                                     ("V2", "widget", "--verb")]
+        assert r.stats["table_cmd_rows"] == 1
+
+    def test_an_injected_flag_in_a_list_passes(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --prometheus <URL> |\n")
+        assert _open(r.findings) == []
+
+    def test_a_code_span_cell_is_an_argv_fragment(self, tmp_path):
+        head = "| 命令 | 用途 | 最小參數 |\n|---|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | x | `db-a --config-dir <dir> --bogus` |\n",
+                        head=head)
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_span_that_is_already_a_command_is_left_to_the_inline_carrier(self, tmp_path):
+        head = "| Command | Purpose | Minimum Parameters |\n|---|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | x | `da-tools widget db-a --bogus` |\n",
+                        head=head)
+        # one finding, from the inline-span carrier — not two
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_table_without_a_flag_column_is_prose(self, tmp_path):
+        head = "| 命令 | 說明 |\n|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | 支援 --bogus 之類的說明文字 |\n", head=head)
+        assert _open(r.findings) == []
+        assert r.stats["table_cmd_rows"] == 0
+
+    def test_a_row_whose_first_cell_is_not_a_command_is_skipped(self, tmp_path):
+        r = self._table(tmp_path, "| `not-a-command` | x | --bogus |\n")
+        assert _open(r.findings) == []
+
+    def test_a_tool_with_actions_is_judged_against_the_union(self, tmp_path):
+        r = self._table(tmp_path, "| `tool2` | x | --repo <R>, --message <M>, --bogus |\n")
+        assert _open(r.findings) == [("V1", "tool2", "--bogus")]
+        assert r.stats["table_flags_by_union"] == 1
+
+    def test_an_ignored_row_is_suppressed_with_its_reason(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --bogus <!-- datools-cmd-ignore: planned -->|\n")
+        assert _open(r.findings) == []
+        assert [f.ignored for f in r.findings] == ["planned"]
+
+    def test_the_real_tables_are_read(self):
+        r = mod.scan()
+        assert r.stats["table_cmd_rows"] >= 200, r.stats["table_cmd_rows"]
+
+
 class TestBaselineLedger:
     def _entry(self, **kw):
         base = dict(file="doc.md", command="widget", verdict="V1", token="--ci",
