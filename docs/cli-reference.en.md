@@ -244,9 +244,9 @@ da-tools check-alert MariaDBHighConnections db-a
 
 #### diagnose
 
-Perform comprehensive health check for a single tenant.
+Health check for a single tenant: the MariaDB Pod's status, the exporter's `mysql_up`, the operational mode (maintenance / silent), and, when `--config-dir` is given, the profile and inheritance chain.
 
-**Purpose**: Verify tenant configuration, metric collection, alert rule completeness.
+**Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod check always looks for an `app=mariadb` Pod in the namespace named after the tenant, and the exporter check always queries `mysql_up{instance="<tenant>"}`, so a non-MariaDB tenant always comes back `status: error` (`Pod not found`).
 
 **Syntax**
 
@@ -264,30 +264,27 @@ da-tools diagnose <tenant> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--config-dir <PATH>` | Tenant config directory (to query profile info) | `./conf.d` |
-| `--namespace <NS>` | K8s namespace (to query ConfigMap) | `monitoring` |
+| `--config-dir <PATH>` | Tenant config directory; profile and inheritance chain are looked up only when given | (none) |
+| `--show-inheritance` | Print only the full inheritance-chain resolution (requires `--config-dir`) | false |
+| `--json` | JSON output. Output is always JSON; the flag is accepted for compatibility | true |
+
+The Pod is always looked up in the namespace named after the tenant; there is no option to choose another namespace.
 
 **Output**
 
-JSON format health check report.
+One line of JSON. When healthy it has just two fields:
 
 ```json
-{
-  "status": "healthy",
-  "tenant": "db-a",
-  "profile": "standard-mariadb",
-  "checks": {
-    "config": "ok",
-    "metrics": "ok",
-    "alerts": "ok"
-  },
-  "details": {
-    "config_source": "threshold-config ConfigMap",
-    "metric_count": 42,
-    "alert_count": 18
-  }
-}
+{"status": "healthy", "tenant": "db-a"}
 ```
+
+When something is wrong it lists `issues` and recent error logs:
+
+```json
+{"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
+```
+
+A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`.
 
 **Examples**
 
@@ -310,9 +307,9 @@ docker run --rm --network=host \
 
 | Code | Description |
 |------|-------------|
-| `0` | Healthy (all checks pass) |
-| `1` | One or more checks failed |
-| `2` | Parameter error or connection failed |
+| `0` | Check completed: `0` whether `status` is `healthy` or `error`; read the output's `status` to judge health |
+| `1` | Without `kubectl` in the environment the tool ends with a Python traceback (known issue, tracked in issue 1513) |
+| `2` | Parameter error: missing tenant, or `--show-inheritance` without `--config-dir` |
 
 ---
 
@@ -501,39 +498,42 @@ docker run --rm --network=host \
 
 #### cutover
 
-Shadow Monitoring one-click cutover: stop old rules, enable new rules, verify health.
+Shadow Monitoring one-click cutover (the last step of the migrate / shadow flow): stop the shadow monitor Job, delete the old Recording Rules, remove the shadow label and the Alertmanager intercept, then confirm the tenant's threshold metrics exist.
 
-**Purpose**: Final migration step, automates complete cutover workflow.
+**Purpose**: Final migration step, automates complete cutover workflow. Applies only to the migrate / shadow flow; the objects it deletes and edits (the `shadow-monitor` Job, the `prometheus-rules-old` ConfigMap, the `migration_status` label) are created by that flow.
 
 **Syntax**
 
 ```bash
-da-tools cutover --tenant <name> [options]
+da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 ```
 
 **Required Parameters**
 
 | Parameter | Description |
 |-----------|-------------|
-| `--tenant <NAME>` | Tenant ID |
+| `--readiness-json <FILE>` | `cutover-readiness.json` produced by `validate_migration --auto-detect-convergence` |
+| `--tenant <NAME>` | Tenant ID (used by the post-cutover health check) |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--readiness-json <FILE>` | JSON output from validate --auto-detect-convergence | (optional) |
-| `--dry-run` | Preview cutover steps without making changes | false |
-| `--force` | Skip readiness check and proceed directly | false |
+| `--dry-run` | Print the `kubectl` commands it would run, change nothing | false |
+| `--force` | Proceed even when the readiness JSON says `ready: false`; `--readiness-json` is still required | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
+| `--json-output` | Also print a JSON report on stdout | false |
 
 **Automated Steps**
 
-1. Verify readiness (if provided)
-2. Stop Shadow Monitor Job
-3. Remove old Recording Rules
-4. Remove `migration_status: shadow` label
-5. Remove Alertmanager shadow route
-6. Run `check-alert` + `diagnose` verification
+0. Read the readiness JSON: stop if it is unreadable or missing fields; stop if `ready` is false (unless `--force`)
+1. `kubectl delete job shadow-monitor`
+2. `kubectl delete configmap prometheus-rules-old`
+3. `kubectl label configmap prometheus-rules migration_status-`
+4. `kubectl label configmap alertmanager-config migration_status-`
+5. Query `count(user_threshold{tenant="<tenant>"})` to confirm the tenant's threshold metrics exist
+
+There is no rollback option; when a step fails the tool points to the manual rollback in `shadow-monitoring-sop.md` §7.2.
 
 **Examples**
 
@@ -554,11 +554,13 @@ docker run --rm --network=host \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a
 
-# Force cutover (after confirming safety)
+# Force cutover even though the readiness JSON says not ready
 docker run --rm --network=host \
+  -v $(pwd)/output:/data:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  cutover --tenant db-a --force
+  cutover --readiness-json /data/cutover-readiness.json \
+    --tenant db-a --force
 ```
 
 **Exit Codes**
@@ -566,8 +568,8 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Cutover successful |
-| `1` | Readiness check failed |
-| `2` | Error during cutover process |
+| `1` | Readiness says not ready (without `--force`), or a cutover step failed |
+| `2` | Caller error: a required argument is missing, the readiness JSON is unreadable or missing fields, Prometheus is unreachable, or `kubectl` is not found |
 
 ---
 
@@ -641,9 +643,9 @@ docker run --rm --network=host \
 
 #### maintenance-scheduler
 
-Evaluate scheduled maintenance windows (cron expressions in `_state_maintenance.recurring[]`), auto-generate Alertmanager silence YAML.
+Evaluate the `_state_maintenance.recurring[]` schedules and create an Alertmanager silence for every tenant currently inside a maintenance window.
 
-**Purpose**: Automate scheduled maintenance window silences; pair with CronJob.
+**Purpose**: Automate scheduled maintenance windows; designed to run as a K8s CronJob every 5 minutes.
 
 **Syntax**
 
@@ -661,41 +663,41 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <FILE>` | Output to YAML file | stdout |
-| `--timezone <TZ>` | Timezone (IANA format) | `UTC` |
-| `--dry-run` | Only show silences to generate, don't write | false |
+| `--alertmanager <URL>` | Alertmanager base URL; silences are only created when this is given, otherwise it just reports | (none) |
+| `--pushgateway <URL>` | Push the run's results to a Pushgateway (skipped with `--dry-run`) | (none) |
+| `--dry-run` | Report only, create no silences | false |
+| `--json-output` | Also print one line `{"created", "skipped", "errors"}` on stdout | false |
+
+Cron expressions are always read as **UTC**; an option to choose a timezone is not implemented yet. For 02:00 Taipei time every day, write `0 18 * * *`. The output is not a silence YAML file either: the tool calls the Alertmanager API directly.
 
 **Output**
 
-Alertmanager silence YAML (can be piped directly to Alertmanager API or kubectl apply).
+stderr lists whether each schedule is currently inside its window, ending with `Summary: N created, N skipped, N errors`. A created silence matches `tenant="<tenant>"` and `alert_source=""`, is created by `da-tools/maintenance-scheduler`, carries the schedule's `reason` as its comment, and ends when the window ends; if the window already has a silence, it counts as skipped. ⚠️ Without `--alertmanager`, or with `--dry-run`, `created` is the number it *would* create; nothing is actually created (known issue, tracked in issue 1513).
 
 **Examples**
 
 ```bash
-# Preview silences to generate
+# Preview which silences would be created
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   maintenance-scheduler --config-dir /etc/config --dry-run
 
-# Generate YAML for CronJob use
+# Create the silences (CronJob use)
 docker run --rm \
-  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:ro \
-  -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
   maintenance-scheduler --config-dir /etc/config \
-    --timezone Asia/Taipei \
-    -o /data/output/alertmanager-silences.yaml
+    --alertmanager http://alertmanager.monitoring.svc.cluster.local:9093
 ```
 
 **Exit Codes**
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Invalid config directory |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `0` | Success (silences created, already present, or not needed) |
+| `1` | At least one silence could not be created |
+| `2` | Caller error: `--config-dir` does not exist, `croniter` is missing, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -1751,39 +1753,40 @@ Split Rule Packs into edge (Part 1) and central (Parts 2+3) layers for Federatio
 **Syntax**
 
 ```bash
-da-tools rule-pack-split --rule-packs-dir <dir> [options]
+da-tools rule-pack-split [--rule-packs-dir <dir>] [options]
 ```
-
-**Required Parameters**
-
-| Parameter | Description |
-|-----------|-------------|
-| `--rule-packs-dir <DIR>` | Rule Pack directory path |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output-dir <DIR>` | Output directory | `./split-output` |
-| `--scenario` | Federation scenario (A / B) | `B` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
+| `--output-dir <DIR>` | Output directory | `split-output/` |
+| `--operator` | Output PrometheusRule CRD YAML instead | false |
+| `--namespace <NS>` | Namespace for the CRDs | `monitoring` |
+| `--gitops` | GitOps mode (sorted keys, reproducible output) | false |
+| `--dry-run` | Write no files | false |
+| `--json` | Print the report as JSON | false |
+
+The tool only performs the Scenario B edge / central split; an option to choose the Federation scenario is not implemented yet. The output format is chosen with `--operator` / `--gitops`.
 
 **Output Structure**
 
 ```
 split-output/
-├── edge/           (Part 1 - edge)
-│   └── part-1-*.yaml
-├── central/        (Parts 2+3 - central)
-│   ├── part-2-*.yaml
-│   └── part-3-*.yaml
-└── mapping.json    (edge → central mapping)
+├── edge-rules/       (Part 1: normalization recording rules)
+│   └── rule-pack-<db>.yaml
+└── central-rules/    (Parts 2+3: threshold normalization and alerts)
+    └── rule-pack-<db>.yaml
 ```
+
+When a group name lacks a `-normalization` / `-threshold-normalization` / `-alerts` suffix, the tool routes its rules one by one by data locality (recording rules to edge, alerts to central) and prints a WARN line.
 
 **Examples**
 
 ```bash
 # Scenario B hierarchical split
-da-tools rule-pack-split --rule-packs-dir rule-packs/ --scenario B --output-dir federation-split/
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-split/
 ```
 
 ---
@@ -2212,7 +2215,6 @@ Offboard tenant configuration and related resources.
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v <config_dir>:/etc/config:rw \
-  [-v <output>:/data/output] \
   ghcr.io/vencil/da-tools:v2.9.0 \
   offboard <tenant> [options]
 ```
@@ -2229,13 +2231,12 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--backup <DIR>` | Backup directory | `./offboarded/` |
-| `--cleanup-rules` | Remove associated Alert rules | false |
-| `--dry-run` | Preview items to delete | false |
+
+Without `--execute` it is already a preview; there is no separate dry-run flag.
 
 **Output**
 
-Backup tenant config; optionally remove associated Recording/Alert rules.
+A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
 
 **Examples**
 
@@ -2323,9 +2324,9 @@ docker run --rm \
 
 #### lint
 
-Check Custom Rule governance compliance (based on `custom_` prefix rules).
+Check tenant-authored Prometheus rule files against the platform governance policy (deny-list).
 
-**Purpose**: CI/CD lint check; ensure custom rules follow naming conventions.
+**Purpose**: CI/CD lint check; the guard rail for Tier 3 custom rules before they reach the platform (see [Custom Rule Governance](custom-rule-governance.en.md) §4).
 
 **Syntax**
 
@@ -2346,14 +2347,18 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--strict` | Strict mode: elevate warnings to errors | false |
-| `--json-output` | Structured JSON output | false |
+| `--policy <FILE>` | Policy file (`custom-rule-policy.yaml`) | built-in policy |
+| `--ci` | Exit 1 when there is any ERROR-level violation | false |
 
-**Checks Performed**
+WARNs are never escalated to ERRORs, and JSON output is not implemented yet; in CI use `--ci`, the output is one `ERROR:` / `WARN:` line per finding.
 
-- Metric names start with `custom_` prefix
-- Recording rule name format
-- Label usage consistency
+**Checks Performed** (built-in policy defaults; override with `--policy`)
+
+- Denied functions: `holt_winters`, `predict_linear`, `quantile_over_time`
+- Denied patterns: the match-all `=~".*"` and `without(tenant)`
+- Required label: `tenant`
+- Range vectors at most `1h`; rule-group `interval` at most `60s`
+- WARN when an `owner` or `expiry` label is missing
 
 **Examples**
 
@@ -2465,7 +2470,7 @@ Compare custom rules with Rule Pack, find duplicates/gaps.
 docker run --rm \
   -v <config_dir>:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --tenant-config <path> [options]
+  analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 ```
 
 **Required Parameters**
@@ -2478,12 +2483,15 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <FILE>` | Output to CSV or JSON | stdout |
-| `--json-output` | JSON format | false |
+| `-o, --output <FILE>` | Also write the JSON report to a file | (none) |
+| `--json` | Print only JSON on stdout | false |
+| `--metric-dictionary <FILE>` | Metric dictionary | the `metric-dictionary.yaml` bundled in the image |
+
+⚠️ When you run `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` directly in the repo, the default dictionary path does not exist; the tool does not warn and falls back to guessing by name prefix (`match_type: "prefix"`, `confidence: 0.7`). Pass `--metric-dictionary scripts/tools/metric-dictionary.yaml`. Running inside the da-tools image is not affected (known issue, tracked in issue 1513).
 
 **Output**
 
-CSV list where each row represents a custom rule and its Rule Pack coverage relationship.
+A text report grouped by Rule Pack, listing which raw metric each `custom_` metric maps to and how, e.g. `custom_mysql_global_status_threads_connected -> mysql_global_status_threads_connected (exact, 100%)`, ending with how many can move to a Rule Pack. With no `custom_` metrics in the tenant config it prints only `No custom_ metrics found in tenant configs.`. With `--json` it is an array with one entry per `custom_` metric, carrying `tenant`, `custom_metric`, `original_metric`, `current_value`, `best_match_pack`, `match_type`, `confidence`, `recommendation` and more.
 
 **Examples**
 
@@ -2499,8 +2507,7 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Invalid config file |
+| `0` | Success. ⚠️ A `--tenant-config` / `--config-dir` path that does not exist also gives `0`, treated as having no `custom_` metrics (known issue, tracked in issue 1513) |
 | `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
@@ -2532,8 +2539,10 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--json-output` | Structured JSON output | false |
-| `--summary-only` | Only output summary, not detailed changes | false |
+| `--format {markdown,json}` | Output format | `markdown` |
+| `--json-output` | Same as `--format json` | false |
+
+An option to print only the summary is not implemented yet; the report's last line is the summary (`Summary: N tenant(s) changed, N metric change(s)`).
 
 **Change Classifications**
 
@@ -3228,11 +3237,14 @@ They're complementary; run both after migration.
 
 ### Q: How to safely execute cutover?
 
-**A**:
-1. Run `validate --auto-detect-convergence` to confirm convergence
-2. Run `cutover --dry-run` to preview steps
-3. Run `cutover` to execute cutover
-4. Run `diagnose` + `batch-diagnose` to verify health
+**A**: `cutover` applies only to the migrate / shadow flow (see [Shadow Monitoring Cutover](scenarios/shadow-monitoring-cutover.en.md)):
+1. Run `validate_migration --watch --auto-detect-convergence`, which writes `cutover-readiness.json` once the values converge
+2. Run `da-tools shadow-verify convergence --readiness-json <file>` to confirm convergence
+3. Run `da-tools cutover --readiness-json <file> --tenant <tenant> --dry-run` to preview the `kubectl` commands it would run
+4. Drop `--dry-run` to execute the cutover
+5. Run `da-tools batch-diagnose` for each tenant's health (`diagnose` only checks MariaDB Pods; confirm other tenant types with `check-alert`)
+
+There is no rollback option; if it fails, roll back by hand per `shadow-monitoring-sop.md` §7.2.
 
 ---
 
