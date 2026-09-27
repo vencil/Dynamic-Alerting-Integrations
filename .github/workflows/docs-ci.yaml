@@ -1,7 +1,6 @@
 # docs-ci.yaml — Documentation CI/CD Pipeline
 #
-# Validates and renders documentation on every PR that touches docs/**/*.md
-# or rule-packs/**/*.md.
+# Validates and renders documentation.
 #
 # The workflow itself triggers on EVERY pull_request to main (no top-level
 # `paths:` filter) — only individual jobs are gated, via the detect-changes
@@ -21,10 +20,7 @@
 # themselves are named `… — run`. check-links is not gated and carries its
 # required name directly (#2107). See detect-changes below.
 #
-# Two jobs intentionally stay unconditional (see their own comments):
-# head-blob-hygiene, meant to catch historical blob corruption on every push
-# regardless of whether a given PR touches docs/, and check-links, whose input
-# set no path filter can express (#2107).
+# A job with no `if:` is unconditional on purpose; its own comment says why.
 #
 # Jobs:
 #   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
@@ -234,8 +230,8 @@ jobs:
     # PR that only deleted or renamed a linked non-doc file skipped this leg
     # and merged a broken link. Same reasoning as the `python` catch-all in
     # ci.yml. Re-adding an `if:` reds test_ci_path_filter_coverage's
-    # path-gated set. Accepted cost: every PR now pays checkout + pip
-    # (~15 s), and a network flake there reds this required check.
+    # path-gated set. Accepted cost: every PR now pays checkout + pip, and a
+    # network flake there reds this required check.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -271,6 +267,8 @@ jobs:
 
   head-blob-hygiene:
     name: HEAD Blob Hygiene
+    # Unconditional: historical blob corruption must be caught on every push,
+    # whether or not a given PR touches docs/.
     # Scans every committed blob in HEAD for corruption the staged-file
     # hygiene hook cannot retroactively fix:
     #   - NUL bytes (e.g. the architecture-quiz.jsx regression) — always fatal
