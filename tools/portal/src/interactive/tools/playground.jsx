@@ -23,8 +23,12 @@ const t = window.__t || ((zh, en) => en);
 // to design tokens using arbitrary-value pattern (bg-[color:var(--da-color-*)])
 // This enables consistent theming and dark mode support via CSS variables.
 
-// Built per page load (#1988): the redis example's _silent_mode expires is
-// computed from `now`, so an exported example never silences for decades.
+// Built per page load (#1988): every expires (redis _silent_mode, postgresql
+// _state_maintenance) is computed from `now`, so an exported example never
+// silences for decades nor ships already expired. Reserved-key shapes follow
+// docs/schemas/tenant-config.schema.json (#2033): `_routing.receiver` is an
+// object whose `type` picks the required fields; every template is validated
+// against the schema in tests/playground-templates.test.tsx.
 function buildYamlTemplates(now = new Date()) {
   return {
   minimal: `# This is ALL a tenant needs to write — just 3 lines!
@@ -38,8 +42,9 @@ tenants:
     mysql_threads_running: "40"
     _silent_mode: "disable"
     _routing:
-      receiver_type: "webhook"
-      webhook_url: "https://webhook.example.com/alerts"
+      receiver:
+        type: "webhook"
+        url: "https://webhook.example.com/alerts"
       group_wait: "30s"
       repeat_interval: "4h"`,
   postgresql: `tenants:
@@ -49,10 +54,11 @@ tenants:
     pg_cache_hit_ratio: "85"
     pg_query_time: "5000"
     _state_maintenance:
-      expires: "2026-03-20T06:00:00Z"
+      expires: "${silentModeExpires(now)}"
     _routing:
-      receiver_type: "slack"
-      webhook_url: "https://hooks.slack.com/services/example"
+      receiver:
+        type: "slack"
+        api_url: "https://hooks.slack.com/services/example"
       group_wait: "1m"
       group_interval: "5m"
       repeat_interval: "12h"`,
@@ -67,8 +73,10 @@ tenants:
       expires: "${silentModeExpires(now)}"
       reason: "Cache migration"
     _routing:
-      receiver_type: "email"
-      webhook_url: "mailto:ops@example.com"
+      receiver:
+        type: "email"
+        to: ["ops@example.com"]
+        smarthost: "smtp.example.com:587"
       group_wait: "45s"
       repeat_interval: "6h"`,
   kafka: `tenants:
@@ -79,42 +87,25 @@ tenants:
     kafka_controller_active: "1"
     kafka_isr_shrank: "0"
     _routing:
-      receiver_type: "teams"
-      webhook_url: "https://teams.example.com/webhook"
+      receiver:
+        type: "teams"
+        webhook_url: "https://teams.example.com/webhook"
       group_wait: "2m"
       group_interval: "3m"
       repeat_interval: "24h"`,
+  // A tenant file only references a profile by name. The profiles
+  // themselves (routing_profiles:), _routing_defaults and _domain_policy
+  // live in their own platform files, so they are not shown here (#2033).
   'routing-profiles': `# v2.1.0: Cross-Domain Routing Profiles (ADR-007)
-_routing_defaults:
-  receiver_type: "webhook"
-  group_wait: "30s"
-  repeat_interval: "4h"
-
-routing_profiles:
-  standard-webhook:
-    receiver_type: "webhook"
-    group_wait: "30s"
-    repeat_interval: "4h"
-  urgent-slack:
-    receiver_type: "slack"
-    group_wait: "10s"
-    repeat_interval: "1h"
-
+# Profiles are defined in _routing_profiles.yaml (platform-owned);
+# a tenant file only names one.
 tenants:
   db-a:
     mysql_connections: "80"
-    _routing:
-      profile: "standard-webhook"
-      webhook_url: "https://hooks.example.com/db-a"
+    _routing_profile: "team-sre-apac"
   db-b:
     pg_connections: "120"
-    _routing:
-      profile: "urgent-slack"
-      webhook_url: "https://hooks.slack.com/services/db-b"
-
-_domain_policy:
-  allowed_domains: ["*.example.com", "hooks.slack.com"]
-  denied_domains: ["*.internal.corp"]`
+    _routing_profile: "team-dba-global"`
   };
 }
 

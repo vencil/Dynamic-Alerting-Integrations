@@ -181,15 +181,23 @@ describe('TenantManager — last-mile activation', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it('silent-mode modal is copy-only with a paste note (its output is per-tenant fragments, #1988)', async () => {
+  it.each([
+    ['Silent Mode YAML', '_silent_mode'],
+    ['Maintenance YAML', '_state_maintenance'],
+  ])('%s modal is copy-only with a paste note (per-tenant fragments, #1988 / #2033)', async (opener, key) => {
     await renderAndSettle();
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.click(screen.getByRole('button', { name: 'Select All Filtered' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Silent Mode YAML' }));
+    fireEvent.click(await screen.findByRole('button', { name: opener }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByTestId('silent-paste-note')).toBeInTheDocument();
+    const note = within(dialog).getByTestId('paste-note').textContent || '';
+    // Where to paste, one block per selected tenant, replace-not-add.
+    expect(note).toMatch(/tenants\.<id>:/);
+    expect(note).toMatch(/several tenants selected, paste each block/);
+    expect(note).toContain(`already has ${key}, replace that block instead of adding a second one`);
     expect(within(dialog).getByRole('button', { name: 'Copy' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Download' })).toBeNull();
+    expect(dialog.textContent).not.toMatch(/ConfigMap|tenant-operational-modes/);
   });
 });
 

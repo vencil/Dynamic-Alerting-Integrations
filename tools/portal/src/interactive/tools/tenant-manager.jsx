@@ -375,15 +375,6 @@ export default function TenantManager() {
 
   const copyToClipboard = () => copy(modalData);
 
-  const downloadYaml = () => {
-    const blob = new Blob([modalData], { type: 'text/yaml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${modalType}-${Date.now()}.yaml`;
-    a.click();
-  };
-
   // Helper: show notification with auto-dismiss
   const showNotification = (type, message) => {
     setApiNotification({ type, message });
@@ -1088,23 +1079,19 @@ export default function TenantManager() {
                 ? t('生成維護模式 YAML', 'Generate Maintenance YAML')
                 : t('生成靜默模式 YAML', 'Generate Silent Mode YAML')}
             </div>
-            {modalType === 'silent' && (
-              <p data-testid="silent-paste-note" style={{ marginBottom: 'var(--da-space-3)' }}>
-                {t('每段貼到該租戶既有檔案的 tenants.<id>: 之下；若已有 _silent_mode 請取代。',
-                  "Paste each block under tenants.<id>: in that tenant's existing file; replace any existing _silent_mode.")}
-              </p>
-            )}
+            <p data-testid="paste-note" style={{ marginBottom: 'var(--da-space-3)' }}>
+              {(() => {
+                const key = modalType === 'maintenance' ? '_state_maintenance' : '_silent_mode';
+                return t(`每段以 # <id> 標示租戶；選了多個租戶時，請把每段分別貼到各自租戶既有檔案的 tenants.<id>: 之下。若該租戶已有 ${key}，請取代原有區塊，不要再新增一個（重複的鍵會讓檔案無法解析）。`,
+                  `Each block is headed by # <id>. With several tenants selected, paste each block under tenants.<id>: in that tenant's own existing file. If the tenant already has ${key}, replace that block instead of adding a second one (a duplicate key makes the file fail to parse).`);
+              })()}
+            </p>
             <div style={styles.codeBlock}>{modalData}</div>
             <div style={styles.buttonGroup2}>
+              {/* Both outputs are per-tenant fragments, not a file (#1988, #2033): copy only. */}
               <button onClick={copyToClipboard} style={styles.button}>
                 {t('複製到剪貼板', 'Copy')}
               </button>
-              {/* Silent output is per-tenant fragments, not a file (#1988): copy only. */}
-              {modalType !== 'silent' && (
-                <button onClick={downloadYaml} style={styles.button}>
-                  {t('下載 YAML', 'Download')}
-                </button>
-              )}
               <button onClick={() => setModalType(null)} style={{ ...styles.button, ...styles.buttonSecondary }}>
                 {t('關閉', 'Close')}
               </button>

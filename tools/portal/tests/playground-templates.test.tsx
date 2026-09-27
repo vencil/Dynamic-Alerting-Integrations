@@ -3,8 +3,10 @@
  * The redis template's _silent_mode.expires is computed from `now` via the
  * shared silentModeExpires helper, so an exported example never silences for
  * a fixed far date; its _silent_mode must still satisfy the schema definition.
+ * Every template must also pass the whole tenant schema (#2033).
  */
 import { describe, it, expect } from 'vitest';
+import { validateTenantDoc } from './helpers/tenant-schema';
 import { render, screen } from '@testing-library/react';
 import TenantYAMLPlayground, { buildYamlTemplates } from '../src/interactive/tools/playground.jsx';
 import { load } from 'js-yaml';
@@ -57,9 +59,6 @@ describe('playground redis template _silent_mode', () => {
 });
 
 describe('playground templates pass the parse-layer check (#2033)', () => {
-  // The templates still carry a flat receiver_type (teaching content, out of
-  // scope here); the playground no longer judges semantics, so every template
-  // must come out valid at the parse layer.
   const templates = buildYamlTemplates(new Date('2026-09-25T10:00:00Z'));
   for (const [name, src] of Object.entries(templates)) {
     it(`${name} is valid`, () => {
@@ -68,6 +67,51 @@ describe('playground templates pass the parse-layer check (#2033)', () => {
       expect(r.valid).toBe(true);
     });
   }
+});
+
+describe('playground templates are accepted by tenant-config.schema.json (#2033 drift guard)', () => {
+  // The playground only checks the parse layer, so nothing at runtime stops a
+  // template from teaching a shape the schema/exporter reject (the former
+  // flat `_routing.receiver_type` did exactly that). This validates every
+  // template against the live schema.
+  const templates = buildYamlTemplates(new Date('2026-09-25T10:00:00Z'));
+  for (const [name, src] of Object.entries(templates)) {
+    it(`${name}`, () => {
+      expect(validateTenantDoc(load(src))).toEqual([]);
+    });
+  }
+
+  it('every _routing names its receiver as an object with a type (the exporter reads _routing.receiver.type)', () => {
+    let seen = 0;
+    for (const src of Object.values(templates)) {
+      for (const tenant of Object.values((load(src) as any).tenants) as any[]) {
+        if (!tenant._routing) continue;
+        seen++;
+        expect(typeof tenant._routing.receiver?.type).toBe('string');
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it('every expires is after now, for any now', () => {
+    for (const now of [new Date('2026-09-25T10:00:00Z'), new Date('2031-01-01T00:00:00Z')]) {
+      const found: string[] = [];
+      for (const src of Object.values(buildYamlTemplates(now))) {
+        for (const tenant of Object.values((load(src) as any).tenants) as any[]) {
+          for (const v of Object.values(tenant) as any[]) {
+            if (v && typeof v === 'object' && 'expires' in v) found.push(v.expires);
+          }
+        }
+      }
+      expect(found.length).toBeGreaterThanOrEqual(2);
+      for (const e of found) expect(Date.parse(e)).toBeGreaterThan(now.getTime());
+    }
+  });
+
+  it('checker positive control: a flat receiver_type is rejected', () => {
+    const bad = { tenants: { t: { _routing: { receiver_type: 'webhook', webhook_url: 'https://x.example.com' } } } };
+    expect(validateTenantDoc(bad)).not.toEqual([]);
+  });
 });
 
 describe('playground validation status is announced', () => {
