@@ -117,7 +117,7 @@ def test_trk_only_in_prose_does_not_count_as_defined(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("token", ["TRK-9991", "xTRK-999", "TRK-99"])
 def test_near_miss_tokens_are_not_matched(tmp_path: Path, token: str) -> None:
-    """邊界錨定：`TRK-9991` / `xTRK-999` / `TRK-99` 都不得被讀成一次 TRK 引用。
+    r"""邊界錨定：`TRK-9991` / `xTRK-999` / `TRK-99` 都不得被讀成一次 TRK 引用。
 
     ⚠️ **這一格原本是空過的，在此更正**：第一版用 `TRK-4011` 對上表裡的
     `TRK-401`——鬆掉錨定後它被讀成 `401`，而 `401` **在表上**，於是
