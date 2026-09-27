@@ -82,13 +82,6 @@ def find_config_file(tenant, config_dir):
     return None
 
 
-def _is_dir(p):
-    try:
-        return p.is_dir()
-    except OSError:
-        return False
-
-
 def load_all_configs(config_dir, unreadable=None):
     """載入 conf.d 下所有設定檔案。
 
@@ -108,12 +101,6 @@ def load_all_configs(config_dir, unreadable=None):
     # like configuration and was NOT taken into account by the pre-check.
     for bad in unusable_config_entries(entries):
         print(f"  ⚠️  略過 {safe_label(bad.name)}: {unusable_reason(bad)}")
-        # #2179: a config-named entry that is not a directory (broken
-        # symlink, unreadable, FIFO...) is a config file this pre-check
-        # cannot read, same as a YAML error below. A directory is not a
-        # config file; its contents are the nested-scan warning's concern.
-        if unreadable is not None and not _is_dir(bad):
-            unreadable.append(bad.name)
     yaml_paths = [
         p for p in entries
         if p.is_file() and has_yaml_extension(p.name)

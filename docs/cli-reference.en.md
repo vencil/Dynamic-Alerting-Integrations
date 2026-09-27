@@ -2241,7 +2241,7 @@ Without `--execute` it is already a preview; there is no separate dry-run flag.
 
 **Output**
 
-A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. A config file that cannot be read is named and fails the pre-check (the cross-reference check cannot see inside it). With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
+A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. A config file that cannot be parsed is named and fails the pre-check (the cross-reference check cannot see inside it). With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
 
 **Examples**
 
@@ -2265,7 +2265,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success: the pre-check passed or only warned (e.g. a cross-file reference); with `--execute` the tenant file was deleted |
-| `1` | The pre-check failed (a ❌ item such as the tenant file not found or a config file that cannot be read, named in the report), with or without `--execute`; or I/O failed (#2179) |
+| `1` | The pre-check failed (a ❌ item such as the tenant file not found or a config file that cannot be parsed, named in the report), with or without `--execute`; or I/O failed (#2179) |
 | `2` | Caller error: only arguments argparse rejects (missing tenant positional, unknown flag) |
 
 ---

@@ -2033,7 +2033,7 @@ da-tools offboard <tenant> [options]
 
 **輸出**
 
-Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。讀不開的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
+Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
 **範例**
 
@@ -2049,7 +2049,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
-| `1` | pre-check 未通過（找不到租戶檔、有讀不開的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
+| `1` | pre-check 未通過（找不到租戶檔、有無法解析的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
 | `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
 
 ---
