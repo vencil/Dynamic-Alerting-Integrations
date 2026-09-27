@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import duplicate_in_mapping  # noqa: E402  (#2123 shared check)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     defaults_files_in,
@@ -322,18 +323,14 @@ def _raw_of(node, lines):
     return src[0] + ("…" if len(src) > 1 else "")
 
 
-def _key_identity(node):
-    return (type(node).__name__,
-            node.value if isinstance(node, yaml.ScalarNode) else "")
-
-
 def _no_duplicate_keys(node):
-    seen = set()
-    for k, _v in node.value:
-        ident = _key_identity(k)
-        if ident in seen:
-            raise _Dropped(f"重複 key `{ident[1]}`")
-        seen.add(ident)
+    """decode.go `mapping()` 的 uniqueKeys 檢查（單層）。判定用共用的
+    `_lib_io.duplicate_in_mapping`（#2123：node 種類＋原文相同即重複）。"""
+    hit = duplicate_in_mapping(node)
+    if hit is not None:
+        dup = hit[0]
+        raise _Dropped(
+            f"重複 key `{dup.value if isinstance(dup, yaml.ScalarNode) else ''}`")
 
 
 def _walk_duplicate_keys(node, visiting=frozenset()):

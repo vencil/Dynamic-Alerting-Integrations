@@ -44,6 +44,12 @@ extensions today:
   still be written, or unknown — which exit 2's "nothing written" cannot
   say; its verification failure stays EXIT_VIOLATION (1). Table in
   docs/cli-reference.md §patch-config.
+* da-guard's exitParseFailed = 3 (#2123; `da-tools guard` passes it
+  through): config files the exporter cannot decode (docs/cli-reference.md
+  §guard). Author-actionable
+  like 1 (fix the file, re-run), but not a finding about the
+  tenants the guard DID check — which is why it is not 1. Contract in the
+  comment at the top of cmd/da-guard/main.go; docs/cli-reference.md §guard.
 
 One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
 finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its

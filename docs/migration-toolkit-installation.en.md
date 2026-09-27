@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error. The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
+Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` config files the exporter cannot decode (see [cli-reference §guard](cli-reference.en.md#guard)). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
 
 ---
 

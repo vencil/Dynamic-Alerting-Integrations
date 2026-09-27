@@ -24,7 +24,9 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import YamlFileError, detect_cli_lang, load_yaml_file  # noqa: E402
+from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
+# #2123: a key written twice in one mapping is a YamlFileError like bad syntax.
+from _lib_io import load_yaml_file_strict  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -79,7 +81,7 @@ def _collect_data(config_dir: str) -> dict:
         # The file NAME is kept as well as the message: `validate` needs
         # it to skip the checks whose input this file was (re-review).
         try:
-            data = load_yaml_file(path)
+            data = load_yaml_file_strict(path)
         except YamlFileError as exc:
             unreadable.append(str(exc))
             unreadable_files.append(fname)

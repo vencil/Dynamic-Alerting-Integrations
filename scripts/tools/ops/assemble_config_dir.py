@@ -51,6 +51,7 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import strict_safe_load  # noqa: E402  (#2123 duplicate key = YAML error)
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
 # Not optional: `_lib_python` -> `_lib_io` imports PyYAML at module scope, so
@@ -402,7 +403,7 @@ def validate_merged(output_dir: Path) -> List[str]:
             continue
         try:
             with open(f, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
+                data = strict_safe_load(fh)
             if data is None:
                 issues.append(f"{WARN_PREFIX}{f.name} is empty")
             elif not isinstance(data, dict):

@@ -80,6 +80,19 @@ modules:
       output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
       _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
       exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
+      # #2123 strict YAML reading. The key-identity rule is a closed matrix
+      # measured against yaml.v3 (one row per branch of the rule), which a
+      # generator would only re-derive from the implementation under test.
+      _key_identity: "yaml.v3 uniqueKeys identity (kind + raw text, #2123); example-pinned row by row against the measured yaml.v3 matrix in tests/shared/test_yaml_strict_loader.py"
+      duplicate_in_mapping: "One-mapping scan over _key_identity (#2123); same matrix in tests/shared/test_yaml_strict_loader.py"
+      find_duplicate_key: "Whole-tree walk over duplicate_in_mapping (#2123); matrix + visit-once (alias fan-out) pins in tests/shared/test_yaml_strict_loader.py"
+      raise_on_duplicate_key: "Raise-wrapper over find_duplicate_key (#2123); no value computation of its own"
+      reject_equal_constructed_keys: "Legacy constructed-key identity kept for two lints (#2123); pinned by the no-widening tests in tests/shared/test_yaml_strict_loader.py"
+      RejectDuplicateKeys.construct_document: "Loader hook calling raise_on_duplicate_key then PyYAML (#2123); exercised through strict_safe_load"
+      _strict_loader_class: "Loader-class selector + type guard (#2123); example-pinned (TypeError on a non-strict loader)"
+      strict_safe_load: "I/O-free but a thin driver over a PyYAML loader (#2123); matrix, parser-preservation and python/object refusal pinned in tests/shared/test_yaml_strict_loader.py"
+      strict_safe_load_all: "Lazy multi-document driver (#2123); laziness and refusal pinned in tests/shared/test_yaml_strict_loader.py"
+      load_yaml_file_strict: "File-reading twin of load_yaml_file (#2123); I/O-bound, contract parity pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:

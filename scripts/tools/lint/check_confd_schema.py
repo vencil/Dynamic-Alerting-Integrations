@@ -46,6 +46,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
@@ -197,11 +198,13 @@ def validate_dir(config_dir: str, schema: dict, validator,
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                docs = list(yaml.safe_load_all(fh))
+                docs = list(strict_safe_load_all(fh))
         except (OSError, yaml.YAMLError) as exc:
             # Unreadable file or malformed YAML is an environment/caller error, not
             # a schema violation — surface it as exit 2 (open() can raise OSError
-            # too, not only yaml.YAMLError).
+            # too, not only yaml.YAMLError). A key written twice in one mapping is
+            # malformed YAML too (#2123: the exporter's yaml.v3 rejects the file;
+            # safe_load_all would have validated the LAST value only).
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
         for doc in docs:
             if is_defaults:

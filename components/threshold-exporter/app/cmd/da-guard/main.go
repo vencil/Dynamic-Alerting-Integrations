@@ -31,6 +31,18 @@
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
 //	2  caller error (bad flags, missing/invalid path, IO failure)
+//	3  config files the exporter cannot decode (#2123; operator-facing
+//	   wording: docs/cli-reference.md §guard): the files ScopeEffective
+//	   reports in ParseFailed, or a config.DecodeError met while
+//	   resolving. The report names them (relative to --config-dir). A
+//	   DecodeError stops the run before any tenant is checked, so only
+//	   that first file is named.
+//
+// 3 wins over 1: findings computed over a tree with a skipped file
+// describe only part of it, so "fix the file first" is the one
+// actionable answer. 3 also replaces the vacuously-safe 0 of an
+// empty scope — a scope whose only tenant file is broken has no
+// tenants to check, and that is not "safe".
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
@@ -38,6 +50,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,9 +74,10 @@ var programName = "da-guard"
 
 // exit codes — referenced from tests too.
 const (
-	exitOK        = 0
-	exitFindings  = 1
-	exitCallerErr = 2
+	exitOK          = 0
+	exitFindings    = 1
+	exitCallerErr   = 2
+	exitParseFailed = 3
 )
 
 // flags is the parsed configuration for one run.
@@ -121,7 +135,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n\n")
 		fs.PrintDefaults()
-		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n")
+		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
+			"  3  config files the exporter cannot decode; the report names them (fix, re-run)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -176,6 +191,18 @@ func run(args []string, stdout, errOut io.Writer) int {
 	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+		// #2123: a resolve failure that is one file failing the decode (a
+		// `_defaults.yaml` in the chain, or a tenant file the walker accepted
+		// but the merge rejects) is the author's to fix — exit 3, not 2.
+		var de *config.DecodeError
+		if errors.As(err, &de) {
+			if werr := writeDecodeStopReport(stdout, errOut, f, de); werr != nil {
+				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
+				return exitCallerErr
+			}
+			reportParseFailed(errOut, []string{de.Path})
+			return exitParseFailed
+		}
 		return exitCallerErr
 	}
 
@@ -211,10 +238,18 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// run the guard on every _defaults.yaml change — and a defaults
 	// file under a directory with no tenants yet (e.g. brand-new
 	// domain skeleton) is a real, valid scenario.
+	//
+	// ⛔ Unless a file in scope failed the exporter's decode (#2123): the
+	// walker skipped it, so "no tenants" may be exactly the tenants that
+	// file declares. That is exit 3, never the vacuous 0.
 	if len(scoped.Tenants) == 0 {
-		if err := writeEmptyReport(stdout, errOut, f); err != nil {
+		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
+		}
+		if len(scoped.ParseFailed) > 0 {
+			reportParseFailed(errOut, scoped.ParseFailed)
+			return exitParseFailed
 		}
 		return exitOK
 	}
@@ -231,6 +266,12 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 
+	// Before the findings: see the exit-code contract at the top (3 wins
+	// over 1, the findings cover only the files the exporter can read).
+	if len(scoped.ParseFailed) > 0 {
+		reportParseFailed(errOut, scoped.ParseFailed)
+		return exitParseFailed
+	}
 	if report.Summary.Errors > 0 {
 		return exitFindings
 	}
@@ -340,12 +381,14 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 			Scope       string             `json:"scope,omitempty"`
 			SourceFiles []string           `json:"source_files"`
 			Notices     []string           `json:"notices,omitempty"`
+			ParseFailed []string           `json:"parse_failed,omitempty"`
 			Report      *guard.GuardReport `json:"report"`
 		}{
 			ConfigDir:   f.configDir,
 			Scope:       f.scopeDir,
 			SourceFiles: scoped.SourceFiles,
 			Notices:     notices,
+			ParseFailed: scoped.ParseFailed,
 			Report:      report,
 		}, "", "  ")
 		if err != nil {
@@ -379,7 +422,18 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 	for _, n := range notices {
 		b.WriteString("> ⚠️ " + n + "\n\n")
 	}
-	b.WriteString(report.Markdown())
+	b.WriteString(parseFailedMarkdown(scoped.ParseFailed))
+	body := report.Markdown()
+	if len(scoped.ParseFailed) > 0 {
+		// #2123: the guard library's all-clear line says the change is safe
+		// to merge; with files the exporter cannot decode it is not. Swapped
+		// here, not in GuardReport.Markdown(), so no other caller's output
+		// changes. TestRun_ParseFailedFileBesideGoodFile_ExitsThree asserts
+		// "safe to merge" is absent, so a reworded library line cannot slip
+		// past this replacement unseen.
+		body = strings.Replace(body, noFindingsSafeLine, noFindingsNotSafeLine, 1)
+	}
+	b.WriteString(body)
 	if len(scoped.SourceFiles) > 0 {
 		b.WriteString("\n<details><summary>Scanned files</summary>\n\n")
 		for _, f := range scoped.SourceFiles {
@@ -399,19 +453,26 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 // Emits a clean Markdown / JSON shell so downstream consumers (PR
 // comment poster, dashboards, log scrapers) don't have to
 // special-case empty input.
-func writeEmptyReport(stdout, errOut io.Writer, f *flags) error {
+func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) error {
 	var body string
 	switch f.format {
 	case "md":
-		body = "## Dangling Defaults Guard\n\n" +
+		verdict := "_No tenants under the requested scope; defaults change is vacuously safe._\n"
+		if len(parseFailed) > 0 {
+			// #2123: not "safe" — the tenants may be in the files listed.
+			verdict = "_No tenant could be checked under the requested scope; " +
+				"the files listed above fail the exporter's YAML decode, so this is NOT a safe result._\n"
+		}
+		body = parseFailedMarkdown(parseFailed) +
+			"## Dangling Defaults Guard\n\n" +
 			"### Summary\n\n" +
 			"- Tenants in scope: **0**\n" +
 			"- Errors: **0**\n" +
 			"- Warnings: **0**\n" +
 			"- Tenants passing (zero errors): **0**\n\n" +
-			"_No tenants under the requested scope; defaults change is vacuously safe._\n"
+			verdict
 	case "json":
-		b, err := json.MarshalIndent(map[string]any{
+		doc := map[string]any{
 			"config_dir":   f.configDir,
 			"scope":        f.scopeDir,
 			"source_files": []string{},
@@ -424,7 +485,11 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags) error {
 					"passed_tenant_count": 0,
 				},
 			},
-		}, "", "  ")
+		}
+		if len(parseFailed) > 0 {
+			doc["parse_failed"] = parseFailed
+		}
+		b, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
 			// MarshalIndent on a map literal of strings/ints can't
 			// realistically fail — but propagating the error keeps
@@ -448,6 +513,83 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags) error {
 	}
 	fmt.Fprintf(errOut, "%s: wrote empty-scope report to %s\n", programName, abs)
 	return nil
+}
+
+// writeDecodeStopReport is the report for a run that stopped while resolving
+// the scope because one file failed the decode (#2123, exit 3). No tenant was
+// checked: ScopeEffective fails the whole scope on the first such file, so
+// the list names that file only — fix it and re-run to see the next one.
+func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError) error {
+	files := []string{de.Path}
+	var body string
+	switch f.format {
+	case "md":
+		body = parseFailedMarkdown(files) +
+			"## Dangling Defaults Guard\n\n" +
+			"_Stopped before checking any tenant: resolving the scope hit the file above " +
+			"(`" + de.Err.Error() + "`). The run stops at the first such file; fix it and re-run._\n"
+	case "json":
+		b, err := json.MarshalIndent(map[string]any{
+			"config_dir":   f.configDir,
+			"scope":        f.scopeDir,
+			"source_files": []string{},
+			"parse_failed": files,
+			"error":        de.Err.Error(),
+			"report":       nil,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode JSON report: %w", err)
+		}
+		body = string(b) + "\n"
+	}
+	if f.output == "" {
+		_, err := io.WriteString(stdout, body)
+		return err
+	}
+	abs, err := filepath.Abs(f.output)
+	if err != nil {
+		return fmt.Errorf("resolve --output %q: %w", f.output, err)
+	}
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		return fmt.Errorf("write --output %q: %w", abs, err)
+	}
+	fmt.Fprintf(errOut, "%s: wrote report to %s\n", programName, abs)
+	return nil
+}
+
+// noFindingsSafeLine is internal/guard's all-clear line (render.go);
+// noFindingsNotSafeLine replaces it when files failed the decode (#2123).
+const (
+	noFindingsSafeLine    = "✅ No findings — defaults change is safe to merge.\n"
+	noFindingsNotSafeLine = "No findings among the tenants that were checked; the change cannot be " +
+		"judged until the files listed above decode (exit 3).\n"
+)
+
+// parseFailedMarkdown is the report block naming the files whose exporter
+// YAML decode fails (#2123); "" when there are none, so a clean tree's
+// report is byte-identical to before. Neutral on purpose: the list may hold
+// a root `_defaults.yaml` outside --scope, or a tenant file the walker
+// accepted and only the merge rejects — neither is "skipped by the exporter".
+func parseFailedMarkdown(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### Files the exporter cannot parse\n\n")
+	b.WriteString("The exporter cannot decode these files. Fix them and re-run (exit 3):\n\n")
+	for _, f := range files {
+		b.WriteString("- `" + f + "`\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// reportParseFailed is the stderr line for exit 3, so a CI log names the
+// files even when the report went to --output.
+func reportParseFailed(errOut io.Writer, files []string) {
+	fmt.Fprintf(errOut, "%s: %d file(s) fail the exporter's YAML decode: %s — "+
+		"fix them and re-run (exit 3)\n",
+		programName, len(files), strings.Join(files, ", "))
 }
 
 func main() {

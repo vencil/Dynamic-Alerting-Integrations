@@ -122,6 +122,7 @@
 | 0 | clean | parse OK | 全部目標成功 |
 | 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
 | 2 | caller error（旗標 / 路徑） | caller error | caller error |
+| 3 | exporter 無法 decode 的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
 
 ---
 

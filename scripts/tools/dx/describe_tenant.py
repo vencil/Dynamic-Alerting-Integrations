@@ -42,6 +42,9 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+# #2123: conf.d YAML is read strictly — a key written twice in one mapping
+# raises (the exporter's yaml.v3 rejects that file) instead of last-wins.
+from _lib_io import strict_safe_load, strict_safe_load_all  # noqa: E402
 
 try:
     import yaml
@@ -107,7 +110,7 @@ def _load_yaml(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     if yaml:
-        return yaml.safe_load(content) or {}
+        return strict_safe_load(content) or {}
     # Minimal fallback — only works for simple flat YAML
     raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
 
@@ -158,7 +161,7 @@ def _load_first_document(path: Path) -> Any:
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
     with open(path, "r", encoding="utf-8") as f:
-        return next(yaml.safe_load_all(f), None)
+        return next(strict_safe_load_all(f), None)
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
