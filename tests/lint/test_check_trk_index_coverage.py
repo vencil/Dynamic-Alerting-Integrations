@@ -86,14 +86,14 @@ def test_repo_table_parse_is_not_vacuous() -> None:
 # 述詞 + 對照組
 # ---------------------------------------------------------------------------
 def test_clean_fixture_is_green(tmp_path: Path) -> None:
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["feat: a\n\nRefs: TRK-401"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["feat: a\n\nRefs: TRK-301"])
     assert _json(repo)["missing"] == []
 
 
 def test_planted_reference_turns_it_red(tmp_path: Path) -> None:
     """⛔ 票明寫的對照組：種一個表上沒有的 TRK-999 引用，必須紅。"""
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n",
-                    ["feat: a\n\nRefs: TRK-401", "chore: probe\n\nRefs: TRK-999"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n",
+                    ["feat: a\n\nRefs: TRK-301", "chore: probe\n\nRefs: TRK-999"])
     data = _json(repo)
     assert [m["trk"] for m in data["missing"]] == ["999"], data
     assert _run(repo, "--ci").returncode == 1
@@ -110,7 +110,7 @@ def test_trk_in_the_second_column_counts_as_defined(tmp_path: Path) -> None:
 
 def test_trk_only_in_prose_does_not_count_as_defined(tmp_path: Path) -> None:
     """⛔ 散文裡提到某個 TRK 不等於它被登錄了——只認表格前兩欄的獨立儲存格。"""
-    rows = "| TRK-401 | #1 | 與 TRK-777 有關，但 777 沒有自己的一列 | — |\n"
+    rows = "| TRK-301 | #1 | 與 TRK-777 有關，但 777 沒有自己的一列 | — |\n"
     repo = _fixture(tmp_path, rows, ["chore: x\n\nRefs: TRK-777"])
     assert [m["trk"] for m in _json(repo)["missing"]] == ["777"]
 
@@ -125,7 +125,7 @@ def test_near_miss_tokens_are_not_matched(tmp_path: Path, token: str) -> None:
     `(?<![\w-])…(?![\w-])` 拿掉）實測**沒有讓任何一格轉紅**。
     近似 token 必須落在一個**表上沒有**的號碼上，才驗得到錨定。
     """
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", [f"chore: x\n\nRefs: {token}"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", [f"chore: x\n\nRefs: {token}"])
     assert _json(repo)["missing"] == [], token
 
 
@@ -147,7 +147,7 @@ def test_empty_table_is_rc2_not_green(tmp_path: Path) -> None:
 
 def test_titles_surface_without_token_is_rc2(tmp_path: Path, monkeypatch) -> None:
     """⛔ 要求了 titles 面卻沒有 token，必須 rc 2 —— 不能當成掃過了。"""
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["chore: x"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["chore: x"])
     env = {k: v for k, v in __import__("os").environ.items()
            if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
     proc = subprocess.run(
@@ -160,7 +160,7 @@ def test_titles_surface_without_token_is_rc2(tmp_path: Path, monkeypatch) -> Non
 
 def test_shallow_clone_is_reported_as_partial(tmp_path: Path) -> None:
     """shallow clone 下「沒找到」不等於「沒有」，報告必須說出來。"""
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["chore: x"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["chore: x"])
     (repo / ".git" / "shallow").write_text("deadbeef\n", encoding="utf-8")
     data = _json(repo)
     assert data["partial"] is True
@@ -179,28 +179,28 @@ def test_trk_mentioned_only_in_commit_body_prose_is_not_a_reference(tmp_path: Pa
     """
     body = ("chore: 說明用的 commit\n\n"
             "這段散文提到 TRK-999 與 TRK-888 只是舉例，不是引用。\n\n"
-            "Refs: TRK-401\n")
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", [body])
+            "Refs: TRK-301\n")
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", [body])
     assert _json(repo)["missing"] == []
 
 
 def test_trk_in_a_trailer_is_a_reference(tmp_path: Path) -> None:
     """同一顆 commit，號碼改放 trailer 就必須算引用。"""
     body = "chore: x\n\n散文完全不提號碼。\n\nRefs: TRK-777\n"
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", [body])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", [body])
     assert [m["trk"] for m in _json(repo)["missing"]] == ["777"]
 
 
 def test_trk_in_the_subject_line_is_a_reference(tmp_path: Path) -> None:
     """subject 行等同 issue/PR 標題那一面，也算引用。"""
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["TRK-555: 做了某件事"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["TRK-555: 做了某件事"])
     assert [m["trk"] for m in _json(repo)["missing"]] == ["555"]
 
 
 @pytest.mark.parametrize("key", ["Refs", "Resolves", "Closes", "Fixes"])
 def test_every_declared_trailer_key_is_scanned(tmp_path: Path, key: str) -> None:
     """宣告的 trailer key 每一個都要真的被掃到——否則就是列了沒接。"""
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n",
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n",
                     [f"chore: x\n\n{key}: TRK-777\n"])
     assert [m["trk"] for m in _json(repo)["missing"]] == ["777"], key
 
@@ -266,7 +266,7 @@ def test_titles_follow_link_next_and_cap_is_rc2(
     ⚠️ 空頁**不是**終止條件：fake 的每一頁都非空，只有 Link 決定要不要翻下一頁。
     """
     mod = _load_module()
-    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["chore: x"])
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["chore: x"])
     seen: list[str] = []
 
     def fake_urlopen(req, timeout=0):
