@@ -142,11 +142,15 @@ func formatUndeliverableLog(
 // ⛔ BOTH halves are passed in, and that is the whole point: they must come
 // from ONE lock window. An earlier revision read `m.hierarchy.tenantSources`
 // here under its own RLock, after commitConfig had already released m.mu.
-// Reloads are not serialised — `fireDebounced` (config_debounce.go) sets
-// `debounce.timer = nil`, unlocks, and only then calls diffAndReload, so a
-// fresh event can arm a new timer and a second reload can overlap the first.
-// In that window the audit could pair reload N's refused set with reload
-// N+1's sources and report a state that never existed at any single instant.
+// Reloads were not serialised then — `fireDebounced` (config_debounce.go)
+// sets `debounce.timer = nil`, unlocks, and only then calls diffAndReload, so
+// a fresh event could arm a new timer and a second reload could overlap the
+// first. In that window the audit could pair reload N's refused set with
+// reload N+1's sources and report a state that never existed at any single
+// instant. ConfigManager.reloadMu (#2122) now serialises the debounced and
+// synchronous reload entries, so that overlap no longer happens on those
+// paths; passing both halves in is kept because it makes the pairing a
+// property of this function's inputs rather than of who holds which lock.
 //
 // Reading both under commitConfig's existing Lock buys exactly one thing: the
 // pair is the manager's OWN state at one instant — what /effective is serving
