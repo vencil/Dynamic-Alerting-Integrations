@@ -454,7 +454,9 @@ RECIPES: list[Recipe] = [
                    "`vmalert -replay` against a live vmsingle; no vmalert on PATH "
                    "→ path unreachable. Runs wherever the VM harness exists.")),
 
-    # ── tenant_verify  (--all → EXIT_PASS 0; inversion not exercised) ──────
+    # ── tenant_verify  (--all on a duplicate-free tree → EXIT_PASS 0; a
+    #    tenant declared in 2+ files makes --all exit 2 (#2093), pinned in
+    #    test_tenant_verify.py; inversion not exercised here) ─────────────
     R("tenant_verify", "all-json",
       lambda t: ["--all", "--conf-d", str(SEED_CONF_D), "--json"],
       expect_exit=EXIT_OK),
