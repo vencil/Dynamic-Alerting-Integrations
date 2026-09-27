@@ -280,6 +280,16 @@ _routing:
 
 PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanager 會走 v1 並忽略 `routing_key`。
 
+必填欄位的值也會檢查格式（[#2180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2180)）：Alertmanager 載入不了其中任何一個 receiver，**整份**設定就 reload 失敗，所以 schema、路由產生器與 `da-guard` 三方都會先擋下。
+
+- URL 欄位（`url`、`api_url`、`webhook_url`）必須是帶 host 的 `http://` 或 `https://` URL，不含空白。
+- `smarthost` 必須是 `host:port`，port 為數字；IPv6 要加方括號，例如 `[2001:db8::1]:25`。
+- `to` 寫成清單時，每一項都必須是非空字串。
+- 必填欄位給了字串以外的值（清單、數字、布林）一律擋下。
+- receiver 的 `type` 必須完全等於上表的小寫名稱，不接受大小寫變化或前後空白。
+
+格式規則以 [`tenant-config.schema.json`](../schemas/tenant-config.schema.json) 的 `receiverHttpUrl`／`receiverSmtpHostPort` 為準。
+
 所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 
 ### 訊息模板（Go Template）

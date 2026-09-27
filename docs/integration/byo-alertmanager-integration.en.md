@@ -286,6 +286,16 @@ Quick reference for other five receiver types (each type's required fields are d
 
 Setting both PagerDuty `routing_key` and `service_key` is rejected: Alertmanager would use v1 and ignore `routing_key`.
 
+Required field values are format-checked too ([#2180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2180)). If Alertmanager cannot load any one receiver, the **whole** config fails to reload, so the schema, the route generator and `da-guard` all reject these values first.
+
+- URL fields (`url`, `api_url`, `webhook_url`) must be an `http://` or `https://` URL with a host and no whitespace.
+- `smarthost` must be `host:port` with a numeric port; an IPv6 host is bracketed, e.g. `[2001:db8::1]:25`.
+- When `to` is a list, every item must be a non-empty string.
+- A required field given anything other than a string (a list, a number, a boolean) is rejected.
+- The receiver `type` must equal the lowercase name in the table above exactly; other letter case and surrounding whitespace are rejected.
+
+The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`tenant-config.schema.json`](../schemas/tenant-config.schema.json).
+
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 
 ### Message Templates (Go Template)

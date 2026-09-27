@@ -5,9 +5,13 @@ Import via _lib_python.py facade for backward compatibility.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
+from pathlib import Path
 from typing import Any, Optional, Union
 
+from _lib_compat import PROJECT_ROOT_MARKERS
 from _lib_constants import (
     _DISABLED_VALUES,
     _DURATION_MULTIPLIERS,
@@ -174,6 +178,117 @@ def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Option
             problem += (" (Alertmanager would use the Events API v1 via "
                         "service_key and silently ignore routing_key)")
         return problem
+    return None
+
+
+_TENANT_SCHEMA_BASENAME = "tenant-config.schema.json"
+_RECEIVER_FIELD_SCHEMAS: Optional[dict[str, dict[str, dict[str, Any]]]] = None
+
+
+def _find_tenant_schema() -> Optional[Path]:
+    """Locate tenant-config.schema.json in either shipping layout.
+
+    Flat first: the da-tools image copies it beside this module (build.sh
+    ``REPO_DATA_FILES``, paired by ``REQUIRED_DATA_FILES`` in
+    check_build_completeness.py) and carries no project-root marker. The repo
+    branch walks up to a marker, bounded there, then reads
+    ``docs/schemas/``. Same shape as ``_grar_validate._find_platform_rules_configmap``
+    (#1494): no counting of directory levels.
+    """
+    here = Path(__file__).resolve().parent
+    flat = here / _TENANT_SCHEMA_BASENAME
+    if flat.is_file():
+        return flat
+    repo_root = next(
+        (base for base in (here, *here.parents)
+         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
+        None,
+    )
+    if repo_root is not None:
+        candidate = repo_root / "docs" / "schemas" / _TENANT_SCHEMA_BASENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
+    """``{rtype: {field: {"type": ..., "pattern": ...}}}`` read from the schema.
+
+    The schema is the hub of the receiver field contract (#2180): the
+    ``pattern`` of a URL / smarthost field is written once there (a
+    ``definitions`` entry the property references via ``allOf``) and read
+    here, never copied. Fails closed — a missing schema raises instead of
+    silently skipping the format check.
+    """
+    global _RECEIVER_FIELD_SCHEMAS
+    if _RECEIVER_FIELD_SCHEMAS is not None:
+        return _RECEIVER_FIELD_SCHEMAS
+    path = _find_tenant_schema()
+    if path is None:
+        raise RuntimeError(
+            f"{_TENANT_SCHEMA_BASENAME} not found beside {__file__} or under "
+            "docs/schemas/ of the project root; receiver fields cannot be checked")
+    with open(path, encoding="utf-8") as f:
+        defs = json.load(f)["definitions"]
+
+    def resolve(prop: dict[str, Any]) -> dict[str, Any]:
+        out = {"type": prop.get("type"), "pattern": prop.get("pattern")}
+        for sub in prop.get("allOf", []):
+            ref = sub["$ref"]
+            if not ref.startswith("#/definitions/"):
+                raise RuntimeError(f"unsupported $ref {ref!r} in {path}")
+            target = defs[ref[len("#/definitions/"):]]
+            if target.get("pattern"):
+                out["pattern"] = target["pattern"]
+        return out
+
+    table: dict[str, dict[str, dict[str, Any]]] = {}
+    for branch in defs["receiver"]["oneOf"]:
+        d = defs[branch["$ref"][len("#/definitions/"):]]
+        table[d["properties"]["type"]["const"]] = {
+            f: resolve(p) for f, p in d["properties"].items() if f != "type"}
+    _RECEIVER_FIELD_SCHEMAS = table
+    return table
+
+
+def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) -> Optional[str]:
+    """Check one ``required`` field of ``RECEIVER_TYPES[rtype]`` (#2180).
+
+    Presence is ``receiver_field_state`` (unset = missing, null or ``""``);
+    everything else follows the field's type in tenant-config.schema.json:
+
+    - a string field must be a string, and match the schema's ``pattern``
+      when it has one (``re.fullmatch``: Python's ``$`` in ``re.search``
+      also matches before a final newline, which ECMA and Go RE2 do not);
+    - an array field (email ``to``) given as a list needs at least one
+      item, each a non-empty string — the list is joined into
+      Alertmanager's ``to`` string, where ``[""]`` reads as no address.
+      A plain string is still taken for it: Alertmanager's own ``to`` is a
+      string (the schema alone rejects that form).
+
+    Returns the problem (callers prefix tenant / receiver context), or
+    ``None``. Same rule as the Go guard (internal/guard/routing.go
+    requiredFieldFinding); cases in
+    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json.
+    """
+    state = receiver_field_state(receiver, field)
+    if state == FIELD_UNSET:
+        return f"requires '{field}'"
+    value = receiver[field]
+    prop = _receiver_field_schemas().get(rtype, {}).get(field, {})
+    if state == FIELD_NOT_STRING:
+        if not (prop.get("type") == "array" and isinstance(value, list)):
+            return f"field '{field}' must be a string, got {type(value).__name__}"
+        if not value:
+            return f"requires '{field}'"
+        for i, item in enumerate(value):
+            if not isinstance(item, str) or item == "":
+                return f"field '{field}' item {i} must be a non-empty string, got {item!r}"
+        return None
+    pattern = prop.get("pattern")
+    if pattern and re.fullmatch(pattern, value) is None:
+        return (f"field '{field}' value {value!r} is not in the format "
+                "tenant-config.schema.json requires")
     return None
 
 

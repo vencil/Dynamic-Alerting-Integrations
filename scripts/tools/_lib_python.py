@@ -66,6 +66,7 @@ from _lib_validation import (  # noqa: F401
     i18n_text,
     receiver_exactly_one_problem,
     receiver_field_state,
+    receiver_required_problem,
     FIELD_UNSET,
     FIELD_SET,
     FIELD_NOT_STRING,

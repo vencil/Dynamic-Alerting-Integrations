@@ -242,7 +242,13 @@ echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 # list is every pack that references `alert_threshold:`; the test
 # test_threshold_alerts.py pins it against rule-packs/, so a new pack that is
 # not added here turns CI red instead of going silently unreported.
+#
+# ⛔ #2180. `_lib_validation.py` reads the tenant schema for the receiver
+# URL / smarthost `pattern` (written once, in the schema). It fails closed
+# when the file is absent — every generate-routes run with such a receiver
+# would then stop — so the schema must ship beside it.
 REPO_DATA_FILES=(
+    docs/schemas/tenant-config.schema.json
     k8s/03-monitoring/configmap-rules-platform.yaml
     rule-packs/rule-pack-clickhouse.yaml
     rule-packs/rule-pack-db2.yaml
