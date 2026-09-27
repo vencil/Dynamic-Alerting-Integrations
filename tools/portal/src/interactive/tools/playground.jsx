@@ -77,6 +77,7 @@ tenants:
         type: "email"
         to: ["ops@example.com"]
         smarthost: "smtp.example.com:587"
+        from: "alerts@example.com"
       group_wait: "45s"
       repeat_interval: "6h"`,
   kafka: `tenants:

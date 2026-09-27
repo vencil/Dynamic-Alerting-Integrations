@@ -6,7 +6,7 @@
  * Every template must also pass the whole tenant schema (#2033).
  */
 import { describe, it, expect } from 'vitest';
-import { validateTenantDoc } from './helpers/tenant-schema';
+import { validateTenantDoc, undeclaredReservedKeys } from './helpers/tenant-schema';
 import { render, screen } from '@testing-library/react';
 import TenantYAMLPlayground, { buildYamlTemplates } from '../src/interactive/tools/playground.jsx';
 import { load } from 'js-yaml';
@@ -77,7 +77,9 @@ describe('playground templates are accepted by tenant-config.schema.json (#2033 
   const templates = buildYamlTemplates(new Date('2026-09-25T10:00:00Z'));
   for (const [name, src] of Object.entries(templates)) {
     it(`${name}`, () => {
-      expect(validateTenantDoc(load(src))).toEqual([]);
+      const doc = load(src) as any;
+      expect(validateTenantDoc(doc)).toEqual([]);
+      for (const body of Object.values(doc.tenants) as any[]) expect(undeclaredReservedKeys(body)).toEqual([]);
     });
   }
 

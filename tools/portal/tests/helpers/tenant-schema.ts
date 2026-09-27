@@ -27,6 +27,17 @@ const validate = ajv.compile(TENANT_SCHEMA);
 
 export type SchemaError = { instancePath: string; keyword: string; message?: string; params: any };
 
+/**
+ * `_`-prefixed tenant keys that tenantConfig does not declare. The schema
+ * alone lets them through: tenantConfig.additionalProperties accepts any
+ * string as a threshold, which is how `_domain_policy: finance` passed while
+ * the exporter reads nothing from it (#2033).
+ */
+export function undeclaredReservedKeys(tenantBody: Record<string, unknown> | null | undefined): string[] {
+  const declared = TENANT_SCHEMA.definitions.tenantConfig.properties;
+  return Object.keys(tenantBody || {}).filter(k => k.startsWith('_') && !(k in declared));
+}
+
 /** Validates a whole `tenants:` document; returns [] when it is accepted. */
 export function validateTenantDoc(doc: unknown): SchemaError[] {
   return validate(doc) ? [] : (validate.errors as SchemaError[]).map(

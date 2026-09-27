@@ -12,7 +12,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // js-yaml is the oracle (#2033), not a portal tool's own parser.
 import { load } from 'js-yaml';
-import { validateTenantDoc } from './helpers/tenant-schema';
+import { validateTenantDoc, undeclaredReservedKeys } from './helpers/tenant-schema';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = JSON.parse(
@@ -28,6 +28,13 @@ describe('template-data.json gallery templates pass tenant-config.schema.json', 
     it(`${tpl.id}`, () => {
       const body = load(tpl.yaml) ?? {};
       expect(validateTenantDoc({ tenants: { 'demo-tenant': body } })).toEqual([]);
+      expect(undeclaredReservedKeys(body as any)).toEqual([]);
     });
   }
+
+  it('checker positive control: an undeclared _ key is caught even though the schema accepts it', () => {
+    const body = { _domain_policy: 'finance' };
+    expect(validateTenantDoc({ tenants: { t: body } })).toEqual([]);
+    expect(undeclaredReservedKeys(body)).toEqual(['_domain_policy']);
+  });
 });

@@ -7,6 +7,7 @@ related: [playground, glossary, config-lint]
 
 import React, { useState, useMemo } from 'react';
 import SILENT_SCHEMA from './_common/data/silent-mode-schema.json';
+import { silentModeExpires } from './tenant-manager/utils/yaml-generators.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -54,14 +55,19 @@ function silentModeNode() {
 
 // Required field(s) per receiver type
 // (tenant-config.schema.json#/definitions/receiver oneOf).
-const RECEIVER_RANGE = 'type: webhook→url | slack→api_url | email→to+smarthost | teams→webhook_url | rocketchat→url | pagerduty';
+// Required field(s) per receiver type: the union of the schema's receiver
+// oneOf and the routing generator's RECEIVER_TYPES
+// (scripts/tools/_lib_constants.py; Go guard receiverTypeSpecs), which also
+// requires email `from` and pagerduty `service_key` — without them the whole
+// route is dropped (#2033). Pinned by tests/receiver-required.drift.test.ts.
+const RECEIVER_RANGE = 'type: webhook→url | slack→api_url | email→to+smarthost+from | teams→webhook_url | rocketchat→url | pagerduty→service_key';
 
 /* ── Tenant-file schema tree ──
  * Every key below is written under tenants.<id>: in a tenant file
  * (docs/schemas/tenant-config.schema.json#/definitions/tenantConfig).
  * Platform files (_defaults.yaml, _routing_profiles.yaml, _domain_policy.yaml,
  * _instance_mapping.yaml) have their own schemas and are not listed here
- * (#2033). tests/schema-explorer-schema.drift.test.ts checks every path below
+ * (#2033). tests/schema-explorer-schema.drift.test.tsx checks every path below
  * against the live tenant schema and validates every insert.
  * `<tenant_name>` stands for the tenant itself: its children sit directly
  * under tenants.<id>:. A `[].` prefix marks a key inside an array item. */
@@ -180,7 +186,21 @@ function insertSegments(path) {
     .filter(k => k !== TENANT_PLACEHOLDER)
     .flatMap(k => (k.startsWith('[].') ? ['[]', k.slice(3)] : [k]));
 }
-function buildInsertYaml(path, example, tenantId = 'db-a') {
+// A leaf under these roots is not safe on its own, so its insert also carries
+// a sibling (#2033): a `_routing` without `receiver` is skipped by the
+// exporter (WARN) and rejected by da-guard; a `_state_maintenance` without
+// `expires` keeps the tenant in maintenance indefinitely, so it gets a
+// relative expiry computed from `now` (never a fixed date).
+const INSERT_SIBLINGS = {
+  _routing: () => [
+    'receiver:',
+    '  type: "webhook"',
+    '  url: "https://webhook.example.com/alerts"',
+  ],
+  _state_maintenance: (now) => [`expires: "${silentModeExpires(now)}"`],
+};
+
+function buildInsertYaml(path, example, now = new Date(), tenantId = 'db-a') {
   const lines = ['# Inserted from Schema Explorer', 'tenants:', `  ${tenantId}:`];
   const segs = insertSegments(path);
   let indent = 4;
@@ -189,6 +209,9 @@ function buildInsertYaml(path, example, tenantId = 'db-a') {
     if (seg === '[]') { item = true; return; }
     const last = i === segs.length - 1;
     lines.push(`${' '.repeat(indent)}${item ? '- ' : ''}${seg}:${last ? ` ${example}` : ''}`);
+    if (i === 0 && !last && INSERT_SIBLINGS[seg]) {
+      for (const l of INSERT_SIBLINGS[seg](now)) lines.push(`${' '.repeat(indent + 2)}${l}`);
+    }
     indent += item ? 4 : 2;
     item = false;
   });

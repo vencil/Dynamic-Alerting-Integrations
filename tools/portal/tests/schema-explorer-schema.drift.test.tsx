@@ -74,6 +74,10 @@ describe('every explorer key path exists in tenantConfig', () => {
 // Leaves whose schema requires a sibling the insert cannot know; each must be
 // rejected with a `required` error naming that sibling (so the list cannot go
 // stale silently).
+const NOW = new Date('2026-09-25T10:00:00Z');
+// Siblings the insert adds under these roots (receiver / relative expires).
+const SIBLING_OF: Record<string, string[]> = { _routing: ['receiver'], _state_maintenance: ['expires'] };
+
 const NEEDS_SIBLING: Record<string, string> = {
   '_silent_mode.reason': 'target',
   '_state_maintenance.recurring.[].cron': 'duration',
@@ -88,19 +92,23 @@ describe('insert produces tenants.<id>.<parent>.<child> accepted by the schema',
 
   for (const { path, node } of LEAVES) {
     it(id(path), () => {
-      const doc: any = load(buildInsertYaml(path, node.example!));
+      const doc: any = load(buildInsertYaml(path, node.example!, NOW));
       expect(Object.keys(doc)).toEqual(['tenants']);
       expect(Object.keys(doc.tenants)).toEqual(['db-a']);
+      const keys = path.filter(k => k !== TENANT_PLACEHOLDER);
       let cur = doc.tenants['db-a'];
-      for (const k of path.filter(k => k !== TENANT_PLACEHOLDER)) {
+      keys.forEach((k, i) => {
         if (k.startsWith('[].')) {
           expect(Array.isArray(cur)).toBe(true);
           cur = cur[0][k.slice(3)];
         } else {
-          expect(Object.keys(cur)).toEqual([k]);
+          // Directly under a root key the insert also carries that root's
+          // safety sibling (see INSERT_SIBLINGS pinned below).
+          const extra = i === 1 ? (SIBLING_OF[keys[0]] || []) : [];
+          expect(Object.keys(cur).sort()).toEqual([...extra, k].sort());
           cur = cur[k];
         }
-      }
+      });
       expect(cur).toEqual(load(node.example!));
 
       const errors = validateTenantDoc(doc);
@@ -118,6 +126,28 @@ describe('insert produces tenants.<id>.<parent>.<child> accepted by the schema',
   });
 });
 
+describe('inserts under _routing / _state_maintenance are safe on their own', () => {
+  const under = (root: string) => LEAVES.filter(l => l.path[0] === root && l.path.length > 1);
+
+  it('every _routing leaf insert carries a webhook receiver (the exporter skips a _routing without one)', () => {
+    expect(under('_routing').length).toBeGreaterThanOrEqual(4);
+    for (const { path, node } of under('_routing')) {
+      const r = (load(buildInsertYaml(path, node.example!, NOW)) as any).tenants['db-a']._routing;
+      expect(r.receiver).toEqual({ type: 'webhook', url: 'https://webhook.example.com/alerts' });
+    }
+  });
+
+  it('every _state_maintenance leaf insert carries an expires after the injected now', () => {
+    expect(under('_state_maintenance').length).toBeGreaterThanOrEqual(3);
+    for (const now of [NOW, new Date('2031-01-01T00:00:00Z')]) {
+      for (const { path, node } of under('_state_maintenance')) {
+        const m = (load(buildInsertYaml(path, node.example!, now)) as any).tenants['db-a']._state_maintenance;
+        expect(Date.parse(m.expires)).toBeGreaterThan(now.getTime());
+      }
+    }
+  });
+});
+
 function insertDepth(path: string[]) {
   return path.filter(k => k !== TENANT_PLACEHOLDER).length;
 }
@@ -132,7 +162,10 @@ describe('the Insert button sends the nested document to the playground', () => 
     expect(open).toHaveBeenCalledTimes(1);
     const url = String(open.mock.calls[0][0]);
     const yaml = decodeURIComponent(escape(atob(url.split('#yaml=')[1])));
-    expect(load(yaml)).toEqual({ tenants: { 'db-a': { _routing: { group_wait: '30s' } } } });
+    expect(load(yaml)).toEqual({ tenants: { 'db-a': { _routing: {
+      receiver: { type: 'webhook', url: 'https://webhook.example.com/alerts' },
+      group_wait: '30s',
+    } } } });
     open.mockRestore();
   });
 });

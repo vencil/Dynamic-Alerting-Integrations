@@ -32,7 +32,7 @@
       "category": "scenario",
       "packs": ["kafka", "mongodb", "jvm", "kubernetes"],
       "desc": { "zh": "高吞吐 IoT：Kafka 資料引入、MongoDB 時序儲存、JVM 處理服務", "en": "High-throughput IoT: Kafka ingestion, MongoDB time-series storage, JVM-based processing services." },
-      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_under_replicated_partitions: \"0\"\nkafka_request_rate: \"15000\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_replication_lag: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver:\n    type: pagerduty\n    routing_key: REPLACE_WITH_ROUTING_KEY\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
+      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_under_replicated_partitions: \"0\"\nkafka_request_rate: \"15000\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_replication_lag: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver:\n    type: pagerduty\n    service_key: REPLACE_WITH_SERVICE_KEY\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
     },
     {
       "id": "saas-backend",
@@ -50,7 +50,7 @@
       "category": "scenario",
       "packs": ["clickhouse", "kafka", "jvm", "kubernetes"],
       "desc": { "zh": "實時分析：Kafka 事件串流、ClickHouse OLAP 儲存、JVM 分析工作程式", "en": "Real-time analytics: Kafka event streaming, ClickHouse OLAP storage, JVM analytics workers." },
-      "yaml": "# Real-time Analytics — ClickHouse + Kafka + JVM + K8s\nclickhouse_queries_rate: \"800\"\nclickhouse_queries_rate_critical: \"1200\"\nclickhouse_active_connections: \"150\"\n\nkafka_consumer_lag: \"100000\"\nkafka_consumer_lag_critical: \"500000\"\nkafka_broker_count: \"5\"\nkafka_request_rate: \"20000\"\n\njvm_memory: \"85\"\njvm_gc_pause: \"1.0\"\n\ncontainer_cpu: \"85\"\ncontainer_memory: \"90\"\n\n_routing:\n  receiver:\n    type: email\n    to: [analytics-team@example.com]\n    smarthost: smtp.example.com:587\n  group_wait: \"2m\"\n  group_interval: \"5m\"\n  repeat_interval: \"24h\"\n\n_metadata:\n  owner: analytics-team\n  tier: production"
+      "yaml": "# Real-time Analytics — ClickHouse + Kafka + JVM + K8s\nclickhouse_queries_rate: \"800\"\nclickhouse_queries_rate_critical: \"1200\"\nclickhouse_active_connections: \"150\"\n\nkafka_consumer_lag: \"100000\"\nkafka_consumer_lag_critical: \"500000\"\nkafka_broker_count: \"5\"\nkafka_request_rate: \"20000\"\n\njvm_memory: \"85\"\njvm_gc_pause: \"1.0\"\n\ncontainer_cpu: \"85\"\ncontainer_memory: \"90\"\n\n_routing:\n  receiver:\n    type: email\n    to: [analytics-team@example.com]\n    smarthost: smtp.example.com:587\n    from: alerts@example.com\n  group_wait: \"2m\"\n  group_interval: \"5m\"\n  repeat_interval: \"24h\"\n\n_metadata:\n  owner: analytics-team\n  tier: production"
     },
     {
       "id": "enterprise-db",
