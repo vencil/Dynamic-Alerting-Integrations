@@ -534,6 +534,32 @@ class TestCheckCIStatus:
         assert result.status == pp.Status.WARN
         assert "1 個 check 還在跑" in result.message
 
+    # #2140：只有 `pass` 算通過、只有 `skipping` 是中性；`cancel`、缺 bucket、
+    # gh 日後新增的值都沒有結論，必須是 WARN 並在 detail 列出是哪幾個 check。
+    # 先前它們不進任何一桶，全部被取消時印「全部 0 個 checks 通過」並 PASS。
+    # 最後兩格是對照：全 pass 與 pass＋skipping 必須仍是 PASS（skipping 不可
+    # 被當成沒有結論）。
+    @pytest.mark.parametrize("buckets, want, listed", [
+        (["cancel", "cancel"], pp.Status.WARN, ["c0", "c1"]),
+        (["pass", "cancel"], pp.Status.WARN, ["c1"]),
+        (["pass", None], pp.Status.WARN, ["c1"]),
+        (["pass", "some-future-bucket"], pp.Status.WARN, ["c1"]),
+        (["pending", "cancel"], pp.Status.WARN, ["c1"]),
+        (["skipping", "skipping"], pp.Status.WARN, []),
+        (["pass", "pass"], pp.Status.PASS, []),
+        (["pass", "skipping"], pp.Status.PASS, []),
+    ], ids=["all-cancel", "pass+cancel", "missing-bucket", "unknown-bucket",
+            "pending+cancel", "all-skipping", "control-all-pass",
+            "control-pass+skipping"])
+    def test_only_pass_counts_as_passed(self, monkeypatch, buckets, want, listed):
+        checks = [{"name": f"c{i}", "state": "X", **({} if b is None else {"bucket": b})}
+                  for i, b in enumerate(buckets)]
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
+        result = pp.check_ci_status()
+        # detail 每行一個 check：「· <name> (…)」；比的是列出了誰，不是措辭。
+        got = [line.split()[1] for line in result.detail.splitlines()]
+        assert (result.status, got) == (want, listed), result
+
     def test_hard_failure_does_not_guess_its_cause_from_main_runs(self, monkeypatch):
         # #1996：`gh run list --branch main --limit 1` 回的是 main 上任一
         # workflow 的最新 run，不載「main 的 CI 結論」——不能據此斷言失敗是
