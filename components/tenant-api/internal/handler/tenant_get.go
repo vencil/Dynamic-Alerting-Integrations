@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/vencil/tenant-api/internal/boundedcall"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 )
@@ -21,10 +22,16 @@ type TenantDetail struct {
 	RawYAML  string                  `json:"raw_yaml"`
 	Resolved []cfg.ResolvedThreshold `json:"resolved_thresholds"`
 	// Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
-	// write of this exact file would be rejected on. Notices is the advisory
-	// set (#1231 deprecated-key alias notices): the file keeps resolving and
-	// writing, but carries a spelling the author should migrate. Split fields
-	// so a client never has to text-parse severity out of one list.
+	// write of this exact file would be rejected on. It judges only the keys
+	// the tenant's own file writes: a problem in a root platform file's
+	// `tenants:` entry for this tenant is never here (#2208). Notices is the
+	// advisory set, which never blocks a write: deprecated-key alias notices
+	// (#1231 — the file keeps resolving and writing, but carries a spelling
+	// the author should migrate), and one notice per problem in a root
+	// platform file's entry for this tenant, naming that file ("platform file
+	// <name>, entry tenants.<id>: …") — the platform operator fixes those
+	// there. Split fields so a client never has to text-parse severity out
+	// of one list.
 	Warnings []string `json:"validation_warnings,omitempty"`
 	Notices  []string `json:"validation_notices,omitempty"`
 	// SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
@@ -86,8 +93,14 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Parse defaults from _defaults.yaml if it exists
-		merged := loadMergedConfig(d.ConfigDir, tenantID, data)
+		// Merge over the root platform surface: the defaults carrier and
+		// the platform files' per-tenant `tenants:` layer (#2208).
+		merged, err := d.loadMergedConfig(tenantID, data)
+		if err != nil {
+			slog.Error("tenant GET: conf.d root platform read failed", "tenant", tenantID, "error", err)
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgRootPlatformRead)
+			return
+		}
 
 		// #1231 1b: two-channel split — validation_warnings stays Errors-only
 		// (the blocking set), deprecation notices get their own field.
@@ -130,11 +143,46 @@ func GetTenant(d *Deps) http.HandlerFunc {
 	}
 }
 
-// loadMergedConfig loads _defaults.yaml (if present) and merges the tenant file
-// on top. Thin wrapper over the shared cfg.MergeTenantWithRootDefaults so the
-// GET / validate / write-boundary paths all merge defaults identically (the
+// msgRootPlatformRead is the fixed client-facing text for a GET whose read of
+// the conf.d root platform files did not complete in time. The full error
+// goes to the server log only.
+const msgRootPlatformRead = "cannot read the conf.d root platform files in time; " +
+	"the tenant's effective thresholds cannot be computed"
+
+// defaultRootReadGuard is the process-wide bound behind Deps.RootReadGuard
+// when that field is nil.
+var defaultRootReadGuard = &boundedcall.Guard{}
+
+// loadMergedConfig merges the tenant file over the conf.d root platform
+// surface — the defaults carrier and the root platform files' per-tenant
+// `tenants:` layer. Thin wrapper over the shared cfg.MergeTenantWithRootDefaults
+// so the GET / validate / write-boundary paths all merge identically (the
 // consolidation that closed the ADR-024 PR4 / #704 write-vs-read asymmetry).
-func loadMergedConfig(configDir, tenantID string, tenantData []byte) cfg.ThresholdConfig {
+//
+// ⛔ BOUNDED (#2208). The merge reads every root `_*.yaml`, and a read that
+// never returns (a FIFO, a hung mount) would hang this GET — before #2208
+// only a file named like the defaults carrier could. The writer's paths are
+// already bounded by their conf.d walk; this is the same mechanism
+// (boundedcall), on its own guard so a stuck GET read does not fail writes.
+func (d *Deps) loadMergedConfig(tenantID string, tenantData []byte) (cfg.TenantMerge, error) {
+	guard := d.RootReadGuard
+	if guard == nil {
+		guard = defaultRootReadGuard
+	}
+	merge := d.mergeTenant
+	if merge == nil {
+		merge = loadMergedConfig
+	}
+	// A panic in the merge comes back as boundedcall.ErrPanicked (the merge
+	// runs on boundedcall's goroutine, where chi's Recoverer cannot reach);
+	// the caller logs it and answers with the same fixed 500.
+	return boundedcall.Do(guard, func() cfg.TenantMerge {
+		return merge(d.ConfigDir, tenantID, tenantData)
+	})
+}
+
+// loadMergedConfig is the unbounded merge (see Deps.loadMergedConfig).
+func loadMergedConfig(configDir, tenantID string, tenantData []byte) cfg.TenantMerge {
 	return cfg.MergeTenantWithRootDefaults(configDir, tenantID, tenantData)
 }
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/boundedcall"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/token"
@@ -33,6 +34,7 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // WriteMode represents the tenant-api write-back mode (ADR-011).
@@ -157,6 +159,20 @@ type Deps struct {
 	// requests so the TTL has effect; nil loads on every request —
 	// see tenant_search.go for design notes.
 	SearchCache *tenantSnapshotCache
+
+	// RootReadGuard bounds GET /tenants/{id}'s read of the conf.d root
+	// platform files (#2208; see loadMergedConfig): a root `_*.yaml` whose
+	// read never returns (a FIFO, a hung mount) fails the GET instead of
+	// hanging it. nil — tests that build Deps literally, and the server,
+	// which has no reason to tune it — uses one process-wide guard with
+	// boundedcall.DefaultTimeout. A test that stalls a read must pass its
+	// own: a stuck read fails every GET sharing the guard until it returns.
+	RootReadGuard *boundedcall.Guard
+
+	// mergeTenant replaces the merge GET runs under RootReadGuard; nil (every
+	// production Deps) is cfg.MergeTenantWithRootDefaults. A test seam, per
+	// Deps so parallel tests do not share it.
+	mergeTenant func(configDir, tenantID string, tenantData []byte) cfg.TenantMerge
 
 	// MaxBodyBytes caps the request body every write handler will
 	// read via `io.LimitReader`. Wired from `TA_MAX_BODY_BYTES`

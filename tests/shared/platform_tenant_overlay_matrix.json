@@ -44,7 +44,20 @@
     "Go also checks every `<base>_critical` key of the walker column against the",
     "critical row /metrics serves for <base>. Measured on main 9079583d before",
     "the fix: p1/p2/p3/p6/p7 walker disagreed with /metrics (80 / 70, no",
-    "pg_connections_critical)."
+    "pg_connections_critical).",
+    "#2208 tenant_api = the tenant-api merge core (pkg/config MergeTenantWithRootDefaults:",
+    "GET /api/v1/tenants/{id}, POST .../validate and the write gate) handed the tenant's",
+    "declaring file: the mysql_connections warning row it resolves. null = not reached",
+    "(tenant declared by no file, or only by one below the root: tenant-api serves",
+    "top-level files). Which top-level file GET opens (confd's filename lookup) is",
+    "tenant-api's own and not in this column. Go (config_platform_tenant_overlay_test.go)",
+    "asserts it, and that it equals metric except (a) null for a nested tenant and",
+    "(b) where walker.profile_overlay is set: the core does not expand profiles yet",
+    "(#1385; p1/p2/p6 serve 80 where /metrics serves 60).",
+    "tenant_api is a threshold column only: on platform-metadata-is-never-inherited-or-listed",
+    "its 60 is mysql_connections. The core does NOT inherit the platform entry's _metadata",
+    "(the walker rule), while /metrics' ResolveMetadata does - a deliberate divergence",
+    "pinned by pkg/config TestMergeTenantPlatformLayerMatchesMetrics, not by this table."
   ],
   "trees": [
     {
@@ -56,6 +69,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": 70,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -79,6 +93,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -103,6 +118,7 @@
       "expect": {
         "tx": {
           "metric": null,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": null,
@@ -111,6 +127,7 @@
         },
         "ty": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -134,6 +151,7 @@
       "expect": {
         "tx": {
           "metric": null,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": null,
@@ -142,6 +160,7 @@
         },
         "ty": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -165,6 +184,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -199,6 +219,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -233,6 +254,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -267,6 +289,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": 70,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -292,6 +315,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": 70,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -317,6 +341,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": 70,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -344,6 +369,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -358,6 +384,7 @@
         },
         "ty": {
           "metric": null,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": null,
@@ -366,6 +393,7 @@
         },
         "tz": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -389,6 +417,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": null,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -423,6 +452,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": null,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -458,6 +488,7 @@
       "expect": {
         "tx": {
           "metric": null,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": null,
@@ -466,6 +497,7 @@
         },
         "ty": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -489,6 +521,7 @@
       "expect": {
         "tx": {
           "metric": 70,
+          "tenant_api": 70,
           "dedup": "enable",
           "group_wait": "10s",
           "exporter_dedup": "enable",
@@ -522,6 +555,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": "20s",
           "exporter_dedup": "enable",
@@ -549,6 +583,7 @@
       "expect": {
         "tx": {
           "metric": 55,
+          "tenant_api": 55,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -587,6 +622,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -610,6 +646,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": "30s",
           "exporter_dedup": "enable",
@@ -636,6 +673,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -666,6 +704,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -698,6 +737,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": null,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -728,6 +768,7 @@
       "expect": {
         "123": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -760,6 +801,7 @@
       "expect": {
         "010": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -792,6 +834,7 @@
       "expect": {
         "yes": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "disable",
           "group_wait": null,
           "exporter_dedup": "disable",
@@ -825,6 +868,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -857,6 +901,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -891,6 +936,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -924,6 +970,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -949,6 +996,7 @@
       "expect": {
         "tx": {
           "metric": 65,
+          "tenant_api": 65,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -981,6 +1029,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -1021,6 +1070,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -1056,6 +1106,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": 80,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -1081,6 +1132,7 @@
       "expect": {
         "tx": {
           "metric": 80,
+          "tenant_api": null,
           "dedup": null,
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -1106,6 +1158,7 @@
       "expect": {
         "tx": {
           "metric": 60,
+          "tenant_api": 60,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",

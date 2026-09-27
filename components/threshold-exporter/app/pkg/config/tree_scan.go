@@ -401,7 +401,8 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 }
 
 // walkMode selects how much of the tree walkDirTree visits. Unexported on
-// purpose: the only non-full caller is scanRootDefaults in this package.
+// purpose: the only non-full callers are scanRootDefaults and
+// scanRootPlatform in this package.
 type walkMode int
 
 const (
@@ -411,15 +412,20 @@ const (
 	// walkRootCarriers visits ONLY the root directory and keeps ONLY the
 	// entries the full walk would classify as defaults carriers there.
 	walkRootCarriers
+	// walkRootPlatform visits ONLY the root directory and keeps every
+	// `_`-prefixed entry there — the defaults carriers AND the other root
+	// platform files — so one walk answers both "which carrier" and "which
+	// files carry a per-tenant `tenants:` layer" (#2208).
+	walkRootPlatform
 )
 
 // scanRootDefaults is the root-only, carriers-only mode of the ONE walker
 // (#1674 round 2). It exists for callers that need exactly one answer —
 // "which defaults carrier does the chain read at the root, and what are its
-// bytes" (MergeTenantWithRootDefaults, i.e. tenant-api GET / validate / the
-// gitops write gate) — and must not pay a full walk for it: measured on a
-// 1000-file tree, a full ScanDirTree per call was ~100x main's cost, and the
-// gitops writer validates inside its single-writer token.
+// bytes" (RootMaxMetricsPerTenant, i.e. da-guard; until #2208 also the
+// tenant-api merge core, which now reads scanRootPlatform) — and must not pay
+// a full walk for it: measured on a 1000-file tree, a full ScanDirTree per
+// call was ~100x main's cost.
 //
 // ⛔ It is walkDirTree with a mode, NOT a second lister: the root's entries
 // go through the same hidden / extension / stat / read / classification code
@@ -432,9 +438,28 @@ func scanRootDefaults(root string) (*TreeScan, error) {
 	return walkDirTree(root, nil, nil, discardLogger, walkRootCarriers)
 }
 
+// scanRootPlatform is the root-only, platform-files mode of the ONE walker
+// (#2208), for the tenant-api merge core (mergeTenantConfig): it needs the
+// root defaults carrier AND every other root platform file, whose
+// `tenants:` blocks /metrics applies to a tenant (rootPlatformKeys).
+//
+// ⛔ A SEPARATE MODE, NOT A WIDER walkRootCarriers. scanRootDefaults backs
+// RootMaxMetricsPerTenant (da-guard) and is pinned file-for-file by
+// TestRootOnlyScanSelectsWhatTheFullScanSelects ("the root-only walk holds
+// nothing but root carriers"); widening it would make those callers read and
+// hash every root `_` file for an answer that needs one.
+//
+// Carriers are `_`-prefixed, so this scan's DefaultsCarriers is the full
+// scan's root pick; rootPlatformKeys over it is the full scan's root
+// platform set (nothing below the root is kept, so there is nothing nested
+// to exclude). Same lister, same hidden / extension / stat / read rules.
+func scanRootPlatform(root string) (*TreeScan, error) {
+	return walkDirTree(root, nil, nil, discardLogger, walkRootPlatform)
+}
+
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
 // hash, the classification and the hierarchy products. mode is walkFull for
-// every production caller except scanRootDefaults.
+// every production caller except scanRootDefaults and scanRootPlatform.
 func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 
@@ -465,7 +490,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != absRoot && (mode == walkRootCarriers || strings.HasPrefix(name, ".")) {
+			if path != absRoot && (mode != walkFull || strings.HasPrefix(name, ".")) {
 				return fs.SkipDir
 			}
 			return nil
@@ -474,6 +499,9 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			return nil
 		}
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
+			return nil
+		}
+		if mode == walkRootPlatform && !strings.HasPrefix(name, "_") {
 			return nil
 		}
 		// ⛔ A SYMLINKED FILE IS JUDGED BY ITS LINK *AND* ITS TARGET (#1969).

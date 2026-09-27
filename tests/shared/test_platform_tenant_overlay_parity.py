@@ -37,10 +37,11 @@ MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.jso
 # read as absent turns a row into one that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "expect"}
-# `metric` / `exporter_dedup` / `silent_mode` are the Go half's columns;
-# this half asserts `dedup` / `group_wait` / `walker` and only pins the key
-# set of the rest.
-EXPECT_KEYS = {"metric", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
+# `metric` / `tenant_api` / `exporter_dedup` / `silent_mode` are the Go
+# half's columns (`tenant_api` is the tenant-api merge core, #2208); this half
+# asserts `dedup` / `group_wait` / `walker` and only pins the key set of the
+# rest.
+EXPECT_KEYS = {"metric", "tenant_api", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
 WALKER_KEYS = {"effective_config", "platform_overlay", "profile_overlay"}
 
 

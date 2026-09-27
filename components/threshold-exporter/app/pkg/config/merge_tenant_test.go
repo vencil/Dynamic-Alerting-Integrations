@@ -181,7 +181,7 @@ func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			merged := MergeTenantWithRootDefaults(t.TempDir(), tt.tenantID, []byte(tt.body))
-			if got := shape(merged); !reflect.DeepEqual(got, tt.want) {
+			if got := shape(merged.ThresholdConfig); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("tenant shape = %v, want %v", got, tt.want)
 			}
 		})
