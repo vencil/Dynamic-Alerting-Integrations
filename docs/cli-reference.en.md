@@ -246,7 +246,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 Health check for a single tenant: the MariaDB Pod's status, the exporter's `mysql_up`, the operational mode (maintenance / silent), and, when `--config-dir` is given, the profile and inheritance chain.
 
-**Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod and exporter checks are written for MariaDB. The Pod check looks for an `app=mariadb` Pod in the namespace named after the tenant; it needs `kubectl` and cluster access, and the da-tools image does not ship `kubectl`. The exporter check queries `mysql_up{instance="<tenant>"}`. The tool first reads the tenant's `db_type` from Prometheus via `tenant_expected_exporter{tenant="<tenant>"}`; that series exists only when the tenant declares `_metadata.db_type`. Both checks run only when `db_type` is `mariadb`. For any other database, or a tenant that declares none, they are listed under `skipped` with a reason and do not count as an error. A MariaDB tenant that does not declare `db_type` therefore skips them too. ⚠️ The v2.9.0 image still has the old behavior: it ignores `db_type`, and every non-MariaDB tenant comes back `status: error` (`Pod not found`).
+**Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod and exporter checks are written for MariaDB. The Pod check looks for an `app=mariadb` Pod in the namespace named after the tenant; it needs `kubectl` and cluster access, and the da-tools image does not ship `kubectl`. The exporter check queries `mysql_up{instance="<tenant>"}`. The tool first reads the tenant's `db_type` from Prometheus via `tenant_expected_exporter{tenant="<tenant>"}`; that series exists only when the tenant declares `_metadata.db_type`. Both checks run only when `db_type` is `mariadb`. For any other database, or a tenant that declares none, they are listed under `skipped` with a reason and `status` is `unchecked`: neither `healthy` nor `error`. A MariaDB tenant that does not declare `db_type` therefore skips them too; declare `mariadb` in `_metadata.db_type` to have them checked. ⚠️ The v2.9.0 image still has the old behavior: it ignores `db_type`, and every non-MariaDB tenant comes back `status: error` (`Pod not found`).
 
 **Syntax**
 
@@ -287,7 +287,7 @@ When something is wrong it lists `issues` and recent error logs:
 A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
 
 ```json
-{"status": "healthy", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
+{"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
 ```
 
 **Examples**
@@ -311,7 +311,7 @@ docker run --rm --network=host \
 
 | Code | Description |
 |------|-------------|
-| `0` | `status: healthy` (including when the Pod and exporter checks were skipped) |
+| `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
 | `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
 | `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); or the Pod check needs to run but `kubectl` is not in the environment (one line on stderr, no JSON) |
 
@@ -348,7 +348,7 @@ None (auto-discover tenants).
 
 **Output**
 
-Unified JSON report with summary of all tenant checks.
+Unified JSON report with summary of all tenant checks. `unchecked` tenants are counted in `unchecked_count`, in neither `healthy_count` nor `issue_count`; `health_score` is computed over checked tenants only and is `null` when every tenant is `unchecked`. The text report lists them in a separate `Unchecked Tenants` section with the skip reason. ⚠️ The v2.9.0 image has no `unchecked` status or field.
 
 **Examples**
 

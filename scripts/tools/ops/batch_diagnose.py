@@ -165,18 +165,30 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
 def generate_report(results, prom_url):
     """Generate unified health report from individual diagnose results."""
     healthy = [r for r in results if r.get("status") == "healthy"]
-    with_issues = [r for r in results if r.get("status") != "healthy"]
+    # issue 1513: diagnose reports `unchecked` for a tenant whose Pod and
+    # exporter checks were skipped (not MariaDB, or db_type not declared).
+    # Counting it as healthy inflated the score with tenants nobody looked at.
+    unchecked = [r for r in results if r.get("status") == "unchecked"]
+    with_issues = [r for r in results
+                   if r.get("status") not in ("healthy", "unchecked")]
 
     total = len(results)
-    health_score = len(healthy) / total if total > 0 else 0.0
+    checked = total - len(unchecked)
+    if checked > 0:
+        health_score = round(len(healthy) / checked, 2)
+    elif total > 0:
+        health_score = None  # every tenant unchecked: no score, not 0% or 100%
+    else:
+        health_score = 0.0
 
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "prometheus_url": prom_url,
         "total_tenants": total,
         "healthy_count": len(healthy),
+        "unchecked_count": len(unchecked),
         "issue_count": len(with_issues),
-        "health_score": round(health_score, 2),
+        "health_score": health_score,
         "tenants": {r["tenant"]: r for r in results},
     }
 
@@ -217,8 +229,13 @@ def print_text_report(report):
     total = report["total_tenants"]
     healthy = report["healthy_count"]
     issues = report["issue_count"]
+    unchecked = report.get("unchecked_count", 0)
     score = report["health_score"]
-    print(f"  Overall Health Score: {score:.0%} ({healthy}/{total} healthy)")
+    checked = total - unchecked
+    if score is None:
+        print(f"  Overall Health Score: n/a (0/{total} tenants checked)")
+    else:
+        print(f"  Overall Health Score: {score:.0%} ({healthy}/{checked} checked tenants healthy)")
     print()
 
     # Healthy tenants
@@ -232,11 +249,20 @@ def print_text_report(report):
                 print(f"    + {name}{suffix}  ({elapsed}s)")
         print()
 
+    # Tenants whose Pod / exporter checks were skipped
+    if unchecked > 0:
+        print(f"  Unchecked Tenants ({unchecked}) — Pod and exporter checks skipped:")
+        for name, data in report["tenants"].items():
+            if data.get("status") == "unchecked":
+                reasons = sorted({s.get("reason", "") for s in data.get("skipped", [])})
+                print(f"    ? {name}: {'; '.join(r for r in reasons if r)}")
+        print()
+
     # Tenants with issues
     if issues > 0:
         print(f"  Tenants with Issues ({issues}):")
         for name, data in report["tenants"].items():
-            if data.get("status") != "healthy":
+            if data.get("status") not in ("healthy", "unchecked"):
                 issue_list = data.get("issues", [])
                 print(f"    - {name}: {', '.join(issue_list)}")
         print()
@@ -325,6 +351,7 @@ def main():
                 "prometheus_url": args.prometheus,
                 "total_tenants": len(tenants),
                 "healthy_count": None,
+                "unchecked_count": None,
                 "issue_count": None,
                 "health_score": None,
                 "tenants": {

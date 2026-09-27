@@ -247,7 +247,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 對單一 tenant 執行健康檢查：MariaDB Pod 狀態、exporter 的 `mysql_up`、運營模式（維護／靜音），以及給了 `--config-dir` 時的 profile 與繼承鏈。
 
-**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，不算 error。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。
+**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_metadata.db_type` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。
 
 **語法**
 
@@ -288,7 +288,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
-{"status": "healthy", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
+{"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
 ```
 
 **範例**
@@ -301,7 +301,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | `status: healthy`（含跳過 Pod 與 exporter 兩項的情形） |
+| `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
 | `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON） |
 
@@ -334,7 +334,7 @@ da-tools batch-diagnose [options]
 
 **輸出**
 
-JSON 格式統一報告，包含所有租戶的檢查結果摘要。
+JSON 格式統一報告，包含所有租戶的檢查結果摘要。`unchecked` 的租戶另計在 `unchecked_count`，不算進 `healthy_count` 也不算進 `issue_count`；`health_score` 的分母只算有檢查的租戶，全部都是 `unchecked` 時為 `null`。文字報告另列一段 `Unchecked Tenants` 並附跳過原因。⚠️ v2.9.0 映像沒有 `unchecked` 這個狀態與欄位。
 
 **範例**
 

@@ -60,7 +60,8 @@ def test_non_mariadb_tenant_skips_pod_and_exporter(db_type, reason_word):
     with mock.patch.object(diagnose, "query_prometheus", side_effect=_router(db_type)), \
             mock.patch.object(diagnose, "run_cmd") as run_cmd:
         result = _check()
-    assert result["status"] == "healthy", result
+    # 沒檢查不等於健康：量不到要說量不到（Nagios 的 UNKNOWN 不是 OK）。
+    assert result["status"] == "unchecked", result
     assert [s["check"] for s in result["skipped"]] == ["pod", "exporter"]
     assert all(reason_word in s["reason"] for s in result["skipped"])
     run_cmd.assert_not_called()
@@ -87,6 +88,9 @@ def test_db_type_query_failure_is_reported_not_skipped_silently():
 
 @pytest.mark.parametrize("result,rc", [
     ({"status": "healthy", "tenant": "t1"}, 0),
+    # 量不到不是違規：repo 的結束碼只有 0/1/2，unchecked 不擋 `diagnose t && …`，
+    # 靠 status 與 batch-diagnose 的分開計數揭露。
+    ({"status": "unchecked", "tenant": "t1", "skipped": [{"check": "pod"}]}, 0),
     ({"status": "error", "tenant": "t1", "issues": ["Pod not found"]}, 1),
     ({"status": "error", "tenant": "t1",
       "issues": ["Pod not found", "Prometheus query failed (http://x)"]}, 2),

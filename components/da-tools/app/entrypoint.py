@@ -487,7 +487,18 @@ def inject_prometheus_env(args, command=None):
     caller picked the other side of the mutually exclusive group.
     """
     blocking = {"--prometheus"} | PROMETHEUS_EXCLUSIVE_FLAGS.get(command, frozenset())
-    already_specified = any(a.split("=", 1)[0] in blocking for a in args)
+
+    def _names_a_blocking_flag(arg):
+        # argparse resolves a unique prefix (`--end` → `--endpoint`), so a
+        # prefix of a blocking flag counts too. `--e`-style one-letter prefixes
+        # are only unique when no other option shares them; the tool's own
+        # parser rejects an ambiguous one, so treating it as blocking cannot
+        # turn a working line into a failing one.
+        name = arg.split("=", 1)[0]
+        return name.startswith("--") and len(name) > 2 and any(
+            flag.startswith(name) for flag in blocking)
+
+    already_specified = any(_names_a_blocking_flag(a) for a in args)
     if not already_specified:
         prom_url = os.environ.get("PROMETHEUS_URL")
         if prom_url:

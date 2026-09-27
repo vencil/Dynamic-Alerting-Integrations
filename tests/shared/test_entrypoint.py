@@ -191,6 +191,9 @@ class TestInjectSkipsFlagsExclusiveWithPrometheus:
     @pytest.mark.parametrize("argv", [
         ["--endpoint", "http://exporter:9104/metrics"],
         ["--endpoint=http://exporter:9104/metrics"],
+        # argparse 接受唯一前綴縮寫，`--end` 就是 `--endpoint`
+        ["--end", "http://exporter:9104/metrics"],
+        ["--endp=http://exporter:9104/metrics"],
     ])
     def test_discover_mappings_endpoint_is_left_alone(self, monkeypatch, argv):
         monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
@@ -200,6 +203,13 @@ class TestInjectSkipsFlagsExclusiveWithPrometheus:
         monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
         result = entrypoint.inject_prometheus_env(["--job", "mysql"], "discover-mappings")
         assert result == ["--job", "mysql", "--prometheus", "http://env:9090"]
+
+    def test_a_prefix_of_another_flag_still_gets_the_env(self, monkeypatch):
+        """`--e` 在 discover-mappings 不唯一（沒有其他 --e 開頭的旗標時才算）；
+        `--json` 不是 --endpoint 的前綴，照常注入。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        result = entrypoint.inject_prometheus_env(["--json"], "discover-mappings")
+        assert result[-2:] == ["--prometheus", "http://env:9090"]
 
     def test_the_flag_only_counts_for_its_own_command(self, monkeypatch):
         monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")

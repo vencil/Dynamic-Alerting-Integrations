@@ -139,8 +139,8 @@ def tenant_db_type(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
 
 
 def exit_code(result: dict) -> int:
-    """0 healthy; 2 when a Prometheus query failed (the caller's environment,
-    as validate / shadow-verify classify it); 1 for any other issue."""
+    """0 healthy or unchecked; 2 when a Prometheus query failed (the caller's
+    environment, as validate / shadow-verify classify it); 1 for any other issue."""
     if result.get("status") != "error":
         return EXIT_OK
     if any(str(i).startswith(PROMETHEUS_FAILURE) for i in result.get("issues", [])):
@@ -642,7 +642,11 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     stream = sys.stdout if out is None else out
 
     if not errors:
-        result = {"status": "healthy", "tenant": tenant}
+        # Skipped checks are not a pass: a tenant whose Pod and exporter were
+        # never looked at must not read as healthy (issue 1513). `unchecked`
+        # still exits 0 — nothing was found wrong — and batch-diagnose counts
+        # it apart from healthy.
+        result = {"status": "unchecked" if skipped else "healthy", "tenant": tenant}
         if operational_mode != "normal":
             result["operational_mode"] = operational_mode
         if profile_name:
