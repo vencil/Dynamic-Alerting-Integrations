@@ -1252,11 +1252,11 @@ func TenantDocBytesFromEnv(envValue string) (n int64, malformed bool) {
 
 // CheckTenantDocSize is the pre-parse size gate on one tenant document (#1722).
 //
-// ⛔ EXPORTED SO THE DRY-RUN ENDPOINT ENFORCES THE BYTE-IDENTICAL RULE. POST
-// /tenants/{id}/validate does not call validate(); it re-assembles the same
-// checks by hand, so a gate living only inside validateShape let the dry-run
-// answer `valid: true` for a body the PUT then refused — the write-vs-read
-// asymmetry this repo has closed twice (#704, #1718). One function, two callers.
+// It was exported (#1722) because POST /tenants/{id}/validate then re-assembled
+// validate()'s checks by hand and had to call this gate itself. Since #2124 the
+// dry-run gets its verdict from DryRunValidate, which runs validate() — and so
+// this gate — itself; the handler no longer calls it. It stays exported for the
+// handler-side symmetry test that measures a fixture against the cap.
 //
 // ⚠️ WHAT IT MEASURES DEPENDS ON THE CALLER, so the message must not assert one.
 // The merged document reaches it from exactly two places — readMergeBodyOnly and

@@ -412,11 +412,12 @@ func TestBatchBodyCapIsInclusiveAndHonoursTheGlobalCap(t *testing.T) {
 // TestDryRunAndWriteAgreeOnDocumentSize is the write-vs-read symmetry pin.
 //
 // ⛔ THIS REPO HAS CLOSED THIS ASYMMETRY TWICE (#704, #1718) AND THE #1722 GATE
-// RE-OPENED IT: POST /{id}/validate does not call gitops.validate — it
-// reassembles the same checks by hand — so a gate added only to the write path
-// let the dry-run answer `valid: true` for a body the PUT then refused. Both
-// sides now call the same exported gitops.CheckTenantDocSize; this asserts the
-// verdicts agree rather than asserting either implementation.
+// RE-OPENED IT: POST /{id}/validate then reassembled gitops.validate's checks
+// by hand, so a gate added only to the write path let the dry-run answer
+// `valid: true` for a body the PUT then refused. Since #2124 the dry-run calls
+// gitops.Writer.DryRunValidate, i.e. the write path's own validate; this still
+// asserts the verdicts agree rather than asserting either implementation
+// (TestValidateTenant_VerdictMatchesWrite covers the other refusal classes).
 func TestDryRunAndWriteAgreeOnDocumentSize(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
