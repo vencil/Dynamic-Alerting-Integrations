@@ -668,7 +668,7 @@ def main(argv=None):
         if not path.exists():
             print(f"::error::missing data file {path}")
             return 2
-        session = load(path.read_text(), path.name)
+        session = load(path.read_text(encoding="utf-8"), path.name)
         err = reject(session)
         if err:
             print(err)
@@ -691,7 +691,7 @@ def main(argv=None):
         if not path.exists():
             print(f"::error::missing data file {path}")
             return 2
-        session = load(path.read_text(), path.name)
+        session = load(path.read_text(encoding="utf-8"), path.name)
         err = reject(session, thin_msg=lambda s: (
             f"::error::parsed {len(s.rows)} measurement rows, need >= 2"))
         if err:

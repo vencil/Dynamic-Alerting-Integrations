@@ -35,6 +35,9 @@ if _DA_TOOLS_DIR not in sys.path:
 # ── Local imports (factories helper) ──────────────────────────────────
 from factories import populate_routing_dir  # noqa: E402
 
+# ── Runtime encoding gate (#2005): see tests/_encoding_gate.py ─────────
+pytest_plugins = ["_encoding_gate"]
+
 
 # ── Hypothesis: repo-wide settings profile ───────────────────────────
 #
