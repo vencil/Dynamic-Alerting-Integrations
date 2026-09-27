@@ -2440,7 +2440,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | exporter 無法 decode 的設定檔（報告的「Files the exporter cannot parse」段落列出，路徑相對於 `--config-dir`），修好後重跑。`_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
+| 3 | `--scope` 內、或被解析租戶繼承鏈上的設定檔，exporter 無法 decode（報告的「Files the exporter cannot parse」段落列出，路徑相對於 `--config-dir`），修好後重跑。`_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
 
 **範例**
 
