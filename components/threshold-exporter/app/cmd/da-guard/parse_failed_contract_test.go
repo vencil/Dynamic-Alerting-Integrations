@@ -5,10 +5,11 @@ package main
 //
 // The contract (docs/cli-reference.md §guard): da-guard exits 3 and names
 // exactly the files the exporter's own load drops — config.LoadDir's
-// parseFailed — restricted to the files that bear on --scope. This test runs
-// both over one fixture matrix and compares the two sets, so a guard that
-// starts judging "broken" on its own (a second decode, a missed path, a flag
-// that skips a read) turns it red instead of drifting silently.
+// parseFailed — plus the files da-guard itself cannot decode, restricted to
+// the files that bear on --scope. Both halves are derived here independently
+// of da-guard's output (LoadDir; the untyped yaml decode its chain merge
+// uses), so a guard that starts judging "broken" on its own (another decode,
+// a missed path, a flag that skips a read) turns it red instead of drifting.
 
 import (
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"gopkg.in/yaml.v3"
 )
 
 // contractCases is #2179 step 0's matrix: one broken file per case, at every
@@ -76,7 +78,51 @@ func contractCases() map[string]map[string]string {
 		"T3_tenant_dupkey": base(map[string]string{"db/tenant-b.yaml": "tenants:\n  tenant-b:\n    mem: \"60\"\n    mem: \"61\"\n"}),
 		// Control: the exporter keeps this file (parseFailed is empty).
 		"T4_tenant_value_type": base(map[string]string{"db/tenant-b.yaml": "tenants:\n  tenant-b:\n    mem:\n      a: [1]\n"}),
+
+		// The exporter keeps these (unknown top-level field; parseFailed is
+		// empty) but da-guard's untyped decode rejects the repeated key (#2179).
+		"U1_tenant_dupkey_unknown_field":        base(map[string]string{"tenant-a.yaml": tenantA + "extra: {k: 1, k: 2}\n"}),
+		"U2_root_defaults_dupkey_unknown_field": base(map[string]string{"_defaults.yaml": goodDefaults + "extra: {k: 1, k: 2}\n"}),
 	}
+}
+
+// guardUndecodable is the second half of the set: the files da-guard decodes
+// untyped while merging the tenants under scopeRel ("" = whole tree) — each
+// such tenant file and every `_defaults.yaml` on its chain (its directory and
+// the ones above) — whose bytes that decode (the same yaml.Unmarshal into
+// `any` as config.ParseChainDefaults / the tenant merge) rejects. No tenant
+// under the scope means no merge, so nothing is decoded.
+func guardUndecodable(tree map[string]string, scopeRel string) []string {
+	isYAML := func(rel string) bool {
+		ext := strings.ToLower(path.Ext(rel))
+		return !strings.HasSuffix(rel, "/") && (ext == ".yaml" || ext == ".yml")
+	}
+	read := map[string]bool{}
+	for rel := range tree {
+		if !isYAML(rel) || strings.HasPrefix(path.Base(rel), "_") ||
+			(scopeRel != "" && !strings.HasPrefix(rel, scopeRel+"/")) {
+			continue
+		}
+		read[rel] = true
+		for dir := path.Dir(rel); ; dir = path.Dir(dir) {
+			read[path.Join(dir, "_defaults.yaml")] = true
+			if dir == "." {
+				break
+			}
+		}
+	}
+	var out []string
+	for rel := range read {
+		body, ok := tree[rel]
+		if !ok {
+			continue
+		}
+		var doc any
+		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+			out = append(out, rel)
+		}
+	}
+	return out
 }
 
 // bearsOnScope is the scope half of the contract, and only that half — what
@@ -114,12 +160,20 @@ func TestExitThree_NamesExactlyTheFilesTheExporterDrops(t *testing.T) {
 			}
 
 			for _, scopeRel := range []string{"", "db", "empty"} {
-				want := []string{}
+				expected := map[string]bool{}
 				for _, k := range dropped {
+					expected[k] = true
+				}
+				for _, k := range guardUndecodable(tree, scopeRel) {
+					expected[k] = true
+				}
+				want := []string{}
+				for k := range expected {
 					if bearsOnScope(k, scopeRel) {
 						want = append(want, k)
 					}
 				}
+				sort.Strings(want)
 				for _, withLimit := range []bool{false, true} {
 					args := []string{"--config-dir", root, "--format", "json"}
 					if scopeRel != "" {
@@ -133,13 +187,13 @@ func TestExitThree_NamesExactlyTheFilesTheExporterDrops(t *testing.T) {
 
 					if len(want) == 0 {
 						if code == exitParseFailed {
-							t.Errorf("[%s] exit 3 but the exporter drops nothing here. stdout=%q stderr=%q",
+							t.Errorf("[%s] exit 3 but no file bears on this run. stdout=%q stderr=%q",
 								label, stdout, stderr)
 						}
 						continue
 					}
 					if code != exitParseFailed {
-						t.Errorf("[%s] exit = %d, want %d (exporter drops %v). stdout=%q stderr=%q",
+						t.Errorf("[%s] exit = %d, want %d (expected %v). stdout=%q stderr=%q",
 							label, code, exitParseFailed, want, stdout, stderr)
 						continue
 					}

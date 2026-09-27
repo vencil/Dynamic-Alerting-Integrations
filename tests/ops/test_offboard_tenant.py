@@ -420,3 +420,25 @@ def test_precheck_mode_with_only_a_warning_still_exits_zero(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", d])
 
     ot.main()  # no SystemExit
+
+
+def test_precheck_fails_on_a_broken_symlink_config(tmp_path):
+    """A config-named entry that cannot be opened (here a dangling
+    `_platform.yaml` link) is an unreadable file too — it used to print ⚠️
+    and pass the pre-check. A directory named like a config is not a file
+    and stays out of the count (paired control)."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "tenant-a.yaml").write_text(
+        'tenants:\n  tenant-a:\n    cpu: "80"\n', encoding="utf-8")
+    (root / "_platform.yaml").symlink_to(root / "gone.yaml")
+
+    can_proceed, report = ot.run_precheck("tenant-a", str(root))
+    text = "\n".join(report)
+    assert can_proceed is False, text
+    assert "→ _platform.yaml" in text, text
+
+    (root / "_platform.yaml").unlink()
+    (root / "notes.yaml").mkdir()
+    can_proceed, report = ot.run_precheck("tenant-a", str(root))
+    assert can_proceed is True, "\n".join(report)

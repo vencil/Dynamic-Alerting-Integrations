@@ -2451,7 +2451,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | exporter 載入這棵樹時會整份丟掉的檔（與 exporter 的 `LoadDir` 回報的 `parseFailed` 為同一判定），限與本次執行有關者：`--scope` 內的檔，以及 `--scope` 以上各層目錄（含 `--config-dir` 根目錄）的 `_` 開頭檔，例如根目錄的 `_defaults.yaml`、`_platform.yaml`、`_profiles.yaml`。exporter 只略過某個 key、整份檔仍保留的，不在此列。與 `--cardinality-limit` 無關。報告的「Files the exporter cannot parse」段落列出這些檔（路徑相對於 `--config-dir`），修好後重跑。繼承鏈上的 `_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡沒有可檢查的租戶時也回 3、不回「vacuously safe」的 0（#2123、#2179） |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **範例**
 

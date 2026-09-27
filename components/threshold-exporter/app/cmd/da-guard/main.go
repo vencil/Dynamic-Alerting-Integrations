@@ -491,7 +491,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) 
 		if len(parseFailed) > 0 {
 			// #2123: not "safe" — the tenants may be in the files listed.
 			verdict = "_No tenant could be checked under the requested scope; " +
-				"the files listed above fail the exporter's YAML decode, so this is NOT a safe result._\n"
+				"the files listed above cannot be decoded, so this is NOT a safe result._\n"
 		}
 		body = parseFailedMarkdown(parseFailed) +
 			"## Dangling Defaults Guard\n\n" +
@@ -617,7 +617,7 @@ func parseFailedMarkdown(files []string) string {
 // reportParseFailed is the stderr line for exit 3, so a CI log names the
 // files even when the report went to --output.
 func reportParseFailed(errOut io.Writer, files []string) {
-	fmt.Fprintf(errOut, "%s: %d file(s) fail the exporter's YAML decode: %s — "+
+	fmt.Fprintf(errOut, "%s: %d file(s) cannot be decoded: %s — "+
 		"fix them and re-run (exit 3)\n",
 		programName, len(files), strings.Join(files, ", "))
 }
