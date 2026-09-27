@@ -63,7 +63,9 @@ place a VALUE is a tenant id — a list of them (``exclude_tenants:`` in a
 policy, ``tenants:`` in a domain policy) — is opt-in per call through
 *raw_text_sequences*: those sequences come back as the items' source text,
 so ``exclude_tenants: [010, yes]`` is ``["010", "yes"]`` and compares equal
-to the tenant keys above.
+to the tenant keys above. Likewise a scalar VALUE that names a key — a
+tenant's ``_profile: 010`` naming profile ``010:`` — is opt-in per call
+through *raw_text_scalars* (#2216; non-null scalars only).
 
 ⛔ Leaf module: imports ``yaml`` and the standard library ONLY, never another
 ``_lib_*`` — ``_lib_io`` and ``_lib_confd`` import it.
@@ -104,6 +106,12 @@ class ExporterKeyLoader(yaml.SafeLoader):
     """
 
     raw_text_sequences: "frozenset[str]" = frozenset()
+    #: mapping keys whose non-null SCALAR value is returned as its source
+    #: text (#2216: a tenant's ``_profile: 010`` names profile ``"010"``, as
+    #: the exporter's ``ScheduledValue`` keeps ``value.Value``). A null value
+    #: stays ``None``: ``~`` is no profile name, and writing ``'~'`` back
+    #: would turn it into one.
+    raw_text_scalars: "frozenset[str]" = frozenset()
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see module
         # Same guard as SafeConstructor's: `!!map [a, b]` / `!!map abc` reach
@@ -134,19 +142,28 @@ class ExporterKeyLoader(yaml.SafeLoader):
                     else self.construct_object(item, deep=True)
                     for item in value_node.value]
                 continue
+            if (key in self.raw_text_scalars
+                    and isinstance(value_node, yaml.ScalarNode)
+                    and value_node.tag != _NULL_TAG):
+                mapping[key] = value_node.value
+                continue
             mapping[key] = self.construct_object(value_node, deep=deep)
         return mapping
 
 
-def _make_loader(stream: Any, raw_text_sequences: Iterable[str]) -> Any:
+def _make_loader(stream: Any, raw_text_sequences: Iterable[str],
+                 raw_text_scalars: Iterable[str] = ()) -> Any:
     loader = ExporterKeyLoader(stream)
     if raw_text_sequences:
         loader.raw_text_sequences = frozenset(raw_text_sequences)
+    if raw_text_scalars:
+        loader.raw_text_scalars = frozenset(raw_text_scalars)
     return loader
 
 
 def load_exporter_keys(stream: Any, *,
-                       raw_text_sequences: Iterable[str] = ()) -> Any:
+                       raw_text_sequences: Iterable[str] = (),
+                       raw_text_scalars: Iterable[str] = ()) -> Any:
     """``yaml.load(stream, Loader=ExporterKeyLoader)``, spelled the long way.
 
     Single document, like ``yaml.safe_load`` (a second document raises).
@@ -170,8 +187,10 @@ def load_exporter_keys(stream: Any, *,
     refused, with a must-still-work control beside it. ⛔ Deleting that test
     leaves this shape completely unguarded. ⚠️ NOT GUARDED: it pins THIS
     loader only — nothing pins a future copy.
+
+    *raw_text_scalars*: see ``ExporterKeyLoader.raw_text_scalars``.
     """
-    loader = _make_loader(stream, raw_text_sequences)
+    loader = _make_loader(stream, raw_text_sequences, raw_text_scalars)
     try:
         return loader.get_single_data()
     finally:

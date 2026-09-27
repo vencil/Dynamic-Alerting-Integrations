@@ -47,7 +47,15 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
+# #2216: this tool WRITES the files it reads, so a tenant id read with
+# PyYAML's typing went back to disk renamed (`010:` → `8:`, `yes:` → `true:`).
+# Keys are read as the exporter reads them — the scalar's source text (#2114,
+# `_lib_yaml_keys`) — and `safe_dump` quotes any text YAML would retype, so
+# the id written is the id read. Not strict, as the read was before (#2123).
+# `_profile` is the one VALUE that names such a key (a profile name): kept as
+# source text too, or `_profile: 010` is written as `8` next to a profile
+# still named `'010'`. Every other value keeps its PyYAML type.
+from _lib_python import load_yaml_file_exporter_keys  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import duplicate_in_mapping  # noqa: E402  (#2123 shared check)
@@ -67,7 +75,8 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
 def _read_yaml(path):
     """`(data, error)`: 讀不到／解析失敗／頂層不是 mapping 時 `error` 是一句話。"""
     try:
-        data = _lib_load_yaml(path, default={})
+        data = load_yaml_file_exporter_keys(path, default={},
+                                            raw_text_scalars=("_profile",))
     except (OSError, yaml.YAMLError) as e:
         return None, str(e).splitlines()[0] if str(e) else e.__class__.__name__
     if data is None:

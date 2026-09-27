@@ -174,6 +174,21 @@ def test_raw_text_sequences_reads_tenant_id_lists_as_text() -> None:
     assert plain["policies"][0]["exclude_tenants"] == [8, True, "123", 31]
 
 
+def test_raw_text_scalars_reads_a_profile_reference_as_text() -> None:
+    """#2216: `_profile: 010` names profile "010" (the exporter keeps the
+    scalar's `value.Value`). Only the opted-in key; a null stays None (no
+    profile, and writing `'~'` back would invent one)."""
+    src = ("tenants:\n  a:\n    _profile: 010\n    cpu: 010\n"
+           "  b:\n    _profile: ~\n  c:\n    _profile: yes\n")
+    got = yk.load_exporter_keys(io.StringIO(src), raw_text_scalars={"_profile"})
+    assert got["tenants"] == {"a": {"_profile": "010", "cpu": 8},
+                              "b": {"_profile": None},
+                              "c": {"_profile": "yes"}}, got
+    # Control: without the opt-in the value keeps PyYAML's type.
+    plain = yk.load_exporter_keys(io.StringIO(src))
+    assert plain["tenants"]["a"]["_profile"] == 8
+
+
 def test_the_first_document_is_not_lost_to_a_later_one() -> None:
     src = "tenants:\n  010: {}\n---\n[\n"
     got = yk.load_first_document_exporter_keys(io.StringIO(src))
