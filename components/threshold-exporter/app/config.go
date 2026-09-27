@@ -45,6 +45,23 @@ type flatScanState struct {
 	// would drop every unchanged tenant from the hierarchy on every quiet
 	// tick.
 	tree *treeScan
+
+	// parseFailed is the sorted scan keys (root-relative slash paths, the
+	// keys of `hashes`) of the files that contribute NOTHING to the config
+	// this commit installed because their bytes did not parse (#2069): the
+	// walker's TreeFile.ParseFailed, plus the `_`-prefixed files the flat
+	// build rejected. It is served by GET /api/v1/config/identity next to
+	// lastHash.
+	//
+	// ⛔ IT TRAVELS WITH THE COMMIT, NOT BESIDE IT. installConfig writes
+	// m.flat, m.lastHash and m.lastReload in ONE lock window, and the
+	// identity accessor reads them in one RLock; a reader therefore never
+	// pairs this set with another reload's hash. Reloads are not serialised
+	// (#2122), so a set published from its own lock window could be
+	// another reload's. da_config_parse_failure_total cannot stand in for
+	// it: that counter is bumped by every scan of a broken file, before and
+	// without any commit (#2132).
+	parseFailed []string
 }
 
 // hierarchyState bundles the v2.7.0+ ADR-016/017 hierarchical-mode caches.
@@ -573,6 +590,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	m.mu.RLock()
 	oldHashes := m.flat.hashes
 	oldConfigs := m.flat.configs
+	oldParseFailed := m.flat.parseFailed
 	m.mu.RUnlock()
 
 	changed, added, removed := diffFileHashes(oldHashes, newHashes)
@@ -641,11 +659,14 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// load differential (9 of 300 seeds), not by reading. (#1569 blind review.)
 	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
+	// The files this round re-judged and rejected (see incrementalParseFailed).
+	reparseFailed := make(map[string]bool)
 	for _, name := range reparse {
 		// Rejected by the walker on this scan: already logged and counted
 		// there (see commitFlatFrom). Dropped from the cache so the merge
 		// below treats it as the full load does.
 		if f := scan.Files[name]; f != nil && f.ParseFailed {
+			reparseFailed[name] = true
 			delete(newConfigs, name)
 			continue
 		}
@@ -701,12 +722,15 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		if isNestedPlatformFile(name) {
 			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger()); ok {
 				reportNestedPlatformTenants(fullPath, probe, m.getLogger())
+			} else {
+				reparseFailed[name] = true
 			}
 			delete(newConfigs, name)
 			continue
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
+			reparseFailed[name] = true
 			delete(newConfigs, name)
 			continue
 		}
@@ -891,12 +915,60 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 
 	scan.ReleaseData()
 	m.commitConfig(&merged, compositeHash, &flatScanState{
-		hashes:  newHashes,
-		configs: newConfigs,
-		mtimes:  newMtimes,
-		tree:    scan,
+		hashes:      newHashes,
+		configs:     newConfigs,
+		mtimes:      newMtimes,
+		tree:        scan,
+		parseFailed: incrementalParseFailed(scan, oldParseFailed, reparse, reparseFailed),
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
+}
+
+// incrementalParseFailed is flatScanState.parseFailed for a commit of the
+// incremental path: the set BuildFlatConfig reports for a full load of the
+// same tree, reached without re-judging the files this path does not re-read.
+//
+//   - a tenant file: the walker's verdict on THIS scan (TreeFile.ParseFailed).
+//     A broken tenant file never takes the walker's fast path, so every scan
+//     judges every tenant file again.
+//   - a file this round re-parsed (reparse = changed + added): whether it
+//     was rejected (reparseFailed).
+//   - an unchanged `_`-prefixed file: the previous commit's verdict. This
+//     path does not re-read it, and one that failed is absent from the
+//     carried cache, so it still contributes nothing — which is exactly
+//     what the set says.
+//
+// A removed file is in none of the three. Returns the keys sorted, nil when
+// none failed.
+func incrementalParseFailed(scan *treeScan, prior, reparse []string, reparseFailed map[string]bool) []string {
+	judged := make(map[string]bool, len(reparse))
+	for _, k := range reparse {
+		judged[k] = true
+	}
+	set := make(map[string]struct{})
+	for k := range reparseFailed {
+		set[k] = struct{}{}
+	}
+	for _, k := range scan.Keys {
+		if f := scan.Files[k]; f != nil && f.ParseFailed {
+			set[k] = struct{}{}
+		}
+	}
+	for _, k := range prior {
+		if judged[k] || scan.Files[k] == nil || !strings.HasPrefix(scanKeyBase(k), "_") {
+			continue
+		}
+		set[k] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // failSafeHeldTenants lists the tenants the patch branch keeps serving on
@@ -1427,10 +1499,11 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 
 	scan.ReleaseData()
 	m.commitConfig(&merged, scan.Composite, &flatScanState{
-		hashes:  scan.RelHashes(),
-		configs: fileConfigs,
-		mtimes:  scan.RelMtimes(),
-		tree:    scan,
+		hashes:      scan.RelHashes(),
+		configs:     fileConfigs,
+		mtimes:      scan.RelMtimes(),
+		tree:        scan,
+		parseFailed: built.ParseFailed,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }

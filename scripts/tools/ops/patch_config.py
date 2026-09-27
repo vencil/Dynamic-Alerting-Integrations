@@ -35,7 +35,10 @@ not hold (#1950 route E). The details, the exit codes and what this cannot
 see are in `VERIFY_HELP` below (also printed by --help).
 """
 import argparse
+import base64
+import binascii
 import contextlib
+import hashlib
 import re
 import select
 import signal
@@ -88,30 +91,47 @@ ROLLBACK_CONFLICT_ATTEMPTS = 3
 # Upper bound on a threshold key's `user_*` changes (see `verify_pod`).
 THRESHOLD_KEY_MAX_CHANGES = 4
 
+# The exporter's machine-read identity of the config it serves (#2069; see
+# components/threshold-exporter/app/config_identity.go). An exporter older
+# than that answers 404 and is verified the older way.
+IDENTITY_PATH = "api/v1/config/identity"
+IDENTITY_SCHEMA = 1
+# identity -> /metrics -> identity reads before a /metrics read counts as the
+# served config's (see `Exporter.consistent`).
+CONSISTENT_READ_ATTEMPTS = 5
+
 VERIFY_HELP = f"""\
 apply (no --diff) is verified by every exporter pod before it succeeds:
   1. the new bytes of the one ConfigMap key equal the old ones -> no-op, exit 0,
      nothing is written or waited for.
   2. list the Running, not-terminating pods (--exporter-selector in
      --exporter-namespace) and read, via `kubectl get --raw
-     .../pods/<pod>:<port>/proxy/...` (GET only), each pod's /api/v1/config
-     `Last reload` and /metrics.
+     .../pods/<pod>:<port>/proxy/...` (GET only), each pod's
+     /api/v1/config/identity (config_hash: which bytes it serves;
+     parse_failed: the keys it left out because they did not parse), then
+     its /metrics, then its identity again.
   3. kubectl patch, conditional on the ConfigMap's resourceVersion as read
      (changed since -> nothing is written, exit {EXIT_CALLER_ERROR}: re-run; if the call fails
-     otherwise, the ConfigMap is re-read to tell whether it landed); wait
-     until every pod's `Last reload` differs from the value read in 2 (pod
-     clock against pod clock); --reload-timeout is the deadline that ends
-     the wait, checked between polling passes.
+     otherwise, the ConfigMap is re-read to tell whether it landed). From
+     the ConfigMap the patch returned, compute the config_hash a pod serving
+     exactly that version reports: SHA-256 over the SHA-256 hex digests of
+     the keys the exporter reads (not dot-hidden, a .yaml / .yml extension in
+     any case), in key order; for a pod in single-file mode, the SHA-256 of
+     {LEGACY_KEY}. Poll each pod's identity until it reports that hash;
+     --reload-timeout is the deadline that ends the wait, checked between
+     polling passes. /metrics is then read between two identity reads and
+     kept only if both show the same install (same config_hash and
+     last_reload); otherwise it is read again, at most {CONSISTENT_READ_ATTEMPTS} times, then
+     it counts as a timeout.
   4. on each pod, compare every `user_*` series (name + labels -> value) with 2.
      Any change on a series whose `tenant` is not <tenant> fails. For a key
      not starting with `_`, more than {THRESHOLD_KEY_MAX_CHANGES} changed series of <tenant> fails
      (unless <tenant> had none before: a new tenant). For a `_` key,
      <tenant>'s own series are not judged, only listed (stderr / --json).
-     da_config_parse_failure_total{{file_basename}} fails if it rises for a
-     basename that was absent or 0 before, or for the patched key; a rise on
-     another already-failing basename is only a warning. Finally the
-     ConfigMap must still be at the version the write produced: if anyone
-     wrote it meanwhile, the reloads may not be of these bytes -> fails.
+     parse_failed after the write fails if it holds the patched key, or
+     another key it did not hold in 2; another key it already held in 2 is
+     only a warning. Finally the ConfigMap must still be at the version the
+     write produced: if anyone wrote it meanwhile -> fails.
   5. any failure in 3-4, Ctrl-C / SIGTERM or any other error from the write
      call on -> the old bytes are patched back (the key is removed if it did
      not exist) unless the ConfigMap is seen to hold the old bytes, or cannot
@@ -121,12 +141,25 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
      write produced: if only other keys changed, it is retried on the fresh
      version a bounded number of times; if another writer changed the patched
      key itself, it is not rolled back (exit {EXIT_STATE_UNKNOWN}).
+older exporters: a pod that answers /api/v1/config/identity with 404 predates
+  it; it is named on stderr, marked `"identity": "unavailable (404)"` in
+  --json (otherwise "checked"), and verified the older way: 2 reads its
+  /api/v1/config `Last reload` and /metrics; 3 waits until `Last reload`
+  differs from 2 (one-second resolution, pod clock against pod clock), which
+  any reload satisfies - including one of an earlier write's bytes, or none
+  seen when it falls in the same second as the previous reload; 4 judges
+  parse failures by da_config_parse_failure_total{{file_basename}}: a rise for
+  a basename that was absent or 0 before, or for the patched key, fails; a
+  rise on another already-failing basename is only a warning. So there a
+  write that FIXES a key the exporter could not parse wrongly fails (its
+  counter keeps rising until the reload). Any other error reading the
+  identity is treated as unreachable.
 signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   exporter call; from the rollback on they are ignored until the process
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes
   and no envelope is printed.
 exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back;
-  {EXIT_CALLER_ERROR} caller error, nothing written; {EXIT_RELOAD_TIMEOUT} no reload in time, rolled back;
+  {EXIT_CALLER_ERROR} caller error, nothing written; {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
   {EXIT_EXPORTER_UNREACHABLE} exporter unreachable (before the write: nothing written; after: rolled
   back); {EXIT_ROLLBACK_FAILED} rollback failed - the ConfigMap may still hold the new bytes;
   {EXIT_ABORTED_ROLLED_BACK} interrupted or an unexpected error after the write, rolled back;
@@ -136,19 +169,22 @@ exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back
   as it normally would.
 needs: list pods, get pods/proxy in the exporter namespace (besides get/patch
   on the ConfigMap).
-not seen (known residuals): a future `expires:` in the same key rewritten so
-  it no longer parses (fail-open) looks identical in /metrics before and after; a
-  change of <tenant>'s other series within the bound above; under a `_` key,
-  any change of <tenant>'s own series (a wrong `_profile` that drops its
-  thresholds is listed, not rolled back); a write the exporter drops without
-  counting a parse failure (the target just keeps its old value); a pod that
-  starts after step 2; a reload of a version older than the one read (a
-  write made just before apply read the ConfigMap, not yet delivered to the
-  pod), or one in the same second as the previous reload; the legacy `-config` single-file
-  mode reloads nothing on a broken file, so that only ever ends as a timeout.
-wrongly failed: a write that FIXES a key the exporter could not parse (its
-  counter keeps rising until the reload); another tenant's `expires:` passing
-  while apply waits (its series change) - retry.
+what success proves: every pod listed in 2 serves the whole ConfigMap at the
+  version this write produced, byte for byte, and did not leave the patched
+  key out as unparseable (older exporters: only that each pod reloaded).
+what it does not prove - whether those bytes do what was meant (#1950 route
+  E residuals): a value the exporter accepts but does not use as written
+  (e.g. a non-numeric value falling back to the default, an unknown key
+  ignored); a future `expires:` in the same key rewritten so it no longer
+  parses (fail-open) looks identical in /metrics before and after; a change
+  of <tenant>'s other series within the bound above; under a `_` key, any
+  change of <tenant>'s own series (a wrong `_profile` that drops its
+  thresholds is listed, not rolled back).
+not seen: a pod that starts after step 2. The legacy `-config` single-file
+  mode never installs a file that does not parse, so that only ever ends as a
+  timeout.
+wrongly failed: another tenant's `expires:` passing while apply waits (its
+  series change) - retry.
 """
 
 
@@ -552,6 +588,61 @@ def parse_metrics(text):
     return series, failures
 
 
+def _http_404(exc):
+    """Whether a failed `kubectl get --raw` was the pod answering 404.
+
+    kubectl prints a proxied response that is not an API Status object as
+    `Error from server (NotFound): the server could not find the requested
+    resource`; the apiserver's own NotFound (e.g. the pod is gone) carries
+    a Status message naming the object instead, so it does not match."""
+    text = str(exc)
+    return ("(NotFound)" in text
+            and "the server could not find the requested resource" in text)
+
+
+def _same_install(a, b):
+    return (a["config_hash"], a["last_reload"]) == (b["config_hash"], b["last_reload"])
+
+
+def exporter_reads(key):
+    """Whether the exporter's conf.d walker reads a file named `key`
+    (pkg/config/tree_scan.go IsScannedFileName): not dot-hidden and a
+    .yaml / .yml extension in any case. A ConfigMap key has no `/`, so no
+    directory on the way can be hidden."""
+    return has_yaml_extension(key) and not is_hidden_name(key)
+
+
+def configmap_files(cm):
+    """{key: bytes} of a ConfigMap object, as kubelet writes them into the
+    mounted directory: `data` values UTF-8 encoded, `binaryData` decoded."""
+    files = {}
+    for key, value in ((cm or {}).get("data") or {}).items():
+        files[key] = str(value).encode("utf-8", "surrogatepass")
+    for key, value in ((cm or {}).get("binaryData") or {}).items():
+        try:
+            files[key] = base64.b64decode(value, validate=True)
+        except (binascii.Error, TypeError, ValueError) as exc:
+            raise ConfigMapShapeError(
+                f"{CONFIGMAP} binaryData key {key} is not base64: {exc}") from exc
+    return files
+
+
+def config_hash(files, mode="directory"):
+    """The config_hash an exporter serving exactly `files` ({key: bytes})
+    reports in /api/v1/config/identity: in directory mode the walker's
+    composite, the SHA-256 of the SHA-256 hex digests of the files it reads
+    (`exporter_reads`) concatenated in key order; in single-file mode the
+    SHA-256 of LEGACY_KEY's bytes (None if there is no such key).
+    tests/shared/config_identity_golden.json pins it against the exporter."""
+    if mode == "single-file":
+        data = files.get(LEGACY_KEY)
+        return None if data is None else hashlib.sha256(data).hexdigest()
+    outer = hashlib.sha256()
+    for key in sorted(k for k in files if exporter_reads(k)):
+        outer.update(hashlib.sha256(files[key]).hexdigest().encode("ascii"))
+    return outer.hexdigest()
+
+
 class Exporter:
     """The exporter pods, read through `kubectl get --raw` on pods/proxy."""
 
@@ -561,6 +652,7 @@ class Exporter:
         self.namespace, self.selector, self.port = namespace, selector, port
         self.timeout, self.poll = timeout, poll
         self.pods = {}  # pod name -> port number (text)
+        self.has_identity = {}  # pod name -> verified by its identity (`probe`)
 
     def discover(self):
         """Fill `pods` with the serving ones (phase Running, not being
@@ -596,7 +688,10 @@ class Exporter:
         raise ExporterUnreachable(
             f"pod {name} has no container port named {self.port!r}.")
 
-    def get(self, pod, path):
+    def get(self, pod, path, missing_ok=False):
+        """The body of GET <path> on `pod`. With `missing_ok`, None when the
+        pod answers 404 (see `_http_404`); any other failure is
+        unreachable."""
         SIGNALS.checkpoint()
         try:
             return run_cmd([
@@ -604,18 +699,122 @@ class Exporter:
                 f"/api/v1/namespaces/{self.namespace}/pods/"
                 f"{pod}:{self.pods[pod]}/proxy/{path}"])
         except KubectlError as exc:
+            if missing_ok and _http_404(exc):
+                return None
             raise ExporterUnreachable(f"pod {pod}: {exc}") from exc
 
+    def probe(self, pod):
+        """Decide, once per pod, how it is verified: by its identity, or —
+        an exporter that answers 404 there, i.e. older than #2069 — the
+        older way. Returns True for identity."""
+        self.has_identity[pod] = self.identity(pod, missing_ok=True) is not None
+        return self.has_identity[pod]
+
+    def identity(self, pod, missing_ok=False):
+        """The pod's /api/v1/config/identity document (schema
+        IDENTITY_SCHEMA), checked for shape; None only when `missing_ok`
+        and the pod answers 404."""
+        text = self.get(pod, IDENTITY_PATH, missing_ok=missing_ok)
+        if text is None:
+            return None
+        try:
+            doc = json.loads(text)
+        except ValueError as exc:
+            raise ExporterUnreachable(
+                f"pod {pod}: {IDENTITY_PATH} is not JSON: {exc}") from exc
+        if not isinstance(doc, dict) or doc.get("schema") != IDENTITY_SCHEMA:
+            raise ExporterUnreachable(
+                f"pod {pod}: {IDENTITY_PATH} has schema "
+                f"{doc.get('schema') if isinstance(doc, dict) else None!r}; "
+                f"this tool reads schema {IDENTITY_SCHEMA}.")
+        failed = doc.get("parse_failed")
+        if not (isinstance(doc.get("config_hash"), str)
+                and isinstance(doc.get("last_reload"), str)
+                and doc.get("mode") in ("directory", "single-file")
+                and isinstance(failed, list)
+                and all(isinstance(k, str) for k in failed)):
+            raise ExporterUnreachable(
+                f"pod {pod}: {IDENTITY_PATH} does not have the schema "
+                f"{IDENTITY_SCHEMA} fields: {text[:200]!r}")
+        return doc
+
     def last_reload(self, pod):
+        """The pod's reload marker: its identity's `last_reload`, or for an
+        older exporter the `Last reload` line of /api/v1/config."""
+        if self.has_identity.get(pod):
+            return self.identity(pod)["last_reload"]
         for line in self.get(pod, "api/v1/config").splitlines():
             if line.startswith("Last reload:"):
                 return line.split(":", 1)[1].strip()
         raise ExporterUnreachable(
             f"pod {pod}: /api/v1/config has no `Last reload:` line.")
 
-    def snapshot(self, pod):
-        """(Last reload, user_* series, parse failures) of one pod."""
-        return (self.last_reload(pod),) + parse_metrics(self.get(pod, "metrics"))
+    def snapshot(self, pod, unsettled=ReloadTimeout):
+        """(reload marker, user_* series, parse failures, identity) of one
+        pod; identity is None for an older exporter. For a pod with an
+        identity it is the `consistent` read."""
+        if self.has_identity.get(pod):
+            return self.consistent(pod, unsettled=unsettled)
+        return ((self.last_reload(pod),) + parse_metrics(self.get(pod, "metrics"))
+                + (None,))
+
+    def consistent(self, pod, want=None, unsettled=ReloadTimeout):
+        """identity -> /metrics -> identity, until both identity reads show
+        the same install (config_hash and last_reload): only then was that
+        /metrics rendered from the config the identity names. None if the
+        first read's config_hash is not `want` (when given); `unsettled` is
+        raised after CONSISTENT_READ_ATTEMPTS reads that never agreed."""
+        for _ in range(CONSISTENT_READ_ATTEMPTS):
+            first = self.identity(pod)
+            if want is not None and first["config_hash"] != want:
+                return None
+            metrics = self.get(pod, "metrics")
+            second = self.identity(pod)
+            if _same_install(first, second):
+                return (first["last_reload"],) + parse_metrics(metrics) + (first,)
+        raise unsettled(
+            f"pod {pod}: its config changed during each of "
+            f"{CONSISTENT_READ_ATTEMPTS} identity -> /metrics -> identity "
+            f"reads; no /metrics read can be tied to one config.")
+
+    def wait_served(self, before, expected, seen):
+        """{pod: snapshot} once each pod serves the bytes the write produced:
+        a pod with an identity once it reports config_hash expected[pod]
+        (read by `consistent`), an older one once its `Last reload` is not
+        the one in before[pod]. `seen` gets the last marker read per pod."""
+        start = time.monotonic()
+        deadline = start + self.timeout
+        done, pending, reported = {}, set(before), {}
+        while True:
+            for pod in sorted(pending):
+                if not self.has_identity.get(pod):
+                    seen[pod] = self.last_reload(pod)
+                    if seen[pod] != before[pod][0]:
+                        done[pod] = self.snapshot(pod)
+                        seen[pod] = done[pod][0]
+                    continue
+                ident = self.identity(pod)
+                seen[pod], reported[pod] = ident["last_reload"], ident["config_hash"]
+                if ident["config_hash"] == expected[pod]:
+                    snap = self.consistent(pod, want=expected[pod])
+                    if snap is not None:
+                        done[pod] = snap
+                        seen[pod] = snap[0]
+            pending -= set(done)
+            left = deadline - time.monotonic()
+            if not pending:
+                return done
+            if left <= 0:
+                raise ReloadTimeout(
+                    f"not every pod serves the bytes this write produced "
+                    f"before --reload-timeout ({time.monotonic() - start:.1f}s "
+                    f"elapsed): " + "; ".join(
+                        f"{p} reports config_hash {reported.get(p)}, not "
+                        f"{expected[p]} (what the ConfigMap as written gives)"
+                        if self.has_identity.get(p) else
+                        f"{p} shows no reload (`Last reload` still {before[p][0]})"
+                        for p in sorted(pending)) + ".")
+            time.sleep(min(self.poll, left))
 
     def wait_moved(self, since, seen):
         """{pod: snapshot} once each pod of `since` shows a `Last reload`
@@ -647,6 +846,10 @@ def verify_pod(pod, before, after, tenant, metric_key, key):
     (`snapshot` shapes). Target changes are `tenant`'s own changed series as
     {"series", "before", "after"} (None = absent), reported whatever the key.
 
+    Parse failures are judged on the identity's parse_failed when both
+    snapshots carry one (VERIFY_HELP step 4), else — an older exporter — on
+    da_config_parse_failure_total.
+
     Which `user_*` series a write may change is judged on the exporter's own
     output, not on a Python copy of its key → label mapping:
 
@@ -676,8 +879,8 @@ def verify_pod(pod, before, after, tenant, metric_key, key):
     message says to retry instead.
     """
     problems, warnings = [], []
-    _, old, old_pf = before
-    _, new, new_pf = after
+    old, old_pf = before[1], before[2]
+    new, new_pf = after[1], after[2]
     changed = {s for s in set(old) | set(new) if old.get(s) != new.get(s)}
     ours = {s for s in changed if dict(s[1]).get("tenant") == tenant}
     for s in sorted(changed - ours):
@@ -694,6 +897,26 @@ def verify_pod(pod, before, after, tenant, metric_key, key):
             f"{pod}: {len(ours)} series of {tenant} changed; one threshold "
             f"key changes at most {THRESHOLD_KEY_MAX_CHANGES}: "
             + "; ".join(_show(s) for s in sorted(ours)))
+    was_id = before[3] if len(before) > 3 else None
+    now_id = after[3] if len(after) > 3 else None
+    if was_id is not None and now_id is not None:
+        # The installed config's own verdict (#2069): which keys the config
+        # it serves left out as unparseable. The counter below is not read:
+        # every scan of a broken file bumps it, before and without any
+        # install, so a write that FIXES a broken key saw it rise (#2132).
+        was, now = set(was_id["parse_failed"]), set(now_id["parse_failed"])
+        if key in now:
+            problems.append(
+                f"{pod}: the exporter could not parse the written key {key}: it "
+                f"serves the ConfigMap without it (parse_failed "
+                f"{sorted(now)}).")
+        for other in sorted(now - was - {key}):
+            problems.append(f"{pod}: {other} no longer parses after the write "
+                            f"(parse_failed; it did before).")
+        for other in sorted((now & was) - {key}):
+            warnings.append(f"{pod}: {other} does not parse (parse_failed; "
+                            f"it already did not before the write).")
+        return problems, warnings, target
     for base in sorted(new_pf):
         was, now = old_pf.get(base, 0.0), new_pf[base]
         if now <= was:
@@ -720,8 +943,9 @@ class PatchConflict(KubectlError):
 def _kubectl_patch(patch_data, resource_version):
     """Merge-patch the ConfigMap only if it is still at `resource_version`
     (metadata.resourceVersion in a merge patch is the apiserver's optimistic
-    concurrency precondition). Returns the resourceVersion the patch
-    produced (None if kubectl did not print it); PatchConflict on 409."""
+    concurrency precondition). Returns the ConfigMap object the patch
+    produced, as kubectl printed it (None if it printed no JSON object;
+    `_rv_of` reads its resourceVersion); PatchConflict on 409."""
     patch_data = dict(patch_data,
                       metadata={"resourceVersion": resource_version})
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json',
@@ -738,14 +962,36 @@ def _kubectl_patch(patch_data, resource_version):
                 raise PatchConflict(str(exc)) from exc
             raise
         try:
-            return json.loads(out)["metadata"]["resourceVersion"]
-        except (ValueError, KeyError, TypeError):
+            obj = json.loads(out)
+        except ValueError:
             return None
+        return obj if isinstance(obj, dict) else None
     finally:
         try:
             os.remove(temp_path)
         except OSError:  # a leftover temp file must not mask the patch's outcome
             pass
+
+
+def _rv_of(obj):
+    """metadata.resourceVersion of a ConfigMap object, or None."""
+    try:
+        return obj["metadata"]["resourceVersion"]
+    except (KeyError, TypeError):
+        return None
+
+
+def written_files(obj, cm_data, key, new):
+    """{key: bytes} of the ConfigMap at the version our write produced: the
+    object the patch returned, or — when it carried no `data` — the
+    ConfigMap as read with `key` set to `new`. The two are the same: the
+    patch was conditional on the version read, so nothing else changed in
+    between."""
+    if isinstance(obj, dict) and isinstance(obj.get("data"), dict):
+        return configmap_files(obj)
+    files = configmap_files(cm_data)
+    files[key] = new.encode("utf-8", "surrogatepass")
+    return files
 
 
 def _say(text, out=False):
@@ -846,7 +1092,19 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
 
     exporter = exporter or Exporter()
     exporter.discover()
-    before = {pod: exporter.snapshot(pod) for pod in sorted(exporter.pods)}
+    before = {}
+    for pod in sorted(exporter.pods):
+        checked = exporter.probe(pod)
+        report["pods"][pod] = {
+            "identity": "checked" if checked else "unavailable (404)",
+            "problems": [], "warnings": [], "target_changes": []}
+        before[pod] = exporter.snapshot(pod, unsettled=ExporterUnreachable)
+    older = [p for p in sorted(before) if not exporter.has_identity[p]]
+    if older:
+        _say(f"WARNING: {', '.join(older)}: no {IDENTITY_PATH} (404: an "
+             f"exporter older than this check); verified by `Last reload` "
+             f"and da_config_parse_failure_total instead, which cannot tell "
+             f"these bytes from an earlier write's (see --help).")
     seen = {pod: snap[0] for pod, snap in before.items()}
     write.key, write.old, write.new = key, old, new
     write.exporter, write.before, write.seen = exporter, before, seen
@@ -857,17 +1115,22 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     if SIGNALS.pending is not None:  # arrived just before the write
         SIGNALS.die()
     write.attempted = True
-    write.rv_written = _kubectl_patch(patch_data, write.rv_read)
+    written = _kubectl_patch(patch_data, write.rv_read)
+    write.rv_written = _rv_of(written)
     write.returned = True
     SIGNALS.armed = True
-    _say(f"Waiting for {len(before)} exporter pod(s) to reload...", out=True)
-    after = exporter.wait_moved({p: s[0] for p, s in before.items()}, seen)
+    files = written_files(written, cm_data, key, new)
+    expected = {pod: config_hash(files, snap[3]["mode"])
+                for pod, snap in before.items() if snap[3] is not None}
+    _say(f"Waiting for {len(before)} exporter pod(s) to serve the new bytes...",
+         out=True)
+    after = exporter.wait_served(before, expected, seen)
     problems = []
     for pod in sorted(after):
         found, warned, target = verify_pod(
             pod, before[pod], after[pod], tenant, metric_key, key)
-        report["pods"][pod] = {"problems": found, "warnings": warned,
-                               "target_changes": target}
+        report["pods"][pod].update({"problems": found, "warnings": warned,
+                                    "target_changes": target})
         problems += found
         for w in warned:
             _say(f"WARNING: {w}")
@@ -1223,12 +1486,14 @@ def build_parser():
     parser.add_argument(
         "--reload-timeout", type=_positive_seconds, default=RELOAD_TIMEOUT_S,
         metavar="SECONDS",
-        help=f"Deadline that ends apply's wait for every pod to reload, "
-             f"checked between polling passes (default: {RELOAD_TIMEOUT_S:g})")
+        help=f"Deadline that ends apply's wait for every pod to serve the "
+             f"written bytes, checked between polling passes "
+             f"(default: {RELOAD_TIMEOUT_S:g})")
     parser.add_argument(
         "--poll-interval", type=_positive_seconds, default=POLL_INTERVAL_S,
         metavar="SECONDS",
-        help=f"How often it reads `Last reload` meanwhile "
+        help=f"How often it reads each pod's /api/v1/config/identity (an "
+             f"older exporter's `Last reload`) meanwhile "
              f"(default: {POLL_INTERVAL_S:g})")
     return parser
 

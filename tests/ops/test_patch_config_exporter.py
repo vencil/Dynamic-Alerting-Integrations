@@ -61,7 +61,11 @@ FAKE_KUBECTL = textwrap.dedent('''\
         rv = str(int(rv) + 1)
         with open(rv_file, "w", encoding="utf-8") as fh:
             fh.write(rv)
-        print(json.dumps({"metadata": {"resourceVersion": rv}}))
+        data = {}  # like kubectl patch -o json: the whole object it produced
+        for n in sorted(os.listdir(d)):
+            with open(os.path.join(d, n), encoding="utf-8") as fh:
+                data[n] = fh.read()
+        print(json.dumps({"metadata": {"resourceVersion": rv}, "data": data}))
     elif a[:2] == ["get", "pods"]:
         print(json.dumps({"items": [{"metadata": {"name": "exporter-0"},
               "status": {"phase": "Running"},
@@ -216,3 +220,52 @@ def test_silent_mode_disable_is_applied_and_listed(cluster):
     assert {"series": silent.rsplit(" ", 1)[0], "before": "1", "after": None} \
         in doc["pods"]["exporter-0"]["target_changes"]
     assert silent not in _get(c.port, "metrics").splitlines()
+
+
+def _identity(port):
+    return json.loads(_get(port, "api/v1/config/identity"))
+
+
+@needs_go
+def test_the_served_identity_is_the_hash_patch_config_computes(cluster):
+    # #2069：真 exporter 回報的 config_hash 等於 patch-config 由目錄位元組算出的值
+    # （含隱藏檔、非 YAML 檔、.yml），寫入前後都是。
+    import patch_config as pc
+    c = cluster({
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t-a.yaml": 'tenants:\n  t-a:\n    mysql_connections: "70"\n',
+        "t-b.yml": 'tenants:\n  t-b:\n    mysql_connections: "60"\n',
+        ".hidden.yaml": "not: read\n",
+        "notes.txt": "not read\n",
+    })
+
+    def files():
+        return {p.name: p.read_bytes() for p in c.dir.iterdir() if p.is_file()}
+    assert _identity(c.port)["config_hash"] == pc.config_hash(files())
+    r = c.run("--json", "t-a", "mysql_connections", "65")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["pods"]["exporter-0"]["identity"] == "checked"
+    served = _identity(c.port)
+    assert (served["config_hash"], served["parse_failed"]) == (
+        pc.config_hash(files()), [])
+
+
+@needs_go
+def test_fixing_a_key_the_exporter_rejected_is_verified(cluster):
+    # #2132：t-a.yaml 被 exporter 拒收（`default:` 是 list，解不進字串），每個 tick
+    # 都讓 da_config_parse_failure_total 上升；patch-config 把該值改成合法的就修好了
+    # 它。驗收看的是寫入後的 parse_failed 不再含它，不是計數器。⚠️ 這格釘的是真
+    # exporter 上的新判準；舊判準只在「寫入前讀數與換版之間剛好跑過一個 tick」時
+    # 誤判，這裡不穩定重現——確定性的重現在 test_patch_config_identity.py (b)。
+    c = cluster({
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t-a.yaml": ("tenants:\n  t-a:\n    mysql_connections:\n"
+                     "      default: [1, 2]\n"),
+        "t-b.yaml": 'tenants:\n  t-b:\n    mysql_connections: "60"\n',
+    })
+    assert _identity(c.port)["parse_failed"] == ["t-a.yaml"]
+    r = c.run("--json", "t-a", "mysql_connections", "65")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _identity(c.port)["parse_failed"] == []
+    assert ('user_threshold{component="mysql",metric="connections",'
+            'severity="warning",tenant="t-a"} 65') in c.user_series()

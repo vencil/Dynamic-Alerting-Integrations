@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Cross-language golden for the exporter config identity (#2069).",
+    "data is a ConfigMap data map: kubelet writes each value as the UTF-8 bytes of a file named by its key.",
+    "expected_directory_hash: SHA-256 of the per-file SHA-256 hex digests of the kept keys, concatenated in byte-sorted key order; kept = not dot-prefixed and a .yaml/.yml extension in any case.",
+    "Computed with sha256sum over the materialised files, not with either implementation.",
+    "Readers: components/threshold-exporter/app/config_identity_test.go, tests/ops/test_patch_config_identity.py."
+  ],
+  "schema": 1,
+  "data": {
+    ".hidden.yaml": "tenants:\n  t-hidden:\n    mysql_connections: \"30\"\n",
+    "T-e.yaml": "tenants:\n  t-e:\n    mysql_connections: \"45\"\n",
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    "_profiles.yaml": "profiles:\n  gold:\n    mysql_connections: \"95\"\n",
+    "config.yaml": "tenants:\n  t-legacy:\n    mysql_connections: \"40\"\n",
+    "notes.txt": "not yaml\n",
+    "payload.json": "{\"tenants\": {}}\n",
+    "t-a.yaml": "# 租戶 A：UTF-8 註解，雜湊的是原始位元組\ntenants:\n  t-a:\n    mysql_connections: \"70\"\n",
+    "t-b.yml": "tenants:\n  t-b:\n    mysql_connections: \"60\"\n",
+    "t-c.YAML": "tenants:\n  t-c:\n    mysql_connections: \"50\"\n",
+    "t-d.yaml.bak": "tenants:\n  t-d:\n    mysql_connections: \"20\"\n"
+  },
+  "expected_scanned_keys": [
+    "T-e.yaml",
+    "_defaults.yaml",
+    "_profiles.yaml",
+    "config.yaml",
+    "t-a.yaml",
+    "t-b.yml",
+    "t-c.YAML"
+  ],
+  "expected_directory_hash": "cfc01496171b678f3d76cc3c1d5f52b2b30f3ef304bb20370ecda11782884383",
+  "single_file_key": "config.yaml",
+  "expected_single_file_hash": "94c619c1ccf819cd44143c0be7550611cb1858f47d511bb197f072cdf2d3e1cb"
+}

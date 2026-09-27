@@ -31,6 +31,7 @@ GET /metrics          → Prometheus metrics export (200 OK)
 GET /health           → Liveness probe (200 OK)
 GET /ready            → Readiness probe (200 OK / 503 Service Unavailable)
 GET /api/v1/config    → Configuration state debug endpoint (200 OK)
+GET /api/v1/config/identity → Identity of the config being served (machine-read JSON contract, 200 OK)
 ```
 
 ---
@@ -396,6 +397,38 @@ curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 
 ```bash
 curl -s http://localhost:8080/api/v1/config | head -3
 ```
+
+---
+
+## 5. GET /api/v1/config/identity - Config Identity (machine contract)
+
+### Description
+
+Reports **which config bytes this exporter is serving right now**, and which files of that version it left out because they did not parse. This is a **machine-read contract**, versioned by its `schema` field (currently `1`; bumped only when a field changes meaning or goes away, not when one is added); the human-read debug page stays `/api/v1/config` above. `patch-config` uses it for its post-write verification (see [cli-reference](../cli-reference.en.md) §patch-config). Every field is read in the same lock window as the install that wrote it, so it never mixes the state of two reloads.
+
+```bash
+curl -s http://localhost:8080/api/v1/config/identity
+```
+
+### Response
+
+**Status**: 200 OK (also before any config is loaded, with `loaded: false`; readiness is `/ready`'s job)  
+**Content-Type**: `application/json`; `GET` / `HEAD` only (other methods: 405)
+
+```json
+{"schema":1,"loaded":true,"mode":"directory","last_reload":"2026-09-27T01:02:03.456789Z","config_hash":"<64 hex>","parse_failed":["tenant-b.yaml"]}
+```
+
+| Field | Description |
+|-------|-------------|
+| `schema` | Contract version, currently `1` |
+| `loaded` | Whether any config has been installed |
+| `mode` | `directory` (`-config-dir`) or `single-file` (`-config`) |
+| `last_reload` | Install time, UTC, RFC 3339 with nanoseconds; `""` when nothing is loaded |
+| `config_hash` | Directory mode: the files the exporter reads in conf.d (not dot-prefixed, a `.yaml` / `.yml` extension in any case), sorted by relative path, each SHA-256'd, the hex digests concatenated and SHA-256'd again; single-file mode: the SHA-256 of that file's bytes |
+| `parse_failed` | The files (relative paths, sorted) this version did **not** take in because they did not parse; always an array. Always empty in single-file mode (a single file that does not parse is never installed) |
+
+⚠️ `da_config_parse_failure_total` answers a different question: it rises on every scan that meets a broken file, whether or not a new version was installed, so it cannot tell whether the version being served left a file out.
 
 ---
 
