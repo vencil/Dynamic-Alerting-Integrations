@@ -247,7 +247,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 對單一 tenant 執行健康檢查：MariaDB Pod 狀態、exporter 的 `mysql_up`、運營模式（維護／靜音），以及給了 `--config-dir` 時的 profile 與繼承鏈。
 
-**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 檢查固定查租戶同名 namespace 裡 `app=mariadb` 的 Pod，exporter 檢查固定查 `mysql_up{instance="<tenant>"}`，所以非 MariaDB 的租戶一定回 `status: error`（`Pod not found`）。
+**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，不算 error。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。
 
 **語法**
 
@@ -285,7 +285,11 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。
+租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+
+```json
+{"status": "healthy", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
+```
 
 **範例**
 
@@ -297,9 +301,11 @@ da-tools diagnose db-a --config-dir ./conf.d
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 檢查完成：`status` 是 `healthy` 或 `error` 都是 0，要判斷健康請讀輸出的 `status` |
-| `1` | 環境裡沒有 `kubectl` 時，工具以 Python traceback 結束（已知問題，追蹤於 issue 1513） |
-| `2` | 參數錯誤：缺 tenant，或 `--show-inheritance` 沒配 `--config-dir` |
+| `0` | `status: healthy`（含跳過 Pod 與 exporter 兩項的情形） |
+| `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON） |
+
+⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。
 
 ---
 
@@ -594,13 +600,13 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 | `--alertmanager <URL>` | Alertmanager base URL；給了才會真的建立 silence，不給只印報告 | （無） |
 | `--pushgateway <URL>` | 把執行結果推到 Pushgateway（`--dry-run` 時不推） | （無） |
 | `--dry-run` | 只印報告，不建立 silence | false |
-| `--json-output` | 另在 stdout 印一行 `{"created", "skipped", "errors"}` | false |
+| `--json-output` | 另在 stdout 印一行 `{"created", "skipped", "errors", "mode"}`；`mode` 是 `apply`、`dry-run` 或 `report-only`，後兩者的 `created` 是「會建立」的數量 | false |
 
 cron 一律以 **UTC** 解讀，指定時區的選項尚未實作；例如台北時間每天 02:00 要寫成 `0 18 * * *`。輸出也不是 silence YAML 檔，工具直接呼叫 Alertmanager API。
 
 **輸出**
 
-stderr 列出每個排程目前是否在窗口內，最後一行是 `Summary: N created, N skipped, N errors`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ 沒給 `--alertmanager` 或帶 `--dry-run` 時，`created` 是「會建立」的數量，實際沒有建立（已知問題，追蹤於 issue 1513）。
+stderr 列出每個排程目前是否在窗口內，最後一行是摘要：實際建立時是 `Summary: N created, N skipped, N errors`；沒給 `--alertmanager` 時是 `Summary: N in window (report only …)`；帶 `--dry-run` 時是 `Summary: N would be created (dry run …)`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ `--dry-run` 不讀 Alertmanager 既有的 silence，所以已經存在的也算在「會建立」裡。v2.9.0 映像在這兩種情況下仍印 `N created`，也沒有 `mode` 欄位，實際上什麼都沒建立。
 
 **範例**
 
@@ -2243,9 +2249,9 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 |------|------|--------|
 | `-o, --output <FILE>` | 另把 JSON 報告寫到檔案 | （無） |
 | `--json` | stdout 只印 JSON | false |
-| `--metric-dictionary <FILE>` | 指標字典 | 映像內建的 `metric-dictionary.yaml` |
+| `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
-⚠️ 在 repo 裡直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時，預設的字典路徑不存在，工具不會警告，而是退回名稱前綴猜測（`match_type: "prefix"`、`confidence: 0.7`）；請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。在 da-tools 映像裡跑不受影響（已知問題，追蹤於 issue 1513）。
+兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。
 
 **輸出**
 
@@ -2261,8 +2267,8 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功。⚠️ `--tenant-config`／`--config-dir` 指到不存在的路徑也是 `0`，當成沒有 `custom_` 指標（已知問題，追蹤於 issue 1513） |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `0` | 成功 |
+| `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 |
 
 ---
 

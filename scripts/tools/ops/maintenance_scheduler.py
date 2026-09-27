@@ -475,14 +475,31 @@ def main():
 
     duration_s = time.monotonic() - t0
 
+    # issue 1513: without --alertmanager, or with --dry-run, nothing reaches
+    # Alertmanager, yet the summary used to read "N created". `created` stays
+    # the JSON key (consumers read it); `mode` says what the number means.
+    if not args.alertmanager:
+        mode = "report-only"
+        counted = (f"{created} in window (report only — no --alertmanager, "
+                   "no silence was created)")
+    elif args.dry_run:
+        mode = "dry-run"
+        counted = (f"{created} would be created (dry run — nothing was sent to "
+                   "Alertmanager, and its existing silences were not read, so "
+                   "ones already active are counted too)")
+    else:
+        mode = "apply"
+        counted = f"{created} created"
+
     if args.json_output:
         print(json.dumps({
             "created": created,
             "skipped": skipped,
             "errors": errors,
+            "mode": mode,
         }))
 
-    print(f"\nSummary: {created} created, {skipped} skipped, {errors} errors",
+    print(f"\nSummary: {counted}, {skipped} skipped, {errors} errors",
           file=sys.stderr)
 
     # Push observability metrics (non-fatal on failure)

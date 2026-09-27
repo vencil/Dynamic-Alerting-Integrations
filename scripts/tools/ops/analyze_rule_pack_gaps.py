@@ -32,7 +32,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
@@ -47,7 +47,6 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 # Default paths (relative to script location for da-tools container)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_METRIC_DICT = os.path.join(SCRIPT_DIR, "metric-dictionary.yaml")
 
 # Rule pack prefixes mapped to pack names
 RULE_PACK_PREFIXES = {
@@ -318,8 +317,9 @@ def main():
         help="Single tenant config YAML file",
     )
     parser.add_argument(
-        "--metric-dictionary", default=DEFAULT_METRIC_DICT,
-        help=f"Path to metric-dictionary.yaml (default: {DEFAULT_METRIC_DICT})",
+        "--metric-dictionary",
+        help="Path to metric-dictionary.yaml (default: the one shipped beside "
+             "the tool, or one level up in the repository layout)",
     )
     parser.add_argument(
         "--output", "-o",
@@ -334,6 +334,21 @@ def main():
     if not args.config_dir and not args.tenant_config:
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    # A path that does not exist used to read as "no custom_ metrics found"
+    # at rc=0 — indistinguishable from a real, clean scan (issue 1513).
+    for flag, path, exists in (("--config-dir", args.config_dir, os.path.isdir),
+                               ("--tenant-config", args.tenant_config, os.path.isfile),
+                               ("--metric-dictionary", args.metric_dictionary,
+                                os.path.isfile)):
+        if path and not exists(path):
+            kind = "directory" if flag == "--config-dir" else "file"
+            print(f"ERROR: {flag} {safe_label(path)}: no such {kind}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    dictionary_path = args.metric_dictionary or find_metric_dictionary(SCRIPT_DIR)
+    if dictionary_path is None:
+        print("WARN: metric-dictionary.yaml not found beside the tool or one level "
+              "up; matches fall back to prefix and token heuristics. "
+              "Pass --metric-dictionary to use one.", file=sys.stderr)
 
     # Load data
     configs = load_tenant_configs(
@@ -341,7 +356,7 @@ def main():
         tenant_config=args.tenant_config,
     )
     custom_metrics = extract_custom_metrics(configs)
-    metric_dict = load_metric_dictionary(args.metric_dictionary)
+    metric_dict = load_metric_dictionary(dictionary_path) if dictionary_path else {}
 
     # Analyze
     results = analyze_gaps(custom_metrics, metric_dict)

@@ -518,6 +518,24 @@ def exit_on_yaml_file_error(fn: _F) -> _F:
     return _wrapped  # type: ignore[return-value]
 
 
+def find_metric_dictionary(tool_dir: str) -> "str | None":
+    """Locate ``metric-dictionary.yaml`` for a tool living in *tool_dir*.
+
+    The image flattens every tool next to the dictionary (build.sh); the
+    repository keeps the tools under ``scripts/tools/ops/`` and the dictionary
+    one level up. Looking only beside the tool — what analyze-gaps and migrate
+    did — silently yielded an empty dictionary for every reader who ran
+    ``python3 scripts/tools/ops/<tool>.py`` as the docs teach (issue 1513).
+    Returns the first file that exists, else ``None`` so the caller can say so.
+    """
+    for candidate in (os.path.join(tool_dir, "metric-dictionary.yaml"),
+                      os.path.join(os.path.dirname(os.path.abspath(tool_dir)),
+                                   "metric-dictionary.yaml")):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def iter_yaml_files(
     config_dir: str,
     *,

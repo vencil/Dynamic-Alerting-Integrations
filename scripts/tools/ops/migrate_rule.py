@@ -46,6 +46,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
+from _lib_io import find_metric_dictionary  # noqa: E402
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -262,10 +263,17 @@ def rewrite_expr_tenant_label(expr_str, metric_names):
 # ============================================================
 
 def load_metric_dictionary(script_dir=None):
-    """載入 metric-dictionary.yaml 啟發式字典。"""
-    base = Path(script_dir) if script_dir is not None else _THIS_DIR
-    dict_path = str(base / "metric-dictionary.yaml")
-    if os.path.exists(dict_path):
+    """載入 metric-dictionary.yaml 啟發式字典。
+
+    沒給 script_dir 時，映像佈局（與工具同層）與 repo 佈局（scripts/tools/，
+    工具在 ops/ 子目錄）都找；先前只找工具同層，repo 佈局下字典恆為空
+    （issue 1513）。
+    """
+    if script_dir is None:
+        dict_path = find_metric_dictionary(str(_THIS_DIR))
+    else:
+        dict_path = str(Path(script_dir) / "metric-dictionary.yaml")
+    if dict_path and os.path.exists(dict_path):
         with open(dict_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
     return {}
@@ -1235,6 +1243,9 @@ def main():
 
     # 載入字典
     dictionary = {} if args.no_dictionary else load_metric_dictionary()
+    if not args.no_dictionary and not dictionary:
+        print("[WARN] 找不到 metric-dictionary.yaml（工具同層與上一層都沒有），"
+              "本次不做黃金標準比對。", file=sys.stderr)
 
     try:
         with open(args.input_file, 'r', encoding='utf-8') as f:

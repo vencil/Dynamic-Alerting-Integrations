@@ -40,7 +40,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2114)
 from _lib_confd import (  # noqa: E402
@@ -87,6 +87,15 @@ def _h(key: str) -> str:
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
 
+class CommandNotFoundError(FileNotFoundError):
+    """The external command (kubectl) is not on PATH.
+
+    A FileNotFoundError subclass so batch_diagnose, which catches OSError per
+    tenant, keeps recording it as that tenant's issue; the CLI turns it into
+    rc=2 plus one line instead of the traceback it used to be (issue 1513).
+    """
+
+
 def run_cmd(cmd: list[str]) -> str | None:
     """Execute a command safely using list arguments only (no shell=True).
 
@@ -100,6 +109,43 @@ def run_cmd(cmd: list[str]) -> str | None:
         return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=120).strip()
     except subprocess.CalledProcessError:
         return None
+    except FileNotFoundError as exc:
+        raise CommandNotFoundError(f"{cmd[0]} not found on PATH") from exc
+
+
+# The Pod and exporter checks below are written for MariaDB (`app=mariadb`,
+# `mysql_up`). Every other tenant used to get `Pod not found`, so
+# batch-diagnose reported all of them as errors (issue 1513, 本輪決策 N2).
+MARIADB_DB_TYPE = "mariadb"
+PROMETHEUS_FAILURE = "Prometheus query failed"
+
+
+def tenant_db_type(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
+    """Return (db_type, error) from `tenant_expected_exporter{tenant=...}`.
+
+    Read from Prometheus rather than conf.d: batch-diagnose calls check()
+    without a config dir. The exporter emits the series only for a tenant that
+    declares `_metadata.db_type` (#869), so an empty result means "not
+    declared", which is distinct from a failed query.
+    """
+    results, err = query_prometheus(prom_url, f'tenant_expected_exporter{{tenant="{tenant}"}}')
+    if err:
+        return None, err
+    for item in results or []:
+        db_type = item.get("metric", {}).get("db_type")
+        if db_type:
+            return db_type, None
+    return None, None
+
+
+def exit_code(result: dict) -> int:
+    """0 healthy; 2 when a Prometheus query failed (the caller's environment,
+    as validate / shadow-verify classify it); 1 for any other issue."""
+    if result.get("status") != "error":
+        return EXIT_OK
+    if any(str(i).startswith(PROMETHEUS_FAILURE) for i in result.get("issues", [])):
+        return EXIT_CALLER_ERROR
+    return EXIT_VIOLATION
 
 
 # Alias for backward-compat within this module
@@ -512,7 +558,7 @@ def _format_chain_summary(inheritance):
 
 
 def check(tenant: str, prom_url: str, config_dir: str | None = None,
-          *, out: TextIO | None = None) -> None:
+          *, out: TextIO | None = None) -> dict:
     """Emit one JSON health document for `tenant`.
 
     ⛔ `out` exists because the caller may need the document WITHOUT touching
@@ -525,30 +571,50 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
     ⚠️ Resolved at CALL time, not as a default argument value: binding
     `sys.stdout` at def time would freeze the stream pytest's capsys swaps in.
+
+    Returns the document it printed, so the CLI can derive its exit code.
     """
     errors = []
+    skipped = []
 
-    # 1. 檢查 Pod 狀態
-    pod_status = run_cmd(["kubectl", "get", "pods", "-n", tenant, "-l", "app=mariadb",
-                          "-o", "jsonpath={.items[0].status.phase}"])
-    if not pod_status:
-        errors.append("Pod not found")
-    elif pod_status != "Running":
-        errors.append(f"Pod status is {pod_status}")
+    # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
+    db_type, db_type_err = tenant_db_type(tenant, prom_url)
+    if db_type_err:
+        errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
+        reason = "db_type unknown: the Prometheus query for tenant_expected_exporter failed"
+    elif db_type is None:
+        reason = ("db_type not declared (no tenant_expected_exporter series for this "
+                  "tenant); the Pod and exporter checks are written for MariaDB")
+    else:
+        reason = (f"db_type={db_type}; the Pod and exporter checks are written for "
+                  "MariaDB (app=mariadb, mysql_up)")
+    is_mariadb = db_type == MARIADB_DB_TYPE and not db_type_err
+    if not is_mariadb:
+        skipped = [{"check": "pod", "reason": reason},
+                   {"check": "exporter", "reason": reason}]
 
-    # 2. 檢查 Exporter (透過 Prometheus API)
-    try:
-        up_results, up_err = query_prometheus(prom_url, f'mysql_up{{instance="{tenant}"}}')
-        if up_err:
-            errors.append(f"Prometheus query failed ({prom_url})")
-        elif up_results:
-            val = up_results[0].get("value", [None, None])[1]
-            if val != "1":
+    if is_mariadb:
+        # 1. 檢查 Pod 狀態
+        pod_status = run_cmd(["kubectl", "get", "pods", "-n", tenant, "-l", "app=mariadb",
+                              "-o", "jsonpath={.items[0].status.phase}"])
+        if not pod_status:
+            errors.append("Pod not found")
+        elif pod_status != "Running":
+            errors.append(f"Pod status is {pod_status}")
+
+        # 2. 檢查 Exporter (透過 Prometheus API)
+        try:
+            up_results, up_err = query_prometheus(prom_url, f'mysql_up{{instance="{tenant}"}}')
+            if up_err:
+                errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
+            elif up_results:
+                val = up_results[0].get("value", [None, None])[1]
+                if val != "1":
+                    errors.append("Exporter reports DOWN (mysql_up!=1)")
+            else:
                 errors.append("Exporter reports DOWN (mysql_up!=1)")
-        else:
-            errors.append("Exporter reports DOWN (mysql_up!=1)")
-    except Exception:
-        errors.append("Metrics check failed")
+        except Exception:
+            errors.append("Metrics check failed")
 
     # 3. 查詢運營模式 (Silent Mode / Maintenance)
     operational_mode = "normal"
@@ -583,10 +649,13 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             result["profile"] = profile_name
         if inheritance:
             result["inheritance_chain"] = _format_chain_summary(inheritance)
+        if skipped:
+            result["skipped"] = skipped
         print(json.dumps(result), file=stream)
     else:
-        # 只有異常時，嘗試抓取最近的 error log
-        logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb", "--tail=20"])
+        # 只有異常時，嘗試抓取最近的 error log（MariaDB 的 deploy 名稱）
+        logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb",
+                        "--tail=20"]) if is_mariadb else None
         error_logs = [line for line in (logs or "").split('\n') if 'ERROR' in line]
 
         result = {
@@ -601,7 +670,10 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             result["profile"] = profile_name
         if inheritance:
             result["inheritance_chain"] = _format_chain_summary(inheritance)
+        if skipped:
+            result["skipped"] = skipped
         print(json.dumps(result, ensure_ascii=False), file=stream)
+    return result
 
 
 if __name__ == "__main__":
@@ -636,4 +708,14 @@ if __name__ == "__main__":
                              indent=2))
         sys.exit(EXIT_OK)
 
-    check(args.tenant, args.prometheus, config_dir=args.config_dir)
+    try:
+        result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
+    except CommandNotFoundError as exc:
+        # issue 1513: this was a traceback at rc=1. The Pod check needs kubectl
+        # and a cluster context; the da-tools image ships neither.
+        print(f"ERROR: {exc}; the MariaDB Pod check needs kubectl and cluster "
+              "access", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
+    # passed on an unhealthy tenant.
+    sys.exit(exit_code(result))
