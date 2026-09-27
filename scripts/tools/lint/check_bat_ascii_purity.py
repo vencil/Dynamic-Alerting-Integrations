@@ -159,10 +159,15 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
 
 
 def _diff_changed_bats(repo: Path, base: str) -> list[Path]:
-    """Return scripts/ops/*.bat changed in current diff vs base."""
+    """Return scripts/ops/*.bat changed in current diff vs base.
+
+    ⛔ The extension is matched case-insensitively and NOT in the pathspec:
+    git pathspecs are case-sensitive, and cmd.exe runs ``FOO.BAT`` exactly
+    like ``foo.bat`` (#2196).
+    """
     out: list[Path] = []
-    for rel in diff_changed_paths(base, repo, ("scripts/ops/*.bat",)):
-        if rel.endswith(".bat"):
+    for rel in diff_changed_paths(base, repo, ("scripts/ops/",)):
+        if rel.lower().endswith(".bat"):
             full = repo / rel
             if full.is_file():
                 out.append(full)
@@ -207,7 +212,9 @@ def main() -> int:
         bat_paths = [Path(p) for p in args.paths]
         scan_mode = "explicit-paths"
     elif args.full_scan:
-        bat_paths = sorted((repo / "scripts" / "ops").glob("*.bat"))
+        # ⛔ Not ``glob("*.bat")``: case-sensitive on POSIX (#2196).
+        bat_paths = sorted(p for p in (repo / "scripts" / "ops").iterdir()
+                           if p.is_file() and p.name.lower().endswith(".bat"))
         scan_mode = "full-scan"
     else:
         try:
