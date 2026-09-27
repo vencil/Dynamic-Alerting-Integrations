@@ -1179,7 +1179,10 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             Status.SKIP,
             f"pre-push 守衛已接上；pre-commit --all-files 已跳過（--skip-hooks）｜{why}",
         )
-    r = run(["pre-commit", "run", "--all-files"], timeout=300)
+    # ⛔ The ceiling must fit a full hook run on the slowest host that runs
+    # this; set below it, the full preflight cannot pass by construction and a
+    # timeout still FAILs (#1519). Measurements live in the issue.
+    r = run(["pre-commit", "run", "--all-files"], timeout=1800)
     if r.returncode == 0:
         return CheckResult(
             "Local hooks", Status.PASS, "pre-commit 全部通過（pre-push 守衛已接上）"
