@@ -23,9 +23,14 @@ Two markers in the script record the deliberate gaps, each with a reason:
   filled in, a URL pointed at nothing). An exempt call that anchors in both
   languages is stale and fails.
 * ``# i4-doc-anchor: unanchored-begin — <reason>`` …
-  ``# i4-doc-anchor: unanchored-end`` around checks that invoke a tool
-  outside the ``assert_*`` helpers. Any such invocation outside a region
-  fails, so a new inline check cannot bypass the anchor.
+  ``# i4-doc-anchor: unanchored-end`` around checks that use a tool
+  outside the ``assert_*`` helpers. Outside the helper bodies and outside a
+  region, a tool name may not appear in code at all — not only in command
+  position, since ``env jq``, ``xargs jq``, ``bash -c "jq …"`` and
+  ``T=jq; $T`` all run it — so a new inline check cannot bypass the anchor.
+
+Each checklist must use a section number once: a duplicated heading would
+let a stale copy under the wrong heading satisfy the anchor.
 
 What this does NOT cover: checklist commands the script never copied, and
 whether a filter reads the right field (``jq '.typo // empty'`` exits 0).
@@ -35,6 +40,7 @@ from __future__ import annotations
 import re
 import shlex
 import textwrap
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -53,11 +59,9 @@ BEGIN = "# i4-doc-anchor: unanchored-begin"
 END = "# i4-doc-anchor: unanchored-end"
 AMTOOL_SUFFIX = " 2>&1 || true"
 
-# A tool name in command position: line start, after a pipe / list operator
-# / subshell opener, or after a shell keyword.
-_CMD_POS = re.compile(
-    r"(?:^|[|;&(]|\$\(|\b(?:if|then|else|do|while|until)\s)\s*(%s)\b"
-    % "|".join(TOOLS))
+# A tool name as a word anywhere in code. Deliberately not "command
+# position": `env jq`, `xargs jq`, `bash -c "jq"` and `T=jq; $T` all run it.
+_TOOL_WORD = re.compile(r"(?<![\w.\-/])(%s)(?![\w\-])" % "|".join(TOOLS))
 _HELPER_NAME = re.compile(r"\b(%s)\b" % "|".join(HELPERS))
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
 _SECTION = re.compile(r"^§(\d+(?:\.\d+)*) ")
@@ -164,10 +168,10 @@ def parse_script(text: str) -> tuple[list[Call], list[str]]:
                     f"line {start + 1}: helper called outside statement position "
                     "— this test cannot see that call")
             code = "\n".join(l.split(" #", 1)[0] for l in buf.split("\n"))
-            if any(_CMD_POS.search(l) for l in code.split("\n")):
+            if _TOOL_WORD.search(code):
                 if region is None:
                     problems.append(
-                        f"line {start + 1}: invokes {'/'.join(TOOLS)} outside the "
+                        f"line {start + 1}: uses {'/'.join(TOOLS)} outside the "
                         f"assert_* helpers and outside an unanchored region")
                 else:
                     region_hits += 1
@@ -187,6 +191,7 @@ def section_blocks(md: str) -> dict[str, list[str]]:
     """Map each numbered heading (``1.2.2``) to the fenced blocks under it,
     subsections included."""
     own: dict[str, list[str]] = {}
+    numbers: list[str] = []
     current = None
     fence: list[str] | None = None
     for line in md.split("\n"):
@@ -204,8 +209,11 @@ def section_blocks(md: str) -> dict[str, list[str]]:
         m = re.match(r"^#{2,6} (\d+(?:\.\d+)*)\b", line)
         if m:
             current = m.group(1)
+            numbers.append(current)
             own.setdefault(current, [])
     assert fence is None, "unterminated fenced block"
+    dup = sorted(n for n, c in Counter(numbers).items() if c > 1)
+    assert not dup, f"section number(s) used by more than one heading: {dup}"
     return {
         num: [b for sub, bs in own.items()
               if sub == num or sub.startswith(num + ".") for b in bs]
@@ -360,8 +368,27 @@ def test_region_rules() -> None:
     assert _run(f"{BEGIN} — why\njq .x f\n{call}{END}\n"), "call hidden in region"
 
 
-def test_tool_word_in_a_string_is_not_an_invocation() -> None:
-    assert _run('echo "  ok §2.1.1 promtool --experimental promql format"\n') == []
+@pytest.mark.parametrize("line", [
+    "env jq '.x' f",
+    "command jq '.x' f",
+    "OUT=`jq -n '.x'`",
+    "bash -c \"jq -n '.x'\"",
+    "T=jq; $T '.x' f",
+    "echo '{}' | xargs jq -n '.x'",
+    'echo "  ok §2.1.1 promtool --experimental promql format"',
+])
+def test_tool_word_outside_region_is_red(line: str) -> None:
+    assert _run(line + "\n")
+
+
+def test_tool_name_inside_a_longer_word_is_not_a_use() -> None:
+    assert _run('cat > "$T/alertmanager.yml" <<\'EOF\'\nx: 1\nEOF\necho jqx myjq\n') == []
+
+
+def test_duplicate_section_number_is_red() -> None:
+    doc = _DOC + "#### 1.1.1 Again\n```bash\njq '.data.a // empty'\n```\n"
+    with pytest.raises(AssertionError, match="more than one heading"):
+        _run("assert_jq \"§1.1 a\" \"$F\" '.data.a // empty'\n", doc)
 
 
 def test_call_the_parser_cannot_see_is_red() -> None:

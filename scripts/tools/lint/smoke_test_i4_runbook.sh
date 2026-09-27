@@ -115,7 +115,7 @@ assert_yaml() {
 }
 
 echo "════════════════════════════════════════════════════════════════"
-echo "I-4 Runbook Smoke Test — jq / amtool / promtool / yq"
+echo "I-4 Runbook Smoke Test"
 echo "════════════════════════════════════════════════════════════════"
 echo
 
