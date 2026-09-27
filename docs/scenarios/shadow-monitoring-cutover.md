@@ -60,18 +60,18 @@ da-tools alert-quality --prometheus http://localhost:9090 --period 30d \
 
 Dynamic Alerting 提供端到端的遷移工作流，包含：
 
-1. **合規性掃描**（`onboard_platform.py`）— 解析舊配置，產出遷移提示
-2. **規則轉換**（`migrate_rule.py`）— 舊規則 → 新規則，自動標記為 shadow 狀態
+1. **合規性掃描**（`onboard_platform.py`）— 解析舊的 Alertmanager 設定與規則檔，產出路由片段與遷移計畫
+2. **規則轉換**（`migrate_rule.py`）— 舊規則 → 平台的 recording／alert rule 與租戶配置，alert rule 帶 `migration_status: shadow` label
 3. **並行驗證**（`validate_migration.py`）— 連續比對新舊規則輸出，直到自動檢測到收斂
-4. **一鍵切換**（`cutover_tenant.py`）— 自動化完成所有切換步驟（刪舊規則、移除 shadow 標籤、驗證通知）
-5. **自動回退**（rollback 機制）— 若切換後發現問題，快速恢復舊規則
+4. **一鍵切換**（`cutover_tenant.py`）— 依序停止 shadow monitor job、刪除舊 recording rule、移除 shadow label 與 Alertmanager 攔截，最後確認租戶的閾值指標存在
+5. **回退** — 工具沒有自動回退；切換失敗時照 [Shadow Monitoring SOP §7.2](../shadow-monitoring-sop.md) 手動恢復（`cutover_tenant.py` 失敗時也會印出這個指引）
 
 ## 工作流程圖
 
 ```mermaid
 graph LR
     A["現有告警<br/>（舊系統）"] -->|導入| B["onboard_platform.py<br/>反向分析"]
-    B -->|產出| C["onboard-hints.json<br/>遷移提示"]
+    B -->|產出| C["migration-plan.csv<br/>遷移計畫"]
     C -->|參考| D["migrate_rule.py<br/>規則轉換"]
     D -->|部署| E["新規則<br/>migration_status: shadow<br/>（被 AM 攔截）"]
     A -->|並行運行| E
@@ -82,12 +82,12 @@ graph LR
     I -->|是| J["cutover_tenant.py<br/>執行切換"]
     I -->|否| K["修改配置<br/>重新驗證"]
     K -->|再驗| F
-    J -->|Step 1| L["刪除舊規則<br/>（Shadow Monitor Job）"]
-    L -->|Step 2| M["移除 migration_status<br/>shadow label"]
-    M -->|Step 3| N["Alertmanager 移除<br/>shadow 攔截 route"]
-    N -->|Step 4| O["驗證告警觸發<br/>check-alert + diagnose"]
+    J -->|Step 1–2| L["停止 Shadow Monitor Job<br/>刪除舊 Recording Rules"]
+    L -->|Step 3| M["移除 migration_status<br/>shadow label"]
+    M -->|Step 4| N["Alertmanager 移除<br/>shadow 攔截 route"]
+    N -->|Step 5| O["確認租戶閾值指標存在<br/>count(user_threshold)"]
     O -->|通過| P["完成切換 ✓"]
-    O -->|失敗| Q["自動回退<br/>（rollback 機制）"]
+    O -->|失敗| Q["手動回退<br/>（SOP §7.2）"]
     Q -->|恢復| E
 ```
 
@@ -117,7 +117,7 @@ python3 scripts/tools/ops/validate_migration.py \
   # stability-window=5 表示連續 5 輪無 mismatch 即宣告收斂
 ```
 
-輸出：`validation_output/cutover-readiness.json`（包含 `converged`、`convergence_timestamp`、`tenants_verified`、`recommendation` 等欄位）。可用 `da-tools shadow-verify convergence --readiness-json <path>` 自動解讀。
+輸出：`validation_output/cutover-readiness.json`（包含 `ready`、`timestamp`、`convergence_percentage`、`converged_count`、`total_pairs`、`unconverged_pairs`、`recommendation` 等欄位）。可用 `da-tools shadow-verify convergence --readiness-json <path>` 自動解讀。
 
 ### 2. 容忍度閾值（Tolerance Thresholds）
 
@@ -142,7 +142,7 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ### 3. 回退條件（Rollback Triggers）
 
-切換後若檢測到以下情況，立即觸發自動回退：
+切換後若檢測到以下情況，立即依 [SOP §7.2](../shadow-monitoring-sop.md) 手動回退（工具沒有自動回退）：
 
 | 條件 | 檢測方式 | 回退操作 |
 |------|--------|--------|
@@ -184,17 +184,21 @@ python3 scripts/tools/ops/validate_config.py \
 ### 階段 2：轉換（Day 0）
 
 ```bash
-# 2.1 執行規則轉換
-python3 scripts/tools/ops/migrate_rule.py \
-  --input migration_input/onboard-hints.json \
-  --tenant db-a,db-b \
-  --output migration_output/
-# 產出：
-#   - migration_output/custom_rules.yaml（新規則，帶 migration_status: shadow）
-#   - migration_output/prefix-mapping.yaml（old_query ↔ new_query 映射）
+# 2.1 執行規則轉換（輸入是舊的 Prometheus 規則檔，一次一個檔）
+python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
+  --output-dir migration_output/
+# 產出（migration_output/）：
+#   - platform-recording-rules.yaml、platform-alert-rules.yaml
+#     （新規則；alert rule 帶 migration_status: shadow label）
+#   - tenant-config.yaml（要貼進各租戶 conf.d 的閾值 key）
+#   - prefix-mapping.yaml（階段 3 validate_migration 的比對組）
+#   - migration-report.txt、triage-report.csv（轉換報告）
+# 工具沒有「只轉某些租戶」的選項；租戶是在 tenant-config.yaml 貼進哪個租戶檔時決定的。
+# ⚠️ 產出的閾值 recording rule 目前與 exporter 發射的 label 對不上，而且 key 要先在
+#    _defaults.yaml 宣告才會發射（issue 1818 追蹤中），部署前請人工核對。
 
-# 2.2 部署新規則（shadow 狀態）
-kubectl apply -f migration_output/custom_rules.yaml
+# 2.2 部署新規則（shadow 狀態）：把兩份規則檔合併進 Prometheus 的規則 ConfigMap
+#     （具體操作依環境：ConfigMap 或 Helm）
 
 # 2.3 更新 Alertmanager，攔截 shadow alert
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -239,13 +243,25 @@ python3 scripts/tools/ops/cutover_tenant.py \
   --prometheus http://localhost:9090 \
   --dry-run
 
-# 預期輸出：
-# [DRY RUN] Would stop shadow-monitor job in namespace monitoring
-# [DRY RUN] Would delete old recording rules for tenant db-a
-# [DRY RUN] Would remove migration_status:shadow label from custom_* rules
-# [DRY RUN] Would remove Alertmanager shadow route for db-a
-# [DRY RUN] Would run: check-alert MariaDBHighConnections db-a
-# [DRY RUN] Would run: diagnose db-a
+# 預期輸出（stderr；列出會執行的 kubectl 命令，不做任何變更）：
+# ▸ Stop Shadow Monitor Job...
+#   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove old Recording Rules...
+#   [dry-run] kubectl delete configmap prometheus-rules-old -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove shadow label from rules...
+#   [dry-run] kubectl label configmap prometheus-rules -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Remove Alertmanager shadow route...
+#   [dry-run] kubectl label configmap alertmanager-config -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Verify tenant health...
+#   [dry-run] query http://localhost:9090 for tenant=db-a health
+#   ✓ (dry-run)
+#
+# ✅ Cutover completed successfully.
+# Next: run 'da-tools batch-diagnose' for full health report.
 
 # 4.3 確認預覽無誤後執行切換
 ```
@@ -259,13 +275,16 @@ python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --prometheus http://localhost:9090
 
-# 預期流程（自動執行）：
-# [STEP 1/4] Stopping shadow monitor job...
-# [STEP 2/4] Removing old recording rules for tenant db-a...
-# [STEP 3/4] Removing migration_status:shadow label...
-# [STEP 4/4] Verifying alert triggers post-cutover...
-# ✓ db-a cutover completed successfully
-# ✓ All validation checks passed
+# 預期流程（自動執行，同 4.2 的五步，這次真的執行 kubectl）：
+# ▸ Stop Shadow Monitor Job...
+# ▸ Remove old Recording Rules...
+# ▸ Remove shadow label from rules...
+# ▸ Remove Alertmanager shadow route...
+# ▸ Verify tenant health...
+#   ✓ tenant=db-a: <N> threshold metrics active
+#
+# ✅ Cutover completed successfully.
+# 任一步失敗時印出 ❌ Cutover failed at step: <步驟> 與原因，並指向 SOP §7.2 的回退步驟。
 
 # 5.2 批次切換多個 tenant（逐一執行）
 for tenant in db-a db-b db-c; do
@@ -278,18 +297,19 @@ for tenant in db-a db-b db-c; do
   sleep 60  # 每個 tenant 間隔 60 秒，避免 Prometheus reload 沖突
 done
 
-# 5.3 驗證全部切換成功
+# 5.3 驗證全部切換成功（多租戶健康報告）
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 \
-  --check-shadow-removal
+  --tenants db-a,db-b,db-c \
+  --prometheus http://localhost:9090
 ```
 
 ### 階段 6：清理（Day 15+）
 
 ```bash
-# 6.1 確認舊規則已完全移除（batch-diagnose 含 shadow-removal 檢查）
-python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 --check-shadow-removal
+# 6.1 確認舊規則已完全移除：cutover 刪掉的兩個物件應該都查不到（NotFound）
+#     batch-diagnose 沒有 shadow 殘留檢查（尚未實作），用 kubectl 直接查
+kubectl get job shadow-monitor -n monitoring
+kubectl get configmap prometheus-rules-old -n monitoring
 
 # 6.2 清理遷移產物與備份
 rm -rf migration_input/ migration_output/ validation_output/
@@ -328,11 +348,8 @@ rm -rf conf.d.bak alertmanager.yml.bak
 kubectl patch configmap alertmanager-config -n monitoring \
   --patch-file alertmanager-block-custom.patch  # 臨時攔截 custom_* alerts
 
-# 3.2 執行完整回退
-python3 scripts/tools/ops/cutover_tenant.py \
-  --tenant db-a \
-  --rollback --prometheus http://localhost:9090
-# 自動：恢復舊規則、恢復舊 AM 設定、重啟驗證
+# 3.2 執行完整回退：cutover 沒有回退選項（尚未實作），照 shadow-monitoring-sop.md
+#     §7.2 手動恢復舊 recording rule 與 Alertmanager 設定，再重啟 validate_migration
 
 # 3.3 根本原因分析
 # - 檢查新規則邏輯是否有誤
@@ -394,15 +411,18 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ### Option B: --force Skip Readiness Check
 
-在確保手工驗證充分的情況下，可跳過自動 readiness 檢查：
+在確保手工驗證充分的情況下，可略過 readiness 判定：
 
 ```bash
-# 跳過 cutover-readiness.json 驗證，直接切換
+# readiness JSON 顯示 ready: false 也照樣切換
 python3 scripts/tools/ops/cutover_tenant.py \
+  --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090 \
-  --force  # 不需要 --readiness-json
+  --force
 ```
+
+`--force` 只略過 `ready` 的判定，`--readiness-json` 仍然必填：不給會直接以 rc=2 結束（`the following arguments are required: --readiness-json`）。
 
 **何時使用**：已手工審視 CSV 報告確認 7 天無 mismatch；測試/開發環境
 
@@ -414,7 +434,7 @@ python3 scripts/tools/ops/cutover_tenant.py \
 
 - [ ] 現有配置已備份（`conf.d.bak`, `alertmanager.yml.bak`）
 - [ ] 執行 `validate_config.py` 通過
-- [ ] 執行 `onboard_platform.py` 完成，`onboard-hints.json` 已審視
+- [ ] 執行 `onboard_platform.py` 完成，產出（`phase2-rules/migration-plan.csv` 等）已審視
 - [ ] 執行 `migrate_rule.py` 完成，新規則已部署
 - [ ] Alertmanager shadow route 已部署
 - [ ] Prometheus reload 完成
