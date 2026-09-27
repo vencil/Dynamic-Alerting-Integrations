@@ -580,7 +580,7 @@ def test_the_shim_says_what_to_do_when_the_dispatcher_is_missing(
 
 
 @pytest.mark.parametrize("shape", ["git-dir-from-elsewhere", "bare-repo"])
-def test_a_push_without_a_work_tree_is_not_told_to_rebase(
+def test_a_push_without_a_work_tree_is_shown_where_it_looked_and_a_way_out(
     tmp_path: Path, shape: str,
 ) -> None:
     """#2039: with no work tree the shim finds no dispatcher even though the
@@ -589,6 +589,9 @@ def test_a_push_without_a_work_tree_is_not_told_to_rebase(
     `--show-toplevel` empty: git takes the cwd as the work tree, so a check
     for an empty root would miss the very shape the issue reproduced. The
     message therefore prints the directory it looked in instead of guessing.
+
+    ⚠️ NOT GUARDED: the rebase remedy is still printed, as the other branch of
+    the message; nothing here asserts it is absent.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _install_guards(work).returncode == 0
@@ -613,7 +616,12 @@ def test_a_push_without_a_work_tree_is_not_told_to_rebase(
         f"the message offers no remedy that works without a work tree:\n{out}"
     )
     if shape == "git-dir-from-elsewhere":
-        assert f"'{elsewhere}'" in out, (
+        # Git's own spelling of the path (forward slashes on Windows), checked
+        # against the directory the push ran from.
+        looked = _git(elsewhere, f"--git-dir={git_dir}", "rev-parse",
+                      "--show-toplevel").stdout.strip()
+        assert Path(looked).resolve() == elsewhere.resolve(), looked
+        assert f"'{looked}'" in out, (
             f"the message hides which directory it took for the work tree:\n{out}"
         )
 
