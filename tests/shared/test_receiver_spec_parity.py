@@ -56,7 +56,7 @@ _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired
 
 
 def _rejects_empty(prop: dict | None) -> bool:
-    """True when the property rejects "" and null (and []), which Python/Go read as unset.
+    """True when the property rejects "" and null, which Python/Go read as unset.
 
     The type must be pinned to one type: minLength / minItems do not apply to
     null, so `type: ["string", "null"]` + minLength would still let null in.

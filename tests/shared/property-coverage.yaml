@@ -52,6 +52,7 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      receiver_field_set: "#2137 presence predicate (absent / None / \"\" unset, everything else set); table-covered by the shared receiver_presence_cases.json rows in tests/shared/test_receiver_spec_parity.py and tests/dx/test_generate_tenant_metadata.py"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
 
   scripts/tools/_lib_io.py:

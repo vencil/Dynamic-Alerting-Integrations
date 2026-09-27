@@ -122,11 +122,25 @@ def validate_and_clamp(
     return value, warnings
 
 
+def receiver_field_set(receiver: dict[str, Any], field: str) -> bool:
+    """Whether ``field`` counts as given in a receiver's exactly-one group.
+
+    Unset means only: key absent, ``None`` (YAML ``key:`` with no value) or
+    ``""`` — the same rule as the Go guard (matcherValuePresent), the schema
+    (``minLength: 1``) and Alertmanager (both decode to the zero value). Any
+    other value is given, including falsy non-strings such as ``0`` / ``False``
+    / ``[]`` and whitespace ``" "``: Alertmanager renders ``service_key: 0`` as
+    ``"0"`` and uses the v1 API, so truthiness would under-count it.
+    """
+    value = receiver.get(field)
+    return value is not None and value != ""
+
+
 def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
     """Check the ``exactly_one_of`` groups of ``RECEIVER_TYPES[rtype]``.
 
-    A field counts as set under the same truthiness the required-field checks
-    use (present and truthy), so ``""`` / ``None`` read as unset. Returns the
+    A field counts as set per ``receiver_field_set`` (absent / ``None`` /
+    ``""`` are unset; everything else is set). Returns the
     first problem as ``"requires exactly one of 'a' or 'b', ..."`` (callers
     prefix tenant / receiver context), or ``None`` when every group has
     exactly one field set. Unknown types return ``None``; callers reject those
@@ -134,7 +148,7 @@ def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Option
     """
     spec = RECEIVER_TYPES.get(rtype, {})
     for group in spec.get("exactly_one_of", []):
-        set_fields = [f for f in group if receiver.get(f)]
+        set_fields = [f for f in group if receiver_field_set(receiver, f)]
         if len(set_fields) == 1:
             continue
         names = " or ".join(f"'{f}'" for f in group)

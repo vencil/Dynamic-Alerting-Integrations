@@ -112,7 +112,7 @@ func sortedCopy(in []string) []string {
 }
 
 // rejectsEmpty reports whether a property schema rejects every value the
-// guard and Python read as unset: "" and null (and an empty array). It
+// guard and Python read as unset: "" and null. It
 // needs the type pinned as well as the length bound — minLength /
 // minItems do not apply to null, so `type: ["string","null"]` +
 // minLength would still let null through.
