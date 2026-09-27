@@ -1740,7 +1740,9 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
     # The user's own worktree, which the clean-up must leave alone: with only
     # the main tree around, "remove every linked worktree" passes as well.
-    user_wt = tmp_path / "user wt"
+    # ⛔ No space in the path: word splitting would then spare it, and an
+    # unquoted "remove every linked worktree" would pass again.
+    user_wt = tmp_path / "user_wt"
     assert _git(work, "worktree", "add", "-q", "--detach", str(user_wt), "main").returncode == 0
     before = _git(work, "worktree", "list", "--porcelain").stdout
 
