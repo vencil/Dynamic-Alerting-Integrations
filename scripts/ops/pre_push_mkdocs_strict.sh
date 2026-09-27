@@ -123,19 +123,26 @@ while read -r remote_ref local_sha remote_sha; do
     _mb=""
     [ -n "$_base" ] && _mb=$(git merge-base "$_base" "$local_sha" 2>/dev/null || true)
 
-    # --diff-filter=ACMRD — Added/Copied/Modified/Renamed/Deleted.
-    # CRITICAL: 'D' (deleted) MUST be included. Deleting a doc is precisely the
-    # failure mode that breaks mkdocs strict: dangling nav entries pointing at
-    # the deleted file, broken cross-refs from other docs that linked to it.
-    if [ -n "$_mb" ]; then
-        _changed=$(git diff --name-only --diff-filter=ACMRD "$_mb" "$local_sha" 2>/dev/null || echo "")
+    # ⛔ No --diff-filter: every change status counts, deletions included.
+    # Deleting a doc is precisely what breaks mkdocs strict (dangling nav
+    # entries, cross-refs to the gone file), and an enumerated list silently
+    # drops whatever it forgets — ACMRD forgot T, so a doc turned into a
+    # symlink pushed with no build at all (#2195).
+    # ⛔ -z: without it git C-quotes a non-ASCII path ("docs/\346…"), the
+    # leading quote defeats DOC_RE, and a new doc with such a name pushed
+    # with no build (#2195). A newline inside a file name still splits.
+    # ⛔ A failed diff is the unknown case, never "no doc changes" (#2195).
+    # It reaches the else branch only through `set -o pipefail` above;
+    # without it the pipeline's status is tr's, and the failure is lost.
+    if [ -n "$_mb" ] && _changed=$(git diff --name-only -z "$_mb" "$local_sha" | tr '\0' '\n'); then
         _hit=$(printf '%s\n' "$_changed" | grep -E "$DOC_RE" || true)
         if [ -n "$_hit" ]; then
             _doc_changes="${_doc_changes}${_hit}"$'\n'
             _build_shas+=("$local_sha")
         fi
     else
-        # ⛔ Fail-safe, not fail-open: with no base we cannot tell, so we build.
+        # ⛔ Fail-safe, not fail-open: with no base, or a diff that failed, we
+        # cannot tell, so we build.
         # The opposite default is how this guard was quietly useless before.
         # ⛔ Reported separately: filing it under "doc changes detected" tells a
         # contributor pushing pure code that they changed docs.
