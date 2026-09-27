@@ -349,8 +349,7 @@ route:
 
 **If not this**:
 - (a) `continue: true` accidentally lets the alert fall through → change to `continue: false`
-- (b) Subtle matcher syntax differences between AM v0.27 and v0.32 → use `==`, not `=~`, unless you actually need regex
-- (c) `null` receiver configuration missing (receiver name typo) → AM log contains `receiver "null" not found`
+- (b) `null` receiver configuration missing (receiver name typo) → AM log contains `undefined receiver "null" used in route`
 
 **Cross-ref**: playbook §12 Phase 2 catalog row "Shadow alerts leak to the production receiver"
 
