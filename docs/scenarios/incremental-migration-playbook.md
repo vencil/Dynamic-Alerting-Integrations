@@ -609,7 +609,7 @@ Rehearsal 內容：
 [ ] 8. Alertmanager Silenced alerts 列表為空（沒有遺留 silence 干擾觀測）
 ```
 
-**第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退）；先把 pre-Base-PR snapshot 用 `da-tools tenant-verify --all --json > pre-base.json` 存起來，rollback 後再跑同樣指令對照即可定位漂移 tenant。exit 2 且輸出 `status: ERROR — duplicate` 時不是 hash 漂移，而是**重複宣告**：該 tenant 同時出現在 `declared in:` 列出的多個檔裡（例如 rollback 漏刪的檔），工具因此拒絕算 hash——刪除多餘檔、讓 tenant 只留在一個檔後重跑第 6 項。`--all` 遇到重複宣告同樣 exit 2（其餘 tenant 照常輸出），拍快照前先處理掉。
+**第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退）；先把 pre-Base-PR snapshot 用 `da-tools tenant-verify --all --json > pre-base.json` 存起來，rollback 後再跑同樣指令對照即可定位漂移 tenant。exit 2 且輸出 `status: ERROR — duplicate` 時不是 hash 漂移，而是**重複宣告**：該 tenant 同時出現在 `declared in:` 列出的多個檔裡（例如 rollback 漏刪的檔），工具因此拒絕算 hash——從多餘的檔移除這個 tenant 的宣告、讓它只留在一個檔後重跑第 6 項（同一檔可能還宣告了其他 tenant，只有該檔沒有其他要保留的內容時才整個刪掉）。`--all` 遇到重複宣告同樣 exit 2（其餘 tenant 照常輸出），拍快照前先處理掉。
 
 ### 工具層 follow-up（未實裝，列入 v2.8.x backlog）
 
