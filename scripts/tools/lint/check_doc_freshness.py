@@ -8,7 +8,11 @@ v2.5.0 新增。
 - 掃描 docs/ 下所有 .md 文件
 - 使用 git log 取得最後修改時間戳
 - 標記超過閾值（預設 90 天）的陳舊文件
-- `--check` 模式：若發現陳舊文件則 exit 1
+- `--check` 模式：若發現陳舊文件則 exit 1；沒有陳舊文件、但有量不到年齡的文件則 exit 2
+- 量不到（unknown）的兩種來源：git 讀不到時間戳（不是 git repo、git 失敗或逾時），
+  以及 shallow clone 裡最後一次修改落在 shallow 邊界 commit 上的文件——那顆 commit
+  的時間只是 clone 的深度，不是文件真正的最後修改時間（#2023）
+- 已在工作樹、但還沒有任何 commit 的新文件算新鮮（git 成功、只是沒有歷史）
 - `--threshold DAYS` 標誌：覆蓋 90 天預設值
 - `--verbose` 模式：顯示所有文件及其年齡
 - `--exclude` 模式：逗號分隔的排除模式
@@ -34,7 +38,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Constant for ignore file name
 IGNORE_FILE_NAME = ".docfreshness-ignore"
@@ -320,28 +324,60 @@ def check_doc_file(
             })
 
 
-def get_git_last_modified_timestamp(file_path: Path) -> Optional[int]:
-    """
-    使用 git log 取得文件最後修改時間戳（unix seconds）。
+_UNKNOWN = object()  # git could not answer: not a repo, failed, or timed out
 
-    Args:
-        file_path: 相對於 repo root 的文件路徑
+
+def get_git_last_commit(file_path: Path):
+    """
+    取得文件最後一次修改的 commit（full SHA）與 committer 時間戳（unix seconds）。
 
     Returns:
-        Unix timestamp（秒），或 None 若文件未在 git 中或出錯
+        (sha, timestamp)；文件還沒有任何 commit 時為 (None, None)；
+        git 無法回答（不是 git repo、失敗或逾時）時為 _UNKNOWN。
     """
     try:
         result = subprocess.run(
-            ['git', 'log', '-1', '--format=%ct', str(file_path)],
+            ['git', 'log', '-1', '--format=%H %ct', '--', str(file_path)],
             capture_output=True,
             text=True,
             timeout=5
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return int(result.stdout.strip())
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
-    return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return _UNKNOWN
+    if result.returncode != 0:
+        return _UNKNOWN
+    out = result.stdout.strip()
+    if not out:
+        return (None, None)
+    try:
+        sha, ts = out.split()
+        return (sha, int(ts))
+    except ValueError:
+        return _UNKNOWN
+
+
+def get_shallow_boundaries() -> Set[str]:
+    """shallow clone 的邊界 commit（`.git/shallow` 列出的 SHA）；非 shallow 時為空集合。
+
+    邊界 commit 在 shallow clone 裡沒有父 commit，於是 `git log -1 -- <file>`
+    對「最後修改在邊界之外」的文件回的就是邊界 commit，時間只反映 clone 深度。
+    讀不到 shallow 檔以外的 git 錯誤不在這裡判斷：那種情況每個文件的
+    `git log` 也會失敗，逐檔就會變成 unknown。
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--git-path', 'shallow'],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    shallow = Path(result.stdout.strip())
+    try:
+        return set(shallow.read_text(encoding='utf-8').split())
+    except FileNotFoundError:
+        return set()
 
 
 def calculate_days_since_update(timestamp: int) -> float:
@@ -408,6 +444,7 @@ class DocFreshnessChecker:
             return True, []
 
         all_fresh = True
+        boundaries = get_shallow_boundaries()
 
         for file_path in md_files:
             relative_path = file_path.relative_to(self.docs_dir)
@@ -416,11 +453,23 @@ class DocFreshnessChecker:
             if self.matches_exclude_pattern(file_path):
                 continue
 
-            # 取得 git 最後修改時間戳
-            timestamp = get_git_last_modified_timestamp(file_path)
+            # 取得 git 最後修改的 commit 與時間戳
+            commit = get_git_last_commit(file_path)
+            unknown_reason = None
+            if commit is _UNKNOWN:
+                unknown_reason = 'git'
+                timestamp = None
+            elif commit[0] is None:
+                # 還沒有任何 commit：正在新增的文件，年齡為 0
+                timestamp = int(datetime.now(timezone.utc).timestamp())
+            elif commit[0] in boundaries:
+                unknown_reason = 'shallow'
+                timestamp = None
+            else:
+                timestamp = commit[1]
 
-            if timestamp is None:
-                # 文件未在 git 中或無法取得時間戳
+            if unknown_reason is not None:
+                # 量不到：不可併入 fresh（#2023）
                 status = 'unknown'
                 days_since = None
                 is_stale = False
@@ -435,6 +484,7 @@ class DocFreshnessChecker:
             result = {
                 'file': str(relative_path),
                 'status': status,
+                'unknown_reason': unknown_reason,
                 'days_since': days_since,
                 'timestamp': timestamp,
             }
@@ -552,8 +602,8 @@ def main():
         '--check',
         action='store_true',
         help=i18n_text(
-            "檢查模式：若發現陳舊文件則 exit 1",
-            "Check mode: exit 1 if stale files found"
+            "檢查模式：有陳舊文件 exit 1；沒有陳舊但有年齡量不到的文件 exit 2",
+            "Check mode: exit 1 if stale files found; else exit 2 if any file's age cannot be measured"
         )
     )
     parser.add_argument(
@@ -595,6 +645,20 @@ def main():
 
     if args.check and not all_fresh:
         sys.exit(EXIT_VIOLATION)
+
+    unknown = [r for r in results if r['status'] == 'unknown']
+    if args.check and unknown:
+        # 量不到 ≠ 量了沒事：沒有陳舊文件時，只要有文件年齡未知就不能回 0（#2023）
+        print(i18n_text(
+            f"無法判定 {len(unknown)} 份文件的新鮮度：",
+            f"cannot determine freshness of {len(unknown)} file(s):"), file=sys.stderr)
+        for r in unknown:
+            why = (i18n_text("最後修改落在 shallow clone 邊界，請先 git fetch --unshallow",
+                             "last change is at the shallow-clone boundary; run git fetch --unshallow")
+                   if r['unknown_reason'] == 'shallow'
+                   else i18n_text("git 讀不到時間戳", "git could not read a timestamp"))
+            print(f"  {r['file']}: {why}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     sys.exit(EXIT_OK)
 

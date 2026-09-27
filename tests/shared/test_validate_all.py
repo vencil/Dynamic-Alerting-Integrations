@@ -3294,14 +3294,8 @@ class TestRearmedRows:
     above; it says nothing about whether a row can fail). The withdrawn
     check and what it had measured are in the commit message.
     ``translation`` and ``freshness`` are still un-armed and tracked in
-    #1735: ``check_translation.py --ci`` is rc 1 on today's content, and
-    ``check_doc_freshness.py --check`` is rc 0 only on a SHALLOW clone --
-    it ages files by ``git log -1``, and the graft commit's date caps every
-    age at the clone's depth (measured: ``docs/README-root.md`` shows
-    2026-07-30 here, 2026-03-13 on GitHub, i.e. 177 days and stale). A
-    blind review of the first version of this change caught that; arming
-    the row on that measurement would have made a bare run red on every
-    full clone for content reasons (#1735's own ⛔).
+    #1735: arming either would make a bare run red for content reasons
+    (#1735's own ⛔).
     """
 
     PINNED = {
