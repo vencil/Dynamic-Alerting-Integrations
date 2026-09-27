@@ -649,14 +649,22 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness (advisory — read its output above; it never blocks)"
-	@echo "  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
+	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
+
+# --- #2102: every changelog.d/ fragment must be assembled before tagging ---
+# The release wrap-up turns changelog.d/ into ## [vX.Y.Z] and deletes the
+# fragments. One left on the tagged commit either missed these notes or gets
+# assembled again next release; nothing else notices either way.
+.PHONY: changelog-fragments-consumed
+changelog-fragments-consumed: ## ⛔ 擋住「changelog.d/ 還有沒組裝的片段就打 tag」（#2102）
+	@python3 scripts/tools/dx/generate_changelog.py --check-consumed
 
 # --- #1269 / TRK-354: unpublished draft security advisory gate ---
 # WHY THIS IS A MAKE TARGET AND NOT ONLY A CHECKLIST LINE: a draft advisory

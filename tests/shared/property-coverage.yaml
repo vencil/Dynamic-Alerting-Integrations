@@ -141,6 +141,8 @@ modules:
       lint_fragment: "I/O (reads the fragment) + body shape; covered by tests/dx/test_changelog_fragments.py"
       fragment_paths: "I/O (globs changelog.d/); covered by the live-tree test"
       assemble_fragments: "I/O + ordering; section/topic/created order and mixed-offset order pinned in tests/dx/test_changelog_fragments.py"
+      check_fragments_consumed: "I/O (git tree + worktree) + exit code for make pre-tag; leftover / README-only / uncommitted-deletion / no-git cases pinned in tests/dx/test_changelog_fragments.py"
+      _committed_fragments: "git ls-tree wrapper; covered through check_fragments_consumed tests on a real temp repo"
 
   scripts/tools/dx/axe_lite_static.py:
     covered:
