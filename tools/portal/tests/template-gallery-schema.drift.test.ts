@@ -50,7 +50,27 @@ describe('gallery expiry times are relative to load time (#2033)', () => {
     expect(JSON.stringify(DATA)).not.toContain('{{');
   });
 
-  it('every expires is after now and within 30 days (a hard-coded date fails either way)', () => {
+  // The window check below runs against a FIXED now, so a hard-coded date
+  // inside that window would pass until real time overtakes it. This one
+  // needs no clock: every expires in the shipped JSON must be a placeholder.
+  it('every expires in the raw JSON is a {{expires:…}} placeholder', () => {
+    const raw: Array<[string, unknown]> = [];
+    const walk = (id: string, v: any) => {
+      if (!v || typeof v !== 'object') return;
+      for (const [k, x] of Object.entries(v)) {
+        if (k === 'expires') raw.push([id, x]);
+        walk(id, x);
+      }
+    };
+    for (const tpl of RAW.templates) walk(tpl.id, load(tpl.yaml));
+    expect(raw.length).toBeGreaterThanOrEqual(2);
+    for (const [id, e] of raw) {
+      expect({ id, e, placeholder: /^\{\{expires:[^}]+\}\}$/.test(String(e)) })
+        .toEqual({ id, e, placeholder: true });
+    }
+  });
+
+  it('every expires is after now and within 30 days', () => {
     const found: Array<[string, string]> = [];
     const walk = (id: string, v: any) => {
       if (!v || typeof v !== 'object') return;
