@@ -15,10 +15,15 @@ import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
 import { buildYamlTemplates } from '../src/interactive/tools/playground.jsx';
 import { SCHEMA, buildInsertYaml } from '../src/interactive/tools/schema-explorer.jsx';
+import { resolveTemplateData } from '../src/interactive/tools/template-gallery/placeholders.js';
 import { RECEIVER_SOURCES, RECEIVER_REQUIRED, findReceivers, missingReceiverFields } from './helpers/receiver-required';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const GALLERY = JSON.parse(readFileSync(resolve(__dirname, '../../../docs/assets/template-data.json'), 'utf8'));
+// As the gallery serves it: load-time placeholders resolved with a fixed now.
+const GALLERY = resolveTemplateData(
+  JSON.parse(readFileSync(resolve(__dirname, '../../../docs/assets/template-data.json'), 'utf8')),
+  new Date('2026-09-25T10:00:00Z'),
+);
 
 describe('required-field sources are read, not empty', () => {
   it('both Python RECEIVER_TYPES and Go receiverTypeSpecs list all six types', () => {

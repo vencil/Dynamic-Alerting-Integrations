@@ -24,8 +24,13 @@ const OPERATIONAL_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 // RFC3339 (no milliseconds) timestamp OPERATIONAL_MODE_TTL_MS after `now`.
 // Shared with the playground templates so no example expires at a fixed date.
 function silentModeExpires(now = new Date()) {
-  return new Date(now.getTime() + OPERATIONAL_MODE_TTL_MS)
-    .toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return rfc3339After(now, OPERATIONAL_MODE_TTL_MS);
+}
+
+// RFC3339 UTC (no milliseconds) timestamp `ms` after `now`. Also used by the
+// Config Template Gallery's `{{expires:+N<h|d>}}` placeholders (#2033).
+function rfc3339After(now, ms) {
+  return new Date(now.getTime() + ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function perTenantBlocks(tenants, body) {
@@ -55,4 +60,4 @@ function generateSilentModeYaml(tenants, now = new Date()) {
   ]);
 }
 
-export { generateMaintenanceYaml, generateSilentModeYaml, silentModeExpires };
+export { generateMaintenanceYaml, generateSilentModeYaml, silentModeExpires, rfc3339After };

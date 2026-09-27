@@ -5,7 +5,8 @@ lang: en
 related: [playground, rule-pack-selector, threshold-calculator]
 dependencies: [
   "_common/components/Loading.jsx",
-  "_common/hooks/useCopyToClipboard.js"
+  "_common/hooks/useCopyToClipboard.js",
+  "template-gallery/placeholders.js"
 ]
 ---
 
@@ -17,6 +18,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Loading } from './_common/components/Loading.jsx';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 import { annotateCounterexamples } from './_common/data/rule-packs.js';
+import { resolveTemplateData } from './template-gallery/placeholders.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -103,7 +105,11 @@ export default function TemplateGallery() {
   useEffect(() => {
     fetch('template-data.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(data => setTemplateData(data))
+      // Placeholders ({{expires:+24h}}) are resolved HERE, once, before any
+      // preview or copy can see the data (#2033). A bad placeholder throws
+      // into the catch below, so the gallery shows an error instead of
+      // handing a reader the raw token.
+      .then(data => setTemplateData(resolveTemplateData(data, new Date())))
       .catch(err => {
         console.error('[TemplateGallery] Failed to load template-data.json:', err);
         setLoadError(err.message);
