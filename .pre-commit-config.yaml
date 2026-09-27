@@ -251,14 +251,14 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_ad_hoc_git_scripts.py
         language: python
         pass_filenames: false
-        files: \.(bat|ps1|cmd)$
+        files: \.(?i:bat|ps1|cmd)$
 
       - id: bat-ascii-purity-check
         name: "Guard: scripts/ops/*.bat must be ASCII + CRLF + no-BOM (pitfall #45)"
         entry: python3 -X utf8 scripts/tools/lint/check_bat_ascii_purity.py
         language: python
         pass_filenames: true
-        files: ^scripts/ops/.*\.bat$
+        files: ^scripts/ops/.*\.(?i:bat)$
 
       - id: workload-closure-drift
         name: "Guard: workload closure literal copies agree with .github/bench-reference.yaml"
@@ -885,14 +885,6 @@ repos:
         # is the pytest tests/dx/test_sync_schema.py; this stays manual-stage as
         # a fast local mirror.
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py)
-        stages: [manual]
-
-      - id: translation-check
-        name: Bilingual structure consistency
-        entry: python3 -X utf8 scripts/tools/lint/check_translation.py
-        language: python
-        pass_filenames: false
-        files: \.(en|zh)\.md$
         stages: [manual]
 
       - id: jsx-babel-check

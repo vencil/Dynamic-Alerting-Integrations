@@ -69,6 +69,12 @@ from _lint_helpers import (  # noqa: E402
 
 EXTS = {".bat", ".ps1", ".cmd"}
 
+
+def is_windows_script(name: str) -> bool:
+    """Case-insensitively: Windows runs ``FOO.BAT`` like ``foo.bat`` (#2196)."""
+    lowered = name.lower()
+    return any(lowered.endswith(ext) for ext in EXTS)
+
 # Repo-relative POSIX paths. Anything whose path starts with one of these
 # prefixes is considered a sanctioned location for Windows shell scripts.
 ALLOWLIST_DIRS = (
@@ -101,15 +107,17 @@ SKIP_ANY = {
 
 def scan_full(repo: Path) -> list[Path]:
     """Full-tree scan: return list of offending files (repo-relative)."""
+    # ⛔ Not ``rglob(f"*{ext}")``: on POSIX that glob is case-sensitive, so
+    # ``evil.BAT`` was never listed (#2196).
     offending: list[Path] = []
-    for ext in EXTS:
-        for candidate in repo.rglob(f"*{ext}"):
-            parts = candidate.relative_to(repo).parts
-            if any(p in SKIP_ANY for p in parts):
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_ANY]
+        for name in filenames:
+            if not is_windows_script(name):
                 continue
-            rel_posix = "/".join(parts)
-            if not is_allowlisted(rel_posix):
-                offending.append(candidate.relative_to(repo))
+            rel = Path(dirpath, name).relative_to(repo)
+            if not is_allowlisted(rel.as_posix()):
+                offending.append(rel)
     return sorted(offending)
 
 
@@ -125,7 +133,7 @@ def scan_diff(repo: Path, base: str) -> list[Path]:
     offending: list[Path] = []
     for rel in diff_changed_paths(base, repo):
         # Only check Windows shell scripts
-        if not any(rel.endswith(ext) for ext in EXTS):
+        if not is_windows_script(rel):
             continue
         # Skip sandbox / vendored dirs. git lists paths with "/" only; a
         # backslash is part of a file name here, so splitting on it would let
