@@ -98,7 +98,7 @@ lang: zh
 ## M
 
 **Maintenance Mode（維護模式）**
-:   三態之一。`_state_maintenance` 設定後，產生 sentinel alert 觸發 Alertmanager inhibit 抑制該租戶所有告警。支援 `expires` 自動失效與 `recurring[]` 排程式維護窗口。
+:   三態之一。`_state_maintenance` 設定後，exporter 輸出 `user_state_filter{filter="maintenance"} 1`，rule pack 以 `unless on(tenant) (…)` 在 PromQL 層消滅該租戶的告警：不觸發、不記錄進 TSDB、不通知。與 Silent Mode（告警照常觸發、只擋通知）不同。支援 `expires` 自動失效與 `recurring[]` 排程式維護窗口。
 
 **Migration Toolkit（遷移工具組）**
 :   協助既有 Prometheus 環境遷入本平台的工具集合（`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py` 等）。見 `docs/migration-toolkit-installation.md`。
@@ -185,7 +185,7 @@ lang: zh
 :   指**配置層**的三種取值：Custom Value（自訂值）/ Omitted（省略 → 採 `_defaults.yaml` 的 `defaults:` 預設）/ Disable（`"disable"` → 不輸出）。⚠️ **三態只適用有平台預設的 key**：列在 `optional_overrides:` 的宣告 key 沒有值可繼承，省略＝沒有值＝不輸出，只有「填值 / 不填」兩態。詳見 [Config-Driven 設計](design/config-driven.md) §2.1。⚠️ 與「三態運營模式」是**不同概念**，勿以單詞「三態」混用。
 
 **Three-State Operational Model（三態運營模式）**
-:   指**運營層**的三種狀態：Normal / Silent / Maintenance，透過 Sentinel Alert + Alertmanager Inhibit 實現，均支援 `expires` 自動失效。詳見 [Config-Driven 設計](design/config-driven.md) §2.7。
+:   指**運營層**的三種狀態：Normal / Silent / Maintenance。Silent 透過 Sentinel Alert + Alertmanager Inhibit 擋通知；Maintenance 在 PromQL 層以 `unless` 消滅告警。兩者均支援 `expires` 自動失效。詳見 [Config-Driven 設計](design/config-driven.md) §2.7。
 
 **TSDB (Time Series Database)**
 :   Prometheus 的時間序列資料庫。本平台的 Severity Dedup 設計確保 TSDB 永遠保留完整數據（critical + warning），只在通知層面去重。
