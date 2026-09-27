@@ -82,9 +82,10 @@ _TOOLS = {
                                  True, False),
 }
 
-# A tool whose (rc, file named) is the same for a clean tree and a syntax
-# error — its pre-check names every file and exits 0 either way — is told
-# apart by the marker its "cannot read this file" line prints.
+# A tool whose (rc, file named) could be the same for a clean tree and a
+# syntax error — its pre-check names every file — is told apart by the marker
+# its "cannot read this file" line prints. (Since #2179 its pre-check also
+# exits 1 on an unreadable file; the marker still pins which path it took.)
 _UNREADABLE_MARKER = {
     "offboard_tenant_precheck": "無法讀取",
 }

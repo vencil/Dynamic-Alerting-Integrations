@@ -2236,7 +2236,7 @@ Without `--execute` it is already a preview; there is no separate dry-run flag.
 
 **Output**
 
-A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
+A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. A config file that cannot be read is named and fails the pre-check (the cross-reference check cannot see inside it). With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
 
 **Examples**
 
@@ -2259,8 +2259,8 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success; without `--execute` only the pre-check runs and **a failed pre-check is still 0** |
-| `1` | Pre-check failed under `--execute` (tenant not found, etc.) or I/O failed |
+| `0` | Success: the pre-check passed or only warned (e.g. a cross-file reference); with `--execute` the tenant file was deleted |
+| `1` | The pre-check failed (a ❌ item such as the tenant file not found or a config file that cannot be read, named in the report), with or without `--execute`; or I/O failed (#2179) |
 | `2` | Caller error: only arguments argparse rejects (missing tenant positional, unknown flag) |
 
 ---
@@ -2719,7 +2719,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
 | 1 | guard found errors — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
-| 3 | a YAML file in `--scope` whose name does not start with `_`, or the `_defaults.yaml` in a resolved tenant's chain, that the exporter cannot decode (listed in the report's "Files the exporter cannot parse" section, paths relative to `--config-dir`); fix them and re-run. A `_defaults.yaml`, or a tenant file that only fails while a tenant is being resolved, stops the run before any tenant is checked and only that first file is listed; re-run after fixing it to see the next one. Takes precedence over 1, and replaces the "vacuously safe" 0 when such files are all the scope holds (#2123) |
+| 3 | files the exporter drops whole when it loads this tree (the same verdict as the `parseFailed` list the exporter's `LoadDir` returns), limited to the ones that bear on this run: files in `--scope`, and `_`-prefixed files in the directories above `--scope` (up to and including the `--config-dir` root), e.g. the root `_defaults.yaml`, `_platform.yaml`, `_profiles.yaml`. A file the exporter keeps while skipping one key in it is not included. Independent of `--cardinality-limit`. Listed in the report's "Files the exporter cannot parse" section (paths relative to `--config-dir`); fix them and re-run. A `_defaults.yaml` in a tenant's chain, or a tenant file that only fails while a tenant is being resolved, stops the run before any tenant is checked and only that first file is listed; re-run after fixing it to see the next one. Takes precedence over 1, and replaces the "vacuously safe" 0 when the scope has no tenant that could be checked (#2123, #2179) |
 
 **Examples**
 

@@ -53,6 +53,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -73,9 +74,11 @@ type ScopedTenants struct {
 	// Useful for CLI output ("scanned 12 files, found 47 tenants").
 	SourceFiles []string
 
-	// ParseFailed is every config file at-or-below the scope whose bytes
-	// the exporter's decode REJECTS (TreeFile.ParseFailed), as root-relative
-	// slash paths, sorted; nil when there are none (#2123).
+	// ParseFailed is every file the exporter's own load of this tree drops
+	// (LoadDir's parseFailed — FlatBuild.ParseFailed) that bears on the
+	// scope: at-or-below it, or a `_` file in a directory above it. Root-
+	// relative slash paths, sorted; nil when there are none (#2123, #2179).
+	// See scopeParseFailed.
 	//
 	// ⛔ Not an error of ScopeEffective, on purpose: the walker skips such a
 	// file and serves the rest of the tree, and callers that mirror the
@@ -175,19 +178,18 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// does not. A hidden scope yields zero tenants: the walker prunes hidden
 	// directories, so no kept file lives under it.
 	inScope := make(map[string]struct{})
-	var parseFailed []string
 	for _, f := range scan.Files {
 		if !pathAtOrBelow(f.AbsPath, absScope, rel == ".") {
 			continue
-		}
-		if f.ParseFailed {
-			parseFailed = append(parseFailed, f.RelKey)
 		}
 		for _, id := range f.TenantIDs {
 			inScope[id] = struct{}{}
 		}
 	}
-	sort.Strings(parseFailed)
+	parseFailed, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	if err != nil {
+		return nil, err
+	}
 	if len(inScope) == 0 {
 		return &ScopedTenants{ParseFailed: parseFailed}, nil
 	}
@@ -236,6 +238,52 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	out.SourceFiles = files
 
 	return out, nil
+}
+
+// scopeParseFailed is ScopedTenants.ParseFailed: the files the exporter's own
+// load of this scan drops (FlatBuild.ParseFailed via loadDirBuild — the list
+// LoadDir returns as parseFailed), kept when they bear on the scope (#2179).
+//
+// ⛔ ONE VERDICT. Which files count as broken is the exporter's build's
+// answer, never re-judged here: a root `_defaults.yaml` with a type error, a
+// root `_platform.yaml` / `_profiles.yaml` the decode rejects, a nested
+// `_defaults.yaml` with a syntax error, a tenant file the walker rejected.
+// A nested `_defaults.yaml` whose values have the wrong type is NOT in the
+// list — the exporter skips that key and keeps the file.
+//
+// scopeRel is the scope relative to the root, slash-separated ("." = whole
+// tree). A dropped file bears on the scope when it lies at-or-below it, or it
+// is a `_` file in a directory above it (the root's platform files, a chain
+// `_defaults.yaml`) — those shape every tenant under the scope.
+func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
+	if len(scan.Files) == 0 {
+		return nil, nil // the exporter refuses an empty tree; nothing was dropped
+	}
+	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, key := range built.ParseFailed {
+		if bearsOnScope(key, scopeRel) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// bearsOnScope: key (a root-relative slash scan key) at-or-below scopeRel, or
+// a `_` file in a directory that is an ancestor of scopeRel.
+func bearsOnScope(key, scopeRel string) bool {
+	if scopeRel == "." || strings.HasPrefix(key, scopeRel+"/") {
+		return true
+	}
+	dir := path.Dir(key)
+	if !strings.HasPrefix(scanKeyBase(key), "_") {
+		return false
+	}
+	return dir == "." || strings.HasPrefix(scopeRel+"/", dir+"/")
 }
 
 // pathAtOrBelow reports whether p lies under dir (both Clean absolute
