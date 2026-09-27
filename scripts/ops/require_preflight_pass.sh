@@ -245,13 +245,22 @@ if [ -n "$_here" ]; then
     printf -v _here_q '%q' "$_here"
     _checkout_hint="    (cd ${_here_q} && make pr-preflight)"
 else
-    # ⛔ `&&` before the clean-up: a failed `add` (path already there) must not
+    # ⛔ `&&` before the trap: a failed `add` (path already there) must not
     # remove what is there. `$$` keeps two pushes' paths apart.
+    # ⛔ An EXIT trap, not a clean-up after the command: Ctrl-C or SIGTERM mid
+    # preflight skips a following command, and the throwaway is left behind
+    # (#2038). The subshell's status is preflight's; the trap does not change it.
+    # ⛔ `cd` in a nested subshell: the trap's shell must not stand in the tree
+    # it removes (Windows refuses to delete a process's cwd). ⚠️ NOT GUARDED:
+    # Linux deletes a cwd without complaint, so no test here can see this.
+    # ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
     _common="$(CDPATH='' cd "$git_dir" && pwd)"
     _tmp_root="$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
     printf -v _common_q '%q' "$_common"
     printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
-    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && { (cd ${_tmp_wt_q} && make pr-preflight); r=\$?; git -C ${_common_q} worktree remove --force ${_tmp_wt_q}; exit \$r; })"
+    # Quoted twice: the shell you paste into reads it once, the trap once more.
+    printf -v _remove_q '%q' "git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && make pr-preflight))"
 fi
 
 # No marker — block with actionable instructions.
