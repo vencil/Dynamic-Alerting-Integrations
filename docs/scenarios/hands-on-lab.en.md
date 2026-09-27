@@ -14,6 +14,8 @@ lang: en
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 
+> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows three differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); and `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears).
+
 > 💡 **Want to see the product running in ~1 minute instead of typing CLI commands?** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) (recommended first stop: da-portal UI in the browser + a real firing alert, no K8s; `⏱️ <1 min · 🟢 Docker only`). **This lab** focuses on the hands-on **da-tools CLI workflow** (config / routing / blast radius; `⏱️ 30–45 min · 🟡 Medium (CLI)`) — complementary, different depth, not either/or.
 
 ## Lab Overview
@@ -305,20 +307,34 @@ docker run --rm \
   generate-routes --config-dir /data/conf.d --validate
 ```
 
-Expected output summary:
+Expected output (first run):
 
 ```
-Generated routes for 5 tenants:
-  prod-mariadb  → slack     (group_wait: 30s, repeat: 4h)
-  prod-redis    → slack     (profile: team-sre-apac)
-  prod-kafka    → pagerduty (group_wait: 1m, repeat: 12h)
-  staging-pg    → email     (group_wait: 5m, repeat: 24h)
-  prod-oracle   → pagerduty (profile: domain-finance-tier1)
-  + 5 inhibit rules (severity dedup)
-Written: /data/output/alertmanager-routes.yaml
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
 ```
 
-Each tenant gets its own route block, with receiver, group_by, timing parameters, and inhibit rules for severity dedup.
+Second run (`--validate`):
+
+```
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+OK: all configs valid
+```
+
+Each tenant gets its own block under `route.routes` in `.output/alertmanager-routes.yaml` (`matchers: tenant="…"`), with 5 `receivers` and 5 `inhibit_rules`. Against the Exercise 2 settings:
+
+| Tenant | receiver | group_wait | repeat_interval | From |
+|---|---|---|---|---|
+| prod-kafka | pagerduty | 1m | 12h | tenant `_routing` |
+| prod-mariadb | slack | 30s | 4h | tenant `_routing` |
+| prod-oracle | pagerduty | 30s | 1h | profile `domain-finance-tier1` |
+| prod-redis | slack | 30s | 4h | profile `team-sre-apac` |
+| staging-pg | email | 5m | 24h | tenant `_routing` |
 
 **Checkpoint**: Find the `inhibit_rules` section. How does it prevent duplicate warnings when a critical alert fires?
 
@@ -335,7 +351,7 @@ This shows the four-layer merge for prod-redis:
 1. **Platform defaults** → webhook, 30s group_wait
 2. **Routing profile** `team-sre-apac` → overrides to slack, 30s wait, 4h repeat
 3. **Tenant _routing** → (none, uses profile)
-4. **Platform enforced** → NOC copy
+4. **Platform enforced** (`_routing_enforced` in `_defaults.yaml`) → (not set: the `_defaults.yaml` init generates has no such layer, so the output shows `(empty)`. When the platform team sets it, it inserts a `continue: true` platform route ahead of every tenant route — for example so the NOC always gets a copy)
 
 **Checkpoint**: What receiver_type does prod-redis resolve to? Which layer set it?
 
@@ -360,12 +376,37 @@ The diff shows exactly which tenant and metrics are affected — this is what ge
 
 ## Exercise 7: Three-State Operations
 
-Examine `staging-pg.yaml`:
+`staging-pg.yaml` sets two operational states at once, and they do different things:
 
-- **`_state_maintenance`**: Alerts still evaluate but route to maintenance-specific handling. The `expires` timestamp means the state auto-reverts to normal after that time.
-- **`_silent_mode`**: Alerts are fully suppressed — no notifications sent. Also has `expires` for safety.
+| State | Alert fires | Recorded in TSDB | Notification sent | Blocked by |
+|---|---|---|---|---|
+| `_silent_mode` (here `target: warning`) | ✅ | ✅ | ❌ (warning only) | Alertmanager inhibit |
+| `_state_maintenance` | ❌ | ❌ | ❌ | Prometheus (the rule packs' `unless`) |
 
-Try removing `_state_maintenance` and re-running validate — you'll see the tenant return to normal routing.
+Both carry `expires` and revert to normal on their own when it passes. The full behavior matrix is in [Config-Driven Design §2.7](../design/config-driven.en.md).
+
+Both states take effect only while alerts are being evaluated: they change nothing in the output of `validate-config`, `explain-route` or `generate-routes`. To see them, point threshold-exporter at this `conf.d/` and look at the flag metrics it exposes:
+
+```bash
+docker run --rm -d --name da-lab-exporter \
+  -p 8080:8080 \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/threshold-exporter:latest \
+  --config-dir /data/conf.d
+
+curl -s localhost:8080/metrics | grep -E '^user_(state_filter\{filter="maintenance"|silent_mode)'
+```
+
+Expected output:
+
+```
+user_silent_mode{target_severity="warning",tenant="staging-pg"} 1
+user_state_filter{filter="maintenance",severity="info",tenant="staging-pg"} 1
+```
+
+Now delete the whole `_state_maintenance` block (two lines) from `staging-pg.yaml`, wait about 30 seconds (the exporter reloads every 30 seconds by default), and run the same `curl` again: the `maintenance` line is gone and the silent-mode line stays. The rule packs read this metric through `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, so staging-pg's alerts fire again; warning notifications are still held back by silent mode, while critical ones go out.
+
+When you are done, stop the exporter: `docker stop da-lab-exporter` (`--rm` removes the container too).
 
 ## Exercise 8: Domain Policy Test
 

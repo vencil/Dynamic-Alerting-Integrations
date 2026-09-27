@@ -14,6 +14,8 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
+> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到三處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）。
+
 > 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
 
 ## 實驗概覽
@@ -300,20 +302,34 @@ docker run --rm \
   generate-routes --config-dir /data/conf.d --validate
 ```
 
-預期輸出摘要：
+預期輸出（第一次執行）：
 
 ```
-Generated routes for 5 tenants:
-  prod-mariadb  → slack     (group_wait: 30s, repeat: 4h)
-  prod-redis    → slack     (profile: team-sre-apac)
-  prod-kafka    → pagerduty (group_wait: 1m, repeat: 12h)
-  staging-pg    → email     (group_wait: 5m, repeat: 24h)
-  prod-oracle   → pagerduty (profile: domain-finance-tier1)
-  + 5 inhibit rules (severity dedup)
-Written: /data/output/alertmanager-routes.yaml
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
 ```
 
-每個 tenant 都有獨立的路由區塊，包含 receiver、group_by、timing 參數和 severity dedup 的 inhibit rules。
+第二次執行（`--validate`）：
+
+```
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+OK: all configs valid
+```
+
+每個租戶在產出檔 `.output/alertmanager-routes.yaml` 的 `route.routes` 底下各有一段（`matchers: tenant="…"`），`receivers` 與 `inhibit_rules` 各 5 筆。對照練習 2 的設定：
+
+| 租戶 | receiver | group_wait | repeat_interval | 來自 |
+|---|---|---|---|---|
+| prod-kafka | pagerduty | 1m | 12h | 租戶 `_routing` |
+| prod-mariadb | slack | 30s | 4h | 租戶 `_routing` |
+| prod-oracle | pagerduty | 30s | 1h | profile `domain-finance-tier1` |
+| prod-redis | slack | 30s | 4h | profile `team-sre-apac` |
+| staging-pg | email | 5m | 24h | 租戶 `_routing` |
 
 **檢查點**：找到 `inhibit_rules` 區段。它如何防止 critical 和 warning 的重複通知？
 
@@ -330,7 +346,7 @@ docker run --rm \
 1. **平台預設** → webhook, 30s group_wait
 2. **Routing profile** `team-sre-apac` → 覆蓋為 slack, 30s wait, 4h repeat
 3. **Tenant _routing** → （未設定，使用 profile）
-4. **Platform enforced** → NOC 副本
+4. **Platform enforced**（`_defaults.yaml` 的 `_routing_enforced`）→ （未設定：init 產生的 `_defaults.yaml` 沒有這一層，輸出顯示 `(empty)`。平台團隊設定後，它會在所有租戶路由之前插入一條 `continue: true` 的平台路由，例如讓 NOC 一律收到副本）
 
 **檢查點**：prod-redis 最終 resolve 的 receiver_type 是什麼？哪一層設定的？
 
@@ -353,12 +369,37 @@ Diff 精確顯示哪個 tenant、哪些 metric 受影響 — 這就是 CI 中會
 
 ## 練習 7：三態運營
 
-檢查 `staging-pg.yaml`：
+`staging-pg.yaml` 同時設了兩種運營狀態，效果不一樣：
 
-- **`_state_maintenance`**：告警仍然評估但路由到維護處理。`expires` 時間戳代表該狀態在到期後自動恢復。
-- **`_silent_mode`**：告警完全抑制 — 不發送通知。同樣有 `expires` 安全機制。
+| 狀態 | 告警觸發 | 記錄進 TSDB | 送出通知 | 由誰擋下 |
+|---|---|---|---|---|
+| `_silent_mode`（本例 `target: warning`） | ✅ | ✅ | ❌（只擋 warning） | Alertmanager inhibit |
+| `_state_maintenance` | ❌ | ❌ | ❌ | Prometheus（rule pack 的 `unless`） |
 
-試著移除 `_state_maintenance` 再跑驗證 — 你會看到 tenant 恢復正常路由。
+兩者都帶 `expires`，到期自動恢復正常。行為矩陣的完整說明見 [Config-Driven 設計 §2.7](../design/config-driven.md)。
+
+這兩種狀態在告警執行期間才生效：`validate-config`、`explain-route`、`generate-routes` 的輸出都不會因為它們改變。要看到它們，讓 threshold-exporter 讀這個 `conf.d/`，看它輸出的旗標 metric：
+
+```bash
+docker run --rm -d --name da-lab-exporter \
+  -p 8080:8080 \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/threshold-exporter:latest \
+  --config-dir /data/conf.d
+
+curl -s localhost:8080/metrics | grep -E '^user_(state_filter\{filter="maintenance"|silent_mode)'
+```
+
+預期輸出：
+
+```
+user_silent_mode{target_severity="warning",tenant="staging-pg"} 1
+user_state_filter{filter="maintenance",severity="info",tenant="staging-pg"} 1
+```
+
+接著刪掉 `staging-pg.yaml` 裡整個 `_state_maintenance` 區塊（兩行），等約 30 秒（exporter 預設每 30 秒重新載入），再跑一次同一個 `curl`：`maintenance` 那一行消失，靜音那一行還在。rule pack 以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 讀這個 metric，所以 staging-pg 的告警會重新觸發；warning 的通知仍被靜音擋著，critical 則會送出。
+
+做完後停掉 exporter：`docker stop da-lab-exporter`（`--rm` 會一併刪除容器）。
 
 ## 練習 8：Domain Policy 測試
 
