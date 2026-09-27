@@ -56,7 +56,7 @@ tenants:
   db-a:
     mysql_connections: "800"           # Custom: 自訂閾值
     mysql_threads_running: ""          # Default: 採用平台預設值
-    mariadb_replication_lag: "disable"  # Disable: 關閉此告警
+    mysql_replication_lag: "disable"   # Disable: 關閉此告警
     mysql_connections_critical: "1000"  # 多層嚴重度（_critical suffix）
     "redis_queue_length{queue='tasks'}": "500"  # 維度標籤篩選
 ```

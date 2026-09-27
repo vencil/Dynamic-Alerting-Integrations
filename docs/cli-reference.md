@@ -412,12 +412,15 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 選擇一種模式：
 
 1. **Mapping 模式**：`--mapping <file>`
-   mapping.csv 格式：
+   讀 `da-tools migrate` 在輸出目錄產生的 `prefix-mapping.yaml`，不接受 CSV（餵 CSV 會在載入時 traceback，結束碼 1）。檔案長這樣（實跑 `migrate` 取得）：
+   ```yaml
+   custom_mysql_global_status_threads_connected:
+     original_metric: mysql_global_status_threads_connected
+     alert_name: MySQLTooManyConnections
+     golden_match: null
+     golden_rule: null
    ```
-   old_rule,new_rule
-   mysql_connections,tenant:custom_mysql_connections:max
-   mysql_replication_lag,tenant:custom_mysql_replication_lag:max
-   ```
+   每一項產生一組比對：舊查詢是 `original_metric`，新查詢固定組成 `tenant:<key>:max`。migrate 對 rate 類規則產生的 recording rule 不是 `:max`（例如 `tenant:custom_mysql_global_status_slow_queries:sum`），這類比對組查不到新值，要改用 Query 模式逐條比對。
 
 2. **Query 模式**：`--old <query> --new <query>`
    直接指定兩組 PromQL
@@ -442,18 +445,20 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 **範例**
 
 ```bash
-da-tools validate --mapping mapping.csv
-da-tools validate --mapping mapping.csv --watch --interval 60 --rounds 1440
-da-tools validate --mapping mapping.csv --watch --auto-detect-convergence -o ./validation_output
+da-tools validate --mapping migration_output/prefix-mapping.yaml
+da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --interval 60 --rounds 1440
+da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功（任何收斂狀態） |
-| `1` | Prometheus 連線或查詢失敗 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
+| `0` | 全部比對組一致；`--watch --auto-detect-convergence` 時為已收斂 |
+| `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
+| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
+
+⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。
 
 ---
 
@@ -2960,7 +2965,7 @@ spec:
 
 ### Q: 如何指定多個 metric 用於 validate？
 
-**A**: 使用 `--mapping` CSV 檔案（格式：`old_rule,new_rule`）。詳見 [validate](#validate) 命令說明。
+**A**: 使用 `--mapping` 指向 `da-tools migrate` 產生的 `prefix-mapping.yaml`（不接受 CSV）。詳見 [validate](#validate) 命令說明。
 
 ### Q: blind-spot 與 analyze-gaps 有什麼區別？
 

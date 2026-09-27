@@ -12,9 +12,8 @@
 完全運作於 ZH-primary 模式；EN-primary 模式保留以支援未來若 trigger
 條件達成時的遷移（見 dev-rules.md §9b 與 testing-playbook §LL §12a Q4）。
 
-互補工具（三者互不重疊）：
+互補工具（兩者互不重疊）：
 - 本工具：管「骨架」— heading 數量與層級必須 1:1 對齊
-- check_translation.py：管「內容量」— 元素數量（code blocks/tables）20% 容差
 - check_bilingual_content.py：管「語言純度」— CJK 比例偵測
 
 v2.4.0 新增：解決 v2.3.0 release 過程中 cli-reference.en.md 缺少整個
