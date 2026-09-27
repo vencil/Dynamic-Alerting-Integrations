@@ -1383,11 +1383,11 @@ class TestRealRepo:
         green tree proves only that it looked at nothing."""
         keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
         # issue 1818 fixed the last live `python3 <script>.py` V1 and the last
-        # V2 in shadow-monitoring-cutover; those two shapes are pinned against
-        # the real parsers by test_the_retired_probe_shapes_still_judge_red.
-        for probe in [("V1", "maintenance-scheduler", "--timezone"),  # #1513
-                      ("V3", "lint", "--strict"),               # #1619
-                      ("V1", "shadow-verify", "--window")]:     # #1513, inline span only
+        # V2 in shadow-monitoring-cutover; the cli-reference batch (issue 1513 /
+        # 1619) fixed the last fenced `da-tools` V1, the last option-table V3
+        # and the last `docker run` continuation. Those shapes are pinned
+        # against the real parsers by test_the_retired_probe_shapes_still_judge_red.
+        for probe in [("V1", "shadow-verify", "--window")]:     # #1513, inline span only
             assert probe in keys, f"probe {probe} not measured; the whole run is void"
         # The inline-span carrier. This used to be proven by #1381's
         # migration-state.md prose, which is fixed now; staged-adoption-guide
@@ -1396,33 +1396,38 @@ class TestRealRepo:
                    and (f.verdict, f.command, f.token) == ("V1", "shadow-verify", "--window")
                    for f in result["findings"]), (
             "the inline-span carrier stopped seeing staged-adoption-guide.md (#1513)")
-        # The `docker run … <image ref> \` continuation carrier. This used to be
-        # proven by #1380's hands-on-lab line, which is fixed now; the zh page
-        # writes this command as bare `da-tools`, so pin the EN file, or the
-        # bare form alone would keep the probe green with the carrier blind.
-        assert any(f.file == "docs/cli-reference.en.md"
-                   and (f.verdict, f.command, f.token) == ("V1", "maintenance-scheduler", "--timezone")
-                   for f in result["findings"]), (
-            "the `docker run <image ref>` continuation carrier stopped seeing "
-            "cli-reference.en.md maintenance-scheduler (#1513)")
 
     def test_the_retired_probe_shapes_still_judge_red(self, tmp_path):
-        """The tree no longer carries a live instance of these two, so judge
-        the lines the docs used to teach against the REAL parsers and the REAL
-        COMMAND_MAP: a script-path command resolved to its subcommand (V1), and
-        a unique-prefix abbreviation argparse would silently accept (V2)."""
+        """The tree no longer carries a live instance of these, so judge the
+        lines the docs used to teach against the REAL parsers and the REAL
+        COMMAND_MAP: a script-path command resolved to its subcommand (V1), a
+        unique-prefix abbreviation argparse would silently accept (V2), a
+        `docker run … <image ref> \\` continuation (V1), and a phantom row in a
+        reference option table (V3)."""
         doc = tmp_path / "probe.md"
         doc.write_text(
             "```bash\n"
             "python3 scripts/tools/ops/batch_diagnose.py --prometheus http://p:9090 "
             "--check-shadow-removal\n"
             "python3 scripts/tools/ops/migrate_rule.py rules.yml --output out/\n"
+            "docker run --rm \\\n"
+            "  -v $(pwd)/conf.d:/etc/config:ro \\\n"
+            "  ghcr.io/vencil/da-tools:v2.9.0 \\\n"
+            "  maintenance-scheduler --config-dir /etc/config --timezone Asia/Taipei\n"
             "```\n", encoding="utf-8")
-        r = mod.scan(docs=[doc], reference_docs=(), repo_root=tmp_path, portal=[])
+        ref = tmp_path / "ref.md"
+        ref.write_text(
+            "#### lint\n\n**選項**\n\n| 選項 | 說明 | 預設值 |\n|------|------|--------|\n"
+            "| `--strict` | strict | false |\n"
+            "\n**結束碼**\n\n| 代碼 | 說明 |\n|------|------|\n"
+            "| `0` | ok |\n| `1` | findings |\n| `2` | caller |\n", encoding="utf-8")
+        r = mod.scan(docs=[doc], reference_docs=(ref,), repo_root=tmp_path, portal=[])
         assert r.fatal == [], r.fatal
         assert {(f.verdict, f.command, f.token) for f in r.findings} == {
             ("V1", "batch-diagnose", "--check-shadow-removal"),
-            ("V2", "migrate", "--output")}
+            ("V2", "migrate", "--output"),
+            ("V1", "maintenance-scheduler", "--timezone"),
+            ("V3", "lint", "--strict")}
 
     @_needs_node
     def test_the_portal_carrier_judged_the_real_playground(self, result):

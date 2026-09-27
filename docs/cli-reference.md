@@ -245,9 +245,9 @@ da-tools check-alert MariaDBHighConnections db-a
 
 #### diagnose
 
-對單一 tenant 執行全面健康檢查。
+對單一 tenant 執行健康檢查：MariaDB Pod 狀態、exporter 的 `mysql_up`、運營模式（維護／靜音），以及給了 `--config-dir` 時的 profile 與繼承鏈。
 
-**用途**：驗證 tenant 配置、metric 收集、alert 規則完整性。
+**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 檢查固定查租戶同名 namespace 裡 `app=mariadb` 的 Pod，exporter 檢查固定查 `mysql_up{instance="<tenant>"}`，所以非 MariaDB 的租戶一定回 `status: error`（`Pod not found`）。
 
 **語法**
 
@@ -265,30 +265,27 @@ da-tools diagnose <tenant> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--config-dir <PATH>` | 租戶配置目錄（用於查詢 profile 資訊） | `./conf.d` |
-| `--namespace <NS>` | K8s namespace（用於查詢 ConfigMap） | `monitoring` |
+| `--config-dir <PATH>` | 租戶配置目錄；給了才查 profile 與繼承鏈 | （無） |
+| `--show-inheritance` | 只印完整的繼承鏈解析（需要 `--config-dir`） | false |
+| `--json` | JSON 輸出。本來就只輸出 JSON，接受這個旗標只為相容 | true |
+
+Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選項。
 
 **輸出**
 
-JSON 格式健康檢查報告。
+一行 JSON。健康時只有兩個欄位：
 
 ```json
-{
-  "status": "healthy",
-  "tenant": "db-a",
-  "profile": "standard-mariadb",
-  "checks": {
-    "config": "ok",
-    "metrics": "ok",
-    "alerts": "ok"
-  },
-  "details": {
-    "config_source": "threshold-config ConfigMap",
-    "metric_count": 42,
-    "alert_count": 18
-  }
-}
+{"status": "healthy", "tenant": "db-a"}
 ```
+
+有問題時列出 `issues` 與最近的錯誤 log：
+
+```json
+{"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
+```
+
+租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。
 
 **範例**
 
@@ -300,9 +297,9 @@ da-tools diagnose db-a --config-dir ./conf.d
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 健康（所有檢查通過） |
-| `1` | 一項或多項檢查失敗 |
-| `2` | 參數錯誤或連線失敗 |
+| `0` | 檢查完成：`status` 是 `healthy` 或 `error` 都是 0，要判斷健康請讀輸出的 `status` |
+| `1` | 環境裡沒有 `kubectl` 時，工具以 Python traceback 結束（已知問題，追蹤於 issue 1513） |
+| `2` | 參數錯誤：缺 tenant，或 `--show-inheritance` 沒配 `--config-dir` |
 
 ---
 
@@ -462,46 +459,49 @@ da-tools validate --mapping mapping.csv --watch --auto-detect-convergence -o ./v
 
 #### cutover
 
-Shadow Monitoring 一鍵切換：停止舊規則、啟用新規則、驗證健康。
+Shadow Monitoring 一鍵切換（migrate／shadow 流程的最後一步）：依序停止 shadow monitor Job、刪除舊 Recording Rules、移除 shadow label 與 Alertmanager 攔截，最後確認租戶的閾值指標存在。
 
-**用途**：遷移最後一步，自動化完整切換流程。
+**用途**：遷移最後一步，自動化完整切換流程。只適用 migrate／shadow 流程；它要刪、要改的物件（`shadow-monitor` Job、`prometheus-rules-old` ConfigMap、`migration_status` label）要由那條流程產生。
 
 **語法**
 
 ```bash
-da-tools cutover --tenant <name> [options]
+da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 ```
 
 **必需參數**
 
 | 參數 | 說明 |
 |------|------|
-| `--tenant <NAME>` | Tenant ID |
+| `--readiness-json <FILE>` | `validate_migration --auto-detect-convergence` 產出的 `cutover-readiness.json` |
+| `--tenant <NAME>` | Tenant ID（用於切換後的健康檢查） |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--readiness-json <FILE>` | validate --auto-detect-convergence 產出的 JSON | （可選） |
-| `--dry-run` | 預覽切換步驟，不做任何變更 | false |
-| `--force` | 跳過 readiness 檢查，直接執行 | false |
+| `--dry-run` | 印出會執行的 `kubectl` 命令，不做任何變更 | false |
+| `--force` | readiness JSON 的 `ready` 為 false 也照樣切換；`--readiness-json` 仍然必填 | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
+| `--json-output` | 另在 stdout 印一份 JSON 報告 | false |
 
 **自動化步驟**
 
-1. 驗證 readiness（若有提供）
-2. 停止 Shadow Monitor Job
-3. 移除舊 Recording Rules
-4. 移除 `migration_status: shadow` label
-5. 移除 Alertmanager shadow route
-6. 執行 `check-alert` + `diagnose` 驗證
+0. 讀 readiness JSON：缺欄位或讀不到即中止；`ready` 為 false 時中止（除非 `--force`）
+1. `kubectl delete job shadow-monitor`
+2. `kubectl delete configmap prometheus-rules-old`
+3. `kubectl label configmap prometheus-rules migration_status-`
+4. `kubectl label configmap alertmanager-config migration_status-`
+5. 查詢 `count(user_threshold{tenant="<tenant>"})`，確認租戶的閾值指標存在
+
+工具沒有回退選項；任一步失敗時會指向 `shadow-monitoring-sop.md` §7.2 的手動回退步驟。
 
 **範例**
 
 ```bash
-da-tools cutover --tenant db-a --dry-run
-da-tools cutover --tenant db-a --readiness-json cutover-readiness.json
-da-tools cutover --tenant db-a --force
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --dry-run
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 ```
 
 **結束碼**
@@ -509,8 +509,8 @@ da-tools cutover --tenant db-a --force
 | 代碼 | 說明 |
 |------|------|
 | `0` | 切換成功 |
-| `1` | Readiness 檢查失敗 |
-| `2` | 切換過程中發生錯誤 |
+| `1` | readiness 顯示未就緒（沒帶 `--force`），或某個切換步驟失敗 |
+| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 讀不到或缺欄位、Prometheus 連不到、找不到 `kubectl` |
 
 ---
 
@@ -566,9 +566,9 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 
 #### maintenance-scheduler
 
-評估排程式維護窗口（`_state_maintenance.recurring[]` 中的 cron 表達式），自動產出 Alertmanager silence YAML。
+評估 `_state_maintenance.recurring[]` 的排程，對目前落在維護窗口內的租戶，在 Alertmanager 建立 silence。
 
-**用途**：自動化排程式維護窗口的 silence 建立；與 CronJob 配套。
+**用途**：自動化排程式維護窗口；設計成每 5 分鐘跑一次的 K8s CronJob。
 
 **語法**
 
@@ -586,28 +586,31 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <FILE>` | 輸出至 YAML 檔案 | stdout |
-| `--timezone <TZ>` | 時區（IANA 格式） | `UTC` |
-| `--dry-run` | 僅顯示要產出的 silence，不寫入 | false |
+| `--alertmanager <URL>` | Alertmanager base URL；給了才會真的建立 silence，不給只印報告 | （無） |
+| `--pushgateway <URL>` | 把執行結果推到 Pushgateway（`--dry-run` 時不推） | （無） |
+| `--dry-run` | 只印報告，不建立 silence | false |
+| `--json-output` | 另在 stdout 印一行 `{"created", "skipped", "errors"}` | false |
+
+cron 一律以 **UTC** 解讀，指定時區的選項尚未實作；例如台北時間每天 02:00 要寫成 `0 18 * * *`。輸出也不是 silence YAML 檔，工具直接呼叫 Alertmanager API。
 
 **輸出**
 
-Alertmanager silence YAML（可直接餵入 Alertmanager API 或 kubectl apply）。
+stderr 列出每個排程目前是否在窗口內，最後一行是 `Summary: N created, N skipped, N errors`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ 沒給 `--alertmanager` 或帶 `--dry-run` 時，`created` 是「會建立」的數量，實際沒有建立（已知問題，追蹤於 issue 1513）。
 
 **範例**
 
 ```bash
 da-tools maintenance-scheduler --config-dir ./conf.d --dry-run
-da-tools maintenance-scheduler --config-dir ./conf.d --timezone Asia/Taipei -o silences.yaml
+da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alertmanager:9093
 ```
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 配置目錄無效 |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `0` | 成功（已建立、已存在或不需要 silence） |
+| `1` | 至少一個 silence 建立失敗 |
+| `2` | 呼叫端錯誤：`--config-dir` 不存在、缺少 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
 
@@ -1644,39 +1647,40 @@ da-tools runtime-audit --runtime-json rules.json --json
 **語法**
 
 ```bash
-da-tools rule-pack-split --rule-packs-dir <dir> [options]
+da-tools rule-pack-split [--rule-packs-dir <dir>] [options]
 ```
-
-**必需參數**
-
-| 參數 | 說明 |
-|------|------|
-| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output-dir <DIR>` | 輸出目錄 | `./split-output` |
-| `--scenario` | Federation 場景（A / B） | `B` |
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
+| `--output-dir <DIR>` | 輸出目錄 | `split-output/` |
+| `--operator` | 改輸出 PrometheusRule CRD YAML | false |
+| `--namespace <NS>` | CRD 的 namespace | `monitoring` |
+| `--gitops` | GitOps 模式（key 排序、輸出可重現） | false |
+| `--dry-run` | 不寫檔 | false |
+| `--json` | 以 JSON 印出報告 | false |
+
+工具只做 Scenario B 的 edge／central 拆分，選擇 Federation 場景的選項尚未實作；輸出格式改由 `--operator`／`--gitops` 決定。
 
 **輸出結構**
 
 ```
 split-output/
-├── edge/           (Part 1 - 邊端)
-│   └── part-1-*.yaml
-├── central/        (Parts 2+3 - 中央)
-│   ├── part-2-*.yaml
-│   └── part-3-*.yaml
-└── mapping.json    (edge → central 映射表)
+├── edge-rules/       (Part 1：正規化 recording rule)
+│   └── rule-pack-<db>.yaml
+└── central-rules/    (Parts 2+3：閾值正規化與告警)
+    └── rule-pack-<db>.yaml
 ```
+
+group 名稱沒有 `-normalization`／`-threshold-normalization`／`-alerts` 後綴時，工具依資料位置逐條分配（recording rule 到 edge、alert 到 central），並印一行 WARN。
 
 **範例**
 
 ```bash
 # Scenario B 分層拆分
-da-tools rule-pack-split --rule-packs-dir rule-packs/ --scenario B --output-dir federation-split/
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-split/
 ```
 
 ---
@@ -2019,13 +2023,12 @@ da-tools offboard <tenant> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--backup <DIR>` | 備份目錄 | `./offboarded/` |
-| `--cleanup-rules` | 移除相關 Alert 規則 | false |
-| `--dry-run` | 預覽將刪除的項目 | false |
+
+不帶 `--execute` 就是預覽，不需要另外的 dry-run 旗標。
 
 **輸出**
 
-備份 tenant 配置；可選地移除相關 Recording/Alert 規則。
+Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
 **範例**
 
@@ -2101,9 +2104,9 @@ docker run --rm \
 
 #### lint
 
-檢查 Custom Rule 的治理合規性（根據 `custom_` 前綴規則）。
+依平台治理政策（deny-list）檢查租戶自訂的 Prometheus 規則檔。
 
-**用途**：CI/CD lint 檢查；確保 custom rule 符合命名規範。
+**用途**：CI/CD lint 檢查；Tier 3 自訂規則進平台前的護欄（見 [Custom Rule Governance](custom-rule-governance.md) §4）。
 
 **語法**
 
@@ -2121,14 +2124,18 @@ da-tools lint <path...> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--strict` | Strict 模式：警告升級為錯誤 | false |
-| `--json-output` | JSON 結構化輸出 | false |
+| `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`） | 內建政策 |
+| `--ci` | 有 ERROR 級違規時以結束碼 1 結束 | false |
 
-**檢查項目**
+WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用 `--ci`，輸出是逐條的 `ERROR:`／`WARN:` 文字。
 
-- Metric 名稱是否以 `custom_` 開頭
-- Recording rule 名稱格式
-- Label 使用一致性
+**檢查項目**（內建政策的預設值，可用 `--policy` 覆寫）
+
+- 禁用函式：`holt_winters`、`predict_linear`、`quantile_over_time`
+- 禁用樣式：全通配 `=~".*"`、`without(tenant)`
+- 必備 label：`tenant`
+- range vector 最長 `1h`、rule group 的 `interval` 最長 `60s`
+- 缺 `owner` 或 `expiry` label 時出 WARN
 
 **範例**
 
@@ -2216,7 +2223,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 **語法**
 
 ```bash
-da-tools analyze-gaps --tenant-config <path> [options]
+da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 ```
 
 **必需參數**
@@ -2229,12 +2236,15 @@ da-tools analyze-gaps --tenant-config <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <FILE>` | 輸出至 CSV 或 JSON | stdout |
-| `--json-output` | JSON 格式 | false |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案 | （無） |
+| `--json` | stdout 只印 JSON | false |
+| `--metric-dictionary <FILE>` | 指標字典 | 映像內建的 `metric-dictionary.yaml` |
+
+⚠️ 在 repo 裡直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時，預設的字典路徑不存在，工具不會警告，而是退回名稱前綴猜測（`match_type: "prefix"`、`confidence: 0.7`）；請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。在 da-tools 映像裡跑不受影響（已知問題，追蹤於 issue 1513）。
 
 **輸出**
 
-CSV 列表，各行表示一條 custom rule 與對應 Rule Pack 的覆蓋關係。
+文字報告：依 Rule Pack 分組，列出每個 `custom_` 指標對應到哪個原始指標與比對方式，例如 `custom_mysql_global_status_threads_connected -> mysql_global_status_threads_connected (exact, 100%)`，最後統計可改用 Rule Pack 的數量。租戶配置裡沒有 `custom_` 指標時只印 `No custom_ metrics found in tenant configs.`。`--json` 時是一個陣列，每個 `custom_` 指標一筆，含 `tenant`、`custom_metric`、`original_metric`、`current_value`、`best_match_pack`、`match_type`、`confidence`、`recommendation` 等欄位。
 
 **範例**
 
@@ -2246,8 +2256,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 配置檔案無效 |
+| `0` | 成功。⚠️ `--tenant-config`／`--config-dir` 指到不存在的路徑也是 `0`，當成沒有 `custom_` 指標（已知問題，追蹤於 issue 1513） |
 | `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
@@ -2275,8 +2284,10 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--json-output` | JSON 結構化輸出 | false |
-| `--summary-only` | 僅輸出摘要，不詳列各個變更 | false |
+| `--format {markdown,json}` | 輸出格式 | `markdown` |
+| `--json-output` | 等同 `--format json` | false |
+
+只印摘要的選項尚未實作；報告最後一行就是摘要（`Summary: N tenant(s) changed, N metric change(s)`）。
 
 **變更分類**
 
@@ -2961,11 +2972,14 @@ spec:
 
 ### Q: 如何安全地執行 cutover？
 
-**A**:
-1. 執行 `validate --auto-detect-convergence` 確認收斂
-2. 執行 `cutover --dry-run` 預覽步驟
-3. 執行 `cutover` 正式切換
-4. 執行 `diagnose` + `batch-diagnose` 驗證健康
+**A**：`cutover` 只適用 migrate／shadow 流程（見 [Shadow Monitoring 切換](scenarios/shadow-monitoring-cutover.md)）：
+1. `validate_migration --watch --auto-detect-convergence` 持續比對，收斂時產出 `cutover-readiness.json`
+2. `da-tools shadow-verify convergence --readiness-json <檔>` 確認收斂
+3. `da-tools cutover --readiness-json <檔> --tenant <tenant> --dry-run` 預覽會執行的 `kubectl` 命令
+4. 拿掉 `--dry-run` 正式切換
+5. `da-tools batch-diagnose` 看各租戶的健康狀態（`diagnose` 只查 MariaDB Pod，其他類型的租戶用 `check-alert` 確認）
+
+工具沒有回退選項；失敗時照 `shadow-monitoring-sop.md` §7.2 手動回退。
 
 ---
 
