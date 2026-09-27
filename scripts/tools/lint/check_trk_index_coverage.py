@@ -39,7 +39,12 @@ TRK 在第 2 欄）。散文裡提到某個 TRK **不算**它被定義了——�
 clone 上實測（掃描面 = subject + trailer）：把 #1627 的六列拿掉之後，**commits
 面一個都找不到、回綠**；六個全部只由 titles 面看得到（TRK-363←#1545、365←#1558、
 366←#1564、367←#1571、368←#1574、380←#1757）。⇒ **只跑 commits 面的 pre-commit
-hook 對這一類是弱後備，不是偵測器**；真正的偵測要 titles 面（需 token，見上）。
+hook 對這一類是弱後備，不是偵測器**；titles 面由 ``.github/workflows/trk-index-coverage.yaml``
+在開票／改標題時跑（#2106）。
+
+⛔ 只認**三位數**號碼是刻意的，不是遺漏：表凍結在 TRK-392，新條目改用
+``TRK-<issue 號>``（ADR-019，#2106），那些號碼本身就指向 issue、不需要登記。所以
+表上沒有的三位數新號＝有人照舊看表手配號，正是要擋的東西。
 
 Usage
 -----
@@ -137,13 +142,23 @@ def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
     return hits, not shallow
 
 
+class TitlesTruncated(RuntimeError):
+    """翻到頁數上限仍未見空頁：沒翻到的標題不能當成掃過了。"""
+
+
+_MAX_PAGES = 40
+
+
 def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
     """issue / PR 標題裡的 TRK。⛔ search API 對本 token 回 403 ⇒ 列 issue 本地過濾。"""
     if not (_SLUG_RE.match(owner) and _SLUG_RE.match(repo)):
         raise ValueError(f"owner/repo 不是合法的 GitHub slug: {owner!r}/{repo!r}")
     hits: dict[str, str] = {}
     page = 1
-    while page <= 40:
+    while True:
+        # ⛔ 上限只防無窮迴圈；撞到上限時剩下的（最舊的）標題沒被看過，要回 rc 2。
+        if page > _MAX_PAGES:
+            raise TitlesTruncated(f"翻了 {_MAX_PAGES} 頁仍未到底")
         url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100&page={page}"
         # 述詞而不是註解：host 與 scheme 是常數前綴，argv 只能影響其後的路徑段，
         # 而那兩段已由 _SLUG_RE 收斂過。
@@ -231,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             hits = title_trks(args.owner, args.gh_repo, token)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                TitlesTruncated) as exc:
             print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{exc}）", file=sys.stderr)
             return 2
         for k, v in hits.items():

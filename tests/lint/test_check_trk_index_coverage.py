@@ -225,3 +225,55 @@ def test_owner_repo_slug_is_validated() -> None:
             mod.title_trks(bad, "repo", "token")
         with pytest.raises(ValueError):
             mod.title_trks("owner", bad, "token")
+
+
+# ---------------------------------------------------------------------------
+# #2106：titles 面翻頁上限
+# ---------------------------------------------------------------------------
+def _load_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_trk_mod_2106", _CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _FakeResp:
+    def __init__(self, payload: list) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self, *a):
+        body, self._body = self._body, b""
+        return body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a) -> None:
+        return None
+
+
+@pytest.mark.parametrize("pages_before_empty, expect_rc", [
+    (None, 2),  # 永遠還有下一頁：撞到上限，沒看過的標題不能當成掃過 ⇒ rc 2
+    (2, 1),     # 對照：第 3 頁是空頁 ⇒ 正常掃完，TRK-777 不在表上 ⇒ rc 1
+])
+def test_titles_page_cap_is_rc2_not_a_partial_scan(
+        tmp_path: Path, monkeypatch, capsys, pages_before_empty, expect_rc) -> None:
+    mod = _load_module()
+    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["chore: x"])
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=0):
+        calls["n"] += 1
+        if pages_before_empty is not None and calls["n"] > pages_before_empty:
+            return _FakeResp([])
+        return _FakeResp([{"number": calls["n"], "title": "TRK-777: x"}])
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("GH_TOKEN", "t")
+    rc = mod.main(["--repo", str(repo), "--surface", "titles", "--ci"])
+    assert rc == expect_rc, capsys.readouterr()
+    if expect_rc == 2:
+        assert calls["n"] == mod._MAX_PAGES
+

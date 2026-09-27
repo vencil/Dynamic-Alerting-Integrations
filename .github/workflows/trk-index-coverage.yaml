@@ -1,0 +1,54 @@
+name: TRK Index Coverage
+
+# #2106: the titles surface of check_trk_index_coverage.py, which pre-commit
+# (commits surface only) cannot see. New tracking items are numbered
+# TRK-<issue number> (ADR-019) and never need a table row; the tool only reads
+# three-digit numbers, so a red here means someone hand-allocated a new
+# three-digit TRK instead — caught at the moment the title is written.
+#
+# Triggers:
+#   * issues opened/edited — attributes the red to the issue that caused it.
+#   * pull_request on the three files that define the check — a PR changing
+#     the table or the tool is verified before it lands. Deliberately NOT on
+#     every PR: someone else's issue title would red an unrelated PR.
+#   * workflow_dispatch — manual re-check.
+# Not a required check. rc 2 (token missing / API failure / page cap hit)
+# fails the job the same as rc 1: "could not measure" never reports green.
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request:
+    paths:
+      - docs/internal/planning-id-mapping.md
+      - scripts/tools/lint/check_trk_index_coverage.py
+      - .github/workflows/trk-index-coverage.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  titles:
+    name: TRK index covers issue/PR titles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Check titles against the TRK index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_trk_index_coverage.py \
+            --surface titles --ci \
+            --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"

@@ -129,6 +129,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 ### TRK-300+ — post-migration 新分配（無 legacy 對映）
 
 > 此區段**不是 redirect**（無舊 ID 來源），而是 v2.8.1+ 直接以 `TRK-NNN` 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 `TRK ↔ GitHub issue` 快查。
+>
+> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §TD-NN / HA-NN / REG-NN → TRK-NNN 遷移）。**不要**再看本表取「下一號」；表上沒有的三位數新號會被 `check_trk_index_coverage.py` 擋下。
 
 | TRK | Issue | 主題 | Epic |
 |---|---|---|---|
