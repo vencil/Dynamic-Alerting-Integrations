@@ -194,8 +194,66 @@ paths:
           source: |
             curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
 
+  /api/v1/config/identity:
+    get:
+      summary: Identity of the Config Being Served (machine contract)
+      description: |
+        Which config bytes this exporter serves right now, and which files of
+        that version were left out because they did not parse. A machine-read
+        contract versioned by `schema` (bumped only when a field changes
+        meaning or goes away). Every field is read in the lock window of the
+        install that wrote it. Used by patch-config's post-write verification
+        (#2069). Also answers HEAD; other methods get 405.
+      operationId: getConfigIdentity
+      tags:
+        - Debug
+      responses:
+        '200':
+          description: The identity (also before any config is loaded, with loaded=false)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigIdentity'
+              example:
+                schema: 1
+                loaded: true
+                mode: directory
+                last_reload: "2026-09-27T01:02:03.456789Z"
+                config_hash: "cfc01496171b678f3d76cc3c1d5f52b2b30f3ef304bb20370ecda11782884383"
+                parse_failed: ["tenant-b.yaml"]
+        '405':
+          description: A method other than GET / HEAD
+
 components:
   schemas:
+    ConfigIdentity:
+      type: object
+      description: /api/v1/config/identity, schema 1
+      required: [schema, loaded, mode, last_reload, config_hash, parse_failed]
+      properties:
+        schema:
+          type: integer
+          enum: [1]
+        loaded:
+          type: boolean
+        mode:
+          type: string
+          enum: [directory, single-file]
+        last_reload:
+          type: string
+          description: Install time, UTC, RFC 3339 with nanoseconds; "" when nothing is loaded
+        config_hash:
+          type: string
+          description: |
+            Directory mode: SHA-256 over the per-file SHA-256 hex digests of the
+            files the exporter reads (not dot-prefixed, .yaml/.yml in any case),
+            concatenated in sorted relative-path order. Single-file mode: SHA-256
+            of the file's bytes. "" when nothing is loaded.
+        parse_failed:
+          type: array
+          description: Relative paths (sorted) of the files whose bytes in this version did not parse (those bytes were not taken in; in flat mode their tenants may still be served from the previous version); always empty in single-file mode
+          items:
+            type: string
     PrometheusMetric:
       type: object
       description: Prometheus metric in OpenMetrics text format

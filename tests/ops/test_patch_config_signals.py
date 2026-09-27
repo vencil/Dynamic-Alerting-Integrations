@@ -5,6 +5,10 @@ patch_config.py 以子行程（自己的 session）跑，所以 `os.kill`／`os.
 pytest。PATH 上的 fake `kubectl` 把 ConfigMap 放在檔案裡，每次 patch 讓
 `Last reload` 前進；`delay_<op>` 檔讓第 N 次某種呼叫睡一段時間，測試在 log 看到
 那次睡眠開始後才送信號——信號因此落在指定的那一步。
+
+這支 fake 的 `/api/v1/config/identity` 一律回 404（扮演 #2069 之前的 exporter），
+所以這裡量的是舊驗法那條路；identity 那條路的中斷由 `test_patch_config_inject.py`
+逐函式注入 KeyboardInterrupt 覆蓋。
 """
 import json
 import os
@@ -82,6 +86,9 @@ FAKE_KUBECTL = textwrap.dedent('''\
     elif a[:2] == ["get", "--raw"]:
         path = a[2].split("/proxy/", 1)[1]
         delay("raw")
+        if path == "api/v1/config/identity":  # an exporter older than #2069
+            sys.exit("Error from server (NotFound): the server could not find "
+                     "the requested resource")
         if path == "api/v1/config":
             print(f"Last reload:   g{gen()}")
         else:
@@ -169,8 +176,9 @@ SIGS = pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM],
 @needs_posix
 @SIGS
 def test_two_signals_back_to_back_during_verification_roll_back(tmp_path, sig):
-    r = Run(tmp_path, OLD, {"raw": "2 3"})  # 3rd raw = the first wait poll
-    r.wait_log("sleep raw 3")
+    # raw 1 = the identity probe (404), 2-3 = the snapshot, 4 = the first wait poll
+    r = Run(tmp_path, OLD, {"raw": "2 4"})
+    r.wait_log("sleep raw 4")
     r.signal(sig, n=2)
     rc, out, err, cm = r.finish()
     doc = _one_doc(out)
@@ -181,8 +189,8 @@ def test_two_signals_back_to_back_during_verification_roll_back(tmp_path, sig):
 @needs_posix
 @SIGS
 def test_a_burst_of_signals_is_absorbed(tmp_path, sig):
-    r = Run(tmp_path, OLD, {"raw": "2 3"})
-    r.wait_log("sleep raw 3")
+    r = Run(tmp_path, OLD, {"raw": "2 4"})
+    r.wait_log("sleep raw 4")
     r.signal(sig, n=500)
     rc, out, err, cm = r.finish()
     assert (rc, _one_doc(out)["status"]) == (6, "interrupted-rolled-back"), err
@@ -227,8 +235,8 @@ def test_a_signal_that_kills_the_patch_before_it_lands_writes_nothing(tmp_path, 
 
 @needs_posix
 def test_kubectl_killed_by_the_same_ctrl_c_is_not_unreachable(tmp_path):
-    r = Run(tmp_path, OLD, {"raw": "2 3"})
-    r.wait_log("sleep raw 3")
+    r = Run(tmp_path, OLD, {"raw": "2 4"})
+    r.wait_log("sleep raw 4")
     r.signal(signal.SIGINT, group=True)  # kills the in-flight `get --raw` too
     rc, out, err, cm = r.finish()
     assert (rc, _one_doc(out)["status"]) == (6, "interrupted-rolled-back"), err

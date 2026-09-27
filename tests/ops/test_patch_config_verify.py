@@ -92,8 +92,11 @@ class TestApplyVerified:
         err = capsys.readouterr().err
         assert 'tenant="t-b"' in err and "another tenant" in err
 
+    # The next three are the OLDER exporter's parse-failure verdict (no
+    # /api/v1/config/identity: 404), judged by the counter. The identity
+    # verdict is in test_patch_config_identity.py.
     def test_new_parse_failure_rolls_back(self):
-        c = FakeCluster(_multi(), render=_with(
+        c = FakeCluster(_multi(), identity=False, render=_with(
             lambda d: "" if "65" not in d["t-a.yaml"] else
             'da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'))
         assert _run(c, "t-a", "mysql_connections", "65") == pc.EXIT_VERIFY_FAILED
@@ -105,7 +108,7 @@ class TestApplyVerified:
         def extra(d):
             state["n"] += 1
             return f'da_config_parse_failure_total{{file_basename="t-a.yaml"}} {state["n"]}\n'
-        c = FakeCluster(_multi(), render=_with(extra))
+        c = FakeCluster(_multi(), identity=False, render=_with(extra))
         assert _run(c, "t-a", "mysql_connections", "65") == pc.EXIT_VERIFY_FAILED
 
     def test_rise_on_an_already_broken_other_file_only_warns(self, capsys):
@@ -114,10 +117,10 @@ class TestApplyVerified:
         def extra(d):
             state["n"] += 1
             return f'da_config_parse_failure_total{{file_basename="broken.yaml"}} {state["n"]}\n'
-        c = FakeCluster(_multi(), render=_with(extra))
+        c = FakeCluster(_multi(), identity=False, render=_with(extra))
         assert _run(c, "t-a", "mysql_connections", "65") == 0
         assert len(c.patches) == 1
-        assert "WARNING" in capsys.readouterr().err
+        assert "was already failing before the write" in capsys.readouterr().err
 
     def test_timeout_rolls_back_with_3(self):
         c = FakeCluster(_multi(), reload=lambda n: False)
@@ -795,10 +798,16 @@ class TestCompareAndSwap:
 
     @staticmethod
     def _verify_fails(data, pod=None):
-        """Toy exporter whose verification always fails (a new parse failure)."""
+        """Toy exporter whose verification always fails (a new parse failure):
+        the counter an older exporter is judged by, and — `_rejects` — the
+        parse_failed an exporter with an identity is judged by."""
         extra = ('da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'
                  if "'65'" in data.get("t-a.yaml", "") else "")
         return render_thresholds(data) + extra
+
+    @staticmethod
+    def _rejects(key, text):
+        return key == "t-a.yaml" and "'65'" in text
 
     def test_every_write_carries_the_version_it_is_based_on(self, capsys):
         c = FakeCluster(_multi())
@@ -816,6 +825,7 @@ class TestCompareAndSwap:
 
     def test_a_rollback_conflict_on_another_key_retries_and_keeps_theirs(self, capsys):
         c = FakeCluster(_multi(), render=self._verify_fails,
+                        rejects=self._rejects,
                         concurrent=lambda n, cl: n == 1 and
                         cl.other_writer("t-b.yaml", self.T_B2))
         code, doc = self._json_run(c, capsys=capsys)
@@ -828,6 +838,7 @@ class TestCompareAndSwap:
     def test_a_rollback_never_overwrites_another_writers_value(self, capsys):
         theirs = "tenants:\n  t-a:\n    mysql_connections: '99'\n"
         c = FakeCluster(_multi(), render=self._verify_fails,
+                        rejects=self._rejects,
                         concurrent=lambda n, cl: n == 1 and
                         cl.other_writer("t-a.yaml", theirs))
         code, doc = self._json_run(c, capsys=capsys)
@@ -1032,6 +1043,7 @@ class TestRollbackAccounting:
                 cl.other_writer("t-b.yaml",
                                 f"tenants:\n  t-b: {{m: '{churn['n']}'}}\n")
         c = FakeCluster(_multi(), render=TestCompareAndSwap._verify_fails,
+                        rejects=TestCompareAndSwap._rejects,
                         concurrent=other_key_keeps_changing)
         code = _run(c, "--json", "t-a", "mysql_connections", "65")
         doc = json.loads(capsys.readouterr().out)

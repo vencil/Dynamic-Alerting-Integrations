@@ -31,6 +31,7 @@ GET /metrics          → Prometheus 指標匯出 (200 OK)
 GET /health           → 存活探針 (200 OK)
 GET /ready            → 就緒探針 (200 OK / 503 Service Unavailable)
 GET /api/v1/config    → 設定狀態除錯端點 (200 OK)
+GET /api/v1/config/identity → 目前服務的設定之識別（給機器讀的 JSON 契約，200 OK）
 ```
 
 ---
@@ -396,6 +397,38 @@ curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 
 ```bash
 curl -s http://localhost:8080/api/v1/config | head -3
 ```
+
+---
+
+## 5. GET /api/v1/config/identity - Config Identity（機器契約）
+
+### 說明
+
+回報這個 exporter **目前服務的是哪一版設定位元組**，以及那一版裡哪些檔案因無法 parse 而被排除。這是**給機器讀的契約**，以 `schema` 欄位版本化（目前為 `1`；欄位改變意義或移除時才升版，新增欄位不升版）；人讀的除錯頁仍是上方的 `/api/v1/config`。`patch-config` 用它做寫後驗收（見 [cli-reference](../cli-reference.md) §patch-config）。所有欄位在同一次安裝的同一個鎖窗內取值，不會混到兩次 reload 的狀態。
+
+```bash
+curl -s http://localhost:8080/api/v1/config/identity
+```
+
+### 回應
+
+**狀態碼**: 200 OK（尚未載入任何設定時也是 200，`loaded: false`；是否就緒請看 `/ready`）  
+**Content-Type**: `application/json`；只接受 `GET`／`HEAD`（其他方法 405）
+
+```json
+{"schema":1,"loaded":true,"mode":"directory","last_reload":"2026-09-27T01:02:03.456789Z","config_hash":"<64 位 hex>","parse_failed":["tenant-b.yaml"]}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| `schema` | 契約版本，目前 `1` |
+| `loaded` | 是否已安裝過設定 |
+| `mode` | `directory`（`-config-dir`）或 `single-file`（`-config`） |
+| `last_reload` | 安裝時間，UTC、RFC 3339 含奈秒；未載入時為 `""` |
+| `config_hash` | directory 模式：conf.d 裡 exporter 會讀的檔案（非 `.` 開頭、副檔名 `.yaml`／`.yml` 不分大小寫），依相對路徑排序後各自 SHA-256，hex 串接後再 SHA-256；single-file 模式：該檔位元組的 SHA-256 |
+| `parse_failed` | 這一版掃描中位元組無法 parse 的檔案（相對路徑、已排序）：這些位元組**沒有**被採用，但在 flat 模式下該檔的租戶可能仍以上一版的值服務；一律是陣列。single-file 模式恆為空（無法 parse 的單檔不會被安裝） |
+
+⚠️ `da_config_parse_failure_total` 回答的是另一個問題：它在每次掃描到壞檔時都會累加，與有沒有安裝新版無關，所以不能拿來判斷「目前這一版有沒有排除某個檔」。
 
 ---
 

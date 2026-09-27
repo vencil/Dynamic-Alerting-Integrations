@@ -32,12 +32,14 @@ SCENARIOS["rollback-fail"] = SCENARIOS["verify-fail"]
 FAKE_KW = {"rollback-fail": {"fail_patch": {1}}}
 # Every function between the write and the answer (module functions, and the
 # methods of the two objects apply drives).
-MODULE_FNS = ["_kubectl_patch", "_read_key", "_read_cm", "parse_metrics", "verify_pod",
+MODULE_FNS = ["_kubectl_patch", "_rv_of", "written_files", "config_hash",
+              "_read_key", "_read_cm", "parse_metrics", "verify_pod",
               "_conclude", "_send_rollback",
               "_wait_rolled_back", "_observed_fallback",
               "_say", "_emit", "_apply_envelope", "format_json_report",
               "_status_exit_code", "_outcome", "_answer"]
-EXPORTER_FNS = ["wait_moved", "snapshot", "last_reload", "get"]
+EXPORTER_FNS = ["wait_served", "wait_moved", "snapshot", "consistent", "identity",
+                "probe", "last_reload", "get"]
 SIGNAL_FNS = ["cause", "ignore", "checkpoint"]
 OUTPUT_FNS = {"_say", "_emit", "_apply_envelope", "format_json_report",
               "_answer"}

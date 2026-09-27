@@ -128,6 +128,9 @@ func buildMux(manager *ConfigManager, collector *ThresholdCollector) *http.Serve
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/ready", readyHandler(manager))
 	mux.HandleFunc("/api/v1/config", configViewHandler(manager))
+	// #2069: the machine-read identity of the installed config (composite
+	// hash + parse-failed keys), for patch-config's post-write verification.
+	mux.HandleFunc("/api/v1/config/identity", configIdentityHandler(manager))
 	// v2.8.0 Phase .c C-7b: ephemeral simulate primitive. Stateless —
 	// no shared writer to manager, no disk IO; safe to colocate with
 	// the rest of the read-only API.
