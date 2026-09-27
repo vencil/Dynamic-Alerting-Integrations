@@ -807,7 +807,6 @@ prod-rest         ✅       ✅       —        —        —
 | **Shadow 期 + dual-write 雙重 cardinality 撐爆 VM** | Phase 1 dual-write 已 doubling、Phase 2 shadow rule 額外產生 `ALERTS{}` series；總和超 budget | (e.g., 客戶估 Phase 1 容量但忘 Phase 2 ALERTS{} cardinality，shadow week-2 VM disk 週末爆滿、cardinality limit 觸發、新 metric ingest 被拒) |
 | **Subset overlap = 100% 但有「假 100%」陷阱** | shadow rule 寫成「與 custom_ 完全等價」太保守，本質沒測 golden 的 smarter logic；客戶以為 ready，實際 cutover 才暴露 golden 行為 | (e.g., 客戶「先抄 custom_ 規則一比一變 golden」，2 週 shadow overlap 100% 但 golden smart filter 沒生效；cutover 後客戶發現 alert volume 不變、partial value lost) |
 | **Plan A staging-first 但客戶意外把 prod 升 v2.8.0 exporter** | exporter version skew 被 manual override；prod 也 picked up shadow rule | (e.g., 客戶 SRE 不知 staging-first 慣例、看到 v2.8.0 release 直接 helm upgrade prod，prod shadow rule 觸發但客戶以為是 production alert 半夜 paged) |
-| **AM `migration_status: shadow` matcher 規則寫錯** | matcher 用 `migration_status=~"shadow"` regex 但被 fall-through；或 matchers 為空陣列 | (e.g., AM v0.27 vs v0.32 matcher 語法輕微差異，客戶複製 sample config 沒檢查 AM 版本，matchers 解析錯誤靜默 fall through 到 production) |
 
 ### Phase 3 — Incremental Cutover
 
