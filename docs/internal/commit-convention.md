@@ -242,7 +242,7 @@ Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped an
 
 - **Format** (the full spec and an example are in [`changelog.d/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/changelog.d/README.md)): YAML front matter with `section` (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`), `topic` (kebab-case grouping key), `issues` (list, may be `[]`) and `created` (ISO 8601 with offset, `date -Iseconds`); then exactly one column-0 `- ` entry, at most 1,000 characters. Checked by `python3 scripts/tools/dx/generate_changelog.py --fragments` (pre-commit `changelog-fragments`).
 - **⛔ Revising an unreleased change edits its fragment; it does not add a second one.** The release note states the net change since the last release. `--assemble` prints a note when one issue has several fragments. A change to something already released gets a new fragment.
-- **Order at assembly** is section → topic → `created` → filename, so entries about one topic sit together, oldest first. `python3 scripts/tools/dx/generate_changelog.py --assemble` prints the result; the release wrap-up (`vibe-release`, step 2) distils it and deletes the assembled fragments.
+- **Order at assembly** is section → topic → `created` → filename, so entries about one topic sit together, oldest first. `python3 scripts/tools/dx/generate_changelog.py --assemble` prints the result; the release wrap-up (`vibe-release`, step 1) distils it and deletes the assembled fragments.
 
 ### Editing `CHANGELOG.md` by hand
 

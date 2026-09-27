@@ -114,7 +114,7 @@ git push origin main
 make version-check              # 版號一致性 — 必須 ✅
 make lint-docs                  # 文件 lint — 必須 0 failed
 pre-commit run --all-files      # auto hooks — 必須全過
-make pre-tag                    # 一鍵整合（含以上 + draft-advisory-check + docker-build-all + trivy-scan-all）
+make pre-tag                    # 一鍵整合（含以上 + changelog-fragments-consumed + draft-advisory-check + docker-build-all + trivy-scan-all）
 ```
 
 任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
@@ -218,7 +218,7 @@ GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任
 - ✅ <feature/component> — `<test surface>`
 - ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
 - ✅ `make pr-preflight` 全綠
-- ✅ `make pre-tag` 全綠（version-check + lint-docs + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
+- ✅ `make pre-tag` 全綠（version-check + lint-docs + changelog-fragments-consumed + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
 
 ## Known limits
 <已知但未在本 release 解的問題。每條一行，連到 issue / docs/api 的 §「Known gaps」>

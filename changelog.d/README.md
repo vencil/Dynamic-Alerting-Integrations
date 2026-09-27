@@ -37,4 +37,4 @@ python3 scripts/tools/dx/generate_changelog.py --fragments   # lint 全部片段
 python3 scripts/tools/dx/generate_changelog.py --assemble    # 印出組裝後的 markdown（發版前預覽）
 ```
 
-發版時的流程見 `vibe-release` skill 的「CHANGELOG distill」一步：`--assemble` 的輸出是原料，濃縮成 `## [vX.Y.Z]` 之後，刪掉已組裝的片段檔。
+發版時的流程見 `vibe-release` skill 的「CHANGELOG distill」一步：`--assemble` 的輸出是原料，濃縮成 `## [vX.Y.Z]` 之後，刪掉已組裝的片段檔。打 tag 前 `make pre-tag` 會跑 `generate_changelog.py --check-consumed`，這個目錄除了 README 還有片段就擋下。

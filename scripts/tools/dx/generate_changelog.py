@@ -20,6 +20,7 @@ Usage:
     # changelog.d/ fragments (#2102): lint them, or print them assembled
     generate_changelog.py --fragments [PATH ...]
     generate_changelog.py --assemble
+    generate_changelog.py --check-consumed   # make pre-tag: none may be left
 """
 
 import argparse
@@ -649,6 +650,59 @@ def fragment_paths(root: Path) -> List[Path]:
     return sorted(p for p in d.glob("*.md") if p.name != FRAGMENT_README)
 
 
+def _committed_fragments(root: Path, rev: str) -> Optional[List[str]]:
+    """Fragment paths in ``rev``'s tree (README excluded); None when git
+    cannot list them."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(root), "ls-tree", "--name-only", rev, f"{FRAGMENT_DIR}/"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted(n for n in r.stdout.splitlines()
+                  if n.endswith(".md") and Path(n).name != FRAGMENT_README)
+
+
+def check_fragments_consumed(root: Path, rev: str = "HEAD") -> int:
+    """Exit code for ``--check-consumed``: every fragment must be gone.
+
+    Run on the commit being tagged. The release wrap-up assembles the
+    fragments into ``## [vX.Y.Z]`` and deletes them; one still here either
+    missed this release's notes or will be assembled again into the next
+    one. A fragment merged after the wrap-up is a change the tag would ship
+    without describing, so it fails too.
+
+    Both the committed tree (what the tag records) and the worktree are
+    checked: a deletion that was never committed empties the worktree
+    while the tagged commit still carries the fragment. Fail-closed when
+    git cannot list the tree.
+    """
+    committed = _committed_fragments(root, rev)
+    if committed is None:
+        print(f"❌ could not list {FRAGMENT_DIR}/ at {rev} (not a git checkout, or "
+              "unknown revision); refusing to report the fragments as assembled")
+        return EXIT_CALLER_ERROR
+    in_tree = {p.relative_to(root).as_posix() for p in fragment_paths(root)}
+    left = sorted(set(committed) | in_tree)
+    if left:
+        print(f"❌ {len(left)} changelog fragment(s) not assembled into this release:")
+        for name in left:
+            where = []
+            if name in committed:
+                where.append(rev)
+            if name in in_tree:
+                where.append("worktree")
+            print(f"  {name}  ({', '.join(where)})")
+        print("   Assemble them into the new ## [vX.Y.Z] block, `git rm` them and commit "
+              "(vibe-release step 1), then run this on the commit you tag.")
+        return EXIT_VIOLATION
+    print(f"✅ no changelog fragments left in {FRAGMENT_DIR}/ ({rev} and worktree)")
+    return EXIT_OK
+
+
 def assemble_fragments(paths: List[Path]) -> Tuple[str, List[str], List[str]]:
     """Render fragments as release-section markdown.
 
@@ -755,7 +809,16 @@ def main() -> int:
         help=f"Print the {FRAGMENT_DIR}/ fragments as release-section markdown "
              "(section, then topic, then created); the release wrap-up distils this",
     )
+    parser.add_argument(
+        "--check-consumed",
+        action="store_true",
+        help=f"Fail if any {FRAGMENT_DIR}/ fragment is left (make pre-tag: the "
+             "commit being tagged must have assembled all of them)",
+    )
     args = parser.parse_args()
+
+    if args.check_consumed:
+        return check_fragments_consumed(Path(__file__).resolve().parents[3])
 
     # Fragment lint / assembly (#2102).
     if args.fragments is not None or args.assemble:
