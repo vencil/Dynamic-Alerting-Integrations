@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -743,6 +746,41 @@ def test_a_failing_preflight_in_the_throwaway_worktree_fails_the_line_and_cleans
     r = _paste_the_hint(_blocked(tmp_path, shas[0]).stderr, tmp_path, f": > '{ran}'; exit 3")
     assert (r.returncode, ran.exists()) == (3, True)
     assert _git(tmp_path, "worktree", "list", "--porcelain").stdout == listed
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
+def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, sig: signal.Signals):
+    """#2038 — Ctrl-C mid preflight used to skip the clean-up that followed it,
+    leaving the throwaway on disk and registered in the shared `.git`. The
+    names need quoting, because the clean-up is parsed twice (paste, then trap).
+    """
+    repo, tmpdir = tmp_path / "repo x'$HOME", tmp_path / "t d$HOME"
+    tmpdir.mkdir()
+    _, shas = _held_worktree(repo, "sibling wt", commits=2)
+    listed = _git(repo, "worktree", "list", "--porcelain").stdout
+    started = tmp_path / "preflight-started"
+    lines = [ln.strip() for ln in _blocked(repo, shas[0], tmpdir=tmpdir).stderr.splitlines()
+             if "make pr-preflight" in ln]
+    assert len(lines) == 1, lines
+    line = lines[0].replace("make pr-preflight", f": > {shlex.quote(str(started))}; sleep 30")
+
+    # A session of its own, so the signal reaches the whole group like a
+    # terminal's Ctrl-C does.
+    proc = subprocess.Popen(["bash", "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 20
+    while not started.exists():
+        assert proc.poll() is None, f"the line ended before preflight began: {proc.communicate(timeout=20)}"
+        assert time.monotonic() < deadline, "preflight never started"
+        time.sleep(0.05)
+    os.killpg(proc.pid, sig)
+    proc.communicate(timeout=20)
+
+    assert proc.returncode != 0, "an interrupted preflight reported success"
+    assert _git(repo, "worktree", "list", "--porcelain").stdout == listed, (
+        "the throwaway worktree is still registered after the interrupt"
+    )
+    assert not list(tmpdir.iterdir()), f"left on disk: {list(tmpdir.iterdir())}"
 
 
 def test_a_failed_add_removes_nothing(tmp_path: Path):
