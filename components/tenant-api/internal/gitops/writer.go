@@ -154,21 +154,116 @@ var ErrTenantTreeScan = errors.New("cannot scan conf.d to check where the tenant
 // is on origin with no PR/MR opened for it.
 var ErrBaseRestore = errors.New("failed to return the config worktree to the base branch after a PR-mode write")
 
-// extraDocumentsWithContent counts the YAML documents after the first that
-// decode to something non-nil. A body whose YAML is invalid returns 0 — that is
-// the caller's earlier Unmarshal check to report, not this one's.
-func extraDocumentsWithContent(yamlContent string) int {
+// yamlDocumentShapeErrors is the whole-body YAML gate behind validateShape
+// (#1681, #1721). It exists because Write commits the body VERBATIM while the
+// struct yaml.Unmarshal in validateShape reads only the FIRST document and only
+// the fields ThresholdConfig names — so any byte the struct decode skips is a
+// byte that reaches git unjudged, and the exporter reads it.
+//
+// It walks every document as a yaml.Node and refuses, in this order:
+//
+//  1. Any decode error, in ANY document. The struct Unmarshal does not own
+//     these: it stops after the first document, so a parse error behind an
+//     end-of-document marker (`...`) is invisible to it. A gate that treated
+//     that error as end-of-stream accepted the unparseable tail, and the
+//     unparseable tail is where the smuggled section sat (#1721).
+//  2. In the FIRST document only, a root key the struct decode and
+//     cfg.CheckTenantRootKeys can both look past (see rootKeyShapeError):
+//     a merge key (`<<`, checked first, with its own message), or any key
+//     that is not a plain string scalar — null (`~`, `null`, an empty `? `),
+//     int, bool, an alias, a complex key, a custom tag. CheckTenantRootKeys
+//     decodes into map[string]any, fails on such a key and then reports
+//     NOTHING, while a generic decode falls back to map[any]any and succeeds,
+//     so the key's value — a `tenants:` section, a `defaults:` block — would
+//     be committed unjudged. A string key other than `tenants` is NOT refused
+//     here: CheckTenantRootKeys owns that and names the key. Merge keys and
+//     aliases INSIDE a tenant section are ordinary YAML and stay legal.
+//  3. A document that does not decode generically (`node.Decode(&any)`). The
+//     struct decode never visits a root key ThresholdConfig lacks, so a bad
+//     tag under one passes it, and CheckTenantRootKeys returns no errors when
+//     its own decode fails. This also refuses an unconstructable tagged value
+//     inside the body's own tenant section (`!!int "abc"`), which the struct
+//     decode reads as a string — deliberately: those bytes would be committed.
+//  4. Content after the first document — anything after it would be written
+//     but never validated. An empty trailer (a bare `---`, a lone `...`, a
+//     comment-only or `~` document) carries nothing and stays legal, so this
+//     counts content rather than documents.
+//
+// Messages go to API callers: they name the rule, never a server path.
+func yamlDocumentShapeErrors(yamlContent string) []string {
 	dec := yaml.NewDecoder(strings.NewReader(yamlContent))
 	extra := 0
 	for i := 0; ; i++ {
+		var node yaml.Node
+		if err := dec.Decode(&node); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
+		}
+		// Before the generic decode: a complex root key makes that decode fail
+		// with a message about the key's value, not about the rule it broke.
+		if i == 0 {
+			if msg := rootKeyShapeError(&node); msg != "" {
+				return []string{msg}
+			}
+		}
 		var doc any
-		if err := dec.Decode(&doc); err != nil {
-			return extra // io.EOF, or a parse error the Unmarshal above already owns
+		if err := node.Decode(&doc); err != nil {
+			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
 		}
 		if i > 0 && doc != nil {
 			extra++
 		}
 	}
+	if extra > 0 {
+		return []string{fmt.Sprintf(
+			"YAML has %d document(s) with content after the first — a tenant config "+
+				"is a single document; anything after it would be written but never "+
+				"validated", extra)}
+	}
+	return nil
+}
+
+// rootKeyShapeError returns the refusal for the first root key of a decoded
+// document that is not a plain string, or "" when every root key is one. A
+// merge key (`<<` in any form — a mapping, an alias, or a sequence of either)
+// is looked for across ALL root keys first, so it always gets its dedicated
+// message whatever else the root holds.
+func rootKeyShapeError(doc *yaml.Node) string {
+	root := doc
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return ""
+		}
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].ShortTag() == "!!merge" {
+			return "YAML uses a merge key (<<) at the root — a tenant config " +
+				"may only contain a literal top-level 'tenants' block; merge keys are " +
+				"allowed inside a tenant section, not at the root"
+		}
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		if key.Kind == yaml.ScalarNode && key.ShortTag() == "!!str" {
+			continue
+		}
+		found := key.ShortTag()
+		switch key.Kind {
+		case yaml.AliasNode:
+			found = "alias"
+		case yaml.MappingNode, yaml.SequenceNode:
+			found = "complex " + found
+		}
+		return fmt.Sprintf("YAML root keys must be plain strings — found a %s key; "+
+			"a tenant config may only contain a top-level 'tenants' block", found)
+	}
+	return ""
 }
 
 // addedTenantKeys returns the sorted `tenants:` keys a body declares that are
@@ -1361,7 +1456,7 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
 	// caller below parses yamlContent three times (Unmarshal here,
-	// CheckTenantRootKeys, extraDocumentsWithContent).
+	// CheckTenantRootKeys, yamlDocumentShapeErrors).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
 	// validate() runs INSIDE the single-writer token, so this cost is no longer
@@ -1384,18 +1479,18 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return tcfg, []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
 	}
-	// Everything after the first YAML document is bytes that nothing here reads:
-	// Unmarshal above and CheckTenantRootKeys both decode ONE document and
-	// report no error for the rest, while the write path commits yamlContent
-	// VERBATIM — so a second document carries any `tenants:` section or root key
-	// straight into git, past every gate in this function (#1681). An empty
-	// trailer (a bare `---`, a comment-only document) carries nothing and stays
-	// legal, so this counts content rather than documents.
-	if extra := extraDocumentsWithContent(yamlContent); extra > 0 {
-		return tcfg, []string{fmt.Sprintf(
-			"YAML has %d document(s) with content after the first — a tenant config "+
-				"is a single document; anything after it would be written but never "+
-				"validated", extra)}
+	// The write path commits yamlContent VERBATIM, but the Unmarshal and
+	// CheckTenantRootKeys above each see less than that: both decode ONE
+	// document, the struct decode skips root keys ThresholdConfig lacks, both
+	// resolve a root merge key (`<<`) away, and CheckTenantRootKeys reports
+	// nothing for a root key that is not a string (`~:`). So a second document,
+	// a parse error behind `...`, a bad tag under an unknown root key, a root
+	// merge key or a non-string root key could each carry a `tenants:` section
+	// straight into git past every gate in this function (#1681, #1721). A successful Unmarshal above does
+	// NOT mean the rest of the body parses — it stopped reading after the first
+	// document — so this gate owns every decode error it meets.
+	if shapeErrs := yamlDocumentShapeErrors(yamlContent); len(shapeErrs) > 0 {
+		return tcfg, shapeErrs
 	}
 	// The write plane addresses a file by tenant id, but the exporter takes
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
