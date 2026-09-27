@@ -62,7 +62,13 @@ TOOLS = REPO / "scripts" / "tools"
 # `find_duplicate_key` / `duplicate_in_mapping`.
 _YAML_LENIENT = {"safe_load", "safe_load_all", "load", "load_all", "full_load",
                  "unsafe_load", "full_load_all", "unsafe_load_all"}
-_LENIENT_ANY = {"load_yaml_file"}
+# #2114: the exporter-key readers (`_lib_yaml_keys` and `_lib_io`'s file
+# sibling) keep the last value of a repeated key too — lenient in exactly
+# this sense, so they are named here; their strict counterparts
+# (`strict_load_exporter_keys`, `strict_load_all_exporter_keys`,
+# `load_yaml_file_strict_exporter_keys`) are not.
+_LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
+                "load_first_document_exporter_keys", "load_yaml_file_exporter_keys"}
 
 LENIENT_BY_DESIGN: dict[str, str] = {
     "_lib_confd.py":
@@ -249,11 +255,18 @@ _CAUGHT = {
     "comprehension": (
         "import yaml, os\n"
         "def scan(d):\n    return [yaml.safe_load(open(n)) for n in os.listdir(d)]\n"),
+    "exporter_key_reader_in_the_loop": (
+        "from _lib_yaml_keys import load_exporter_keys\n"
+        "from _lib_confd import iter_config_files\n"
+        "def scan(d):\n    for p in iter_config_files(d):\n        load_exporter_keys(open(p))\n"),
 }
 _NOT_CAUGHT = {
     "strict_reader_in_the_loop": (
         "from _lib_io import strict_safe_load\nfrom _lib_confd import iter_config_files\n"
         "def scan(d):\n    for p in iter_config_files(d):\n        strict_safe_load(open(p))\n"),
+    "strict_exporter_key_reader_in_the_loop": (
+        "from _lib_io import strict_load_exporter_keys\nfrom _lib_confd import iter_config_files\n"
+        "def scan(d):\n    for p in iter_config_files(d):\n        strict_load_exporter_keys(open(p))\n"),
     "lenient_read_outside_any_loop": (
         "import yaml\ndef read(p):\n    return yaml.safe_load(open(p))\n"),
     "json_load_in_the_loop": (

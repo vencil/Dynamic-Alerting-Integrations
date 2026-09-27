@@ -541,8 +541,9 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # Regression tripwire (derivation): every lib load site is guarded or wrapped
 # ---------------------------------------------------------------------------
 # `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
-# owe the same guard.
-_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs"}
+# owe the same guard; so do the #2114 exporter-key siblings of both.
+_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs",
+              "load_yaml_file_exporter_keys", "load_yaml_file_strict_exporter_keys"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python"}
 # Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on
 # the LAST attribute segment, so `yaml.error.YAMLError`, `_lib_io.YamlFileError`
@@ -788,8 +789,11 @@ def test_scanner_still_flags_a_handler_that_does_not_catch_it():
 
 def test_scanner_sees_reexport_through_a_tool_module():
     """`from policy_engine import load_yaml_file` resolves to the lib helper
-    (policy_engine imports it and does not define its own)."""
+    (policy_engine imports it and does not define its own). #2114: so does
+    the strict exporter-key sibling it reads policies with."""
     assert _sites_of("from policy_engine import load_yaml_file\ndef f(p):\n    return load_yaml_file(p)\n")
+    assert _sites_of("from policy_engine import load_yaml_file_strict_exporter_keys\n"
+                     "def f(p):\n    return load_yaml_file_strict_exporter_keys(p)\n")
     # control: a tool's OWN function of the same name is not the lib
     assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")
 

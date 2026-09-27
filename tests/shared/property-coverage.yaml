@@ -62,7 +62,8 @@ modules:
       - format_json_report
       - safe_label
     excluded:
-      load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file (both covered); composite contract is exercised by integration tests"
+      load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file_exporter_keys; composite contract is exercised by integration tests (text tenant ids: tests/ops/test_tenant_id_as_text.py, #2114)"
+      load_yaml_file_exporter_keys: "load_yaml_file's I/O + error contract over _lib_yaml_keys' loader (#2114); the key rule is table-pinned against the exporter's decode in tests/shared/test_tenant_id_yaml_spelling_parity.py (22 spellings, Go half asserts the same table), not a value computation this function owns"
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
       write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"
       write_onboard_hints: "Thin wrapper over write_json_secure"
@@ -93,6 +94,11 @@ modules:
       strict_safe_load: "I/O-free but a thin driver over a PyYAML loader (#2123); matrix, parser-preservation and python/object refusal pinned in tests/shared/test_yaml_strict_loader.py"
       strict_safe_load_all: "Lazy multi-document driver (#2123); laziness and refusal pinned in tests/shared/test_yaml_strict_loader.py"
       load_yaml_file_strict: "File-reading twin of load_yaml_file (#2123); I/O-bound, contract parity pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
+      # #2114 × #2123: strict reading composed with the exporter's key rule.
+      _strict_exporter_key_class: "Loader-class selector (#2114 × #2123) over StrictExporterKeyLoader; exercised through every strict_*_exporter_keys pin in tests/shared/test_yaml_strict_loader.py"
+      strict_load_exporter_keys: "strict_safe_load driven with StrictExporterKeyLoader (#2114 × #2123); identity matrix, python/object refusal and parser pinned in tests/shared/test_yaml_strict_loader.py; key text pinned in tests/shared/test_tenant_id_yaml_spelling_parity.py"
+      strict_load_all_exporter_keys: "strict_safe_load_all driven with StrictExporterKeyLoader (#2114 × #2123); same pins as strict_load_exporter_keys"
+      load_yaml_file_strict_exporter_keys: "File-reading twin of load_yaml_file_strict with exporter keys (#2114 × #2123); I/O-bound, contract pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:

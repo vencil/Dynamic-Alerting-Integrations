@@ -207,3 +207,79 @@ def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected)
     with pytest.raises(pc.ConfigMapShapeError, match="twice"):
         pc.read_node(doc, "t.yaml")
     assert find_duplicate_key(yaml.compose(doc)) is not None  # deprecate_rule's walker
+
+
+# ── #2114: the strict + exporter-key composition in `_lib_io` ──────────────
+#
+# `StrictExporterKeyLoader` = `RejectDuplicateKeys` + `_lib_yaml_keys`'s
+# `ExporterKeyLoader`. Its entry points must refuse exactly what the strict
+# loader refuses (same `_key_identity`, same error), be safe by behaviour
+# like it, and build the keys as the exporter's raw text.
+
+from _lib_io import (  # noqa: E402
+    StrictExporterKeyLoader,
+    load_yaml_file_strict_exporter_keys,
+    strict_load_all_exporter_keys,
+    strict_load_exporter_keys,
+)
+from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys  # noqa: E402
+
+_EXPORTER_KEY_ENTRIES = {
+    "strict_load_exporter_keys": lambda d: strict_load_exporter_keys(d),
+    "strict_load_exporter_keys+raw_text_sequences":
+        lambda d: strict_load_exporter_keys(d, raw_text_sequences=("x",)),
+    "strict_load_all_exporter_keys": lambda d: next(strict_load_all_exporter_keys(d)),
+}
+
+
+@pytest.mark.parametrize("entry", sorted(_EXPORTER_KEY_ENTRIES))
+@pytest.mark.parametrize("name,doc,rejected", _IDENTITY, ids=[r[0] for r in _IDENTITY])
+def test_the_exporter_key_entry_points_share_the_identity(name, doc, rejected, entry):
+    load = _EXPORTER_KEY_ENTRIES[entry]
+    if rejected:
+        with pytest.raises(DuplicateKeyError, match="found duplicate key"):
+            load(doc)
+    else:
+        # Accepted: the same document the non-strict exporter-key read gives.
+        assert load(doc) == load_exporter_keys(io.StringIO(doc))
+
+
+@pytest.mark.parametrize("entry", sorted(_EXPORTER_KEY_ENTRIES))
+def test_the_exporter_key_entry_points_cannot_construct_python_objects(entry):
+    payload = '!!python/object/apply:os.system ["echo strict-loader-pwned"]\n'
+    with pytest.raises(yaml.constructor.ConstructorError):
+        _EXPORTER_KEY_ENTRIES[entry](payload)
+    assert _EXPORTER_KEY_ENTRIES[entry]("a: [1, 2]\n") == {"a": [1, 2]}
+
+
+def test_the_composed_loader_is_strict_and_pure_underneath():
+    assert issubclass(StrictExporterKeyLoader, ExporterKeyLoader)
+    assert issubclass(StrictExporterKeyLoader, yaml.SafeLoader)
+    with pytest.raises(yaml.scanner.ScannerError):
+        strict_load_exporter_keys("defaults:\n  cpu_usage: 80\t\n")
+    # The non-strict key loader is not accepted where a strict one is required.
+    with pytest.raises(TypeError):
+        strict_safe_load("a: 1\n", loader=ExporterKeyLoader)
+
+
+def test_load_yaml_file_strict_exporter_keys_keeps_the_strict_readers_contract(tmp_path):
+    assert load_yaml_file_strict_exporter_keys(None, default={}) == {}
+    assert load_yaml_file_strict_exporter_keys(str(tmp_path / "missing.yaml"), default=[]) == []
+    empty = tmp_path / "e.yaml"
+    empty.write_text("# nothing\n", encoding="utf-8")
+    assert load_yaml_file_strict_exporter_keys(str(empty), default={}) == {}
+    clean = tmp_path / "c.yaml"
+    clean.write_text("tenants:\n  010: {}\n  yes: {}\n", encoding="utf-8")
+    assert load_yaml_file_strict_exporter_keys(str(clean)) == {
+        "tenants": {"010": {}, "yes": {}}}
+    bad_utf8 = tmp_path / "b.yaml"
+    bad_utf8.write_bytes(b"a: \xff\n")
+    with pytest.raises(YamlFileError) as exc:
+        load_yaml_file_strict_exporter_keys(str(bad_utf8))
+    assert isinstance(exc.value.cause, UnicodeDecodeError)
+    dup = tmp_path / "d.yaml"
+    dup.write_text('tenants:\n  123: {a: 1}\n  "123": {b: 2}\n', encoding="utf-8")
+    with pytest.raises(YamlFileError) as exc:
+        load_yaml_file_strict_exporter_keys(str(dup))
+    assert isinstance(exc.value.cause, DuplicateKeyError)
+    assert exc.value.cause.key == "123" and str(dup) in str(exc.value)

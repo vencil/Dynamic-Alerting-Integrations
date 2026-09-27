@@ -182,6 +182,11 @@ TOOL_FILES=(
     # every other tool that enumerates a tenant config dir; without it the
     # flat-layout image ImportErrors on startup. Stdlib-only; safe to bundle.
     _lib_confd.py
+    # #2114 — tenant ids read as the exporter keys them (raw scalar text).
+    # Imported by _lib_io, _lib_confd.declared_tenant_ids and the conf.d
+    # readers; without it the flat-layout image ImportErrors on startup.
+    # Imports only yaml + stdlib.
+    _lib_yaml_keys.py
     _lib_validation.py
     # v2.8.0 — cross-platform compat helpers (try_utf8_stdout etc.)
     # Imported by state_reconcile / rule_pack_diff / silencer_drift_check.
