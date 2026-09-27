@@ -552,7 +552,8 @@ def test_the_shim_says_what_to_do_when_the_dispatcher_is_missing(
     has a hook pointing at a file it does not have. Measured before this
     message existed: one line of `bash: …: No such file or directory` under
     three green `Passed` lines, and zero guidance. The three cheapest ways out
-    of that picture each disarm the guards for every worktree at once.
+    of that picture each disarm the guards: --no-verify for that push, deleting
+    or hand-writing the hook for every worktree at once.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _install_guards(work).returncode == 0
@@ -591,7 +592,8 @@ def test_a_push_without_a_work_tree_is_shown_where_it_looked_and_a_way_out(
     message therefore prints the directory it looked in instead of guessing.
 
     ⚠️ NOT GUARDED: the rebase remedy is still printed, as the other branch of
-    the message; nothing here asserts it is absent.
+    the message; nothing here asserts it is absent. Nor is "without --git-dir",
+    which is the part that helps a --git-dir push from inside a worktree.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _install_guards(work).returncode == 0

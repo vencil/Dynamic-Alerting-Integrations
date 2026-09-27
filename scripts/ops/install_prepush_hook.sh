@@ -134,8 +134,8 @@ fi
 # any tree checked out before #1689 lands has no dispatcher. Without the guard
 # below the whole message is one line of `bash: …: No such file or directory`
 # under three green `Passed` lines, and the three cheapest ways out of that
-# picture (--no-verify, delete the hook, hand-write one) each disarm the guards
-# for every worktree at once.
+# picture each disarm the guards: --no-verify for that push, main included;
+# deleting or hand-writing the hook for every worktree at once.
 # ⛔ A quoted heredoc read into a variable by the `read` BUILTIN, then written
 # with `printf`. Not `cat <<EOF` (needs `cat`, which is the dependency this file
 # just removed) and not a printf with per-line escapes (the shim itself contains
@@ -159,16 +159,16 @@ if [ ! -r "$_dispatch" ]; then
         echo "If that is a checkout of this repo from before #1689: rebase / switch it"
         echo "to a commit that has the dispatcher. .git/hooks is shared by every"
         echo "worktree, so one old tree hits this while the others are fine."
-        echo "If it is empty or some other directory (a bare repo, or git --git-dir=..."
-        echo "run from elsewhere): push from inside a worktree of this repo, without"
-        echo "--git-dir."
+        echo "If it is empty or not the top of a worktree (a bare repo, or"
+        echo "git --git-dir=... run from elsewhere): push from inside a worktree of"
+        echo "this repo, without --git-dir."
         echo ""
-        echo "⛔ Re-running the installer does NOT fix this: the shim it rewrites is"
-        echo "byte-identical, and the shim resolves the dispatcher from the tree you"
-        echo "push FROM."
+        echo "⛔ Re-running the installer does NOT fix this: the shim resolves the"
+        echo "dispatcher from the tree you push FROM."
         echo ""
-        echo "⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push:"
-        echo "both turn off the direct-push-to-main guard for EVERY worktree at once."
+        echo "⛔ Do not reach for --no-verify: it skips every guard for that push,"
+        echo "the direct-push-to-main one included. Do not delete .git/hooks/pre-push:"
+        echo "that turns them off for EVERY worktree at once."
         echo ""
     } >&2
     exit 1
