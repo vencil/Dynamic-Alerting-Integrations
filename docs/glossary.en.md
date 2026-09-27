@@ -98,7 +98,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 ## M
 
 **Maintenance Mode**
-:   One of three operational states. When `_state_maintenance` is set, a sentinel alert triggers Alertmanager inhibit rules to suppress all alerts for that tenant. Supports `expires` auto-expiry and `recurring[]` scheduled maintenance windows.
+:   One of three operational states. When `_state_maintenance` is set, the exporter exposes `user_state_filter{filter="maintenance"} 1` and the rule packs drop that tenant's alerts in PromQL with `unless on(tenant) (…)`: they do not fire, are not recorded in the TSDB, and send no notification. Unlike Silent Mode, where alerts still fire and only notifications are held back. Supports `expires` auto-expiry and `recurring[]` scheduled maintenance windows.
 
 **Migration Toolkit**
 :   The toolset that helps existing Prometheus environments migrate onto this platform (`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py`, etc.). See `docs/migration-toolkit-installation.md`.
@@ -185,7 +185,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   The three **config-layer** values: Custom Value / Omitted (→ falls back to the `defaults:` value in `_defaults.yaml`) / Disable (`"disable"` → no output). ⚠️ **Three states only apply to keys that have a platform default**: a key listed under `optional_overrides:` has nothing to inherit, so omitting it means no value and no output — only "set it" or "leave it silent". See [Config-Driven Design](design/config-driven.en.md) §2.1. ⚠️ A **distinct concept** from "Three-State Operational Model" below — don't conflate them under the bare word "three-state".
 
 **Three-State Operational Model**
-:   The three **operational-layer** states: Normal / Silent / Maintenance, implemented via Sentinel Alert + Alertmanager Inhibit, all supporting `expires` auto-expiry. See [Config-Driven Design](design/config-driven.en.md) §2.7.
+:   The three **operational-layer** states: Normal / Silent / Maintenance. Silent holds back notifications via Sentinel Alert + Alertmanager Inhibit; Maintenance drops alerts in PromQL with `unless`. Both support `expires` auto-expiry. See [Config-Driven Design](design/config-driven.en.md) §2.7.
 
 **TSDB (Time Series Database)**
 :   Prometheus's time series database. This platform's Severity Dedup design ensures TSDB always retains complete data (critical + warning); deduplication occurs only at the notification layer.
