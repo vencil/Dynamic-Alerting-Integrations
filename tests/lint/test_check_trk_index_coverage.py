@@ -240,8 +240,9 @@ def _load_module():
 
 
 class _FakeResp:
-    def __init__(self, payload: list) -> None:
+    def __init__(self, payload: list, next_url: str = "") -> None:
         self._body = json.dumps(payload).encode("utf-8")
+        self.headers = {"Link": f'<{next_url}>; rel="next"'} if next_url else {}
 
     def read(self, *a):
         body, self._body = self._body, b""
@@ -254,26 +255,34 @@ class _FakeResp:
         return None
 
 
-@pytest.mark.parametrize("pages_before_empty, expect_rc", [
-    (None, 2),  # 永遠還有下一頁：撞到上限，沒看過的標題不能當成掃過 ⇒ rc 2
-    (2, 1),     # 對照：第 3 頁是空頁 ⇒ 正常掃完，TRK-777 不在表上 ⇒ rc 1
+@pytest.mark.parametrize("pages_with_next, expect_rc", [
+    (None, 2),  # 永遠還有 rel="next"：撞到上限，沒看過的標題不能當成掃過 ⇒ rc 2
+    (2, 1),     # 對照：第 3 頁沒有 rel="next" ⇒ 正常掃完，TRK-777 不在表上 ⇒ rc 1
 ])
-def test_titles_page_cap_is_rc2_not_a_partial_scan(
-        tmp_path: Path, monkeypatch, capsys, pages_before_empty, expect_rc) -> None:
+def test_titles_follow_link_next_and_cap_is_rc2(
+        tmp_path: Path, monkeypatch, capsys, pages_with_next, expect_rc) -> None:
+    """⛔ 分頁跟 `Link: rel="next"` 走；頁碼式分頁在大資料集會被拒（422，#2106）。
+
+    ⚠️ 空頁**不是**終止條件：fake 的每一頁都非空，只有 Link 決定要不要翻下一頁。
+    """
     mod = _load_module()
     repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["chore: x"])
-    calls = {"n": 0}
+    seen: list[str] = []
 
     def fake_urlopen(req, timeout=0):
-        calls["n"] += 1
-        if pages_before_empty is not None and calls["n"] > pages_before_empty:
-            return _FakeResp([])
-        return _FakeResp([{"number": calls["n"], "title": "TRK-777: x"}])
+        seen.append(req.full_url)
+        n = len(seen)
+        more = pages_with_next is None or n <= pages_with_next
+        nxt = f"https://api.github.com/repositories/1/issues?after=c{n}" if more else ""
+        return _FakeResp([{"number": n, "title": "TRK-777: x"}], nxt)
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setenv("GH_TOKEN", "t")
     rc = mod.main(["--repo", str(repo), "--surface", "titles", "--ci"])
     assert rc == expect_rc, capsys.readouterr()
     if expect_rc == 2:
-        assert calls["n"] == mod._MAX_PAGES
-
+        assert len(seen) == mod._MAX_PAGES
+    else:
+        # 第 2、3 頁的 URL 必須是上一頁 Link 給的那一個，不是自己拼的 page=N
+        assert seen[1:] == ["https://api.github.com/repositories/1/issues?after=c1",
+                            "https://api.github.com/repositories/1/issues?after=c2"]

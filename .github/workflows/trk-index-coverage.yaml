@@ -28,6 +28,9 @@ on:
 permissions:
   contents: read
   issues: read
+  # ⛔ Required, not optional: without it the issues endpoint silently omits
+  # pull requests and PR-only TRK titles go unseen while the job still exits 0/1.
+  pull-requests: read
 
 jobs:
   titles:

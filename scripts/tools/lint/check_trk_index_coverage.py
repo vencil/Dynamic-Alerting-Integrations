@@ -143,10 +143,11 @@ def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
 
 
 class TitlesTruncated(RuntimeError):
-    """翻到頁數上限仍未見空頁：沒翻到的標題不能當成掃過了。"""
+    """翻到頁數上限仍有下一頁：沒翻到的標題不能當成掃過了。"""
 
 
 _MAX_PAGES = 40
+_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
@@ -154,14 +155,19 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
     if not (_SLUG_RE.match(owner) and _SLUG_RE.match(repo)):
         raise ValueError(f"owner/repo 不是合法的 GitHub slug: {owner!r}/{repo!r}")
     hits: dict[str, str] = {}
-    page = 1
-    while True:
+    # ⛔ 跟 Link: rel="next" 走 cursor 分頁，不自己拼 `page=N`：issues API 對大資料集
+    # 拒收頁碼式分頁（匿名請求第 11 頁起 422，訊息要求改用 after/before）。
+    # ⚠️ 這個端點會**靜默省略**token 讀不到的 PR：沒有 pull-requests: read 的
+    # GITHUB_TOKEN 只拿到 issue，rc 照樣 0/1（#2106 實測少 6 個只出現在 PR 標題的 TRK）。
+    # 工具分辨不出來，權限由呼叫端（workflow）負責給齊。
+    url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100"
+    pages = 0
+    while url:
         # ⛔ 上限只防無窮迴圈；撞到上限時剩下的（最舊的）標題沒被看過，要回 rc 2。
-        if page > _MAX_PAGES:
-            raise TitlesTruncated(f"翻了 {_MAX_PAGES} 頁仍未到底")
-        url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100&page={page}"
-        # 述詞而不是註解：host 與 scheme 是常數前綴，argv 只能影響其後的路徑段，
-        # 而那兩段已由 _SLUG_RE 收斂過。
+        if pages >= _MAX_PAGES:
+            raise TitlesTruncated(f"翻了 {_MAX_PAGES} 頁仍有下一頁")
+        # 述詞而不是註解：第一頁的 host 是常數前綴、路徑段已由 _SLUG_RE 收斂；
+        # 之後的 URL 來自回應的 Link header，同樣只准回到 _API_HOST。
         if not url.startswith(_API_HOST):
             raise ValueError(f"refusing to fetch a non-GitHub URL: {url!r}")
         req = urllib.request.Request(  # nosec B310  # https-only, host pinned to _API_HOST above
@@ -174,12 +180,12 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
         )
         with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310  # same, scheme+host asserted
             batch = json.load(resp)
-        if not batch:
-            break
+            m = _NEXT_RE.search(resp.headers.get("Link") or "")
+        pages += 1
         for it in batch:
-            for m in _TRK_RE.finditer(it.get("title") or ""):
-                hits.setdefault(m.group(1), f"#{it['number']}")
-        page += 1
+            for hit in _TRK_RE.finditer(it.get("title") or ""):
+                hits.setdefault(hit.group(1), f"#{it['number']}")
+        url = m.group(1) if m else ""
     return hits
 
 
