@@ -467,10 +467,14 @@ _FSYNC_UNSUPPORTED_ERRNOS = frozenset(
 # mkstemp's prefix embeds the target name; cap it so a target name near
 # NAME_MAX cannot turn a write that works in place into ENAMETOOLONG.
 _TMP_PREFIX_NAME_CAP = 64
-# os.replace errnos where the in-place write would still have worked:
+# os.replace errnos meaning "this name cannot be renamed over", where writing
+# through it may still work — so the answer is the in-place write, not rc 2:
 # EBUSY — the target is a mount point (docker `-v file:file`, k8s subPath);
-# EXDEV — the same, seen through some bind setups; EPERM / EACCES — a sticky
-# directory (/tmp) holding a writable file owned by someone else.
+# EXDEV — the same, seen through some bind setups; EPERM / EACCES — rename
+# refused by policy rather than by file mode (an LSM such as SELinux /
+# AppArmor, an append-only or immutable attribute). ⚠️ Not the sticky-/tmp
+# case: measured, that never reaches the rename (a non-root run falls back
+# at the fchown first, root has CAP_FOWNER).
 _REPLACE_REFUSED_ERRNOS = frozenset({errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES})
 
 
@@ -535,52 +539,33 @@ def atomic_replace_output(out: Path, content: str) -> None:
 
     #2082: the in-place ``write_text`` truncated first, so ENOSPC / a kill /
     a FUSE drop mid-write left half a JSON document where the last good one
-    was. This writes a private tmp file in the directory of the REAL target,
-    fsyncs it, sets 0644 and ``os.replace``-s it over the target: a reader
-    sees the old bytes or the new ones, never a prefix.
+    was. When the file is *eligible* (below) this writes a private tmp file
+    beside the REAL target, fsyncs it and ``os.replace``-s it over the
+    target: a reader sees the old bytes or the new ones, never a prefix.
 
-    ⛔ It is not the shared ``_atomic_write.atomic_write_text``, which was
-    measured to regress this tool in three ways; each is handled here:
+    **The rule**: wherever the in-place write succeeded or refused, this ends
+    the same way. When atomic is not possible it falls back to the in-place
+    write — with a WARN when that silently costs atomicity on an existing
+    file — and never adds an rc 2 of its own.
 
-    * **symlink ``--output``** — the target is ``os.path.realpath(out)``, so
-      the symlink stays a symlink and the file it points at is what gets
-      replaced (including across filesystems: the tmp lives beside the
-      target, not beside the link).
-    * **a user's ``<out>.tmp``** — the tmp name comes from ``mkstemp``
-      (random, ``O_EXCL``), so nothing that already exists is touched; on any
-      failure only that tmp is removed.
-    * **directory not writable, file writable** — ``mkstemp`` raises
-      ``PermissionError``; this falls back to the in-place write with a WARN
-      on stderr and keeps today's rc 0, instead of failing a run that works
-      now. Atomicity is given up only where it was never available.
+    **Eligible for atomic** = no file yet, or a regular file with ONE link
+    that we may write (``os.access(out, W_OK)``). Everything else goes in
+    place, as before:
 
-    Two more shapes also keep the in-place write, on purpose:
+    * a non-regular file (``/proc/self/fd/1`` → pipe / tty, a FIFO, a
+      directory) — nothing to replace; no chmod on what we did not create;
+      a directory still ends in rc 2;
+    * a hard-linked file — a replace would detach this name from the other
+      links without a word; WARN and write in place so every name updates;
+    * a read-only file — it is refused with EACCES (rc 2) as before, instead
+      of being replaced through a writable directory.
 
-    * **a non-regular file** (``/proc/self/fd/1`` → a pipe or tty, a FIFO, a
-      directory): there is nothing to replace atomically; the write goes
-      through the name as before (a directory still ends in rc 2), and no
-      chmod is attempted on something this tool did not create.
-    * **a hard-linked file** (``st_nlink > 1``): a replace gives this name a
-      new inode and silently stops updating every other name of the old one.
-      Chosen: keep the in-place write (every link keeps seeing the update)
-      and WARN that this run is not atomic. The alternative — atomic, and the
-      other links go stale without a word — trades a rare crash-window for a
-      certain, silent divergence.
-
-    Rule for every other case: where the in-place write succeeded or
-    refused, this does the same — when atomic is not possible it falls back
-    to the in-place write (WARN when that loses atomicity), it does not add
-    a new rc 2:
-
-    * **read-only file** (``os.access(out, W_OK)`` false): in place, so it
-      is still refused with EACCES (rc 2) instead of being replaced through
-      the writable directory.
-    * **ownership**: the tmp is ``fchown``-ed to the old file's uid/gid, so a
-      root run does not leave a root-owned file the owner cannot rewrite. If
-      that is not permitted and the owner differs, in place (which, as
-      before, writes and then fails its own chmod: rc 2).
-    * **target is a mount point / sticky directory** (``os.replace`` fails
-      EBUSY / EXDEV / EPERM / EACCES): the tmp is removed, WARN, in place.
+    ⛔ Not the shared ``_atomic_write.atomic_write_text``, measured to
+    regress this tool three ways: the target here is ``os.path.realpath``
+    (a symlink stays a symlink, its target is replaced — across filesystems
+    too); the tmp comes from ``mkstemp`` (a user's ``<out>.tmp`` is never
+    touched); and an unwritable directory falls back instead of failing.
+    What makes :func:`_try_atomic` give up is listed there.
 
     Every ``OSError`` leaves as :class:`OutputWriteError` (or
     :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
@@ -593,25 +578,56 @@ def atomic_replace_output(out: Path, content: str) -> None:
     except OSError as exc:
         raise _output_error(out, exc, previous_kept=True) from exc
 
-    if st is not None and not stat.S_ISREG(st.st_mode):
-        _write_in_place(out, content, set_mode=False)
-        return
-    if st is not None and st.st_nlink > 1:
+    regular = st is None or stat.S_ISREG(st.st_mode)
+    eligible = st is None or (
+        regular and st.st_nlink == 1 and os.access(out, os.W_OK)
+    )
+    if eligible:
+        done, why = _try_atomic(out, content, st)
+        if done:
+            return
+        # No file yet ⇒ nothing to truncate, and the in-place write reports
+        # the real failure itself: a WARN would only be noise ahead of it.
+        if why is not None and st is not None:
+            _warn_not_atomic(out, why)
+    elif regular and st.st_nlink > 1:
         _warn_not_atomic(
             out,
             f"it has {st.st_nlink} hard links and replacing it would detach "
             f"this name from the others",
         )
-        _write_in_place(out, content, set_mode=True)
-        return
-    if st is not None and not os.access(out, os.W_OK):
-        # A read-only file (0444, or not ours): the in-place write refused
-        # it with EACCES, and a replace would need only the DIRECTORY to be
-        # writable — it would silently overwrite a file the operator
-        # protected. Let the in-place write refuse it as before (rc 2).
-        _write_in_place(out, content, set_mode=True)
-        return
+    _write_in_place(out, content, set_mode=regular)
 
+
+def _try_atomic(out: Path, content: str,
+                st: os.stat_result | None) -> tuple[bool, str | None]:
+    """Replace *out* atomically: ``(True, None)``, or ``(False, why)`` to fall back.
+
+    ``why`` is the WARN text, or ``None`` when no WARN is due. On a
+    ``False`` return nothing has changed on disk — the tmp is gone. It gives
+    up (``False``) exactly where the in-place write would still have
+    produced the old result:
+
+    * ``mkstemp`` → ``PermissionError``: the directory is not writable but
+      the file may be;
+    * the tmp cannot be handed back to the file's OWNER (``fchown``, any
+      ``OSError`` — EPERM for a non-root run, EINVAL for an unmapped id in a
+      rootless / userns container). No WARN: for a non-root run the in-place
+      write then fails its own chmod (rc 2), exactly as before, and a WARN
+      ahead of that ERROR is noise. Only the GROUP not being settable while
+      the owner matches is not a reason: the owner can still rewrite the
+      file, so the replace goes ahead (the group becomes ours);
+    * ``os.replace`` refused with one of ``_REPLACE_REFUSED_ERRNOS``.
+
+    A real write failure (write / fsync: ENOSPC, EIO, …) is NOT a fallback:
+    the tmp is removed, the target is untouched, and it is raised as
+    :class:`OutputWriteError` naming *out* — writing in place at that point
+    would put the truncation risk straight back.
+
+    The mode is set with ``fchmod`` on the open fd, before any byte is
+    written: a path-based chmod could follow a symlink someone swapped in
+    for the tmp name.
+    """
     target = Path(os.path.realpath(out))
     try:
         fd, tmp_name = tempfile.mkstemp(
@@ -620,69 +636,53 @@ def atomic_replace_output(out: Path, content: str) -> None:
             suffix=".tmp",
         )
     except PermissionError as exc:
-        if st is not None:
-            _warn_not_atomic(
-                out, f"cannot create a temporary file beside it ({exc.strerror})",
-            )
-        # No file yet ⇒ nothing to protect and nothing to warn about: the
-        # in-place write fails on the same directory with its own ERROR.
-        _write_in_place(out, content, set_mode=True)
-        return
+        return False, f"cannot create a temporary file beside it ({exc.strerror})"
     except OSError as exc:
         raise _output_error(out, exc, previous_kept=True) from exc
 
-    fallback: str | None = None
+    replaced = False
     try:
         if st is not None and hasattr(os, "fchown") and (
                 st.st_uid != os.geteuid() or st.st_gid != os.getegid()):
             try:
                 os.fchown(fd, st.st_uid, st.st_gid)
-            except PermissionError:
+            except OSError:
                 if st.st_uid != os.geteuid():
-                    # Cannot hand the file back to its owner. The in-place
-                    # writer kept the owner (and then failed its own chmod,
-                    # rc 2); taking the file over silently is worse.
-                    fallback = "owner"
-                # Same owner, a group we are not in: proceed. The file ends
-                # up with our group where in place kept the old one — the
-                # owner can still rewrite it, so no later run is refused.
-        if fallback is None:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(content)
-                fh.flush()
-                try:
-                    os.fsync(fh.fileno())
-                except OSError as exc:
-                    if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
-                        raise _output_error(out, exc, previous_kept=True) from exc
+                    return False, None
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, _OUTPUT_MODE)
+        else:  # Windows before 3.13: only the read-only bit exists anyway
             os.chmod(tmp_name, _OUTPUT_MODE)
+        fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        fd = -1  # the file object owns it now
+        with fh:
+            fh.write(content)
+            fh.flush()
             try:
-                os.replace(tmp_name, target)
+                os.fsync(fh.fileno())
             except OSError as exc:
-                if exc.errno not in _REPLACE_REFUSED_ERRNOS:
+                if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
                     raise
-                fallback = f"it cannot be replaced ({exc.strerror})"
-        else:
-            os.close(fd)
-    except BaseException as exc:
         try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+            os.replace(tmp_name, target)
+        except OSError as exc:
+            if exc.errno not in _REPLACE_REFUSED_ERRNOS:
+                raise
+            return False, f"it cannot be replaced ({exc.strerror})"
+        replaced = True
+        return True, None
+    except OSError as exc:
         if isinstance(exc, OutputWriteError):
             raise
-        if isinstance(exc, OSError):
-            raise _output_error(out, exc, previous_kept=True) from exc
-        raise
-
-    if fallback is not None:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        if fallback != "owner":
-            _warn_not_atomic(out, fallback)
-        _write_in_place(out, content, set_mode=True)
+        raise _output_error(out, exc, previous_kept=True) from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if not replaced:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
 
 def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:

@@ -28,6 +28,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,19 @@ def _run(monkeypatch, confd: Path, out: Path, *extra: str) -> int:
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else 1
     return 0
+
+
+def _forbid_in_place_write(monkeypatch, out: Path) -> None:
+    """Make a truncating write of *out* itself fail, so a test can prove the
+    atomic path ran (the tmp beside it is unaffected)."""
+    real = Path.write_text
+
+    def write_text(self, *a, **k):
+        if str(self) == str(out):
+            raise AssertionError(f"in-place write of {out}: atomicity was dropped")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", write_text)
 
 
 def _is_fresh_metadata(path: Path) -> bool:
@@ -353,18 +367,130 @@ class TestSameResultAsInPlace:
 
     @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
                         reason="only root can create a file owned by someone else")
-    def test_a_root_run_keeps_the_files_owner(self, monkeypatch, confd, tmp_path):
+    def test_a_root_run_keeps_the_files_owner(self, monkeypatch, confd, tmp_path, capsys):
+        """…AND stays atomic: an in-place write of *out* is made to fail, so
+        "always fall back in place and quietly drop atomicity" cannot pass."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         os.chown(out, 65534, 65534)
+        _forbid_in_place_write(monkeypatch, out)
 
         assert _run(monkeypatch, confd, out) == 0
+        monkeypatch.undo()
 
         st = out.stat()
         assert (st.st_uid, st.st_gid) == (65534, 65534)
         assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
 
-    @pytest.mark.parametrize("code", [errno.EBUSY, errno.EXDEV])
+    def test_an_owner_that_can_be_restored_stays_atomic(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """The root test above, simulated so it also runs unprivileged: the
+        run's euid differs from the file's owner and ``fchown`` succeeds —
+        the tmp must be handed to that owner and the replace must happen."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        st = out.stat()
+        calls: list[tuple[int, int]] = []
+        monkeypatch.setattr(gtm.os, "geteuid", lambda: st.st_uid + 1)
+        monkeypatch.setattr(gtm.os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+        _forbid_in_place_write(monkeypatch, out)
+
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert rc == 0
+        assert calls == [(st.st_uid, st.st_gid)]
+        assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize("code", [errno.EPERM, errno.EINVAL])
+    def test_a_group_that_cannot_be_set_does_not_cost_atomicity(
+        self, monkeypatch, confd, tmp_path, capsys, code,
+    ):
+        """Owner matches, only the group differs and ``fchown`` refuses —
+        EPERM (not in that group) or EINVAL (unmapped gid in a rootless /
+        userns container, F1). The owner can still rewrite the file, so the
+        replace goes ahead: rc 0, atomic, owner unchanged."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        st = out.stat()
+        monkeypatch.setattr(gtm.os, "getegid", lambda: st.st_gid + 1)
+
+        def fchown(fd, uid, gid):
+            raise OSError(code, os.strerror(code))
+
+        monkeypatch.setattr(gtm.os, "fchown", fchown)
+        _forbid_in_place_write(monkeypatch, out)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert rc == 0
+        assert _is_fresh_metadata(out)
+        assert out.stat().st_uid == st.st_uid
+        assert "WARN" not in capsys.readouterr().err
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    def test_an_owner_that_cannot_be_restored_goes_in_place_like_before(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """Someone else's writable file, non-root run: the in-place writer
+        wrote it and then failed its own chmod (EPERM, rc 2 — measured as
+        nobody). Same result, no WARN ahead of the ERROR."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        st = out.stat()
+        monkeypatch.setattr(gtm.os, "geteuid", lambda: st.st_uid + 1)
+
+        def fchown(fd, uid, gid):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        real_chmod = os.chmod
+
+        def chmod(path, mode, *a, **k):
+            if os.fspath(path) == str(out):
+                raise PermissionError(errno.EPERM, "Operation not permitted", str(out))
+            return real_chmod(path, mode, *a, **k)
+
+        monkeypatch.setattr(gtm.os, "fchown", fchown)
+        monkeypatch.setattr(gtm.os, "chmod", chmod)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+
+        assert rc == 2
+        assert f"ERROR: cannot write {out}: Operation not permitted" in err
+        assert "WARN" not in err
+        assert _is_fresh_metadata(out)   # written in place, as the old tool did
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    def test_the_tmp_mode_is_set_on_the_fd_not_through_the_name(
+        self, monkeypatch, confd, tmp_path,
+    ):
+        """F4: between ``mkstemp`` and the chmod, the tmp NAME can be swapped
+        for a symlink. A path chmod would then chmod whatever it points at."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        victim = tmp_path / "victim"
+        victim.write_text("secret\n", encoding="utf-8")
+        victim.chmod(0o600)
+        real_mkstemp = tempfile.mkstemp
+
+        def swapped(*a, **k):
+            fd, name = real_mkstemp(*a, **k)
+            os.unlink(name)
+            os.symlink(victim, name)
+            return fd, name
+
+        monkeypatch.setattr(gtm.tempfile, "mkstemp", swapped)
+        _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o600
+        assert victim.read_text(encoding="utf-8") == "secret\n"
+
+    @pytest.mark.parametrize("code", [errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES])
     def test_a_mount_point_target_falls_back_in_place(
         self, monkeypatch, confd, tmp_path, capsys, code,
     ):
