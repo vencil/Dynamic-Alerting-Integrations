@@ -81,24 +81,45 @@ func anchorWrites() []anchorWrite {
 	}
 }
 
-// (i) The tree is stranded, returning to base works: the write lands on base,
-// the feature branch gains nothing, HEAD is base.
-func TestCommitFileChange_StrandedOnPRBranch_ReturnsToBaseAndCommitsThere(t *testing.T) {
+// (i) The tree is stranded, returning to base works: the tree is back on
+// base, but this write is still refused — everything it decided was decided on
+// the branch — and nothing moves. The same request retried then lands on base.
+func TestCommitFileChange_StrandedOnPRBranch_ReturnsToBaseThenRetryCommitsThere(t *testing.T) {
 	for _, tc := range anchorWrites() {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, w, branch := strandOnPRBranch(t)
 			mainBefore := gitOut(t, dir, "rev-parse", "main")
 			branchBefore := gitOut(t, dir, "rev-parse", branch)
 
-			if err := tc.do(w); err != nil {
-				t.Fatalf("write: %v", err)
+			err := tc.do(w)
+			if !errors.Is(err, ErrTreeNotOnBase) {
+				t.Fatalf("first write err = %v, want ErrTreeNotOnBase", err)
 			}
-
+			if errors.Is(err, ErrWriteOverloaded) || errors.Is(err, ErrBaseRestore) {
+				t.Errorf("err = %v carries a sentinel the successful return does not warrant", err)
+			}
 			if got := headBranch(t, dir); got != "main" {
-				t.Errorf("HEAD = %q, want main", got)
+				t.Errorf("HEAD = %q, want main (the return to base itself succeeded)", got)
+			}
+			if got := gitOut(t, dir, "rev-parse", "main"); got != mainBefore {
+				t.Errorf("main moved although the write was refused")
 			}
 			if got := gitOut(t, dir, "rev-parse", branch); got != branchBefore {
-				t.Errorf("feature branch moved %s → %s: the write committed onto the stranded branch", branchBefore[:8], got[:8])
+				t.Errorf("feature branch moved although the write was refused")
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, tc.rel)); !os.IsNotExist(statErr) {
+				t.Errorf("%s exists on disk (stat err %v); the refused write must not touch the tree", tc.rel, statErr)
+			}
+
+			// The retry, now on base, commits there — exactly once.
+			if err := tc.do(w); err != nil {
+				t.Fatalf("retry on base: %v", err)
+			}
+			if got := headBranch(t, dir); got != "main" {
+				t.Errorf("after retry HEAD = %q, want main", got)
+			}
+			if got := gitOut(t, dir, "rev-parse", branch); got != branchBefore {
+				t.Errorf("feature branch moved %s → %s: the retry committed onto the stranded branch", branchBefore[:8], got[:8])
 			}
 			if got := gitOut(t, dir, "rev-parse", "main~1"); got != mainBefore {
 				t.Errorf("main~1 = %s, want the previous main tip %s (exactly one new commit on base)", got[:8], mainBefore[:8])
@@ -107,7 +128,7 @@ func TestCommitFileChange_StrandedOnPRBranch_ReturnsToBaseAndCommitsThere(t *tes
 				t.Errorf("main:%s = %q, want %q", tc.rel, got, tc.content)
 			}
 			if st := gitOut(t, dir, "status", "--porcelain"); st != "" {
-				t.Errorf("working tree dirty after the write:\n%s", st)
+				t.Errorf("working tree dirty after the retry:\n%s", st)
 			}
 		})
 	}
@@ -149,46 +170,29 @@ func TestCommitFileChange_StrandedOnPRBranch_ReturnFailsWritesNothing(t *testing
 				t.Errorf("%s exists on disk (stat err %v); the refused write must not touch the tree", tc.rel, statErr)
 			}
 
-			// Recovery: with the lock gone, the same write lands on base.
+			// Recovery: with the lock gone, the first retry is still prepared
+			// on the branch, so it returns the tree to base and is refused
+			// (arm (i)); the next one runs on base and lands there.
 			_ = os.Remove(lockPath)
+			if err := tc.do(w); !errors.Is(err, ErrTreeNotOnBase) || errors.Is(err, ErrWriteOverloaded) {
+				t.Fatalf("first retry after the lock cleared: err = %v, want ErrTreeNotOnBase alone", err)
+			}
+			if got := headBranch(t, dir); got != "main" {
+				t.Fatalf("after the first retry HEAD = %q, want main", got)
+			}
 			if err := tc.do(w); err != nil {
-				t.Fatalf("retry after the lock cleared: %v", err)
+				t.Fatalf("second retry, on base: %v", err)
+			}
+			if got := gitOut(t, dir, "rev-parse", "main~1"); got != mainBefore {
+				t.Errorf("main~1 = %s, want %s (exactly one new commit on base)", got[:8], mainBefore[:8])
+			}
+			if got := gitOut(t, dir, "rev-parse", branch); got != branchBefore {
+				t.Errorf("feature branch moved during recovery")
 			}
 			if got := gitOut(t, dir, "show", "main:"+tc.rel); got != strings.TrimSpace(tc.content) {
 				t.Errorf("after retry main:%s = %q, want %q", tc.rel, got, tc.content)
 			}
 		})
-	}
-}
-
-// The target file differs between the stranded branch and base (the PR's own
-// tenant): the caller read the branch's copy, so even after returning to base
-// nothing may be written — a retry reads base's copy.
-func TestCommitFileChange_StrandedOnPRBranch_TargetDiffersOnBaseIsRefused(t *testing.T) {
-	dir, w, branch := strandOnPRBranch(t)
-	mainBefore := gitOut(t, dir, "rev-parse", "main")
-	branchBefore := gitOut(t, dir, "rev-parse", branch)
-	body := "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"
-
-	_, err := w.Write(context.Background(), "db-a", anchorEmail, body)
-	if !errors.Is(err, ErrTreeNotOnBase) {
-		t.Fatalf("err = %v, want ErrTreeNotOnBase", err)
-	}
-	if got := headBranch(t, dir); got != "main" {
-		t.Errorf("HEAD = %q, want main (the return to base itself succeeded)", got)
-	}
-	if got := gitOut(t, dir, "rev-parse", "main"); got != mainBefore {
-		t.Errorf("main moved although the write was refused")
-	}
-	if got := gitOut(t, dir, "rev-parse", branch); got != branchBefore {
-		t.Errorf("feature branch moved although the write was refused")
-	}
-
-	if _, err := w.Write(context.Background(), "db-a", anchorEmail, body); err != nil {
-		t.Fatalf("retry on base: %v", err)
-	}
-	if got := gitOut(t, dir, "show", "main:db-a.yaml"); got != strings.TrimSpace(body) {
-		t.Errorf("after retry main:db-a.yaml = %q", got)
 	}
 }
 

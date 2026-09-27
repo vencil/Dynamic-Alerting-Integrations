@@ -7,7 +7,8 @@ package handler
 // branch), and not the 400 / 500 fallbacks of each handler's ladder.
 //
 // The stranded state is built with plain git: a branch in the PR namespace
-// whose copies of db-a.yaml and _groups.yaml differ from main's, checked out.
+// whose copies of db-a.yaml and _groups.yaml differ from main's, checked out
+// (so a write that slipped through onto either tree would be visible).
 
 import (
 	"bytes"
@@ -125,9 +126,10 @@ func putGroup(t *testing.T, dir string) *httptest.ResponseRecorder {
 	return executeWithRBAC(t, h, req)
 }
 
-// The return to base succeeds, but the file the handler's write read differs
-// on base: 503 TREE_NOT_ON_BASE, and the tree is left on base for the retry.
-func TestDirectWrite_StrandedOnPRBranch_TargetDiffers503(t *testing.T) {
+// The return to base succeeds, but the request was prepared on the branch:
+// 503 TREE_NOT_ON_BASE, and the tree is left on base for the retry, which
+// succeeds.
+func TestDirectWrite_StrandedOnPRBranch_ReturnsToBase503ThenRetry(t *testing.T) {
 	t.Parallel()
 	for name, do := range map[string]func(*testing.T, string) *httptest.ResponseRecorder{
 		"PutTenant": putTenantDirect,

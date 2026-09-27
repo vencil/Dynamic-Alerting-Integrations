@@ -82,11 +82,11 @@ const (
 	// unbounded goroutines.
 	CodeWriteOverloaded = "WRITE_OVERLOADED"
 	// CodeTreeNotOnBase marks an HTTP 503 from a direct commit that found the
-	// config worktree on a PR feature branch a failed PR-mode write left behind,
-	// and either could not return it to base or could return it only after the
-	// content had been derived from the branch's copy (#1723,
-	// gitops.ErrTreeNotOnBase). Nothing was committed or pushed, so a retry is
-	// safe — and once the tree is back on base, it is the retry that succeeds.
+	// config worktree on a PR feature branch a failed PR-mode write left behind
+	// (#1723, gitops.ErrTreeNotOnBase). The write is refused whether or not the
+	// tree could be returned to base, because the request was prepared on the
+	// branch. Nothing was committed or pushed, so a retry is safe — and once
+	// the tree is back on base, it is the retry that succeeds.
 	CodeTreeNotOnBase = "TREE_NOT_ON_BASE"
 	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
 	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
