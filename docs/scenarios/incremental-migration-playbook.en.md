@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**Expected output**: stdout lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. Analysis points:
+**Expected output**: stderr lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one; redirect `2>` to keep it — stdout alone only carries the list of written files), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. When tenant routes are found there is also one `phase1-routing/<tenant>.yaml` routing snippet per tenant, and `onboard-hints.json`. Analysis points:
 - Receiver count → potential tenant count
 - Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
 - Inhibit rules → whether to migrate to Dynamic Alerting severity dedup
@@ -64,12 +64,17 @@ Analyze existing rules, categorize by type (Recording Rules / Alerting Rules), a
 
 ```bash
 da-tools onboard \
-  --prometheus-rules prometheus-rules.yaml \
-  --prometheus-rules /etc/prometheus/rules.d/*.yaml \
-  --output rule-audit.json
+  --rule-files '/etc/prometheus/rules.d/*.yaml' \
+  --output-dir rule-audit
 ```
 
-**Expected output**: `rule-audit.json` summarizes alert rule statistics, per-rule migration priority scores, and rule-pack correspondence recommendations. Prioritize migrating high-priority rules (Redis, MariaDB), defer custom business rules.
+`--rule-files` takes a single glob (`**` supported); if your rule files live in several places, gather them into one directory first. ⚠️ Quote the glob, or the shell expands it into several file names and the command exits 2.
+
+**Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and the directory `rule-audit/phase2-rules/` is written:
+- `migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
+- `_defaults-suggestion.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
+
+Order the migration by `status`: `perfect` first, `complex` checked one by one, `unparseable` last or kept as original rules.
 
 ### Step 0.3: Scan Active Alerts in Cluster
 
@@ -79,11 +84,11 @@ Scan all active scrape targets in Prometheus to understand what's actually being
 da-tools blind-spot \
   --config-dir /dev/null \
   --prometheus http://prometheus:9090 \
-  --json \
+  --json-output \
   > blind-spot-report.json
 ```
 
-**Expected output**: `blind-spot-report.json` enumerates scrape targets, database types covered by rule-packs, and recommendations for directly usable Rule Packs.
+**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants already monitoring it), and `status`. No tenant config exists yet (`--config-dir /dev/null`; the `WARN: config-dir not found` line on stderr is expected), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). ⚠️ When Prometheus is unreachable the output is `[]` and the exit code is still 0 (stderr shows `WARN: Cannot reach Prometheus`) — do not read that as "the cluster is empty".
 
 ### Step 0.4: Decision Matrix — Select Pilot Domain
 

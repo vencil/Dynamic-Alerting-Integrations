@@ -162,9 +162,18 @@ cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 掃描並分析現有配置
 python3 scripts/tools/ops/onboard_platform.py \
-  --legacy-config /path/to/old_rules/ \
-  --output migration_input/
-# 產出：onboard-hints.json（含規則映射提示、需手工調整的項目、預計遷移工作量）
+  --alertmanager-config alertmanager.yml \
+  --rule-files '/path/to/old_rules/*.yaml' \
+  --output-dir migration_input/
+# glob 要加引號，否則 shell 先展開成多個檔名，rc=2
+# 產出（migration_input/）：
+#   - onboard-hints.json（租戶清單、路由提示、DB 類型；Alertmanager 設定裡
+#     找得到租戶 route 才會寫）
+#   - phase1-routing/：每個租戶 route 的路由摘要與 <租戶>.yaml 路由片段
+#   - phase2-rules/migration-plan.csv（每條舊告警規則的 metric、閾值、建議聚合方式，
+#     以及 status：perfect 可直接轉換／complex 需人工確認／unparseable 無法解析）
+#   - phase2-rules/_defaults-suggestion.yaml（由舊閾值推得的平台預設值建議；
+#     含 complex 規則的閾值，合併前要逐條對過）
 
 # 1.3 驗證環境就緒
 python3 scripts/tools/ops/validate_config.py \

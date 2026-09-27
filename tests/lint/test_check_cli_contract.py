@@ -1383,8 +1383,11 @@ class TestRealRepo:
         green tree proves only that it looked at nothing."""
         keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
         for probe in [("V1", "maintenance-scheduler", "--timezone"),  # #1513
-                      ("V1", "onboard", "--legacy-config"),     # #1818
-                      ("V2", "onboard", "--output"),            # #1514 class (abbreviation)
+                      # issue 1514 retired `onboard --legacy-config` and the
+                      # last `onboard --output`; these two are the same classes
+                      # still live in shadow-monitoring-cutover (issue 1818).
+                      ("V1", "batch-diagnose", "--check-shadow-removal"),
+                      ("V2", "migrate", "--output"),            # abbreviation class
                       ("V3", "lint", "--strict"),               # #1619
                       ("V1", "shadow-verify", "--window")]:     # #1513, inline span only
             assert probe in keys, f"probe {probe} not measured; the whole run is void"

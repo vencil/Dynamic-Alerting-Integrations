@@ -96,11 +96,11 @@ Full command set, hash verification, air-gapped flow, cosign keyless verificatio
 
 For enterprises with mature monitoring stacks, `da-tools onboard` **reverse-analyzes** Alertmanager / Prometheus rules / scrape config and produces a migration plan (skip this step if you have no existing monitoring):
 
-- Outputs `extracted-tenants.yaml` (auto-identified tenants + receiver mapping)
-- Outputs `migration-plan.csv` (rule buckets: `auto` / `review` / `skip` / `use_golden`)
-- Outputs `relabel-config-suggestions.txt` (scrape relabel for Tenant-NS mapping)
+- Alertmanager (`--alertmanager-config`) → `phase1-routing/`: a routing summary per tenant route and a `<tenant>.yaml` routing snippet, plus `onboard-hints.json` (when tenant routes are found)
+- Rule files (`--rule-files '<glob>'`) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `_defaults-suggestion.yaml`
+- Scrape config (`--scrape-config`) → `phase3-scrape/`: `scrape-analysis.yaml` and a `<job>-relabel-suggestion.yaml` per job
 
-Complete flag matrix + scrape-config parser details: [`cli-reference.md#onboard`](cli-reference.md#onboard). The output files can feed directly into `scaffold` / `migrate`, accelerating enterprise onboarding.
+Full flags, output conditions and exit codes: [`cli-reference.md#onboard`](cli-reference.md#onboard). `onboard-hints.json` feeds `scaffold --from-onboard`; rule conversion is `migrate`, which reads the old rule files directly.
 
 ### 3. Generate Tenant Config (da-tools scaffold)
 
@@ -110,7 +110,7 @@ For brand-new tenants, the interactive generator completes setup in 30 seconds:
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel-config-snippet.yaml` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
+Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.yaml` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
 
 The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 

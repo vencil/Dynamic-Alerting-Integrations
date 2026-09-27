@@ -83,16 +83,21 @@ python3 scripts/tools/ops/scaffold_tenant.py \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
   --non-interactive \
-  --output conf.d/
+  --output-dir scaffold_output
+# Copy only the tenant file: scaffold regenerates _defaults.yaml on every run,
+# so pointing it at conf.d would overwrite the platform's existing defaults
+cp scaffold_output/db-product-01.yaml conf.d/
 
-# Output:
-# - conf.d/db-product-01.yaml (tenant config framework)
+# Output (scaffold_output/):
+# - db-product-01.yaml (tenant config framework)
+# - _defaults.yaml (platform defaults template; do not overwrite the one in conf.d)
+# - relabel_configs-db-product-01.yaml (Prometheus relabel snippet for multi-namespace mapping)
 # - scaffold-report.txt (planning document)
 ```
 
 #### 1.1.3 Plan Rule Packs and Exporters
 
-`scaffold-report.txt` includes recommended Rule Pack list. Select required Rule Packs based on DB type (see [Rule Packs README](../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
+`scaffold_output/scaffold-report.txt` lists the Rule Packs for this DB type (all preloaded on the platform). Select required Rule Packs based on DB type (see [Rule Packs README](../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
 
 #### 1.1.4 Negotiate Initial Thresholds with DBA
 
@@ -400,17 +405,17 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | Tool | Purpose | Common command |
 |------|---------|--------|
-| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --output-dir conf.d/` |
+| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --non-interactive --output-dir scaffold_output` (then copy only the tenant file into conf.d, see 1.1.2) |
 | **diagnose.py** | Health check | `<tenant> --prometheus <url>` |
 | **check_alert.py** | Alert status query | `<alertname> <tenant>` |
 | **baseline_discovery.py** | Threshold suggestions | `--tenant <name> --duration 604800` |
-| **backtest_threshold.py** | Test threshold changes | `--tenant <name> --old-threshold 80 --new-threshold 75` |
+| **backtest_threshold.py** | Test threshold changes | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | Multi-tenant report | `--output report.json` |
 | **lint_custom_rules.py** | Custom rule validation | `custom-rules.yaml` |
-| **offboard_tenant.py** | Tenant offboarding | `--tenant <name> --archival-dir ./archive/` |
+| **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/` (pre-check only by default, `--execute` deletes; no archiving — `cp` first, see 4.1) |
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --execute` |
-| **onboard_platform.py** | Pre-migration scan | `--legacy-config /path/ --output migration_input/` |
-| **migrate_rule.py** | Rule migration transform | `--input hints.json --tenant <name> --output migration_output/` |
+| **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
+| **migrate_rule.py** | Rule migration transform | `<legacy-rules.yaml> --output-dir migration_output/` |
 | **validate_migration.py** | Parallel migration test | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | Migration switch | `--tenant <name> --readiness-json file.json --dry-run` |
 
