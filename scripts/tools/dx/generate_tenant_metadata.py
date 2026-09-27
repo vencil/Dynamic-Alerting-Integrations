@@ -634,7 +634,7 @@ def _try_atomic(out: Path, content: str,
     the data blocks full, the in-place write could truncate the old file and
     reuse its blocks, and succeed; here the tmp write fails with ENOSPC and
     the run ends rc 2 with the old file intact. That truncation is exactly
-    what #2082 exists to prevent, so it is kept (pending an owner ruling).
+    what #2082 exists to prevent, so it is kept (owner ruling on #2082).
 
     The mode is set with ``fchmod`` on the open fd, before any byte is
     written: a path-based chmod could follow a symlink someone swapped in
