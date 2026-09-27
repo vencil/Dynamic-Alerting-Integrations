@@ -1,9 +1,12 @@
 package gitops
 
-// #1681 (direct-write timing half): Write / WriteIfUnchanged decide on a tree
-// they read BEFORE queueing for the single-writer token. Three requests that
-// each pass their own checks can then commit, in order, a tree the exporter
-// refuses: one tenant id declared by two files.
+// #1681 (direct-write timing half): Write / WriteIfUnchanged must decide on the
+// tree their bytes land on, not on the tree they saw BEFORE queueing for the
+// single-writer token. Deciding early fails in both directions, and each has
+// a test here: three requests that each pass their own checks commit, in
+// order, one tenant id declared by two files (bypass); and a write that is
+// legal where it lands is refused on the tree an earlier queued write is
+// about to change (over-reject).
 //
 // The interleaving is forced through the admission queue itself, not a sleep:
 // the test holds the one execution token, so every request runs whatever it
@@ -19,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,9 +30,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// holdExecToken takes the writer's single execution token, so every write
+// started afterwards parks in acquireWrite. The returned release gives it
+// back; t.Cleanup also gives it back if the test ends first (a t.Fatalf while
+// writes are parked), so no parked goroutine is left waiting forever.
+func holdExecToken(t *testing.T, w *Writer) (release func()) {
+	t.Helper()
+	<-w.writeExec
+	var once sync.Once
+	release = func() { once.Do(func() { w.writeExec <- struct{}{} }) }
+	t.Cleanup(release)
+	return release
+}
+
 // waitParkedInAcquire blocks until n goroutines are parked in acquireWrite's
 // wait for the execution token.
 func waitParkedInAcquire(t *testing.T, n int) {
+	t.Helper()
+	waitParkedInAcquireUnless(t, n, func() bool { return false })
+}
+
+// waitParkedInAcquireUnless is waitParkedInAcquire that also returns, false,
+// as soon as done reports true — for a write that may return before it ever
+// reaches the queue.
+func waitParkedInAcquireUnless(t *testing.T, n int, done func() bool) bool {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	buf := make([]byte, 1<<20)
@@ -48,7 +73,10 @@ func waitParkedInAcquire(t *testing.T, n int) {
 			}
 		}
 		if parked >= n {
-			return
+			return true
+		}
+		if done() {
+			return false
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("only %d goroutine(s) parked in acquireWrite, want %d", parked, n)
@@ -112,7 +140,7 @@ func TestDirectWrite_StaleOutOfLockCheckCannotReAddASection(t *testing.T) {
 
 	// Hold the single execution token: every request below runs up to
 	// acquireWrite and parks there, in the order it is started.
-	<-w.writeExec
+	release := holdExecToken(t, w)
 
 	type result struct {
 		name string
@@ -144,7 +172,7 @@ func TestDirectWrite_StaleOutOfLockCheckCannotReAddASection(t *testing.T) {
 	waitParkedInAcquire(t, 3)
 
 	// Release the token: T1, T2, T3 now run one at a time, in that order.
-	w.writeExec <- struct{}{}
+	release()
 	errs := map[string]error{}
 	for i := 0; i < 3; i++ {
 		r := <-results
@@ -177,4 +205,83 @@ func TestDirectWrite_StaleOutOfLockCheckCannotReAddASection(t *testing.T) {
 	} else if !errors.Is(t3Err, ErrValidation) || !strings.Contains(t3Err.Error(), "adds tenant section") {
 		t.Errorf("T3 err = %v, want the added-section refusal", t3Err)
 	}
+}
+
+// TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree pins the other direction
+// (#1718's shape on the direct path): nothing decided before queueing may
+// REFUSE a write that is legal on the tree it lands on.
+func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
+	both := "tenants:\n" +
+		"  mv-x:\n    _silent_mode: \"warning\"\n" +
+		"  mv-y:\n    _silent_mode: \"warning\"\n"
+
+	// T1 Write(mv-x) is queued to drop mv-y from the shared file; T2
+	// Write(mv-y) is started after it. On the tree T2 lands on, mv-x.yaml no
+	// longer declares mv-y, so creating mv-y.yaml is legal — sent one after the
+	// other, both succeed. Queued, T2 must succeed too, not be refused with
+	// ErrTenantDeclaredElsewhere on the tree as it was before T1 ran.
+	t.Run("queued behind the write that frees the id", func(t *testing.T) {
+		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": both})
+		w := NewWriter(dir, dir)
+		ctx := context.Background()
+		release := holdExecToken(t, w)
+
+		t1 := make(chan error, 1)
+		go func() {
+			_, err := w.Write(ctx, "mv-x", "t1@example.com", tenantBody("mv-x"))
+			t1 <- err
+		}()
+		waitParkedInAcquire(t, 1)
+		t2 := make(chan error, 1)
+		go func() {
+			_, err := w.Write(ctx, "mv-y", "t2@example.com", tenantBody("mv-y"))
+			t2 <- err
+		}()
+		if !waitParkedInAcquireUnless(t, 2, func() bool { return len(t2) > 0 }) {
+			release()
+			err := <-t2
+			<-t1
+			t.Fatalf("T2 Write(mv-y) returned before queueing: %v — refused on the tree "+
+				"T1 had not changed yet (ErrTenantDeclaredElsewhere=%v)",
+				err, errors.Is(err, ErrTenantDeclaredElsewhere))
+		}
+		release()
+		if err := <-t1; err != nil {
+			t.Fatalf("T1 Write(mv-x): %v", err)
+		}
+		if err := <-t2; err != nil {
+			t.Fatalf("T2 Write(mv-y): %v", err)
+		}
+		if decl := filesDeclaring(t, dir, "mv-y"); len(decl) != 1 || decl[0] != "mv-y.yaml" {
+			t.Errorf("files declaring mv-y = %v, want [mv-y.yaml]", decl)
+		}
+		if _, _, err := cfg.LoadDir(dir, nil); err != nil {
+			t.Errorf("exporter refuses the resulting tree: %v", err)
+		}
+	})
+
+	// A WriteIfUnchanged whose base is stale must hear ErrPrecondition —
+	// "refresh and retry" — not a validation verdict about a file it has not
+	// seen. Its body still carries mv-y, which the current file no longer
+	// declares; judged on the current file that is an added section.
+	t.Run("stale base hears ErrPrecondition", func(t *testing.T) {
+		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": both})
+		w := NewWriter(dir, dir)
+		ctx := context.Background()
+		staleHash := cfg.ComputeSourceHash([]byte(both))
+		if _, err := w.Write(ctx, "mv-x", "t1@example.com", tenantBody("mv-x")); err != nil {
+			t.Fatalf("Write(mv-x): %v", err)
+		}
+		body := "tenants:\n" +
+			"  mv-x:\n    _silent_mode: \"critical\"\n" +
+			"  mv-y:\n    _silent_mode: \"warning\"\n"
+		_, err := w.WriteIfUnchanged(ctx, "mv-x", "t2@example.com", body, staleHash)
+		if !errors.Is(err, ErrPrecondition) {
+			t.Fatalf("WriteIfUnchanged on a stale base: err = %v (ErrValidation=%v), want ErrPrecondition",
+				err, errors.Is(err, ErrValidation))
+		}
+		if got, rerr := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); rerr != nil || string(got) != tenantBody("mv-x") {
+			t.Errorf("mv-x.yaml = %q (%v), want unchanged", got, rerr)
+		}
+	})
 }
