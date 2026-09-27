@@ -190,12 +190,15 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 # 產出（migration_output/）：
 #   - platform-recording-rules.yaml、platform-alert-rules.yaml
 #     （新規則；alert rule 帶 migration_status: shadow label）
-#   - tenant-config.yaml（要貼進各租戶 conf.d 的閾值 key）
+#   - defaults-snippet.yaml（先合併進 _defaults.yaml 的 defaults: 區塊；exporter 只發射
+#     宣告過的 key。值取自原規則，warning 層對所有租戶生效）
+#   - tenant-config.yaml（warning 層只有要和預設值不同的租戶才需要；<key>_critical
+#     不能放 defaults，要 critical 的租戶都要貼進自己的 conf.d 檔）
 #   - prefix-mapping.yaml（階段 3 validate_migration 的比對組）
 #   - migration-report.txt、triage-report.csv（轉換報告）
-# 工具沒有「只轉某些租戶」的選項；租戶是在 tenant-config.yaml 貼進哪個租戶檔時決定的。
-# ⚠️ 產出的閾值 recording rule 目前與 exporter 發射的 label 對不上，而且 key 要先在
-#    _defaults.yaml 宣告才會發射（issue 1818 追蹤中），部署前請人工核對。
+# 工具沒有「只轉某些租戶」的選項；某個租戶不要這條告警，在該租戶檔把 key 設成 "disable"。
+# ⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 label、
+#    recording rule 讀加了前綴的指標名、沒有 defaults-snippet.yaml），用它時部署前請人工核對。
 
 # 2.2 部署新規則（shadow 狀態）：把兩份規則檔合併進 Prometheus 的規則 ConfigMap
 #     （具體操作依環境：ConfigMap 或 Helm）

@@ -3233,6 +3233,13 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "passes an operator-supplied `defaults` block through into a conf.d "
         "document; the key names are the operator's and the resulting file is "
         "read by the DERIVED artifact half of this gate",
+    "scripts/tools/ops/migrate_rule.py":
+        "render_defaults_snippet refuses to place a `<base>_critical` key "
+        "under `defaults:` (it only backfills the bare base), and its keys come from "
+        "the parsed rule's metric name, which cannot carry `{labels}` — the "
+        "dimensional variant is only ever printed as a comment in "
+        "tenant-config.yaml; pinned by "
+        "tests/ops/test_migrate_threshold_wiring.py",
     "scripts/tools/ops/deprecate_rule.py":
         "removes keys and rewrites what is left; it can shrink a `defaults:` "
         "map but never name a new key",

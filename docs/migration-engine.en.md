@@ -19,7 +19,7 @@ lang: en
 flowchart LR
     A["Original PromQL<br/>string"] --> B["promql_parser<br/>.parse()"]
     B -->|"read-only AST"| C["walk_ast()<br/>Collect VectorSelector<br/>nodes"]
-    C --> D["rewrite_expr()<br/>1. custom_ prefix<br/>2. tenant label"]
+    C --> D["rewrite_expr_tenant_label()<br/>tenant label injection"]
     D --> E["Reparse +<br/>prettify()"]
     E -->|"✅ Valid"| F["Output<br/>Rewritten PromQL"]
     B -->|"❌ Parse fails"| G["Fallback<br/>Regex path"]
@@ -37,7 +37,6 @@ flowchart LR
 |------------|-------------|
 | `extract_metrics_ast()` | Precise AST-based metric name identification, replacing regex + blacklist approach |
 | `extract_label_matchers_ast()` | Extracts all label matchers (including `=~` regex matchers) |
-| `rewrite_expr_prefix()` | `custom_` prefix injection using word-boundary regex to prevent substring false matches |
 | `rewrite_expr_tenant_label()` | `tenant=~".+"` label injection, ensuring tenant isolation |
 | `detect_semantic_break_ast()` | Detects `absent()` / `predict_linear()` and other semantic-breaking functions |
 
@@ -56,7 +55,7 @@ Degradation does not affect output format — both paths produce the same three-
 The complete migration path integrates the AST engine, Shadow Monitoring, and Triage mode:
 
 1. **Triage**: `migrate_rule.py --triage` produces a CSV inventory, categorizing each rule's migration strategy (direct / prefix / skip)
-2. **Migration execution**: AST engine handles prefix injection and tenant label injection
+2. **Migration execution**: the AST engine injects the tenant label. The `custom_` prefix goes only on threshold keys and recording rule names, not on source metric names: the source series come from the customer's existing exporters, so renaming them would leave the recording rule empty (issue 1818)
 3. **Shadow Monitoring**: `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%)
 4. **Go-live**: `scaffold_tenant.py` generates the complete tenant configuration package
 

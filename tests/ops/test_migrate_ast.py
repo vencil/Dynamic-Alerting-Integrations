@@ -165,52 +165,6 @@ def test_ast_normal_not_detected():
     ) is False
 
 
-def test_prefix_simple_prefix():
-    """測試簡單前綴注入。"""
-    result = migrate_rule.rewrite_expr_prefix(
-        "mysql_connections > 100",
-        {"mysql_connections": "custom_mysql_connections"}
-    )
-    assert result == "custom_mysql_connections > 100"
-
-def test_prefix_with_labels():
-    """測試帶標籤的前綴注入。"""
-    result = migrate_rule.rewrite_expr_prefix(
-        'mysql_connections{job="mysql"} > 100',
-        {"mysql_connections": "custom_mysql_connections"}
-    )
-    assert 'custom_mysql_connections{job="mysql"}' in result
-
-def test_prefix_does_not_affect_substring():
-    """測試前綴不影響含子字串的其他 metric。"""
-    result = migrate_rule.rewrite_expr_prefix(
-        "mysql_connections_total > 100",
-        {"mysql_connections": "custom_mysql_connections"}
-    )
-    # mysql_connections_total 不應被改
-    assert "mysql_connections_total" in result
-
-def test_prefix_compound_expr():
-    """測試複合表達式中多個 metric 的前綴。"""
-    result = migrate_rule.rewrite_expr_prefix(
-        "(metric_a > 10) and (metric_b > 20)",
-        {"metric_a": "custom_metric_a", "metric_b": "custom_metric_b"}
-    )
-    assert "custom_metric_a" in result
-    assert "custom_metric_b" in result
-
-@requires_ast
-def test_prefix_validates_reparse():
-    """測試改寫後的表達式仍可 parse。"""
-    result = migrate_rule.rewrite_expr_prefix(
-        'rate(http_requests_total{method="GET"}[5m]) > 100',
-        {"http_requests_total": "custom_http_requests_total"}
-    )
-    import promql_parser
-    ast = promql_parser.parse(result)
-    assert ast is not None
-
-
 def test_tenant_inject_into_existing_labels():
     """測試在現有標籤中注入租戶。"""
     result = migrate_rule.rewrite_expr_tenant_label(
@@ -278,9 +232,8 @@ def test_killer_complex_label_regex():
     metrics = migrate_rule.extract_metrics_ast(expr)
     assert metrics == ["mysql_up"]
 
-    # Prefix + tenant injection roundtrip
-    rewritten = migrate_rule.rewrite_expr_prefix(expr, {"mysql_up": "custom_mysql_up"})
-    rewritten = migrate_rule.rewrite_expr_tenant_label(rewritten, ["custom_mysql_up"])
+    # Tenant injection roundtrip
+    rewritten = migrate_rule.rewrite_expr_tenant_label(expr, ["mysql_up"])
     import promql_parser
     ast = promql_parser.parse(rewritten)
     assert ast is not None

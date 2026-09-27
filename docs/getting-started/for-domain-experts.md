@@ -208,7 +208,7 @@ python3 scripts/tools/ops/validate_migration.py \
 ```
 
 - **步驟 1**：`--rule-files` 吃 glob。只給規則檔時，輸出是規則分析；`onboard-hints.json` 只有在另外給 `--alertmanager-config`、而且從中找到租戶時才會寫出。
-- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`platform-recording-rules.yaml`、`platform-alert-rules.yaml`、`tenant-config.yaml`、`prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是 metric 名稱的前綴（預設 `custom_`），不是租戶前綴；指定單一租戶、直接產出 Rule Pack 檔，這兩件事工具尚未實作。⚠️ 目前 migrate 產出的閾值 recording rule 以完整 key 當 `metric` label，和 exporter 拆開後發射的 `component`／`metric` 對不上，而且產出的 key 要先在 `_defaults.yaml` 宣告才會發射（issue 1818 追蹤中）；套用前請照上方「第二部分」人工核對。
+- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`platform-recording-rules.yaml`、`platform-alert-rules.yaml`、`tenant-config.yaml`、`defaults-snippet.yaml`、`prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；指定單一租戶、直接產出 Rule Pack 檔，這兩件事工具尚未實作。⚠️ 先把 `defaults-snippet.yaml` 合併進 `_defaults.yaml` 的 `defaults:` 區塊：exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。
 - **步驟 3**：比對的是同一個 Prometheus 上的新舊兩組查詢，`--mapping` 讀步驟 2 產出的 `prefix-mapping.yaml`；單組比對用 `--old '<舊查詢>' --new '<新查詢>'`。兩個 Prometheus 之間互相比對、指定比對的時間範圍，這兩件事工具尚未實作；要持續觀察用 `--watch --interval <秒> --rounds <輪>`，加 `--auto-detect-convergence` 會在數值收斂時自動停止。完整流程見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)。
 
 ### 回測閾值變更

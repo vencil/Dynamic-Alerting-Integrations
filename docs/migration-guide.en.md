@@ -127,8 +127,8 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant
 The tool automatically handles:
 
 - **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
-- **Three-piece output**: `tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`
-- **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched, and the warning alert gets a second-tier `unless` clause injected
+- **Three-piece output**: `tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`, plus `defaults-snippet.yaml`, which must be merged into `_defaults.yaml` before the exporter emits these thresholds
+- **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 
 AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
