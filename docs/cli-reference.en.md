@@ -2710,6 +2710,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
 | 1 | guard found errors — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
+| 3 | a config file in scope is rejected by the exporter's decode (invalid YAML, a key written twice in one mapping, a value of the wrong type) — the exporter skips that file, so the tenants in it were **not checked**. The report's "Files the exporter cannot parse" section lists them (paths relative to `--config-dir`); fix them and re-run. Takes precedence over 1, and replaces the "vacuously safe" 0 when such files are all the scope holds (#2123) |
 
 **Examples**
 

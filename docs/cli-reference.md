@@ -2440,6 +2440,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
+| 3 | scope 內有 exporter 解析會拒收的設定檔（YAML 語法錯、同一個 mapping 裡同一個 key 寫兩次、值的型別不對）——exporter 會略過該檔，所以檔內租戶**沒有被檢查**。報告的「Files the exporter cannot parse」段落列出這些檔（相對於 `--config-dir` 的路徑），修好後重跑。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
 
 **範例**
 
