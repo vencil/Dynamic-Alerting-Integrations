@@ -480,14 +480,18 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 
 // Write validates, persists, and commits a tenant's config YAML.
 //
-// Flow (steps 2–6 are shared with writeSpecialFile via commitFileChange):
-//  1. Validate YAML schema (ParseConfig + ValidateTenantKeys)
-//  2. Lock mutex
-//  3. Record HEAD before write
-//  4. Write file to configDir/{tenantID}.yaml
-//  5. git add + git commit --author="<authorEmail>"
-//  6. Check HEAD again (conflict detection)
-//  7. onWrite callback (e.g. SSE broadcast)
+// Flow (steps 6–9 are shared with writeSpecialFile via commitFileChange):
+//  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
+//  2. Admission (single-writer token), then lock the tree
+//  3. Resolve the tenant's file, under the lock (#1673 / #2078)
+//  4. WriteIfUnchanged only: base-hash precondition on that file
+//  5. validate, under the lock — the authoritative verdict and the
+//     notices returned (#1681)
+//  6. Record HEAD before write
+//  7. Write the file resolved in step 3
+//  8. git add + git commit --author="<authorEmail>", then check the commit's
+//     parent against step 6 (conflict detection)
+//  9. onWrite callback (e.g. SSE broadcast)
 //
 // notices carries the advisory deprecation channel (#1231 1b): non-blocking
 // deprecated-key alias advisories from validate(), meaningful ONLY when err is
@@ -502,9 +506,10 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 // nothing is written and *PreconditionError (errors.Is ErrPrecondition) is
 // returned.
 //
-// The check runs INSIDE the writer lock, immediately before the commit, so it
-// is the authoritative one: a caller that also compares hashes in its handler
-// is doing a cheap early rejection, not concurrency control — that comparison
+// The check runs INSIDE the writer lock, on the file resolved there and before
+// the body is validated and committed, so it is the authoritative one: a
+// caller that also compares hashes in its handler is doing a cheap early
+// rejection, not concurrency control — that comparison
 // reads the file outside the lock, leaving a window in which another write can
 // land between the read and the commit (the TOCTOU the custom-alerts handler
 // documented as a future hardening).
@@ -529,19 +534,26 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	// #1673: resolve the tenant's file first — validate's eol guard reads it,
-	// and the commit below must land on the same one. An ambiguous tenant is
-	// refused here with a typed error, so callers can map it to 409 instead of
-	// the 400 a validation string would produce.
-	filePath, err := w.tenantFilePath(tenantID)
-	if err != nil {
-		return nil, err
-	}
-	// Step 1: validate schema before touching disk (and before taking an
-	// admission slot — validation is cheap, CPU-only, and must not consume the
-	// single-writer token).
-	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
-	if len(errs) > 0 {
+	// Step 1: PRE-FLIGHT, body only — the same validateBodyOnly WritePR's
+	// Step 1 runs, and for the same reason.
+	//
+	// ⛔ NOTHING HERE MAY READ THE TREE. Every write queued ahead of this one
+	// may change conf.d before this one runs, so a verdict taken on the tree
+	// now is a verdict on a tree the write does not land on, in both
+	// directions (#1681):
+	//
+	//   - BYPASS: a stale addedTenantKeys baseline still grandfathers a
+	//     section an earlier write removed, and the write puts it back beside
+	//     the id's own file — one id declared by two files.
+	//   - OVER-REJECT: a stale #2078 walk (tenantFilePath) or baseline refuses
+	//     a write that is legal where it lands — an id whose other declaration
+	//     an earlier write is about to remove, or a WriteIfUnchanged whose base
+	//     is stale and should hear ErrPrecondition, not a validation verdict.
+	//
+	// What is left — is this body well-formed? — cannot go stale, and
+	// rejecting it here keeps a bad body from consuming the single-writer
+	// token. Step 3 is the authoritative run.
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -554,9 +566,21 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	w.lockTree()
 	defer w.unlockTree()
 
-	// Optimistic concurrency, under the lock and immediately before the write:
-	// anything that lands between here and commitFileChange would have to hold
-	// w.mu, which this goroutine has.
+	// Step 3: AUTHORITATIVE resolve + validate, under the lock, against the
+	// tree the commit below lands on. Every in-process write that changes
+	// conf.d holds w.mu, which this goroutine now holds until the commit — so
+	// no other write can make this verdict stale.
+	//
+	// #1673: resolve ONCE here and use that path for the base-hash read, for
+	// validate's baseline and for the commit, so the three cannot disagree.
+	filePath, err := w.tenantFilePath(tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Optimistic concurrency, under the lock and before validating: a caller
+	// whose base is stale must hear ErrPrecondition (refresh and retry), not a
+	// validation verdict about a file it has not seen.
 	if baseHash != "" {
 		existing, rerr := os.ReadFile(filePath)
 		if rerr != nil && !os.IsNotExist(rerr) {
@@ -570,6 +594,11 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		if current != baseHash {
 			return nil, &PreconditionError{TenantID: tenantID, Expected: baseHash, Current: current}
 		}
+	}
+
+	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	if err := w.commitFileChange(
@@ -648,10 +677,10 @@ var (
 // until it returns; while the count is non-zero, later calls fail at once.
 //
 // ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
-// before taking the writer token/lock — direct Write / WriteIfUnchanged and
-// Diff (which never takes the lock) — can each start a walk within the same
+// without the writer lock — Diff — can each start a walk within the same
 // timeout window, and each of those can block too; walks under the lock
-// (WriteMerged, WritePR, WritePRBatch) are serialised. A blocked walk ends
+// (Write / WriteIfUnchanged, WriteMerged, WritePR, WritePRBatch) are
+// serialised. A blocked walk ends
 // only when the file it is reading is opened for writing or the process
 // restarts: removing the file does not unblock a read already in progress.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {
@@ -802,9 +831,8 @@ func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (
 // conflict detector only catches EXTERNAL commits, not serialized in-process
 // writes onto a stale base).
 //
-// Unlike Write(), validation runs under the lock — the final content is not
-// known until the base is read. The merge + validate are CPU-only and
-// sub-millisecond, so the extra time holding the write token is negligible.
+// Validation runs only under the lock — unlike Write(), there is no
+// pre-flight, because the final content is not known until the base is read.
 //
 // notices is validate()'s advisory deprecation channel (#1231 1b), meaningful
 // only when err is nil — note it is populated even on the no-op short-circuit
@@ -1297,8 +1325,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 //
 // ⚠️ It is NOT a weaker validate — it is a DIFFERENT question ("is this body
 // well-formed?"). The authoritative answer still comes from validate, run
-// against the tree the write lands on. A caller that has no checkout between
-// the two — Write, WriteMerged — must keep calling validate directly.
+// against the tree the write lands on: every write path runs validate under
+// the lock before it commits.
 func validateBodyOnly(tenantID, yamlContent string) []string {
 	tcfg, errs := validateShape(tenantID, yamlContent)
 	if len(errs) > 0 {
@@ -1363,7 +1391,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// Read the file this write replaces ONCE. Two stateful checks need it — the
 	// added-section gate below and the eol-expansion guard at the end — and on a
 	// large flat conf.d file a second full read+parse doubles a validate() that
-	// runs before the single-writer token is taken.
+	// may run while the single-writer lock is held.
 	//
 	// ⛔ The path comes from the caller (#1673), never from tenantID + ".yaml":
 	// a tenant whose file is spelled `.yml` would otherwise get an empty
