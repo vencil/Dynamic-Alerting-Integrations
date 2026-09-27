@@ -250,14 +250,16 @@ else
     # ⛔ An EXIT trap, not a clean-up after the command: Ctrl-C or SIGTERM mid
     # preflight skips a following command, and the throwaway is left behind
     # (#2038). The subshell's status is preflight's; the trap does not change it.
-    # ⚠️ Closing the terminal (SIGHUP) still leaves it.
+    # ⛔ `cd` in a nested subshell: the trap's shell must not stand in the tree
+    # it removes (Windows refuses to delete a process's cwd).
+    # ⚠️ bash: other shells may skip an EXIT trap on a signal (dash on SIGTERM).
     _common="$(CDPATH='' cd "$git_dir" && pwd)"
     _tmp_root="$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
     printf -v _common_q '%q' "$_common"
     printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
     # Quoted twice: the shell you paste into reads it once, the trap once more.
     printf -v _remove_q '%q' "git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
-    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && cd ${_tmp_wt_q} && make pr-preflight)"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && make pr-preflight))"
 fi
 
 # No marker — block with actionable instructions.

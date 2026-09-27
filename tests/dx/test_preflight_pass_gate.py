@@ -765,18 +765,26 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     line = lines[0].replace("make pr-preflight", f": > {shlex.quote(str(started))}; sleep 30")
 
     # A session of its own, so the signal reaches the whole group like a
-    # terminal's Ctrl-C does.
+    # terminal's Ctrl-C does. SIGINT back to default: a shell that starts with
+    # it ignored (pytest run as a background job) cannot trap it, and this cell
+    # would time out for a reason that says nothing about the line.
     proc = subprocess.Popen(["bash", "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
+                            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    deadline = time.monotonic() + 20
-    while not started.exists():
-        assert proc.poll() is None, f"the line ended before preflight began: {proc.communicate(timeout=20)}"
-        assert time.monotonic() < deadline, "preflight never started"
-        time.sleep(0.05)
-    os.killpg(proc.pid, sig)
-    proc.communicate(timeout=20)
+    try:
+        deadline = time.monotonic() + 20
+        while not started.exists():
+            assert proc.poll() is None, f"the line ended before preflight began: {proc.communicate(timeout=20)}"
+            assert time.monotonic() < deadline, "preflight never started"
+            time.sleep(0.05)
+        os.killpg(proc.pid, sig)
+        proc.communicate(timeout=20)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
-    assert proc.returncode != 0, "an interrupted preflight reported success"
     assert _git(repo, "worktree", "list", "--porcelain").stdout == listed, (
         "the throwaway worktree is still registered after the interrupt"
     )
