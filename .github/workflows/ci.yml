@@ -399,12 +399,11 @@ jobs:
               # template hands over is annotated (#1176), so editing a template
               # alone must not skip the Portal leg.
               - "docs/assets/template-data.json"
+              # Also the receiver-required drift Vitest's (#2033) only source
+              # since #2137: it reads the receiver field contract from this
+              # schema, to which _lib_constants.py (pytest) and the Go guard's
+              # routing.go (go test) are pinned in their own legs.
               - "docs/schemas/tenant-config.schema.json"
-              # The receiver-required drift Vitest (#2033) reads the routing
-              # pipeline's required receiver fields from both sources, so a
-              # change there must re-check every receiver the portal teaches.
-              - "scripts/tools/_lib_constants.py"
-              - "components/threshold-exporter/app/internal/guard/routing.go"
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"

@@ -51,6 +51,9 @@ modules:
       - validate_and_clamp
       - detect_cli_lang
       - i18n_text
+    excluded:
+      receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
+      receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
 
   scripts/tools/_lib_io.py:
     covered:

@@ -58,6 +58,9 @@ from _lib_python import (  # noqa: E402
     RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     detect_cli_lang,
+    receiver_exactly_one_problem,
+    receiver_field_state,
+    FIELD_SET,
     exit_on_yaml_file_error,
     load_tenant_configs,
 )
@@ -364,6 +367,14 @@ def test_receiver(
                 status=STATUS_INVALID_CONFIG,
                 detail=f"missing required field '{req_field}'",
             )
+    problem = receiver_exactly_one_problem(rtype, receiver)
+    if problem:
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_CONFIG,
+            detail=problem,
+        )
 
     # Validate URL
     url, url_err = validate_receiver_url(receiver)
@@ -420,8 +431,13 @@ def _build_test_request(
         return url, _build_teams_payload()
 
     if rtype == "pagerduty":
-        service_key = receiver.get("routing_key") or receiver.get("service_key", "")
-        return "https://events.pagerduty.com/v2/enqueue", _build_pagerduty_payload(service_key)
+        # test_receiver has already enforced "exactly one, and a string" via
+        # receiver_exactly_one_problem; pick the key by the same rule so the
+        # one sent is the one that counts as given.
+        key_field = next(f for f in ("routing_key", "service_key")
+                         if receiver_field_state(receiver, f) == FIELD_SET)
+        return ("https://events.pagerduty.com/v2/enqueue",
+                _build_pagerduty_payload(receiver[key_field]))
 
     if rtype == "email":
         # Email: SMTP handshake test (EHLO only, no actual send)

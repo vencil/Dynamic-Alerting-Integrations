@@ -147,11 +147,32 @@ class TestBuildReceiverConfig:
         assert entry["severity"] == "critical"
         assert entry["client"] == "Dynamic Alerting"
 
-    def test_pagerduty_missing_service_key(self):
-        """PagerDuty 缺少必填 service_key 欄位。"""
+    def test_pagerduty_missing_both_keys(self):
+        """PagerDuty service_key 與 routing_key 都沒給 → WARN 並略過（#2137）。"""
         cfg, warnings = build_receiver_config({"type": "pagerduty"}, "t")
         assert cfg is None
-        assert any("requires 'service_key'" in w for w in warnings)
+        assert any("requires exactly one of 'service_key' or 'routing_key', none is set"
+                   in w for w in warnings)
+
+    def test_pagerduty_routing_key_only_is_valid(self):
+        """只給 routing_key（Events API v2）是合法的，會進 AM config（#2137）。"""
+        cfg, warnings = build_receiver_config({"type": "pagerduty", "routing_key": "r"}, "t")
+        assert warnings == []
+        assert cfg == {"pagerduty_configs": [{"routing_key": "r"}]}
+
+    def test_pagerduty_both_keys_rejected(self):
+        """兩個都給 → WARN 並略過；訊息說明 AM 會走 v1 並忽略 routing_key（#2137）。"""
+        cfg, warnings = build_receiver_config(
+            {"type": "pagerduty", "service_key": "k", "routing_key": "r"}, "t")
+        assert cfg is None
+        assert any("not both" in w and "v1" in w and "skipping" in w for w in warnings)
+
+    def test_pagerduty_empty_key_counts_as_unset(self):
+        """空字串視同沒給，與必填欄位的判斷一致。"""
+        cfg, warnings = build_receiver_config(
+            {"type": "pagerduty", "service_key": "", "routing_key": "r"}, "t")
+        assert warnings == []
+        assert cfg["pagerduty_configs"][0]["routing_key"] == "r"
 
 
 # ============================================================

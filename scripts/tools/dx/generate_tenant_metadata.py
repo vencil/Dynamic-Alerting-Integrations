@@ -30,6 +30,11 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
+    FIELD_NOT_STRING,
+    FIELD_SET,
+    receiver_field_state,
+)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
@@ -217,8 +222,20 @@ def extract_routing_channel(tenant_config: dict) -> str:
         webhook_url = receiver.get("webhook_url", "")
         return f"{recv_type}:{webhook_url}" if webhook_url else ""
     elif recv_type == "pagerduty":
-        service_key = receiver.get("service_key", "")
-        return f"{recv_type}:{service_key}" if service_key else ""
+        # The keys are credentials: name the Events API version, never the
+        # key. service_key wins when both are set, as it does in Alertmanager.
+        # Presence is the routing pipeline's rule (receiver_field_state). A
+        # non-string key is a config error the pipeline rejects, so the
+        # version cannot be told: "" like every other undeterminable channel.
+        sk = receiver_field_state(receiver, "service_key")
+        rk = receiver_field_state(receiver, "routing_key")
+        if FIELD_NOT_STRING in (sk, rk):
+            return ""
+        if sk == FIELD_SET:
+            return f"{recv_type}:v1"
+        if rk == FIELD_SET:
+            return f"{recv_type}:v2"
+        return ""
 
     return ""
 

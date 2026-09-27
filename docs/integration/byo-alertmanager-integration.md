@@ -268,15 +268,17 @@ _routing:
     send_resolved: true  # optional: send resolved alerts
 ```
 
-其他五種 receiver 類型快速參考：
+其他五種 receiver 類型快速參考（各類型的必填欄位以 [`tenant-config.schema.json`](../schemas/tenant-config.schema.json) 為準）：
 
-| 類型 | 必填欄位 | 範例 |
-|------|---------|------|
-| **Email** | `to`, `smarthost`, `from` | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
-| **Slack** | `api_url`, `channel` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
-| **Microsoft Teams** | `webhook_url` | `webhook_url: "https://outlook.office.com/webhook/..."` |
-| **Rocket.Chat** | `url`, `channel`, `username` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
-| **PagerDuty** | `service_key`, `severity`, `client` | `service_key: "key-123"`, `severity: "critical"` |
+| 類型 | 範例 |
+|------|------|
+| **Email** | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
+| **Slack** | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
+| **Microsoft Teams** | `webhook_url: "https://outlook.office.com/webhook/..."` |
+| **Rocket.Chat** | `url: "https://chat.example.com/hooks/xxx/yyy"` |
+| **PagerDuty** | `routing_key: "key-123"`, `severity: "critical"` |
+
+PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanager 會走 v1 並忽略 `routing_key`。
 
 所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 

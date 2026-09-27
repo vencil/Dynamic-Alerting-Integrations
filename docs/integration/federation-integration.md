@@ -260,6 +260,7 @@ tenants:
         type: "email"
         to: ["dba-europe@example.com"]
         smarthost: "smtp.example.com:587"
+        from: "alertmanager@example.com"
 ```
 
 ### 4.4 Rule Pack 部署

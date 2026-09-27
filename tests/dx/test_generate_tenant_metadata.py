@@ -364,3 +364,33 @@ class TestHiddenEntriesAxis:
             f"{err!r}"
         )
         assert sorted(meta["tenant_metadata"]) == ["db-a", "db-b"]
+
+
+class TestPagerdutyRoutingChannel:
+    """#2137：routing_key-only 的 pagerduty 現在合法；卡片標出 API 版本，不輸出 key 本身。"""
+
+    def _channel(self, receiver):
+        return gtm.extract_routing_channel({"_routing": {"receiver": receiver}})
+
+    def test_routing_key_only_is_named_v2(self):
+        assert self._channel({"type": "pagerduty", "routing_key": "secret-r"}) == "pagerduty:v2"
+
+    def test_service_key_is_named_v1(self):
+        assert self._channel({"type": "pagerduty", "service_key": "secret-k"}) == "pagerduty:v1"
+
+    def test_empty_key_counts_as_unset(self):
+        assert self._channel({"type": "pagerduty", "service_key": "", "routing_key": "r"}) == "pagerduty:v2"
+        assert self._channel({"type": "pagerduty"}) == ""
+
+    def test_presence_is_the_pipelines_type_rule(self):
+        """A non-string key is a config error the pipeline rejects: no v1/v2 label."""
+        for bad in (0, False, [], {}):
+            assert self._channel({"type": "pagerduty", "service_key": bad, "routing_key": "r"}) == ""
+            assert self._channel({"type": "pagerduty", "routing_key": bad}) == ""
+        assert self._channel({"type": "pagerduty", "service_key": None, "routing_key": "r"}) == "pagerduty:v2"
+        assert self._channel({"type": "pagerduty", "service_key": " "}) == "pagerduty:v1"
+
+    def test_key_value_never_appears(self):
+        for recv in ({"type": "pagerduty", "service_key": "secret-k"},
+                     {"type": "pagerduty", "routing_key": "secret-r"}):
+            assert "secret" not in self._channel(recv)

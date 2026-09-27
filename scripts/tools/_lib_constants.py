@@ -79,7 +79,17 @@ PLATFORM_DEFAULTS: Final[dict[str, Any]] = {
 # ============================================================
 # Receiver Types
 # ============================================================
-# Each type maps to: (alertmanager_config_key, required_fields, optional_fields)
+# Each type maps to: am_key (Alertmanager config key), required (every field
+# must be set), optional, and — where a type needs EXACTLY ONE of a field group —
+# exactly_one_of (list of groups; both-set and none-set are errors). Fields in a
+# group are also listed in `optional` so code that walks "every field this type
+# accepts" (required + optional) still sees them.
+#
+# The presence contract (required + exactly_one_of) is shared with
+# docs/schemas/tenant-config.schema.json and the Go guard
+# (internal/guard/routing.go receiverTypeSpecs). The schema is the hub:
+# tests/shared/test_receiver_spec_parity.py pins this dict to it (including the
+# accepted field set), and a Go test pins receiverTypeSpecs to it.
 RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     "webhook": {
         "am_key": "webhook_configs",
@@ -92,8 +102,7 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
         # receiver (smarthost) with no global smtp_* block, and Alertmanager
         # rejects an email_config without `from` UNLESS a global smtp_from is set
         # ("no global SMTP from set" at config load). Same per-receiver SMTP
-        # assumption that already makes `smarthost` required. Keep in lock-step
-        # with the Go guard (internal/guard/routing.go receiverTypeSpecs).
+        # assumption that already makes `smarthost` required.
         "required": ["to", "smarthost", "from"],
         "optional": ["auth_username", "auth_password", "require_tls",
                       "html", "text", "headers", "send_resolved"],
@@ -117,9 +126,13 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     },
     "pagerduty": {
         "am_key": "pagerduty_configs",
-        "required": ["service_key"],
-        "optional": ["routing_key", "severity", "description", "client",
-                      "client_url", "send_resolved"],
+        "required": [],
+        # Alertmanager needs one of the two, and given both it uses the Events
+        # API v1 via service_key and silently ignores routing_key
+        # (notify/pagerduty/pagerduty.go) — so both-set is rejected as well.
+        "exactly_one_of": [["service_key", "routing_key"]],
+        "optional": ["service_key", "routing_key", "severity", "description",
+                      "client", "client_url", "send_resolved"],
     },
 }
 
@@ -133,7 +146,7 @@ RECEIVER_URL_FIELDS: Final[dict[str, list[str]]] = {
     "slack":      ["api_url"],
     "teams":      ["webhook_url"],
     "rocketchat": ["url"],
-    "pagerduty":  [],                 # service_key only, no URL
+    "pagerduty":  [],                 # service_key / routing_key, no URL
 }
 
 # ============================================================

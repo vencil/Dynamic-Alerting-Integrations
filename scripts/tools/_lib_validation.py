@@ -14,6 +14,7 @@ from _lib_constants import (
     _DURATION_RE,
     GUARDRAILS,
     PLATFORM_DEFAULTS,
+    RECEIVER_TYPES,
 )
 
 
@@ -119,6 +120,61 @@ def validate_and_clamp(
         return clamped, warnings
 
     return value, warnings
+
+
+FIELD_UNSET = "unset"
+FIELD_SET = "set"
+FIELD_NOT_STRING = "not_string"
+
+
+def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
+    """State of an exactly-one group field, by the schema's type rule (#2137).
+
+    Cases:
+    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+    ``FIELD_NOT_STRING`` is an error,
+    stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
+    fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
+    rule for non-strings is right for all of them.
+
+    Same rule as the Go guard (internal/guard/routing.go exactlyOneFinding).
+    """
+    value = receiver.get(field)
+    if value is None or value == "":
+        return FIELD_UNSET
+    if isinstance(value, str):
+        return FIELD_SET
+    return FIELD_NOT_STRING
+
+
+def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
+    """Check the ``exactly_one_of`` groups of ``RECEIVER_TYPES[rtype]``.
+
+    Each field's state comes from ``receiver_field_state``; a non-string value
+    is reported first, and only when every field's type is valid is "exactly
+    one" checked. Returns the first problem (callers prefix tenant / receiver
+    context), or ``None`` when every group has exactly one field set. Unknown
+    types return ``None``; callers reject those separately.
+    """
+    spec = RECEIVER_TYPES.get(rtype, {})
+    for group in spec.get("exactly_one_of", []):
+        states = {f: receiver_field_state(receiver, f) for f in group}
+        for f, state in states.items():
+            if state == FIELD_NOT_STRING:
+                return (f"field '{f}' must be a string, "
+                        f"got {type(receiver[f]).__name__}")
+        set_fields = [f for f, state in states.items() if state == FIELD_SET]
+        if len(set_fields) == 1:
+            continue
+        names = " or ".join(f"'{f}'" for f in group)
+        if not set_fields:
+            return f"requires exactly one of {names}, none is set"
+        problem = f"requires exactly one of {names}, not both"
+        if rtype == "pagerduty":
+            problem += (" (Alertmanager would use the Events API v1 via "
+                        "service_key and silently ignore routing_key)")
+        return problem
+    return None
 
 
 def i18n_text(zh: str, en: str) -> str:
