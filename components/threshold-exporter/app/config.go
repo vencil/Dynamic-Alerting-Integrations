@@ -58,9 +58,11 @@ type flatScanState struct {
 	// ⛔ IT TRAVELS WITH THE COMMIT, NOT BESIDE IT. installConfig writes
 	// m.flat, m.lastHash and m.lastReload in ONE lock window, and the
 	// identity accessor reads them in one RLock; a reader therefore never
-	// pairs this set with another reload's hash. Reloads are not serialised
-	// (#2122), so a set published from its own lock window could be
-	// another reload's. da_config_parse_failure_total cannot stand in for
+	// pairs this set with another reload's hash. reloadMu (#2122) orders
+	// reloads but readers never take it, so a set published in a window of
+	// its own would still be readable beside the previous commit's hash;
+	// the pairing is guaranteed by the shared lock window, not by reload
+	// ordering. da_config_parse_failure_total cannot stand in for
 	// it: that counter is bumped by every scan of a broken file, before and
 	// without any commit (#2132).
 	parseFailed []string
@@ -100,9 +102,12 @@ type hierarchyState struct {
 	// (absent from both `cfg.Defaults` and `cfg.OptionalOverrides`).
 	//
 	// ⛔ It lives HERE, next to tenantSources, so the undeliverable audit reads
-	// both from one lock window. Reloads are not serialised, and pairing
-	// reload N's config with reload N+1's diagnosis is exactly the failure
-	// the tenantSources snapshot exists to prevent. (#1569)
+	// both from one lock window. Pairing reload N's config with reload
+	// N+1's diagnosis is exactly the failure the tenantSources snapshot
+	// exists to prevent. (#1569) reloadMu (#2122) now keeps reloads from
+	// overlapping, but the one-window read is still what guarantees the
+	// pair: the hierarchy plane and the config are installed in different
+	// m.mu windows even within one reload.
 	unreachableInherited map[string][]string
 }
 
@@ -149,6 +154,33 @@ type ConfigManager struct {
 	// SetAfterCommitUnlockForTest can never race the read; per-manager
 	// rather than package-level so `t.Parallel()` tests do not share it.
 	afterCommitUnlock func()
+
+	// afterHierarchyInstall is a TEST-ONLY seam fired by
+	// installNewHierarchyState between its two lock windows: after the
+	// hierarchy plane is installed and m.mu released, before commitFlatFrom
+	// installs the service config (#2122). Nil in production. Read inside
+	// the first window, per-manager — same contract as afterCommitUnlock.
+	afterHierarchyInstall func()
+
+	// reloadMu serialises whole reloads (#2122). A hierarchical reload
+	// writes the manager in TWO m.mu windows (installNewHierarchyState:
+	// hierarchy plane, then the service config via commitFlatFrom). Two
+	// overlapping reloads could interleave hierW → hierB → flatB → flatW:
+	// the collector then serves W while m.hierarchy.hashes says B, and
+	// detectChange (which compares against hierarchy.hashes) never sees a
+	// reason to reload again, so it does not heal. Holding reloadMu across
+	// the whole reload makes the two windows of one reload contiguous
+	// relative to any other reload.
+	//
+	// ⛔ Taken ONLY at the outermost reload entries (fireDebounced and the
+	// window<=0 branch of triggerDebouncedReload). sync.Mutex is not
+	// reentrant, and the reload internals call each other (diffAndReload →
+	// Load, incrementalLoadFrom → fullDirLoadFrom, …), so taking it lower
+	// down would self-deadlock. Lock order: reloadMu is the OUTERMOST lock —
+	// it is acquired while holding none of m.mu, debounce.mu or
+	// undeliverable.mu, and each of those is taken and released inside it.
+	// Scrapes and /effective only take m.mu, so they never wait on it.
+	reloadMu sync.Mutex
 
 	// undeliverable tracks what the subtree-undeliverable audit last put in
 	// the log, so a persistent condition is stated once per change instead of
@@ -311,6 +343,21 @@ func (m *ConfigManager) SetAfterCommitUnlockForTest(fn func()) {
 	m.afterCommitUnlock = fn
 }
 
+// SetAfterHierarchyInstallForTest installs a callback fired by
+// installNewHierarchyState after the hierarchy plane is installed and m.mu
+// released, and before commitFlatFrom installs the service config (#2122).
+//
+// ⛔ Test-only. It pins a reload in the one instant where the two planes
+// disagree, which is what lets a test start a second reload there and
+// prove reloadMu keeps it out. Without a hook that instant is a few
+// microseconds wide and a race test would pass by luck either way.
+// Per-manager and read back under m.mu, like SetAfterCommitUnlockForTest.
+func (m *ConfigManager) SetAfterHierarchyInstallForTest(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.afterHierarchyInstall = fn
+}
+
 // getLogger returns m.logger, lazy-initializing to log.Default() if
 // the constructor was bypassed (test struct-literal pattern). Always
 // returns a non-nil pointer so callers can write
@@ -413,12 +460,15 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 // ⛔ The first return value is the whole reason this function exists, and
 // the reason it is a return value rather than a comment. An earlier
 // revision assigned m.config here and let the caller read
-// m.hierarchy.tenantSources afterwards, outside the lock. Reloads are not
-// serialised — `fireDebounced` sets `debounce.timer = nil`, unlocks, and
-// only then calls diffAndReload — so the audit could pair reload N's cfg
-// with reload N+1's hierarchy and name a HEALTHY tenant as having no
+// m.hierarchy.tenantSources afterwards, outside the lock. Reloads were not
+// serialised then — `fireDebounced` sets `debounce.timer = nil`, unlocks,
+// and only then calls diffAndReload — so the audit could pair reload N's
+// cfg with reload N+1's hierarchy and name a HEALTHY tenant as having no
 // metrics, from the one check whose entire value is being trustworthy
-// about that.
+// about that. reloadMu (#2122) now keeps reloads from overlapping, but it
+// is held only by the debounced/synchronous reload entries, not by every
+// caller of commitConfig; the snapshot keeps the audit's pair correct by
+// construction instead of by the call graph.
 //
 // ⛔ The fix was originally a comment saying "read this inside the lock",
 // and adversarial review measured what that was worth: moving the read

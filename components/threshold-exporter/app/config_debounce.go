@@ -98,9 +98,13 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		// on a timer. Observe reload duration so callers using the
 		// zero-window opt-out still feed the SLO histogram (B-3).
 		m.recordReason(reason)
+		// Outermost reload entry → take reloadMu here (see the field doc in
+		// config.go, #2122). debounce.mu is not held at this point.
+		m.reloadMu.Lock()
 		t0 := time.Now()
 		_, _, err := m.diffAndReload()
 		m.getMetrics().ObserveReloadDuration(time.Since(t0))
+		m.reloadMu.Unlock()
 		if err != nil {
 			m.getLogger().Printf("ERROR: synchronous reload failed: %v", err)
 		}
@@ -153,6 +157,15 @@ func (m *ConfigManager) recordReason(reason string) {
 // triggers arriving during the reload accumulate into the next batch),
 // then runs diffAndReload without holding the mutex so a long reload does
 // not block new triggers.
+//
+// Because debounce.timer is cleared before the reload runs, a trigger that
+// arrives mid-reload arms a NEW timer, and that timer can fire while this
+// reload is still running. The reload therefore runs under reloadMu
+// (#2122): the second fire waits for the first to finish instead of
+// interleaving its two install windows with ours. It is taken only after
+// debounce.mu is released — reloadMu is the outermost lock, and holding
+// debounce.mu while waiting on it would also stall every trigger for the
+// length of a reload.
 func (m *ConfigManager) fireDebounced() {
 	m.debounce.mu.Lock()
 	// Snapshot reasons and clear state so concurrent triggerDebouncedReload
@@ -167,9 +180,13 @@ func (m *ConfigManager) fireDebounced() {
 	// errors out. Sample count == fire count by construction.
 	m.getMetrics().ObserveDebounceBatch(len(reasons))
 	atomic.AddUint64(&m.debounce.fired, 1)
+	// t0 is taken after the lock so the reload-duration histogram keeps
+	// measuring the reload, not the time spent queued behind another one.
+	m.reloadMu.Lock()
 	t0 := time.Now()
 	_, _, err := m.diffAndReload()
 	m.getMetrics().ObserveReloadDuration(time.Since(t0))
+	m.reloadMu.Unlock()
 	if err != nil {
 		m.getLogger().Printf("ERROR: debounced reload failed: %v", err)
 	}
@@ -594,6 +611,13 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 // last-reload gauge. Two lock windows on purpose: the flat rebuild parses
 // YAML and we don't want the debounce goroutine to gate scrapes on it.
 //
+// ⛔ Two windows means a second reload must not run in between: hierW →
+// hierB → flatB → flatW would leave the service on W while the hierarchy
+// plane (the baseline detectChange compares against) says B, and nothing
+// would ever reload it back (#2122). The caller's reload entry holds
+// reloadMu for exactly that reason; this function does not take it itself
+// because it runs inside diffAndReload, below the outermost entry.
+//
 // ⛔ Hierarchy FIRST, then the flat commit — the reverse of the historical
 // order, for two reasons that both come from having one walk:
 //
@@ -628,7 +652,14 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.graph = scan.graph
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.hierarchy.platform = scan.platform
+	afterHierarchyInstall := m.afterHierarchyInstall
 	m.mu.Unlock()
+
+	// Test-only seam (nil in production): the planes disagree right here,
+	// which is the instant #2122's regression test parks a reload in.
+	if afterHierarchyInstall != nil {
+		afterHierarchyInstall()
+	}
 
 	if err := m.commitFlatFrom(scan.tree); err != nil {
 		m.getLogger().Printf("ERROR: flat rebuild (commitFlatFrom) inside diffAndReload failed: %v", err)

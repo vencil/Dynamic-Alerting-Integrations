@@ -31,9 +31,10 @@ package main
 // ⛔ ONE RLock FOR ALL FIELDS. installConfig writes config, lastHash,
 // lastReload and m.flat (parseFailed) in one lock window; reading them in
 // several would let a reload land between the reads and pair one install's
-// hash with another's parse_failed. Reloads are not serialised (#2122) and
-// the hierarchy plane is written in a DIFFERENT lock window, so nothing from
-// m.hierarchy (hashes, merged_hash) may be added here.
+// hash with another's parse_failed. Reloads are serialised by reloadMu
+// (#2122), but this reader does not take it, and within ONE reload the
+// hierarchy plane is written in a DIFFERENT lock window from the one this
+// reads, so nothing from m.hierarchy (hashes, merged_hash) may be added here.
 
 import (
 	"encoding/json"
