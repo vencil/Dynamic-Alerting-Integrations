@@ -60,8 +60,9 @@ END = "# i4-doc-anchor: unanchored-end"
 AMTOOL_SUFFIX = " 2>&1 || true"
 
 # A tool name as a word anywhere in code. Deliberately not "command
-# position": `env jq`, `xargs jq`, `bash -c "jq"` and `T=jq; $T` all run it.
-_TOOL_WORD = re.compile(r"(?<![\w.\-/])(%s)(?![\w\-])" % "|".join(TOOLS))
+# position": `env jq`, `xargs jq`, `bash -c "jq"`, `T=jq; $T` and
+# `/usr/bin/jq` all run it.
+_TOOL_WORD = re.compile(r"(?<![\w.\-])(%s)(?![\w\-])" % "|".join(TOOLS))
 _HELPER_NAME = re.compile(r"\b(%s)\b" % "|".join(HELPERS))
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
 _SECTION = re.compile(r"^§(\d+(?:\.\d+)*) ")
@@ -375,6 +376,8 @@ def test_region_rules() -> None:
     "bash -c \"jq -n '.x'\"",
     "T=jq; $T '.x' f",
     "echo '{}' | xargs jq -n '.x'",
+    "/usr/bin/jq '.x' f",
+    "./yq '.x' f",
     'echo "  ok §2.1.1 promtool --experimental promql format"',
 ])
 def test_tool_word_outside_region_is_red(line: str) -> None:
