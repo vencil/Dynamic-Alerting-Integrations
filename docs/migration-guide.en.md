@@ -237,10 +237,12 @@ tenants:
 |----------|---------------|----------------|----------------------|-------|
 | **Multi-tier severity** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule handles `_critical` downgrade logic automatically |
 | **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
-| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum reflects cluster-wide load |
-| **Percentage** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | Percentage computed in the Recording Rule |
+| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
+| **Ratio** | `buffer_pool_pages_data / buffer_pool_pages_total` | `tenant:mysql_buffer_pool_usage:ratio`: `sum by(tenant) (...) / sum by(tenant) (...)` | No tenant key (see ⚠️ below) | Ratio computed in the Recording Rule (0–1, not multiplied by 100) |
 
-> Scenarios 2–5 reuse the Scenario 1 three-piece template — only the metric name and Tenant Config key change; the platform-side Alert Rule structure is always identical. Rule Pack design + three-piece contract: [design/rule-packs.en.md](design/rule-packs.en.md). Actual golden alert listings: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
+> ⚠️ For the rate and ratio rows, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`, and nothing alerts on `tenant:mysql_buffer_pool_usage:ratio`. To let tenants tune these thresholds, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validation reports `unknown key … not in defaults`.
+
+> Scenarios 2–5 reuse the Scenario 1 three-piece template — only the metric name and Tenant Config key change; the platform-side Alert Rule structure is always identical. This assumes the key is already declared by the platform (see ⚠️ above). Rule Pack design + three-piece contract: [design/rule-packs.en.md](design/rule-packs.en.md). Actual golden alert listings: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
 
 ### 9. Dimensional Labels — Multi-DB Type Support
 
