@@ -35,6 +35,7 @@ from _lib_io import (  # noqa: F401
     YamlFileError,
     exit_on_yaml_file_error,
     load_yaml_file,
+    load_yaml_file_exporter_keys,
     iter_yaml_files,
     load_tenant_configs,
     write_text_secure,

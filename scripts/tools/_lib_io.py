@@ -20,6 +20,8 @@ import yaml
 
 from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
+# Leaf module (yaml + stdlib only), so no import cycle (#2114).
+from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys
 # No import cycle: _lib_exitcodes imports only sys + _lib_compat (#1641).
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
@@ -130,6 +132,47 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return data if data is not None else default
+
+
+def load_yaml_file_exporter_keys(
+    path: Optional[str],
+    default: Any = None,
+    *,
+    raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
+) -> Any:
+    """:func:`load_yaml_file`, except every mapping KEY is the scalar's raw
+    TEXT — the tenant id the exporter reads (#2114; ``_lib_yaml_keys``).
+
+    Same contract as :func:`load_yaml_file` in every other respect — *default*
+    for a missing / empty file, :class:`YamlFileError` naming the file for
+    non-UTF-8 content or bad syntax, and the SAME pure-Python parser, so a
+    file this refuses is exactly a file :func:`load_yaml_file` refuses (its
+    callers route those limits, see ``SAFE_LOADER``). Values stay
+    PyYAML-typed; *raw_text_sequences* names the keys whose list value is a
+    list of tenant ids and comes back as source text too.
+
+    ⚠️ NOT strict: a duplicate key keeps the last value, like
+    :func:`load_yaml_file`. The strict sibling is
+    :func:`load_yaml_file_strict_exporter_keys`; pick by what the caller
+    read with before (#2123 decided which readers are strict).
+
+    ⚠️ A sibling rather than a flag on :func:`load_yaml_file`: that helper
+    has dozens of callers reading files that hold no tenant id, and changing
+    their key types would be a change nobody asked them about.
+    """
+    if not path:
+        return default
+    file = Path(path)
+    if not file.is_file():
+        return default
+    try:
+        stream = io.StringIO(file.read_bytes().decode("utf-8"))
+        stream.name = str(path)   # PyYAML marks keep naming the real file
+        data = load_exporter_keys(stream,
+                                  raw_text_sequences=raw_text_sequences)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
+    return default if data is None else data
 
 
 # ── Strict reading: a duplicate mapping key is an error (#2123) ─────────────
@@ -300,6 +343,31 @@ else:  # pragma: no cover - every PyPI wheel ships libyaml
     StrictCSafeLoader = StrictSafeLoader  # type: ignore[misc,assignment]
 
 
+class StrictExporterKeyLoader(RejectDuplicateKeys, ExporterKeyLoader):
+    """Strict (#2123) AND exporter keys (#2114): the two compose.
+
+    ``RejectDuplicateKeys`` checks the composed node tree before anything is
+    constructed, by ``_key_identity`` — kind + raw text, which is the
+    exporter's identity too — so ``123:`` and ``"123":`` in one mapping are
+    ONE key and raise :class:`DuplicateKeyError`, as yaml.v3 rejects them
+    (``mapping key "123" already defined``). ``ExporterKeyLoader`` then
+    builds the keys as that same raw text. Pure-Python parser underneath
+    (``ExporterKeyLoader`` is a ``yaml.SafeLoader``), like every reader that
+    uses it had before.
+    """
+
+
+@functools.lru_cache(maxsize=None)
+def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]") -> type:
+    """``StrictExporterKeyLoader``, or a subclass that also reads the lists
+    under *raw_text_sequences* as source text — a class, because the strict
+    entry points below build the loader themselves."""
+    if not raw_text_sequences:
+        return StrictExporterKeyLoader
+    return type("StrictExporterKeyLoader_raw", (StrictExporterKeyLoader,),
+                {"raw_text_sequences": raw_text_sequences})
+
+
 # ⛔ The loader is DRIVEN here rather than passed as `yaml.load(..., Loader=)`:
 # bandit B506 (a hard gate) name-matches only a literal `yaml.SafeLoader` /
 # `yaml.CSafeLoader` and flags any subclass, while a loader built and driven
@@ -310,11 +378,12 @@ else:  # pragma: no cover - every PyPI wheel ships libyaml
 def _strict_loader_class(fast: bool, loader: Optional[type]) -> type:
     if loader is None:
         return StrictCSafeLoader if fast else StrictSafeLoader
-    # A caller-supplied class must still be one of these two underneath:
+    # A caller-supplied class must still be one of these underneath:
     # anything else could be a loader that constructs arbitrary objects.
-    if not issubclass(loader, (StrictSafeLoader, StrictCSafeLoader)):
+    if not issubclass(loader, (StrictSafeLoader, StrictCSafeLoader,
+                               StrictExporterKeyLoader)):
         raise TypeError(f"{loader.__name__} is not a StrictSafeLoader / "
-                        f"StrictCSafeLoader subclass")
+                        f"StrictCSafeLoader / StrictExporterKeyLoader subclass")
     return loader
 
 
@@ -364,6 +433,53 @@ def load_yaml_file_strict(path: Optional[str], default: Any = None) -> Any:
         stream = io.StringIO(raw.decode("utf-8"))
         stream.name = str(path)
         data = strict_safe_load(stream)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
+    return default if data is None else data
+
+
+def strict_load_exporter_keys(stream: Any, *,
+                              raw_text_sequences: "frozenset[str] | tuple[str, ...]" = ()
+                              ) -> Any:
+    """:func:`strict_safe_load` whose mapping keys are the exporter's tenant
+    ids (raw text, #2114). Same driver, same errors — only the loader class
+    differs (:class:`StrictExporterKeyLoader`)."""
+    return strict_safe_load(stream, loader=_strict_exporter_key_class(
+        frozenset(raw_text_sequences)))
+
+
+def strict_load_all_exporter_keys(stream: Any, *,
+                                  raw_text_sequences: "frozenset[str] | tuple[str, ...]" = ()
+                                  ) -> Iterator[Any]:
+    """:func:`strict_safe_load_all` with exporter keys; lazy, so
+    ``next(...)`` reads — and checks — the first document only."""
+    return strict_safe_load_all(stream, loader=_strict_exporter_key_class(
+        frozenset(raw_text_sequences)))
+
+
+def load_yaml_file_strict_exporter_keys(
+    path: Optional[str],
+    default: Any = None,
+    *,
+    raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
+) -> Any:
+    """:func:`load_yaml_file_strict` whose mapping keys are raw text (#2114).
+
+    Same contract as :func:`load_yaml_file_strict` — same pure parser, same
+    UTF-8 decode, *default* for a missing or empty file, and a duplicate
+    key (by the exporter's identity: ``123`` and ``"123"`` are one key)
+    raises the same :class:`YamlFileError` a syntax error does.
+    """
+    # Spelled apart from its siblings: the mutation catalogue anchors on
+    # their lines being unique in the file.
+    if not path or not os.path.isfile(path):
+        return default
+    try:
+        text = Path(path).read_bytes().decode("utf-8")
+        named = io.StringIO(text)
+        named.name = str(path)
+        data = strict_load_exporter_keys(
+            named, raw_text_sequences=raw_text_sequences)
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return default if data is None else data
@@ -471,6 +587,14 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
         Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict when
         *config_dir* is missing or holds no eligible files.
 
+        Tenant names are always ``str``: the key's source text, which is
+        what the exporter serves (#2114) — an unquoted ``010:`` is ``"010"``
+        and ``yes:`` is ``"yes"`` (PyYAML's own typing made them ``8`` and
+        ``True``). Mapping keys inside a config are text too; values keep
+        PyYAML's types. Same pure-Python parser as :func:`load_yaml_file`.
+        ⚠️ This is true of THIS helper's callers; tools that read tenant ids
+        some other way may still use PyYAML's typing (tracked in #2115).
+
         ⚠️ A document that parses to a non-mapping is skipped, but an EMPTY
         file is not: ``load_yaml_file`` turns it into the ``{}`` default, so
         the file registers a tenant named after it with no thresholds. Same
@@ -504,7 +628,10 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
         # Strict (#2123): a file holding a key twice is one the exporter
         # rejects, so it raises YamlFileError here like any unreadable file
         # instead of registering whichever value PyYAML kept last.
-        raw = load_yaml_file_strict(fpath, default={})
+        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
+        # them (`010:` is "010", not 8) — and `123:` / `"123":` in one
+        # mapping are that duplicate.
+        raw = load_yaml_file_strict_exporter_keys(fpath, default={})
         if not isinstance(raw, dict):
             continue
         if "tenants" in raw and isinstance(raw.get("tenants"), dict):

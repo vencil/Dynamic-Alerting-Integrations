@@ -1278,12 +1278,25 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
       the Go decoder here would be an unbounded differential (#1942), so the
       rule is "first document's `tenants:` keys", named as such.
 
+    * The ids are the keys' raw TEXT (#2114), as yaml.v3 keys the exporter's
+      ``map[string]`` — ``010:`` is ``"010"``, ``yes:`` is ``"yes"``, and
+      ``123:`` / ``"123":`` are one id — read through ``_lib_yaml_keys``, on
+      the same pure-Python parser as before (so a file the flat readers
+      cannot parse declares nothing here either). Before, the keys were
+      PyYAML's YAML 1.1 values (``8``, ``True``, ``123``), so a platform
+      file's ``123:`` never met the tenant file's ``"123":``. The three
+      readers that ask this set about membership through
+      ``overlay_platform_tenants`` (``_grar_parse``, ``diagnose``,
+      ``check_routing_profiles``) key their own tenants the same way. ⚠️ Not
+      every tenant reader in the tool family does yet — the remaining
+      PyYAML-typed ones are tracked in #2115.
+
     A file that does not parse as YAML at all, or cannot be read, declares
     nothing; naming it is the calling reader's own job (it has its own record
-    of skipped files). ``yaml`` is imported lazily: the rest of this module
-    is pure name predicates.
+    of skipped files). The loader is imported lazily: the rest of this
+    module is pure name predicates.
     """
-    import yaml  # lazy: see above
+    from _lib_yaml_keys import load_first_document_exporter_keys  # lazy: see above
 
     ids: set[str] = set()
     for path in iter_config_files(config_dir, recursive=True):
@@ -1291,14 +1304,14 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                # First document only; the generator is not advanced past
+                # First document only; the loader is not advanced past
                 # it, so a later document's error cannot drop this one.
-                data = next(yaml.safe_load_all(fh), None)
+                data = load_first_document_exporter_keys(fh)
         except Exception:  # noqa: BLE001 — declares nothing; see docstring
             continue
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
-            # Keys as YAML gave them, not str()-ed: the flat readers key
-            # their tenants the same way, so membership must compare alike.
+            # Keys are the source text (#2114); the overlay readers key
+            # their tenants the same way, so membership compares text to text.
             ids.update(data["tenants"])
     return ids
 

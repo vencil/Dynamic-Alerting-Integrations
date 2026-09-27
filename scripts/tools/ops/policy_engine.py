@@ -72,11 +72,17 @@ except ImportError:
     )
 # #2123: policy YAML is read strictly — a key written twice in one mapping is
 # a YAMLError (YamlFileError from the file reader), not PyYAML's last value.
+# #2114: on that same strict read, `exclude_tenants` items are source text
+# (the `*_exporter_keys` variants compose the two loaders in `_lib_io`).
 try:
-    from _lib_io import load_yaml_file_strict, strict_safe_load
+    from _lib_io import (
+        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        strict_load_exporter_keys, strict_safe_load,
+    )
 except ImportError:
     from scripts.tools._lib_io import (  # type: ignore[no-redef]
-        load_yaml_file_strict, strict_safe_load,
+        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        strict_load_exporter_keys, strict_safe_load,
     )
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,10 @@ VALID_OPERATORS = frozenset({
 })
 
 VALID_SEVERITIES = frozenset({"error", "warning"})
+
+# #2114: keys whose list items are tenant ids — read as source text, the way
+# `load_tenant_configs` reads the tenant keys they are compared with.
+POLICY_TENANT_LISTS = frozenset({"exclude_tenants"})
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +174,14 @@ def load_policies(source: str) -> list[PolicyRule]:
 
     Returns:
         PolicyRule 清單。
+
+    ``exclude_tenants`` 的項目以**原始文字**讀入（#2114）：租戶 id 是
+    exporter 讀到的 key 文字（``010`` 就是 ``"010"``），排除清單必須用同一種
+    讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
+    對不上租戶 ``"010"``。
     """
-    return rules_from_policy_data(load_yaml_file_strict(source))
+    return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
+        source, raw_text_sequences=POLICY_TENANT_LISTS))
 
 
 def rules_from_policy_data(data: Any) -> list[PolicyRule]:
@@ -403,7 +419,8 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict) -> list[Violation
     Returns:
         違規清單（空 = 通過）。
     """
-    # Check tenant exclusion
+    # Check tenant exclusion — text to text (#2114): tenant ids and the
+    # `exclude_tenants` items are both the YAML source text.
     if tenant in rule.exclude_tenants:
         return []
 
@@ -763,7 +780,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             with open(args.policy, encoding="utf-8") as f:
-                policy_data = strict_safe_load(f)
+                # #2123 strict; #2114 `exclude_tenants` items as source
+                # text, see `load_policies`. Same pure parser as before.
+                policy_data = strict_load_exporter_keys(
+                    f, raw_text_sequences=POLICY_TENANT_LISTS)
         except OSError as e:
             problem = ("policy_file_unreadable",
                        f"cannot read {args.policy!r}: {e}",

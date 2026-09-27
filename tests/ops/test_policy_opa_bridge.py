@@ -60,6 +60,8 @@ class TestPolicyResult:
 # （重複 key 即錯），所以 stub 打在 _lib_io.load_yaml_file_strict 上
 # （patch pob 模組屬性不再被 lib 內部呼叫看見）；lib 以 `default=` kwarg
 # 呼叫，stub 簽名同步承接。斷言逐字不動。
+# #2114：lib 讀租戶檔改走 `load_yaml_file_strict_exporter_keys`（同樣嚴格、
+# key 取原始文字），stub 目標跟著搬過去。
 class TestLoadTenantConfigs:
     def test_missing_dir_returns_empty(self, tmp_path):
         ghost = tmp_path / "ghost"
@@ -73,7 +75,7 @@ class TestLoadTenantConfigs:
         }
         for p in files:
             Path(p).write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict",
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
                             lambda p, default=None: files.get(p, default))
         configs = pob.load_tenant_configs(str(tmp_path))
         assert configs["db-a"] == {"mysql_connections": "70"}
@@ -83,7 +85,7 @@ class TestLoadTenantConfigs:
         # File contains {tenants: {db-a: {...}, db-b: {...}}}.
         f = tmp_path / "all.yaml"
         f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict", lambda p, default=None: {
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys", lambda p, default=None: {
             "tenants": {
                 "db-a": {"mysql_connections": "70"},
                 "db-b": {"redis_memory": "1024"},
@@ -95,7 +97,7 @@ class TestLoadTenantConfigs:
     def test_underscore_prefix_files_skipped(self, tmp_path, monkeypatch):
         (tmp_path / "_defaults.yaml").write_text("x", encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict",
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
                             lambda p, default=None: {"k": "v"})
         configs = pob.load_tenant_configs(str(tmp_path))
         assert "db-a" in configs
@@ -104,7 +106,7 @@ class TestLoadTenantConfigs:
     def test_non_yaml_extensions_ignored(self, tmp_path, monkeypatch):
         (tmp_path / "readme.md").write_text("x", encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict",
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
                             lambda p, default=None: {"k": "v"})
         configs = pob.load_tenant_configs(str(tmp_path))
         assert "readme" not in configs
@@ -112,14 +114,14 @@ class TestLoadTenantConfigs:
 
     def test_non_dict_yaml_skipped(self, tmp_path, monkeypatch):
         (tmp_path / "weird.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict",
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
                             lambda p, default=None: ["a list", "not a dict"])
         configs = pob.load_tenant_configs(str(tmp_path))
         assert configs == {}
 
     def test_wrapper_with_non_dict_tenant_value_skipped(self, tmp_path, monkeypatch):
         (tmp_path / "x.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict", lambda p, default=None: {
+        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys", lambda p, default=None: {
             "tenants": {
                 "db-a": {"mysql_connections": "70"},
                 "db-b": "not a dict",  # skipped

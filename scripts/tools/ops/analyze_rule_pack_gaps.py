@@ -38,6 +38,7 @@ from _lib_python import (  # noqa: E402
     format_json_report,
     load_tenant_configs as _load_tenant_configs_dir,
     load_yaml_file,
+    load_yaml_file_exporter_keys,
     write_json_or_die,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -86,7 +87,8 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
     configs = {}
 
     if tenant_config:
-        data = load_yaml_file(tenant_config, default={})
+        # #2114: tenant ids as source text, as the directory branch reads them.
+        data = load_yaml_file_exporter_keys(tenant_config, default={})
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
             # Multi-tenant wrapper format (mirrors _lib_io.load_tenant_configs)
             for t_name, t_data in data["tenants"].items():

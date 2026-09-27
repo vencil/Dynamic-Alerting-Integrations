@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import strict_safe_load  # noqa: E402  (#2123 duplicate key = YAML error)
+# #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
+from _lib_io import strict_load_exporter_keys  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     is_defaults_name,
@@ -478,12 +479,20 @@ def _parse_config_files(config_dir: str) -> dict:
         # made `validate-config` exit **2** ("this tool broke, report it")
         # while its own `yaml_syntax` row said PASS. The scope of a guard is
         # part of the guard.
+        #
+        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
+        # them — `010:` is "010" (PyYAML's own typing made it 8, and a bool
+        # id from `yes:` crashed `{{tenant}}` substitution). A domain
+        # policy's `tenants:` list is read as text too, so it still meets the
+        # tenant keys. Same pure parser `yaml.safe_load` used, so every
+        # branch below still sees the errors it was written for.
         try:
             with open(path, encoding="utf-8") as f:
                 # Strict (#2123): a key written twice in one mapping is a
                 # YAMLError naming the line — the exporter's yaml.v3 rejects
                 # the file, so it must not route on PyYAML's last value.
-                data = strict_safe_load(f)
+                data = strict_load_exporter_keys(
+                    f, raw_text_sequences=("tenants",))
         except yaml.YAMLError as e:
             _drop_unreadable_file(
                 fname, f"failed to parse: {e}",

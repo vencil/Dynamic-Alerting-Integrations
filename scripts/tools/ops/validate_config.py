@@ -157,8 +157,11 @@ from _lib_python import (  # noqa: E402
 # #2123: conf.d files are read strictly — a key written twice in one mapping
 # is a YAML error (the exporter's yaml.v3 rejects the file), not last-wins.
 from _lib_io import (  # noqa: E402
-    StrictSafeLoader, load_yaml_file_strict, strict_safe_load,
+    load_yaml_file_strict, strict_safe_load,
 )
+# #1577 / #2114: the ONE exporter-key loader (`_lib_yaml_keys`, moved out of
+# this module), composed with the strict reading above in `_lib_io`.
+from _lib_io import strict_load_exporter_keys  # noqa: E402
 
 # ============================================================
 # Check results
@@ -973,94 +976,6 @@ def check_versions() -> dict[str, object]:
 # ============================================================
 # Check 9: Tenant declaration uniqueness (#1577)
 # ============================================================
-class _ExporterKeyLoader(StrictSafeLoader):
-    """``SafeLoader``, except a mapping key is the scalar's RAW TEXT.
-
-    ⛔ THIS IS NOT A STYLE CHOICE. ``yaml.safe_load`` and the exporter's
-    ``gopkg.in/yaml.v3`` disagree about what a tenant id *is*, silently and in
-    both directions, because PyYAML implements YAML **1.1** implicit typing
-    while yaml.v3 keys a ``map[string]...`` on the scalar's text. Measured on
-    ``tenants:`` blocks holding ``on / yes / true / True / on2 / 010 / null``:
-
-    ======================  ==========================================
-    Go (the oracle)         6 ids: ``010 True on on2 true yes``
-    ``yaml.safe_load``      4 ids: ``on2 8 None True``
-    raw scalar text         7 ids: the above plus ``null``
-    ======================  ==========================================
-
-    So ``safe_load`` folds four *different* tenants (``on``/``yes``/``true``/
-    ``True``) into one id, and renames ``010`` to ``8`` — and both directions
-    of that were reproduced end to end before this class existed:
-
-    * **missed**: ``no:`` in one file and ``"no":`` in another is one id to the
-      exporter (it rejects the whole dir) and two to ``safe_load`` → PASS;
-    * **false red**: ``yes:`` and ``true:`` are two ids to the exporter and one
-      to ``safe_load`` → FAIL, naming a tenant ``"True"`` that appears in
-      neither file, so the operator cannot even grep for it.
-
-    Two behaviours are kept rather than reimplemented, both measured against Go
-    on this host (the snippet is in ``TestTenantIdParity``'s docstring so the
-    table can be re-derived rather than trusted):
-
-    * ``<<:`` merge keys are expanded — Go expands them too (measured: a
-      ``tenants:`` block merging an anchor yields the anchor's ids, not ``<<``),
-      which is why this subclasses the constructor instead of walking
-      ``yaml.compose``: compose would report a tenant literally named ``<<``.
-    * a ``null`` / ``~`` key is dropped — measured: Go drops it as well.
-
-    A key repeated in one mapping is refused by the ``StrictSafeLoader``
-    base (#2123):
-    Go rejects the whole file (``mapping key "tenants" already defined``), so
-    such a file is unreadable here and ``yaml_syntax`` names it — this check
-    no longer takes PyYAML's last block as the file's declaration.
-    """
-
-    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
-        self.flatten_mapping(node)
-        mapping = {}
-        for key_node, value_node in node.value:
-            if isinstance(key_node, yaml.ScalarNode):
-                if key_node.tag == "tag:yaml.org,2002:null":
-                    continue
-                key = key_node.value
-            else:
-                key = str(self.construct_object(key_node, deep=deep))
-            mapping[key] = self.construct_object(value_node, deep=deep)
-        return mapping
-
-
-def _load_with_exporter_keys(stream):
-    """``yaml.load(stream, Loader=_ExporterKeyLoader)``, spelled the long way.
-
-    ⛔ NOT a style choice, and NOT a way around the safety rule. The loader
-    has to be a ``SafeLoader`` **subclass** (it changes how mapping KEYS are
-    read), and no automated check in this repo can express that: dev-rules
-    §5 item 4 is enforced by bandit B506, which flags
-    ``Loader=<SafeLoader subclass>`` as a violation just as the AST guard
-    removed in #1643 did. Spelling the call out longhand keeps it outside a
-    predicate that would be wrong about it either way.
-
-    ⚠️ Be exact about the cost. This body never calls ``yaml.load``, so it is
-    not a *rejected* spelling — it is OUTSIDE both predicates. Someone
-    copying this shape with ``yaml.UnsafeLoader`` gets no red from anything.
-
-    The safety property is therefore pinned by BEHAVIOUR, not by spelling:
-    ``TestTenantIdParity::test_the_loader_cannot_construct_python_objects``
-    feeds this function an actual ``!!python/object/apply`` payload and
-    requires it to be refused, with a must-still-work control beside it.
-    ⛔ Deleting that test leaves this shape completely unguarded.
-    ⚠️ NOT GUARDED: it pins THIS loader only — nothing pins a future copy.
-
-    This body is what ``yaml.load`` does; keeping it in one named function
-    means there is one place to read, and one place a future edit lands.
-    """
-    loader = _ExporterKeyLoader(stream)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
-
-
 def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
     """One tenant declared by two files makes the exporter refuse the WHOLE tree.
 
@@ -1117,7 +1032,11 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
             label = path.name
         try:
             with open(path, encoding="utf-8") as fh:
-                data = _load_with_exporter_keys(fh)
+                # #2114: tenant ids are the key's raw TEXT, as the exporter
+                # keys them — see `_lib_yaml_keys` for the measured table.
+                # #2123: a key repeated in one mapping (by that same
+                # identity) makes the file unreadable here, as in Go.
+                data = strict_load_exporter_keys(fh)
         except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
             unreadable.append(label)
             continue

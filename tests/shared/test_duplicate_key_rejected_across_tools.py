@@ -44,6 +44,13 @@ _TENANT_VARIANTS = {
                       '  tenant-a:\n    mysql_connections: "90"\n'),
     "dup_tenants_block": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
                           'tenants:\n  tenant-a:\n    mysql_connections: "90"\n'),
+    # #2114: two spellings of ONE tenant id — the exporter keys tenants by
+    # the raw text, so `123` and `"123"` are the same key (yaml.v3:
+    # `mapping key "123" already defined`). Every tool, including the ones
+    # that read tenant ids as raw text, must refuse it like bad syntax.
+    "dup_tenant_id_by_spelling": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
+                                  '  123:\n    mysql_connections: "1"\n'
+                                  '  "123":\n    mysql_connections: "2"\n'),
 }
 _DEFAULTS_VARIANTS = {
     "clean": "",
@@ -110,7 +117,8 @@ def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool, bool]:
 
 
 _CASES = (
-    [(t, "tenant", v) for t in _TOOLS for v in ("dup_key", "dup_tenant_id", "dup_tenants_block")]
+    [(t, "tenant", v) for t in _TOOLS for v in ("dup_key", "dup_tenant_id", "dup_tenants_block",
+                                                 "dup_tenant_id_by_spelling")]
     + [(t, "defaults", "dup_key") for t, spec in _TOOLS.items() if spec[2]]
 )
 
