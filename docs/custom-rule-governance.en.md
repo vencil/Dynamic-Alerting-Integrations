@@ -53,7 +53,7 @@ Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 # Three-state control example (key names match metric definitions in _defaults.yaml)
 mysql_connections: "800"        # Custom: user-defined threshold
 mysql_threads_running: ""       # Default: use platform default (omit or empty string)
-mariadb_replication_lag: "disable" # Disable: turn off this alert
+mysql_replication_lag: "disable" # Disable: turn off this alert
 ```
 
 Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering.

@@ -1656,6 +1656,144 @@ def test_an_unknown_base_builds_rather_than_skipping(tmp_path: Path) -> None:
     assert record.read_text(encoding="utf-8").split() == [sha_b]
 
 
+def _topic_commit(work: Path, message: str) -> str:
+    """Commit everything on a fresh branch off main; return its SHA."""
+    _git(work, "checkout", "-q", "-b", "topic2", "main")
+    return _commit_all(work, message)
+
+
+def _commit_all(work: Path, message: str) -> str:
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, message)
+    return _git(work, "rev-parse", "HEAD").stdout.strip()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a real symlink in the tree")
+def test_a_doc_turned_into_a_symlink_is_built(tmp_path: Path) -> None:
+    """#2195: a type change (T) is a doc change.
+
+    Measured before the fix: the enumerated ``--diff-filter=ACMRD`` dropped
+    ``T docs/index.md`` and the guard exited 0 with no output.
+    """
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    _git(work, "checkout", "-q", "-b", "topic2", "main")
+    (work / "docs" / "other.md").write_text("# other\n", encoding="utf-8")
+    _commit_all(work, "docs: add other")
+    base = _git(work, "rev-parse", "HEAD").stdout.strip()
+    (work / "docs" / "index.md").unlink()
+    os.symlink("other.md", work / "docs" / "index.md")
+    sha_t = _commit_all(work, "docs: index becomes a symlink")
+    # ⚠️ `_commit` also touches a.txt, so the doc is not the only change.
+    status = _git(work, "diff", "--name-status", base, sha_t).stdout.splitlines()
+    assert "T\tdocs/index.md" in status, status
+
+    r = _run_guard(work, record, f"refs/heads/topic2 {sha_t} refs/heads/topic2 {base}\n")
+
+    assert record.exists(), f"a type change to a doc was not built. {r.stdout}{r.stderr}"
+    assert record.read_text(encoding="utf-8").split() == [sha_t]
+    assert "docs/index.md" in r.stdout
+
+
+def test_a_deleted_doc_is_built(tmp_path: Path) -> None:
+    """#2195: dropping the enumerated filter must keep D.
+
+    Deleting a doc is what leaves dangling nav entries. With the filter gone
+    nothing names D any more, so this pins it; ``--diff-filter=d`` (the
+    helper's filter, lower-case = exclude) turns it red.
+    """
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    (work / "docs" / "gone.md").write_text("# gone\n", encoding="utf-8")
+    _git(work, "checkout", "-q", "-b", "topic2", "main")
+    base = _commit_all(work, "docs: add gone")
+    (work / "docs" / "gone.md").unlink()
+    sha_d = _commit_all(work, "docs: delete gone")
+    status = _git(work, "diff", "--name-status", base, sha_d).stdout.splitlines()
+    assert "D\tdocs/gone.md" in status, status
+
+    r = _run_guard(work, record, f"refs/heads/topic2 {sha_d} refs/heads/topic2 {base}\n")
+
+    assert record.exists(), f"a doc deletion was not built. {r.stdout}{r.stderr}"
+    assert record.read_text(encoding="utf-8").split() == [sha_d]
+    assert "docs/gone.md" in r.stdout
+
+
+def test_a_new_doc_with_a_non_ascii_name_is_built(tmp_path: Path) -> None:
+    """#2195: without ``-z`` git C-quotes the path and DOC_RE never sees it."""
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    (work / "docs" / "測試.md").write_text("# 測試\n", encoding="utf-8")
+    sha_n = _topic_commit(work, "docs: non-ascii name")
+
+    r = _run_guard(work, record, f"refs/heads/topic2 {sha_n} refs/heads/topic2 {sha_a}\n")
+
+    assert record.exists(), f"a new non-ASCII doc was not built. {r.stdout}{r.stderr}"
+    assert record.read_text(encoding="utf-8").split() == [sha_n]
+    assert "docs/測試.md" in r.stdout, r.stdout
+
+
+_DIFF_FAILS_SHIM = """#!/usr/bin/env bash
+if [ "${1:-}" = "diff" ]; then
+    echo "fatal: simulated diff failure" >&2
+    exit 128
+fi
+exec "$REAL_GIT" "$@"
+"""
+
+
+def _run_guard_with_failing_diff(work: Path, record: Path, rows: str):
+    real_git = shutil.which("git")
+    assert real_git, "no git on PATH"
+    bindir = work.parent / "diffshim"
+    bindir.mkdir(exist_ok=True)
+    shim = bindir / "git"
+    shim.write_text(_DIFF_FAILS_SHIM, encoding="utf-8")
+    shim.chmod(0o755)
+    fake_dir = work.parent / "fakebin"
+    fake_dir.mkdir(exist_ok=True)
+    fm = fake_dir / "mkdocs"
+    fm.write_text(_FAKE_MKDOCS, encoding="utf-8")
+    fm.chmod(0o755)
+    env = {
+        **os.environ,
+        "REAL_GIT": real_git,
+        "PATH": str(bindir) + os.pathsep + str(fake_dir) + os.pathsep
+                + os.environ.get("PATH", ""),
+        "PREPUSH_TEST_RECORD": str(record),
+    }
+    return subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
+        cwd=work, input=rows, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
+@pytest.mark.parametrize("carries_docs", [True, False])
+def test_a_failed_diff_builds_and_says_it_could_not_tell(
+    tmp_path: Path, carries_docs: bool,
+) -> None:
+    """#2195: a failed ``git diff`` is "cannot tell", never "no doc changes".
+
+    Measured before the fix: ``2>/dev/null || echo ""`` turned the failure into
+    an empty list and the guard exited 0 with no output, for a push that did
+    change docs/index.md. Both directions build, because the guard cannot know
+    which one it is looking at, and neither is reported as a doc change.
+    """
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    if carries_docs:
+        sha = sha_b
+    else:
+        (work / "note.txt").write_text("not a doc\n", encoding="utf-8")
+        sha = _topic_commit(work, "chore: no docs here")
+
+    r = _run_guard_with_failing_diff(
+        work, record, f"refs/heads/topic {sha} refs/heads/topic {sha_a}\n")
+
+    assert record.exists(), (
+        f"a push whose diff failed was not built. {r.stdout}{r.stderr}")
+    assert record.read_text(encoding="utf-8").split() == [sha]
+    assert "Cannot tell what these refs introduce" in r.stdout, r.stdout
+    assert "Doc changes detected" not in r.stdout, r.stdout
+
+
 def test_a_deletion_row_is_not_judged(tmp_path: Path) -> None:
     """`git push origin :topic` carries no tree, so there is nothing to build.
 
