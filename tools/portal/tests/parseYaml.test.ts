@@ -125,6 +125,33 @@ describe('parseYaml — js-yaml regressions (#2033)', () => {
     expect(config.expires).toBe('2026-01-01T00:00:00Z');
   });
 
+  it('reads only the first document, like yaml.Unmarshal (trailing ---, second doc)', () => {
+    expect(parseYaml('environment: prod\n---\n')).toEqual({ config: { environment: 'prod' }, errors: [] });
+    expect(parseYaml('a: 1\n---\na: 2\nb: 3\n')).toEqual({ config: { a: 1 }, errors: [] });
+    // yaml.v3 never parses document 2, so a malformed one is not an error.
+    expect(parseYaml('a: 1\n---\na: [\n')).toEqual({ config: { a: 1 }, errors: [] });
+    // An error inside document 1 is still reported.
+    expect(parseYaml('a: [\n---\na: 2\n').errors).toHaveLength(1);
+  });
+
+  it('treats an empty stream (only ---) as empty config', () => {
+    expect(parseYaml('---\n')).toEqual({ config: {}, errors: [] });
+  });
+
+  it('reports a self-referencing anchor instead of overflowing the stack', () => {
+    let r: ReturnType<typeof parseYaml> | undefined;
+    expect(() => { r = parseYaml('a: &r\n  b: *r\n'); }).not.toThrow();
+    expect(r!.config).toEqual({});
+    expect(r!.errors).toHaveLength(1);
+    expect(r!.errors[0]).toMatch(/anchor 'r' value contains itself/);
+  });
+
+  it('accepts a shared (non-cyclic) alias', () => {
+    const { config, errors } = parseYaml('x: &s {k: 1}\ny: *s\nz: *s\n');
+    expect(errors).toEqual([]);
+    expect(config).toEqual({ x: { k: 1 }, y: { k: 1 }, z: { k: 1 } });
+  });
+
   it('drops UNSAFE_KEYS nested below the top level', () => {
     const { config } = parseYaml('_routing:\n  __proto__:\n    polluted: yes\n  receiver_type: webhook');
     expect(Object.keys(config._routing)).toEqual(['receiver_type']);

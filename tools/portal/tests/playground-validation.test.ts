@@ -103,8 +103,29 @@ describe('validateTenantConfig — syntax errors the old line parser swallowed (
     expect(r.errors[0].message).toMatch(/line 5/);
   });
 
+  it('rejects a self-referencing anchor (yaml.v3: "value contains itself")', () => {
+    let r: ReturnType<typeof validateTenantConfig> | undefined;
+    expect(() => { r = validateTenantConfig('tenants:\n  db-a: &r\n    self: *r\n'); }).not.toThrow();
+    expect(r!.valid).toBe(false);
+    expect(r!.errors[0].message).toMatch(/anchor 'r' value contains itself/);
+  });
+
   it('rejects tab indentation', () => {
     expect(validateTenantConfig('tenants:\n\tdb-a:\n\t\tx: "1"').valid).toBe(false);
+  });
+});
+
+describe('validateTenantConfig — multi-document streams (yaml.Unmarshal reads doc 1 only)', () => {
+  it('accepts a trailing ---', () => {
+    expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n').valid).toBe(true);
+  });
+
+  it('judges only the first of two documents', () => {
+    const r = validateTenantConfig('tenants:\n  db-a: {}\n---\nfoo: bar\n');
+    expect(r.valid).toBe(true);
+    expect(r.summary.tenants).toBe(1);
+    // …and a first document without tenants: still fails even if doc 2 has it.
+    expect(validateTenantConfig('foo: bar\n---\ntenants:\n  db-a: {}\n').valid).toBe(false);
   });
 });
 

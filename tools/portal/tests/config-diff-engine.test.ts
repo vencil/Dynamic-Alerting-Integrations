@@ -190,6 +190,15 @@ describe('js-yaml parse layer (#2033)', () => {
     expect(tenants).toEqual({});
   });
 
+  it('reports a self-referencing anchor instead of overflowing the stack', () => {
+    const cyclic = 'tenants:\n  db-b: &r\n    self: *r\n';
+    let r: ReturnType<typeof computeDiff> | undefined;
+    expect(() => { r = computeDiff(cyclic, cyclic); }).not.toThrow();
+    expect(r!.errors).toHaveLength(1);
+    expect(r!.errors[0]).toMatch(/anchor 'r' value contains itself/);
+    expect(r!.changes).toEqual([]);
+  });
+
   it('reads a quoted key and an unquoted number as the same comparable value', () => {
     const a = 'tenants:\n  db-b:\n    "mysql_connections": 100';
     const b = 'tenants:\n  db-b:\n    mysql_connections: "100"';

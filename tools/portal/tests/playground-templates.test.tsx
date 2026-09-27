@@ -84,5 +84,8 @@ describe('playground validation status is announced', () => {
     const note = screen.getAllByTestId('semantics-not-checked')[0];
     expect(note.textContent).toMatch(/syntax and structure/);
     expect(note.textContent).toMatch(/exporter/);
+    // Measured yaml.v3 differences that remain must be visible to the user.
+    expect(note.textContent).toContain('010');
+    expect(note.textContent).toContain('1_000');
   });
 });
