@@ -1963,7 +1963,8 @@ da-tools validate-config --config-dir <path> [options]
 **檢查項目**
 
 - YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組
-- Schema 驗證（必需的 key、類型正確）
+- **字串欄位的引號**（`yaml_quoting`）：JSON Schema 標為字串（含 enum）的欄位，值未加引號、而 PyYAML 把它讀成布林、數字或 null 時 FAIL——`channel: yes` 在 PyYAML 是 `True`，在 exporter 與 Alertmanager 是字串 `"yes"`，同一份檔各工具讀到不同的值。每筆列出檔案、行號與欄位路徑；解法是加引號（`channel: "yes"`）。租戶閾值也是字串欄位，所以 `mysql_connections: 70` 會被列出——寫成 `"70"`。租戶檔對照 `tenant-config.schema.json`，`_defaults*` 對照 `platform-defaults.schema.json`（其中 `_routing_defaults`／`_routing_enforced` 沿用租戶 schema 的 routing 定義）；其餘 `_*` 檔不讀。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定（所以 PyYAML 讀成字串的 `y`／`n` 不會被列出），哪些欄位是字串由 schema 決定（#2164）。⚠️ **v2.9.0 映像沒有這一項**
+- Schema 驗證（必需的 key、類型正確）。`_routing_enforced.enabled` 不是 YAML 布林（`n`、`'yes'`、`~` 等）時 FAIL：平台強制（NOC）路由**不會**啟用，`generate-routes --validate` 也對同一行回 1（#2164）。⚠️ v2.9.0 映像遇到非空字串會**啟用** NOC 路由
 - 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）
 - Policy 檢查（webhook 域名）——**只在給了 `--policy` 時才會出現這一列**
 - 自訂規則 lint（`rule-packs/` 的 deny-list）——**只在給了 `--rule-packs` 時**

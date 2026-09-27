@@ -35,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -47,8 +48,10 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
+from _lib_io import compose_all_nodes, find_misread_scalars  # noqa: E402  (#2164)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
+    is_defaults_document_name,
     is_defaults_name,
     is_hidden_name,
 )
@@ -81,15 +84,47 @@ def _is_defaults_file(basename: str) -> bool:
     platform-defaults file skipped the schema gate entirely at rc=0), not a
     change of shape.
     """
-    return has_yaml_extension(basename) and basename.lower().startswith("_defaults")
+    return is_defaults_document_name(basename)  # #2164: one rule, in _lib_confd
 
 
 class _CallerError(Exception):
     """Environment/invocation failure → EXIT_CALLER_ERROR (2)."""
 
 
+# #2164: platform-defaults.schema.json types `_routing_defaults` /
+# `_routing_enforced` by `$ref` into tenant-config.schema.json, so validating
+# it needs the sibling document. These are the names the `$ref`s are written
+# with — also the keys `find_misread_scalars` looks them up by.
+TENANT_SCHEMA_NAME = "tenant-config.schema.json"
+PLATFORM_SCHEMA_NAME = "platform-defaults.schema.json"
+
+
+def schema_registry(*schemas: dict):
+    """A `referencing.Registry` holding *schemas* under their `$id`, for
+    `jsonschema.validate(..., registry=...)`.
+
+    ⛔ Without it the cross-file `$ref` in platform-defaults.schema.json is
+    `Unresolvable` (jsonschema does not fetch it — measured), so every
+    validator of that schema has to be handed one. Lazy import for the same
+    reason `jsonschema` is lazy here: `--help` must work without it.
+    """
+    from referencing import Registry, Resource
+    from referencing.jsonschema import DRAFT7
+    return Registry().with_resources(
+        (s["$id"], Resource.from_contents(s, default_specification=DRAFT7))
+        for s in schemas if isinstance(s, dict) and s.get("$id"))
+
+
+def default_registry():
+    """`schema_registry` over the repo's own tenant schema — for a caller
+    (`check_threshold_reachability`, `check_md_yaml_drift`) that holds only
+    the platform schema."""
+    with open(_DEFAULT_SCHEMA, encoding="utf-8") as fh:
+        return schema_registry(json.load(fh))
+
+
 def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
-                            validator) -> list[str]:
+                            validator, registry=None) -> list[str]:
     """Every platform-defaults violation in ONE parsed `_defaults*` document.
 
     ⛔ ONE implementation of this judgement, and that is the point of it being a
@@ -119,10 +154,12 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
         return [f"ERROR: {rel}: top-level YAML document must be a mapping "
                 f"(`_defaults` platform file; got {type(doc).__name__})"]
     try:
-        validator.validate(doc, platform_schema)
+        validator.validate(doc, platform_schema,
+                           registry=registry if registry is not None
+                           else default_registry())
     except validator.ValidationError as exc:
         loc = "/".join(str(p) for p in exc.absolute_path)
-        return [f"ERROR: {rel}: {exc.message} @ /{loc}"]
+        return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
     return []
 
 
@@ -174,6 +211,19 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     return sorted(out)
 
 
+def misread_scalar_violations(rel: str, text: str, schema: dict,
+                              schemas: dict, schema_name: str) -> list[str]:
+    """#2164: one ERROR per unquoted scalar in a string-typed field that
+    PyYAML reads as non-string (`channel: yes` → True). The judgement is
+    `_lib_io.find_misread_scalars` — the resolver decides what the scalar
+    is, *schema* decides which fields are strings; nothing is listed here."""
+    out: list[str] = []
+    for root in compose_all_nodes(io.StringIO(text)):
+        for hit in find_misread_scalars(root, schema, schemas, schema_name):
+            out.append(f"ERROR: {rel}:{hit.line}: {hit.message()}")
+    return out
+
+
 def validate_dir(config_dir: str, schema: dict, validator,
                  platform_schema: dict | None = None) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
@@ -189,6 +239,10 @@ def validate_dir(config_dir: str, schema: dict, validator,
     violations: list[str] = []
     skipped: list[str] = []
     checked = 0
+    schemas = {TENANT_SCHEMA_NAME: schema}
+    if platform_schema is not None:
+        schemas[PLATFORM_SCHEMA_NAME] = platform_schema
+    registry = schema_registry(schema, platform_schema) if platform_schema else None
     for path in _iter_yaml_files(config_dir):
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
         basename = os.path.basename(path)
@@ -198,7 +252,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                docs = list(strict_safe_load_all(fh))
+                text = fh.read()
+            docs = list(strict_safe_load_all(io.StringIO(text)))
         except (OSError, yaml.YAMLError) as exc:
             # Unreadable file or malformed YAML is an environment/caller error, not
             # a schema violation — surface it as exit 2 (open() can raise OSError
@@ -206,6 +261,12 @@ def validate_dir(config_dir: str, schema: dict, validator,
             # malformed YAML too (#2123: the exporter's yaml.v3 rejects the file;
             # safe_load_all would have validated the LAST value only).
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
+        # #2164: quoting, judged on the node tree (the only place a plain
+        # `yes` and a quoted "yes" still differ). Tenant files AND
+        # `_defaults*` — the latter is where `_routing_defaults` lives.
+        violations.extend(misread_scalar_violations(
+            rel, text, platform_schema if is_defaults else schema, schemas,
+            PLATFORM_SCHEMA_NAME if is_defaults else TENANT_SCHEMA_NAME))
         for doc in docs:
             if is_defaults:
                 # ⛔ Delegated, not duplicated — `defaults_doc_violations` is the
@@ -215,7 +276,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
                 # check moved into it verbatim; only the counting stays here,
                 # because `checked` is this function's own bookkeeping.
                 violations.extend(
-                    defaults_doc_violations(rel, doc, platform_schema, validator))
+                    defaults_doc_violations(rel, doc, platform_schema, validator,
+                                            registry=registry))
                 if isinstance(doc, dict):
                     checked += 1
                 continue

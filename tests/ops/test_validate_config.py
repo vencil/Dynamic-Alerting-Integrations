@@ -932,8 +932,9 @@ class TestNoCheckCanKillTheReport:
         d.mkdir()
         (d / "_defaults.yaml").write_text(
             "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        # Quoted: a tenant threshold is a string field (#2164 yaml_quoting).
         (d / "db-a.yaml").write_text(
-            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            "tenants:\n  db_a:\n    mysql_threads_running: \"90\"\n",
             encoding="utf-8")
         return str(d)
 
@@ -1863,6 +1864,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # four above: without it the row asserts "no duplicate
             # declaration" about a tree it did not finish reading.
             "tenant_uniqueness",
+            # #2164. Reads every file under `--config-dir` and skips the
+            # ones it cannot parse — same reason as the rows above.
+            "yaml_quoting",
         }, sorted(carriers)
         assert all(r["skipped_unusable_files"] == ["db-b.yaml"]
                    for r in rows if r["check"] in carriers), rows

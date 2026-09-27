@@ -733,8 +733,10 @@ _routing_enforced:
     type: "webhook"
     url: "https://noc.example.com/alerts"
   match:
-    severity: "critical"    # Only critical alerts sent to NOC
+    - 'severity="critical"'  # Only critical alerts sent to NOC (a list of Alertmanager matcher strings)
 ```
+
+⚠️ `enabled` must be a YAML boolean (`true` / `false`). A string such as `n`, `y` or `'yes'` (PyYAML reads an unquoted `n` / `y` as a string) does **not** enable NOC routing and is treated as a configuration error: `generate-routes --validate` and `validate-config` exit 1, and render mode prints a WARN and renders without the NOC route ([#2164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2164)). The shape of the rest of `_routing_enforced` is checked by `platform-defaults.schema.json`, which reuses the tenant schema's definition.
 
 **Per-tenant Enforced Channel :** If the receiver field includes `{{tenant}}`, the system automatically creates independent enforced routes for each tenant, allowing Platform to establish per-tenant notification channels that tenants cannot refuse or override:
 

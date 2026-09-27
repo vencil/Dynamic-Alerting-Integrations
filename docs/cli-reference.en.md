@@ -2156,7 +2156,8 @@ docker run --rm \
 **Checks Performed**
 
 - YAML file usability (parses, decodes as UTF-8, mapping at top level). ⚠️ **The last two landed after v2.9.0**: on the image you have, a non-UTF-8 file or a non-mapping top level raises a traceback with zero bytes on stdout
-- Schema validation (required keys, correct types)
+- **Quoting of string fields** (`yaml_quoting`): FAIL when a value in a field the JSON Schema types as a string (enum included) is written unquoted and PyYAML reads it as a boolean, number or null — `channel: yes` is `True` to PyYAML but the string `"yes"` to the exporter and Alertmanager, so the tools disagree about the same file. Each finding names the file, line and field path; the fix is to quote the value (`channel: "yes"`). Tenant thresholds are string fields too, so `mysql_connections: 70` is reported — write `"70"`. Tenant files are held to `tenant-config.schema.json`, `_defaults*` files to `platform-defaults.schema.json` (whose `_routing_defaults` / `_routing_enforced` follow the tenant schema's routing definitions); other `_*` files are not read. Which words are ambiguous is PyYAML's own resolver's verdict (so `y` / `n`, which PyYAML reads as strings, are not reported) and which fields are strings is the schema's (#2164). ⚠️ **Not present in the v2.9.0 image**
+- Schema validation (required keys, correct types). A `_routing_enforced.enabled` that is not a YAML boolean (`n`, `'yes'`, `~` …) is FAIL: the platform-enforced (NOC) route is NOT enabled, and `generate-routes --validate` fails on the same line (#2164). ⚠️ In the v2.9.0 image such a value enabled NOC routing when it was a non-empty string
 - Routing rule validation (group_wait/group_interval/repeat_interval in allowed range)
 - Policy checks (webhook domains) — **this row only appears when `--policy` is given**
 - Custom rule lint (deny-list over `rule-packs/`) — **only when `--rule-packs` is given**

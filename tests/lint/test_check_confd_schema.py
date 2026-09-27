@@ -262,7 +262,10 @@ class TestValidateDir:
         if expect is None:
             assert viol == []
         else:
-            assert len(viol) == 1 and expect in viol[0], viol
+            # #2164: an explicit null in a string field is ALSO named by the
+            # quoting check (with its line); the schema message is still one.
+            schema_viol = [v for v in viol if "is YAML null" not in v]
+            assert len(schema_viol) == 1 and expect in schema_viol[0], viol
 
 
 # --- _defaults.yaml platform-schema guard (#658 fast-follow / Gemini 對抗3) ---
@@ -276,7 +279,10 @@ class TestDefaultsValidation:
         _write(confd, "_defaults.yaml",
                "defaults:\n  mysql_connections: 80\n"
                "state_filters:\n  maintenance:\n    severity: info\n"
-               "_routing_defaults:\n  receiver:\n    type: webhook\n")
+               "_routing_defaults:\n  receiver:\n    type: webhook\n"
+               # #2164: `_routing_defaults` is typed now (tenant schema's
+               # routingDefaults) — a webhook receiver needs its url.
+               "    url: \"https://hooks.example.com/a\"\n")
         checked, viol, skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert (checked, viol, skipped) == (1, [], [])
 
@@ -298,7 +304,10 @@ class TestDefaultsValidation:
         # _state_*/_routing prefixes) must NOT false-red.
         _write(confd, "_defaults.yaml",
                "_metadata:\n  owner: dba\n_severity_dedup: enable\n"
-               "_state_maintenance: disable\n_routing_enforced: true\n")
+               # #2164: `_routing_enforced` is typed now (an object whose
+               # `enabled` is a boolean); a bare `true` was never a shape the
+               # generator used (it WARNs "must be a dict" and ignores it).
+               "_state_maintenance: disable\n_routing_enforced:\n  enabled: false\n")
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == []
 
@@ -345,6 +354,88 @@ class TestDefaultsValidation:
         # The shipped _defaults.yaml / _defaults-multidb.yaml must stay valid.
         _checked, viol, _skipped = validate_dir(_REAL_CONFD, schema, jsonschema, platform_schema)
         assert viol == [], f"shipped _defaults.yaml violates platform schema: {viol}"
+
+
+class TestQuotingAndDefaultsRouting:
+    """#2164: an unquoted scalar in a string-typed field that PyYAML reads as
+    non-string is an ERROR with file:line + field path; `_defaults.yaml`'s
+    `_routing_defaults` / `_routing_enforced` are typed (by `$ref` into the
+    tenant schema) instead of accepted as anything."""
+
+    @pytest.mark.parametrize("token", ["yes", "no", "on", "off", "~", "null", "123", "1.0"])
+    def test_unquoted_in_a_string_field_names_line_and_path(
+            self, confd, schema, platform_schema, token):
+        _write(confd, "t1.yaml",
+               "tenants:\n  t1:\n    _routing:\n      receiver:\n"
+               "        type: slack\n"
+               "        api_url: \"https://hooks.slack.com/services/x\"\n"
+               f"        channel: {token}\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert any(v.startswith("ERROR: t1.yaml:7: /tenants/t1/_routing/receiver/channel: ")
+                   for v in viol), viol
+
+    @pytest.mark.parametrize("token", ['"yes"', "'no'", '"123"', "y", "n"])
+    def test_quoted_or_string_to_pyyaml_passes(self, confd, schema, platform_schema, token):
+        _write(confd, "t1.yaml",
+               "tenants:\n  t1:\n    _routing:\n      receiver:\n"
+               "        type: slack\n"
+               "        api_url: \"https://hooks.slack.com/services/x\"\n"
+               f"        channel: {token}\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == []
+
+    def test_send_resolved_yes_is_a_boolean_field_not_flagged(
+            self, confd, schema, platform_schema):
+        _write(confd, "t1.yaml",
+               "tenants:\n  t1:\n    _routing:\n      receiver:\n"
+               "        type: webhook\n        url: \"https://a.example.com/h\"\n"
+               "        send_resolved: yes\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == []
+
+    def test_defaults_routing_defaults_string_field_unquoted(
+            self, confd, schema, platform_schema):
+        _write(confd, "_defaults.yaml",
+               "_routing_defaults:\n  receiver:\n    type: pagerduty\n"
+               "    service_key: yes\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert any(v.startswith("ERROR: _defaults.yaml:4: /_routing_defaults/receiver/service_key: ")
+                   for v in viol), viol
+
+    @pytest.mark.parametrize("body,expect", [
+        ("_routing_defaults:\n  receiver:\n    type: webhook\n"
+         "    url: \"https://a.example.com/h\"\n  group_wait: \"30s\"\n", None),
+        ("_routing_defaults:\n  receiver:\n    receiver_type: webhook\n"
+         "    webhook_url: \"https://a.example.com/h\"\n", "/_routing_defaults/receiver"),
+        ("_routing_defaults:\n  group_wiat: \"30s\"\n", "group_wiat"),
+        ("_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n"
+         "    url: \"https://noc.example.com/h\"\n"
+         "  match: ['severity=\"critical\"']\n", None),
+        ("_routing_enforced:\n  enabled: false\n", None),
+        ("_routing_enforced:\n  enabled: n\n", "'n' is not of type 'boolean'"),
+        ("_routing_enforced:\n  enabled: 'yes'\n", "'yes' is not of type 'boolean'"),
+        ("_routing_enforced:\n  enabled: true\n  match:\n    severity: critical\n",
+         "is not of type 'array'"),
+    ], ids=["rd-ok", "rd-flat-receiver", "rd-typo-key", "re-ok", "re-off",
+            "re-enabled-n", "re-enabled-quoted-yes", "re-match-mapping"])
+    def test_defaults_routing_blocks_are_typed(
+            self, confd, schema, platform_schema, body, expect):
+        _write(confd, "_defaults.yaml", body)
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        if expect is None:
+            assert viol == []
+        else:
+            assert len(viol) == 1 and expect in viol[0], viol
+
+    def test_cli_exit_one_on_unquoted_bool_in_defaults(self, confd):
+        _write(confd, "_defaults.yaml",
+               "_routing_enforced:\n  enabled: true\n  receiver:\n"
+               "    type: slack\n"
+               "    api_url: \"https://hooks.slack.com/services/x\"\n"
+               "    channel: on\n")
+        result = _run(confd)
+        assert result.returncode == EXIT_VIOLATION, result.stdout + result.stderr
+        assert "_defaults.yaml:6: /_routing_enforced/receiver/channel" in result.stderr
 
 
 class TestPlatformSchemaDriftGuard:

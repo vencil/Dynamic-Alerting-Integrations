@@ -243,6 +243,11 @@ echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 # test_threshold_alerts.py pins it against rule-packs/, so a new pack that is
 # not added here turns CI red instead of going silently unreported.
 REPO_DATA_FILES=(
+    # #2164 — validate-config's yaml_quoting row reads the conf.d JSON
+    # Schemas (which fields are strings) beside the tool; paired with
+    # validate_config.py by REQUIRED_DATA_FILES.
+    docs/schemas/tenant-config.schema.json
+    docs/schemas/platform-defaults.schema.json
     k8s/03-monitoring/configmap-rules-platform.yaml
     rule-packs/rule-pack-clickhouse.yaml
     rule-packs/rule-pack-db2.yaml

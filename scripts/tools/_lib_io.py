@@ -485,6 +485,245 @@ def load_yaml_file_strict_exporter_keys(
     return default if data is None else data
 
 
+# ── #2164: an UNQUOTED scalar in a STRING field that PyYAML reads as non-string
+#
+# `channel: yes` is `True` to PyYAML (YAML 1.1) and the string "yes" to the
+# Go readers (yaml.v3) and to Alertmanager (yaml.v2 into a string field), so
+# the same bytes mean three things. Nothing on the READ side changes (#2164
+# owner decision (a)); the author is told to quote instead, the #1017
+# "STRING-ONLY, always quote it" rule applied to every string-typed field.
+#
+# ⛔ Two things are deliberately NOT written down here:
+#
+# * WHICH words are ambiguous. The composer already asked PyYAML's own
+#   resolver — `Composer.compose_scalar_node` stamps every scalar whose tag
+#   was not written explicitly with `self.resolve(ScalarNode, value,
+#   (plain, quoted))` — so `node.tag` IS the resolver's verdict for exactly
+#   the loader that reads the file. A third yes/no/on/off table (the repo
+#   already has two) would be one more thing to drift.
+# * WHICH fields are strings. That is read from the JSON Schema passed in,
+#   so a field that becomes a string (or stops being one) there changes what
+#   this reports with no edit here.
+#
+# A field counts as a string field when, among the schema branches that can
+# describe it, every one that constrains a SCALAR allows only `string` (plus
+# `null`). A mixed field such as `string | number` is left alone: a bare
+# number is a legal value there, and #1017's answer to that ambiguity was to
+# tighten the schema to `type: string`, not to have a lint guess the intent.
+_YAML_STR_TAG = "tag:yaml.org,2002:str"
+_YAML_NULL_TAG = "tag:yaml.org,2002:null"
+_JSON_SCALAR_TYPES = frozenset({"string", "number", "integer", "boolean", "null"})
+_SCHEMA_COMBINATORS = ("allOf", "anyOf", "oneOf")
+
+
+class MisreadScalar:
+    """One unquoted scalar in a string field that PyYAML reads as non-string.
+
+    ``line`` / ``column`` are 1-based. ``path`` is a JSON-pointer-like
+    ``/tenants/t1/_routing/receiver/channel``. ``text`` is the scalar as
+    written; ``resolved`` is the short name of the tag PyYAML's resolver
+    gave it (``bool``, ``int``, ``float``, ``null`` …).
+    """
+
+    __slots__ = ("line", "column", "path", "text", "resolved")
+
+    def __init__(self, line: int, column: int, path: str, text: str,
+                 resolved: str) -> None:
+        self.line, self.column = line, column
+        self.path, self.text, self.resolved = path, text, resolved
+
+    def message(self) -> str:
+        field = self.path.rsplit("/", 1)[-1]
+        # A sequence item has no key to repeat in the suggestion.
+        written = (f"- \"{self.text}\"" if field.isdigit() or not field
+                   else f"{field}: \"{self.text}\"")
+        if self.resolved == "null":
+            # ⛔ No "quote it" here: `"~"` would be a literal tilde, which is
+            # almost never what an empty value meant.
+            return (f"{self.path}: {self.text or '(empty)'!s} is YAML null — "
+                    f"no value — but the schema requires a string for this "
+                    f"field: write the value, quoted, or remove the key")
+        return (f"{self.path}: unquoted {self.text!r} is read by PyYAML as "
+                f"YAML {self.resolved}, not as the string the schema requires "
+                f"for this field (the Go readers and Alertmanager can read "
+                f"the same bytes differently) — quote it: {written}")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"MisreadScalar({self.line}:{self.column} {self.path} {self.text!r})"
+
+
+def compose_all_nodes(stream: Any,
+                      loader: Optional[type] = None) -> Iterator["yaml.Node"]:
+    """The composed node tree of each document in *stream* (nothing is
+    constructed). *loader* defaults to :class:`StrictSafeLoader`, the pure
+    parser every strict entry point here uses, so line numbers and resolved
+    tags are the ones the reader of the file sees."""
+    ldr = (loader or StrictSafeLoader)(stream)
+    try:
+        while ldr.check_node():
+            yield ldr.get_node()
+    finally:
+        ldr.dispose()
+
+
+def _schema_pointer(doc: Any, fragment: str) -> Any:
+    node = doc
+    for part in [p for p in fragment.split("/") if p]:
+        part = part.replace("~1", "/").replace("~0", "~")
+        node = node[int(part)] if isinstance(node, list) else node[part]
+    return node
+
+
+def _schema_expand(schema: Any, doc: str, schemas: dict[str, Any],
+                   depth: int = 0) -> list[tuple[dict, str]]:
+    """*schema* plus every branch it can stand for ($ref, allOf/anyOf/oneOf),
+    each paired with the name of the schema document it lives in (so a $ref
+    inside a referenced document resolves against THAT document).
+
+    A cross-document ``$ref`` (``tenant-config.schema.json#/…``) is looked up
+    by basename in *schemas*; an unknown one raises ``KeyError`` rather than
+    silently checking less."""
+    if not isinstance(schema, dict) or depth > 32:
+        return []
+    out = [(schema, doc)]
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        target, _, fragment = ref.partition("#")
+        tdoc = os.path.basename(target) if target else doc
+        if tdoc not in schemas:
+            raise KeyError(f"$ref {ref!r}: schema document {tdoc!r} not loaded")
+        out.extend(_schema_expand(_schema_pointer(schemas[tdoc], fragment),
+                                  tdoc, schemas, depth + 1))
+    for kw in _SCHEMA_COMBINATORS:
+        for sub in schema.get(kw) or ():
+            out.extend(_schema_expand(sub, doc, schemas, depth + 1))
+    return out
+
+
+def _schema_key_children(cands: list[tuple[dict, str]], key: str,
+                         schemas: dict[str, Any]) -> list[tuple[dict, str]]:
+    out: list[tuple[dict, str]] = []
+    for schema, doc in cands:
+        props = schema.get("properties")
+        if isinstance(props, dict) and key in props:
+            out.extend(_schema_expand(props[key], doc, schemas))
+            continue
+        matched = False
+        for pattern, sub in (schema.get("patternProperties") or {}).items():
+            if re.search(pattern, key):
+                matched = True
+                out.extend(_schema_expand(sub, doc, schemas))
+        extra = schema.get("additionalProperties")
+        if not matched and isinstance(extra, dict):
+            out.extend(_schema_expand(extra, doc, schemas))
+    return out
+
+
+def _schema_item_children(cands: list[tuple[dict, str]], index: int,
+                          schemas: dict[str, Any]) -> list[tuple[dict, str]]:
+    out: list[tuple[dict, str]] = []
+    for schema, doc in cands:
+        items = schema.get("items")
+        if isinstance(items, dict):
+            out.extend(_schema_expand(items, doc, schemas))
+        elif isinstance(items, list):
+            if index < len(items):
+                out.extend(_schema_expand(items[index], doc, schemas))
+            elif isinstance(schema.get("additionalItems"), dict):
+                out.extend(_schema_expand(schema["additionalItems"], doc, schemas))
+    return out
+
+
+def _json_type_of(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "string" if isinstance(value, str) else "object"
+
+
+def schema_scalar_types(cands: list[tuple[dict, str]]) -> Optional[frozenset]:
+    """The JSON scalar types the branches in *cands* allow, or ``None`` when
+    no branch constrains the value at all. Non-scalar types are dropped: a
+    scalar can only ever be judged by the scalar branches."""
+    types: set[str] = set()
+    constrained = False
+    for schema, _doc in cands:
+        if "type" in schema:
+            raw = schema["type"]
+            types.update([raw] if isinstance(raw, str) else raw)
+        elif "const" in schema:
+            types.add(_json_type_of(schema["const"]))
+        elif isinstance(schema.get("enum"), list):
+            types.update(_json_type_of(v) for v in schema["enum"])
+        else:
+            continue
+        constrained = True
+    return frozenset(types & _JSON_SCALAR_TYPES) if constrained else None
+
+
+def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
+                         schemas: Optional[dict[str, Any]] = None,
+                         schema_name: str = "") -> list[MisreadScalar]:
+    """Every plain (unquoted) scalar under *root* that sits in a string-typed
+    field of *schema* and that PyYAML's resolver read as something else.
+
+    *schemas* maps a schema document's basename to its parsed JSON, for
+    cross-document ``$ref``; *schema_name* is *schema*'s own basename in it.
+    See the block comment above for what is (and is not) a string field.
+    """
+    if root is None:
+        return []
+    schemas = dict(schemas or {})
+    schemas.setdefault(schema_name, schema)
+    found: list[MisreadScalar] = []
+    seen: set[tuple[int, tuple[int, ...]]] = set()
+    stack: list[tuple["yaml.Node", list[tuple[dict, str]], str]] = [
+        (root, _schema_expand(schema, schema_name, schemas), "")]
+    while stack:
+        node, cands, path = stack.pop()
+        if not cands:
+            continue
+        memo = (id(node), tuple(sorted(id(s) for s, _ in cands)))
+        if memo in seen:  # an alias re-entering the same schema position
+            continue
+        seen.add(memo)
+        if isinstance(node, yaml.MappingNode):
+            for key_node, value_node in reversed(node.value):
+                if key_node.tag == _MERGE_TAG:
+                    # `<<: *base` — its keys land in THIS mapping.
+                    merged = (value_node.value
+                              if isinstance(value_node, yaml.SequenceNode)
+                              else [value_node])
+                    stack.extend((m, cands, path) for m in merged)
+                    continue
+                if not isinstance(key_node, yaml.ScalarNode):
+                    continue
+                stack.append((value_node,
+                              _schema_key_children(cands, key_node.value, schemas),
+                              f"{path}/{key_node.value}"))
+        elif isinstance(node, yaml.SequenceNode):
+            for idx in reversed(range(len(node.value))):
+                stack.append((node.value[idx],
+                              _schema_item_children(cands, idx, schemas),
+                              f"{path}/{idx}"))
+        elif isinstance(node, yaml.ScalarNode) and node.style is None:
+            if node.tag == _YAML_STR_TAG:
+                continue
+            types = schema_scalar_types(cands)
+            if types is None or types - {"null"} != {"string"}:
+                continue
+            if node.tag == _YAML_NULL_TAG and "null" in types:
+                continue
+            found.append(MisreadScalar(
+                node.start_mark.line + 1, node.start_mark.column + 1,
+                path or "/", node.value, node.tag.rsplit(":", 1)[-1]))
+    found.sort(key=lambda m: (m.line, m.column))
+    return found
+
+
 def exit_on_yaml_file_error(fn: _F) -> _F:
     """Decorate a CLI ``main`` so an unreadable YAML input exits 2, named.
 

@@ -34,7 +34,14 @@
       "title": "ThresholdConfig.max_metrics_per_tenant — platform-wide cardinality cap; in directory mode the exporter honours it ONLY in the conf.d ROOT _defaults.yaml (#2028) and ignores it with a WARN anywhere else"
     },
     "_routing_defaults": {
-      "title": "Default routing inherited by all tenants under this directory"
+      "$ref": "tenant-config.schema.json#/definitions/routingDefaults",
+      "title": "Default routing inherited by all tenants under this directory",
+      "$comment": "#2164: typed by REFERENCE to the tenant schema's definition, never re-stated here. A validator must be able to resolve tenant-config.schema.json (a sibling file): check_confd_schema.schema_registry() builds that for jsonschema; _lib_io.find_misread_scalars takes it by basename."
+    },
+    "_routing_enforced": {
+      "$ref": "tenant-config.schema.json#/definitions/routingEnforced",
+      "title": "Platform-enforced (NOC) routing — `enabled` must be a YAML boolean",
+      "$comment": "#2164: before this the key matched only the empty `^_routing` patternProperties schema, so `enabled: n` (a STRING to PyYAML) validated clean and the generator, testing truthiness, switched NOC routing ON. The referenced definition is the shape generate_alertmanager_routes consumes: enabled / receiver / match / group_by / group_wait / group_interval / repeat_interval."
     },
     "_metadata": {},
     "_routing": {},

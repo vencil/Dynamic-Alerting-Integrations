@@ -83,6 +83,11 @@ _CORPUS = [
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
         "db-a-copy.yaml": "tenants:\n  db-a:\n    mysql_connections: \"60\"\n"},
      [], False),
+    # #2164: a bare number in a string-typed field (tenant thresholds are
+    # strings) — the yaml_quoting row.
+    ("unquoted-number-in-string-field", {}, {
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"},
+     [], False),
     ("top-level-is-a-list", {}, {
         "db-a.yaml": "- not\n- a\n- mapping\n"},
      [], False),
