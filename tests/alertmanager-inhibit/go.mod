@@ -9,7 +9,7 @@
 // test are the semantics that run in production.
 module github.com/vencil/dynamic-alerting/tests/alertmanager-inhibit
 
-go 1.25.0
+go 1.26.4
 
 require (
 	github.com/prometheus/alertmanager v0.33.1
