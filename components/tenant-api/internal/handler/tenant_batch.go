@@ -352,6 +352,12 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 			msg = "conflict: retry after refresh"
 		case errors.Is(err, gitops.ErrWriteOverloaded):
 			msg = "write plane busy: retry shortly"
+		case errors.Is(err, gitops.ErrTreeNotOnBase):
+			// #1723: fixed text — err names the stranded PR branch, and with
+			// it another tenant's id, which only the server log may see.
+			slog.Warn("batch op refused: worktree not on the base branch",
+				"tenant", op.TenantID, "error", err)
+			msg, code = "config worktree was not on the base branch; nothing written: retry shortly", CodeTreeNotOnBase
 		case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
 			// #2078: fixed text — err names the other file, which only the
 			// server log may see.

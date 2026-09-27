@@ -81,6 +81,13 @@ const (
 	// the client should back off and retry rather than the server piling up
 	// unbounded goroutines.
 	CodeWriteOverloaded = "WRITE_OVERLOADED"
+	// CodeTreeNotOnBase marks an HTTP 503 from a direct commit that found the
+	// config worktree on a PR feature branch a failed PR-mode write left behind
+	// (#1723, gitops.ErrTreeNotOnBase). The write is refused whether or not the
+	// tree could be returned to base, because the request was prepared on the
+	// branch. Nothing was committed or pushed, so a retry is safe — and once
+	// the tree is back on base, it is the retry that succeeds.
+	CodeTreeNotOnBase = "TREE_NOT_ON_BASE"
 	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
 	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
 	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
@@ -370,6 +377,28 @@ func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// treeNotOnBaseRetryAfterS is the Retry-After hint (seconds) on the 503 for
+// gitops.ErrTreeNotOnBase. Same pacing as the overloaded 503: what blocks the
+// write is the local worktree (usually a competing index.lock), which clears on
+// the scale of one git command, not a forge round-trip.
+const treeNotOnBaseRetryAfterS = 1
+
+// WriteTreeNotOnBase renders the canonical 503 for gitops.ErrTreeNotOnBase on
+// a direct-commit write path (#1723): the worktree was on a PR feature branch,
+// and the write refused to commit there. The error names that branch — and so
+// another tenant's id — so it goes to the log only; the client gets a fixed
+// message. Exported for the federation sub-package handlers, like
+// WriteOverloaded.
+func WriteTreeNotOnBase(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("config write refused: worktree not on the base branch (#1723)", "error", err)
+	w.Header().Set("Retry-After", strconv.Itoa(treeNotOnBaseRetryAfterS))
+	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+		Error:       "config worktree was not on the base branch; nothing was written — please retry shortly",
+		Code:        CodeTreeNotOnBase,
+		RetryAfterS: treeNotOnBaseRetryAfterS,
+	})
+}
+
 // writeWriteFlowError maps the sentinel errors returned by Writer.WritePR /
 // WritePRBatch to their canonical retry-hinting 503s and reports whether it
 // handled the error. The single-tenant (PutTenant) and batch (BatchTenants)
@@ -405,10 +434,11 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 // responses, unifying the ladder the view and group PUT/DELETE handlers
 // duplicated verbatim across four sites. Unlike writeWriteFlowError (which
 // reports handled/unhandled and leaves the generic case to the caller), this
-// covers the config-file ladder's exact three branches and ALWAYS writes a
+// covers the config-file ladder's exact branches and ALWAYS writes a
 // response:
 //
 //   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
+//   - gitops.ErrTreeNotOnBase   → 503 + Retry-After (worktree left on a PR branch, #1723)
 //   - gitops.ErrConflict        → 409 with the error text
 //   - anything else             → 500 with the error text
 //
@@ -419,6 +449,10 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, gitops.ErrWriteOverloaded) {
 		WriteOverloaded(w, r)
+		return
+	}
+	if errors.Is(err, gitops.ErrTreeNotOnBase) {
+		WriteTreeNotOnBase(w, r, err)
 		return
 	}
 	if errors.Is(err, gitops.ErrConflict) {

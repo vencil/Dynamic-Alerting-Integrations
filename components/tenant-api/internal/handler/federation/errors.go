@@ -11,12 +11,17 @@ import (
 // writeFederationGitError maps a gitops write-path error to the HTTP
 // response shared by every federation registry write (token account-id
 // allocation, fleet backfill): an overloaded write plane or degraded forge
-// → 503 (retryable), a commit conflict → 409, anything else → 500 prefixed
-// with msg500. It always writes exactly one response, so callers invoke it
+// → 503 (retryable), a worktree left on a PR branch (#1723) → 503
+// (retryable, nothing written), a commit conflict → 409, anything else → 500
+// prefixed with msg500. It always writes exactly one response, so callers invoke it
 // inside `if err != nil { ...; return }`.
 func writeFederationGitError(w http.ResponseWriter, r *http.Request, err error, msg500 string) {
 	if errors.Is(err, gitops.ErrWriteOverloaded) || errors.Is(err, gitops.ErrForgeDegraded) {
 		handler.WriteOverloaded(w, r)
+		return
+	}
+	if errors.Is(err, gitops.ErrTreeNotOnBase) {
+		handler.WriteTreeNotOnBase(w, r, err)
 		return
 	}
 	if errors.Is(err, gitops.ErrConflict) {

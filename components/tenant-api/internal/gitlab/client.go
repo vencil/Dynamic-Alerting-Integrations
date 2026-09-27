@@ -162,7 +162,7 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 
 		for _, mr := range mrs {
 			// Only include MRs created by tenant-api (branch prefix: tenant-api/)
-			if !strings.HasPrefix(mr.SourceBranch, "tenant-api/") {
+			if !strings.HasPrefix(mr.SourceBranch, platform.BranchPrefix) {
 				continue
 			}
 			info := platform.PRInfo{

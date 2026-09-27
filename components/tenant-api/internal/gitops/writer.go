@@ -337,6 +337,36 @@ func (w *Writer) unlockTree() {
 	}
 }
 
+// lockTreeOnBase is lockTree for a direct-commit write (#1723): it takes the
+// writer lock and, before the caller reads anything from the tree, runs
+// leavePRBranch. On error the lock is already released and the caller returns
+// the error as is; on nil the caller holds the lock and must defer unlockTree.
+//
+// ⛔ It must come BEFORE the first read of the tree, not merely before the
+// commit. Every read a direct write makes under the lock — which file the
+// tenant resolves to, the declared-elsewhere scan, validation's root defaults,
+// the base-hash comparison, MutateConfigFile's transform input, WriteMerged's
+// merge base — answers for whatever branch is checked out. With the check at
+// commit time, a read that REFUSED on a stranded tree (409 declared-elsewhere,
+// 409 precondition, a transform error) returned before the guard ran: the
+// caller got the branch's answer, and the tree stayed on the branch.
+//
+// ⚠️ It covers reads under the lock only. A handler that reads the tree before
+// calling the Writer (custom-alerts' cheap hash comparison, authorization
+// lookups) can still answer from a stranded branch; the next write that
+// reaches the Writer moves the tree back.
+//
+// WritePR / WritePRBatch do not use it: they anchor on base themselves
+// (checkoutBaseClean) as their first step under the lock.
+func (w *Writer) lockTreeOnBase() error {
+	w.lockTree()
+	if err := w.leavePRBranch(); err != nil {
+		w.unlockTree()
+		return err
+	}
+	return nil
+}
+
 // SetOnTreeRelease registers fn to run after every write section releases
 // the writer lock, whether the write succeeded or not (see lockTree). Set it
 // once at startup, before the server serves.
@@ -482,7 +512,8 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 //
 // Flow (steps 6–9 are shared with writeSpecialFile via commitFileChange):
 //  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
-//  2. Admission (single-writer token), then lock the tree
+//  2. Admission (single-writer token), then lock the tree and, before any
+//     read of it, leave a stranded PR branch (lockTreeOnBase, #1723)
 //  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
 //  5. validate, under the lock — the authoritative verdict and the
@@ -563,7 +594,11 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	// #1723: the branch check runs before Step 3 reads the tree — on a stranded
+	// PR branch those reads would answer for the branch (lockTreeOnBase).
+	if err := w.lockTreeOnBase(); err != nil {
+		return nil, err
+	}
 	defer w.unlockTree()
 
 	// Step 3: AUTHORITATIVE resolve + validate, under the lock, against the
@@ -849,7 +884,9 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	if err := w.lockTreeOnBase(); err != nil { // #1723: before the first read
+		return nil, err
+	}
 	defer w.unlockTree()
 
 	// #1673: one resolution for the whole flow — the file we read below and the
@@ -997,7 +1034,18 @@ func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
 // from our commit's parent (someone else pushed between our read and
 // our write). Non-git environments skip conflict detection but still
 // return commit errors verbatim.
+//
+// Callers take the lock with lockTreeOnBase (#1723), which is where the
+// branch check that matters runs — before the caller's first read.
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, trailer ...string) error {
+	// #1723 backstop only. Every current caller already ran this check in
+	// lockTreeOnBase, so here it is one symbolic-ref that finds base. It
+	// stays so a future caller that takes plain lockTree still cannot commit
+	// onto a stranded PR branch — though such a caller's reads would already
+	// have answered for that branch; use lockTreeOnBase.
+	if err := w.leavePRBranch(); err != nil {
+		return err
+	}
 	headBefore, err := w.currentHEAD()
 	if err != nil {
 		// Proceed without conflict detection in non-git environments.

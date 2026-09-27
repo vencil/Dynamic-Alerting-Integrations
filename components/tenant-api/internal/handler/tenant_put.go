@@ -152,6 +152,12 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				WriteOverloaded(rw, r)
 				return
 			}
+			// #1723: the tree was on a PR branch and nothing was written —
+			// retryable, not the 400 fallback below.
+			if errors.Is(err, gitops.ErrTreeNotOnBase) {
+				WriteTreeNotOnBase(rw, r, err)
+				return
+			}
 			// Same 409 + CONFLICT code as the custom-alerts base_hash check:
 			// from the caller's side both mean "the file moved under you,
 			// re-read and retry", and the current hash tells them what to
