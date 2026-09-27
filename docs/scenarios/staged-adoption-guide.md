@@ -96,9 +96,9 @@ lang: zh
 <details>
 <summary>📋 Promotion gate checklist（給 executor）</summary>
 
-- [ ] Shadow 期 ≥ 2 週、無 alert noise（`da-tools shadow-verify --window=14d`）
+- [ ] Shadow 期 ≥ 2 週、無 alert noise（`da-tools alert-quality --prometheus <URL> --tenant <tenant> --period 14d`，沒有 `bad` 等級；`shadow-verify` 沒有指定觀察窗的選項，尚未實作）
 - [ ] **Coverage gate** 二擇一：
-  - [ ] (2a) Subset overlap = 100%（`da-tools shadow-verify --check-subset-overlap`）— 預設嚴格路徑
+  - [ ] (2a) Subset overlap = 100%（`custom_` 告警每一次觸發，golden 告警都有對應的觸發；目前沒有工具自動比對，尚未實作，請從兩邊的告警歷史逐筆對照）— 預設嚴格路徑
   - [ ] (2b) Intentional noise reduction — overlap 不足 100% 時，每筆 missing case 在 PR description 含 domain owner 「為什麼這次沒叫」分類 + reviewer 推理
 - [ ] 多出 alert 列表已給 customer ops sign-off（PR description 含 sign-off 紀錄）
 - [ ] Customer ops 已熟悉 `git revert <batch-commit>` rollback path
@@ -204,7 +204,7 @@ git revert <commit-sha>
 
 **Observation phase**
 - [ ] Batch promotion PR merge 之後計時 1 ops cycle
-- [ ] 每天看 alert volume + receiver delivery（`da-tools alert-quality --tenant=<batch-tenants>`）
+- [ ] 每天看 alert volume + receiver delivery（`da-tools alert-quality --prometheus <URL> --tenant <tenant> --period 1d`，`--tenant` 一次一個，batch 內每個租戶各跑一次）
 - [ ] 跑 smoke 確認新 alert label schema 對 receiver compatible
 - [ ] 跨週末 / 夜班 / 月底等 corner case
 

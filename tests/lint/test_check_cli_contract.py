@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_cli_contract.py"
@@ -1378,32 +1379,16 @@ class TestRealRepo:
         assert result["open"] == [], "\n".join(
             f"{f.verdict} {f.file}:{f.line} {f.command} {f.token}" for f in result["open"])
 
-    def test_the_probes_are_measured(self, result):
-        """The gate must SEE the defects the content tickets describe, or a
-        green tree proves only that it looked at nothing."""
-        keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
-        # issue 1818 fixed the last live `python3 <script>.py` V1 and the last
-        # V2 in shadow-monitoring-cutover; the cli-reference batch (issue 1513 /
-        # 1619) fixed the last fenced `da-tools` V1, the last option-table V3
-        # and the last `docker run` continuation. Those shapes are pinned
-        # against the real parsers by test_the_retired_probe_shapes_still_judge_red.
-        for probe in [("V1", "shadow-verify", "--window")]:     # #1513, inline span only
-            assert probe in keys, f"probe {probe} not measured; the whole run is void"
-        # The inline-span carrier. This used to be proven by #1381's
-        # migration-state.md prose, which is fixed now; staged-adoption-guide
-        # writes shadow-verify only as `inline spans`, so pin that file.
-        assert any(f.file == "docs/scenarios/staged-adoption-guide.md"
-                   and (f.verdict, f.command, f.token) == ("V1", "shadow-verify", "--window")
-                   for f in result["findings"]), (
-            "the inline-span carrier stopped seeing staged-adoption-guide.md (#1513)")
-
     def test_the_retired_probe_shapes_still_judge_red(self, tmp_path):
-        """The tree no longer carries a live instance of these, so judge the
+        """The gate must SEE the defect shapes the content tickets describe, or
+        a green tree proves only that it looked at nothing. The content batches
+        of issues 1513 / 1619 / 1818 fixed every live instance, so judge the
         lines the docs used to teach against the REAL parsers and the REAL
-        COMMAND_MAP: a script-path command resolved to its subcommand (V1), a
-        unique-prefix abbreviation argparse would silently accept (V2), a
-        `docker run … <image ref> \\` continuation (V1), and a phantom row in a
-        reference option table (V3)."""
+        COMMAND_MAP instead: a script-path command resolved to its subcommand
+        (V1), a unique-prefix abbreviation argparse would silently accept (V2),
+        a `docker run … <image ref> \\` continuation (V1), an inline code span
+        outside any fence (V1), and a phantom row in a reference option table
+        (V3)."""
         doc = tmp_path / "probe.md"
         doc.write_text(
             "```bash\n"
@@ -1414,7 +1399,8 @@ class TestRealRepo:
             "  -v $(pwd)/conf.d:/etc/config:ro \\\n"
             "  ghcr.io/vencil/da-tools:v2.9.0 \\\n"
             "  maintenance-scheduler --config-dir /etc/config --timezone Asia/Taipei\n"
-            "```\n", encoding="utf-8")
+            "```\n"
+            "Shadow 期無 noise（`da-tools shadow-verify --window=14d`）\n", encoding="utf-8")
         ref = tmp_path / "ref.md"
         ref.write_text(
             "#### lint\n\n**選項**\n\n| 選項 | 說明 | 預設值 |\n|------|------|--------|\n"
@@ -1427,7 +1413,11 @@ class TestRealRepo:
             ("V1", "batch-diagnose", "--check-shadow-removal"),
             ("V2", "migrate", "--output"),
             ("V1", "maintenance-scheduler", "--timezone"),
+            ("V1", "shadow-verify", "--window"),
             ("V3", "lint", "--strict")}
+        # the shadow-verify key must come from the prose line after the fence
+        # (line 9), i.e. from the inline-span carrier, not from a fenced line
+        assert [f.line for f in r.findings if f.command == "shadow-verify"] == [9]
 
     @_needs_node
     def test_the_portal_carrier_judged_the_real_playground(self, result):
@@ -1451,7 +1441,12 @@ class TestRealRepo:
                        for f in result["findings"]), f"false red on {command} {flag}"
 
     def test_every_ledger_row_names_a_real_ticket_and_is_live(self, result):
-        assert result["entries"], "an empty ledger on this tree means nothing loaded"
+        # The ledger can legitimately reach zero rows (it did, once the
+        # 12-series doc batches landed), so "non-empty" no longer proves it
+        # loaded. What does: the shipped file parses to an explicit list.
+        raw = yaml.safe_load(mod.BASELINE_PATH.read_text(encoding="utf-8"))
+        assert isinstance(raw, dict) and isinstance(raw.get("entries"), list), \
+            "the ledger did not load as a mapping with an `entries` list"
         assert all(mod._TICKET_RE.match(e.ticket) for e in result["entries"])
         live = {}
         for f in result["suppressed"]:

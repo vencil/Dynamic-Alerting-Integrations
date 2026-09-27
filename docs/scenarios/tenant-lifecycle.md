@@ -339,11 +339,11 @@ tenants:
 cp conf.d/db-product-01.yaml conf.d.archive/
 
 # 3. 自動化下架（推薦）
-da-tools offboard db-product-01 --dry-run  # 預檢
-da-tools offboard db-product-01            # 執行
+da-tools offboard db-product-01 --config-dir conf.d            # 預檢（預設只預檢，不寫入）
+da-tools offboard db-product-01 --config-dir conf.d --execute  # 執行：刪除 conf.d/db-product-01.yaml
 
-# 4. 下架舊 custom rules（若有遷移過）
-da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d
+# 4. 下架舊 custom rules（若有遷移過；不帶 --execute 只預覽）
+da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d --execute
 ```
 
 ### 4.2 驗證與歸檔
@@ -414,7 +414,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **batch_diagnose.py** | 多租戶報告 | `--output report.json` |
 | **lint_custom_rules.py** | 自訂規則驗證 | `custom-rules.yaml` |
 | **offboard_tenant.py** | 租戶下架 | `<name> --config-dir conf.d/`（預設只做預檢，加 `--execute` 才刪；不做歸檔，先自己 `cp`，見 4.1） |
-| **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --execute` |
+| **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute`（不帶 `--config-dir` 會指向 repo 內部路徑） |
 | **onboard_platform.py** | 遷移前掃描 | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
 | **migrate_rule.py** | 規則遷移轉換 | `<legacy-rules.yaml> --output-dir migration_output/` |
 | **validate_migration.py** | 並行驗證 | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
