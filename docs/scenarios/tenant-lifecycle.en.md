@@ -338,11 +338,11 @@ tenants:
 cp conf.d/db-product-01.yaml conf.d.archive/
 
 # 3. Automated offboarding (recommended)
-da-tools offboard db-product-01 --dry-run  # Pre-check
-da-tools offboard db-product-01            # Execute
+da-tools offboard db-product-01 --config-dir conf.d            # Pre-check (the default; writes nothing)
+da-tools offboard db-product-01 --config-dir conf.d --execute  # Execute: deletes conf.d/db-product-01.yaml
 
-# 4. Offboard legacy custom rules (if migrated)
-da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d
+# 4. Offboard legacy custom rules (if migrated; without --execute it only previews)
+da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d --execute
 ```
 
 ### 4.2 Verify and Archive
@@ -413,7 +413,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **batch_diagnose.py** | Multi-tenant report | `--output report.json` |
 | **lint_custom_rules.py** | Custom rule validation | `custom-rules.yaml` |
 | **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/` (pre-check only by default, `--execute` deletes; no archiving — `cp` first, see 4.1) |
-| **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --execute` |
+| **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute` (without `--config-dir` it points at a path inside the repo) |
 | **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
 | **migrate_rule.py** | Rule migration transform | `<legacy-rules.yaml> --output-dir migration_output/` |
 | **validate_migration.py** | Parallel migration test | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |

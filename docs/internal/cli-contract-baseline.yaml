@@ -3,10 +3,4 @@
 # 比對是集合相等：少於 count 是 stale 硬錯、多出來的是新紅。
 # 修好一處就降 count（歸零就刪列）。ticket 必須是 #NNNN。
 # 產生：python3 scripts/tools/lint/check_cli_contract.py --write-baseline
-entries:
-  - {file: docs/scenarios/staged-adoption-guide.en.md, command: shadow-verify, verdict: V1, token: "--check-subset-overlap", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/staged-adoption-guide.en.md, command: shadow-verify, verdict: V1, token: "--window", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/staged-adoption-guide.md, command: shadow-verify, verdict: V1, token: "--check-subset-overlap", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/staged-adoption-guide.md, command: shadow-verify, verdict: V1, token: "--window", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.en.md, command: offboard, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.md, command: offboard, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
+entries: []

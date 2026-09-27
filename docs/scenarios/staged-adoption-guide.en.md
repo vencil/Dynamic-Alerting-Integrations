@@ -96,9 +96,9 @@ Each section (§4–§6) shares the same structure:
 <details>
 <summary>📋 Promotion gate checklist (for the executor)</summary>
 
-- [ ] Shadow phase ≥ 2 weeks, no alert noise (`da-tools shadow-verify --window=14d`)
+- [ ] Shadow phase ≥ 2 weeks, no alert noise (`da-tools alert-quality --prometheus <URL> --tenant <tenant> --period 14d` shows no `bad` grade; `shadow-verify` has no option to set an observation window, not implemented yet)
 - [ ] **Coverage gate**, one of:
-  - [ ] (2a) *Subset overlap = 100%* (`da-tools shadow-verify --check-subset-overlap`) — default strict path
+  - [ ] (2a) *Subset overlap = 100%* (every firing of the `custom_` alert has a matching firing of the golden alert; no tool compares this automatically yet, so check both alert histories entry by entry) — default strict path
   - [ ] (2b) *Intentional noise reduction* — when overlap is below 100%, each missing case in the PR description has the domain owner's "why this didn't fire" classification + the reviewer's reasoning
 - [ ] List of extra alerts signed off by customer ops (PR description records the sign-off)
 - [ ] Customer ops is fluent with `git revert <batch-commit>` rollback path
@@ -204,7 +204,7 @@ git revert <commit-sha>
 
 **Observation phase**
 - [ ] Start counting 1 ops cycle from batch-promotion PR merge
-- [ ] Daily check on alert volume + receiver delivery (`da-tools alert-quality --tenant=<batch-tenants>`)
+- [ ] Daily check on alert volume + receiver delivery (`da-tools alert-quality --prometheus <URL> --tenant <tenant> --period 1d`; `--tenant` takes one tenant, so run it once per tenant in the batch)
 - [ ] Smoke-check that the new alert label schema is compatible with the receiver
 - [ ] Cover weekends / night shifts / month-end corner cases
 
