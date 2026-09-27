@@ -252,3 +252,120 @@ class TestExtractChartVersion:
 
     def test_missing_chart(self, tmp_path):
         assert cdf.extract_chart_version(tmp_path, "nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# --check exit codes: "could not measure" must not read as "fresh" (#2023)
+# ---------------------------------------------------------------------------
+#
+# A doc whose age git cannot give used to count as not-stale, so --check
+# returned 0 even when every doc was unknown. On a shallow clone it was worse:
+# `git log -1 -- <file>` returns the shallow boundary commit for a file whose
+# real last change lies beyond it, so the doc looked as young as the clone.
+# Now a doc is `unknown` when git cannot answer or when its last commit is a
+# boundary listed in `.git/shallow`; --check exits 1 on any stale doc, else 2
+# on any unknown doc, else 0. Every case runs the real script in a throwaway
+# repo with real git.
+
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_SCRIPT = os.path.abspath(os.path.join(_TOOLS_DIR, 'check_doc_freshness.py'))
+_OLD = '2020-01-01T00:00:00+00:00'
+_GIT_ENV = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_TERMINAL_PROMPT': '0'}
+
+
+def _git(cwd, *args, date=None):
+    env = {**os.environ, **_GIT_ENV}
+    if date:
+        env.update(GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+    subprocess.run(['git', *args], cwd=str(cwd), env=env, check=True,
+                   capture_output=True, timeout=30)
+
+
+def _commit(repo, rel, text, date=None):
+    path = Path(repo) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+    _git(repo, 'add', rel)
+    _git(repo, 'commit', '-q', '-m', rel, date=date)
+
+
+def _check(cwd):
+    p = subprocess.run([sys.executable, _SCRIPT, '--check'], cwd=str(cwd), capture_output=True,
+                       text=True, encoding='utf-8', timeout=60,
+                       env={**os.environ, **_GIT_ENV, 'DA_LANG': 'en'})
+    return p.returncode, p.stdout, p.stderr
+
+
+@pytest.fixture
+def origin(tmp_path):
+    """docs/old.md committed in 2020, then an unrelated commit today."""
+    r = tmp_path / 'origin'
+    r.mkdir()
+    _git(r, 'init', '-q')
+    _git(r, 'config', 'user.email', 't@example.invalid')
+    _git(r, 'config', 'user.name', 't')
+    _git(r, 'config', 'commit.gpgsign', 'false')
+    _commit(r, 'docs/old.md', '# old\n', date=_OLD)
+    _commit(r, 'other.txt', 'x\n')
+    return r
+
+
+def _shallow_clone(origin, dest, depth):
+    _git(origin.parent, 'clone', '-q', f'--depth={depth}', f'file://{origin}', str(dest))
+    _git(dest, 'config', 'user.email', 't@example.invalid')
+    _git(dest, 'config', 'user.name', 't')
+    _git(dest, 'config', 'commit.gpgsign', 'false')
+    return dest
+
+
+class TestCheckExitCodes:
+    def test_full_history_stale_doc_exits_1(self, origin):
+        rc, out, err = _check(origin)
+        assert rc == 1, out + err
+        assert 'docs/old.md' not in err
+
+    def test_full_history_all_fresh_exits_0(self, origin):
+        _commit(origin, 'docs/old.md', '# old, edited\n')
+        rc, out, err = _check(origin)
+        assert rc == 0, out + err
+
+    def test_shallow_boundary_doc_is_unknown_exit_2(self, origin, tmp_path):
+        clone = _shallow_clone(origin, tmp_path / 'shallow', 1)
+        rc, out, err = _check(clone)
+        assert rc == 2, out + err
+        assert 'old.md' in err and 'shallow' in err, err
+        assert 'Unknown: 1' in out, out
+
+    def test_shallow_doc_changed_after_the_boundary_is_measured(self, origin, tmp_path):
+        """Per-file, not per-repo: a doc edited inside the fetched history still gets an age."""
+        _commit(origin, 'docs/old.md', '# old, edited\n')
+        clone = _shallow_clone(origin, tmp_path / 'shallow', 1)
+        _commit(clone, 'docs/old.md', '# edited in the clone\n')
+        rc, out, err = _check(clone)
+        assert rc == 0, out + err
+        assert 'Unknown: 0' in out, out
+
+    def test_shallow_stale_doc_still_exits_1(self, origin, tmp_path):
+        """A doc measured stale beats an unknown one: rc 1, not 2."""
+        clone = _shallow_clone(origin, tmp_path / 'shallow', 1)
+        _commit(clone, 'docs/stale.md', '# stale\n', date=_OLD)
+        rc, out, err = _check(clone)
+        assert rc == 1, out + err
+
+    def test_no_git_repo_is_unknown_exit_2(self, tmp_path):
+        d = tmp_path / 'plain'
+        (d / 'docs').mkdir(parents=True)
+        (d / 'docs' / 'a.md').write_text('# a\n', encoding='utf-8')
+        rc, out, err = _check(d)
+        assert rc == 2, out + err
+        assert 'a.md' in err, err
+
+    def test_new_uncommitted_doc_is_fresh(self, origin):
+        _commit(origin, 'docs/old.md', '# old, edited\n')
+        (origin / 'docs' / 'new.md').write_text('# new\n', encoding='utf-8')
+        rc, out, err = _check(origin)
+        assert rc == 0, out + err
+        assert 'Unknown: 0' in out, out

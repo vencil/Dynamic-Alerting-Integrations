@@ -77,7 +77,6 @@ FIX_COMMANDS: Dict[str, List[str]] = {
     "alerts": ["dx/generate_alert_reference.py"],
     "rule_packs": ["dx/generate_rule_pack_readme.py", "--update"],
     "includes": ["lint/check_includes_sync.py", "--fix"],
-    "freshness": ["lint/check_doc_freshness.py", "--fix"],
     "platform_data": ["dx/generate_platform_data.py"],
     "repo_name": ["lint/check_repo_name.py", "--fix"],
     "frontmatter_versions": ["lint/check_frontmatter_versions.py", "--fix"],
@@ -87,11 +86,8 @@ FIX_COMMANDS: Dict[str, List[str]] = {
 # prints the violations and still returns 0, so the runner shows a tick
 # (#1702). links and mermaid are armed below and pinned in
 # tests/shared/test_validate_all.py::TestRearmedRows; translation and
-# freshness are still un-armed (#1735): translation is red on today's
-# content, and freshness's `--check` is rc 0 ONLY on a shallow clone (the
-# graft commit's date hides every doc's real age) -- on full history docs
-# older than 90 days exist, so arming it would make a bare run red for
-# content reasons this runner does not own.
+# freshness are still un-armed (#1735): arming either today would make a bare
+# run red for content reasons this runner does not own.
 TOOLS = [
     ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
     ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
