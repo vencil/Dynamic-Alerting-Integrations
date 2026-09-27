@@ -490,7 +490,7 @@ updated_at: 2026-05-13
 ```
 
 
-**問題來源**：v2.7.0 doc audit 發現 `config-driven.md` front-matter 寫 `version: v2.7.0` 但**文件內沒有任何 v2.7.0 specific 內容**（conf.d/、_defaults.yaml、dual-hash、/effective 都沒提）。front-matter 是允諾，body 是空。`check_doc_freshness.py` 只檢查 version 字串，不檢查內容涵蓋度。
+**問題來源**：v2.7.0 doc audit 發現 `config-driven.md` front-matter 寫 `version: v2.7.0` 但**文件內沒有任何 v2.7.0 specific 內容**（conf.d/、_defaults.yaml、dual-hash、/effective 都沒提）。front-matter 是允諾，body 是空。
 
 **設計**：新增 `scripts/tools/lint/check_spoke_doc_freshness.py`：
 
