@@ -286,6 +286,23 @@ def load_custom_alerts_from_dir(dir_path):
 # Reserved keys this report already covers in its own section.
 _SETTING_KEYS_REPORTED_ELSEWHERE = frozenset({"_custom_alerts"})
 
+# Receiver fields in docs/schemas/tenant-config.schema.json that hold a
+# credential: a Slack / Teams / Rocket.Chat webhook URL *is* the secret, and
+# so are the PagerDuty keys, bearer tokens and passwords. The schema lets a
+# tenant file carry them inline, and this report is posted as a PR comment —
+# whose body is also mailed to every watcher and survives a history rewrite
+# that purges the file. So a change to one is reported as a change, with
+# both values replaced by _REDACTED. `url` and `proxy_url` are included
+# because either can embed a token or `user:pass@`. The schema parity test
+# fails when a new credential-shaped field is neither listed here nor named
+# as not a credential.
+_CREDENTIAL_KEYS = frozenset({
+    "api_url", "webhook_url", "url", "proxy_url",
+    "routing_key", "service_key", "bearer_token",
+    "auth_password", "password",
+})
+_REDACTED = "<redacted>"
+
 
 def load_settings_from_dir(dir_path):
     """Load each tenant's own `_`-prefixed settings from a conf.d/ directory.
@@ -317,10 +334,12 @@ def load_settings_from_dir(dir_path):
 def _mapping_changes(old, new, prefix):
     """Leaf-level changes between two mappings, keys joined with dots.
 
-    Where both sides hold a mapping the walk goes down, so a changed webhook
-    URL reads `_routing.receiver.url: a → b` instead of the whole `_routing`
-    printed twice. Anything else (scalars, lists) is compared whole. Presence
-    decides added / removed, so a key set to null is still a key that exists.
+    Where both sides hold a mapping the walk goes down, so a changed
+    group_wait reads `_routing.group_wait: 30s → 1m` instead of the whole
+    `_routing` printed twice. Anything else (scalars, lists) is compared whole.
+    Presence decides added / removed, so a key set to null is still a key that
+    exists. Values are compared first and redacted after (_redact_leaf), so a
+    rotated credential is still reported — only its values are not.
     """
     changes = []
     for key in sorted(set(old) | set(new), key=str):
@@ -334,9 +353,33 @@ def _mapping_changes(old, new, prefix):
             change = "modified"
         else:
             change = "added" if key not in old else "removed"
-        changes.append({"key": path, "old": old.get(key),
-                        "new": new.get(key), "change": change})
+        old_v, new_v = _redact_leaf(key, old.get(key), new.get(key))
+        changes.append({"key": path, "old": old_v,
+                        "new": new_v, "change": change})
     return changes
+
+
+def _redact(value):
+    """`value` with every credential field inside it replaced by _REDACTED.
+
+    Walks mappings and lists: adding a whole `_routing`, or a list of
+    receivers, carries its credentials inside a value that is not itself
+    named like one.
+    """
+    if isinstance(value, dict):
+        return {k: (_REDACTED if str(k) in _CREDENTIAL_KEYS and v is not None
+                    else _redact(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
+
+
+def _redact_leaf(key, old, new):
+    if str(key) in _CREDENTIAL_KEYS:
+        return (None if old is None else _REDACTED,
+                None if new is None else _REDACTED)
+    return _redact(old), _redact(new)
 
 
 def compute_setting_diff(old_settings, new_settings):

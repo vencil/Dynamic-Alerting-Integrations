@@ -100,7 +100,7 @@ The GitHub Actions template automatically posts the blast radius report as a PR 
 
 **Data-Driven Threshold Review Dual Engine**: `config-diff` (static blast radius analysis) paired with `backtest` (Prometheus historical backtest) form a complete review workflow with pre-change preview + historical validation.
 
-Report content includes: change list per affected tenant, change classification (tighter / looser / added / removed / toggled), changes to the tenant's `_`-prefixed settings (maintenance, silent mode, routing, profile, …, with before and after values), the alerts that read each key (looked up in the rule packs; `—` when no alert reads it, `unknown` when the rule packs cannot be found). See [`cli-reference.en.md` config-diff](../cli-reference.en.md#config-diff).
+Report content includes: change list per affected tenant, change classification (tighter / looser / added / removed / toggled), changes to the tenant's `_`-prefixed settings (maintenance, silent mode, routing, profile, …, with before and after values; a receiver credential such as a webhook URL, PagerDuty key, token or password is reported as changed with both values shown as `<redacted>`, because the report is posted as a PR comment), the alerts that read each key (looked up in the rule packs; `—` when no alert reads it, `unknown` when the rule packs cannot be found). See [`cli-reference.en.md` config-diff](../cli-reference.en.md#config-diff).
 
 ## 3. ConfigMap Assembly
 

@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ import yaml
 
 
 import config_diff as cd  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── 1. Flatten Tenant Config ────────────────────────────────────────
@@ -908,13 +911,13 @@ class TestTenantSettingChanges:
         old.mkdir(), new.mkdir()
         _write_settings(old, self.BASE)
         changed = {**self.BASE, "_routing": {
-            "receiver": {"type": "webhook", "url": "https://b.example"},
-            "group_wait": "30s"}}
+            "receiver": {"type": "webhook", "url": "https://a.example"},
+            "group_wait": "1m"}}
         _write_settings(new, changed)
         p = _run_cli(old, new)
-        assert "- `_routing.receiver.url`: `https://a.example` → " \
-               "`https://b.example`" in p.stdout
-        assert "group_wait" not in p.stdout
+        assert "- `_routing.group_wait`: `30s` → `1m`" in p.stdout
+        assert "receiver" not in p.stdout
+
 
     def test_custom_alerts_stay_in_their_own_section(self):
         diff = cd.compute_setting_diff(
@@ -954,3 +957,96 @@ class TestTenantSettingChanges:
         p = _run_cli(old, new)
         line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_profile`"))
         assert line.count("`") == 6, line
+
+
+# A Slack incoming-webhook URL is the credential itself.
+_SECRET_OLD = "https://hooks.slack.com/services/T0/B0/oldSECRETvalue"
+_SECRET_NEW = "https://hooks.slack.com/services/T0/B0/newSECRETvalue"
+
+
+class TestCredentialsAreNotPrinted:
+    """receiver 的憑證欄位改了要報「有變」，但新舊值都不印。
+
+    報告會貼成 PR comment：本文會寄給每個 watcher，改寫 git 歷史清掉檔案後
+    也還在；輪替外洩憑證的 PR 還會把舊值再印一次。
+    """
+
+    BASE = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD},
+                         "group_wait": "30s"}}
+
+    def _run(self, tmp_path, old_cfg, new_cfg, *extra):
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, old_cfg)
+        _write_settings(new, new_cfg)
+        return _run_cli(old, new, *extra)
+
+    def test_a_rotated_credential_is_reported_without_its_values(self, tmp_path):
+        rotated = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_NEW},
+                                "group_wait": "30s"}}
+        p = self._run(tmp_path, self.BASE, rotated)
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert "- `_routing.receiver.api_url`: `<redacted>` → `<redacted>`" \
+            in p.stdout
+        assert "SECRET" not in p.stdout
+
+    def test_json_redacts_too(self, tmp_path):
+        rotated = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_NEW},
+                                "group_wait": "30s"}}
+        p = self._run(tmp_path, self.BASE, rotated, "--format", "json")
+        assert "SECRET" not in p.stdout
+        assert json.loads(p.stdout)["setting_diffs"]["db-a"] == [{
+            "key": "_routing.receiver.api_url", "old": "<redacted>",
+            "new": "<redacted>", "change": "modified"}]
+
+    @pytest.mark.parametrize("direction", ["added", "removed"])
+    def test_a_whole_routing_block_is_redacted_inside(self, tmp_path, direction):
+        without = {"_silent_mode": "all"}
+        with_routing = {**without, **self.BASE}
+        old, new = ((without, with_routing) if direction == "added"
+                    else (with_routing, without))
+        p = self._run(tmp_path, old, new)
+        assert p.returncode == 1
+        assert f"- `_routing` ({direction})" in p.stdout
+        assert "SECRET" not in p.stdout
+        assert "<redacted>" in p.stdout
+
+    def test_credentials_inside_a_list_are_redacted(self):
+        diff = cd.compute_setting_diff(
+            {"t": {"_routing": {"overrides": []}}},
+            {"t": {"_routing": {"overrides": [
+                {"receiver": {"type": "pagerduty", "routing_key": "pdSECRET"}}]}}})
+        assert "SECRET" not in json.dumps(diff)
+        assert diff["t"][0]["new"] == [
+            {"receiver": {"type": "pagerduty", "routing_key": "<redacted>"}}]
+
+    def test_a_non_credential_change_still_prints_values(self, tmp_path):
+        changed = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD},
+                                "group_wait": "1m"}}
+        p = self._run(tmp_path, self.BASE, changed)
+        assert "- `_routing.group_wait`: `30s` → `1m`" in p.stdout
+        assert "receiver" not in p.stdout
+
+    def test_the_credential_list_covers_the_schema(self):
+        """schema 裡長得像憑證的欄位，每一個都得歸類：要嘛遮、要嘛明列不是。
+
+        日後 schema 新增 receiver 欄位而這裡沒跟上，這條就會紅，不會悄悄印出來。
+        """
+        schema = json.loads((REPO_ROOT / "docs" / "schemas"
+                             / "tenant-config.schema.json").read_text(encoding="utf-8"))
+        names = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == "properties" and isinstance(v, dict):
+                        names.update(v)
+                    walk(v)
+            elif isinstance(node, list):
+                for x in node:
+                    walk(x)
+        walk(schema)
+        looks_secret = {n for n in names
+                        if re.search(r"pass|key|token|secret|url", n, re.I)}
+        not_credentials = {"runbook_url", "icon_url", "client_url"}
+        assert looks_secret - not_credentials == set(cd._CREDENTIAL_KEYS)
