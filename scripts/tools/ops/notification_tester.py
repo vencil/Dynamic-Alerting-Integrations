@@ -58,6 +58,7 @@ from _lib_python import (  # noqa: E402
     RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     detect_cli_lang,
+    receiver_exactly_one_problem,
     exit_on_yaml_file_error,
     load_tenant_configs,
 )
@@ -364,6 +365,14 @@ def test_receiver(
                 status=STATUS_INVALID_CONFIG,
                 detail=f"missing required field '{req_field}'",
             )
+    problem = receiver_exactly_one_problem(rtype, receiver)
+    if problem:
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_CONFIG,
+            detail=problem,
+        )
 
     # Validate URL
     url, url_err = validate_receiver_url(receiver)

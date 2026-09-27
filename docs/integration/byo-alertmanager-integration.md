@@ -273,10 +273,10 @@ _routing:
 | 類型 | 必填欄位 | 範例 |
 |------|---------|------|
 | **Email** | `to`, `smarthost`, `from` | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
-| **Slack** | `api_url`, `channel` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
+| **Slack** | `api_url` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
 | **Microsoft Teams** | `webhook_url` | `webhook_url: "https://outlook.office.com/webhook/..."` |
-| **Rocket.Chat** | `url`, `channel`, `username` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
-| **PagerDuty** | `service_key`, `severity`, `client` | `service_key: "key-123"`, `severity: "critical"` |
+| **Rocket.Chat** | `url` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
+| **PagerDuty** | `routing_key` 或 `service_key`，恰好一個（兩個都給會被擋：Alertmanager 會走 v1 並忽略 `routing_key`） | `routing_key: "key-123"`, `severity: "critical"` |
 
 所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 

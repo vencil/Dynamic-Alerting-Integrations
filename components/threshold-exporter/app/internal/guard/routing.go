@@ -35,8 +35,9 @@ package guard
 //      scripts/tools/_lib_constants.py::RECEIVER_TYPES (the SSOT
 //      shared with the Python tooling). e.g. webhook needs `url`,
 //      slack needs `api_url`, email needs `to` + `smarthost` +
-//      `from`, pagerduty needs `service_key`. Same checks for receivers
-//      embedded in overrides.
+//      `from`. Some types instead need EXACTLY ONE of a field group:
+//      pagerduty needs `service_key` or `routing_key`, never both and
+//      never neither. Same checks for receivers embedded in overrides.
 //
 //   3. Override matcher contract (error)
 //      The route generator
@@ -76,34 +77,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
-// receiverTypeSpec mirrors the relevant subset of the Python
-// _lib_constants.py::RECEIVER_TYPES for the receiver completeness
-// check. We don't pull the optional/metadata fields — only required.
+// receiverTypeSpec is the field-presence contract of one receiver
+// type, in the same two concepts every copy of it uses:
 //
-// Source of truth lives in scripts/tools/_lib_constants.py.
-// TestReceiverTypeSpecs_KeysMatchExpected is a Go-side sentinel
-// that catches accidental edits to THIS file; it does NOT parse
-// the Python source and does NOT detect upstream additions. If
-// _lib_constants.py adds a new receiver type, valid configs using
-// it will surface as "unknown receiver type" errors here until
-// someone updates this list. A real SSOT freshness gate (parsing
-// the Python constants at CI time) belongs in a shared lint
-// task — deferred until C-8 PR-2 lands its similar gate for
-// vm_only_functions.yaml so we can pick a single pattern.
+//   - Required:     every field must be set.
+//   - ExactlyOneOf: for each group, exactly one field must be set
+//     (both set and none set are errors).
 //
-// CAUTION when editing: keep this in lock-step with
-// _lib_constants.py. A new receiver type added on the Python side
-// without updating here would surface as "unknown receiver type"
-// errors against valid configs (false positive blocking merges).
-var receiverTypeSpecs = map[string][]string{
-	"webhook":    {"url"},
-	"email":      {"to", "smarthost", "from"},
-	"slack":      {"api_url"},
-	"teams":      {"webhook_url"},
-	"rocketchat": {"url"},
-	"pagerduty":  {"service_key"},
+// The same contract is declared in docs/schemas/tenant-config.schema.json
+// (`required` + a `oneOf` whose branches each require one field) and in
+// scripts/tools/_lib_constants.py::RECEIVER_TYPES (`required` +
+// `exactly_one_of`). The schema is the hub: TestReceiverTypeSpecs_MatchSchema
+// parses it and fails on any difference with this map, and
+// tests/shared/test_receiver_spec_parity.py pins the Python copy to the
+// same schema — so no copy is read out of another language's source text.
+//
+// Only presence is modelled; optional fields and value shapes stay with
+// the schema and config_resolve.go.
+type receiverTypeSpec struct {
+	Required     []string
+	ExactlyOneOf [][]string
+}
+
+var receiverTypeSpecs = map[string]receiverTypeSpec{
+	"webhook":    {Required: []string{"url"}},
+	"email":      {Required: []string{"to", "smarthost", "from"}},
+	"slack":      {Required: []string{"api_url"}},
+	"teams":      {Required: []string{"webhook_url"}},
+	"rocketchat": {Required: []string{"url"}},
+	// Alertmanager accepts both keys at once but then uses the Events
+	// API v1 (service_key) and silently ignores routing_key
+	// (notify/pagerduty/pagerduty.go), so both-set is rejected too.
+	"pagerduty": {ExactlyOneOf: [][]string{{"service_key", "routing_key"}}},
 }
 
 // matcherKeys is the EXACT set of override-block keys the routing
@@ -301,7 +309,7 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 		}}
 	}
 
-	required, known := receiverTypeSpecs[rtype]
+	spec, known := receiverTypeSpecs[rtype]
 	if !known {
 		return []Finding{{
 			Severity: SeverityError,
@@ -315,7 +323,7 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 	}
 
 	var out []Finding
-	for _, field := range required {
+	for _, field := range spec.Required {
 		v, ok := receiver[field]
 		if !ok {
 			out = append(out, Finding{
@@ -344,7 +352,56 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 			})
 		}
 	}
+	for _, group := range spec.ExactlyOneOf {
+		if f, bad := exactlyOneFinding(tenantID, fieldPath, rtype, receiver, group); bad {
+			out = append(out, f)
+		}
+	}
 	return out
+}
+
+// exactlyOneFinding checks one ExactlyOneOf group. A field counts as
+// set under the Python pipeline's truthiness (matcherValuePresent):
+// absent, nil and "" are all unset.
+func exactlyOneFinding(tenantID, fieldPath, rtype string, receiver map[string]any, group []string) (Finding, bool) {
+	var set []string
+	for _, field := range group {
+		if matcherValuePresent(receiver[field]) {
+			set = append(set, field)
+		}
+	}
+	if len(set) == 1 {
+		return Finding{}, false
+	}
+	quoted := make([]string, len(group))
+	for i, field := range group {
+		quoted[i] = fmt.Sprintf("%q", field)
+	}
+	names := strings.Join(quoted, ", ")
+	if len(set) == 0 {
+		return Finding{
+			Severity: SeverityError,
+			Kind:     FindingMissingReceiverField,
+			TenantID: tenantID,
+			Field:    fieldPath + "." + group[0],
+			Message: fmt.Sprintf(
+				"tenant %q: receiver type %q requires exactly one of %s; none is set",
+				tenantID, rtype, names),
+		}, true
+	}
+	msg := fmt.Sprintf(
+		"tenant %q: receiver type %q requires exactly one of %s; %d are set",
+		tenantID, rtype, names, len(set))
+	if rtype == "pagerduty" {
+		msg += " (Alertmanager would use the Events API v1 via service_key and silently ignore routing_key)"
+	}
+	return Finding{
+		Severity: SeverityError,
+		Kind:     FindingConflictingReceiverField,
+		TenantID: tenantID,
+		Field:    fieldPath + "." + set[len(set)-1],
+		Message:  msg,
+	}, true
 }
 
 // matcherValuePresent reports whether an override matcher value

@@ -14,6 +14,7 @@ from _lib_constants import (
     _DURATION_RE,
     GUARDRAILS,
     PLATFORM_DEFAULTS,
+    RECEIVER_TYPES,
 )
 
 
@@ -119,6 +120,32 @@ def validate_and_clamp(
         return clamped, warnings
 
     return value, warnings
+
+
+def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
+    """Check the ``exactly_one_of`` groups of ``RECEIVER_TYPES[rtype]``.
+
+    A field counts as set under the same truthiness the required-field checks
+    use (present and truthy), so ``""`` / ``None`` read as unset. Returns the
+    first problem as ``"requires exactly one of 'a' or 'b', ..."`` (callers
+    prefix tenant / receiver context), or ``None`` when every group has
+    exactly one field set. Unknown types return ``None``; callers reject those
+    separately.
+    """
+    spec = RECEIVER_TYPES.get(rtype, {})
+    for group in spec.get("exactly_one_of", []):
+        set_fields = [f for f in group if receiver.get(f)]
+        if len(set_fields) == 1:
+            continue
+        names = " or ".join(f"'{f}'" for f in group)
+        if not set_fields:
+            return f"requires exactly one of {names}, none is set"
+        problem = f"requires exactly one of {names}, not both"
+        if rtype == "pagerduty":
+            problem += (" (Alertmanager would use the Events API v1 via "
+                        "service_key and silently ignore routing_key)")
+        return problem
+    return None
 
 
 def i18n_text(zh: str, en: str) -> str:

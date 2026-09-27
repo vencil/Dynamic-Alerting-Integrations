@@ -279,10 +279,10 @@ Quick reference for other five receiver types:
 | Type | Required Fields | Example |
 |------|-----------------|---------|
 | **Email** | `to`, `smarthost`, `from` | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
-| **Slack** | `api_url`, `channel` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
+| **Slack** | `api_url` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
 | **Microsoft Teams** | `webhook_url` | `webhook_url: "https://outlook.office.com/webhook/..."` |
-| **Rocket.Chat** | `url`, `channel`, `username` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
-| **PagerDuty** | `service_key`, `severity`, `client` | `service_key: "key-123"`, `severity: "critical"` |
+| **Rocket.Chat** | `url` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
+| **PagerDuty** | exactly one of `routing_key` or `service_key` (both is rejected: Alertmanager would use v1 and ignore `routing_key`) | `routing_key: "key-123"`, `severity: "critical"` |
 
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 

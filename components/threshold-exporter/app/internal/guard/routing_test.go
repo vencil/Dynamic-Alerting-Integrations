@@ -422,32 +422,44 @@ func TestRouting_FailingTenantCountsTowardPassedTenantCount(t *testing.T) {
 	}
 }
 
-// --- SSOT drift sentinel -------------------------------------------
+// --- exactly-one field groups (pagerduty service_key / routing_key) ---
 
-// TestReceiverTypeSpecs_KeysMatchExpected is a static sentinel that
-// guards against accidental edits to receiverTypeSpecs in routing.go.
-// If you intentionally add/remove a receiver type here, update the
-// expected list below to match _lib_constants.py::RECEIVER_TYPES.
-//
-// (A full file-level diff against _lib_constants.py would be more
-// rigorous but adds Python parsing at test time. PR-1 keeps this as
-// a Go-side sentinel; PR-3 may add a freshness CI gate that compares
-// the two sources directly.)
-func TestReceiverTypeSpecs_KeysMatchExpected(t *testing.T) {
-	want := map[string]bool{
-		"webhook":    true,
-		"email":      true,
-		"slack":      true,
-		"teams":      true,
-		"rocketchat": true,
-		"pagerduty":  true,
+func TestRouting_PagerdutyExactlyOneKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		receiver map[string]any
+		wantKind FindingKind // "" = no error finding
+	}{
+		{"service_key only", map[string]any{"type": "pagerduty", "service_key": "k"}, ""},
+		{"routing_key only", map[string]any{"type": "pagerduty", "routing_key": "k"}, ""},
+		{"both set", map[string]any{"type": "pagerduty", "service_key": "k", "routing_key": "r"}, FindingConflictingReceiverField},
+		{"neither set", map[string]any{"type": "pagerduty", "severity": "critical"}, FindingMissingReceiverField},
+		{"empty string counts as unset", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": "r"}, ""},
+		{"both empty is neither", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": nil}, FindingMissingReceiverField},
 	}
-	if len(receiverTypeSpecs) != len(want) {
-		t.Errorf("receiverTypeSpecs has %d types, want %d", len(receiverTypeSpecs), len(want))
-	}
-	for k := range want {
-		if _, ok := receiverTypeSpecs[k]; !ok {
-			t.Errorf("missing receiver type %q from receiverTypeSpecs", k)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runWithRouting(t, "t1", map[string]any{"receiver": tc.receiver})
+			if tc.wantKind == "" {
+				for _, f := range got {
+					if f.Severity == SeverityError {
+						t.Fatalf("unexpected error finding: %+v", f)
+					}
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+			}
+			if got[0].Kind != tc.wantKind || got[0].Severity != SeverityError {
+				t.Errorf("finding = %s/%s, want error/%s", got[0].Severity, got[0].Kind, tc.wantKind)
+			}
+			if !strings.Contains(got[0].Message, `exactly one of "service_key", "routing_key"`) {
+				t.Errorf("message %q should name the group", got[0].Message)
+			}
+			if tc.wantKind == FindingConflictingReceiverField && !strings.Contains(got[0].Message, "v1") {
+				t.Errorf("both-set message %q should say Alertmanager falls back to the v1 API", got[0].Message)
+			}
+		})
 	}
 }

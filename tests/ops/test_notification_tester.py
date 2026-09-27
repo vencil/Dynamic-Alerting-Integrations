@@ -323,6 +323,21 @@ class TestEdgeCases:
         result = nt.test_receiver(recv)
         assert result.status == nt.STATUS_INVALID_CONFIG
 
+    @pytest.mark.parametrize("keys,expect", [
+        ({"routing_key": "r"}, None),
+        ({}, "none is set"),
+        ({"service_key": "k", "routing_key": "r"}, "not both"),
+    ], ids=["routing-key-only", "neither", "both"])
+    def test_pagerduty_exactly_one_key(self, keys, expect):
+        """PagerDuty service_key／routing_key 恰好一個（#2137）；合法者走到 dry-run。"""
+        recv = {"type": "pagerduty", "_label": "pd", **keys}
+        result = nt.test_receiver(recv, dry_run=True)
+        if expect is None:
+            assert result.status == nt.STATUS_DRY_RUN
+        else:
+            assert result.status == nt.STATUS_INVALID_CONFIG
+            assert expect in result.detail
+
     def test_email_skipped(self):
         """Email receiver 目前應返回 SKIPPED（SMTP 測試尚未實作）。"""
         recv = {"type": "email", "to": "admin@example.com", "smarthost": "smtp.example.com:587", "from": "alerts@example.com", "_label": "mail"}

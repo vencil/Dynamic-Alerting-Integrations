@@ -481,7 +481,7 @@
       "type": "object",
       "title": "Email Receiver",
       "description": "SMTP email receiver. Sends alerts via email to specified recipients.",
-      "required": ["type", "to", "smarthost"],
+      "required": ["type", "to", "smarthost", "from"],
       "properties": {
         "type": {
           "const": "email",
@@ -507,7 +507,7 @@
         "from": {
           "type": "string",
           "title": "From Address",
-          "description": "Sender email address. Default: Alertmanager config.",
+          "description": "Sender email address. Required: the platform configures SMTP per receiver with no global smtp_from, and Alertmanager rejects an email config without `from` unless a global smtp_from is set.",
           "format": "email",
           "examples": ["alerts@example.com"]
         },
@@ -533,6 +533,11 @@
           "type": "string",
           "title": "HTML Template",
           "description": "Alertmanager template for HTML email body. Optional; uses Alertmanager default if omitted."
+        },
+        "text": {
+          "type": "string",
+          "title": "Text Template",
+          "description": "Alertmanager template for the plain-text email body. Optional."
         },
         "headers": {
           "type": "object",
@@ -583,6 +588,17 @@
           "type": "string",
           "title": "Message Body",
           "description": "Custom body text for Slack message. Alertmanager template string."
+        },
+        "title_link": {
+          "type": "string",
+          "title": "Title Link",
+          "description": "URL the message title links to. Alertmanager template string."
+        },
+        "icon_emoji": {
+          "type": "string",
+          "title": "Icon Emoji",
+          "description": "Emoji used as the message icon (e.g., ':rotating_light:').",
+          "examples": [":rotating_light:"]
         },
         "send_resolved": {
           "type": "boolean",
@@ -676,8 +692,13 @@
     "pagerdutReceiver": {
       "type": "object",
       "title": "PagerDuty Receiver",
-      "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents.",
+      "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents. Set exactly one of service_key (Events API v1) or routing_key (Events API v2) — not both, not neither.",
+      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field `required` branches (both set matches both branches and fails oneOf; neither matches none). Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. The Go guard (internal/guard/routing.go receiverTypeSpecs ExactlyOneOf) and Python RECEIVER_TYPES (exactly_one_of) read this same shape; their parity tests fail on any other presence keyword here.",
       "required": ["type"],
+      "oneOf": [
+        { "required": ["service_key"] },
+        { "required": ["routing_key"] }
+      ],
       "properties": {
         "type": {
           "const": "pagerduty",
@@ -686,13 +707,13 @@
         "service_key": {
           "type": "string",
           "title": "Service Key (Integration Key)",
-          "description": "PagerDuty service integration key for events API v1. Deprecated in favor of routing_key (v2).",
+          "description": "PagerDuty service integration key for events API v1. Deprecated in favor of routing_key (v2). Mutually exclusive with routing_key.",
           "examples": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
         },
         "routing_key": {
           "type": "string",
           "title": "Routing Key (v2 API)",
-          "description": "PagerDuty integration key for events API v2. Recommended over service_key.",
+          "description": "PagerDuty integration key for events API v2. Recommended over service_key. Mutually exclusive with service_key.",
           "examples": ["xxxxx/xxxxx/xxxxx"]
         },
         "severity": {

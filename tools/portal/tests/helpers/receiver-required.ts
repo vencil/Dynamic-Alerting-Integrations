@@ -1,60 +1,58 @@
 /**
- * Required receiver fields per type, as the ROUTING PIPELINE demands them
- * (#2033). The tenant schema only requires e.g. email to+smarthost, but the
- * route generator (scripts/tools/_lib_constants.py RECEIVER_TYPES, used by
- * _grar_merge.build_receiver_config) and the Go guard
- * (components/threshold-exporter/app/internal/guard/routing.go
- * receiverTypeSpecs) also require email `from` and pagerduty `service_key`;
- * a receiver without them makes the whole route WARN-and-skip.
+ * Receiver field-presence contract per type (#2033, #2137): which fields are
+ * required, and which groups need EXACTLY ONE field set (pagerduty
+ * service_key / routing_key). A receiver that breaks it makes the routing
+ * pipeline WARN-and-skip the whole route.
  *
- * Both sources are read live and unioned, so a field either side adds
- * reddens the portal tests. Reading fails loudly (throws), never empty:
- * the Python half runs the real module (stdlib-only) via python3, which the
- * Portal Tests job already has (it runs check_portal_bundle_size.py).
+ * Read from docs/schemas/tenant-config.schema.json, the hub of the three
+ * copies of this contract: the Python route generator's RECEIVER_TYPES
+ * (scripts/tools/_lib_constants.py) is pinned to it by
+ * tests/shared/test_receiver_spec_parity.py, and the Go guard's
+ * receiverTypeSpecs by TestReceiverTypeSpecs_MatchSchema. Each copy is
+ * compared as data against the schema's JSON, so none is regex-parsed out of
+ * another language's source. Read shape, identical in all three readers:
+ *   `required` minus "type"                                  → required
+ *   `oneOf` whose every branch is {"required": [<one field>]} → one group
+ * Any other presence keyword on a receiver definition throws (fail loud,
+ * never read as "no constraint").
  */
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// Literal paths on purpose: tests/ops/test_ci_path_filter_coverage.py scans
+// Literal path on purpose: tests/ops/test_ci_path_filter_coverage.py scans
 // Vitest out-of-tree reads to keep ci.yml's `portal` filter complete.
-const LIB_CONSTANTS = resolve(here, '../../../../scripts/tools/_lib_constants.py');
-const GUARD_ROUTING = resolve(here, '../../../../components/threshold-exporter/app/internal/guard/routing.go');
+const SCHEMA_PATH = resolve(here, '../../../../docs/schemas/tenant-config.schema.json');
 
-function fromPython(): Record<string, string[]> {
-  const out = execFileSync('python3', ['-c', [
-    'import json, sys',
-    'sys.path.insert(0, sys.argv[1])',
-    'from _lib_constants import RECEIVER_TYPES',
-    "print(json.dumps({k: v['required'] for k, v in RECEIVER_TYPES.items()}))",
-  ].join('\n'), dirname(LIB_CONSTANTS)], { encoding: 'utf8' });
-  return JSON.parse(out);
-}
+export interface ReceiverSpec { required: string[]; exactlyOneOf: string[][] }
 
-function fromGo(): Record<string, string[]> {
-  const src = readFileSync(GUARD_ROUTING, 'utf8');
-  const block = src.match(/var receiverTypeSpecs = map\[string\]\[\]string\{([\s\S]*?)\n\}/);
-  if (!block) throw new Error('receiverTypeSpecs literal not found in routing.go');
-  const out: Record<string, string[]> = {};
-  for (const m of block[1].matchAll(/"([a-z]+)":\s*\{([^}]*)\}/g)) {
-    out[m[1]] = [...m[2].matchAll(/"([a-z_]+)"/g)].map(x => x[1]);
+const UNMODELLED = ['anyOf', 'allOf', 'not', 'if', 'dependencies', 'dependentRequired'];
+
+export const RECEIVER_SPECS: Record<string, ReceiverSpec> = (() => {
+  const defs = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')).definitions;
+  const out: Record<string, ReceiverSpec> = {};
+  for (const { $ref } of defs.receiver.oneOf) {
+    const name = String($ref).replace(/^#\/definitions\//, '');
+    const def = defs[name];
+    if (!def) throw new Error(`receiver $ref ${$ref} does not resolve`);
+    const bad = UNMODELLED.filter(k => k in def);
+    if (bad.length) throw new Error(`${name} uses ${bad.join(', ')}, which this reader does not model`);
+    const exactlyOneOf: string[][] = [];
+    if (def.oneOf) {
+      exactlyOneOf.push(def.oneOf.map((br: any, i: number) => {
+        if (Object.keys(br).join() !== 'required' || br.required.length !== 1) {
+          throw new Error(`${name}.oneOf[${i}] is not {"required": [<one field>]}`);
+        }
+        return br.required[0];
+      }));
+    }
+    out[def.properties.type.const] = {
+      required: (def.required ?? []).filter((f: string) => f !== 'type').sort(),
+      exactlyOneOf,
+    };
   }
   return out;
-}
-
-export const RECEIVER_SOURCES = { python: fromPython(), go: fromGo() };
-
-export const RECEIVER_REQUIRED: Record<string, string[]> = (() => {
-  const u: Record<string, Set<string>> = {};
-  for (const src of Object.values(RECEIVER_SOURCES)) {
-    for (const [type, req] of Object.entries(src)) {
-      u[type] ||= new Set();
-      req.forEach(f => u[type].add(f));
-    }
-  }
-  return Object.fromEntries(Object.entries(u).map(([k, v]) => [k, [...v].sort()]));
 })();
 
 /** Every `receiver` object (anywhere in the document) with its path. */
@@ -68,9 +66,16 @@ export function findReceivers(doc: any, path: string[] = []): Array<{ path: stri
   return out;
 }
 
-/** Fields the pipeline requires that this receiver lacks ([] = complete). */
-export function missingReceiverFields(receiver: any): string[] {
-  const req = RECEIVER_REQUIRED[receiver?.type];
-  if (!req) return [`<unknown type ${JSON.stringify(receiver?.type)}>`];
-  return req.filter(f => !(f in receiver));
+/**
+ * Presence problems of this receiver ([] = complete): a missing required
+ * field is reported by name; an exactly-one group as `exactly one of a|b`.
+ */
+export function receiverFieldProblems(receiver: any): string[] {
+  const spec = RECEIVER_SPECS[receiver?.type];
+  if (!spec) return [`<unknown type ${JSON.stringify(receiver?.type)}>`];
+  const out = spec.required.filter(f => !(f in receiver));
+  for (const group of spec.exactlyOneOf) {
+    if (group.filter(f => f in receiver).length !== 1) out.push(`exactly one of ${group.join('|')}`);
+  }
+  return out;
 }

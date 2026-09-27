@@ -109,58 +109,9 @@
       "additionalProperties": false
     },
     "receiver": {
-      "oneOf": [
-        { "$ref": "#/definitions/webhookReceiver" },
-        { "$ref": "#/definitions/slackReceiver" },
-        { "$ref": "#/definitions/pagerdutReceiver" },
-        { "$ref": "#/definitions/emailReceiver" }
-      ],
-      "title": "Receiver Configuration"
-    },
-    "webhookReceiver": {
-      "type": "object",
-      "required": ["type", "url"],
-      "properties": {
-        "type": { "const": "webhook" },
-        "url": { "type": "string", "format": "uri" },
-        "send_resolved": { "type": "boolean", "default": true }
-      },
-      "additionalProperties": false
-    },
-    "slackReceiver": {
-      "type": "object",
-      "required": ["type", "api_url"],
-      "properties": {
-        "type": { "const": "slack" },
-        "api_url": { "type": "string", "format": "uri" },
-        "channel": { "type": "string" },
-        "send_resolved": { "type": "boolean", "default": true }
-      },
-      "additionalProperties": false
-    },
-    "pagerdutReceiver": {
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": { "const": "pagerduty" },
-        "service_key": { "type": "string" },
-        "routing_key": { "type": "string" },
-        "severity": { "type": "string" },
-        "send_resolved": { "type": "boolean", "default": true }
-      },
-      "additionalProperties": false
-    },
-    "emailReceiver": {
-      "type": "object",
-      "required": ["type", "to", "smarthost"],
-      "properties": {
-        "type": { "const": "email" },
-        "to": { "type": "array", "items": { "type": "string", "format": "email" }, "minItems": 1 },
-        "smarthost": { "type": "string" },
-        "from": { "type": "string", "format": "email" },
-        "send_resolved": { "type": "boolean", "default": true }
-      },
-      "additionalProperties": false
+      "$ref": "tenant-config.schema.json#/definitions/receiver",
+      "title": "Receiver Configuration",
+      "$comment": "#2137: a profile receiver is merged into the tenant's _routing and goes through the same route generator, so it uses the tenant schema's receiver definition instead of a second copy (the copy that lived here had drifted: 4 of 6 types, email without from, pagerduty without its key constraint). Resolves against this file's $id, which shares its base with tenant-config.schema.json's $id."
     }
   }
 }
