@@ -277,6 +277,10 @@ type reloadPriorState struct {
 	// blocks (#2019): the second input set classifyTenant compares, and
 	// the decode cache this tick's LoadRootPlatformTenants reuses by hash.
 	platform []config.PlatformTenants
+	// profiles is the last commit's root platform files' `profiles:` set
+	// (#2117): what this tick's is compared with, and reused as is when no
+	// root platform file moved.
+	profiles *config.PlatformProfiles
 }
 
 // reloadScanState bundles the hierarchy projection of this tick's scan
@@ -295,6 +299,13 @@ type reloadScanState struct {
 	// the common tick, which skips the per-tenant comparison.
 	platform      []config.PlatformTenants
 	platformMoved bool
+	// profiles is this tick's root platform files' `profiles:` set
+	// (#2117) — the prior's own pointer when no root platform file moved,
+	// so the common tick decodes nothing. changedProfiles is
+	// config.ChangedProfiles(prior, this): nil on every tick where no
+	// profile's content moved, which skips the per-tenant question.
+	profiles        *config.PlatformProfiles
+	changedProfiles map[string]struct{}
 }
 
 // reloadResult bundles classifyAndCount's output for installNewHierarchyState
@@ -324,6 +335,7 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
 		graph:            m.hierarchy.graph,          // #1964: prior chain membership
 		platform:         m.hierarchy.platform,       // #2019: prior platform per-tenant blocks
+		profiles:         m.hierarchy.profiles,       // #2117: prior profiles
 		hierarchicalMode: m.hierarchy.enabled,
 		tree:             m.flat.tree,
 	}
@@ -374,14 +386,29 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	}
 
 	platform := config.LoadRootPlatformTenants(scan, prior.platform, readTreeFile)
+	platformMoved := platformFilesMoved(prior.platform, platform)
+	// #2117: the profiles come from the same files. Unmoved files ⇒ the
+	// prior set as is (no decode on the common tick); moved ⇒ decoded
+	// again and compared, per profile name.
+	// No prior set (hierarchical mode not yet committed) ⇒ nothing to
+	// compare against: every tenant is computed fresh on that tick anyway.
+	profiles, changedProfiles := prior.profiles, map[string]struct{}(nil)
+	if platformMoved || profiles == nil {
+		profiles = config.LoadRootPlatformProfiles(scan, readTreeFile)
+		if prior.profiles != nil {
+			changedProfiles = config.ChangedProfiles(prior.profiles, profiles)
+		}
+	}
 	return reloadScanState{
-		tenants:       scan.Tenants,
-		defaults:      scan.Defaults,
-		hashes:        scan.AbsHashes(),
-		graph:         scan.InheritanceGraph(),
-		tree:          scan,
-		platform:      platform,
-		platformMoved: platformFilesMoved(prior.platform, platform),
+		tenants:         scan.Tenants,
+		defaults:        scan.Defaults,
+		hashes:          scan.AbsHashes(),
+		graph:           scan.InheritanceGraph(),
+		tree:            scan,
+		platform:        platform,
+		platformMoved:   platformMoved,
+		profiles:        profiles,
+		changedProfiles: changedProfiles,
 	}, false, nil
 }
 
@@ -463,6 +490,16 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		overlayPaths, overlayKeys = platformOverlayDelta(prior.platform, scan.platform, tid)
 		scopePaths = append(scopePaths, overlayPaths...)
 	}
+	// #2117: so are the root platform files' `profiles:` — for a tenant
+	// whose `_profile` names a profile this tick changed. Asked only on a
+	// tick where some profile's content moved; a changed tenant file is
+	// recomputed (and attributed to its source) anyway.
+	var profileKeys []string
+	if len(scan.changedProfiles) > 0 && !sourceChanged {
+		var profilePaths []string
+		profilePaths, profileKeys = profileDeltaFor(tid, srcPath, prior, scan)
+		scopePaths = append(scopePaths, profilePaths...)
+	}
 	defaultsChanged := membershipChanged || len(scopePaths) > 0
 
 	if !sourceChanged && !defaultsChanged {
@@ -476,7 +513,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	}
 
 	overlay := config.PlatformOverlayFor(scan.platform, tid)
-	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain, overlay...)
+	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles})
 	if mergeErr != nil {
 		logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
 		// Preserve any prior merged_hash we had so the /effective
@@ -530,6 +567,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 					scan.hashes, prior.hashes,
 					removedPaths, addedPaths,
 					overlayKeys, overlay,
+					profileKeys, scan.profiles,
 				)
 			}
 			switch effect {
@@ -652,6 +690,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.graph = scan.graph
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.hierarchy.platform = scan.platform
+	m.hierarchy.profiles = scan.profiles
 	afterHierarchyInstall := m.afterHierarchyInstall
 	m.mu.Unlock()
 
@@ -744,9 +783,10 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 // (`sum(rate(da_config_parse_failure_total{file_basename="_defaults.yaml"}
 // [5m])) > 0`) and the count itself is the blast-radius signal.
 //
-// `overlay` is the tenant's root-platform-file entries (#2019,
-// config.PlatformOverlayFor) — part of what merged_hash is a hash of.
-func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string, overlay ...config.PlatformBlock) (string, error) {
+// `layers` is the tenant's root-platform-file entries (#2019,
+// config.PlatformOverlayFor) and the tree's profiles (#2117) — part of what
+// merged_hash is a hash of.
+func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string, layers config.TenantLayers) (string, error) {
 	tenantBytes, err := os.ReadFile(tenantFile)
 	if err != nil {
 		return "", err
@@ -759,7 +799,7 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 		}
 		chainBytes = append(chainBytes, b)
 	}
-	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes, overlay...)
+	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes, layers)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}

@@ -34,6 +34,12 @@ package config
 // by exactly that layer. Deliberate: the request shape is unchanged, and
 // the result is "tenant file + this chain", nothing read from disk.
 //
+// PROFILES (#2117): a `_profile` the tenant elects IS expanded, from the
+// `profiles:` block of the chain's ROOT entry (L0) only — see
+// simulateProfiles. `_profiles.yaml` is not part of the request shape, so a
+// profile defined only there expands on /effective and /metrics but not
+// here.
+//
 // API shape mirrors describe_tenant.py JSON output and EffectiveConfig
 // so HTTP consumers can compare the two responses field-for-field.
 
@@ -149,11 +155,12 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		chainBytes = append(chainBytes, files[dp])
 	}
 
-	merged, err := ComputeEffectiveConfig(req.TenantYAML, req.TenantID, chainBytes)
+	parts, err := computeEffectiveConfigBytesDetailed(req.TenantYAML, req.TenantID, chainBytes, nil, simulateProfiles(chain, files))
 	if err != nil {
 		return nil, fmt.Errorf("simulate merge: %w", err)
 	}
-	mergedHash, err := ComputeMergedHash(req.TenantYAML, req.TenantID, chainBytes)
+	merged := parts.merged
+	mergedHash, err := mergedHashOf(merged)
 	if err != nil {
 		return nil, fmt.Errorf("simulate hash: %w", err)
 	}
@@ -165,4 +172,29 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		DefaultsChain: append([]string(nil), chain...),
 		Config:        merged,
 	}, nil
+}
+
+// simulateProfiles is the profile set a /simulate request carries (#2117):
+// the `profiles:` block (and `optional_overrides:`) of the chain's ROOT
+// entry — L0, placed at SimRoot/_defaults.yaml — decoded exactly as the
+// walker plane decodes a root platform file (newPlatformProfiles).
+//
+// ⛔ ONLY L0, because only a ROOT platform file's `profiles:` reaches
+// /metrics: a nested `_defaults.yaml`'s block is read by no plane
+// (flat_build.go drops nested platform files), so expanding an L1+ entry's
+// would simulate a profile the exporter never serves.
+//
+// ⚠️ `_profiles.yaml` (or any root platform file other than the defaults
+// carrier) is not part of the request shape — the request carries a tenant
+// file and a defaults chain only. A profile defined there is unknown to
+// /simulate: a tenant electing it simulates with no expansion, while
+// /effective and /metrics expand it. Same stance as the platform per-tenant
+// layer above: the result is "tenant file + this chain", nothing read from
+// disk.
+func simulateProfiles(chain []string, files map[string][]byte) *PlatformProfiles {
+	root := path.Join(SimRoot, "_defaults.yaml")
+	if len(chain) == 0 || chain[0] != root {
+		return nil
+	}
+	return newPlatformProfiles([]profileSourceFile{{key: "_defaults.yaml", data: files[root]}})
 }

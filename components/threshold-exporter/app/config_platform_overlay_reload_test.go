@@ -33,10 +33,15 @@ func cachedMergedHash(m *ConfigManager, tid string) string {
 	return m.hierarchy.mergedHashes[tid]
 }
 
-func cachedOverlay(m *ConfigManager, tid string) []config.PlatformBlock {
+// cachedLayers is what the cached merged_hash of tid was computed with:
+// its platform entries (#2019) and the tree's profiles (#2117).
+func cachedLayers(m *ConfigManager, tid string) config.TenantLayers {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return config.PlatformOverlayFor(m.hierarchy.platform, tid)
+	return config.TenantLayers{
+		Overlay:  config.PlatformOverlayFor(m.hierarchy.platform, tid),
+		Profiles: m.hierarchy.profiles,
+	}
 }
 
 func readAll(t *testing.T, paths ...string) [][]byte {
@@ -75,7 +80,7 @@ func TestConfigManagerResolve_AgreesWithResolveEffective(t *testing.T) {
 			t.Errorf("%s: Resolve(%s) = %s %s, /effective = %s %s", where, tid, gotCfg, got.MergedHash, wantCfg, pe.MergedHash)
 		}
 		// The served config hashes to the served merged_hash.
-		h, err := config.ComputeMergedHash(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedOverlay(m, tid)...)
+		h, err := config.ComputeMergedHash(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedLayers(m, tid))
 		if err != nil || h != got.MergedHash {
 			t.Errorf("%s: Resolve(%s) merged_hash %s is not its own merge's (%s, %v)", where, tid, got.MergedHash, h, err)
 		}

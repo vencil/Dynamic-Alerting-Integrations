@@ -317,6 +317,14 @@ func pathOverriddenIn(node any, segs []string) bool {
 // is the tenant's current platform entries: a CHAIN key they set shadows
 // the chain change just as a tenant-file key does.
 //
+// `profileKeys` (#2117) are the canonical keys whose value in the profile
+// the tenant elects changed this tick (profileDeltaFor). The profile only
+// fills in keys the tenant's layer (file + platform entries) does not set,
+// under any spelling, so each is shadowed iff that layer sets it
+// (config.ProfileKeysSetBy); they join steps 2 and 3 like overlayKeys.
+// `profiles` is this tick's profile set: a CHAIN key the elected profile
+// fills in shadows the chain change like a tenant-file key (nil = none).
+//
 // All disk-I/O is deliberately scoped to this rare path (tenants in
 // the noOp set are by definition the "quiet defaults edit" minority).
 // On parse failure of the tenant file we return "cosmetic" with a
@@ -330,6 +338,8 @@ func classifyDefaultsNoOpEffect(
 	removed, added []string,
 	overlayKeys []string,
 	overlay []config.PlatformBlock,
+	profileKeys []string,
+	profiles *config.PlatformProfiles,
 ) string {
 	var allChanged []string
 	// #1964: a file that joined the chain contributes its whole content
@@ -389,7 +399,7 @@ func classifyDefaultsNoOpEffect(
 			allChanged = append(allChanged, changedDefaultsKeys(empty, next)...)
 		}
 	}
-	if len(allChanged) == 0 && len(overlayKeys) == 0 {
+	if len(allChanged) == 0 && len(overlayKeys) == 0 && len(profileKeys) == 0 {
 		return "cosmetic"
 	}
 	var doc any
@@ -404,7 +414,16 @@ func classifyDefaultsNoOpEffect(
 	// sets over the chain — its file AND its root platform entries
 	// (`overlay`, merged exactly as the merge does). A platform change
 	// (overlayKeys) can only be shadowed by the tenant FILE, below.
-	if !tenantOverridesAll(config.ApplyPlatformOverlay(overrides, overlay), allChanged) {
+	// #2117: …and the keys the profile that layer elects fills in — they
+	// sit above the chain too, so a chain change to one of them does not
+	// reach /metrics either. The profile does NOT shadow a profile change
+	// (profileKeys, below: only the layer itself does) nor a platform
+	// change (the platform entry beats the profile).
+	own := config.ApplyPlatformOverlay(overrides, overlay)
+	if !tenantOverridesAll(profiles.Expand(own), allChanged) {
+		return "cosmetic"
+	}
+	if !config.ProfileKeysSetBy(own, profileKeys) {
 		return "cosmetic"
 	}
 	for _, k := range overlayKeys {

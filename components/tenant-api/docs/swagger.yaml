@@ -50,6 +50,18 @@ definitions:
         items:
           $ref: '#/definitions/config.PlatformOverlaySource'
         type: array
+      profile_overlay:
+        description: |-
+          ProfileOverlay names the profile the tenant is on (`_profile`, from
+          the tenant file or the platform overlay) and, per root platform file
+          that profile's filled-in values came from (merge order), the
+          top-level keys it supplied to EffectiveConfig — only keys neither the
+          tenant file nor the platform overlay writes (#2117). Omitted when the
+          profile contributes nothing (no `_profile`, an unknown profile, or
+          every key already set). Same name and shape as describe_tenant.py.
+        items:
+          $ref: '#/definitions/config.ProfileOverlaySource'
+        type: array
       source_file:
         type: string
       source_hash:
@@ -69,6 +81,17 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  config.ProfileOverlaySource:
+    properties:
+      file:
+        type: string
+      keys:
+        items:
+          type: string
+        type: array
+      profile:
+        type: string
     type: object
   config.ResolvedThreshold:
     properties:
@@ -1910,6 +1933,11 @@ paths:
         applied between the chain and the tenant file (the tenant
         file wins key by key); platform_overlay names the files and
         keys that layer supplied and is omitted when it supplied none.
+        A tenant's _profile is expanded as /metrics expands it: the
+        profile (from the root platform files' profiles: blocks) fills
+        in keys neither the tenant file nor the platform entries set;
+        profile_overlay names the profile, the files and the keys it
+        supplied and is omitted when it supplied none.
         Includes two SHA-256 hashes (truncated to 16 hex chars):
         source_hash for raw file content and merged_hash for the
         canonical-JSON of the merged dict. Parity target:

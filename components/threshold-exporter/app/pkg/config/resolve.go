@@ -1537,47 +1537,18 @@ func (c *ThresholdConfig) ApplyProfiles() {
 		// materially different act from a profile that fans out, so it is not
 		// obviously the same defect. Tracked with the rest of the tier's
 		// write-path questions rather than fixed by a half-measure here.
-		canonProfile, _ := canonicalizeOverrides(profile)
-		for key, profileValue := range canonProfile {
-			// ⛔ The declared check must look at the BASE, not the whole key.
-			// resolveDimensionalRows emits unconditionally — it never consults
-			// defaults — so a profile entry spelled `oracle_wait_time_rate{db="x"}`
-			// fans out to every tenant on the profile exactly like the flat
-			// spelling would, one label segment away from the blocked shape.
-			// (Measured: two tenants on such a profile got two rows.)
-			//
-			// ⛔ …but NOT the `_critical` shape, and the asymmetry is the whole
-			// test: block only where blocking buys something. resolveCriticalRows
-			// admits on defaults[base], so a profile supplying
-			// `jvm_memory_critical` (base `jvm_memory` valued) produces a real
-			// critical-tier row — while resolveDeclaredRows refuses that shape
-			// outright. Blocking it here would therefore prevent nothing and
-			// delete a working row, with a WARN as the only trace. Registry tier
-			// membership groups the two together; runtime behaviour does not.
-			declaredKey := key
-			if i := strings.IndexByte(key, '{'); i > 0 {
-				declaredKey = key[:i]
+		//
+		// The per-key decision is profileFill (profile_overlay.go), shared
+		// with the walker plane's expansion (/effective, da-guard; #2117) so
+		// the two planes cannot pick different keys.
+		fill := profileFill(canonicalView(profile), overrides, canonDeclared, func(key string) {
+			if _, seen := warnedProfileKeys[profileName+"\x00"+key]; !seen {
+				warnedProfileKeys[profileName+"\x00"+key] = struct{}{}
+				log.Printf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
 			}
-			_, declared := canonDeclared[declaredKey]
-			if declared && strings.HasSuffix(key, criticalSuffix) {
-				declared = false
-			}
-			if declared {
-				// Only say something when the fill-in would actually have
-				// happened. If the tenant set the key themselves, the old code
-				// skipped it anyway — warning there would report a non-event
-				// and blame the wrong file.
-				if !tenantHasAliasEquivalent(overrides, key) {
-					if _, seen := warnedProfileKeys[profileName+"\x00"+key]; !seen {
-						warnedProfileKeys[profileName+"\x00"+key] = struct{}{}
-						log.Printf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
-					}
-				}
-				continue
-			}
-			if !tenantHasAliasEquivalent(overrides, key) {
-				overrides[key] = profileValue
-			}
+		})
+		for key, profileValue := range fill {
+			overrides[key] = profileValue
 		}
 	}
 }

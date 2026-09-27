@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // coldMergeFixtures are trees that exercise every input shape the cold merge
@@ -124,7 +126,7 @@ func assertColdStateMatchesRecompute(t *testing.T, mgr *ConfigManager) int {
 	}
 	sort.Strings(tids)
 	for _, tid := range tids {
-		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid])
+		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid], config.TenantLayers{})
 		have, ok := got[tid]
 		switch {
 		case werr != nil && ok:
@@ -301,7 +303,7 @@ func TestColdMergedHashMatchesRecomputeOnEveryError(t *testing.T) {
 			oracle := NewConfigManager(root)
 			oracle.SetMetrics(oracleMetrics)
 			oracle.SetLogger(oracleLog)
-			wantHash, wantErr := oracle.recomputeMergedHash(tc.tid, tc.tenant, tc.chain)
+			wantHash, wantErr := oracle.recomputeMergedHash(tc.tid, tc.tenant, tc.chain, config.TenantLayers{})
 
 			coldMetrics, _ := freshMetrics(t)
 			coldLog, coldBuf := newTestLogger()
@@ -320,7 +322,7 @@ func TestColdMergedHashMatchesRecomputeOnEveryError(t *testing.T) {
 						}
 					}
 				}
-				gotHash, gotErr := cold.coldMergedHash(tc.tid, tc.tenant, tc.chain, in)
+				gotHash, gotErr := cold.coldMergedHash(tc.tid, tc.tenant, tc.chain, in, config.TenantLayers{})
 				if gotHash != wantHash {
 					t.Errorf("seeded=%v: hash %q, recompute %q", seeded, gotHash, wantHash)
 				}
@@ -428,7 +430,7 @@ func TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce(t *testing.
 	oracle.SetLogger(logger)
 	want := map[string]string{}
 	for tid, src := range scan.Tenants {
-		h, herr := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid])
+		h, herr := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid], config.TenantLayers{})
 		if herr != nil {
 			t.Fatalf("oracle %s: %v", tid, herr)
 		}
@@ -453,7 +455,7 @@ func TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce(t *testing.
 	}
 	changed := 0
 	for tid, src := range scan.Tenants {
-		if h, _ := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid]); h != want[tid] {
+		if h, _ := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid], config.TenantLayers{}); h != want[tid] {
 			changed++
 		}
 	}

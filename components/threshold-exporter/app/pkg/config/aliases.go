@@ -113,7 +113,7 @@ func canonicalKeyFor(key string) (string, bool) {
 
 // legacySpellingFor is the inverse of canonicalKeyFor for the same three
 // shapes: given a canonical-spelled key, it returns the deprecated spelling
-// (if the key's base is an alias target). Used by tenantHasAliasEquivalent.
+// (if the key's base is an alias target). Used by hasAliasEquivalent.
 func legacySpellingFor(key string) (string, bool) {
 	if legacy, ok := legacyKeyByCanonical[key]; ok {
 		return legacy, true
@@ -221,19 +221,42 @@ func canonicalizeOverrides(overrides map[string]ScheduledValue) (map[string]Sche
 	if deprecated == 0 {
 		return overrides, 0
 	}
-	out := make(map[string]ScheduledValue, len(overrides))
-	for k, v := range overrides {
+	return canonicalView(overrides), deprecated
+}
+
+// canonicalView is canonicalizeOverrides' map half over any value type: the
+// input with every deprecated spelling moved onto its canonical key, the
+// canonical spelling winning when both are present. The input is never
+// mutated; a map without a deprecated key is returned as is.
+//
+// Generic so the walker plane's profile expansion (profile_overlay.go, over
+// raw YAML values) canonicalizes a profile with THIS rule rather than a copy
+// of it — ApplyProfiles (typed, /metrics) and the walker (untyped,
+// /effective) must pick the same keys (#2117).
+func canonicalView[V any](m map[string]V) map[string]V {
+	clean := true
+	for k := range m {
+		if _, isAlias := canonicalKeyFor(k); isAlias {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return m
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
 		canon, isAlias := canonicalKeyFor(k)
 		if !isAlias {
 			out[k] = v
 			continue
 		}
-		if _, canonPresent := overrides[canon]; canonPresent {
+		if _, canonPresent := m[canon]; canonPresent {
 			continue // canonical wins; deprecated duplicate ignored
 		}
 		out[canon] = v
 	}
-	return out, deprecated
+	return out
 }
 
 // appendWithLegacyTwin appends row and, when canonicalKey is the target of a
@@ -256,13 +279,15 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 	return rows
 }
 
-// tenantHasAliasEquivalent reports whether overrides already contains key
-// under ANY spelling: the key itself, its canonical form, or the legacy form
-// of that canonical. ApplyProfiles uses this for its fill-in check so a
-// profile value never displaces a tenant's own setting that is merely spelled
-// with the other name of the same threshold (#1231 transition window) — the
-// four-layer priority (tenant beats profile) must hold across spellings.
-func tenantHasAliasEquivalent(overrides map[string]ScheduledValue, key string) bool {
+// hasAliasEquivalent reports whether overrides already contains key under ANY
+// spelling: the key itself, its canonical form, or the legacy form of that
+// canonical. The profile fill-in (profileFill, shared by ApplyProfiles and the
+// walker plane) uses it so a profile value never displaces a tenant's own
+// setting that is merely spelled with the other name of the same threshold
+// (#1231 transition window) — tenant beats profile across spellings. Generic
+// over the value type so ScheduledValue maps and raw YAML maps ask the same
+// question.
+func hasAliasEquivalent[V any](overrides map[string]V, key string) bool {
 	if _, ok := overrides[key]; ok {
 		return true
 	}

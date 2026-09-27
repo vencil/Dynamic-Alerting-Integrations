@@ -33,7 +33,18 @@
     "the tenant id is the key's source TEXT on every plane, so an unquoted",
     "`010:` / `yes:` in the platform file and a quoted one in the tenant file",
     "are one tenant. Each platform block sets `_severity_dedup: disable` so the",
-    "Python `dedup` column can see a missed platform value (enable = missed)."
+    "Python `dedup` column can see a missed platform value (enable = missed).",
+    "#2117 p-rows (profile expansion): the walker plane expands a tenant's",
+    "`_profile` exactly as /metrics does (ApplyProfiles): profiles only from ROOT",
+    "platform files, fill-in only, precedence tenant file > root platform",
+    "`tenants:` entry > profile > defaults chain (subtree carriers included).",
+    "walker.profile_overlay = [{profile, file, keys}] (merge order; null = omitted).",
+    "The exporter's merged_hash expands it too (the reload contract tests",
+    "check every row, p-rows included, against /effective).",
+    "Go also checks every `<base>_critical` key of the walker column against the",
+    "critical row /metrics serves for <base>. Measured on main 9079583d before",
+    "the fix: p1/p2/p3/p6/p7 walker disagreed with /metrics (80 / 70, no",
+    "pg_connections_critical)."
   ],
   "trees": [
     {
@@ -53,7 +64,8 @@
             "effective_config": {
               "mysql_connections": "70"
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -75,7 +87,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -106,7 +119,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -136,7 +150,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -169,7 +184,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -202,7 +218,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -235,7 +252,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -259,7 +277,8 @@
               "_severity_dedup": "enable",
               "_silent_mode": "critical"
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -283,7 +302,8 @@
               "_severity_dedup": "enable",
               "_silent_mode": "critical"
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -307,7 +327,8 @@
               "_severity_dedup": "enable",
               "_silent_mode": "critical"
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -331,7 +352,8 @@
             "effective_config": {
               "mysql_connections": 70
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         },
         "ty": {
@@ -352,7 +374,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -385,7 +408,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -418,7 +442,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -449,7 +474,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -481,7 +507,8 @@
                   "_routing"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -506,7 +533,8 @@
                 "group_wait": "20s"
               }
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -543,7 +571,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -566,7 +595,8 @@
             "effective_config": {
               "mysql_connections": 80
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -591,7 +621,8 @@
                 "group_interval": "1m"
               }
             },
-            "platform_overlay": null
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }
@@ -620,7 +651,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -650,7 +682,8 @@
                   "_silent_mode"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -680,7 +713,8 @@
                   "_silent_mode"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -711,7 +745,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -742,7 +777,8 @@
                   "mysql_connections"
                 ]
               }
-            ]
+            ],
+            "profile_overlay": null
           }
         }
       }
@@ -773,7 +809,313 @@
                   "mysql_connections"
                 ]
               }
+            ],
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "p1-profile-in-profiles-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 60
+            },
+            "platform_overlay": null,
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_profiles.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
             ]
+          }
+        }
+      }
+    },
+    {
+      "name": "p2-profile-in-defaults-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 60
+            },
+            "platform_overlay": null,
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_defaults.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "p3-nested-tenant-profile-beats-subtree-defaults",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+        "team/tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 60
+            },
+            "platform_overlay": null,
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_profiles.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "p4-tenant-file-beats-profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 80
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "p5-platform-overlay-beats-profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: 65\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 65,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 65
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ],
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "p6-profile-elected-by-platform-overlay",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    _profile: std\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 60
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "_profile"
+                ]
+              }
+            ],
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_profiles.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "p7-profile-supplies-a-critical-twin",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  pg_connections: 100\n",
+        "_profiles.yaml": "profiles:\n  std:\n    pg_connections_critical: 150\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 80,
+              "pg_connections": 100,
+              "pg_connections_critical": 150
+            },
+            "platform_overlay": null,
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_profiles.yaml",
+                "keys": [
+                  "pg_connections_critical"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "p8-unknown-profile-expands-nothing",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: nope\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "nope",
+              "mysql_connections": 80
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "p9-nested-profiles-file-read-by-no-plane",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "team/tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "dedup": null,
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 80
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "p10-control-value-in-tenant-file-no-profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 60\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_connections": 60
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
           }
         }
       }

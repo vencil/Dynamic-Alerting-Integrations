@@ -14,7 +14,10 @@ package main
 import (
 	"os"
 	"reflect"
+	"slices"
 	"sort"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -101,6 +104,56 @@ func platformBlocksOf(files []config.PlatformTenants, tid string, abs map[string
 		abs[pt.File] = pt.AbsPath
 	}
 	return out, abs
+}
+
+// profileDeltaFor is the #2117 half of the same question: which of this
+// tick's changed profiles feed tenant tid. A tenant is fed by the profile
+// its layer elects — its `_profile`, else its root platform entries' —
+// under this tick's overlay or the last commit's (a `_profile` switched by
+// the overlay is also an overlay change, so either side counts). paths are
+// the absolute paths of the files whose part of such a profile changed (the
+// scope attribution); keys the canonical keys whose value changed
+// (classifyDefaultsNoOpEffect's shadow test). Both nil when none feeds tid.
+//
+// ⚠️ Reads and decodes the tenant file — only on a tick where some profile
+// changed (scan.changedProfiles non-empty), never on the common tick. An
+// unreadable or undecodable file answers nil: its merge fails and is
+// reported by recomputeMergedHash on the tick that touches it.
+func profileDeltaFor(tid, srcPath string, prior reloadPriorState, scan reloadScanState) (paths, keys []string) {
+	b, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil, nil
+	}
+	var doc any
+	if yaml.Unmarshal(b, &doc) != nil {
+		return nil, nil
+	}
+	raw, err := extractTenantRaw(normalizeYAMLToJSON(doc), tid)
+	if err != nil {
+		return nil, nil
+	}
+	names := map[string]struct{}{}
+	for _, own := range []map[string]any{
+		config.ApplyPlatformOverlay(raw, config.PlatformOverlayFor(scan.platform, tid)),
+		config.ApplyPlatformOverlay(raw, config.PlatformOverlayFor(prior.platform, tid)),
+	} {
+		if name := config.ElectedProfile(own); name != "" {
+			if _, changed := scan.changedProfiles[name]; changed {
+				names[name] = struct{}{}
+			}
+		}
+	}
+	for name := range names {
+		p, k := config.ProfileDelta(prior.profiles, scan.profiles, name)
+		paths = append(paths, p...)
+		keys = append(keys, k...)
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	sort.Strings(paths)
+	sort.Strings(keys)
+	return slices.Compact(paths), slices.Compact(keys)
 }
 
 // platformUnion is tid's platform values as the merge sees them: every

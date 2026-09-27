@@ -96,6 +96,10 @@ type hierarchyState struct {
 	// platform is the root platform files' `tenants:` blocks the
 	// mergedHashes above were computed with (#2019), in merge order.
 	platform []config.PlatformTenants
+	// profiles is the root platform files' `profiles:` set the mergedHashes
+	// above were computed with (#2117) — a tenant's `_profile` fills in keys
+	// on /metrics (ApplyProfiles), so it is part of what merged_hash hashes.
+	profiles *config.PlatformProfiles
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
 	// subtree defaults chain supplies but that NO emitter can iterate
@@ -1618,11 +1622,18 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	platform := config.LoadRootPlatformTenants(scan, nil, func(f *config.TreeFile) ([]byte, error) {
 		return in.bytesOf(f.AbsPath)
 	})
+	// #2117: and so are their `profiles:` blocks, decoded once likewise.
+	profiles := config.LoadRootPlatformProfiles(scan, func(f *config.TreeFile) ([]byte, error) {
+		return in.bytesOf(f.AbsPath)
+	})
 
 	newMergedHashes := make(map[string]string, len(tenants))
 	for tid, srcPath := range tenants {
 		chain := graph.TenantDefaults[tid]
-		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in, config.PlatformOverlayFor(platform, tid)...)
+		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in, config.TenantLayers{
+			Overlay:  config.PlatformOverlayFor(platform, tid),
+			Profiles: profiles,
+		})
 		if mergeErr != nil {
 			logMergeSkip(m.getLogger(), tid, "initial-hierarchy-scan", mergeErr)
 			continue
@@ -1653,6 +1664,7 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.hierarchy.platform = platform
+	m.hierarchy.profiles = profiles
 	m.mu.Unlock()
 }
 
@@ -1737,7 +1749,7 @@ func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ChainD
 // emitParseFailureSignal on a merge failure. Read errors keep their
 // precedence over parse errors (recomputeMergedHash reads the tenant file
 // and every chain file before it parses anything).
-func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs, overlay ...config.PlatformBlock) (string, error) {
+func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs, layers config.TenantLayers) (string, error) {
 	tenantBytes, err := in.bytesOf(tenantFile)
 	if err != nil {
 		return "", err
@@ -1750,7 +1762,7 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 		}
 		chain = append(chain, e.parsed)
 	}
-	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain, overlay...)
+	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain, layers)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
@@ -1996,7 +2008,11 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 	// entries for this tenant, so the config served next to it must be
 	// merged with the SAME entries (the ones that hash was computed from),
 	// or the two contradict each other.
-	overlay := config.PlatformOverlayFor(m.hierarchy.platform, tenantID)
+	// #2117: and with the SAME profiles.
+	layers := config.TenantLayers{
+		Overlay:  config.PlatformOverlayFor(m.hierarchy.platform, tenantID),
+		Profiles: m.hierarchy.profiles,
+	}
 	m.mu.RUnlock()
 
 	if !known {
@@ -2028,7 +2044,7 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 		chainBytes = append(chainBytes, b)
 	}
 
-	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes, overlay...)
+	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes, layers)
 	if err != nil {
 		return &EffectiveConfig{
 			TenantID:      tenantID,
@@ -2043,7 +2059,7 @@ func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 	if mergedHash == "" {
 		// Cold path: cache miss (first /effective before any reload).
 		// Compute on the fly.
-		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes, overlay...); mErr == nil {
+		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes, layers); mErr == nil {
 			mergedHash = mh
 		}
 	}

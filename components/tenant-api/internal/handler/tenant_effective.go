@@ -44,6 +44,11 @@ import (
 // @Description applied between the chain and the tenant file (the tenant
 // @Description file wins key by key); platform_overlay names the files and
 // @Description keys that layer supplied and is omitted when it supplied none.
+// @Description A tenant's _profile is expanded as /metrics expands it: the
+// @Description profile (from the root platform files' profiles: blocks) fills
+// @Description in keys neither the tenant file nor the platform entries set;
+// @Description profile_overlay names the profile, the files and the keys it
+// @Description supplied and is omitted when it supplied none.
 // @Description Includes two SHA-256 hashes (truncated to 16 hex chars):
 // @Description source_hash for raw file content and merged_hash for the
 // @Description canonical-JSON of the merged dict. Parity target:
