@@ -27,7 +27,11 @@ Two markers in the script record the deliberate gaps, each with a reason:
   outside the ``assert_*`` helpers. Outside the helper bodies and outside a
   region, a tool name may not appear in code at all — not only in command
   position, since ``env jq``, ``xargs jq``, ``bash -c "jq …"`` and
-  ``T=jq; $T`` all run it — so a new inline check cannot bypass the anchor.
+  ``T=jq; $T`` all run it. This catches a new inline check written the
+  ordinary way; it is a text match on the source, so it cannot see a name
+  the shell assembles (``j""q``, ``j\\q``, a name split by a ``\\``
+  line continuation, ``eval``) or a tool run inside a heredoc fed to
+  ``bash``.
 
 Each checklist must use a section number once: a duplicated heading would
 let a stale copy under the wrong heading satisfy the anchor.
