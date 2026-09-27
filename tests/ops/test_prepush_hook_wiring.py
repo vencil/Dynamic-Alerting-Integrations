@@ -579,6 +579,45 @@ def test_the_shim_says_what_to_do_when_the_dispatcher_is_missing(
     )
 
 
+@pytest.mark.parametrize("shape", ["git-dir-from-elsewhere", "bare-repo"])
+def test_a_push_without_a_work_tree_is_not_told_to_rebase(
+    tmp_path: Path, shape: str,
+) -> None:
+    """#2039: with no work tree the shim finds no dispatcher even though the
+    repo has one, and used to blame the tree for predating #1689 — a remedy
+    that cannot work. ⚠️ `--git-dir` from another directory does NOT leave
+    `--show-toplevel` empty: git takes the cwd as the work tree, so a check
+    for an empty root would miss the very shape the issue reproduced. The
+    message therefore prints the directory it looked in instead of guessing.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    if shape == "bare-repo":
+        git_dir = tmp_path / "clone.git"
+        assert _git(tmp_path, "clone", "-q", "--bare", str(work),
+                    str(git_dir)).returncode == 0
+        shutil.copy2(work / ".git" / "hooks" / "pre-push",
+                     git_dir / "hooks" / "pre-push")
+        remote = str(tmp_path / "remote.git")
+    else:
+        git_dir = work / ".git"
+        remote = "origin"
+
+    r = _git(elsewhere, f"--git-dir={git_dir}", "push", "--dry-run", remote,
+             "main:refs/heads/feat/no-work-tree", env_extra=_SIBLINGS_OFF)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, f"a push the guards could not judge was allowed:\n{out}"
+    assert "push from inside a worktree" in out, (
+        f"the message offers no remedy that works without a work tree:\n{out}"
+    )
+    if shape == "git-dir-from-elsewhere":
+        assert f"'{elsewhere}'" in out, (
+            f"the message hides which directory it took for the work tree:\n{out}"
+        )
+
+
 
 def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
     tmp_path: Path,
