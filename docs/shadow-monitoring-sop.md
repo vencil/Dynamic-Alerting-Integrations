@@ -274,12 +274,26 @@ docker run --rm --network=host \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
-# 預期輸出：
-#   [DRY RUN] Would delete job shadow-monitor in namespace monitoring
-#   [DRY RUN] Would remove old recording rules for tenant db-a
-#   [DRY RUN] Would remove migration_status:shadow label
-#   [DRY RUN] Would remove Alertmanager shadow route for db-a
-#   [DRY RUN] Would verify alerts via check-alert + diagnose
+# 預期輸出（列出會執行的 kubectl 命令，不做任何變更；v2.9.0 映像印在
+# stdout，之後的版本改印在 stderr）：
+# ▸ Stop Shadow Monitor Job...
+#   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove old Recording Rules...
+#   [dry-run] kubectl delete configmap prometheus-rules-old -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove shadow label from rules...
+#   [dry-run] kubectl label configmap prometheus-rules -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Remove Alertmanager shadow route...
+#   [dry-run] kubectl label configmap alertmanager-config -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Verify tenant health...
+#   [dry-run] query http://localhost:9090 for tenant=db-a health
+#   ✓ (dry-run)
+#
+# ✅ Cutover completed successfully.
+# Next: run 'da-tools batch-diagnose' for full health report.
 
 # Step 2: 執行切換
 docker run --rm --network=host \
@@ -307,7 +321,7 @@ done
 | 測試環境快速驗證 | 用 `--force` | 測試用途不需嚴格收斂 |
 | 生產環境未確認收斂 | **不要用** | 風險過高，先完成收斂確認 |
 
-> **注意**：`--force` 跳過的是 readiness 檢查，不會跳過切換後的 `check-alert` / `diagnose` 健康驗證。如果切換後驗證失敗，工具會報錯但不會自動回退——需手動執行 §7.2 回退步驟。
+> **注意**：`--force` 只跳過 readiness 檢查，五個步驟照樣執行，包括最後的健康驗證。健康驗證只查一件事：`count(user_threshold{tenant="<租戶>"})` 有沒有結果。它不跑 `check-alert` 或 `diagnose`，切換後請另跑 `da-tools batch-diagnose`。任一步失敗時，工具印出 `❌ Cutover failed at step: <步驟>` 並以非零碼結束，但不會自動回退。失敗步驟之前的步驟已經生效，需手動執行 §7.2 回退步驟。
 
 ### 7.1b 手動切換步驟
 

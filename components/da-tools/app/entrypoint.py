@@ -426,7 +426,7 @@ PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
 _USAGE_EXAMPLES = (
     "da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090",
     "da-tools baseline --tenant db-a --prometheus http://prometheus:9090",
-    "da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090",
+    "da-tools validate --mapping prefix-mapping.yaml --prometheus http://prometheus:9090",
     "da-tools migrate legacy-rules.yml --dry-run --triage",
     "da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive",
     "da-tools lint /path/to/custom-rules/ --ci",

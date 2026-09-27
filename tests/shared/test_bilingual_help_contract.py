@@ -247,7 +247,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_subprocess_timeout.py": _R_LINT,
     "check_threshold_observed_map.py": _R_LINT,
     "check_tool_registry_jsx_parity.py": _R_LINT,
-    "check_translation.py": _R_LINT,
     "check_undefined_tokens.py": _R_LINT,
     "check_unpinned_deps.py": _R_LINT,
     "check_vmalert_coverage.py": _R_LINT,

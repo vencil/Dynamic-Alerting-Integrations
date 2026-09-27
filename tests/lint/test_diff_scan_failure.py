@@ -340,3 +340,76 @@ def test_helper_pathspec_limits_the_listing(repo):
     _stage(repo, "scripts/ops/x.bat", b"@echo off\r\n")
     _stage(repo, "other/y.bat", b"@echo off\r\n")
     assert diff_changed_paths("HEAD", repo, ("scripts/ops/*.bat",)) == ["scripts/ops/x.bat"]
+
+
+# ---------------------------------------------------------------------------
+# #2196 — Windows runs FOO.BAT exactly like foo.bat
+# ---------------------------------------------------------------------------
+# Each tool: (module, violating paths whose extension differs only in case,
+# legal look-alikes that must stay out of scope). Measured before the fix:
+# every violating path below read as OK in diff mode and in --full-scan.
+CASE_VARIANTS = {
+    "ad_hoc_git_scripts": (
+        adhoc, b"@echo off\r\ngit commit\r\n",
+        ["_probe.BAT", "_probe.Ps1", "_probe.CMD"],
+        ["_probe.batx", "_probe_bat", "notes.batch"],
+    ),
+    "bat_ascii_purity": (
+        bat, "@echo off\r\nrem café\r\n".encode("utf-8"),
+        ["scripts/ops/_probe.BAT", "scripts/ops/_probe.Bat"],
+        ["scripts/ops/_probe.batx", "scripts/ops/_probe_bat"],
+    ),
+}
+
+
+@pytest.mark.parametrize("mode", ["diff", "full-scan"])
+@pytest.mark.parametrize("name", sorted(CASE_VARIANTS))
+def test_extension_case_does_not_hide_a_violation(name, mode, in_repo, monkeypatch, capsys):
+    module, data, violating, _legal = CASE_VARIANTS[name]
+    argv = ["--diff-base", "HEAD"] if mode == "diff" else ["--full-scan"]
+    for rel in violating:
+        # Fresh tree per path: one hit must not mask another path's miss.
+        for p in list(in_repo.rglob("_probe*")):
+            _git(in_repo, "rm", "-q", "-f", "--cached", "--ignore-unmatch", p.relative_to(in_repo).as_posix())
+            p.unlink()
+        _stage(in_repo, rel, data)
+        rc, out, err = _run(monkeypatch, capsys, module, argv)
+        assert rc == 1, f"{name}/{mode}: {rel} read as clean, rc={rc}\n{out}{err}"
+        assert Path(rel).name in err, err
+
+
+@pytest.mark.parametrize("mode", ["diff", "full-scan"])
+@pytest.mark.parametrize("name", sorted(CASE_VARIANTS))
+def test_extension_look_alikes_stay_out_of_scope(name, mode, in_repo, monkeypatch, capsys):
+    module, data, _violating, legal = CASE_VARIANTS[name]
+    for rel in legal:
+        _stage(in_repo, rel, data)
+    argv = ["--diff-base", "HEAD"] if mode == "diff" else ["--full-scan"]
+    rc, out, err = _run(monkeypatch, capsys, module, argv)
+    assert rc == 0, f"{name}/{mode}: rc={rc}\n{out}{err}"
+
+
+def _hook_files_regex(hook_id: str) -> str:
+    import yaml  # noqa: PLC0415 - only this section needs it
+    cfg_path = Path(_TOOLS_DIR).parents[2] / ".pre-commit-config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    hooks = [h for r in cfg["repos"] for h in r["hooks"] if h["id"] == hook_id]
+    assert len(hooks) == 1, hook_id
+    return hooks[0]["files"]
+
+
+@pytest.mark.parametrize("hook_id,matches,misses", [
+    ("ad-hoc-git-scripts-check",
+     ["_x.BAT", "a/_x.Ps1", "_x.CMD", "_x.bat"],
+     ["_x.batx", "_x_bat", "notes.batch"]),
+    ("bat-ascii-purity-check",
+     ["scripts/ops/_x.BAT", "scripts/ops/_x.bat"],
+     ["scripts/ops/_x.batx", "other/_x.BAT"]),
+])
+def test_precommit_files_filter_ignores_extension_case(hook_id, matches, misses):
+    """pre-commit skips a hook whose ``files:`` matches nothing, so a
+    case-sensitive filter made the tool unreachable for ``evil.BAT``."""
+    import re  # noqa: PLC0415
+    pattern = re.compile(_hook_files_regex(hook_id))
+    assert [p for p in matches if not pattern.search(p)] == [], hook_id
+    assert [p for p in misses if pattern.search(p)] == [], hook_id
