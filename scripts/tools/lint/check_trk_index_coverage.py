@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  ✗ TRK-{n} 被登記在 {_MAPPING}，但表凍結在 TRK-{_FROZEN_MAX}："
                   "新條目改用 TRK-<issue 號>，不要再加列")
         for n in missing:
-            hint = ("改用 TRK-<issue 號>" if int(n) > _FROZEN_MAX else "補列或明記「此號未使用」")
+            hint = ("三位數屬於凍結的舊表，新條目改用四位數以上的新追蹤 issue 號" if int(n) > _FROZEN_MAX else "補列或明記「此號未使用」")
             print(f"  ✗ TRK-{n} 被引用（{used[n]}）卻不在 {_MAPPING} 的索引裡 → {hint}")
         if missing or past_freeze:
             print(f"[trk-index] 共 {len(missing) + len(past_freeze)} 個問題。")

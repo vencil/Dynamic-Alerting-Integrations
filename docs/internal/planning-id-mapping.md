@@ -33,7 +33,8 @@ lang: zh
 | **TRK-001 ~ TRK-099** | `HA-N` 序列 | `HA-11` → `TRK-011` |
 | **TRK-100 ~ TRK-199** | `REG-NNN` 序列 | `REG-004` → `TRK-104` |
 | **TRK-200 ~ TRK-299** | `TECH-DEBT-NNN` / `TD-NN` 序列 | `TECH-DEBT-005` → `TRK-205`、`TD-022` → `TRK-222` |
-| **TRK-300 +** | **post-migration 新分配** | — |
+| **TRK-300 ~ TRK-392** | post-migration 手工配號（已凍結，見下方 TRK-300+ 區段） | — |
+| **TRK-1000 +** | **新條目：追蹤 issue 的號碼**（[ADR-019](../adr/019-planning-ssot.md)，#2106） | issue #2150 → `TRK-2150` |
 
 > `TECH-DEBT-NNN` 與 `TD-NN` 是同一個 namespace 的長短形（v2.7.x 之後簡寫為 `TD-`，數字編號連續），同號 alias 合併到同一個 TRK：`TECH-DEBT-022` ≡ `TD-022` → `TRK-222`。
 >
@@ -259,7 +260,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 本文件落地（chunk 1）之後：
 
 - chunk 2a — `generate_planning_index.py`（產 `planning-index.md`）
-- chunk 3 — 既有 backlog frontmatter migration（一律 TRK-NNN，後續 entries 從 TRK-300+ 分配）
+- chunk 3 — 既有 backlog frontmatter migration（一律 TRK-NNN；TRK-392 之後改用追蹤 issue 號，見 ADR-019）
 - chunk 2b — `check_planning_status_sync.py` + CI wire（讀 PR body `Resolves TRK-NNN`，驗 frontmatter status）
 - chunk 5 — CLAUDE.md 起手式收編 + dev-rules.md / commit-convention.md 強制 TRK
 
