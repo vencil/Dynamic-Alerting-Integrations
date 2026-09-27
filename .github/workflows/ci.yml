@@ -1302,6 +1302,14 @@ jobs:
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
       # below, so a missing binary is a failure, not a skip.
       VIBE_REQUIRE_GO: "1"
+      # #2005: tests/_encoding_gate.py fails a test when product code
+      # (scripts/, components/) opens a text file without encoding=. It reads
+      # sys.flags.warn_default_encoding, which only this variable can turn on
+      # for pytest-xdist workers (they do not inherit `-X` flags). The REQUIRE
+      # var turns a lost PYTHONWARNDEFAULTENCODING into a usage error instead
+      # of a run that passes unwatched.
+      PYTHONWARNDEFAULTENCODING: "1"
+      VIBE_REQUIRE_ENCODING_GATE: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

@@ -112,6 +112,7 @@ lang: zh
 | **pre-commit hook 計數一致性** | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 hook 計數 | 增刪 pre-commit hook 後 |
 | **OpenAPI spec drift** | `make api-docs` | tenant-api swag 標註 ↔ spec | 改 handler 標註、**或標註可達的任何 struct**（`internal/rbac`、`internal/platform`、`internal/federation/fedpolicy` 的型別也在 spec 的 definitions 裡）後；CI 上紅在 `go-tests-tenant-api` 的「Verify OpenAPI spec is up-to-date」步驟，看起來像 Go 測試失敗 |
 | **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz | 改 tenant-api API 後 |
+| **執行期 encoding 閘門**（`tests/_encoding_gate.py`，[#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005)） | `PYTHONWARNDEFAULTENCODING=1 pytest tests/`（沒設這個變數時閘門不作用，結尾會印 `encoding gate: INACTIVE`） | `scripts/`、`components/` 的程式在測試中讀寫文字檔沒帶 `encoding=`，含 `Path.open`／`read_text`／`write_text`；只看得到測試實際走到的路徑，`subprocess(text=True)` 與在子行程裡跑的程式不在內 | 改任何讀寫檔的 Python 後 |
 | **行尾政策**（`tests/dx/test_line_ending_policy.py`，[dev-rules #11b](dev-rules.md)） | `pytest tests/dx/test_line_ending_policy.py` | 寫文字的呼叫必須明確傳字串字面值 `newline=` | 改任何寫檔的 Python 後 |
 
 行尾這條與 §3 的 `open-encoding-audit` 是姊妹規則但在不同執行點；若頻繁跳閘，判準同 `verify_diff` 的先例（本地成本低、可用 `files:` 限縮 ⇒ 升為 hook，#1185）。
