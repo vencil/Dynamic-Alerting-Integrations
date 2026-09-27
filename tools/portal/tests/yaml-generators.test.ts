@@ -12,7 +12,8 @@ import {
   generateMaintenanceYaml,
   generateSilentModeYaml,
 } from '../src/interactive/tools/tenant-manager/utils/yaml-generators.js';
-import { parseYAML } from '../src/interactive/tools/playground/validation.js';
+// js-yaml is the oracle (#2033), not a portal tool's own parser.
+import { load } from 'js-yaml';
 
 describe('generateMaintenanceYaml', () => {
   it('emits the standard ConfigMap envelope', () => {
@@ -70,7 +71,7 @@ describe('generateSilentModeYaml', () => {
     const blocks = generateSilentModeYaml(ids, NOW).split('\n\n');
     blocks.forEach((b, i) => {
       const body = b.split('\n').filter(l => !l.startsWith('#')).join('\n');
-      const doc = parseYAML(`tenants:\n  ${ids[i]}:\n${body}`).data;
+      const doc = load(`tenants:\n  ${ids[i]}:\n${body}`);
       expect(doc).toEqual({
         tenants: { [ids[i]]: { _silent_mode: { target: 'all', expires: '2026-09-26T10:00:00Z', reason: 'Under investigation' } } },
       });

@@ -1,14 +1,11 @@
 /**
  * Unit tests for config-diff/diff.js — portal ROI wave 2.
  *
- * config-diff previously carried a hand-rolled YAML mini-parser
- * (`extractTenants`) that lacked the prototype-pollution guard and size
- * guard the shared `_common/validation/yaml-parser.js` already has. The
- * engine now delegates each tenant's body to that shared parseYaml and
- * keeps only a thin tenant-splitting layer. These tests pin:
+ * The engine parses the whole document with the shared
+ * `_common/validation/yaml-parser.js` parseYaml (js-yaml since #2033) and
+ * reads the `tenants:` mapping out of it. These tests pin:
  *
- *   - multi-tenant split into per-tenant configs (behaviour parity with
- *     the old extractTenants: same tenants, same keys)
+ *   - multi-tenant split into per-tenant configs (same tenants, same keys)
  *   - _routing block flattened + diffed BY VALUE (not object identity,
  *     which would report a phantom change on every render)
  *   - prototype-pollution guard at BOTH the tenant-name level (guarded by
@@ -183,7 +180,33 @@ const ROUTING_BASE = [
 ].join('\n');
 const ROUTING_CHANGED = ROUTING_BASE.replace('/alerts"', '/alerts-v2"');
 
-describe('nested / list keys parseYaml does not model (HIGH-1 regression)', () => {
+describe('js-yaml parse layer (#2033)', () => {
+  it('surfaces a duplicate key as an error with its line', () => {
+    const dup = 'tenants:\n  db-b:\n    mysql_connections: "100"\n    mysql_connections: "120"';
+    const { tenants, errors } = extractTenants(dup);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/duplicated mapping key/);
+    expect(errors[0]).toMatch(/line 4/);
+    expect(tenants).toEqual({});
+  });
+
+  it('reports a self-referencing anchor instead of overflowing the stack', () => {
+    const cyclic = 'tenants:\n  db-b: &r\n    self: *r\n';
+    let r: ReturnType<typeof computeDiff> | undefined;
+    expect(() => { r = computeDiff(cyclic, cyclic); }).not.toThrow();
+    expect(r!.errors).toHaveLength(1);
+    expect(r!.errors[0]).toMatch(/anchor 'r' value contains itself/);
+    expect(r!.changes).toEqual([]);
+  });
+
+  it('reads a quoted key and an unquoted number as the same comparable value', () => {
+    const a = 'tenants:\n  db-b:\n    "mysql_connections": 100';
+    const b = 'tenants:\n  db-b:\n    mysql_connections: "100"';
+    expect(computeDiff(a, b).changes).toEqual([]);
+  });
+});
+
+describe('nested / list keys (HIGH-1 regression)', () => {
   it('surfaces a _custom_alerts list body as a non-empty comparable string', () => {
     // Pre-fix this was '' (parseYaml returns {} for a non-_routing nested key,
     // flattenValue({}) === ''), which is exactly what hid the change below.

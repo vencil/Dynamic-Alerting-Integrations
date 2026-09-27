@@ -102,10 +102,10 @@
         {
           "tool": "playground",
           "component": "../interactive/tools/playground.jsx",
-          "title": { "en": "Validate YAML", "zh": "驗證 YAML" },
+          "title": { "en": "Check YAML Syntax", "zh": "檢查 YAML 語法" },
           "hint": {
-            "en": "Paste and validate your tenant configuration. Fix any issues before deploying.",
-            "zh": "貼上並驗證你的 Tenant 配置。部署前修正問題。"
+            "en": "Paste your tenant configuration to check its YAML syntax and structure. It does not check what values mean — the exporter is the authority on that.",
+            "zh": "貼上你的 Tenant 配置，檢查 YAML 語法與結構。不檢查值的語意——那以 exporter 為準。"
           }
         },
         {

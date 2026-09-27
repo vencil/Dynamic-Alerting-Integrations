@@ -169,6 +169,18 @@ describe('simulateAlerts', () => {
   it('returns empty array for empty metricValues', () => {
     expect(simulateAlerts({ x: '10' }, {})).toEqual([]);
   });
+
+  it('treats a numeric 0 threshold (unquoted YAML, #2033) as a real threshold', () => {
+    // parseYaml keeps YAML types, so `x: 0` arrives as the number 0 — a
+    // falsy value that must not read as "no threshold".
+    const alerts = simulateAlerts(
+      { x: 0, x_critical: 0 },
+      { x: { current: 1, unit: 'count', packLabel: 'p' } },
+    );
+    expect(alerts[0].threshold).toBe(0);
+    expect(alerts[0].critical_threshold).toBe(0);
+    expect(alerts[0].severity).toBe('critical');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

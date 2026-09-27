@@ -97,7 +97,7 @@ const CHECKLISTS = {
         steps: [
           { text: t('建立 tenant YAML 並設定閾值', 'Create tenant YAML with thresholds'), doc: 'docs/getting-started/for-tenants.md' },
           { text: t('設定 warning 和 critical 兩層嚴重度', 'Set warning and critical severity levels'), doc: 'docs/architecture-and-design.md' },
-          { text: t('用 YAML Validator 驗證配置', 'Validate config with YAML Validator'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
+          { text: t('用 YAML 語法檢查器檢查配置語法', 'Check config syntax with the YAML Syntax Checker'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
           { text: t('（選用）配置排程式閾值', '(Optional) Configure scheduled thresholds'), doc: 'docs/internal/test-coverage-matrix.md' },
           { text: t('（選用）配置 regex 維度閾值', '(Optional) Configure regex dimension thresholds'), doc: 'docs/internal/test-coverage-matrix.md' },
         ],
@@ -135,7 +135,7 @@ const CHECKLISTS = {
           { text: t('選擇需要的 Rule Pack 組合', 'Select the Rule Packs for your stack'), doc: null, tool: '../assets/jsx-loader.html?component=../rule-pack-selector.jsx' },
           { text: t('建立 tenant YAML 配置檔', 'Create tenant YAML config file'), doc: 'docs/getting-started/for-tenants.md' },
           { text: t('設定告警路由（Slack / Email / Webhook / PagerDuty）', 'Configure alert routing (Slack / Email / Webhook / PagerDuty)'), doc: 'docs/scenarios/alert-routing-split.md' },
-          { text: t('用 YAML Validator 驗證配置', 'Validate config with YAML Validator'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
+          { text: t('用 YAML 語法檢查器檢查配置語法', 'Check config syntax with the YAML Syntax Checker'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
         ],
       },
       {

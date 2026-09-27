@@ -90,7 +90,11 @@ function YamlValidatorTab() {
   const validate = useCallback(() => {
     const { config, errors } = parseYaml(yaml);
     const validation = validateConfig(config, selectedPacks);
-    setResult({ config, parseErrors: errors, ...validation });
+    // A syntax error leaves config = {} (#2033: the js-yaml parser no longer
+    // guesses past it), and validateConfig({}) has nothing to report — so the
+    // parse errors must be shown, or a broken file would read "all passed".
+    const parseIssues = errors.map((msg) => ({ level: 'error', field: 'YAML', msg }));
+    setResult({ config, parseErrors: errors, ...validation, issues: [...parseIssues, ...validation.issues] });
   }, [yaml, selectedPacks]);
 
   const handleInsertMetric = useCallback(
