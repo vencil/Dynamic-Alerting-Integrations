@@ -23,7 +23,7 @@ import (
 //     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}},
 //     read as one ExactlyOneOf group
 //
-// Emptiness is part of the contract: this guard (matcherValuePresent)
+// Emptiness is part of the contract: this guard (exactlyOneFinding)
 // and the Python pipeline treat "" and null as unset, as Alertmanager
 // does (its config is a Go struct; both decode to the zero value). So
 // every required field must reject "" and null in the schema (a single

@@ -122,25 +122,41 @@ def validate_and_clamp(
     return value, warnings
 
 
-def receiver_field_set(receiver: dict[str, Any], field: str) -> bool:
-    """Whether ``field`` counts as given in a receiver's exactly-one group.
+FIELD_UNSET = "unset"
+FIELD_SET = "set"
+FIELD_NOT_STRING = "not_string"
 
-    Unset means only: key absent, ``None`` (YAML ``key:`` with no value) or
-    ``""`` — the same rule as the Go guard (matcherValuePresent), the schema
-    (``minLength: 1``) and Alertmanager (both decode to the zero value). Any
-    other value is given, including falsy non-strings such as ``0`` / ``False``
-    / ``[]`` and whitespace ``" "``: Alertmanager renders ``service_key: 0`` as
-    ``"0"`` and uses the v1 API, so truthiness would under-count it.
+
+def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
+    """State of an exactly-one group field, by the schema's type rule (#2137).
+
+    The value may only be absent, ``None`` (YAML ``key:`` with no value) or a
+    string — as in tenant-config.schema.json (``type: ["string", "null"]``):
+
+    - ``FIELD_UNSET``: absent, ``None`` or ``""``.
+    - ``FIELD_SET``: a non-empty string (``" "`` counts, as with the schema's
+      ``minLength: 1``).
+    - ``FIELD_NOT_STRING``: any other type (number, bool, list, map). This is
+      an error, stricter than Alertmanager on purpose: it renders ``0`` as
+      ``"0"`` but fails to load ``[]`` (``cannot unmarshal !!seq``), so no
+      "counts as given" rule for non-strings is right for all of them.
+
+    Same rule as the Go guard (internal/guard/routing.go exactlyOneFinding).
     """
     value = receiver.get(field)
-    return value is not None and value != ""
+    if value is None or value == "":
+        return FIELD_UNSET
+    if isinstance(value, str):
+        return FIELD_SET
+    return FIELD_NOT_STRING
 
 
 def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
     """Check the ``exactly_one_of`` groups of ``RECEIVER_TYPES[rtype]``.
 
-    A field counts as set per ``receiver_field_set`` (absent / ``None`` /
-    ``""`` are unset; everything else is set). Returns the
+    Each field's state comes from ``receiver_field_state``; a non-string value
+    is reported first (``"field 'x' must be a string, got int"``), and only
+    when every field's type is valid is "exactly one" checked. Returns the
     first problem as ``"requires exactly one of 'a' or 'b', ..."`` (callers
     prefix tenant / receiver context), or ``None`` when every group has
     exactly one field set. Unknown types return ``None``; callers reject those
@@ -148,7 +164,12 @@ def receiver_exactly_one_problem(rtype: str, receiver: dict[str, Any]) -> Option
     """
     spec = RECEIVER_TYPES.get(rtype, {})
     for group in spec.get("exactly_one_of", []):
-        set_fields = [f for f in group if receiver_field_set(receiver, f)]
+        states = {f: receiver_field_state(receiver, f) for f in group}
+        for f, state in states.items():
+            if state == FIELD_NOT_STRING:
+                return (f"field '{f}' must be a string, "
+                        f"got {type(receiver[f]).__name__}")
+        set_fields = [f for f, state in states.items() if state == FIELD_SET]
         if len(set_fields) == 1:
             continue
         names = " or ".join(f"'{f}'" for f in group)

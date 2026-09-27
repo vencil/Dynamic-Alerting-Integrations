@@ -327,7 +327,9 @@ class TestEdgeCases:
         ({"routing_key": "r"}, None),
         ({}, "none is set"),
         ({"service_key": "k", "routing_key": "r"}, "not both"),
-    ], ids=["routing-key-only", "neither", "both"])
+        ({"service_key": 0}, "field 'service_key' must be a string"),
+        ({"service_key": [], "routing_key": "r"}, "field 'service_key' must be a string"),
+    ], ids=["routing-key-only", "neither", "both", "int-key", "list-key-with-rk"])
     def test_pagerduty_exactly_one_key(self, keys, expect):
         """PagerDuty service_key／routing_key 恰好一個（#2137）；合法者走到 dry-run。"""
         recv = {"type": "pagerduty", "_label": "pd", **keys}

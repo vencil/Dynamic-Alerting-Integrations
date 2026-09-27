@@ -363,14 +363,36 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 	return out
 }
 
-// exactlyOneFinding checks one ExactlyOneOf group. A field counts as
-// set under the Python pipeline's truthiness (matcherValuePresent):
-// absent, nil and "" are all unset.
+// exactlyOneFinding checks one ExactlyOneOf group, by the schema's type
+// rule (tenant-config.schema.json: `type: ["string", "null"]`), the same
+// rule as _lib_validation.receiver_field_state on the Python side:
+//
+//   - absent, nil or "" → unset
+//   - a non-empty string → set (" " counts, as with minLength: 1)
+//   - any other type (number, bool, list, map) → error "must be a string".
+//     Stricter than Alertmanager on purpose: it renders 0 as "0" but
+//     fails to load a list, so no "counts as given" rule fits all of them.
+//
+// "Exactly one" is judged only once every field's type is valid.
 func exactlyOneFinding(tenantID, fieldPath, rtype string, receiver map[string]any, group []string) (Finding, bool) {
 	var set []string
 	for _, field := range group {
-		if matcherValuePresent(receiver[field]) {
-			set = append(set, field)
+		switch v := receiver[field].(type) {
+		case nil:
+		case string:
+			if v != "" {
+				set = append(set, field)
+			}
+		default:
+			return Finding{
+				Severity: SeverityError,
+				Kind:     FindingInvalidReceiverField,
+				TenantID: tenantID,
+				Field:    fieldPath + "." + field,
+				Message: fmt.Sprintf(
+					"tenant %q: receiver type %q field %q must be a string, got %T",
+					tenantID, rtype, field, v),
+			}, true
 		}
 	}
 	if len(set) == 1 {

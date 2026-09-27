@@ -30,7 +30,11 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_validation import receiver_field_set  # noqa: E402  (#2137 one presence rule)
+from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
+    FIELD_NOT_STRING,
+    FIELD_SET,
+    receiver_field_state,
+)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
@@ -220,11 +224,16 @@ def extract_routing_channel(tenant_config: dict) -> str:
     elif recv_type == "pagerduty":
         # The keys are credentials: name the Events API version, never the
         # key. service_key wins when both are set, as it does in Alertmanager.
-        # Presence is the routing pipeline's rule (receiver_field_set), so a
-        # `service_key: 0` that Alertmanager sends via v1 is labelled v1 here too.
-        if receiver_field_set(receiver, "service_key"):
+        # Presence is the routing pipeline's rule (receiver_field_state). A
+        # non-string key is a config error the pipeline rejects, so the
+        # version cannot be told: "" like every other undeterminable channel.
+        sk = receiver_field_state(receiver, "service_key")
+        rk = receiver_field_state(receiver, "routing_key")
+        if FIELD_NOT_STRING in (sk, rk):
+            return ""
+        if sk == FIELD_SET:
             return f"{recv_type}:v1"
-        if receiver_field_set(receiver, "routing_key"):
+        if rk == FIELD_SET:
             return f"{recv_type}:v2"
         return ""
 

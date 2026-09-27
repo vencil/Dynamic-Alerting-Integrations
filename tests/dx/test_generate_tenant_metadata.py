@@ -382,10 +382,13 @@ class TestPagerdutyRoutingChannel:
         assert self._channel({"type": "pagerduty", "service_key": "", "routing_key": "r"}) == "pagerduty:v2"
         assert self._channel({"type": "pagerduty"}) == ""
 
-    def test_presence_is_the_pipelines_rule_not_truthiness(self):
-        """service_key: 0 is sent by Alertmanager via v1 — label it v1, as the generator counts it."""
-        assert self._channel({"type": "pagerduty", "service_key": 0, "routing_key": "r"}) == "pagerduty:v1"
+    def test_presence_is_the_pipelines_type_rule(self):
+        """A non-string key is a config error the pipeline rejects: no v1/v2 label."""
+        for bad in (0, False, [], {}):
+            assert self._channel({"type": "pagerduty", "service_key": bad, "routing_key": "r"}) == ""
+            assert self._channel({"type": "pagerduty", "routing_key": bad}) == ""
         assert self._channel({"type": "pagerduty", "service_key": None, "routing_key": "r"}) == "pagerduty:v2"
+        assert self._channel({"type": "pagerduty", "service_key": " "}) == "pagerduty:v1"
 
     def test_key_value_never_appears(self):
         for recv in ({"type": "pagerduty", "service_key": "secret-k"},
