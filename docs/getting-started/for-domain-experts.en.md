@@ -11,7 +11,7 @@ lang: en
 
 > **v2.9.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
-> Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.en.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Architecture](../architecture-and-design.en.md) §2.4 · [threshold-exporter config / recipe reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
+> Related docs: [Rule Packs](../rule-packs/README.md) · [Rule Pack Design](../design/rule-packs.en.md) · [Custom Rule Governance](../custom-rule-governance.en.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Architecture](../architecture-and-design.en.md) §2.4 · [threshold-exporter config / recipe reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
 
 > 💡 **Recommended first step: [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) to watch an alert actually fire.** Start the Mode 0 core twins, then the full stack to see a Rule Pack turn a synthetic metric into a critical red light — the fastest way to grasp the threshold → alert chain.
 
@@ -19,249 +19,245 @@ lang: en
 
 1. **Run the whole stack first** (big picture) → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md), watch a Rule Pack turn a synthetic metric red.
 2. **Go deeper on your CLI** → [da-tools QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/app/QUICKSTART.md); for the full hands-on workflow, see the [Hands-on Lab](../scenarios/hands-on-lab.md).
-3. **Govern your Rule Packs** → the Rule Pack customization below and [Custom Rule Governance](../custom-rule-governance.md).
+3. **Govern your Rule Packs** → the Rule Pack structure below and [Custom Rule Governance](../custom-rule-governance.en.md).
 
 ## Three Things You Need to Know
 
-**1. Rule Packs are your domain.** Each database type has a corresponding Rule Pack YAML that you can customize with thresholds, dimensions, and alert rules.
+**1. Rule Packs are Prometheus rules the platform ships.** There is one `rule-packs/rule-pack-<db>.yaml` per database type (for example `rule-pack-mariadb.yaml`), and its content is plain Prometheus rule groups. Tenants never edit a Rule Pack; they set thresholds in their own `conf.d/<tenant>.yaml`. The DBA owns the PromQL in the Rule Pack and the meaning of each threshold key.
 
-**2. Rule Pack has three-part structure.** Part 1: Data normalization (unify metrics from various exporters). Part 2: Threshold normalization (support scheduled, dimensional, tri-state). Part 3: Alert rules (PromQL expressions).
+**2. A Rule Pack has three parts.** Normalization recording rules turn raw exporter metrics into `tenant:<metric>:<function>`; threshold-normalization recording rules turn the `user_threshold` series that threshold-exporter emits into `tenant:alert_threshold:<key>`; alert rules compare the two and exclude tenants in maintenance mode.
 
-**3. Custom rules have governance.** lint_custom_rules.py enforces deny-list, naming conventions, and schema checks to prevent rule pollution.
+**3. Tenant-authored rules are governed.** `lint_custom_rules.py` checks denied functions and PromQL patterns, the required `tenant` label, and upper bounds on range-vector length and rule-group `interval`; a missing `owner` / `expiry` label produces a WARN.
 
 ## Rule Pack Structure
 
-Each Rule Pack contains three components:
+The snippets below are verbatim excerpts from `rule-packs/rule-pack-mariadb.yaml`, a few rules per part. The full structure is described in [Rule Pack Design](../design/rule-packs.en.md) §3.2.
 
-### Part 1: Data Normalization
-
-```yaml
-# rule-packs/mariadb.yaml
-data_mappings:
-  # Map exporter's raw metrics to platform standard names
-  mysql_connections:
-    source_metric: "mysql_global_status_threads_connected"
-    # Optional relabel_configs for transformation
-  mysql_threads_running:
-    source_metric: "mysql_global_status_threads_running"
-```
-
-### Part 2: Threshold Normalization
+### Part 1: Normalization recording rules
 
 ```yaml
-thresholds:
-  mysql_connections:
-    default: "80"
-    critical: "95"
-    type: "gauge"
-    dimensions: ["instance", "cluster"]     # Multi-dimensional support
-  mysql_slow_queries:
-    type: "scheduled"
-    default: "100 / 1h"                     # 100 per hour threshold
-    range: ["{{ business_hours_start }}", "{{ business_hours_end }}"]  # Scheduled
-  mysql_replication_lag:
-    type: "regex"
-    default: "5s"
-    dimensions_re: ["role=~^primary|replica$"]  # Regex dimensions
+# rule-packs/rule-pack-mariadb.yaml — group: mariadb-normalization (excerpt)
+- record: tenant:mysql_threads_connected:max
+  expr: max by(tenant) (mysql_global_status_threads_connected)
+
+- record: tenant:mysql_slow_queries:rate5m
+  expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
 ```
+
+Names are always `tenant:<metric>:<function>`. Pick the aggregation by meaning: connections take `max` (the busiest instance of the tenant), rates take `sum` (the whole cluster's total).
+
+### Part 2: Threshold-normalization recording rules
+
+```yaml
+# rule-packs/rule-pack-mariadb.yaml — group: mariadb-threshold-normalization (excerpt)
+- record: tenant:alert_threshold:mysql_connections
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
+
+- record: tenant:alert_threshold:mysql_connections_critical
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
+```
+
+When threshold-exporter emits a tenant threshold, it splits the key at the first `_`: `mysql_connections` in a tenant file becomes `user_threshold{component="mysql", metric="connections"}`, and `mysql_connections_critical` is the same label pair plus `severity="critical"`. The selector must therefore use the split `component` and `metric`; `metric="mysql_connections"` never matches anything. `max by(tenant)` rather than `sum` keeps the threshold from doubling when the exporter runs more than one replica.
+
+### Part 3: Alert rules
+
+```yaml
+# rule-packs/rule-pack-mariadb.yaml — group: mariadb-alerts (excerpt)
+- alert: MariaDBHighConnections
+  expr: |
+    (
+      (
+        (
+          tenant:mysql_threads_connected:max
+          > on(tenant) group_left
+          tenant:alert_threshold:mysql_connections
+        )
+        unless on(tenant)
+        (user_state_filter{filter="maintenance"} == 1)
+      )
+      * on(tenant) group_left(runbook_url, owner, tier)
+        tenant_metadata_info
+    )
+    or
+    (
+      (
+        (
+          tenant:mysql_threads_connected:max
+          > on(tenant) group_left
+          tenant:alert_threshold:mysql_connections
+        )
+        unless on(tenant)
+        (user_state_filter{filter="maintenance"} == 1)
+      )
+      unless on(tenant) tenant_metadata_info
+    )
+  for: 30s
+  labels:
+    severity: warning
+    metric_group: "connections"
+    tenant: "{{ $labels.tenant }}"
+  annotations:
+    summary: "High connections on {{ $labels.tenant }}"
+    summary_zh: "{{ $labels.tenant }} 連線數過高"
+    platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
+    platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
+```
+
+- `> on(tenant) group_left tenant:alert_threshold:<key>`: each tenant is compared with its own threshold. When a tenant sets the key to `"disable"`, the threshold series does not exist and this alert cannot fire.
+- `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`: tenants in maintenance mode do not alert.
+- `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`: carries the runbook, owner and tier from the tenant's `_metadata` into the alert. The `or … unless on(tenant) tenant_metadata_info` half keeps tenants without `_metadata` alerting.
+- `summary` / `summary_zh` are for the tenant; `platform_summary` / `platform_summary_zh` are the NOC-facing summary, used by notifications sent through platform-enforced routing (`_routing_enforced`). Annotations without a `*_zh` variant fall back to English.
+
+### Where thresholds come from
+
+A Rule Pack carries no threshold values. Tenants set them in conf.d, and the platform defaults live under `defaults:` in `_defaults.yaml`:
+
+```yaml
+# conf.d/my-tenant.yaml
+tenants:
+  my-tenant:
+    mysql_connections: "70"              # warning threshold
+    mysql_connections_critical: "120"    # critical threshold (_critical suffix)
+    mysql_replication_lag: "disable"     # turn this alert off
+    mysql_threads_running:               # scheduled threshold: a different value inside a UTC window
+      default: "30"
+      overrides:
+        - window: "01:00-09:00"
+          value: "50"
+```
+
+- A key you leave out takes its value from `defaults:` in `_defaults.yaml`. ⚠️ Keys listed under `optional_overrides:` have no platform default: leaving them out means no value and no series.
+- Scheduled-threshold windows are always UTC `HH:MM-HH:MM`, may cross midnight, and with several windows the first match wins.
+- Dimensional thresholds (for example `"redis_queue_length{queue='tasks'}": "500:critical"`) and the full syntax are in the [threshold-exporter config reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.4.
+- Each Rule Pack's file header lists the threshold keys it reads and suggested starting values. The content of `defaults:` is generated from the threshold registry; to change a platform default, edit `RULE_PACKS` in `scaffold_tenant.py` and run `check_threshold_registry.py --regen`.
 
 > 💡 **Interactive Tools** — Want to browse all Rule Packs' recording/alert rules? Use [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx). Compare metrics across all 16 Rule Packs? Try [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx). Calculate recommended thresholds from p50/p90/p99? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx).
 
-### Part 3: Alert Rules
-
-```yaml
-alert_rules:
-  HighMysqlConnections:
-    expr: |
-      mysql_connections_active > {{ mysql_connections_critical }}
-    for: "5m"
-    labels:
-      severity: "critical"
-      component: "database"
-    annotations:
-      summary: "High connections on {{ $labels.instance }}"
-      description: "{{ $value }} threads connected (threshold: {{ mysql_connections_critical }})"
-```
-
 ## Common Operations
 
-### Adding Metrics to Existing Rule Pack
+### Tune the threshold of an existing alert
 
-```yaml
-# rule-packs/mariadb.yaml
-data_mappings:
-  mysql_locked_tables:
-    source_metric: "mysql_global_status_innodb_row_lock_waits"
-
-thresholds:
-  mysql_locked_tables:
-    default: "10"
-    critical: "50"
-    type: "gauge"
-    dimensions: ["instance"]
-
-alert_rules:
-  HighMysqlLockedTables:
-    expr: |
-      mysql_locked_tables > {{ mysql_locked_tables_critical }}
-    for: "2m"
-    labels:
-      severity: "critical"
-    annotations:
-      summary: "Excessive table locks on {{ $labels.instance }}"
-```
-
-Validate new rules:
+No Rule Pack change is needed: set the key in the tenant file (see the previous section), then validate the whole conf.d:
 
 ```bash
-python3 scripts/tools/ops/lint_custom_rules.py \
-  --rule-pack rule-packs/mariadb.yaml \
-  --check
+python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
-### Creating New Rule Pack (New Database Type)
+### Add a metric to an existing Rule Pack
 
-```yaml
-# rule-packs/new-db-type.yaml
-metadata:
-  name: "new-db-type"
-  version: "1.0.0"
-  description: "Monitoring for NewDB cluster instances"
+A new alert needs all three parts plus a declaration of its threshold key:
 
-data_mappings:
-  newdb_connections:
-    source_metric: "newdb_connection_count"
-  newdb_query_latency:
-    source_metric: "newdb_query_duration_seconds"
-    # Recommend histogram_quantile processing
-    quantile: "0.95"
+1. **Normalization recording rule**: add a `tenant:<metric>:<function>` rule to the `<db>-normalization` group.
+2. **Threshold-normalization recording rule**: add `tenant:alert_threshold:<key>` to the `<db>-threshold-normalization` group, with a selector on the split `component` and `metric` (see Part 2 above). For a critical tier, add a `<key>_critical` rule with `severity="critical"`.
+3. **Alert rule**: follow the shape of Part 3, keeping both the `unless … maintenance` and the `tenant_metadata_info` parts.
+4. **Declare the threshold key**: in `RULE_PACKS` in `scripts/tools/ops/scaffold_tenant.py`, put the key under `defaults` (a platform-shipped default) or `optional_overrides` (declared only; tenants supply the value), then regenerate:
 
-thresholds:
-  newdb_connections:
-    default: "500"
-    critical: "1000"
-    dimensions: ["instance", "database"]
-  newdb_query_latency:
-    type: "percentile"
-    default: "100ms"
-    critical: "500ms"
-
-alert_rules:
-  HighNewdbQueryLatency:
-    expr: |
-      newdb_query_latency_p95 > {{ newdb_query_latency_critical }}
-    for: "5m"
-    labels:
-      severity: "warning"
-    annotations:
-      summary: "Slow queries detected on {{ $labels.instance }}"
+```bash
+python3 scripts/tools/lint/check_threshold_registry.py --regen
 ```
+
+An undeclared key is not emitted even when a tenant sets it, and validation reports `unknown key … not in defaults`. Before opening the PR, these two checks must be green — "every key an alert reads is declared" and "the registry and every generated block are in sync":
+
+```bash
+python3 scripts/tools/lint/check_threshold_reachability.py --ci
+python3 scripts/tools/lint/check_threshold_registry.py --ci
+```
+
+A Rule Pack change also has three generated artifacts to regenerate: the ConfigMap copies (`make rulepack-configmaps`), the Rule Pack statistics (`python3 scripts/tools/dx/generate_rule_pack_stats.py --generate --lang all`), and the platform data (`make platform-data`). Each has its own pre-commit drift check; regenerating only one of them leaves the other two red.
+
+### Create a new Rule Pack (new database type)
+
+Follow the three-part template in the "自訂 Rule Pack" section of [Rule Packs](../rule-packs/README.md) and add `rule-packs/rule-pack-<db>.yaml`. Each Rule Pack has its own ConfigMap (`k8s/03-monitoring/configmap-rules-<db>.yaml`), mounted into Prometheus through a Projected Volume; its threshold keys must be declared in `RULE_PACKS` too. The design rationale (why each pack is independent, why all packs are preloaded) is in [Rule Pack Design](../design/rule-packs.en.md) §3.
 
 Submit a pull request to the Platform Team for review and integration.
 
-### Configuring Platform Summary (NOC Perspective)
+### Use the metric dictionary
 
-Inject `platform_summary` annotation in Rule Pack alerts:
-
-```yaml
-alert_rules:
-  HighMysqlConnections:
-    expr: |
-      mysql_connections_active > {{ mysql_connections_critical }}
-    for: "5m"
-    annotations:
-      summary: "High connections on {{ $labels.instance }} (Tenant: {{ $labels.tenant }})"
-      platform_summary: |
-        Capacity Alert: MySQL {{ $labels.instance }} reached {{ $value }}% connection utilization.
-        Recommended action: Review connection pool tuning or plan upgrade.
-        Affected tenant: {{ $labels.tenant }}
-```
-
-NOC receives `platform_summary` focused on capacity planning and upgrade decisions. Tenants still receive their own `summary`.
-
-### Using Metric Dictionary
-
-Reference unified metric naming in Rule Pack:
+`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule.
 
 ```yaml
-# rule-packs/_metric_dictionary.yaml
-metrics:
-  response_time_p95: "Response time 95th percentile"
-  connection_pool_utilization: "Active connections / max pool size"
-  query_error_rate: "Errors per second / total queries per second"
+# scripts/tools/metric-dictionary.yaml (excerpt)
+mysql_global_status_threads_connected:
+  maps_to: mysql_connections
+  golden_rule: MariaDBHighConnections
+  rule_pack: mariadb
+  note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
 ```
 
-Use in alert descriptions:
-
-```yaml
-annotations:
-  description: "{{ metric_dictionary.response_time_p95 }}: {{ $value }}ms"
-```
+The platform team edits this YAML directly; no code change is needed.
 
 ## Migration Workflow
 
-### Migrating from Existing Rules to Rule Pack
+### Migrate existing rules to a Rule Pack
 
 ```bash
-# 1. Reverse-analyze existing configuration
+# 1. Reverse-analyze your existing Prometheus rule files
 python3 scripts/tools/ops/onboard_platform.py \
-  --existing-prometheus-rules /path/to/rules.yaml \
-  --output-hints onboard-hints.json
+  --rule-files 'rules/*.yml' \
+  -o onboard_output/
 
-# 2. Migrate rules (AST + Triage + Prefix + Dictionary)
-python3 scripts/tools/ops/migrate_rule.py \
-  --input-rule alert.yml \
-  --output-rule-pack rule-packs/my-db.yaml \
-  --tenant-prefix "my-tenant"
+# 2. Convert the rules (AST + Triage + Prefix + Dictionary)
+python3 scripts/tools/ops/migrate_rule.py rules/alert.yml \
+  -o migration_output/
 
-# 3. Validate migration (Shadow Monitoring value diff)
-# ⚠️ Use HTTPS in production; HTTP shown here for local dev only
+# 3. Validate the migration (Shadow Monitoring: compare old vs new recording-rule values)
+# ⚠️ Use HTTPS in production
 python3 scripts/tools/ops/validate_migration.py \
-  --old-prometheus-url "https://old-prometheus:9090" \
-  --new-prometheus-url "https://new-prometheus:9090" \
-  --compare-range "7d"
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus https://prometheus:9090
 ```
 
-### Testing Rule Pack Changes
+- **Step 1**: `--rule-files` takes a glob. With rule files only, the output is a rule analysis; `onboard-hints.json` is written only when you also pass `--alertmanager-config` and tenants are found in it.
+- **Step 2**: the output is not a Rule Pack file but a set of platform rules plus tenant config: `platform-recording-rules.yaml`, `platform-alert-rules.yaml`, `tenant-config.yaml`, `prefix-mapping.yaml`, plus two reports, `migration-report.txt` and `triage-report.csv`. `--prefix` is a metric-name prefix (default `custom_`), not a tenant prefix; selecting a single tenant and emitting a Rule Pack file directly are not implemented yet. ⚠️ The threshold recording rule migrate emits today uses the full key as the `metric` label, which does not match the split `component` / `metric` the exporter emits, and the key it generates is not emitted until it is declared in `_defaults.yaml` (tracked in issue 1818); check the output by hand against "Part 2" above before applying it.
+- **Step 3**: compares two queries on the same Prometheus. `--mapping` reads the `prefix-mapping.yaml` from step 2; for a single pair use `--old '<old query>' --new '<new query>'`. Comparing two Prometheus servers against each other and choosing the comparison time range are not implemented yet; to keep observing, use `--watch --interval <seconds> --rounds <n>`, and `--auto-detect-convergence` stops automatically once the values converge. The full procedure is in the [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md).
 
-Backtest in CI environment:
+### Backtest threshold changes
+
+Backtest in CI:
 
 ```bash
 python3 scripts/tools/ops/backtest_threshold.py \
-  --rule-pack rule-packs/mariadb.yaml \
   --tenant my-tenant \
-  --look-back "7d" \
-  --comparison-metric mysql_connections
+  --metric mysql_connections \
+  --old-value 80 \
+  --new-value 100 \
+  --lookback 7d \
+  --prometheus https://prometheus:9090
 ```
 
-Output: Shows how many times new thresholds would fire over past 7 days compared to existing thresholds.
+Output: using the last 7 days of history, how alert firing compares under the old and new thresholds, with a risk assessment. Backtesting works on tenant thresholds (conf.d keys) and does not read Rule Pack files. To backtest all threshold changes in a PR, use `--git-diff`, or `--config-dir <new dir> --baseline <old dir>`.
 
 ## Custom Rule Governance
 
 ### Lint Custom Rules
 
 ```bash
-python3 scripts/tools/ops/lint_custom_rules.py \
-  --config-dir conf.d/ \
-  --deny-list "disable=.*production.*" \
-  --naming-convention "^[A-Z][a-zA-Z0-9_]+$"
+# rule-packs/custom/ is created with the first Tier 3 rule
+python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ \
+  --policy .github/custom-rule-policy.yaml \
+  --ci
 ```
 
-Checked items:
-- Naming conventions (avoid lowercase rule names)
-- Deny-list (prohibit specific patterns)
-- Schema conformance (required labels, annotations)
-- Dimension cardinality (prevent explosion)
+lint works on Prometheus rule files, not on tenant config (validate tenant config with `validate_config.py` above). Without `--ci` it exits 0 even when it reports an ERROR.
 
-### Three-Layer Governance Model
+Checks (the built-in policy's defaults; override them with `--policy`):
+- Denied functions: `holt_winters`, `predict_linear`, `quantile_over_time`
+- Denied patterns: the match-all `=~".*"` and `without(tenant)`; to deny other patterns, add them to `denied_patterns` in the policy file
+- Required label: `tenant`
+- Range vectors at most `1h`; rule-group `interval` at most `60s`
+- WARN (does not fail CI) when an `owner` or `expiry` label is missing
 
-| Layer | Manager | Content |
-|-------|---------|---------|
-| Layer 1 (Rule Pack) | Platform Team + DBA | Core rules, shared thresholds |
-| Layer 2 (Tenant Profile) | DBA + Tenant | Profile-based overrides |
-| Layer 3 (Custom Rule) | Tenant | Scenario-specific customization |
+A naming-convention check is not implemented yet, and the policy file has no such setting. Cardinality is guarded by the platform's Cardinality Guard; for trend forecasting see Cardinality Forecasting below.
 
-Custom rules must pass lint_custom_rules.py and include test data in PR.
+### Three-Tier Governance Model
+
+| Tier | Owner | Content |
+|------|-------|---------|
+| Tier 1 — Standard | Tenant self-service | Thresholds, tri-state, `_critical` and routing in conf.d; no PromQL |
+| Tier 2 — Pre-packaged Scenarios | Domain Expert (DBA) | Composite scenarios predefined in the Rule Pack; tenants only decide enablement and thresholds |
+| Tier 3 — True Custom | Requested by the tenant, via Change Request | Custom rules in an isolated rule group; must pass lint and carry `owner` and `expiry` |
+
+Admission criteria and the assimilation cycle for each tier are in [Custom Rule Governance](../custom-rule-governance.en.md) §2. Tenants can also declare their own alerts without writing PromQL, through `_custom_alerts` recipes (see the [threshold-exporter config reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.5).
 
 ### Policy-as-Code (v2.1.0)
 
@@ -345,24 +341,14 @@ tenants:
     #    has no default to inherit — omitting it means no value and no series
 ```
 
-**Q: Does Rule Pack support scheduled thresholds?**
-A: Yes. Use `type: "scheduled"` with `range` parameter:
-
-```yaml
-thresholds:
-  mysql_threads_running:
-    type: "scheduled"
-    default:
-      during_business_hours: "30"   # threads_running saturation (concurrent threads, NOT host CPU%)
-      after_hours: "50"             # relaxed for nightly batch (= suggested critical tier)
-    range: ["09:00", "18:00"]     # Business hours
-```
+**Q: Are scheduled thresholds supported?**
+A: Yes, but they are a tenant-config feature, not something written in a Rule Pack. In the tenant file, write the key as a `default` plus `overrides` structure; windows are in UTC (see the example in "Where thresholds come from" above).
 
 **Q: I want to test new alert rules without sending notifications immediately?**
-A: Use the shadow monitoring environment. Set up parallel Prometheus + threshold-exporter, use validate_migration.py to compare alert triggers, verify correctness, then cut over to production (see shadow-monitoring-sop.md).
+A: Use shadow monitoring. Run the new rules alongside the old ones, compare the recording-rule values of both sides with `validate_migration.py`, and cut over once they converge (see the [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md)).
 
 **Q: How do I share threshold logic across multiple databases?**
-A: Extract common logic to shared Rule Pack, or define common profile in `_profiles.yaml`, letting multiple tenants inherit. For example, all MySQL instances inherit `mysql-standard` profile.
+A: Extract common logic to a shared Rule Pack, or define a common profile in `_profiles.yaml` and let multiple tenants inherit it with `_profile: "<name>"`. For example, all MySQL instances inherit the `mysql-standard` profile.
 
 > 💡 **Interactive Tools** — Browse all valid YAML keys and types? Use [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx). Test PromQL expressions and their recording rules? Use [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx). Migrate existing rules? Use [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx). View platform terminology? Use [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx). Watch how the platform handles multi-tenant configurations in the browser? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates the complete flow. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/). For enterprise intranet deployment, use the `da-portal` Docker image: `docker run -p 8080:80 ghcr.io/vencil/da-portal` ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)).
 
