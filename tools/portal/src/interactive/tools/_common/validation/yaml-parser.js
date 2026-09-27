@@ -16,17 +16,22 @@ purpose: |
   yaml.v3 does), and timestamps stay strings (js-yaml's default schema
   would turn them into Date objects).
 
-  yaml.v3 parity kept on purpose (measured against yaml.v3 v3.0.1, the
-  exporter's `yaml.Unmarshal`):
-    - multi-document streams: only the FIRST document counts; a trailing
-      `---` or a second document (even a malformed one) is ignored; an
-      empty stream is null.
-    - a self-referencing anchor (`a: &r\n  b: *r`) is an error
-      ("anchor 'r' value contains itself") instead of a cyclic object that
-      would send every recursive consumer into a stack overflow.
-  Known remaining differences: `010` is 10 here (YAML 1.2) but 8 in
-  yaml.v3 (`0o10` is 8 in both); `1_000` is the string "1_000" here but
-  1000 in yaml.v3.
+  Multi-document streams: the value is the FIRST document (a trailing
+  `---` is fine; an empty stream is null), as with the exporter's
+  `yaml.Unmarshal`. Any error anywhere in the stream is a parse error —
+  stricter than yaml.v3, which only looks one token into document 2; the
+  direction is deliberately "report red rather than miss".
+
+  A self-referencing alias (`a: &r\n  b: *r`) is a parse error (yaml.v3:
+  "anchor 'r' value contains itself") instead of a cyclic object that
+  would send every recursive consumer into a stack overflow.
+
+  Known differences from yaml.v3 v3.0.1 (measured): `010` is 10 here but 8
+  there (`0o10` is 8 in both); `1_000` is the string "1_000" here but 1000
+  there; errors after the first document are reported here; a
+  self-reference through a merge key (`<<: *r` inside `&r`) is an error
+  there but not here; a `%YAML 1.2` directive is rejected there but
+  accepted here.
 
   Public API:
     parseDuration(str)     parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
@@ -111,60 +116,31 @@ function loadYamlDocument(text) {
   return { doc: loaded.doc, error: null };
 }
 
-// Offset where the first document of a stream ends: the second `---`
-// document-start marker (or the first `...` end marker) at column 0.
-// Document markers cannot occur inside content, so a line scan is exact
-// enough for "where does document 1 stop".
-function firstDocumentEnd(src) {
-  let started = false;
-  let offset = 0;
-  for (const line of src.split('\n')) {
-    if (/^---(\s|$)/.test(line)) {
-      if (started) return offset;
-      started = true;
-    } else if (/^\.\.\.(\s|$)/.test(line)) {
-      return offset;
-    } else if (!/^\s*(#.*)?\r?$/.test(line) && !/^%/.test(line)) {
-      started = true;
-    }
-    offset += line.length + 1;
-  }
-  return src.length;
-}
-
-// yaml.Unmarshal decodes the first document only and never looks at the
-// rest, so a later document — even a malformed one — must not fail the
-// parse. loadAll parses the whole stream; if it throws past the end of
-// document 1, re-parse document 1 alone.
+// First document of the stream (null when empty). Any error in any
+// document throws. The listener collects anchor maps so a cycle can be
+// reported by anchor name.
 function loadFirstDocument(src) {
   const anchorMaps = new Set();
-  const opts = {
+  const docs = loadAll(src, null, {
     schema: YAML_SCHEMA,
     listener(_event, state) { if (state && state.anchorMap) anchorMaps.add(state.anchorMap); },
-  };
-  let docs;
-  try {
-    docs = loadAll(src, null, opts);
-  } catch (e) {
-    const cut = firstDocumentEnd(src);
-    const pos = e && e.mark && typeof e.mark.position === 'number' ? e.mark.position : -1;
-    if (cut >= src.length || pos < cut) throw e;
-    docs = loadAll(src.slice(0, cut), null, opts);
-  }
+  });
   return { doc: docs.length ? docs[0] : null, anchorMaps };
 }
 
 // First object/array that is its own ancestor (a self-referencing alias),
-// or null. Shared, non-cyclic aliases (the same anchor used twice) are fine.
-// Iterative (explicit stack) so a deeply nested but acyclic document cannot
-// overflow the call stack here.
+// or null. Shared, non-cyclic aliases (the same anchor used twice) are fine
+// and each node is expanded once (`done`), so a DAG of shared aliases is
+// linear, not exponential. Iterative (explicit stack) so a deeply nested
+// but acyclic document cannot overflow the call stack here.
 function findCycle(root) {
   const onPath = new Set();
+  const done = new Set();
   const stack = [{ node: root, exit: false }];
   while (stack.length) {
     const { node, exit } = stack.pop();
-    if (exit) { onPath.delete(node); continue; }
-    if (node === null || typeof node !== 'object') continue;
+    if (exit) { onPath.delete(node); done.add(node); continue; }
+    if (node === null || typeof node !== 'object' || done.has(node)) continue;
     if (onPath.has(node)) return node;
     onPath.add(node);
     stack.push({ node, exit: true });
@@ -184,13 +160,24 @@ function anchorNameOf(node, anchorMaps) {
 }
 
 // Copy a parsed value, dropping prototype-pollution keys at every depth.
-function stripUnsafeKeys(v) {
-  if (Array.isArray(v)) return v.map(stripUnsafeKeys);
+// `memo` maps each source node to its copy, so a subtree shared through an
+// alias is copied once (linear in nodes) and stays shared in the output.
+// Input is acyclic (loadYamlDocument guarantees it).
+function stripUnsafeKeys(v, memo = new Map()) {
+  if (v === null || typeof v !== 'object') return v;
+  if (memo.has(v)) return memo.get(v);
+  if (Array.isArray(v)) {
+    const out = [];
+    memo.set(v, out);
+    for (const x of v) out.push(stripUnsafeKeys(x, memo));
+    return out;
+  }
   if (isPlainMap(v)) {
     const out = {};
+    memo.set(v, out);
     for (const k of Object.keys(v)) {
       if (UNSAFE_KEYS.has(k)) continue;
-      out[k] = stripUnsafeKeys(v[k]);
+      out[k] = stripUnsafeKeys(v[k], memo);
     }
     return out;
   }

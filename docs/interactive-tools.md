@@ -19,7 +19,7 @@ lang: zh
 | 工具 | 給誰 | 做什麼 | 何時用 |
 |------|------|--------|--------|
 | **入門精靈 (Wizard)** | 全角色新手 | 依角色（Platform Engineer / Domain Expert / Tenant）引導到對應入門文件，並顯示各角色關鍵操作步驟 | 第一次接觸平台、角色導向入門 |
-| **Tenant YAML Playground** | 租戶 / Domain Expert | 即時檢查 Tenant YAML 的語法與結構（重複鍵、縮排錯誤、`tenants:` 形狀），錯誤附行號；不檢查值的語意，語意以 exporter 為準（已知讀法差異：`010` 讀成 10、exporter 讀成 8；`1_000` 讀成字串、exporter 讀成 1000） | 撰寫或調試 Tenant YAML 時先排除語法錯誤 |
+| **Tenant YAML Playground** | 租戶 / Domain Expert | 即時檢查 Tenant YAML 的語法與結構（重複鍵、縮排錯誤、`tenants:` 形狀），錯誤附行號；不檢查值的語意，語意以 exporter 為準（已知與 exporter 的差異：`010` 讀成 10、exporter 讀成 8；`1_000` 讀成字串、exporter 讀成 1000；第二份文件以後的語法錯誤這裡會報、exporter 可能不報；merge key 自我參照（`&r` 內 `<<: *r`）exporter 報錯、這裡不報；`%YAML 1.2` directive exporter 拒收、這裡接受） | 撰寫或調試 Tenant YAML 時先排除語法錯誤 |
 | **Rule Pack 選擇器** | 平台 / 租戶（導入期） | 依技術棧（MySQL / PostgreSQL / Redis / JVM / Nginx 等）推薦適用 Rule Packs，顯示每個 Pack 的 alert 數與涵蓋指標 | 初次導入時選擇啟用哪些 Rule Packs |
 | **CLI 指令建構器** | DevOps / 平台 | 選 da-tools 子命令 → 填參數 → 自動產生完整 `docker run` 指令，一鍵複製 | 不熟悉 Docker 指令格式時 |
 | **ROI Calculator** | 決策者 | 輸入組織規模（租戶數、Rule Pack 數、On-call 人數）與現有運維成本，即時算三項效益：Rule 維護 O(N×M)→O(M) 降幅、告警風暴壓制率、Onboard 自動化加速（可匯入 `alert_quality.py --json` 實際數據修正預估）| 平台評估階段，向決策者展示量化 TCO 節省 |

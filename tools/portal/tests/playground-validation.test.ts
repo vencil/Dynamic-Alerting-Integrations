@@ -127,6 +127,24 @@ describe('validateTenantConfig — multi-document streams (yaml.Unmarshal reads 
     // …and a first document without tenants: still fails even if doc 2 has it.
     expect(validateTenantConfig('foo: bar\n---\ntenants:\n  db-a: {}\n').valid).toBe(false);
   });
+
+  it('reports a syntax error in a later document (stricter than yaml.v3, by design)', () => {
+    expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n\tfoo: 1\n').valid).toBe(false);
+    expect(validateTenantConfig('tenants:\n  db-a: {}\n---\n"abc').valid).toBe(false);
+  });
+});
+
+describe('validateTenantConfig — shared aliases', () => {
+  it('checks a doubling alias chain (n=24) quickly and without a false cycle', () => {
+    const body = ['    l0: &l0 [x, x]']
+      .concat(Array.from({ length: 24 }, (_, i) => `    l${i + 1}: &l${i + 1} [*l${i}, *l${i}]`))
+      .join('\n');
+    const t0 = performance.now();
+    const r = validateTenantConfig(tenant(body));
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(r.errors).toEqual([]);
+    expect(r.valid).toBe(true);
+  });
 });
 
 describe('validateTenantConfig — keys read as the exporter reads them', () => {

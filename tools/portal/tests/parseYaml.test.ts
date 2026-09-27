@@ -18,7 +18,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { parseYaml } from '../src/interactive/tools/_common/validation/yaml-parser.js';
+import * as parseYamlModule from '../src/interactive/tools/_common/validation/yaml-parser.js';
+
+const { parseYaml } = parseYamlModule;
+
+// `l0: &l0 [x, x]`, `l1: &l1 [*l0, *l0]`, … `l24` — shared-alias DAG.
+const ALIAS_CHAIN_24 = ['l0: &l0 [x, x]']
+  .concat(Array.from({ length: 24 }, (_, i) => `l${i + 1}: &l${i + 1} [*l${i}, *l${i}]`))
+  .join('\n');
 
 describe('parseYaml — unit', () => {
   it('parses top-level scalar string', () => {
@@ -128,9 +135,14 @@ describe('parseYaml — js-yaml regressions (#2033)', () => {
   it('reads only the first document, like yaml.Unmarshal (trailing ---, second doc)', () => {
     expect(parseYaml('environment: prod\n---\n')).toEqual({ config: { environment: 'prod' }, errors: [] });
     expect(parseYaml('a: 1\n---\na: 2\nb: 3\n')).toEqual({ config: { a: 1 }, errors: [] });
-    // yaml.v3 never parses document 2, so a malformed one is not an error.
-    expect(parseYaml('a: 1\n---\na: [\n')).toEqual({ config: { a: 1 }, errors: [] });
-    // An error inside document 1 is still reported.
+  });
+
+  it('reports an error in a later document (stricter than yaml.v3, by design)', () => {
+    const r = parseYaml('a: 1\n---\na: [\n');
+    expect(r.errors).toHaveLength(1);
+    expect(r.config).toEqual({});
+    // A leading `...` must not hide an error in the document after it.
+    expect(parseYaml('...\na: [\n').errors).toHaveLength(1);
     expect(parseYaml('a: [\n---\na: 2\n').errors).toHaveLength(1);
   });
 
@@ -150,6 +162,21 @@ describe('parseYaml — js-yaml regressions (#2033)', () => {
     const { config, errors } = parseYaml('x: &s {k: 1}\ny: *s\nz: *s\n');
     expect(errors).toEqual([]);
     expect(config).toEqual({ x: { k: 1 }, y: { k: 1 }, z: { k: 1 } });
+  });
+
+  it('handles a doubling alias chain (n=24) in linear time, no false cycle', () => {
+    // l_i = [l_{i-1}, l_{i-1}]: 2^24 paths through 25 nodes. A walk that
+    // re-expands shared subtrees takes seconds; each node once is instant.
+    expect(ALIAS_CHAIN_24.length).toBeLessThan(600);
+    const t0 = performance.now();
+    const { loadYamlDocument } = parseYamlModule;
+    const loaded = loadYamlDocument(ALIAS_CHAIN_24);
+    const r = parseYaml(ALIAS_CHAIN_24);
+    const ms = performance.now() - t0;
+    expect(loaded.error).toBeNull();
+    expect(r.errors).toEqual([]);
+    expect(Array.isArray(r.config.l24)).toBe(true);
+    expect(ms).toBeLessThan(500);
   });
 
   it('drops UNSAFE_KEYS nested below the top level', () => {

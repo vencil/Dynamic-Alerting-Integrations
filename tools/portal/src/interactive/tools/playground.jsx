@@ -324,8 +324,8 @@ export default function TenantYAMLPlayground() {
           <div className="flex-1 overflow-y-auto p-6 space-y-6" role="region" aria-label={t('檢查結果', 'Check results')} tabIndex={0}>
             {/* Scope disclosure (#2033): constant, not parse-derived. */}
             <div data-testid="semantics-not-checked" className="text-xs text-[color:var(--da-color-muted)]">
-              {t('本工具只檢查 YAML 語法與結構，不代表 exporter 會接受每個值；語意以 exporter 為準。已知讀法差異：`010` 這裡讀成 10、exporter 讀成 8；`1_000` 這裡是字串、exporter 讀成 1000。',
-                 'This tool only checks YAML syntax and structure; it does not mean the exporter will accept every value. The exporter is the authority on semantics. Known reading differences: `010` is 10 here but 8 in the exporter; `1_000` is a string here but 1000 in the exporter.')}
+              {t('本工具只檢查 YAML 語法與結構，不代表 exporter 會接受每個值；語意以 exporter 為準。已知與 exporter 的差異：`010` 這裡讀成 10、exporter 讀成 8；`1_000` 這裡是字串、exporter 讀成 1000；第二份文件以後的語法錯誤這裡會報、exporter 可能不報；透過 merge key 的自我參照（`&r` 內 `<<: *r`）exporter 報錯、這裡不報；`%YAML 1.2` directive exporter 拒收、這裡接受。',
+                 'This tool only checks YAML syntax and structure; it does not mean the exporter will accept every value. The exporter is the authority on semantics. Known differences from the exporter: `010` is 10 here but 8 there; `1_000` is a string here but 1000 there; syntax errors after the first document are reported here but may not be there; a self-reference through a merge key (`<<: *r` inside `&r`) is an error there but not here; a `%YAML 1.2` directive is rejected there but accepted here.')}
             </div>
 
             {/* Errors */}
