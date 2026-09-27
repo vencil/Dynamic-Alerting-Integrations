@@ -237,6 +237,23 @@ class TestValidateDir:
         assert len(viol) == 1, viol
         assert "_severity_dedup" in viol[0]
 
+    @pytest.mark.parametrize("receiver,expect", [
+        ('{type: pagerduty, routing_key: "r"}', None),
+        ('{type: pagerduty, service_key: "k"}', None),
+        ('{type: pagerduty, service_key: "k", routing_key: "r"}', "exactly one of service_key"),
+        ('{type: pagerduty}', "exactly one of service_key"),
+        ('{type: email, to: ["a@example.com"], smarthost: "s:25"}', "'from' is a required property"),
+    ], ids=["pd-routing-key", "pd-service-key", "pd-both", "pd-neither", "email-no-from"])
+    def test_receiver_contract_and_message(self, confd, schema, receiver, expect):
+        """#2137: pagerduty 恰好一個 key、email 必填 from；錯誤訊息要指到該 type 的規則，
+        而不是外層 receiver oneOf 的「not valid under any of the given schemas」。"""
+        _write(confd, "t1.yaml", f"tenants:\n  t1:\n    _routing:\n      receiver: {receiver}\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        if expect is None:
+            assert viol == []
+        else:
+            assert len(viol) == 1 and expect in viol[0], viol
+
 
 # --- _defaults.yaml platform-schema guard (#658 fast-follow / Gemini 對抗3) ---
 

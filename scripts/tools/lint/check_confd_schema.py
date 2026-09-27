@@ -125,6 +125,36 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
     return []
 
 
+def _explain(exc, validator) -> str:
+    """Message for `exc`, narrowed through a type-discriminated `oneOf` (#2137).
+
+    A receiver is a `oneOf` over per-type definitions, so any receiver mistake
+    surfaces as "... is not valid under any of the given schemas" — naming
+    neither the type nor the field. When exactly one branch did NOT fail on its
+    `type` const, that branch is the one the author meant: report its error
+    instead (repeating inward), and for a failing `oneOf` inside it append the
+    branch's `description`, which states the rule (pagerduty: exactly one of
+    service_key / routing_key). Anything else keeps the original message.
+    """
+    err = exc
+    while err.validator == "oneOf" and err.context:
+        branches: dict = {}
+        for sub in err.context:
+            branches.setdefault(sub.relative_schema_path[0], []).append(sub)
+        live = [subs for subs in branches.values()
+                if not any(s.validator == "const" and list(s.relative_path) == ["type"]
+                           for s in subs)]
+        if len(live) != 1:
+            break
+        err = validator.exceptions.best_match(live[0])
+    msg = err.message
+    if err is not exc and err.validator == "oneOf" and isinstance(err.schema, dict):
+        desc = err.schema.get("description")
+        if desc:
+            msg += f" — {desc}"
+    return msg
+
+
 def _iter_yaml_files(config_dir: str) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(config_dir):
@@ -192,7 +222,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
                 validator.validate(doc, schema)
             except validator.ValidationError as exc:
                 loc = "/".join(str(p) for p in exc.absolute_path)
-                violations.append(f"ERROR: {rel}: {exc.message} @ /{loc}")
+                violations.append(f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}")
     return checked, violations, sorted(set(skipped))
 
 
