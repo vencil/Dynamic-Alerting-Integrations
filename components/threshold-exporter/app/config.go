@@ -47,8 +47,10 @@ type flatScanState struct {
 	tree *treeScan
 
 	// parseFailed is the sorted scan keys (root-relative slash paths, the
-	// keys of `hashes`) of the files that contribute NOTHING to the config
-	// this commit installed because their bytes did not parse (#2069): the
+	// keys of `hashes`) of the files whose bytes in this commit's scan did
+	// not parse (#2069) — those bytes are not in the config, though the flat
+	// patch branch may keep serving the file's tenants from the previous
+	// version (failSafeHeldTenants, #1980): the
 	// walker's TreeFile.ParseFailed, plus the `_`-prefixed files the flat
 	// build rejected. It is served by GET /api/v1/config/identity next to
 	// lastHash.

@@ -251,7 +251,7 @@ components:
             of the file's bytes. "" when nothing is loaded.
         parse_failed:
           type: array
-          description: Relative paths (sorted) of the files this version left out because they did not parse; always empty in single-file mode
+          description: Relative paths (sorted) of the files whose bytes in this version did not parse (those bytes were not taken in; in flat mode their tenants may still be served from the previous version); always empty in single-file mode
           items:
             type: string
     PrometheusMetric:

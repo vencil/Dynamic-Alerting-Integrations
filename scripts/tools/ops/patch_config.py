@@ -108,7 +108,7 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
      --exporter-namespace) and read, via `kubectl get --raw
      .../pods/<pod>:<port>/proxy/...` (GET only), each pod's
      /api/v1/config/identity (config_hash: which bytes it serves;
-     parse_failed: the keys it left out because they did not parse), then
+     parse_failed: the keys whose bytes it could not parse), then
      its /metrics, then its identity again.
   3. kubectl patch, conditional on the ConfigMap's resourceVersion as read
      (changed since -> nothing is written, exit {EXIT_CALLER_ERROR}: re-run; if the call fails

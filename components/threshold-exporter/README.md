@@ -66,7 +66,7 @@
 | `/health` | GET | Liveness probe（process 起來即 200） |
 | `/ready` | GET | Readiness probe（config 載入完成才回 200，否則 503） |
 | `/api/v1/config` | GET | Resolved config + 租戶清單（debug；支援 `?at=<RFC3339>` 模擬未來時間點） |
-| `/api/v1/config/identity` | GET | 目前服務的那一版設定的 `config_hash` 與因無法 parse 而被排除的檔案 `parse_failed`——**給機器讀的契約**（`schema: 1`；patch-config 寫後驗收用），欄位見 [API Reference §5](../../docs/api/README.md) |
+| `/api/v1/config/identity` | GET | 目前服務的那一版設定的 `config_hash` 與這一版位元組無法 parse 的檔案 `parse_failed`——**給機器讀的契約**（`schema: 1`；patch-config 寫後驗收用），欄位見 [API Reference §5](../../docs/api/README.md) |
 | `/api/v1/tenants/simulate` | POST | Ephemeral 合併預覽——帶 base64 的 tenant YAML + defaults chain，回傳 `merged_hash` + 完整 inheritance 預覽。**不寫 disk、不改 manager 狀態** |
 
 ### 3.2 旗標 / 環境變數
