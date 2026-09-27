@@ -464,8 +464,9 @@ _FSYNC_UNSUPPORTED_ERRNOS = frozenset(
     e for e in (errno.EINVAL, getattr(errno, "ENOTSUP", None),
                 getattr(errno, "EOPNOTSUPP", None)) if e is not None
 )
-# mkstemp's prefix embeds the target name; cap it so a target name near
-# NAME_MAX cannot turn a write that works in place into ENAMETOOLONG.
+# mkstemp's prefix embeds the target name; cap it (in UTF-8 BYTES) so a
+# target name near NAME_MAX cannot turn a write that works in place into
+# ENAMETOOLONG. (If it still happens, the mkstemp fallback catches it.)
 _TMP_PREFIX_NAME_CAP = 64
 # os.replace errnos meaning "this name cannot be renamed over", where writing
 # through it may still work — so the answer is the in-place write, not rc 2:
@@ -567,6 +568,9 @@ def atomic_replace_output(out: Path, content: str) -> None:
     touched); and an unwritable directory falls back instead of failing.
     What makes :func:`_try_atomic` give up is listed there.
 
+    ⚠️ A replace makes a NEW inode: extended attributes, POSIX ACLs and the
+    SELinux label of the old file are not carried over (mode and owner are).
+
     Every ``OSError`` leaves as :class:`OutputWriteError` (or
     :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
     ``exit_on_output_write_error`` ends it at rc 2 with no traceback.
@@ -608,8 +612,10 @@ def _try_atomic(out: Path, content: str,
     up (``False``) exactly where the in-place write would still have
     produced the old result:
 
-    * ``mkstemp`` → ``PermissionError``: the directory is not writable but
-      the file may be;
+    * ``mkstemp`` fails for ANY reason (EACCES, EROFS, ENOSPC for inodes,
+      ENAMETOOLONG, …): the directory cannot take a new file but the
+      existing one may still be writable — the in-place write either
+      succeeds as it always did or reports the real error;
     * the tmp cannot be handed back to the file's OWNER (``fchown``, any
       ``OSError`` — EPERM for a non-root run, EINVAL for an unmapped id in a
       rootless / userns container). No WARN: for a non-root run the in-place
@@ -624,24 +630,33 @@ def _try_atomic(out: Path, content: str,
     :class:`OutputWriteError` naming *out* — writing in place at that point
     would put the truncation risk straight back.
 
+    ⚠️ **The one deliberate exception to "same result as in place"**: with
+    the data blocks full, the in-place write could truncate the old file and
+    reuse its blocks, and succeed; here the tmp write fails with ENOSPC and
+    the run ends rc 2 with the old file intact. That truncation is exactly
+    what #2082 exists to prevent, so it is kept (pending an owner ruling).
+
     The mode is set with ``fchmod`` on the open fd, before any byte is
     written: a path-based chmod could follow a symlink someone swapped in
     for the tmp name.
     """
     target = Path(os.path.realpath(out))
+    # Capped in BYTES, not characters: 64 four-byte characters would push
+    # the tmp name past NAME_MAX (255 bytes) for a target name that fits.
+    name_head = os.fsencode(target.name)[:_TMP_PREFIX_NAME_CAP].decode(
+        "utf-8", "ignore")
+    fd, tmp_name, replaced = -1, None, False
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            dir=target.parent,
-            prefix=f".{target.name[:_TMP_PREFIX_NAME_CAP]}.",
-            suffix=".tmp",
-        )
-    except PermissionError as exc:
-        return False, f"cannot create a temporary file beside it ({exc.strerror})"
-    except OSError as exc:
-        raise _output_error(out, exc, previous_kept=True) from exc
-
-    replaced = False
-    try:
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=target.parent, prefix=f".{name_head}.", suffix=".tmp",
+            )
+        except OSError as exc:
+            # ANY failure to create the tmp: the in-place write may still
+            # work (an unwritable or read-only directory holding a writable
+            # file — readOnlyRootFilesystem + a subPath / `-v file:file`
+            # mount), and where it cannot, it reports the real error itself.
+            return False, f"cannot create a temporary file beside it ({exc.strerror})"
         if st is not None and hasattr(os, "fchown") and (
                 st.st_uid != os.geteuid() or st.st_gid != os.getegid()):
             try:
@@ -678,7 +693,7 @@ def _try_atomic(out: Path, content: str,
     finally:
         if fd >= 0:
             os.close(fd)
-        if not replaced:
+        if tmp_name is not None and not replaced:
             try:
                 os.unlink(tmp_name)
             except OSError:

@@ -190,24 +190,29 @@ class TestInterruptedWrite:
         assert f"ERROR: cannot write {out}:" in err
         assert ".tmp" not in err, "the operator never typed the tmp path"
 
-    def test_a_mkstemp_failure_other_than_permission_is_rc2_named(
-        self, monkeypatch, confd, tmp_path, capsys,
+    @pytest.mark.parametrize("code", [errno.EROFS, errno.ENOSPC, errno.ENAMETOOLONG])
+    def test_a_tmp_that_cannot_be_created_falls_back_in_place(
+        self, monkeypatch, confd, tmp_path, capsys, code,
     ):
+        """EROFS: read-only rootfs with the output as a single-file mount
+        (k8s readOnlyRootFilesystem + subPath, docker --read-only -v
+        file:file). ENOSPC: out of inodes. ENAMETOOLONG: the tmp name, not
+        the output name, is too long. The in-place write worked in all three
+        (rc 0), so it still must — with a WARN, since it is not atomic."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
 
-        def rofs(*a, **k):
-            raise OSError(errno.EROFS, "Read-only file system",
-                          str(tmp_path / ".meta.json.abc.tmp"))
+        def refuse(*a, **k):
+            raise OSError(code, os.strerror(code), str(tmp_path / ".meta.json.abc.tmp"))
 
-        monkeypatch.setattr(gtm.tempfile, "mkstemp", rofs)
+        monkeypatch.setattr(gtm.tempfile, "mkstemp", refuse)
         rc = _run(monkeypatch, confd, out)
         err = capsys.readouterr().err
 
-        assert rc == 2
+        assert rc == 0, err
         assert "Traceback" not in err
-        assert f"ERROR: cannot write {out}: Read-only file system" in err
-        assert out.read_text(encoding="utf-8") == _PREVIOUS
+        assert "WARN:" in err and "cannot create a temporary file beside it" in err
+        assert _is_fresh_metadata(out)
 
 
 class TestNoRegressionVsInPlace:
@@ -489,6 +494,64 @@ class TestSameResultAsInPlace:
 
         assert stat.S_IMODE(victim.stat().st_mode) == 0o600
         assert victim.read_text(encoding="utf-8") == "secret\n"
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
+                        reason="bind mounts need root (CAP_SYS_ADMIN)")
+    def test_a_file_mount_on_a_read_only_directory_for_real(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """The measured shape behind the EROFS row above, with real mounts:
+        the directory is a read-only bind mount and the output file is a
+        read-write bind mount of another file on top of it."""
+        import subprocess
+
+        d, src = tmp_path / "ro", tmp_path / "src"
+        d.mkdir()
+        src.mkdir()
+        (src / "real.json").write_text(_PREVIOUS, encoding="utf-8")
+        out = d / "meta.json"
+        out.write_text("", encoding="utf-8")
+        mounted: list[Path] = []
+
+        def mount(*args: str, at: Path) -> bool:
+            p = subprocess.run(["mount", *args], capture_output=True, text=True, timeout=30)
+            if p.returncode == 0 and at not in mounted:
+                mounted.append(at)
+            return p.returncode == 0
+
+        try:
+            if not (mount("--bind", str(d), str(d), at=d)
+                    and mount("-o", "remount,bind,ro", str(d), at=d)
+                    and mount("--bind", str(src / "real.json"), str(out), at=out)):
+                pytest.skip("mount(8) refused in this environment (no CAP_SYS_ADMIN)")
+            rc = _run(monkeypatch, confd, out)
+            err = capsys.readouterr().err
+        finally:
+            for at in reversed(mounted):
+                subprocess.run(["umount", str(at)], capture_output=True, timeout=30)
+
+        assert rc == 0, err
+        assert "WARN:" in err
+        assert _is_fresh_metadata(src / "real.json")
+
+    def test_a_long_multibyte_name_still_gets_an_atomic_write(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """F3: 62 four-byte characters + ``.json`` is 253 bytes — a legal
+        name. A tmp prefix capped at 64 CHARACTERS would be ~264 bytes
+        (ENAMETOOLONG); capped at 64 BYTES it fits. The fallback would hide
+        a wrong cap, so the in-place write is forbidden here."""
+        out = tmp_path / ("\U0001F600" * 62 + ".json")
+        assert len(os.fsencode(out.name)) == 253
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        _forbid_in_place_write(monkeypatch, out)
+
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert rc == 0
+        assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
 
     @pytest.mark.parametrize("code", [errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES])
     def test_a_mount_point_target_falls_back_in_place(
