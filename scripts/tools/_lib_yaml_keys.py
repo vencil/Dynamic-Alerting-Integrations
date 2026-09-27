@@ -32,11 +32,25 @@ Two behaviours are kept rather than reimplemented, both measured against Go:
   compose would report a tenant literally named ``<<``.
 * a ``null`` / ``~`` key is dropped — Go drops it as well.
 
-⚠️ One measured residual, deliberately not closed here: Go **rejects** a
-file that repeats the ``tenants:`` key (``mapping key "tenants" already
-defined``) while PyYAML takes the last block. That is a whole-file parse
-verdict, so it belongs to ``validate_config``'s ``yaml_syntax``, not to a
-key reader — recorded so the next reader does not have to re-measure it.
+A key that is NOT a scalar (``? [a, b]``) is refused with a
+``ConstructorError`` — Go refuses it (``cannot unmarshal !!seq into
+string``) and so did ``safe_load`` (``found unhashable key``); so is a
+``!!map`` tag on something that is not a mapping. Both are
+``yaml.YAMLError``, so every reader's existing "unreadable file" handling
+names the file (#2114 review: before, these leaked ``TypeError`` /
+``ValueError`` and a policy-engine run became a traceback).
+
+⚠️ Measured residuals, deliberately not closed here:
+
+* Go **rejects** a mapping that repeats a key (``mapping key "123" already
+  defined``, also for a repeated ``tenants:``). This loader, like PyYAML,
+  keeps the last one — and because keys are now text, ``123:`` and
+  ``"123":`` in ONE mapping fold into one tenant silently (``safe_load``
+  made them two, 123 and "123"). Duplicate-key rejection is the scope of the
+  shared strict loader in #2123; this test pins today's behaviour so that
+  change is visible when it lands:
+  ``tests/shared/test_tenant_id_yaml_spelling_parity.py``
+  (``test_two_spellings_of_one_id_in_one_mapping_fold_silently``).
 
 ⚠️ Only mapping KEYS change. Values stay PyYAML-typed (``_severity_dedup:
 off`` is still ``False``); every consumer of values is unchanged. The one
@@ -49,13 +63,17 @@ to the tenant keys above.
 ⛔ Leaf module: imports ``yaml`` and the standard library ONLY, never another
 ``_lib_*`` — ``_lib_io`` and ``_lib_confd`` import it.
 
-Parser choice. ``ExporterKeyLoader`` is libyaml's C parser when the wheel
-ships it (~10x faster: 2000 tenants in ~62ms instead of ~600ms). The two
-parsers agree on well-formed input and DISAGREE on malformed input (libyaml,
-like yaml.v3, accepts a trailing tab and deep nesting the pure parser
-rejects — see ``_lib_io.SAFE_LOADER``). Readers whose error contract is
-built on the pure parser's limits (``RecursionError`` → "unreadable file")
-pass ``pure=True`` and keep exactly the parser they had.
+Parser choice: the pure-Python ``yaml.SafeLoader``, i.e. exactly the parser
+every caller used before (``yaml.safe_load`` / ``load_yaml_file``).
+libyaml's ``CSafeLoader`` was considered (~10x faster, and closer to yaml.v3
+on malformed input: it accepts a trailing tab and deep nesting the pure
+parser refuses) and deliberately NOT used: the two parsers disagree exactly
+on malformed files, and switching only the tenant-key readers made one run
+give two answers — ``validate_config``'s ``yaml_syntax`` called a file
+unreadable while ``tenant_uniqueness`` read it, and the routing reader
+dropped a tenant file that ``declared_tenant_ids`` still counted, so a
+platform block created the tenant silently. Which parser the tool family
+uses on malformed files is decided in #2123, for all readers at once.
 """
 from __future__ import annotations
 
@@ -65,7 +83,6 @@ import yaml
 
 __all__ = [
     "ExporterKeyLoader",
-    "PureExporterKeyLoader",
     "load_exporter_keys",
     "load_first_document_exporter_keys",
 ]
@@ -73,8 +90,8 @@ __all__ = [
 _NULL_TAG = "tag:yaml.org,2002:null"
 
 
-class _ExporterKeys:
-    """The key rule, as a mixin over a ``SafeLoader``-family base.
+class ExporterKeyLoader(yaml.SafeLoader):
+    """``SafeLoader``, except a mapping key is the scalar's RAW TEXT.
 
     ``raw_text_sequences``: mapping keys whose SEQUENCE value is returned as
     its scalar items' source text (set per loader instance by the functions
@@ -84,15 +101,27 @@ class _ExporterKeys:
     raw_text_sequences: "frozenset[str]" = frozenset()
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see module
+        # Same guard as SafeConstructor's: `!!map [a, b]` / `!!map abc` reach
+        # here with a non-mapping node, and must be a YAMLError, not the
+        # TypeError / ValueError the loop below would raise.
+        if not isinstance(node, yaml.MappingNode):
+            raise yaml.constructor.ConstructorError(
+                None, None,
+                "expected a mapping node, but found %s" % node.id,
+                node.start_mark)
         self.flatten_mapping(node)
         mapping = {}
         for key_node, value_node in node.value:
-            if isinstance(key_node, yaml.ScalarNode):
-                if key_node.tag == _NULL_TAG:
-                    continue
-                key = key_node.value
-            else:
-                key = str(self.construct_object(key_node, deep=deep))
+            if not isinstance(key_node, yaml.ScalarNode):
+                # Go: `cannot unmarshal !!seq into string`; safe_load:
+                # `found unhashable key`. Never a tenant named "[]".
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping", node.start_mark,
+                    "found unhashable key (a %s node is not a tenant id)"
+                    % key_node.id, key_node.start_mark)
+            if key_node.tag == _NULL_TAG:
+                continue
+            key = key_node.value
             if (key in self.raw_text_sequences
                     and isinstance(value_node, yaml.SequenceNode)):
                 mapping[key] = [
@@ -104,36 +133,23 @@ class _ExporterKeys:
         return mapping
 
 
-_FAST_BASE = (yaml.CSafeLoader if getattr(yaml, "__with_libyaml__", False)
-              else yaml.SafeLoader)
-
-
-class ExporterKeyLoader(_ExporterKeys, _FAST_BASE):  # type: ignore[misc,valid-type]
-    """``CSafeLoader`` (``SafeLoader`` without libyaml); keys are raw text."""
-
-
-class PureExporterKeyLoader(_ExporterKeys, yaml.SafeLoader):
-    """The pure-Python ``SafeLoader``; keys are raw text. See ``pure=``."""
-
-
-def _make_loader(stream: Any, pure: bool,
-                 raw_text_sequences: Iterable[str]) -> Any:
-    loader = (PureExporterKeyLoader if pure else ExporterKeyLoader)(stream)
+def _make_loader(stream: Any, raw_text_sequences: Iterable[str]) -> Any:
+    loader = ExporterKeyLoader(stream)
     if raw_text_sequences:
         loader.raw_text_sequences = frozenset(raw_text_sequences)
     return loader
 
 
-def load_exporter_keys(stream: Any, *, pure: bool = False,
+def load_exporter_keys(stream: Any, *,
                        raw_text_sequences: Iterable[str] = ()) -> Any:
     """``yaml.load(stream, Loader=ExporterKeyLoader)``, spelled the long way.
 
     Single document, like ``yaml.safe_load`` (a second document raises).
 
     ⛔ NOT a style choice, and NOT a way around the safety rule. The loader
-    has to be a ``SafeLoader``-family **subclass** (it changes how mapping
-    KEYS are read), and no automated check in this repo can express that:
-    dev-rules §5 item 4 is enforced by bandit B506, which flags
+    has to be a ``SafeLoader`` **subclass** (it changes how mapping KEYS are
+    read), and no automated check in this repo can express that: dev-rules
+    §5 item 4 is enforced by bandit B506, which flags
     ``Loader=<SafeLoader subclass>`` as a violation just as the AST guard
     removed in #1643 did. Spelling the call out longhand keeps it outside a
     predicate that would be wrong about it either way.
@@ -144,13 +160,13 @@ def load_exporter_keys(stream: Any, *, pure: bool = False,
 
     The safety property is therefore pinned by BEHAVIOUR, not by spelling:
     ``tests/shared/test_tenant_id_yaml_spelling_parity.py::
-    test_the_loaders_cannot_construct_python_objects`` feeds both loaders an
-    actual ``!!python/object/apply`` payload and requires it to be refused,
-    with a must-still-work control beside it. ⛔ Deleting that test leaves
-    this shape completely unguarded. ⚠️ NOT GUARDED: it pins THESE loaders
-    only — nothing pins a future copy.
+    test_the_loader_cannot_construct_python_objects`` feeds both entry
+    points an actual ``!!python/object/apply`` payload and requires it to be
+    refused, with a must-still-work control beside it. ⛔ Deleting that test
+    leaves this shape completely unguarded. ⚠️ NOT GUARDED: it pins THIS
+    loader only — nothing pins a future copy.
     """
-    loader = _make_loader(stream, pure, raw_text_sequences)
+    loader = _make_loader(stream, raw_text_sequences)
     try:
         return loader.get_single_data()
     finally:
@@ -158,8 +174,7 @@ def load_exporter_keys(stream: Any, *, pure: bool = False,
 
 
 def load_first_document_exporter_keys(
-        stream: Any, *, pure: bool = False,
-        raw_text_sequences: Iterable[str] = ()) -> Any:
+        stream: Any, *, raw_text_sequences: Iterable[str] = ()) -> Any:
     """The FIRST document of *stream* (None when there is none), keys as text.
 
     As the exporter's walker reads a config file: yaml.v3 ``Unmarshal``
@@ -168,7 +183,7 @@ def load_first_document_exporter_keys(
     rule as ``next(yaml.safe_load_all(fh), None)``, which this replaces).
     Longhand for the reason given in ``load_exporter_keys``.
     """
-    loader = _make_loader(stream, pure, raw_text_sequences)
+    loader = _make_loader(stream, raw_text_sequences)
     try:
         if loader.check_data():
             return loader.get_data()

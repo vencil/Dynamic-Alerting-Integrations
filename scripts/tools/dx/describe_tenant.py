@@ -165,7 +165,7 @@ def _load_first_document(path: Path) -> Any:
     # Lazy: this module imports without PyYAML (the RuntimeError above).
     from _lib_yaml_keys import load_first_document_exporter_keys
     with open(path, "r", encoding="utf-8") as f:
-        return load_first_document_exporter_keys(f, pure=True)
+        return load_first_document_exporter_keys(f)
 
 
 def _load_platform_doc(path: Path) -> Any:
@@ -174,7 +174,7 @@ def _load_platform_doc(path: Path) -> Any:
     `tenants:` block, so its ids match the tenant files'."""
     from _lib_yaml_keys import load_exporter_keys  # lazy, see _load_first_document
     with open(path, "r", encoding="utf-8") as f:
-        return load_exporter_keys(f, pure=True) or {}
+        return load_exporter_keys(f) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",

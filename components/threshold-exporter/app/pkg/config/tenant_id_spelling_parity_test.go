@@ -24,7 +24,8 @@ type tenantIDSpellingMatrix struct {
 	Spellings []struct {
 		Source      string  `json:"source"`
 		ExporterKey *string `json:"exporter_key"`
-		SafeLoadStr string  `json:"safe_load_str"` // Python half only
+		SafeLoadStr *string `json:"safe_load_str"` // Python half only
+		Rejected    bool    `json:"rejected"`      // both sides refuse the document
 	} `json:"spellings"`
 }
 
@@ -49,6 +50,12 @@ func TestTenantIDSpellingMatrix_ExporterKeyIsTheDecodedKey(t *testing.T) {
 		t.Run(row.Source, func(t *testing.T) {
 			doc := "tenants:\n  " + row.Source + ":\n    mysql_connections: \"1\"\n"
 			cfg, err := ParseConfigFile([]byte(doc))
+			if row.Rejected {
+				if err == nil {
+					t.Fatalf("source %q: table says the exporter rejects it, it decoded %v", row.Source, cfg.Tenants)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ParseConfigFile(%q): %v", doc, err)
 			}

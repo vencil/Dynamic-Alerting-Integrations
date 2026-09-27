@@ -772,7 +772,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # #2114: `exclude_tenants` items as source text, see
                 # `load_policies`. Same pure parser as before.
                 policy_data = load_exporter_keys(
-                    f, pure=True, raw_text_sequences=POLICY_TENANT_LISTS)
+                    f, raw_text_sequences=POLICY_TENANT_LISTS)
         except OSError as e:
             problem = ("policy_file_unreadable",
                        f"cannot read {args.policy!r}: {e}",

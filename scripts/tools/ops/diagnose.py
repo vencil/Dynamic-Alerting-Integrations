@@ -160,7 +160,7 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
                 # #2114: tenant keys as source TEXT — the exporter's id, and
                 # what the CLI's `tenant` argument is. `123:` in a platform
                 # file used to be the int 123 and never matched "123".
-                raw = load_exporter_keys(f, pure=True)
+                raw = load_exporter_keys(f)
         except (OSError, yaml.YAMLError):
             # ⛔ Still silent, deliberately — see #1522. `check()` calls this
             # AND `resolve_inheritance_chain` over the same directory, so
@@ -360,7 +360,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         try:
             with open(entry, encoding="utf-8") as f:
                 # #2114: tenant keys as source TEXT (see lookup_tenant_profile).
-                raw = load_exporter_keys(f, pure=True) or {}
+                raw = load_exporter_keys(f) or {}
         except (OSError, yaml.YAMLError) as e:
             _skip_read_failure(fname, e)
             continue

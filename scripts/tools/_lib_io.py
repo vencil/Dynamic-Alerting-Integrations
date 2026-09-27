@@ -163,7 +163,7 @@ def load_yaml_file_exporter_keys(
     try:
         stream = io.StringIO(file.read_bytes().decode("utf-8"))
         stream.name = str(path)   # PyYAML marks keep naming the real file
-        data = load_exporter_keys(stream, pure=True,
+        data = load_exporter_keys(stream,
                                   raw_text_sequences=raw_text_sequences)
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
@@ -277,6 +277,8 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
         and ``yes:`` is ``"yes"`` (PyYAML's own typing made them ``8`` and
         ``True``). Mapping keys inside a config are text too; values keep
         PyYAML's types. Same pure-Python parser as :func:`load_yaml_file`.
+        ⚠️ This is true of THIS helper's callers; tools that read tenant ids
+        some other way may still use PyYAML's typing (tracked in #2115).
 
         ⚠️ A document that parses to a non-mapping is skipped, but an EMPTY
         file is not: ``load_yaml_file`` turns it into the ``{}`` default, so

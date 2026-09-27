@@ -1280,11 +1280,16 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
 
     * The ids are the keys' raw TEXT (#2114), as yaml.v3 keys the exporter's
       ``map[string]`` — ``010:`` is ``"010"``, ``yes:`` is ``"yes"``, and
-      ``123:`` / ``"123":`` are one id — read through ``_lib_yaml_keys`` (the
-      libyaml parser when available). Before, the keys were PyYAML's YAML 1.1
-      values (``8``, ``True``, ``123``), so a platform file's ``123:`` never
-      met the tenant file's ``"123":``. Every reader that asks this set about
-      membership keys its own tenants the same way.
+      ``123:`` / ``"123":`` are one id — read through ``_lib_yaml_keys``, on
+      the same pure-Python parser as before (so a file the flat readers
+      cannot parse declares nothing here either). Before, the keys were
+      PyYAML's YAML 1.1 values (``8``, ``True``, ``123``), so a platform
+      file's ``123:`` never met the tenant file's ``"123":``. The three
+      readers that ask this set about membership through
+      ``overlay_platform_tenants`` (``_grar_parse``, ``diagnose``,
+      ``check_routing_profiles``) key their own tenants the same way. ⚠️ Not
+      every tenant reader in the tool family does yet — the remaining
+      PyYAML-typed ones are tracked in #2115.
 
     A file that does not parse as YAML at all, or cannot be read, declares
     nothing; naming it is the calling reader's own job (it has its own record
@@ -1305,8 +1310,8 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
         except Exception:  # noqa: BLE001 — declares nothing; see docstring
             continue
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
-            # Keys are the source text (#2114); the flat readers key their
-            # tenants the same way, so membership compares text to text.
+            # Keys are the source text (#2114); the overlay readers key
+            # their tenants the same way, so membership compares text to text.
             ids.update(data["tenants"])
     return ids
 

@@ -12,7 +12,11 @@
     "`safe_load_str` is str() of the key yaml.safe_load (YAML 1.1 typing) gives —",
     "what the Python tools used as the tenant id before #2114. Only the Python",
     "half asserts it; it is kept so the table shows which rows the old read got",
-    "wrong (13 of 22), i.e. that the table can tell the two readers apart."
+    "wrong (13 of 22), i.e. that the table can tell the two readers apart.",
+    "`rejected: true` (#2114 review): the key is not a scalar, and BOTH sides",
+    "refuse the document — Go `cannot unmarshal !!seq into string`, PyYAML",
+    "`found unhashable key` — so `exporter_key` / `safe_load_str` are null.",
+    "It must stay an error in _lib_yaml_keys too, not a tenant named `[]`."
   ],
   "spellings": [
     {"source": "123", "exporter_key": "123", "safe_load_str": "123"},
@@ -36,6 +40,7 @@
     {"source": ".inf", "exporter_key": ".inf", "safe_load_str": "inf"},
     {"source": "\"\"", "exporter_key": "", "safe_load_str": ""},
     {"source": "12:30", "exporter_key": "12:30", "safe_load_str": "750"},
-    {"source": "0123", "exporter_key": "0123", "safe_load_str": "83"}
+    {"source": "0123", "exporter_key": "0123", "safe_load_str": "83"},
+    {"source": "[a, b]", "exporter_key": null, "safe_load_str": null, "rejected": true}
   ]
 }

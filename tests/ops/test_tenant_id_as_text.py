@@ -12,7 +12,6 @@ rows are in tests/shared/platform_tenant_overlay_matrix.json.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -197,6 +196,55 @@ def test_a_python_object_tag_in_a_tenant_file_is_still_refused(tmp_path):
     """The readers switched loaders; the refusal must have come along
     (``load_tenant_configs`` → YamlFileError, a yaml.YAMLError)."""
     _tree(tmp_path, {"t.yaml": "tenants:\n  t: !!python/object/apply:os.system ['echo x']\n"})
-    with pytest.raises(_lib_io.YamlFileError):
+    with pytest.raises(_lib_io.YamlFileError) as ei:
         _lib_io.load_tenant_configs(str(tmp_path))
-    assert os.path.exists(tmp_path / "t.yaml")
+    assert "python/object/apply" in str(ei.value) and "t.yaml" in str(ei.value), ei.value
+
+
+# ── #2114 review: error shape and parser are what the readers had ────
+
+def test_a_map_tag_on_a_sequence_keeps_policy_engine_at_rc_2(tmp_path, capsys):
+    """`tenants: !!map [a, b]` — the loader leaked TypeError, which escaped
+    every `except yaml.YAMLError` and turned policy-engine's rc 2
+    caller-error JSON (main) into an rc 1 traceback. Measured end to end."""
+    d = _tree(tmp_path, {"conf.d/t.yaml": "tenants: !!map [a, b]\n"})
+    pol = tmp_path / "p.yaml"
+    pol.write_text("policies:\n  - name: need-cpu\n    target: cpu\n"
+                   "    operator: required\n", encoding="utf-8")
+    rc = pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 2, out
+    assert out["status"] == "caller_error" and out["reason"] == "yaml_file_unreadable", out
+
+
+_TRAILING_TAB_TENANT = "tenants:\n  tx:\n    cpu: 80\t\n"   # pure parser refuses
+
+
+def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
+    """Every reader stays on the parser it had (all pure; libyaml choice is
+    #2123). With `declared_tenant_ids` on libyaml, a tenant file the routing
+    reader itself drops as unreadable still DECLARED tx, so the platform's
+    `tenants.tx` block silently created the tenant and its `ignored` WARN
+    vanished — two answers in one run."""
+    d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  cpu: 70\ntenants:\n  tx:\n    cpu: 60\n",
+        "tx.yaml": _TRAILING_TAB_TENANT})
+    assert declared_tenant_ids(d) == set()
+    got = _grar_parse.load_tenant_tree(str(d))
+    assert "tx" not in got.dedup_configs, got.dedup_configs
+    err = capsys.readouterr().err
+    assert "tenants.tx ignored" in err, err
+
+
+def test_tenant_uniqueness_agrees_with_yaml_syntax_about_one_file(tmp_path):
+    """`yaml_syntax` (pure parser) calls the trailing-tab file unreadable;
+    `tenant_uniqueness` must not read it anyway and report a duplicate from
+    a file the same run says it cannot read."""
+    import validate_config as vc
+    d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  cpu: 70\n",
+        "a.yaml": "tenants:\n  tx:\n    cpu: 80\n",
+        "b.yaml": _TRAILING_TAB_TENANT})
+    r = vc.check_tenant_uniqueness(str(d))
+    assert r["status"] == vc.WARN, r
+    assert "b.yaml" in " ".join(r["details"]), r

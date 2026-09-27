@@ -483,12 +483,11 @@ def _parse_config_files(config_dir: str) -> dict:
         # them — `010:` is "010" (PyYAML's own typing made it 8, and a bool
         # id from `yes:` crashed `{{tenant}}` substitution). A domain
         # policy's `tenants:` list is read as text too, so it still meets the
-        # tenant keys. `pure=True`: the same parser `yaml.safe_load` used, so
-        # every branch below still sees the errors it was written for.
+        # tenant keys. Same pure parser `yaml.safe_load` used, so every
+        # branch below still sees the errors it was written for.
         try:
             with open(path, encoding="utf-8") as f:
-                data = load_exporter_keys(f, pure=True,
-                                          raw_text_sequences=("tenants",))
+                data = load_exporter_keys(f, raw_text_sequences=("tenants",))
         except yaml.YAMLError as e:
             _drop_unreadable_file(
                 fname, f"failed to parse: {e}",
