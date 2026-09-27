@@ -325,7 +325,10 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 	var out []Finding
 	for _, field := range spec.Required {
 		v, ok := receiver[field]
-		if !ok {
+		// A YAML key with no value (`from:`) decodes to nil. The Python
+		// generator's `not receiver_obj[field]` and Alertmanager (nil → "",
+		// the zero value) both read that as not given, so it is missing here too.
+		if !ok || v == nil {
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     FindingMissingReceiverField,

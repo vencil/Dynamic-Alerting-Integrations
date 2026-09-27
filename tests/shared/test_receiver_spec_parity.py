@@ -15,12 +15,13 @@ pinned to it by TestReceiverTypeSpecs_MatchSchema in the same package as
 receiverTypeSpecs. Each side reads the schema as JSON and its own copy as a
 value, so no copy is parsed out of another language's source text.
 
-Emptiness is part of the contract. Python and Go treat "" as unset, as
-Alertmanager does (its config is a Go struct; "" is the zero value), so the
-schema reader demands `minLength >= 1` (`minItems` for arrays) on every
-required field and every exactly-one branch — otherwise an empty key would
-count as "given" in the schema only, and {service_key: "", routing_key: "r"}
-would match both branches.
+Emptiness is part of the contract. Python and Go treat "" and null as unset,
+as Alertmanager does (its config is a Go struct; both decode to the zero
+value — a YAML `service_key:` with no value is null), so the schema reader
+demands a single pinned type plus `minLength >= 1` (`minItems` for arrays) on
+every required field and every exactly-one branch — otherwise an empty or
+null key would count as "given" in the schema only, and
+{service_key: "" | null, routing_key: "r"} would match both branches.
 
 The shared case table
 (components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json)
@@ -55,8 +56,14 @@ _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired
 
 
 def _rejects_empty(prop: dict | None) -> bool:
+    """True when the property rejects "" and null (and []), which Python/Go read as unset.
+
+    The type must be pinned to one type: minLength / minItems do not apply to
+    null, so `type: ["string", "null"]` + minLength would still let null in.
+    """
     prop = prop or {}
-    return prop.get("minLength", 0) >= 1 or prop.get("minItems", 0) >= 1
+    bound = {"string": "minLength", "array": "minItems"}.get(prop.get("type"))
+    return bound is not None and prop.get(bound, 0) >= 1
 
 
 def _schema_receivers() -> dict[str, dict]:
@@ -80,7 +87,7 @@ def _schema_receivers() -> dict[str, dict]:
                 assert len(req) == 1 and set(br) <= {"required", "properties"}, (
                     f"{name}.oneOf[{i}] is not {{'required': [k], 'properties': {{k: ...}}}}: {br}")
                 props = br.get("properties", {})
-                assert set(props) <= {req[0]} and set(props.get(req[0], {})) <= {"minLength"}, (
+                assert set(props) <= {req[0]} and set(props.get(req[0], {})) <= {"type", "minLength"}, (
                     f"{name}.oneOf[{i}].properties constrains something unmodelled: {props}")
                 group.append((req[0], _rejects_empty(props.get(req[0]))))
             groups.append(sorted(group))
@@ -131,12 +138,12 @@ def test_python_matches_schema(rtype, aspect):
 
 @pytest.mark.parametrize("rtype", sorted(SCHEMA))
 def test_schema_rejects_empty_like_python_and_go(rtype):
-    """Python and Go read "" as unset; the schema must too (minLength / minItems)."""
+    """Python and Go read "" and null as unset; the schema must too."""
     accepts_empty = [f for f, ok in {**SCHEMA[rtype]["required_rejects_empty"],
                                      **SCHEMA[rtype]["group_rejects_empty"]}.items() if not ok]
     assert not accepts_empty, (
         f"{rtype}: schema lets {accepts_empty} be empty, but Python and the Go guard "
-        "treat an empty value as unset — add minLength: 1 (minItems for arrays)")
+        "treat empty and null as unset — pin `type` and add minLength: 1 (minItems for arrays)")
 
 
 def test_group_fields_are_listed_optional():

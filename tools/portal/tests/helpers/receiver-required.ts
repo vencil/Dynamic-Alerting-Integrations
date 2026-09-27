@@ -13,8 +13,8 @@
  * another language's source. Read shape, identical in all three readers:
  *   `required` minus "type"                                  → required
  *   `oneOf` whose every branch is
- *     {"required": [k], "properties": {k: {"minLength": 1}}} → one group
- *   (minLength is required: "" counts as unset, as in Python and Go)
+ *     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}} → one group
+ *   (both are required: "" and null count as unset, as in Python and Go)
  * Any other presence keyword on a receiver definition throws (fail loud,
  * never read as "no constraint").
  */
@@ -48,10 +48,13 @@ export const RECEIVER_SPECS: Record<string, ReceiverSpec> = (() => {
         const shapeOk = br.required?.length === 1
           && Object.keys(br).every(key => key === 'required' || key === 'properties')
           && Object.keys(props).every(p => p === k)
-          && Object.keys(props[k] ?? {}).every(kw => kw === 'minLength');
-        if (!shapeOk) throw new Error(`${name}.oneOf[${i}] is not {"required": [k], "properties": {k: {"minLength": 1}}}`);
-        // Python and the Go guard read "" as unset; the branch must too.
-        if (!((props[k]?.minLength ?? 0) >= 1)) throw new Error(`${name}.oneOf[${i}]: ${k} lacks minLength >= 1`);
+          && Object.keys(props[k] ?? {}).every(kw => kw === 'type' || kw === 'minLength');
+        if (!shapeOk) throw new Error(`${name}.oneOf[${i}] is not {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}}`);
+        // Python and the Go guard read "" and null as unset; the branch must too.
+        // minLength does not apply to null, so the type must be pinned as well.
+        if (props[k]?.type !== 'string' || !((props[k]?.minLength ?? 0) >= 1)) {
+          throw new Error(`${name}.oneOf[${i}]: ${k} lacks type: string + minLength >= 1`);
+        }
         return k;
       }));
     }
@@ -81,7 +84,7 @@ export function findReceivers(doc: any, path: string[] = []): Array<{ path: stri
 export function receiverFieldProblems(receiver: any): string[] {
   const spec = RECEIVER_SPECS[receiver?.type];
   if (!spec) return [`<unknown type ${JSON.stringify(receiver?.type)}>`];
-  // An empty string counts as unset, as in the schema (minLength), Python and Go.
+  // "" and null count as unset, as in the schema, Python and Go.
   const isSet = (f: string) => f in receiver && receiver[f] !== '' && receiver[f] != null;
   const out = spec.required.filter(f => !isSet(f));
   for (const group of spec.exactlyOneOf) {

@@ -20,15 +20,18 @@ import (
 // The schema's presence contract per receiver definition is read as:
 //   - `required` minus "type"                          → Required
 //   - `oneOf` whose every branch is
-//     {"required": [k], "properties": {k: {"minLength": 1}}} → one ExactlyOneOf group
+//     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}},
+//     read as one ExactlyOneOf group
 //
 // Emptiness is part of the contract: this guard (matcherValuePresent)
-// and the Python pipeline treat "" as unset, as Alertmanager does (its
-// config is a Go struct, "" is the zero value). So every required field
-// must reject empty in the schema (minLength >= 1, or minItems >= 1 for
-// an array), and every exactly-one branch must carry minLength >= 1 —
-// without it, {service_key: "", routing_key: "r"} would match both
-// branches and the schema would reject what Go and Python accept.
+// and the Python pipeline treat "" and null as unset, as Alertmanager
+// does (its config is a Go struct; both decode to the zero value). So
+// every required field must reject "" and null in the schema (a single
+// type plus minLength >= 1, or minItems >= 1 for an array), and every
+// exactly-one branch must carry `type: string` + minLength >= 1 —
+// without them, {service_key: "", routing_key: "r"} or
+// {service_key: null, routing_key: "r"} would match both branches and
+// the schema would reject what Go and Python accept.
 //
 // Any other presence-shaping keyword on a receiver definition, or any
 // other branch shape, fails the test instead of being skipped: an
@@ -108,15 +111,20 @@ func sortedCopy(in []string) []string {
 	return out
 }
 
-// rejectsEmpty reports whether a property schema rejects an empty value.
+// rejectsEmpty reports whether a property schema rejects every value the
+// guard and Python read as unset: "" and null (and an empty array). It
+// needs the type pinned as well as the length bound — minLength /
+// minItems do not apply to null, so `type: ["string","null"]` +
+// minLength would still let null through.
 func rejectsEmpty(prop map[string]json.RawMessage) bool {
-	for _, kw := range []string{"minLength", "minItems"} {
-		var n float64
-		if raw, ok := prop[kw]; ok && json.Unmarshal(raw, &n) == nil && n >= 1 {
-			return true
-		}
+	var typ string
+	if json.Unmarshal(prop["type"], &typ) != nil { // absent, or a type list
+		return false
 	}
-	return false
+	kw := map[string]string{"string": "minLength", "array": "minItems"}[typ]
+	var n float64
+	raw, ok := prop[kw]
+	return kw != "" && ok && json.Unmarshal(raw, &n) == nil && n >= 1
 }
 
 func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
@@ -177,7 +185,7 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 			}
 			spec.Required = append(spec.Required, f)
 			if !rejectsEmpty(def.Properties[f]) {
-				t.Errorf("%s.%s is required but the schema accepts it empty (no minLength/minItems >= 1); the guard and Python treat empty as missing", name, f)
+				t.Errorf("%s.%s is required but the schema accepts it empty or null (needs a single type with minLength/minItems >= 1); the guard and Python treat both as missing", name, f)
 			}
 		}
 		if len(def.OneOf) > 0 {
@@ -198,13 +206,13 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 						t.Fatalf("definition %s oneOf[%d].properties must constrain exactly its required field %q", name, i, req[0])
 					}
 					for k := range props[req[0]] {
-						if k != "minLength" {
+						if k != "minLength" && k != "type" {
 							t.Fatalf("definition %s oneOf[%d].properties.%s uses %q, which this parity check does not model", name, i, req[0], k)
 						}
 					}
 				}
 				if !rejectsEmpty(props[req[0]]) {
-					t.Errorf("definition %s oneOf[%d]: %q lacks minLength >= 1, so an empty %q still matches this branch; the guard and Python treat empty as unset", name, i, req[0], req[0])
+					t.Errorf("definition %s oneOf[%d]: %q lacks `type: string` + `minLength >= 1`, so an empty or null %q still matches this branch; the guard and Python treat both as unset", name, i, req[0], req[0])
 				}
 				group = append(group, req[0])
 			}

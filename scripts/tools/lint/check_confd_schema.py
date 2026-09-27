@@ -158,6 +158,9 @@ def _explain(exc, validator) -> str:
             # The rule is the useful part; the raw oneOf message would only
             # restate the branch schemas.
             return f"invalid {rtype} receiver: {desc}" if rtype else desc
+    if err.validator == "type" and err.instance is None and err.path:
+        # A YAML key with no value (`from:`) — say that, not "None is not of type".
+        return f"'{err.path[-1]}' has no value (YAML null); expected {err.validator_value}"
     return err.message
 
 
