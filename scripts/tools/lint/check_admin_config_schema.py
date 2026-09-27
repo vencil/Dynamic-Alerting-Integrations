@@ -80,6 +80,10 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import (  # noqa: E402  (#2123 shared strict loader)
+    DuplicateKeyError, StrictSafeLoader, reject_equal_constructed_keys,
+    strict_safe_load_all,
+)
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
 _DEFAULT_SCHEMA_DIR = os.path.normpath(
@@ -147,37 +151,32 @@ def _navigate(doc: dict, key_path: tuple):
     return cur, None
 
 
-class _DuplicateKeyError(yaml.constructor.ConstructorError):
-    """A YAML mapping has a duplicate key. PyYAML's default loader silently keeps
-    the LAST value (`permissions: [read]` then `permissions: [admin]` → just
-    `[admin]`, no error), but the tenant-api Go parser (yaml.v3, strict) REJECTS
-    a duplicate key at load. So a duplicate key this lint accepted would pass CI
-    and then crash the manager at runtime (rbac is startup-fatal). We reject it
-    here to stay aligned with the strict parser (Gemini #1061 review)."""
+# Duplicate keys (#2123: folded into the shared strict loader). PyYAML's default
+# loader silently keeps the LAST value (`permissions: [read]` then
+# `permissions: [admin]` → just `[admin]`, no error), but the tenant-api Go
+# parser (yaml.v3, strict) REJECTS a duplicate key at load. So a duplicate key
+# this lint accepted would pass CI and then crash the manager at runtime (rbac
+# is startup-fatal) — Gemini #1061 review.
+#
+# `_lib_io.StrictSafeLoader` rejects what yaml.v3 rejects (same raw key text in
+# one mapping, anywhere in the document). This lint compared CONSTRUCTED keys
+# after merge-key flattening before #2123 (`true:` / `True:`, `1:` / `01:`, an
+# explicit key overriding a merged one), which is stricter than yaml.v3; that
+# stays too, so nothing refused before is accepted now.
+_DuplicateKeyError = DuplicateKeyError
 
 
-class _StrictSafeLoader(yaml.SafeLoader):
-    """SafeLoader that rejects duplicate mapping keys (fail-loud), matching Go
-    yaml.v3 instead of PyYAML's silent last-wins."""
+class _StrictSafeLoader(StrictSafeLoader):
+    """Shared strict loader + this lint's pre-#2123 constructed-key identity."""
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see above
+        self.flatten_mapping(node)  # keep default merge-key (<<) handling
+        reject_equal_constructed_keys(self, node.value, node, deep=deep)
+        return super().construct_mapping(node, deep=deep)
 
 
-def _construct_mapping_reject_dups(loader, node, deep=False):
-    loader.flatten_mapping(node)  # keep default merge-key (<<) handling
-    mapping: dict = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise _DuplicateKeyError(
-                "while constructing a mapping", node.start_mark,
-                f"found duplicate key {key!r} — PyYAML silently keeps the last "
-                f"value, but the strict tenant-api parser (yaml.v3) rejects it at "
-                f"load", key_node.start_mark)
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_StrictSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_reject_dups)
+def _load_all_strict(stream) -> list:
+    return list(strict_safe_load_all(stream, loader=_StrictSafeLoader))
 
 
 class _CallerError(Exception):
@@ -205,7 +204,7 @@ def validate_file(path: str, schema: dict, validator) -> list[str]:
     """
     try:
         with open(path, encoding="utf-8") as fh:
-            docs = list(yaml.load_all(fh, Loader=_StrictSafeLoader))
+            docs = _load_all_strict(fh)
     except _DuplicateKeyError as exc:
         # A duplicate key is a config VIOLATION the author fixes (exit 1), not an
         # environment error — and it is invisible without this loader (PyYAML
@@ -275,7 +274,7 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
     # string below; an unparseable one raises a CallerError (exit 2, blocks)
     # rather than passing.
     try:
-        outer_docs = list(yaml.load_all(raw, Loader=_StrictSafeLoader))
+        outer_docs = _load_all_strict(raw)
     except _DuplicateKeyError as exc:
         loc = exc.problem_mark
         where = f" (line {loc.line + 1})" if loc is not None else ""
@@ -315,7 +314,7 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
             # validation of a plain-RBAC block (that was the fail-open this closes).
             continue
         try:
-            inner_docs = list(yaml.load_all(embedded, Loader=_StrictSafeLoader))
+            inner_docs = _load_all_strict(embedded)
         except _DuplicateKeyError as exc:
             loc = exc.problem_mark
             at = f" line {loc.line + 1}" if loc is not None else ""

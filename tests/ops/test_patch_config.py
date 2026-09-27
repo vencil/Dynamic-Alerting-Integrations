@@ -855,28 +855,34 @@ class TestUnreadableKeyWithUndeclaredTenant:
 class TestReaderBounds:
 
     def test_duplicate_scan_visits_each_node_once(self, monkeypatch):
-        """alias 扇出（billion laughs）：每條邊只走一次，不隨路徑數爆炸。"""
-        levels = ["l0: &l0 [x, x, x, x, x, x, x, x, x, x]"] + [
+        """alias 扇出（billion laughs）：每個 node 只看一次，不隨路徑數爆炸。
+
+        #2123 起重複 key 檢查是 `_lib_io.find_duplicate_key`（共用）；
+        量的是它對每個 mapping node 呼叫 `duplicate_in_mapping` 的次數——
+        逐路徑走會是 10**6 次，逐 node 走等於相異 mapping node 數。
+        """
+        import _lib_io
+        levels = ["l0: &l0 {a: x, b: x}"] + [
             f"l{i}: &l{i} [{', '.join([f'*l{i - 1}'] * 10)}]" for i in range(1, 7)]
         text = "\n".join(levels) + "\n" + _T
-        nodes, edges, stack = set(), 0, [yaml.compose(text)]
+        seen, mappings, stack = set(), 0, [yaml.compose(text)]
         while stack:
             n = stack.pop()
-            if id(n) not in nodes:
-                nodes.add(id(n))
-                children = ([x for kv in n.value for x in kv]
-                            if isinstance(n, yaml.MappingNode)
-                            else n.value if isinstance(n, yaml.SequenceNode) else [])
-                edges += len(children)
-                stack += children
+            if id(n) in seen:
+                continue
+            seen.add(id(n))
+            if isinstance(n, yaml.MappingNode):
+                mappings += 1
+                stack += [x for kv in n.value for x in kv]
+            elif isinstance(n, yaml.SequenceNode):
+                stack += n.value
         visits = []
-        real = pc._refuse_duplicate_keys
-        monkeypatch.setattr(pc, "_refuse_duplicate_keys",
-                            lambda node, label, seen: visits.append(id(node))
-                            or real(node, label, seen))
+        real = _lib_io.duplicate_in_mapping
+        monkeypatch.setattr(_lib_io, "duplicate_in_mapping",
+                            lambda node: visits.append(id(node)) or real(node))
         pc.read_node(text, "t.yaml")
-        assert len(set(visits)) == len(nodes)
-        assert len(visits) == edges + 1  # one call per edge, not per path
+        assert len(set(visits)) == mappings
+        assert len(visits) == mappings  # one call per node, not per path
 
     def test_nesting_too_deep_is_a_shape_error(self):
         with pytest.raises(pc.ConfigMapShapeError, match="too deeply"):

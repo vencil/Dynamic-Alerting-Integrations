@@ -154,6 +154,11 @@ from _lib_python import (  # noqa: E402
     load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
     DOCS_SITE_BASE,
 )
+# #2123: conf.d files are read strictly — a key written twice in one mapping
+# is a YAML error (the exporter's yaml.v3 rejects the file), not last-wins.
+from _lib_io import (  # noqa: E402
+    StrictSafeLoader, load_yaml_file_strict, strict_safe_load,
+)
 
 # ============================================================
 # Check results
@@ -404,7 +409,9 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
             label = fpath_p.name
         try:
             with open(fpath, encoding="utf-8") as f:
-                loaded = yaml.safe_load(f)
+                # Strict (#2123): a duplicate key raises a YAMLError naming
+                # the line, and takes the syntax-error branch below.
+                loaded = strict_safe_load(f)
         except yaml.YAMLError as e:
             errors.append(f"{label}: {e}")
             unusable.append(label)
@@ -725,7 +732,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
-    profiles_raw = load_yaml_file(profiles_path, default={})
+    profiles_raw = load_yaml_file_strict(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -761,7 +768,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         if fname.startswith("_") or fname.startswith("."):
             continue
         fpath = str(fpath_p)
-        raw = load_yaml_file(fpath, default={})
+        raw = load_yaml_file_strict(fpath, default={})
         if not isinstance(raw, dict):
             continue
 
@@ -846,7 +853,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         # The read below is the operator's argv. The `_defaults.yaml` read
         # above is the customer's tree and stays a tree finding on purpose.
         try:
-            dsl_data = pe.load_yaml_file(policy_dsl_file)
+            dsl_data = pe.load_yaml_file_strict(policy_dsl_file)
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
             return _argv_error_row(
                 "policy_dsl",
@@ -966,7 +973,7 @@ def check_versions() -> dict[str, object]:
 # ============================================================
 # Check 9: Tenant declaration uniqueness (#1577)
 # ============================================================
-class _ExporterKeyLoader(yaml.SafeLoader):
+class _ExporterKeyLoader(StrictSafeLoader):
     """``SafeLoader``, except a mapping key is the scalar's RAW TEXT.
 
     ⛔ THIS IS NOT A STYLE CHOICE. ``yaml.safe_load`` and the exporter's
@@ -1001,11 +1008,11 @@ class _ExporterKeyLoader(yaml.SafeLoader):
       ``yaml.compose``: compose would report a tenant literally named ``<<``.
     * a ``null`` / ``~`` key is dropped — measured: Go drops it as well.
 
-    ⚠️ One measured residual, deliberately not closed here: Go **rejects** a
-    file that repeats the ``tenants:`` key (``mapping key "tenants" already
-    defined``) while PyYAML takes the last block. That is a whole-file parse
-    verdict, so it belongs to ``yaml_syntax``, not to this check — recorded so
-    the next reader does not have to re-measure it to find out it is known.
+    A key repeated in one mapping (``tenants:`` twice, one tenant id twice,
+    one threshold twice) is refused by the ``StrictSafeLoader`` base (#2123):
+    Go rejects the whole file (``mapping key "tenants" already defined``), so
+    such a file is unreadable here and ``yaml_syntax`` names it — this check
+    no longer takes PyYAML's last block as the file's declaration.
     """
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class

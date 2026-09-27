@@ -85,6 +85,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
+from _lib_io import DuplicateKeyError, strict_safe_load  # noqa: E402  (#2123)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -121,31 +122,6 @@ class ScoreToolBug(Exception):
 
 # ── tolerances loading（D5 機械化） ──────────────────────────────────
 
-def _reject_duplicate_keys(node) -> None:
-    """遞迴檢查 composed YAML node 樹的 mapping 有無重複 key（``yaml.safe_load``
-    靜默取最後、偷塞的重複 `critical:` 能悄悄抬高 D5 天花板；CodeRabbit #1045）。
-    走 ``yaml.compose`` 而非 ``yaml.load(Loader=子類)``——後者的 ``Loader=`` 值是
-    ast.Name（子類名），SAST heuristic（tests/shared/test_sast.py）只認 literal
-    ``*.SafeLoader`` Attribute node、會誤判子類為不安全；compose 只建 node 樹不構造
-    物件、本就安全，SAST 也只掃 ``yaml.load`` 不掃 compose。"""
-    if isinstance(node, yaml.MappingNode):
-        seen = set()
-        for key_node, _v in node.value:
-            k = getattr(key_node, "value", None)
-            if k in seen:
-                raise yaml.constructor.ConstructorError(
-                    None, None,
-                    f"重複 key {k!r}（會靜默覆蓋、D5 天花板可被繞）",
-                    key_node.start_mark)
-            seen.add(k)
-    for child in getattr(node, "value", []) or []:
-        if isinstance(child, tuple):
-            for n in child:
-                _reject_duplicate_keys(n)
-        elif isinstance(child, yaml.Node):
-            _reject_duplicate_keys(child)
-
-
 def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
     """載入 + schema 驗證 + 語義檢查（override≤ceiling / severity row 存在 /
     重複鍵 fail-loud）。回傳 {defaults, overrides(by alert_class), carve_outs(by
@@ -154,10 +130,14 @@ def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        composed = yaml.compose(text, Loader=yaml.SafeLoader)  # node 樹→重複 key 偵測
-        if composed is not None:
-            _reject_duplicate_keys(composed)
-        doc = yaml.safe_load(text)                             # SAST 認可的實際解析
+        # 重複 key 偵測走共用 strict loader（#2123；原本的 compose + 自寫遞迴
+        # 併入 `_lib_io`）：`yaml.safe_load` 靜默取最後、偷塞的重複
+        # `critical:` 能悄悄抬高 D5 天花板（CodeRabbit #1045）。
+        doc = strict_safe_load(text)
+    except DuplicateKeyError as exc:
+        raise ScoreInputError(
+            f"容差矩陣檔讀取失敗 {path}: 重複 key {exc.key!r}（會靜默覆蓋、"
+            f"D5 天花板可被繞）第 {exc.problem_mark.line + 1} 行") from exc
     except (OSError, yaml.YAMLError) as exc:
         raise ScoreInputError(f"容差矩陣檔讀取失敗 {path}: {exc}") from exc
     # 頂層形狀 code 層自驗（非 mapping YAML—`[]`/`42`/`null`—在寬鬆 --schema 下

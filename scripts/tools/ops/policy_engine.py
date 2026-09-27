@@ -70,6 +70,14 @@ except ImportError:
         parse_duration_seconds,
         safe_label,
     )
+# #2123: policy YAML is read strictly — a key written twice in one mapping is
+# a YAMLError (YamlFileError from the file reader), not PyYAML's last value.
+try:
+    from _lib_io import load_yaml_file_strict, strict_safe_load
+except ImportError:
+    from scripts.tools._lib_io import (  # type: ignore[no-redef]
+        load_yaml_file_strict, strict_safe_load,
+    )
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -157,7 +165,7 @@ def load_policies(source: str) -> list[PolicyRule]:
     Returns:
         PolicyRule 清單。
     """
-    return rules_from_policy_data(load_yaml_file(source))
+    return rules_from_policy_data(load_yaml_file_strict(source))
 
 
 def rules_from_policy_data(data: Any) -> list[PolicyRule]:
@@ -755,7 +763,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             with open(args.policy, encoding="utf-8") as f:
-                policy_data = yaml.safe_load(f)
+                policy_data = strict_safe_load(f)
         except OSError as e:
             problem = ("policy_file_unreadable",
                        f"cannot read {args.policy!r}: {e}",

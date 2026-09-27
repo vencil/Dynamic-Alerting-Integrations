@@ -540,7 +540,9 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # ---------------------------------------------------------------------------
 # Regression tripwire (derivation): every lib load site is guarded or wrapped
 # ---------------------------------------------------------------------------
-_LIB_ROOTS = {"load_yaml_file", "load_tenant_configs"}
+# `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
+# owe the same guard.
+_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python"}
 # Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on
 # the LAST attribute segment, so `yaml.error.YAMLError`, `_lib_io.YamlFileError`

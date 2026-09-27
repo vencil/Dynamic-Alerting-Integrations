@@ -55,6 +55,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
+from _lib_io import find_duplicate_key  # noqa: E402  (#2123 shared check)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_defaults_name,
@@ -229,7 +230,7 @@ def read_node(text, label, strict=True):
     try:
         root = next(yaml.compose_all(text or "", Loader=yaml.SafeLoader), None)
         if strict:
-            _refuse_duplicate_keys(root, label, set())
+            _refuse_duplicate_keys(root, label)
     except yaml.YAMLError as exc:
         raise _Unparseable(f"{label} does not parse as YAML: {exc}") from exc
     except RecursionError as exc:
@@ -237,24 +238,17 @@ def read_node(text, label, strict=True):
     return root
 
 
-def _refuse_duplicate_keys(node, label, seen):
-    if id(node) in seen:  # an alias is the same node object
-        return
-    seen.add(id(node))
-    children = []
-    if isinstance(node, yaml.MappingNode):
-        names = set()
-        for k, v in node.value:
-            if isinstance(k, yaml.ScalarNode):
-                if k.value in names:
-                    raise ConfigMapShapeError(
-                        f"{label} has the key {k.value!r} twice in one mapping.")
-                names.add(k.value)
-            children += [k, v]
-    elif isinstance(node, yaml.SequenceNode):
-        children = node.value
-    for child in children:
-        _refuse_duplicate_keys(child, label, seen)
+def _refuse_duplicate_keys(root, label):
+    """The shared YAML-standard check (#2123, `_lib_io.find_duplicate_key`:
+    yaml.v3's raw-key identity, every mapping under `root`), reported in this
+    tool's own words and exception class."""
+    hit = find_duplicate_key(root)
+    if hit is not None:
+        dup, first, _mapping = hit
+        key = dup.value if isinstance(dup, yaml.ScalarNode) else "<non-scalar>"
+        raise ConfigMapShapeError(
+            f"{label} has the key {key!r} twice in one mapping "
+            f"(lines {first.start_mark.line + 1} and {dup.start_mark.line + 1}).")
 
 
 def _entries(node, label, strict=True):
