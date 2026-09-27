@@ -629,8 +629,8 @@ tools:
   - reference
   - yaml
   desc:
-    en: Browse all YAML keys
-    zh: 瀏覽所有 YAML 鍵
+    en: Browse tenant-file YAML keys
+    zh: 瀏覽租戶檔 YAML 鍵
   related:
   - playground
   - glossary

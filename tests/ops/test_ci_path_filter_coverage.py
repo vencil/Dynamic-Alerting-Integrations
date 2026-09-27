@@ -3337,6 +3337,8 @@ def test_this_guard_is_not_itself_path_skippable() -> None:
 PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "tools/portal/**", "docs/assets/platform-data.json",
     "docs/assets/template-data.json", "docs/schemas/tenant-config.schema.json",
+    "scripts/tools/_lib_constants.py",
+    "components/threshold-exporter/app/internal/guard/routing.go",
     "rule-packs/threshold-registry.yaml", "rule-packs/ALERT-REFERENCE.md",
     "components/tenant-api/internal/rbac/testdata/wizard/**",
     "helm/**",
