@@ -566,8 +566,12 @@ REQUIRED_CHECK_NAMES = frozenset({
     "Validate Tenant Config & Routes",
     "Version Consistency",
     # docs-ci.yaml (#1398)
+    # ⚠️ "Check Documentation Links" is still REQUIRED by branch protection but
+    # is not listed: since #2107 it is reported by the unconditional
+    # `check-links` job itself, whose verdict no path filter decides (same as
+    # "HEAD Blob Hygiene"). Gating it again reds the path-gated set in
+    # test_ci_path_filter_coverage; move the name back here if that happens.
     "Validate Mermaid Diagrams",
-    "Check Documentation Links",
     "Check Documentation Front Matter",
     "Check Documentation Coverage",
     "MkDocs Build Verification",

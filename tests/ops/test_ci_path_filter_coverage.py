@@ -2050,7 +2050,6 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-e2e-bench-receiver"),
     ("ci.yml", "go-tests-bench-filter"),
     ("docs-ci.yaml", "validate-mermaid"),
-    ("docs-ci.yaml", "check-links"),
     ("docs-ci.yaml", "check-frontmatter"),
     ("docs-ci.yaml", "check-coverage"),
     ("docs-ci.yaml", "mkdocs-build"),
@@ -2095,7 +2094,7 @@ PINNED_STEP_INPUTS = {
     # version of this very comment said "two", which is the same slip the
     # INTERPRETERS block warns about — see its ⛔ note on why a maintainer who
     # trusts that count deletes the `./script` branch.
-    ("docs-ci.yaml", "check-links"): "scripts/tools/lint/check_doc_links.py",
+    ("docs-ci.yaml", "check-coverage"): "scripts/tools/dx/doc_coverage.py",
     ("validate.yaml", "validate-config"):
         "scripts/tools/ops/generate_alertmanager_routes.py",
 }
@@ -2118,8 +2117,6 @@ PINNED_STEP_INPUTS = {
 # come from that one sweep — each says where it came from; #2079 re-measured
 # every leg under strace, subprocesses included.
 TRACED_INDIRECT_INPUTS = {
-    # check-links: the waiver list decides what that required check ENFORCES.
-    ("docs-ci.yaml", "docs", ".doclinkignore"),
     # The Go legs (#1399): the `-exec` wrapper is an argument to `go test`,
     # not a command this scanner extracts; the glob matcher is imported by
     # go_test_reads.py; flaky-tests.yaml is read by ci_flake_retry.py.
