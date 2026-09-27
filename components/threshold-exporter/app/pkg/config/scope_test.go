@@ -55,6 +55,48 @@ func TestScopeEffective_ListsParseFailedFilesInScope(t *testing.T) {
 	}
 }
 
+// #2123 round 2: a decode failure met while resolving (a chain defaults file,
+// or a tenant file the walker accepted) is still an error of ScopeEffective,
+// with its historical text, but errors.As finds a *DecodeError naming the file.
+func TestScopeEffective_ResolveDecodeFailureIsADecodeError(t *testing.T) {
+	for _, tc := range []struct {
+		name, want, text string
+		tree             map[string]string
+	}{
+		{"defaults", "sub/_defaults.yaml", "parse defaults[1]:", map[string]string{
+			"conf.d/_defaults.yaml":     "defaults:\n  cpu: 70\n",
+			"conf.d/sub/_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
+			"conf.d/sub/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		}},
+		{"tenant", "tenant-b.yaml", "parse tenant:", map[string]string{
+			"conf.d/tenant-b.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			testutil.WriteTree(t, tmp, tc.tree)
+			_, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			var de *DecodeError
+			if !errors.As(err, &de) || de.Path != tc.want {
+				t.Fatalf("errors.As DecodeError = %v (path %q), want path %q; err=%v", de != nil, pathOf(de), tc.want, err)
+			}
+			if !strings.Contains(err.Error(), "resolve tenant") || !strings.Contains(err.Error(), tc.text) {
+				t.Errorf("error text changed: %v", err)
+			}
+		})
+	}
+}
+
+func pathOf(de *DecodeError) string {
+	if de == nil {
+		return ""
+	}
+	return de.Path
+}
+
 func TestScopeEffective_WholeTree(t *testing.T) {
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{

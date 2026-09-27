@@ -349,6 +349,59 @@ func TestRun_OnlyParseFailedFile_ExitsThreeNotVacuous(t *testing.T) {
 	}
 }
 
+// The two decode failures the walker cannot see (#2123 round 2): a
+// `_defaults.yaml` (never decoded by the walker, `_`-prefixed) with a
+// repeated key, and a tenant file whose repeated key sits under a top-level
+// field the walker's typed decode ignores but the effective-config merge
+// (into `any`) rejects. Both used to surface as a resolve error → exit 2
+// ("caller error"); they are the author's file to fix → exit 3, file named.
+func TestRun_DecodeFailureWhileResolving_ExitsThree(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, file string
+		tree       map[string]string
+	}{
+		{"defaults duplicate key", "_defaults.yaml", map[string]string{
+			"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n  cpu: 80\n",
+			"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		}},
+		{"duplicate key under an unknown top-level field", "tenant-b.yaml", map[string]string{
+			"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+			"conf.d/tenant-b.yaml":  "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, format := range []string{"md", "json"} {
+				tmp := t.TempDir()
+				testutil.WriteTree(t, tmp, tc.tree)
+				code, stdout, stderr := runOnce(t,
+					"--config-dir", filepath.Join(tmp, "conf.d"), "--format", format)
+				if code != exitParseFailed {
+					t.Fatalf("[%s] exit = %d, want %d. stdout=%q stderr=%q",
+						format, code, exitParseFailed, stdout, stderr)
+				}
+				if !strings.Contains(stderr, tc.file) {
+					t.Errorf("[%s] stderr should name %s: %q", format, tc.file, stderr)
+				}
+				if format == "json" {
+					var doc struct {
+						ParseFailed []string `json:"parse_failed"`
+					}
+					if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+						t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+					}
+					if len(doc.ParseFailed) != 1 || doc.ParseFailed[0] != tc.file {
+						t.Errorf("parse_failed = %v, want [%s]", doc.ParseFailed, tc.file)
+					}
+				} else if !strings.Contains(stdout, "`"+tc.file+"`") {
+					t.Errorf("report should name %s: %q", tc.file, stdout)
+				}
+			}
+		})
+	}
+}
+
 // Paired control: the broken file is OUTSIDE --scope, so it is not this
 // run's business — the empty scope stays the vacuous exit 0.
 func TestRun_ParseFailedFileOutsideScope_DoesNotCount(t *testing.T) {

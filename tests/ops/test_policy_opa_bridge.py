@@ -140,7 +140,7 @@ class TestLoadDefaults:
     def test_loads_dict(self, tmp_path, monkeypatch):
         f = tmp_path / "_defaults.yaml"
         f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(pob, "load_yaml_file",
+        monkeypatch.setattr(pob, "load_yaml_file_strict",
                             lambda p: {"mysql_connections": 80})
         assert pob.load_defaults(str(tmp_path)) == {"mysql_connections": 80}
 
@@ -158,7 +158,7 @@ class TestLoadDefaults:
     def test_non_dict_returns_empty(self, tmp_path, monkeypatch):
         f = tmp_path / "_defaults.yaml"
         f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(pob, "load_yaml_file", lambda p: ["list"])
+        monkeypatch.setattr(pob, "load_yaml_file_strict", lambda p: ["list"])
         assert pob.load_defaults(str(tmp_path)) == {}
 
 

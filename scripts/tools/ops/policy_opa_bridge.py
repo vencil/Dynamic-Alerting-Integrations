@@ -64,7 +64,6 @@ try:
         exit_on_yaml_file_error,
         format_json_report,
         load_tenant_configs,
-        load_yaml_file,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
@@ -72,8 +71,14 @@ except ImportError:
         exit_on_yaml_file_error,
         format_json_report,
         load_tenant_configs,
-        load_yaml_file,
     )
+# #2123: `_defaults.yaml` is read strictly — a key written twice in one
+# mapping raises YamlFileError (rc 2 via exit_on_yaml_file_error, the path a
+# syntax error already takes) instead of sending OPA PyYAML's last value.
+try:
+    from _lib_io import load_yaml_file_strict
+except ImportError:
+    from scripts.tools._lib_io import load_yaml_file_strict  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -126,7 +131,7 @@ def load_defaults(config_dir: str) -> dict[str, Any]:
     defaults_path = resolve_defaults_file(config_dir, tool="policy_opa_bridge")
     if not defaults_path.is_file():
         return {}
-    data = load_yaml_file(str(defaults_path))
+    data = load_yaml_file_strict(str(defaults_path))
     if isinstance(data, dict):
         return data
     return {}

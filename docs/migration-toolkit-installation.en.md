@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` a config file in scope is rejected by the exporter's decode (the report names it; fix it and re-run). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
+Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` a config file in scope (or a `_defaults.yaml` in a tenant's chain) fails the YAML decode (the report names it; fix it and re-run). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
 
 ---
 

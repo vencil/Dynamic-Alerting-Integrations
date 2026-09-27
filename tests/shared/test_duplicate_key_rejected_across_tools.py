@@ -70,12 +70,24 @@ _TOOLS = {
     "assemble_config_dir_validate": ("ops/assemble_config_dir.py",
                                      ["--sources", "{d}", "--output", "{out}/asm", "--validate"],
                                      True, False),
+    # --dry-run: stops at the OPA input document, no OPA needed.
+    "policy_opa_bridge": ("ops/policy_opa_bridge.py", ["--config-dir", "{d}", "--dry-run"],
+                          True, False),
+    "offboard_tenant_precheck": ("ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{d}"],
+                                 True, False),
+}
+
+# A tool whose (rc, file named) is the same for a clean tree and a syntax
+# error — its pre-check names every file and exits 0 either way — is told
+# apart by the marker its "cannot read this file" line prints.
+_UNREADABLE_MARKER = {
+    "offboard_tenant_precheck": "無法讀取",
 }
 
 
 @functools.lru_cache(maxsize=None)
-def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool]:
-    """(exit code, names the broken file?) for one tool on one tree."""
+def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool, bool]:
+    """(exit code, names the broken file?, prints its unreadable marker?)."""
     script, argv, _reads_defaults, policy = _TOOLS[tool]
     defaults = _DEFAULTS + (_POLICY if policy else "")
     tenant = _TENANT
@@ -93,8 +105,10 @@ def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool]:
             + [a.format(d=d, out=tmp) for a in argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             cwd=tmp, timeout=180)
-    named = ("tenant-a.yaml" if target == "tenant" else "_defaults.yaml") in (r.stdout + r.stderr)
-    return r.returncode, named
+    out = r.stdout + r.stderr
+    named = ("tenant-a.yaml" if target == "tenant" else "_defaults.yaml") in out
+    marker = _UNREADABLE_MARKER.get(tool)
+    return r.returncode, named, bool(marker) and marker in out
 
 
 _CASES = (
@@ -113,7 +127,7 @@ def test_a_duplicate_key_takes_the_syntax_error_path(tool, target, variant):
         f"({syntax}) — the tool does not read that file, so this row proves nothing")
     got = _outcome(tool, target, variant)
     assert got == syntax, (
-        f"{tool}: a duplicate key ({variant} in {target}) gave (rc, file named) = "
+        f"{tool}: a duplicate key ({variant} in {target}) gave (rc, file named, marker) = "
         f"{got}; a syntax error in the same file gives {syntax}, the clean tree {clean}. "
         f"A key written twice is invalid YAML — the exporter rejects the file — so "
         f"the tool must refuse it the way it refuses bad syntax (#2123).")

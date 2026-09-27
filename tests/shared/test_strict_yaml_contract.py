@@ -17,8 +17,10 @@ Derivation, not a list of tools (#2033 R′ rejected enumeration):
   directory — by the enumeration contract's own classifier
   (`test_confd_enumeration_contract._call_kind`), or by a function that
   itself contains such an enumeration (derived from the `_lib_*.py` modules
-  and the file itself), or by a local name assigned from one — or in a
-  module-local function that loop body calls (one hop).
+  and the file itself), or by a local name whose assignment reaches one
+  through any chain of assignments in the same function (a fixpoint:
+  `entries = sorted(d.iterdir())` → `paths = [p for p in entries …]` taints
+  both) — or in a module-local function that loop body calls (one hop).
 * **Residual** — `LENIENT_BY_DESIGN`: the files the predicate flags that
   are not judging a tenant conf.d, each with the reason. Two-way equality,
   like `FLAT_OUTSIDE_POPULATION`: a new flagged file is red until a human
@@ -29,9 +31,11 @@ Derivation, not a list of tools (#2033 R′ rejected enumeration):
 a parse reached through two or more calls from the loop; a file list built
 in one function and parsed in another it is passed to (`describe_tenant`'s
 `_iter_confd_yaml(entries, …)` — migrated, but by hand, not because this
-gate would see it); a single `_defaults.yaml` read outside any loop
-(`gitops_check`, `policy_engine` — migrated by hand too); readers outside
-the population. Those tools' behaviour is pinned by
+gate would see it); a name tainted by augmented / tuple / walrus assignment
+or by a `for` target (only plain `name = …` propagates); a single
+`_defaults.yaml` read outside any loop (`gitops_check`, `policy_engine`,
+`policy_opa_bridge` — migrated by hand too); readers outside the
+population. Those tools' behaviour is pinned by
 `test_duplicate_key_rejected_across_tools.py` instead.
 """
 from __future__ import annotations
@@ -144,9 +148,19 @@ def lenient_reads_in_confd_loops(tree: ast.AST, lib_enums: frozenset[str]) -> li
     enums = set(lib_enums) | _enumerating_functions(tree)
     hits: set[str] = set()
     for fn in funcs.values():
-        tainted = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
-                   and _enumerates(n.value, enums, set())
-                   for t in n.targets if isinstance(t, ast.Name)}
+        # Fixpoint: `entries = sorted(d.iterdir())` then
+        # `paths = [p for p in entries if …]` taints both names — one pass
+        # saw only the first, and offboard_tenant's loop over the second
+        # slipped by (#2123 round-2 blind review).
+        assigns = [n for n in ast.walk(fn) if isinstance(n, ast.Assign)]
+        tainted: set[str] = set()
+        while True:
+            grown = tainted | {t.id for n in assigns
+                               if _enumerates(n.value, enums, tainted)
+                               for t in n.targets if isinstance(t, ast.Name)}
+            if grown == tainted:
+                break
+            tainted = grown
         for loop in ast.walk(fn):
             if isinstance(loop, (ast.For, ast.AsyncFor)):
                 if not _enumerates(loop.iter, enums, tainted):
@@ -224,6 +238,11 @@ _CAUGHT = {
         "import yaml\nfrom _lib_confd import list_config_tree\n"
         "def scan(d):\n    listed = list_config_tree(d).files\n"
         "    for p in listed:\n        yaml.safe_load_all(open(p))\n"),
+    "loop_over_a_name_two_assignments_away": (
+        "import yaml\n"
+        "def scan(d):\n    entries = sorted(d.iterdir())\n"
+        "    yaml_paths = [p for p in entries if p.is_file()]\n"
+        "    for p in yaml_paths:\n        yaml.safe_load(open(p))\n"),
     "comprehension": (
         "import yaml, os\n"
         "def scan(d):\n    return [yaml.safe_load(open(n)) for n in os.listdir(d)]\n"),

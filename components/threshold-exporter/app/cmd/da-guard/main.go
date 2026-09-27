@@ -31,11 +31,18 @@
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
 //	2  caller error (bad flags, missing/invalid path, IO failure)
-//	3  a config file in scope is rejected by the exporter's decode
-//	   (invalid YAML, a key written twice in one mapping, a value of
-//	   the wrong type): the exporter skips that file, so its tenants
-//	   were never checked. The report names the files (relative to
+//	3  a config file in scope — or a `_defaults.yaml` in an in-scope
+//	   tenant's chain — fails the YAML decode (invalid YAML, a key
+//	   written twice in one mapping, a value of the wrong type), so the
+//	   tenants depending on it were never checked. The report names the files (relative to
 //	   --config-dir); the author fixes them and re-runs (#2123).
+//	   Two sources: tenant files the walker's decode rejects (all of
+//	   them are listed, the readable tenants are still checked), and a
+//	   file that fails the decode while a tenant is being resolved — a
+//	   `_defaults.yaml` in its chain, or a tenant file whose repeated
+//	   key sits under a field the walker's typed decode ignores. The
+//	   second kind stops the run before any tenant is checked, and the
+//	   report names that one file (config.DecodeError).
 //
 // 3 wins over 1: findings computed over a tree with a skipped file
 // describe only part of it, so "fix the file first" is the one
@@ -49,6 +56,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -134,7 +142,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
-			"  3  a config file in scope is rejected by the exporter's decode (fix it, re-run)\n")
+			"  3  a config file in scope, or a _defaults.yaml in a tenant's chain, fails the\n"+
+			"     YAML decode; the report names it (fix it, re-run)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -189,6 +198,18 @@ func run(args []string, stdout, errOut io.Writer) int {
 	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+		// #2123: a resolve failure that is one file failing the decode (a
+		// `_defaults.yaml` in the chain, or a tenant file the walker accepted
+		// but the merge rejects) is the author's to fix — exit 3, not 2.
+		var de *config.DecodeError
+		if errors.As(err, &de) {
+			if werr := writeDecodeStopReport(stdout, errOut, f, de); werr != nil {
+				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
+				return exitCallerErr
+			}
+			reportParseFailed(errOut, []string{de.Path})
+			return exitParseFailed
+		}
 		return exitCallerErr
 	}
 
@@ -488,6 +509,48 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) 
 		return fmt.Errorf("write --output %q: %w", abs, err)
 	}
 	fmt.Fprintf(errOut, "%s: wrote empty-scope report to %s\n", programName, abs)
+	return nil
+}
+
+// writeDecodeStopReport is the report for a run that stopped while resolving
+// the scope because one file failed the decode (#2123, exit 3). No tenant was
+// checked: ScopeEffective fails the whole scope on the first such file, so
+// the list names that file only — fix it and re-run to see the next one.
+func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError) error {
+	files := []string{de.Path}
+	var body string
+	switch f.format {
+	case "md":
+		body = parseFailedMarkdown(files) +
+			"## Dangling Defaults Guard\n\n" +
+			"_Stopped before checking any tenant: resolving the scope hit the file above " +
+			"(`" + de.Err.Error() + "`). The run stops at the first such file; fix it and re-run._\n"
+	case "json":
+		b, err := json.MarshalIndent(map[string]any{
+			"config_dir":   f.configDir,
+			"scope":        f.scopeDir,
+			"source_files": []string{},
+			"parse_failed": files,
+			"error":        de.Err.Error(),
+			"report":       nil,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode JSON report: %w", err)
+		}
+		body = string(b) + "\n"
+	}
+	if f.output == "" {
+		_, err := io.WriteString(stdout, body)
+		return err
+	}
+	abs, err := filepath.Abs(f.output)
+	if err != nil {
+		return fmt.Errorf("resolve --output %q: %w", f.output, err)
+	}
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		return fmt.Errorf("write --output %q: %w", abs, err)
+	}
+	fmt.Fprintf(errOut, "%s: wrote report to %s\n", programName, abs)
 	return nil
 }
 

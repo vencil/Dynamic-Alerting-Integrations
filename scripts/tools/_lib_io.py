@@ -138,7 +138,11 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
 # enforce it: `safe_load` keeps the LAST value and says nothing. The
 # exporter's `gopkg.in/yaml.v3` does enforce it and rejects the whole file
 # (`mapping key "x" already defined at line N`), so a tool that judges a
-# conf.d with `safe_load` passes a file the exporter will not serve.
+# conf.d with `safe_load` passes a file the exporter will not serve. Not in
+# every position: yaml.v3 decoding into the exporter's typed config skips a
+# field it does not know, repeated keys under it included, and reads only
+# the first document. That is exporter semantics (#2033 R′: not modelled);
+# the error message below therefore states the YAML rule only.
 #
 # ⛔ This is the YAML standard, not a model of the exporter. The ONE thing
 # mirrored from yaml.v3 is key identity, because the standard leaves the
@@ -187,8 +191,7 @@ class DuplicateKeyError(yaml.constructor.ConstructorError):
         super().__init__(
             "while constructing a mapping", context_mark,
             f"found duplicate key {self.key!r} (first defined at line "
-            f"{self.first_line}); YAML does not allow a key twice in one "
-            f"mapping, and a strict reader (yaml.v3) rejects the file",
+            f"{self.first_line}); YAML does not allow duplicate mapping keys",
             dup.start_mark)
 
 

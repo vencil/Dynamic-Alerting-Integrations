@@ -230,6 +230,17 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
 	merged, mergedDefaults, tenantRaw, sources, err := computeEffectiveConfigBytesDetailed(tenantBytes, tenantID, defaultsYAML, overlay)
 	if err != nil {
+		// #2123: name the file whose bytes the decode rejected, so a caller
+		// can tell "this file is broken" from any other resolve failure
+		// (errors.As *DecodeError). The text is unchanged.
+		var cpe *chainParseError
+		var tpe *tenantParseError
+		switch {
+		case errors.As(err, &cpe) && cpe.index < len(chain):
+			return nil, &DecodeError{Path: r.rel(chain[cpe.index]), Err: err}
+		case errors.As(err, &tpe):
+			return nil, &DecodeError{Path: r.rel(tenantFile), Err: err}
+		}
 		return nil, err
 	}
 
@@ -377,7 +388,7 @@ func mergeDefaultsChain(chain []ChainDefaults) (map[string]any, error) {
 // cannot differ.
 func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]any, error) {
 	if pd.err != nil {
-		return nil, fmt.Errorf("parse defaults[%d]: %w", i, pd.err)
+		return nil, &chainParseError{index: i, err: pd.err}
 	}
 	if pd.block == nil {
 		return merged, nil
@@ -391,7 +402,7 @@ func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]an
 func mergeTenantOver(merged map[string]any, tenantYAMLBytes []byte, tenantID string, overlay []PlatformBlock) (out, tenantRaw map[string]any, sources []PlatformOverlaySource, err error) {
 	var tenantDoc any
 	if err := yaml.Unmarshal(tenantYAMLBytes, &tenantDoc); err != nil {
-		return nil, nil, nil, fmt.Errorf("parse tenant: %w", err)
+		return nil, nil, nil, &tenantParseError{err: err}
 	}
 	tenantRaw, err = extractTenantRaw(normalizeYAMLToJSON(tenantDoc), tenantID)
 	if err != nil {

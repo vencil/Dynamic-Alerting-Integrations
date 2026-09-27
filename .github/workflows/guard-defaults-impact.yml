@@ -581,12 +581,13 @@ jobs:
               ;;
             3)
               # #2123: an author-fixable failure, not an unexpected code. The
-              # exporter rejects a conf.d file in scope (invalid YAML, a key
-              # written twice in one mapping, a value of the wrong type) and
-              # skips it, so no tenant in it was checked. WORST is the max
+              # conf.d file in scope, or a _defaults.yaml in a tenant's chain,
+              # fails the YAML decode (invalid YAML, a key written twice in one
+              # mapping, a value of the wrong type), so the tenants depending
+              # on it were not checked. WORST is the max
               # over trees, so another tree's 1 or 2 is in the PR comment's
               # per-tree "exit N" headings.
-              echo "::error::da-guard exit 3: a conf.d file in scope is rejected by the exporter's YAML decode and was skipped, so its tenants were NOT checked. The PR comment lists the files under 'Files the exporter cannot parse' — fix them and push again."
+              echo "::error::da-guard exit 3: a conf.d file in scope (or a _defaults.yaml in a tenant's chain) fails the YAML decode, so the tenants depending on it were NOT checked. The PR comment lists the files under 'Files the exporter cannot parse' — fix them and push again. If this run also printed other ::error:: lines (e.g. from guard_defaults_scopes.py, the producer), look at those first: WORST keeps only the highest code."
               exit 1
               ;;
             *)

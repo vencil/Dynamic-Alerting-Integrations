@@ -2,6 +2,44 @@ package config
 
 import "fmt"
 
+// DecodeError is a resolve failure caused by one file's bytes failing the
+// YAML decode (#2123): invalid YAML, a key written twice in one mapping —
+// including under a key the exporter's typed ThresholdConfig does not know,
+// which the walker's decode accepts and the effective-config merge (into
+// `any`) rejects — or a defaults file in the tenant's chain that does not
+// parse (`_`-prefixed files are never decoded by the walker, so
+// TreeFile.ParseFailed cannot name them).
+//
+// Error() is Err's text unchanged — `parse defaults[i]: …` / `parse tenant:
+// …`, which package main maps back to a file by that text — so wrapping
+// changes no message; Path is the file relative to the scan root, slash-
+// separated. Detect with errors.As; Unwrap keeps the yaml error reachable.
+type DecodeError struct {
+	Path string
+	Err  error
+}
+
+func (e *DecodeError) Error() string { return e.Err.Error() }
+func (e *DecodeError) Unwrap() error { return e.Err }
+
+// chainParseError / tenantParseError carry which input of a byte-level merge
+// failed to decode, so the resolver (which knows the paths) can build a
+// DecodeError. Their text is the historical fmt.Errorf wording, verbatim.
+type chainParseError struct {
+	index int
+	err   error
+}
+
+func (e *chainParseError) Error() string {
+	return fmt.Sprintf("parse defaults[%d]: %s", e.index, e.err.Error())
+}
+func (e *chainParseError) Unwrap() error { return e.err }
+
+type tenantParseError struct{ err error }
+
+func (e *tenantParseError) Error() string { return "parse tenant: " + e.err.Error() }
+func (e *tenantParseError) Unwrap() error { return e.err }
+
 // DuplicateTenantError signals that the same tenant ID was discovered in two
 // different files during a directory scan. This is a misconfig (e.g. forgot
 // to delete the old flat copy after `git mv` to the nested layout) that the
