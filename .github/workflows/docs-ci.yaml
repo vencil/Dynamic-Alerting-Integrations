@@ -1,7 +1,6 @@
 # docs-ci.yaml — Documentation CI/CD Pipeline
 #
-# Validates and renders documentation on every PR that touches docs/**/*.md
-# or rule-packs/**/*.md.
+# Validates and renders documentation.
 #
 # The workflow itself triggers on EVERY pull_request to main (no top-level
 # `paths:` filter) — only individual jobs are gated, via the detect-changes
@@ -15,14 +14,13 @@
 # own `if:`, by contrast, reports `skipped` — which also satisfies the
 # requirement, and that is the opposite problem: when detect-changes itself
 # fails, every gated job skips and the PR merges having checked nothing
-# (#1398). So the required NAMES belong to the `*-gate` jobs at the end of
-# this file, which always run and fail unless their leg succeeded or was
-# skipped because detect-changes said it was not needed; the legs themselves
-# are named `… — run`. See detect-changes below.
+# (#1398). So the required NAMES of gated legs belong to the `*-gate` jobs at
+# the end of this file, which always run and fail unless their leg succeeded
+# or was skipped because detect-changes said it was not needed; the legs
+# themselves are named `… — run`. check-links is not gated and carries its
+# required name directly (#2107). See detect-changes below.
 #
-# head-blob-hygiene is the one job that intentionally stays unconditional
-# (see its own comment) — it's meant to catch historical blob corruption on
-# every push regardless of whether a given PR touches docs/.
+# A job with no `if:` is unconditional on purpose; its own comment says why.
 #
 # Jobs:
 #   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
@@ -107,30 +105,27 @@ jobs:
               - "scripts/tools/lint/**/*.sh"
               # i4-runbook-smoke-test verifies its tool downloads with it.
               - "scripts/ops/_verify_download.sh"
-              # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
+              # ⛔ Inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
               # tests/ops/test_ci_path_filter_coverage.py documents it
               # CANNOT see, so this group is maintained by measurement, not by
               # review: every `python … .py` command in every gated leg of this
               # workflow was replayed under an open()/read_text recorder, and
               # these are the tracked files that came back uncovered.
-              #   * .doclinkignore — check_doc_links.py (`check-links`) loads it
-              #     to decide which link failures are WAIVED, so editing it alone
-              #     changes what that required check enforces while skipping it.
               #   * scripts/tools/lint/mkdocs-anchor-debt.txt — the ledger
               #     `mkdocs-build` passes or fails on, compared as a SET in BOTH
               #     directions (`comm -13` then `comm -23`), so deleting a line
               #     is as fatal as adding one. It landed 2026-08-08 (c33508d2)
               #     already outside this filter: the `**/*.sh` entry above covers
               #     the script but not its data file.
-              #   * components/threshold-exporter/README.md — read by
-              #     check_doc_links.py; nothing else here reaches it.
+              #   * components/threshold-exporter/README.md — `drift-checks`
+              #     (validate_all `versions` → validate_docs_versions.py)
+              #     checks its chart version; a wrong one reds it (#2107).
               # ⚠️ The sweep is in-process, so it under-reports any leg that
               # fans out through subprocess — `drift-checks` (validate_all.py,
               # which shells out) is the one that does. Its inputs are NOT
               # established by this measurement. #2079 re-ran every leg under
               # strace (subprocesses included); its per-leg results are there.
-              - ".doclinkignore"
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"
               - "components/threshold-exporter/README.md"
               # The mkdocs hook `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
@@ -140,7 +135,7 @@ jobs:
               # raising at import). ⚠️ Only this file is pinned: a new hook
               # added to `hooks:` needs its own line here.
               - "scripts/mkdocs/rule_packs_bridge.py"
-              # ⛔ The pin SSOT six of this workflow's gated jobs INSTALL FROM
+              # ⛔ The pin SSOT most of this workflow's gated jobs INSTALL FROM
               # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
               # not a file any doc check reads, which is why no "does a test
               # read it?" review ever caught it. `mkdocs-build` installs the
@@ -159,7 +154,7 @@ jobs:
               # i.e. main goes red for everyone instead of the PR going red for
               # its author.
               #
-              # Accepted cost: `docs` is ONE filter gating eight jobs, so a pin
+              # Accepted cost: `docs` is ONE filter gating every leg, so a pin
               # bump now also runs the two that do not install from it —
               # doc-line-count and i4-runbook-smoke-test (whose three curl
               # downloads are a network-flake surface). Worth
@@ -227,10 +222,16 @@ jobs:
           python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 
   check-links:
-    name: Check Documentation Links — run
+    name: Check Documentation Links
     runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
+    # ⛔ Unconditional on purpose (#2107), and it reports the required name
+    # itself — no gate job. Its input set is every Markdown file plus every
+    # link target, wherever it lives; no path filter can express that, so a
+    # PR that only deleted or renamed a linked non-doc file skipped this leg
+    # and merged a broken link. Same reasoning as the `python` catch-all in
+    # ci.yml. Re-adding an `if:` reds test_ci_path_filter_coverage's
+    # path-gated set. Accepted cost: every PR now pays checkout + pip, and a
+    # network flake there reds this required check.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -266,6 +267,8 @@ jobs:
 
   head-blob-hygiene:
     name: HEAD Blob Hygiene
+    # Unconditional: historical blob corruption must be caught on every push,
+    # whether or not a given PR touches docs/.
     # Scans every committed blob in HEAD for corruption the staged-file
     # hygiene hook cannot retroactively fix:
     #   - NUL bytes (e.g. the architecture-quiz.jsx regression) — always fatal
@@ -588,38 +591,6 @@ jobs:
             exit 0
           fi
           echo "::error::validate-mermaid did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  check-links-gate:
-    name: Check Documentation Links
-    runs-on: ubuntu-latest
-    permissions: {}
-    needs: [detect-changes, check-links]
-    # The REQUIRED check (#1398). `check-links` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
-    if: always()
-    steps:
-      - name: Verify the link check succeeded (or was path-skipped as not needed)
-        env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
-          RUN_RESULT: ${{ needs.check-links.result }}
-        run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
-          echo "check-links: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
-            exit 0
-          fi
-          echo "::error::check-links did not succeed (result=$RUN_RESULT)"
           exit 1
 
   check-frontmatter-gate:
