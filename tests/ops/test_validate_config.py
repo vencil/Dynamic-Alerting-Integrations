@@ -2266,30 +2266,9 @@ class TestTenantIdParity:
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
 
-    def test_the_loader_cannot_construct_python_objects(self):
-        """⛔ The safety property, measured — not the spelling of the call.
-
-        The custom loader exists to change how mapping KEYS are read; it must
-        not have widened what YAML is allowed to construct.
-
-        ⛔ No static check answers that. dev-rules §5 item 4 is enforced by
-        bandit B506, which reads how the loader is NAMED, not what it can
-        construct — a ``SafeLoader`` subclass is indistinguishable to it from
-        ``yaml.UnsafeLoader``, and a directly constructed loader (what
-        ``_load_with_exporter_keys`` does) is outside its predicate entirely.
-        This test is the only thing pinning the property; it feeds the real
-        payload. See the block at rule 4 in ``tests/shared/test_sast.py``."""
-        import io
-
-        assert issubclass(vc._ExporterKeyLoader, yaml.SafeLoader)
-        payload = "tenants:\n  t: !!python/object/apply:os.system ['echo pwned']\n"
-        with pytest.raises(yaml.YAMLError):
-            vc._load_with_exporter_keys(io.StringIO(payload))
-        # Must-still-work control: an ordinary document still loads, so the
-        # assertion above cannot be satisfied by a loader that refuses
-        # everything.
-        ok = vc._load_with_exporter_keys(io.StringIO("tenants:\n  t: {a: 1}\n"))
-        assert ok == {"tenants": {"t": {"a": 1}}}, ok
+    # #2114: `test_the_loader_cannot_construct_python_objects` moved with the
+    # loader to `tests/shared/test_tenant_id_yaml_spelling_parity.py` — the
+    # ONE exporter-key loader now lives in `scripts/tools/_lib_yaml_keys.py`.
 
     def test_a_defaults_carrier_declaring_a_tenant_is_still_not_a_declaration(
             self, tmp_path):

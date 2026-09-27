@@ -28,7 +28,12 @@
     "subdirectory has dedup null while it still EXISTS for platform-file purposes.",
     "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",
     "c3 TX.yaml / 0tx.yaml served 60 (tx.yaml 70); c2-c5 tx.yaml gave dedup",
-    "enable (TX.yaml / 0tx.yaml disable)."
+    "enable (TX.yaml / 0tx.yaml disable).",
+    "#2114 rows (numeric / octal-looking / YAML-1.1-bool-looking tenant key):",
+    "the tenant id is the key's source TEXT on every plane, so an unquoted",
+    "`010:` / `yes:` in the platform file and a quoted one in the tenant file",
+    "are one tenant. Each platform block sets `_severity_dedup: disable` so the",
+    "Python `dedup` column can see a missed platform value (enable = missed)."
   ],
   "trees": [
     {
@@ -683,24 +688,88 @@
     {
       "name": "numeric-tenant-key-in-the-platform-file",
       "files": {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  123:\n    mysql_connections: \"60\"\n",
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  123:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n",
         "t123.yaml": "tenants:\n  \"123\": {}\n"
       },
       "expect": {
         "123": {
           "metric": 60,
-          "dedup": "enable",
+          "dedup": "disable",
           "group_wait": null,
-          "exporter_dedup": "enable",
+          "exporter_dedup": "disable",
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "_severity_dedup": "disable",
               "mysql_connections": "60"
             },
             "platform_overlay": [
               {
                 "file": "_defaults.yaml",
                 "keys": [
+                  "_severity_dedup",
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "octal-looking-tenant-key-in-the-platform-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  010:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n",
+        "t010.yaml": "tenants:\n  \"010\": {}\n"
+      },
+      "expect": {
+        "010": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_severity_dedup": "disable",
+              "mysql_connections": "60"
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "_severity_dedup",
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "yaml11-bool-looking-tenant-key-in-the-platform-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  yes:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n",
+        "tyes.yaml": "tenants:\n  \"yes\": {}\n"
+      },
+      "expect": {
+        "yes": {
+          "metric": 60,
+          "dedup": "disable",
+          "group_wait": null,
+          "exporter_dedup": "disable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_severity_dedup": "disable",
+              "mysql_connections": "60"
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "_severity_dedup",
                   "mysql_connections"
                 ]
               }

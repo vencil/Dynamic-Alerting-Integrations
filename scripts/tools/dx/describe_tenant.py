@@ -154,11 +154,27 @@ def _load_first_document(path: Path) -> Any:
     the generator is never advanced past the first one. Before #2019 a
     multi-document tenant file (`tenants: …` then `---`) killed the whole
     run with ComposerError while the exporter served its tenants.
+
+    Mapping keys are the scalar's source TEXT (#2114), as yaml.v3 decodes
+    them into the exporter's `map[string]…`: `010:` is tenant "010" and
+    `yes:` is "yes", not PyYAML's 8 / True. Values keep PyYAML's types.
+    Same pure-Python parser as before.
     """
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
+    # Lazy: this module imports without PyYAML (the RuntimeError above).
+    from _lib_yaml_keys import load_first_document_exporter_keys
     with open(path, "r", encoding="utf-8") as f:
-        return next(yaml.safe_load_all(f), None)
+        return load_first_document_exporter_keys(f, pure=True)
+
+
+def _load_platform_doc(path: Path) -> Any:
+    """`path` as ONE document with source-text keys (#2114) — `_load_yaml`'s
+    read (single document, pure parser) for the `--what-if` file's
+    `tenants:` block, so its ids match the tenant files'."""
+    from _lib_yaml_keys import load_exporter_keys  # lazy, see _load_first_document
+    with open(path, "r", encoding="utf-8") as f:
+        return load_exporter_keys(f, pure=True) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
@@ -213,14 +229,13 @@ def _platform_tenant_blocks(doc: Any) -> dict:
 
 
 def _tenant_id(tid: Any) -> str:
-    """A tenant id as the exporter reads it: a string.
+    """A tenant id as the exporter reads it: the key's source text.
 
-    PyYAML turns an unquoted `123:` key into the int 123, while yaml.v3
-    decodes the same key into Go's `map[string]…` as "123" — so a tenant
-    file and a platform file naming tenant 123 must both land on "123" here
-    or they never meet. ⚠️ `str()` of the decoded value, not the source
-    text: spellings PyYAML re-reads as another number or a bool (`0123`,
-    `1.50`, `true`) still come out differently from Go's verbatim key.
+    Every document this module takes tenant ids from is read through
+    `_load_first_document` / `_load_platform_doc`, whose keys already ARE
+    the source text (#2114) — `0123:`, `1.50:`, `true:` come out verbatim,
+    as yaml.v3 keys them. The `str()` fallback is only for a document a
+    caller built itself; it is lossy (`str()` of PyYAML's 83 is not "0123").
     """
     return tid if isinstance(tid, str) else str(tid)
 
@@ -927,6 +942,10 @@ def main() -> None:
         # Load the simulated defaults content
         try:
             what_if_data = _load_yaml(what_if_path)
+            # #2114: its `tenants:` block, keyed by source text like the
+            # platform files it may stand in for — `_load_yaml` keeps
+            # PyYAML's typing for the defaults chain it has always fed.
+            what_if_platform_doc = _load_platform_doc(what_if_path)
         except Exception as e:  # pragma: no cover — defensive
             print(f"❌ Failed to parse --what-if file: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
@@ -979,7 +998,7 @@ def main() -> None:
         # file, so an edit to its `tenants:` block is simulated too.
         sim_tenant, _sources = _overlay_tenant(
             scanner.tenants[tid],
-            scanner.platform_blocks(tid, replace={str(what_if_path): what_if_data}),
+            scanner.platform_blocks(tid, replace={str(what_if_path): what_if_platform_doc}),
             simulated)
         simulated = deep_merge(simulated, sim_tenant)
         what_if_merged_hash = _canonical_hash(simulated)

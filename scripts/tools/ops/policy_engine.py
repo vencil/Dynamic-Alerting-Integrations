@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2114)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -57,6 +58,7 @@ try:
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
+        load_yaml_file_exporter_keys,
         parse_duration_seconds,
         safe_label,
     )
@@ -67,6 +69,7 @@ except ImportError:
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
+        load_yaml_file_exporter_keys,
         parse_duration_seconds,
         safe_label,
     )
@@ -82,6 +85,10 @@ VALID_OPERATORS = frozenset({
 })
 
 VALID_SEVERITIES = frozenset({"error", "warning"})
+
+# #2114: keys whose list items are tenant ids — read as source text, the way
+# `load_tenant_configs` reads the tenant keys they are compared with.
+POLICY_TENANT_LISTS = frozenset({"exclude_tenants"})
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +163,14 @@ def load_policies(source: str) -> list[PolicyRule]:
 
     Returns:
         PolicyRule 清單。
+
+    ``exclude_tenants`` 的項目以**原始文字**讀入（#2114）：租戶 id 是
+    exporter 讀到的 key 文字（``010`` 就是 ``"010"``），排除清單必須用同一種
+    讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
+    對不上租戶 ``"010"``。
     """
-    return rules_from_policy_data(load_yaml_file(source))
+    return rules_from_policy_data(load_yaml_file_exporter_keys(
+        source, raw_text_sequences=POLICY_TENANT_LISTS))
 
 
 def rules_from_policy_data(data: Any) -> list[PolicyRule]:
@@ -395,7 +408,8 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict) -> list[Violation
     Returns:
         違規清單（空 = 通過）。
     """
-    # Check tenant exclusion
+    # Check tenant exclusion — text to text (#2114): tenant ids and the
+    # `exclude_tenants` items are both the YAML source text.
     if tenant in rule.exclude_tenants:
         return []
 
@@ -755,7 +769,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             with open(args.policy, encoding="utf-8") as f:
-                policy_data = yaml.safe_load(f)
+                # #2114: `exclude_tenants` items as source text, see
+                # `load_policies`. Same pure parser as before.
+                policy_data = load_exporter_keys(
+                    f, pure=True, raw_text_sequences=POLICY_TENANT_LISTS)
         except OSError as e:
             problem = ("policy_file_unreadable",
                        f"cannot read {args.policy!r}: {e}",

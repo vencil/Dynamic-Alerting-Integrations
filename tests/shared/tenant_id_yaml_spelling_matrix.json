@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "What tenant id each YAML spelling of a `tenants:` key IS (#2114).",
+    "`source` is the key exactly as written in the file (quotes included);",
+    "each row is decoded from `tenants:\\n  <source>:\\n    mysql_connections: \"1\"\\n`.",
+    "`exporter_key` is the key the exporter's decode yields (null = no tenant:",
+    "the key is dropped). Go (components/threshold-exporter/app/pkg/config/",
+    "tenant_id_spelling_parity_test.go) decodes each row through",
+    "config.ParseConfigFile, the flat plane's own decode, and asserts this column;",
+    "Python (tests/shared/test_tenant_id_yaml_spelling_parity.py) asserts that",
+    "_lib_yaml_keys reads the same key. Neither reads the other's source.",
+    "`safe_load_str` is str() of the key yaml.safe_load (YAML 1.1 typing) gives —",
+    "what the Python tools used as the tenant id before #2114. Only the Python",
+    "half asserts it; it is kept so the table shows which rows the old read got",
+    "wrong (13 of 22), i.e. that the table can tell the two readers apart."
+  ],
+  "spellings": [
+    {"source": "123", "exporter_key": "123", "safe_load_str": "123"},
+    {"source": "\"123\"", "exporter_key": "123", "safe_load_str": "123"},
+    {"source": "'123'", "exporter_key": "123", "safe_load_str": "123"},
+    {"source": "010", "exporter_key": "010", "safe_load_str": "8"},
+    {"source": "0o10", "exporter_key": "0o10", "safe_load_str": "0o10"},
+    {"source": "0x1F", "exporter_key": "0x1F", "safe_load_str": "31"},
+    {"source": "1e3", "exporter_key": "1e3", "safe_load_str": "1e3"},
+    {"source": "1.0", "exporter_key": "1.0", "safe_load_str": "1.0"},
+    {"source": "1_000", "exporter_key": "1_000", "safe_load_str": "1000"},
+    {"source": "+1", "exporter_key": "+1", "safe_load_str": "1"},
+    {"source": "-1", "exporter_key": "-1", "safe_load_str": "-1"},
+    {"source": "yes", "exporter_key": "yes", "safe_load_str": "True"},
+    {"source": "Yes", "exporter_key": "Yes", "safe_load_str": "True"},
+    {"source": "on", "exporter_key": "on", "safe_load_str": "True"},
+    {"source": "true", "exporter_key": "true", "safe_load_str": "True"},
+    {"source": "null", "exporter_key": null, "safe_load_str": "None"},
+    {"source": "~", "exporter_key": null, "safe_load_str": "None"},
+    {"source": "2024-01-01", "exporter_key": "2024-01-01", "safe_load_str": "2024-01-01"},
+    {"source": ".inf", "exporter_key": ".inf", "safe_load_str": "inf"},
+    {"source": "\"\"", "exporter_key": "", "safe_load_str": ""},
+    {"source": "12:30", "exporter_key": "12:30", "safe_load_str": "750"},
+    {"source": "0123", "exporter_key": "0123", "safe_load_str": "83"}
+  ]
+}

@@ -55,6 +55,10 @@ BUILD_EXEMPT = frozenset({
     # plus the guard a flat reader calls so a hierarchical tree can never
     # look empty. Library, not CLI.
     "_lib_confd.py",
+    # #2114 — tenant ids read as the exporter keys them (the YAML scalar's
+    # raw text). Leaf module (yaml + stdlib) imported by _lib_io /
+    # _lib_confd and the conf.d readers. Library, not CLI.
+    "_lib_yaml_keys.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.

@@ -20,6 +20,8 @@ import yaml
 
 from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
+# Leaf module (yaml + stdlib only), so no import cycle (#2114).
+from _lib_yaml_keys import load_exporter_keys
 # No import cycle: _lib_exitcodes imports only sys + _lib_compat (#1641).
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
@@ -132,6 +134,42 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     return data if data is not None else default
 
 
+def load_yaml_file_exporter_keys(
+    path: Optional[str],
+    default: Any = None,
+    *,
+    raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
+) -> Any:
+    """:func:`load_yaml_file`, except every mapping KEY is the scalar's raw
+    TEXT — the tenant id the exporter reads (#2114; ``_lib_yaml_keys``).
+
+    Same contract as :func:`load_yaml_file` in every other respect — *default*
+    for a missing / empty file, :class:`YamlFileError` naming the file for
+    non-UTF-8 content or bad syntax, and the SAME pure-Python parser, so a
+    file this refuses is exactly a file :func:`load_yaml_file` refuses (its
+    callers route those limits, see ``SAFE_LOADER``). Values stay
+    PyYAML-typed; *raw_text_sequences* names the keys whose list value is a
+    list of tenant ids and comes back as source text too.
+
+    ⚠️ A sibling rather than a flag on :func:`load_yaml_file`: that helper
+    has dozens of callers reading files that hold no tenant id, and changing
+    their key types would be a change nobody asked them about.
+    """
+    if not path:
+        return default
+    file = Path(path)
+    if not file.is_file():
+        return default
+    try:
+        stream = io.StringIO(file.read_bytes().decode("utf-8"))
+        stream.name = str(path)   # PyYAML marks keep naming the real file
+        data = load_exporter_keys(stream, pure=True,
+                                  raw_text_sequences=raw_text_sequences)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
+    return default if data is None else data
+
+
 def exit_on_yaml_file_error(fn: _F) -> _F:
     """Decorate a CLI ``main`` so an unreadable YAML input exits 2, named.
 
@@ -234,6 +272,12 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
         Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict when
         *config_dir* is missing or holds no eligible files.
 
+        Tenant names are always ``str``: the key's source text, which is
+        what the exporter serves (#2114) — an unquoted ``010:`` is ``"010"``
+        and ``yes:`` is ``"yes"`` (PyYAML's own typing made them ``8`` and
+        ``True``). Mapping keys inside a config are text too; values keep
+        PyYAML's types. Same pure-Python parser as :func:`load_yaml_file`.
+
         ⚠️ A document that parses to a non-mapping is skipped, but an EMPTY
         file is not: ``load_yaml_file`` turns it into the ``{}`` default, so
         the file registers a tenant named after it with no thresholds. Same
@@ -263,7 +307,9 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
     """
     configs: dict[str, dict[str, Any]] = {}
     for fname, fpath in iter_yaml_files(config_dir):
-        raw = load_yaml_file(fpath, default={})
+        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
+        # them (`010:` is "010", not 8; `123:` and `"123":` are one tenant).
+        raw = load_yaml_file_exporter_keys(fpath, default={})
         if not isinstance(raw, dict):
             continue
         if "tenants" in raw and isinstance(raw.get("tenants"), dict):

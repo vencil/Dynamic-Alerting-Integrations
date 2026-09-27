@@ -42,6 +42,7 @@ from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2114)
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     iter_config_files,
@@ -156,7 +157,10 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
             continue
         try:
             with open(entry, encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
+                # #2114: tenant keys as source TEXT — the exporter's id, and
+                # what the CLI's `tenant` argument is. `123:` in a platform
+                # file used to be the int 123 and never matched "123".
+                raw = load_exporter_keys(f, pure=True)
         except (OSError, yaml.YAMLError):
             # ⛔ Still silent, deliberately — see #1522. `check()` calls this
             # AND `resolve_inheritance_chain` over the same directory, so
@@ -355,7 +359,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             continue
         try:
             with open(entry, encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
+                # #2114: tenant keys as source TEXT (see lookup_tenant_profile).
+                raw = load_exporter_keys(f, pure=True) or {}
         except (OSError, yaml.YAMLError) as e:
             _skip_read_failure(fname, e)
             continue

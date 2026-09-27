@@ -382,10 +382,11 @@ class TestFileWritePermissions:
 #    唯一的反向例外是 `Loader=<SafeLoader 子類>`：兩者都**誤紅**。
 #    本 repo 兩個活實例（今天都安全，但改壞了沒有人會看見）：
 #      `check_admin_config_schema._StrictSafeLoader`（走 `load_all`）；
-#      `validate_config._load_with_exporter_keys()`（自己建 loader）。後者的
-#    安全性質由**行為級**測試釘住（`tests/ops/test_validate_config.py::
-#    TestTenantIdParity::test_the_loader_cannot_construct_python_objects`，餵真的
-#    `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。
+#      `_lib_yaml_keys.load_exporter_keys()` / `load_first_document_exporter_keys()`
+#      （自己建 loader；#2114 自 `validate_config._load_with_exporter_keys()` 搬來）。
+#    後者的安全性質由**行為級**測試釘住（`tests/shared/test_tenant_id_yaml_spelling_parity.py::
+#    test_the_loaders_cannot_construct_python_objects`，對兩個 loader 與兩個入口
+#    都餵真的 `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。
 #
 #    ⛔ 不要在本檔重新長出第二份 AST 實作——同一個判定兩份實作正是 #1643。
 # ============================================================

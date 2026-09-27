@@ -267,4 +267,5 @@ lang: zh
 - `scripts/tools/_lib_validation.py`：Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`：Version SSOT readers for the dx doc-generation tools.
 - `scripts/tools/_lib_yaml.py`：Minimal CRD YAML serialization helpers for operator tooling.
+- `scripts/tools/_lib_yaml_keys.py`：Read YAML the way the exporter reads a tenant id: as the scalar's TEXT.
 - `scripts/_lib.sh`：Shell scenario/benchmark 共用
