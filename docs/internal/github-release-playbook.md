@@ -581,7 +581,7 @@ foreach ($r in $fails) {
 
 > **設計原則**：每份文件有明確職責，不重複。README 做「為什麼 + 怎麼開始」，Roadmap 做「接下來」，CHANGELOG 做「做過什麼」，Playbook 做「怎麼不踩坑」。文件膨脹的根因是職責模糊——同一件事在多處描述。
 
-4. **文件簡潔性檢查**（部分自動化：`check_doc_reading_time` manual-stage hook）
+4. **文件簡潔性檢查**
    - README（root）：維持 ~190 行以內，「5s→30s→5min」漸進式揭露結構完整
    - `docs/index.md`：維持 ~140 行以內，專注 MkDocs 導航入口角色
    - `architecture-and-design.md`：Hub 文件 ≤ 250 行，細節在 spoke 文件
