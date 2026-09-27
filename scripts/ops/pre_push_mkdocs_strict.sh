@@ -169,10 +169,21 @@ fi
 # site gains three duplicated documents under docs/. That is the platform
 # dependence these aliases exist to remove, reintroduced by the build step.
 _checkout_failed=0
+# ⛔ ONE top-level EXIT trap for the tree being built, not a trap inside
+# _build_one: the loop is sequential, so at most one tree is alive, and a trap
+# set per call would replace the previous one. A clean-up written after the
+# build alone never runs on Ctrl-C or SIGTERM, leaving the tree in .git and
+# registered in `git worktree list` (#2169).
+# ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
+_live_wt=""
+trap 'git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
     rm -rf "$_wt"
+    # Set BEFORE `add`: the path is this process's own, so a failed add leaves
+    # nothing the trap could wrongly remove.
+    _live_wt="$_wt"
     if ! git worktree add --detach --quiet "$_wt" "$_sha" 2>/dev/null; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
         # is EXACTLY the #1690 defect this guard exists to remove, and it is
