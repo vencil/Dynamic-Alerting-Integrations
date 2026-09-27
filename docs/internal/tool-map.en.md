@@ -23,6 +23,7 @@ lang: en
 | `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
 | `_observed_map_lib.py` | Shared SoT extractor for the threshold observed-map (#719). |
 | `_registry_lib.py` | threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200). |
+| `_threshold_alerts.py` | Which alerts read a threshold key — looked up in the rule packs, not guessed. |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |

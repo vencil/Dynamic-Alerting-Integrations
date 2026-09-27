@@ -97,6 +97,10 @@ BUILD_EXEMPT = frozenset({
     # interactive prompt may pre-fill). Library, not CLI: the registry gate that
     # drives it is a pre-commit lint, not a `da-tools <cmd>`.
     "_registry_lib.py",
+    # Threshold key -> alert names, read from the rule packs (shipped as
+    # REPO_DATA_FILES). Library imported by config_diff.py and
+    # patch_config.py for their affected-alerts output, not a CLI command.
+    "_threshold_alerts.py",
 })
 
 

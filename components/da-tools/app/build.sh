@@ -97,6 +97,9 @@ TOOL_FILES=(
     # File system tools (offline)
     ops/migrate_rule.py
     ops/config_diff.py
+    # Reads the rule packs (REPO_DATA_FILES below) to name the alerts a
+    # threshold key reaches; shared by config_diff and patch_config --diff.
+    ops/_threshold_alerts.py
     ops/scaffold_tenant.py
     # #1310 — threshold-registry loader lib; top-level import of
     # scaffold_tenant.py (is_shipped_optional_key decides which
@@ -232,8 +235,28 @@ echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 # the probe set is one nothing tests, so a tenant inhibit that would silence
 # it reads as safe. The customer ran that degraded check silently. Pairing is
 # enforced by REQUIRED_DATA_FILES in check_build_completeness.py.
+#
+# The rule packs below are read by `_threshold_alerts.py` to name the alerts
+# a threshold key reaches (config-diff's Affected Alerts column, patch-config
+# --diff). Without them the column says `unknown` rather than guessing. The
+# list is every pack that references `alert_threshold:`; the test
+# test_threshold_alerts.py pins it against rule-packs/, so a new pack that is
+# not added here turns CI red instead of going silently unreported.
 REPO_DATA_FILES=(
     k8s/03-monitoring/configmap-rules-platform.yaml
+    rule-packs/rule-pack-clickhouse.yaml
+    rule-packs/rule-pack-db2.yaml
+    rule-packs/rule-pack-elasticsearch.yaml
+    rule-packs/rule-pack-jvm.yaml
+    rule-packs/rule-pack-kafka.yaml
+    rule-packs/rule-pack-kubernetes.yaml
+    rule-packs/rule-pack-mariadb.yaml
+    rule-packs/rule-pack-mongodb.yaml
+    rule-packs/rule-pack-nginx.yaml
+    rule-packs/rule-pack-oracle.yaml
+    rule-packs/rule-pack-postgresql.yaml
+    rule-packs/rule-pack-rabbitmq.yaml
+    rule-packs/rule-pack-redis.yaml
 )
 
 for f in "${REPO_DATA_FILES[@]}"; do

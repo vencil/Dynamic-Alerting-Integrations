@@ -79,10 +79,31 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 #     而完整 pack 是 41 筆（實測）→ 少掉的 35 個 alertname 不會被
 #     find_tenant_silenceable_platform_inhibits 探測，是 fail-OPEN 方向（#1494）。
 #     該檔不在 scripts/tools/ 底下，由 build.sh 的 REPO_DATA_FILES 搬運。
+#   - _threshold_alerts.py: find_rule_pack_paths() 先找 <module 同目錄>/
+#     rule-pack-*.yaml（映像 flat layout），找不到才找 repo 的 rule-packs/。
+#     缺檔時 config-diff 的 Affected Alerts 欄寫 unknown、stderr 一行 WARN
+#     （不猜）；但少出貨「某一個」pack 時不會 unknown，而是該 pack 的 key 被
+#     報成「沒有告警讀它」——那是 fail-OPEN，所以逐檔列管。清單＝repo 裡引用
+#     alert_threshold: 的 pack，由 tests/ops/test_threshold_alerts.py 對帳。
 REQUIRED_DATA_FILES: dict = {
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
     "_grar_validate.py": ("configmap-rules-platform.yaml",),
+    "_threshold_alerts.py": (
+        "rule-pack-clickhouse.yaml",
+        "rule-pack-db2.yaml",
+        "rule-pack-elasticsearch.yaml",
+        "rule-pack-jvm.yaml",
+        "rule-pack-kafka.yaml",
+        "rule-pack-kubernetes.yaml",
+        "rule-pack-mariadb.yaml",
+        "rule-pack-mongodb.yaml",
+        "rule-pack-nginx.yaml",
+        "rule-pack-oracle.yaml",
+        "rule-pack-postgresql.yaml",
+        "rule-pack-rabbitmq.yaml",
+        "rule-pack-redis.yaml",
+    ),
 }
 
 # 映像把每支工具攤平到 WORKDIR（Dockerfile `WORKDIR /opt/da-tools` + build.sh

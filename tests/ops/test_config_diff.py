@@ -159,12 +159,18 @@ class TestLoadConfigsFromDir:
 # ── 5. Estimate Affected Alerts ─────────────────────────────────────
 
 class TestEstimateAffectedAlerts:
+    """欄位內容取自 rule pack，不是 key 拼法的 CamelCase（舊版寫 *MysqlConnections*）。"""
 
-    def test_basic_conversion(self):
-        assert cd.estimate_affected_alerts("mysql_connections") == "*MysqlConnections*"
+    def test_names_come_from_the_rule_packs(self):
+        assert cd.estimate_affected_alerts("mysql_connections") == \
+            "MariaDBHighConnections, MariaDBSystemBottleneck"
 
-    def test_single_word(self):
-        assert cd.estimate_affected_alerts("cpu") == "*Cpu*"
+    def test_a_key_no_alert_reads(self):
+        assert cd.estimate_affected_alerts("cpu") == "—"
+
+    def test_unknown_when_the_rule_packs_are_missing(self, monkeypatch):
+        monkeypatch.setattr(cd, "alerts_for_key", lambda key: None)
+        assert cd.estimate_affected_alerts("mysql_connections") == "unknown"
 
 
 # ── 6. Render Markdown ──────────────────────────────────────────────

@@ -35,6 +35,7 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _threshold_alerts import alerts_for_key  # noqa: E402
 
 # GitHub silently rejects (422 Unprocessable Entity) issue/PR comments over
 # 65,536 chars. The config-diff bot posts render_markdown() output verbatim, so
@@ -410,14 +411,20 @@ def compute_custom_alert_diff(old_alerts, new_alerts):
 
 
 def estimate_affected_alerts(metric_key):
-    """Estimate which alert names might be affected by a metric key change.
+    """The alerts a change to ``metric_key`` reaches, as the report cell.
 
-    Heuristic: convert metric_key to CamelCase alert pattern.
-    E.g., mysql_connections → *MysqlConnections*
+    Read from the rule packs (``_threshold_alerts``), not derived from the
+    key's spelling: ``mysql_connections`` reaches ``MariaDBHighConnections``
+    and ``MariaDBSystemBottleneck``, which no CamelCase of the key names.
+    ``—`` means no rule-pack alert reads the key (the change reaches no
+    alert); ``unknown`` means the rule packs were not found, and stderr says so.
     """
-    parts = metric_key.split("_")
-    camel = "".join(p.capitalize() for p in parts if p)
-    return f"*{camel}*"
+    alerts = alerts_for_key(metric_key)
+    if alerts is None:
+        return "unknown"
+    if not alerts:
+        return "—"
+    return ", ".join(alerts)
 
 
 def _format_value(val):
