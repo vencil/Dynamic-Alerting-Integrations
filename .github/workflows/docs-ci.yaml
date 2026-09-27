@@ -122,8 +122,9 @@ jobs:
               #     is as fatal as adding one. It landed 2026-08-08 (c33508d2)
               #     already outside this filter: the `**/*.sh` entry above covers
               #     the script but not its data file.
-              #   * components/threshold-exporter/README.md — read by
-              #     check_doc_links.py; nothing else here reaches it.
+              #   * components/threshold-exporter/README.md — `drift-checks`
+              #     (validate_all `versions` → validate_docs_versions.py)
+              #     checks its chart version; a wrong one reds it (#2107).
               # ⚠️ The sweep is in-process, so it under-reports any leg that
               # fans out through subprocess — `drift-checks` (validate_all.py,
               # which shells out) is the one that does. Its inputs are NOT
@@ -138,7 +139,7 @@ jobs:
               # raising at import). ⚠️ Only this file is pinned: a new hook
               # added to `hooks:` needs its own line here.
               - "scripts/mkdocs/rule_packs_bridge.py"
-              # ⛔ The pin SSOT six of this workflow's gated jobs INSTALL FROM
+              # ⛔ The pin SSOT most of this workflow's gated jobs INSTALL FROM
               # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
               # not a file any doc check reads, which is why no "does a test
               # read it?" review ever caught it. `mkdocs-build` installs the
@@ -157,7 +158,7 @@ jobs:
               # i.e. main goes red for everyone instead of the PR going red for
               # its author.
               #
-              # Accepted cost: `docs` is ONE filter gating eight jobs, so a pin
+              # Accepted cost: `docs` is ONE filter gating every leg, so a pin
               # bump now also runs the two that do not install from it —
               # doc-line-count and i4-runbook-smoke-test (whose three curl
               # downloads are a network-flake surface). Worth
@@ -233,7 +234,8 @@ jobs:
     # PR that only deleted or renamed a linked non-doc file skipped this leg
     # and merged a broken link. Same reasoning as the `python` catch-all in
     # ci.yml. Re-adding an `if:` reds test_ci_path_filter_coverage's
-    # path-gated set.
+    # path-gated set. Accepted cost: every PR now pays checkout + pip
+    # (~15 s), and a network flake there reds this required check.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
