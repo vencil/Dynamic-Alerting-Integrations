@@ -13,6 +13,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,17 @@ func buildPlatformBenchTree(b *testing.B, entries int) string {
 }
 
 func benchPlatformMerge(b *testing.B, entries int, uncached bool) {
+	// The decode cache is package-global: a benchmark that leaves a
+	// 1000/10000-entry parse in it inflates the live heap every later
+	// benchmark in the same binary runs against. The PR bench gate selects
+	// these (`_1000(_|$)`) and runs them before Simulate_DeepChain and
+	// ScanFromConfigSource_1000_InMemory, which then read as a 5–13%
+	// regression that is only GC pressure from this leftover. Empty it on
+	// the way out.
+	b.Cleanup(func() {
+		rootPlatformParses.reset()
+		runtime.GC()
+	})
 	dir := buildPlatformBenchTree(b, entries)
 	body := ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
 		"tenant-001": {"metric_001": {Default: "70"}}}}
