@@ -53,10 +53,6 @@ updated_at: 2026-07-22
 
 **時程**：無 urgency，可搭下一次 win-escape 相關的 session 一起處理。`#1`（`win_async_exec.ps1` bug）實際使用時會再撞到，優先級略高於其他。
 
-### check_doc_freshness.py Helm chart 版號檢查
-
-目前只檢查 Docker image 版號，擴展到 `helm install/upgrade` 命令中的 `--version` flag 比對。
-
 ### validate_all.py `--fix --diff` combo
 
 `--fix` 後自動顯示 diff summary（目前 `--fix` 和 `--diff-report` 是獨立的），減少手動操作步驟。
@@ -494,7 +490,7 @@ updated_at: 2026-05-13
 ```
 
 
-**問題來源**：v2.7.0 doc audit 發現 `config-driven.md` front-matter 寫 `version: v2.7.0` 但**文件內沒有任何 v2.7.0 specific 內容**（conf.d/、_defaults.yaml、dual-hash、/effective 都沒提）。front-matter 是允諾，body 是空。`check_doc_freshness.py` 只檢查 version 字串，不檢查內容涵蓋度。
+**問題來源**：v2.7.0 doc audit 發現 `config-driven.md` front-matter 寫 `version: v2.7.0` 但**文件內沒有任何 v2.7.0 specific 內容**（conf.d/、_defaults.yaml、dual-hash、/effective 都沒提）。front-matter 是允諾，body 是空。
 
 **設計**：新增 `scripts/tools/lint/check_spoke_doc_freshness.py`：
 

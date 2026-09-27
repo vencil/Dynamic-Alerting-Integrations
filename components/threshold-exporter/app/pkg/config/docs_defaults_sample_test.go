@@ -204,9 +204,9 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 		//     DECISION and its rationale, not a config sample that silently
 		//     stopped matching the loader.
 		//
-		// Sibling doc lints (_version_patterns.DOC_MAP_SKIP_DIRS,
-		// check_doc_freshness.py) still skip adr/ — they police freshness
-		// metadata, where "don't churn the record" genuinely applies. This gate
+		// Sibling doc lints (_version_patterns.DOC_MAP_SKIP_DIRS) still skip
+		// adr/ — they police metadata, where "don't churn the record"
+		// genuinely applies. This gate
 		// asserts loadability, which is timeless: a sample that cannot decode
 		// was never a faithful illustration of the model on any date.
 		//

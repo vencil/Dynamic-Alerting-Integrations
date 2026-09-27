@@ -237,7 +237,6 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_generate_tenant_mapping_rules.py` | generate_tenant_mapping_rules.py 租戶映射 | v2.1.0 ADR-006 |
 | `ops/test_e2e_routing_profile.py` | 路由設定檔 E2E 管線 | v2.1.0 ADR-007 integration |
 | `ops/test_parse_platform_config.py` | _parse_platform_config 解析器單元測試 | v2.1.0 refactor 驗證 |
-| `lint/test_check_doc_freshness.py` | check_doc_freshness.py 文件新鮮度檢查 | v2.1.0 |
 | `lint/test_check_structure.py` | check_structure.py 目錄結構驗證 | v2.1.0 |
 | `lint/test_lint_tool_consistency.py` | lint_tool_consistency.py 工具一致性驗證 | v2.1.0 |
 | `lint/test_check_bilingual_annotations.py` | check_bilingual_annotations.py 雙語標註驗證 | v2.1.0 |
