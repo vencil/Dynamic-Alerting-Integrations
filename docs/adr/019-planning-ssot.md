@@ -101,7 +101,7 @@ owner: poyu                     # optional：誰負責
 - **既有引用 rewrite**：~73 處批次替換為 TRK（TD-022 → TRK-222、HA-11 → TRK-011、REG-004 → TRK-104 等；分區範圍見 mapping doc）
 - **CHANGELOG-archive.md + docs/internal/archive/ 不動**：pre-v2.2.0 引用作歷史保留，redirect doc 解釋舊 ID 在現代是 TRK-NNN
 - **新條目從 v2.8.1 起一律 TRK-NNN**（新分配從 TRK-300+ 開始；⚠️ 配號方式已由下一條取代）
-- **⛔ 號碼怎麼配（2026-09 修訂，[#2106](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2106)）：新條目的號碼＝新開的追蹤 issue 的號碼，寫成 `TRK-<issue 號>`，一律四位數以上**（例：issue #2150 → `TRK-2150`）。三位數全部屬於凍結的舊表；要追蹤一張號碼小於 1000 的舊 issue，就開一張新的追蹤 issue。手工配號（看表取下一號）在 TRK-392 凍結，不再使用。理由：手配號不是原子操作——兩個 session 幾小時內各自取號就撞（TRK-326、TRK-370、TRK-378 三次），而登記表永遠落後開票（每一列都是事後補），表上的洞又讓下一個人取錯號。用 issue 號則唯一性由 GitHub 保證、也不需要登記（同 Kubernetes KEP 以 tracking issue 號為編號）。`TRK-300`～`TRK-392` 照舊留在 [`planning-id-mapping.md`](../internal/planning-id-mapping.md)；`check_trk_index_coverage.py` 只管三位數號碼：開票／改標題時出現表上沒有的三位數新號＝有人照舊手配，會紅（`trk-index-coverage.yaml`）；表上多出 TRK-392 以後的列也會紅（Python Tests）。
+- **⛔ 號碼怎麼配（2026-09 修訂，[#2106](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2106)）：新條目的號碼＝新開的追蹤 issue 的號碼，寫成 `TRK-<issue 號>`，一律四位數以上**（例：issue #2150 → `TRK-2150`）。三位數全部屬於凍結的舊表；要追蹤一張號碼小於 1000 的舊 issue，就開一張新的追蹤 issue。手工配號（看表取下一號）在 TRK-392 凍結，不再使用。理由：手配號不是原子操作——兩個 session 幾小時內各自取號就撞（TRK-326、TRK-370、TRK-378 三次），而登記表永遠落後開票（每一列都是事後補），表上的洞又讓下一個人取錯號。用 issue 號則唯一性由 GitHub 保證、也不需要登記（同 Kubernetes KEP 以 tracking issue 號為編號）。`TRK-300`～`TRK-392` 照舊留在 [`planning-id-mapping.md`](../internal/planning-id-mapping.md)；`check_trk_index_coverage.py` 只管三位數號碼：開票／改標題時出現表上沒有的三位數新號＝有人照舊手配，會紅（`trk-index-coverage.yaml`）；表上多出凍結時沒有的列（含 TRK-392 以後與補 legacy 區段的洞）也會紅（Python Tests）。
 
 ### Frontmatter 上 ADR / S# 的 id 寫法
 

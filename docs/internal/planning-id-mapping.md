@@ -36,6 +36,8 @@ lang: zh
 | **TRK-300 ~ TRK-392** | post-migration 手工配號（已凍結，見下方 TRK-300+ 區段） | — |
 | **TRK-1000 +** | **新條目：追蹤 issue 的號碼**（[ADR-019](../adr/019-planning-ssot.md)，#2106） | issue #2150 → `TRK-2150` |
 
+> ⛔ TRK-001～392 的各區段全部凍結：區段裡的空號不是「下一個可用號」，不要補洞配號。
+
 > `TECH-DEBT-NNN` 與 `TD-NN` 是同一個 namespace 的長短形（v2.7.x 之後簡寫為 `TD-`，數字編號連續），同號 alias 合併到同一個 TRK：`TECH-DEBT-022` ≡ `TD-022` → `TRK-222`。
 >
 > 字母 suffix（e.g. `TD-030a`, `TD-030z`, `TD-032e`）保留，遷移為 `TRK-230a`, `TRK-230z`, `TRK-232e`。
@@ -131,7 +133,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 > 此區段**不是 redirect**（無舊 ID 來源），而是 v2.8.1+ 直接以 `TRK-NNN` 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 `TRK ↔ GitHub issue` 快查。
 >
-> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §TD-NN / HA-NN / REG-NN → TRK-NNN 遷移）。**不要**再看本表取「下一號」，也不要再加列：表上沒有的三位數新號、以及 TRK-392 以後的列，都會被 `check_trk_index_coverage.py` 擋下。
+> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §TD-NN / HA-NN / REG-NN → TRK-NNN 遷移）。**不要**再看本表取「下一號」，也不要再加列：表上沒有的三位數新號、以及凍結時表上沒有的任何列（含補 legacy 區段的洞），都會被 `check_trk_index_coverage.py` 擋下。
 
 | TRK | Issue | 主題 | Epic |
 |---|---|---|---|

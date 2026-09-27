@@ -45,8 +45,9 @@ hook 對這一類是弱後備，不是偵測器**；titles 面由 ``.github/work
 
 ⛔ 只認**三位數**號碼是刻意的，不是遺漏：表凍結在 TRK-392，新條目改用
 ``TRK-<issue 號>``（ADR-019，#2106），那些號碼本身就指向 issue、不需要登記。所以
-表上沒有的三位數新號＝有人照舊看表手配號，正是要擋的東西；表上出現 TRK-392
-以後的列同樣算違規（手配號的人會順手補列，讓自己的引用「在表上」）。
+表上沒有的三位數新號＝有人照舊看表手配號，正是要擋的東西；表上出現凍結時
+沒有的號碼（TRK-392 以後、四位數、或補 legacy 區段的洞）同樣算違規（手配號的
+人會順手補列，讓自己的引用「在表上」）。
 
 Usage
 -----
@@ -60,7 +61,7 @@ Usage
 Exit codes
 ----------
 - ``0`` — 掃過了，被引用的 TRK 都在表上（**量了沒事**；若 ``PARTIAL`` 另見警告）
-- ``1`` — 有 TRK 被引用卻不在表上（``--ci``）
+- ``1`` — 有 TRK 被引用卻不在表上，或表上出現凍結時沒有的號碼（``--ci``）
 - ``2`` — **量不到**：表解析不出來／表是空的／要求了 titles 面卻拿不到。
 """
 from __future__ import annotations
@@ -87,7 +88,7 @@ _MAPPING = Path("docs/internal/planning-id-mapping.md")
 
 # (?<![\w-]) / (?![\w-]) 讓 TRK-3811 與 xTRK-381 都不會誤配
 _TRK_RE = re.compile(r"(?<![\w-])TRK-(\d{3})(?![\w-])")
-_TRK_CELL_RE = re.compile(r"^TRK-(\d{3})$")
+_TRK_CELL_RE = re.compile(r"^TRK-(\d{3,})$")  # 四位數的列也要讀到，才擋得下
 _API_HOST = "https://api.github.com/"
 _API = _API_HOST + "repos/{owner}/{repo}/issues"
 # owner / repo 由 argv 給，先收斂成 GitHub 實際允許的字元集，避免它們把路徑帶去別處。
@@ -150,8 +151,13 @@ class TitlesTruncated(RuntimeError):
 
 
 _MAX_PAGES = 40
-# 表凍結在這一號（ADR-019，#2106）：之後的新條目用 TRK-<issue 號>，不再登記。
-_FROZEN_MAX = 392
+# 表凍結時的號碼（ADR-019，#2106）：之後只許少、不許多。新條目用 TRK-<issue 號>，
+# 不再登記。⛔ 用集合不用上限：legacy 區段有洞，「補洞」一樣是照舊手配號。
+_FROZEN = "001-018,101,103-104,201-203,205-212,216-222,224,226,228-240,242,300-392"
+_FROZEN_SET = frozenset(
+    n for part in _FROZEN.split(",")
+    for n in range(int(part.partition("-")[0]), int(part.partition("-")[2] or part) + 1))
+_FROZEN_MAX = max(_FROZEN_SET)
 _NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
@@ -266,8 +272,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             hits = title_trks(args.owner, args.gh_repo, token)
+        # ValueError：slug 不合法、Link 指向別的 host、JSON 壞掉——都是量不到，不是違規。
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-                TitlesTruncated) as exc:
+                TitlesTruncated, ValueError) as exc:
             print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{exc}）", file=sys.stderr)
             return 2
         for k, v in hits.items():
@@ -276,8 +283,8 @@ def main(argv: list[str] | None = None) -> int:
 
     missing = sorted(n for n in used if n not in defined)
     # ⛔ 凍結要有機制，不能只是散文：照舊看表取號的人會順手補一列，那一列會讓
-    # 它自己的引用「在表上」而轉綠（#2106 盲審實測）。
-    past_freeze = sorted(n for n in defined if int(n) > _FROZEN_MAX)
+    # 它自己的引用「在表上」而轉綠（#2106 盲審實測，含補 legacy 區段的洞）。
+    past_freeze = sorted((n for n in defined if int(n) not in _FROZEN_SET), key=int)
 
     if args.json:
         print(json.dumps(
@@ -292,11 +299,11 @@ def main(argv: list[str] | None = None) -> int:
             print("[trk-index] ⚠️ PARTIAL：shallow clone，commit 面只看得到一部分 —— "
                   "「沒找到」不等於「沒有」。完整結果請在有完整歷史處或加 --surface all 重跑。")
         for n in past_freeze:
-            print(f"  ✗ TRK-{n} 被登記在 {_MAPPING}，但表凍結在 TRK-{_FROZEN_MAX}："
-                  "新條目改用 TRK-<issue 號>，不要再加列")
+            print(f"  ✗ TRK-{n} 被登記在 {_MAPPING}，但表已凍結（到 TRK-{_FROZEN_MAX}）："
+                  "新條目改用 TRK-<issue 號>，不要再加列或補洞")
         for n in missing:
-            hint = ("三位數屬於凍結的舊表，新條目改用四位數以上的新追蹤 issue 號" if int(n) > _FROZEN_MAX else "補列或明記「此號未使用」")
-            print(f"  ✗ TRK-{n} 被引用（{used[n]}）卻不在 {_MAPPING} 的索引裡 → {hint}")
+            print(f"  ✗ TRK-{n} 被引用（{used[n]}）卻不在 {_MAPPING} 的索引裡 → "
+                  "三位數屬於凍結的舊表，新條目改用四位數以上的新追蹤 issue 號")
         if missing or past_freeze:
             print(f"[trk-index] 共 {len(missing) + len(past_freeze)} 個問題。")
         else:

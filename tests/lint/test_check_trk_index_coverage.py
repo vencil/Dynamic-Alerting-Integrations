@@ -306,10 +306,26 @@ def test_single_title_mode_needs_no_token(tmp_path: Path, title: str, expect_rc:
 
 
 @pytest.mark.parametrize("rows, expect_rc", [
-    ("| TRK-392 | #1 | x | — |\n| TRK-393 | #2 | x | — |\n", 1),  # 凍結之後又加一列 ⇒ 紅
-    ("| TRK-392 | #1 | x | — |\n", 0),                              # 對照：凍結線上 ⇒ 綠
+    ("| TRK-392 | #1 | x | — |\n| TRK-393 | #2 | x | — |\n", 1),   # 凍結之後又加一列 ⇒ 紅
+    ("| TRK-392 | #1 | x | — |\n| TRK-150 | #2 | x | — |\n", 1),   # 補 legacy 區段的洞 ⇒ 紅
+    ("| TRK-392 | #1 | x | — |\n| TRK-2150 | #2 | x | — |\n", 1),  # 四位數的列 ⇒ 紅
+    ("| TRK-392 | #1 | x | — |\n| TRK-101 | #2 | x | — |\n", 0),   # 對照：凍結時就有的號 ⇒ 綠
 ])
 def test_rows_past_the_freeze_are_red(tmp_path: Path, rows: str, expect_rc: int) -> None:
     """⛔ 表凍結在 TRK-392 要有機制：照舊取號的人會順手補列，讓自己的引用「在表上」。"""
     repo = _fixture(tmp_path, rows, ["chore: x"])
     assert _run(repo, "--ci").returncode == expect_rc
+
+
+@pytest.mark.parametrize("owner, expect_rc", [
+    (".", 2),  # 不合法的 slug：呼叫端錯誤＝量不到，不是「有違規」
+])
+def test_titles_scan_errors_are_rc2_not_violations(
+        tmp_path: Path, monkeypatch, capsys, owner: str, expect_rc: int) -> None:
+    """⛔ titles 面丟出的 ValueError（slug、Link host、壞 JSON）一律 rc 2。"""
+    mod = _load_module()
+    repo = _fixture(tmp_path, "| TRK-301 | #1 | x | — |\n", ["chore: x"])
+    monkeypatch.setenv("GH_TOKEN", "t")
+    rc = mod.main(["--repo", str(repo), "--surface", "titles", "--ci", "--owner", owner])
+    assert rc == expect_rc, capsys.readouterr()
+    assert "量不到" in capsys.readouterr().err
