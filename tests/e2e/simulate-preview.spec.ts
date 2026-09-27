@@ -209,7 +209,8 @@ test.describe('Simulate Preview Widget @critical', () => {
   test('surfaces unreachable-API error when fetch fails', async ({ page }) => {
     // Abort every simulate request — Playwright surfaces this to the
     // browser as a network error, which our widget's catch path turns
-    // into the "Could not reach backend API" banner.
+    // into the "Could not reach the simulate endpoint (network error)"
+    // banner — which must not point at tenant-api (#2125).
     await page.route('**/api/v1/tenants/simulate', async (route) => {
       await route.abort('failed');
     });
@@ -220,5 +221,6 @@ test.describe('Simulate Preview Widget @critical', () => {
     // S#98: diagnostic matcher (same rationale as 4xx scenario above).
     await expect(errBanner).toBeVisibleWithDiagnostics({ timeout: 10000 });
     await expect(errBanner).toContainText(/Could not reach|無法連線/);
+    await expect(errBanner).not.toContainText('tenant-api');
   });
 });

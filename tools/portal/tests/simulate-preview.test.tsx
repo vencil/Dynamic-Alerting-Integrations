@@ -66,6 +66,23 @@ describe('SimulatePreview error attribution (#2125)', () => {
     expect(screen.queryByTestId('simulate-preview-state-not-provided')).toBeNull();
   });
 
+  it('non-JSON 501 → generic error, not the "not provided" state', async () => {
+    stubFetch(async () =>
+      new Response('<html>501 Not Implemented</html>', {
+        status: 501,
+        statusText: 'Not Implemented',
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+    render(<SimulatePreview />);
+
+    const err = await screen.findByTestId('simulate-preview-state-error', {}, WAIT);
+    expect(err.textContent).toContain('501');
+    expect(err.textContent).toContain('Not Implemented');
+    expect(err.textContent).not.toMatch(/tenant-api/);
+    expect(screen.queryByTestId('simulate-preview-state-not-provided')).toBeNull();
+  });
+
   it('non-501 status carrying the code (e.g. 405) → generic error', async () => {
     stubFetch(async () =>
       jsonResponse(405, { code: SIMULATE_NOT_PROVIDED_CODE, error: 'method not allowed' }),

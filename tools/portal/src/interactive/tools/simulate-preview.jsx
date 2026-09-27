@@ -253,8 +253,8 @@ function SimulatePreview() {
         </h1>
         <p className="text-sm text-[color:var(--da-color-muted)]">
           {t(
-            '貼上 tenant.yaml + defaults，呼叫 POST /api/v1/tenants/simulate，預覽合併後的 effective config + merged_hash。',
-            'Paste tenant.yaml + defaults, call POST /api/v1/tenants/simulate, preview the merged effective config + merged_hash.'
+            '貼上 tenant.yaml + defaults，呼叫 POST /api/v1/tenants/simulate，預覽合併後的 effective config + merged_hash。出貨的 portal 部署會回「此部署不提供」；需自行把該路徑代理到 threshold-exporter 才能使用。',
+            'Paste tenant.yaml + defaults, call POST /api/v1/tenants/simulate, preview the merged effective config + merged_hash. Shipped portal deployments answer "not provided"; proxy that path to threshold-exporter yourself to use it.'
           )}
         </p>
       </div>
