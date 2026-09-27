@@ -483,6 +483,13 @@ _XATTR_UNSUPPORTED_ERRNOS = frozenset(
     e for e in (getattr(errno, "ENOTSUP", None), getattr(errno, "EOPNOTSUPP", None))
     if e is not None
 )
+# Kernel-maintained xattrs left out of the old-vs-new comparison. IMA's
+# ``security.ima`` is a hash of the CONTENT and EVM's ``security.evm`` an HMAC
+# over inode / uid / gid / mode: they differ on ANY new file, so comparing them
+# would send every write in place on an IMA/EVM host and cost #2082 its
+# protection — yet they are not "lost": the kernel computes them afresh for
+# the replacement. Exactly these two; every other security.* is compared.
+_KERNEL_MAINTAINED_XATTRS = frozenset({"security.ima", "security.evm"})
 
 
 class OutputNoSpaceError(OutputWriteError):
@@ -545,7 +552,8 @@ def _xattrs(ref: str | int) -> dict[str, bytes]:
     """Every extended attribute of *ref* (a path or an fd), as ``{name: value}``.
 
     A filesystem without xattr support reads as ``{}``; a name that vanished
-    between list and get (ENODATA) is skipped. Any other ``OSError`` is raised.
+    between list and get (ENODATA) is skipped, and so is
+    ``_KERNEL_MAINTAINED_XATTRS``. Any other ``OSError`` is raised.
     """
     try:
         names = os.listxattr(ref)
@@ -555,6 +563,8 @@ def _xattrs(ref: str | int) -> dict[str, bytes]:
         raise
     found: dict[str, bytes] = {}
     for name in names:
+        if name in _KERNEL_MAINTAINED_XATTRS:
+            continue
         try:
             found[name] = os.getxattr(ref, name)
         except OSError as exc:
@@ -570,13 +580,23 @@ def _xattr_mismatch(target: Path, fd: int) -> str | None:
     """The WARN text when the tmp *fd* would not reproduce *target*'s xattrs.
 
     A replace makes a NEW inode, and POSIX ACLs (``system.posix_acl_*``),
-    the SELinux label (``security.selinux``) and ``user.*`` / ``trusted.*``
-    are all xattrs: measured, a ``user.*`` xattr is gone after a replace and
-    kept by the in-place write. So the tmp's xattrs — whatever the directory
-    gave it (default ACL, SELinux default context) — are compared with the
-    target's, and only a difference sends the write in place. On an SELinux
-    host both usually get the same ``security.selinux`` ⇒ atomic stays.
+    the SELinux label (``security.selinux``) and ``user.*`` are all xattrs:
+    measured, a ``user.*`` xattr is gone after a replace and kept by the
+    in-place write. So the tmp's xattrs — whatever the directory gave it
+    (default ACL, SELinux default context) — are compared with the target's,
+    and only a difference sends the write in place. On an SELinux host both
+    usually get the same ``security.selinux`` ⇒ atomic stays. IMA / EVM
+    values are not compared (``_KERNEL_MAINTAINED_XATTRS``).
     Not copied: setting ``security.*`` / ``trusted.*`` needs privileges.
+
+    ⚠️ Only what the RUNNING user can list is compared. Without
+    CAP_SYS_ADMIN, ``listxattr`` omits ``trusted.*`` on BOTH sides, so they
+    compare equal and a replace silently drops a root-set ``trusted.*``
+    (measured as uid 65534).
+
+    ⚠️ Linux only: without ``os.listxattr`` (macOS, the BSDs, Windows)
+    nothing is compared and a replace does not keep xattrs (``com.apple.*``
+    and the like) — the pre-comparison behaviour of #2082.
     """
     if not hasattr(os, "listxattr"):
         return None
@@ -688,7 +708,8 @@ def _try_atomic(out: Path, content: str,
       (:func:`_xattr_mismatch`) — a ``user.*`` xattr, a named ACL, a custom
       SELinux label the directory defaults would not reproduce — or cannot
       be compared (any errno but ENOTSUP / ENODATA). WARN, in place, where
-      they survive. Compared AFTER ``fchown`` / ``fchmod``: a ``chmod`` of a
+      they survive. Linux only, and only the namespaces the running user can
+      list (a non-root run cannot see ``trusted.*``) — see there. Compared AFTER ``fchown`` / ``fchmod``: a ``chmod`` of a
       file whose access ACL was inherited from a default ACL rewrites the
       mask entry inside ``system.posix_acl_access``, and the in-place writer
       chmods too, so this is the state a replace would really leave.

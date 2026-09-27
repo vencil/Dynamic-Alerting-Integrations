@@ -27,6 +27,7 @@ import errno
 import json
 import os
 import stat
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -430,6 +431,97 @@ class TestNoRegressionVsInPlace:
         assert _is_fresh_metadata(out)
         assert f"errno {errno.EACCES}" in err and "WARN" in err
         assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
+
+    def test_a_default_acl_directory_stays_atomic_on_the_second_run(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """The compare must run AFTER fchmod. In a directory with a default
+        ACL the mkstemp 0600 tmp inherits an access ACL whose mask is
+        ``---``; only the fchmod to 0644 makes it ``r--`` like the target's.
+        Compared before the fchmod, every later run would fall back."""
+        if not hasattr(os, "setxattr"):
+            pytest.skip("no os.setxattr on this platform")
+        d = tmp_path / "acl"
+        d.mkdir()
+        u_obj, user, g_obj, mask, other, undef = 0x01, 0x02, 0x04, 0x10, 0x20, 0xFFFFFFFF
+        blob = struct.pack("<I", 2) + b"".join(
+            struct.pack("<HHI", tag, perm, qual) for tag, perm, qual in (
+                (u_obj, 6, undef), (user, 6, 1234), (g_obj, 4, undef),
+                (mask, 6, undef), (other, 4, undef),
+            ))
+        try:
+            os.setxattr(d, "system.posix_acl_default", blob)
+        except OSError as exc:
+            pytest.skip(f"POSIX ACL xattrs unsupported on the tmp filesystem: {exc}")
+        out = d / "meta.json"
+
+        assert _run(monkeypatch, confd, out) == 0   # creates it
+        assert "system.posix_acl_access" in os.listxattr(out)
+        ino = out.stat().st_ino
+        capsys.readouterr()
+        assert _run(monkeypatch, confd, out) == 0
+
+        assert out.stat().st_ino != ino
+        assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
+
+    @staticmethod
+    def _atomic_and_quiet(monkeypatch, confd, tmp_path, capsys, listxattr, getxattr):
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        ino = out.stat().st_ino
+        monkeypatch.setattr(gtm.os, "listxattr", listxattr, raising=False)
+        monkeypatch.setattr(gtm.os, "getxattr", getxattr, raising=False)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert "WARN" not in err
+        assert out.stat().st_ino != ino
+        assert _is_fresh_metadata(out)
+
+    def test_an_xattr_that_vanishes_between_list_and_get_is_skipped(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """ENODATA from getxattr = it is gone, not "cannot compare"."""
+        def getxattr(ref, name, *a, **k):
+            if name == "user.gone":
+                raise OSError(errno.ENODATA, "No data available")
+            return b"v"
+
+        self._atomic_and_quiet(
+            monkeypatch, confd, tmp_path, capsys,
+            lambda ref, *a, **k: ["user.kept", "user.gone"], getxattr)
+
+    def test_getxattr_not_supported_reads_as_no_xattrs(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """ENOTSUP from getxattr (not only listxattr) = no xattrs there."""
+        def getxattr(ref, name, *a, **k):
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+
+        self._atomic_and_quiet(
+            monkeypatch, confd, tmp_path, capsys,
+            lambda ref, *a, **k: ["user.x"], getxattr)
+
+    def test_ima_and_evm_values_are_not_compared(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """IMA / EVM differ on every new file and the kernel recomputes them
+        for the replacement: not a reason to lose atomicity."""
+        label = b"system_u:object_r:etc_t:s0"
+        on_path = {"security.selinux": label,
+                   "security.ima": b"old-hash", "security.evm": b"old-hmac"}
+        on_fd = {"security.selinux": label,
+                 "security.ima": b"new-hash", "security.evm": b"new-hmac"}
+
+        def pick(ref):
+            return on_fd if isinstance(ref, int) else on_path
+
+        self._atomic_and_quiet(
+            monkeypatch, confd, tmp_path, capsys,
+            lambda ref, *a, **k: list(pick(ref)),
+            lambda ref, name, *a, **k: pick(ref)[name])
 
     @pytest.mark.parametrize("before", [None, 0o600, 0o666])
     def test_the_mode_is_0644_as_before(self, monkeypatch, confd, tmp_path, before):
