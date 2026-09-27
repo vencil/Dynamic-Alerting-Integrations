@@ -14,9 +14,10 @@ import (
 // so answered `valid: true` for every body whose refusal it had not copied
 // (invalid YAML among them).
 //
-// It runs write()'s pre-flight sequence, in the same order: guardTenantID →
-// w.tenantFilePath (ambiguous tenant file, #2078 declared-elsewhere) →
-// validate(configDir, …). If that sequence changes, this must change with it.
+// It runs the sequence write() judges the tree it lands on with, in the same
+// order: guardTenantID → w.tenantFilePath (ambiguous tenant file, #2078
+// declared-elsewhere) → validate(configDir, …). If that sequence changes, this
+// must change with it.
 //
 // ⚠️ DIRECT MODE ONLY. A PR-mode write judges the tree-derived checks against
 // the fresh base it checks out, not the local tree — use DryRunValidateBodyOnly
@@ -27,8 +28,9 @@ import (
 // the production Writer lets a walk blocked on a FIFO fail every later dry-run
 // AND write fast, instead of each dry-run leaking one more blocked goroutine.
 //
-// No side effects: it takes neither the admission token nor w.mu (write() does
-// not either, before validate) and only reads the tree.
+// No side effects: it takes neither the admission token nor w.mu and only reads
+// the tree, so its verdict is about the tree as it is now; a write queued
+// behind others is judged again on the tree it lands on.
 //
 // err is a refusal that would come BEFORE validation, typed exactly as Write
 // returns it (reserved id, ErrAmbiguousTenantFile, ErrTenantDeclaredElsewhere,
