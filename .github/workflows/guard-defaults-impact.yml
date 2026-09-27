@@ -89,6 +89,20 @@ on:
       - "components/threshold-exporter/app/pkg/config/platform_overlay.go"
       - "components/threshold-exporter/app/pkg/config/profile_overlay.go"
       - "components/threshold-exporter/app/pkg/config/aliases.go"
+      # ParseConfigFile decides whether a root platform file is read at all
+      # (a file its typed decode rejects contributes no `tenants:` and no
+      # `profiles:` to any tenant the guard sees).
+      - "components/threshold-exporter/app/pkg/config/config_file.go"
+      # Profile definitions (#2117): a tenant's `_profile` fills keys into
+      # what da-guard compares, so a PR editing only `_profiles.yaml`
+      # changes the guard's input. Such a PR has no changed `_defaults.yaml`,
+      # so the scope step resolves no target and the run validates the whole
+      # detected tree (the zero-target route). ⚠️ Residual, on purpose: `profiles:` in
+      # any OTHER root `_` file (`_defaults.yaml` is already covered above)
+      # does not trigger this workflow — rare, and widening to every
+      # `_*.yaml` would run the guard on unrelated platform files.
+      - "**/_[Pp][Rr][Oo][Ff][Ii][Ll][Ee][Ss].[Yy][Aa][Mm][Ll]"
+      - "**/_[Pp][Rr][Oo][Ff][Ii][Ll][Ee][Ss].[Yy][Mm][Ll]"
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"

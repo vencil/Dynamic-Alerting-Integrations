@@ -40,12 +40,33 @@ func TestReload_ProfileEdit_MovesMergedHash(t *testing.T) {
 		file      string // the file the mutation rewrites
 		body      string
 		txMoves   bool
+		tyMoves   bool
 		wantTx    *float64
 		reloaded  int
 		noOp      int
 		effect    string // "" = no (defaults, global, *) observation expected
 		effectCnt int
+		// buckets, when set, is the exact (defaults, global, effect)
+		// sampleCount per effect, replacing effect/effectCnt.
+		buckets map[string]int
 	}{
+		{
+			// A CHAIN edit the profile the tenant elects overrides: /metrics
+			// keeps serving the profile's value, so the edit is shadowed for
+			// tx exactly as if its file wrote the key. ty (no profile) is
+			// really re-priced.
+			name: "chain edit the tenant's profile overrides is shadowed",
+			file: "_defaults.yaml", body: strings.Replace(carrier, "mysql_connections: 80", "mysql_connections: 85", 1),
+			tyMoves: true, wantTx: f(60), reloaded: 1, noOp: 1,
+			buckets: map[string]int{"applied": 1, "shadowed": 1, "cosmetic": 0},
+		},
+		{
+			name:     "control: chain edit the tenant file overrides is shadowed",
+			tenantTx: "tenants:\n  tx:\n    _profile: std\n    mysql_connections: 60\n",
+			file:     "_defaults.yaml", body: strings.Replace(carrier, "mysql_connections: 80", "mysql_connections: 85", 1),
+			tyMoves: true, wantTx: f(60), reloaded: 1, noOp: 1,
+			buckets: map[string]int{"applied": 1, "shadowed": 1, "cosmetic": 0},
+		},
 		{
 			name: "profile value edited (the measured defect)",
 			file: "_profiles.yaml", body: strings.Replace(profiles, "mysql_connections: 60", "mysql_connections: 50", 1),
@@ -134,7 +155,7 @@ func TestReload_ProfileEdit_MovesMergedHash(t *testing.T) {
 			}
 			assertServed(t, m, tc.name, "tx", tc.wantTx)
 
-			for tid, wantMove := range map[string]bool{"tx": tc.txMoves, "ty": false} {
+			for tid, wantMove := range map[string]bool{"tx": tc.txMoves, "ty": tc.tyMoves} {
 				after := cachedMergedHash(m, tid)
 				if moved := after != before[tid]; moved != wantMove {
 					t.Errorf("%s merged_hash moved=%v (%s → %s), want moved=%v", tid, moved, before[tid], after, wantMove)
@@ -157,6 +178,9 @@ func TestReload_ProfileEdit_MovesMergedHash(t *testing.T) {
 				}
 				if effect == "cosmetic" && tc.effect == "applied" {
 					want = tc.noOp // ty's recomputed-but-unchanged chain tenant
+				}
+				if tc.buckets != nil {
+					want = tc.buckets[effect]
 				}
 				if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, "global", effect); int(n) != want {
 					t.Errorf("blast-radius (defaults, global, %s) sampleCount = %d, want %d", effect, n, want)

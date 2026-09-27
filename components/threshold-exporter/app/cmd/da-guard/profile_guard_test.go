@@ -47,6 +47,13 @@ func servedWarning(t *testing.T, dir, tenantFile, key string) (float64, bool) {
 	return 0, false
 }
 
+func profilesOr(p string) string {
+	if p == "" {
+		return profileGuardProfiles
+	}
+	return p
+}
+
 func TestGuard_RedundantOverrideFollowsTheProfile(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -55,24 +62,35 @@ func TestGuard_RedundantOverrideFollowsTheProfile(t *testing.T) {
 		without   string // tx.yaml with the override deleted
 		field     string
 		redundant bool
+		profiles  string // _profiles.yaml ("" = profileGuardProfiles)
 	}{
 		// The measured false advice: 80 is the chain's value, but deleting
 		// it falls back to the profile's 60.
 		{"chain-value-under-a-profile-is-not-redundant",
 			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 80\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"mysql_connections", false},
+			"mysql_connections", false, ""},
 		// Control: the profile's own value IS redundant (deleting it keeps 60).
 		{"profile-value-is-redundant",
 			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 60\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"mysql_connections", true},
+			"mysql_connections", true, ""},
 		// Control: a key the profile does not set still falls back to the
 		// chain, so the chain's value stays redundant there.
 		{"key-the-profile-does-not-set-follows-the-chain",
 			"tenants:\n  tx:\n    _profile: std\n    pg_connections: 100\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"pg_connections", true},
+			"pg_connections", true, ""},
+		// A profile value in the SCHEDULE form (a mapping) over a scalar
+		// the tenant writes: deleting the scalar falls back to the
+		// profile's mapping (55), not the chain's 80, so 80 is not
+		// redundant. (Blind review of a9837f1f: inherited() used to skip
+		// every mapping-valued profile key.)
+		{"chain-value-under-a-scheduled-profile-value-is-not-redundant",
+			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 80\n",
+			"tenants:\n  tx:\n    _profile: std\n",
+			"mysql_connections", false,
+			"profiles:\n  std:\n    mysql_connections:\n      default: \"55\"\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +98,7 @@ func TestGuard_RedundantOverrideFollowsTheProfile(t *testing.T) {
 			dir := t.TempDir()
 			testutil.WriteTree(t, dir, map[string]string{
 				"_defaults.yaml": profileGuardDefaults,
-				"_profiles.yaml": profileGuardProfiles,
+				"_profiles.yaml": profilesOr(tc.profiles),
 				"tx.yaml":        tc.tenant,
 			})
 

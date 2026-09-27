@@ -291,10 +291,16 @@ func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, [
 // guard's "inherited value") merges over the chain, below
 // platformInherited. nil when nothing qualifies.
 //
-// Same restraint as platformInherited: only a non-mapping, non-null profile
-// value, and only for a key the tenant does not write as a mapping (a leaf
-// removed from the tenant's mapping leaves the key set, so the profile does
-// not fill it and the leaf falls back to the chain). A key the platform
+// Only a non-null profile value, and only for a key the tenant does not
+// write as a mapping (a leaf removed from the tenant's mapping leaves the
+// key set, so the profile does not fill it and the leaf falls back to the
+// chain). A MAPPING profile value (the schedule form, `{default: …}`) over
+// a scalar the tenant writes is kept: deleting the scalar falls back to the
+// profile's mapping merged into the chain — which is what MergedDefaults
+// then holds, so the guard compares the tenant's scalar with its leaves and
+// never calls it redundant. (platformInherited still drops mapping
+// platform values — a known pre-existing gap there, not this function's
+// rule.) A key the platform
 // overlay sets under any spelling is left out: deleting the tenant's value
 // falls back to the overlay's, not the profile's. The profile is the one
 // `own` (tenant + overlay) elects.
@@ -313,9 +319,6 @@ func (pp *PlatformProfiles) inherited(own, tenantRaw map[string]any, overlay []P
 	var out map[string]any
 	for k, e := range candidates {
 		if k == "_metadata" || k == "_profile" || e.value == nil {
-			continue
-		}
-		if _, isMap := e.value.(map[string]any); isMap {
 			continue
 		}
 		if _, tenantMap := tenantRaw[k].(map[string]any); tenantMap {
@@ -413,6 +416,17 @@ func (pp *PlatformProfiles) absOf(file string) string {
 		}
 	}
 	return file
+}
+
+// Expand is expand's layer without the attribution: `own` (a tenant layer,
+// ApplyPlatformOverlay's result) with its elected profile's keys filled in —
+// every top-level key the tenant's config takes from above the defaults
+// chain. For package main's reload classifier: a CHAIN change to a key the
+// profile fills is shadowed, exactly as one the tenant file writes. nil pp =
+// no profiles (own returned as is).
+func (pp *PlatformProfiles) Expand(own map[string]any) map[string]any {
+	out, _ := pp.expand(own, nil)
+	return out
 }
 
 // ElectedProfile is the profile a tenant layer (the tenant block with the

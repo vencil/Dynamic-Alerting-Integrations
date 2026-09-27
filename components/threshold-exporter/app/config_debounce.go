@@ -567,7 +567,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 					scan.hashes, prior.hashes,
 					removedPaths, addedPaths,
 					overlayKeys, overlay,
-					profileKeys,
+					profileKeys, scan.profiles,
 				)
 			}
 			switch effect {

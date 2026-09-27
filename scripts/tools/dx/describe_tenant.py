@@ -336,7 +336,11 @@ def _read_profiles(files: "list[tuple[str, Any]]") -> dict:
     the canonical `optional_overrides` of a defaults carrier.
 
     ⚠️ Not mirrored (as `_read_platform_files`): Go also drops a file its
-    typed decode rejects."""
+    typed decode rejects — WHOLE, every profile in it. Concretely,
+    `profiles: {std: 5, alt: {mysql_connections: 1}}` with a tenant on
+    `_profile: alt`: the exporter (/metrics, /effective) rejects the file
+    (`std` is not a mapping), serves the chain's value and emits no
+    `profile_overlay`; this reader skips only `std` and expands `alt` (1)."""
     by_name: dict = {}
     order: list = []
     declared: set = set()

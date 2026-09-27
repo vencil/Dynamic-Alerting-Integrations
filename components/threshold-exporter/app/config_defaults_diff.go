@@ -322,6 +322,8 @@ func pathOverriddenIn(node any, segs []string) bool {
 // fills in keys the tenant's layer (file + platform entries) does not set,
 // under any spelling, so each is shadowed iff that layer sets it
 // (config.ProfileKeysSetBy); they join steps 2 and 3 like overlayKeys.
+// `profiles` is this tick's profile set: a CHAIN key the elected profile
+// fills in shadows the chain change like a tenant-file key (nil = none).
 //
 // All disk-I/O is deliberately scoped to this rare path (tenants in
 // the noOp set are by definition the "quiet defaults edit" minority).
@@ -337,6 +339,7 @@ func classifyDefaultsNoOpEffect(
 	overlayKeys []string,
 	overlay []config.PlatformBlock,
 	profileKeys []string,
+	profiles *config.PlatformProfiles,
 ) string {
 	var allChanged []string
 	// #1964: a file that joined the chain contributes its whole content
@@ -411,8 +414,13 @@ func classifyDefaultsNoOpEffect(
 	// sets over the chain — its file AND its root platform entries
 	// (`overlay`, merged exactly as the merge does). A platform change
 	// (overlayKeys) can only be shadowed by the tenant FILE, below.
+	// #2117: …and the keys the profile that layer elects fills in — they
+	// sit above the chain too, so a chain change to one of them does not
+	// reach /metrics either. The profile does NOT shadow a profile change
+	// (profileKeys, below: only the layer itself does) nor a platform
+	// change (the platform entry beats the profile).
 	own := config.ApplyPlatformOverlay(overrides, overlay)
-	if !tenantOverridesAll(own, allChanged) {
+	if !tenantOverridesAll(profiles.Expand(own), allChanged) {
 		return "cosmetic"
 	}
 	if !config.ProfileKeysSetBy(own, profileKeys) {
