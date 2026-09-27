@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 )
 
@@ -25,14 +26,11 @@ type ValidateResponse struct {
 
 // ValidateTenant handles POST /api/v1/tenants/{id}/validate
 //
-// Dry-run validation: run the write path's own pre-write checks
-// (gitops.Writer.DryRunValidate) without writing.
-//
-// ⛔ THE VERDICT COMES ONLY FROM gitops.Writer.DryRunValidate (#2124). This
-// handler used to re-assemble the write path's checks by hand, and answered
-// `valid: true` for every body whose refusal it had not copied — invalid YAML
-// among them. Do not add a check here: add it to gitops.validate, and both
-// boundaries get it.
+// Dry-run validation without writing: the verdict comes from the same gitops
+// validation function PUT runs in the configured write mode (#2124) — the full
+// pre-write sequence in direct mode, the body-only pre-flight in PR mode.
+// Authorization and domain policy are not part of it. Body checks belong in
+// gitops, never here.
 //
 // @Summary     Validate tenant config
 // @Description Dry-run validation of a tenant YAML without writing to disk.
@@ -57,15 +55,23 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Production always wires d.Writer (cmd/server/main.go builds it on the
-		// same configDir). The fallback serves handler-test literals that set
-		// only ConfigDir: it runs the same checks, and lacks only the production
-		// Writer's shared stuck-walk breaker (see DryRunValidate).
-		wr := d.Writer
-		if wr == nil {
-			wr = gitops.NewWriter(d.ConfigDir, "")
+		var errs, notices []string
+		var err error
+		if d.prWritePath() {
+			// The local tree may lag the base in PR mode (#1718), so only the
+			// body-only pre-flight WritePR itself runs before the PR is cut.
+			errs, err = gitops.DryRunValidateBodyOnly(tenantID, string(body))
+		} else {
+			// Production always wires d.Writer (cmd/server/main.go builds it on
+			// the same configDir). The fallback serves handler-test literals
+			// that set only ConfigDir: same checks, without the production
+			// Writer's shared stuck-walk breaker (see DryRunValidate).
+			wr := d.Writer
+			if wr == nil {
+				wr = gitops.NewWriter(d.ConfigDir, "")
+			}
+			errs, notices, err = wr.DryRunValidate(tenantID, string(body))
 		}
-		errs, notices, err := wr.DryRunValidate(tenantID, string(body))
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err)}
 		}
@@ -77,14 +83,19 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 	}
 }
 
-// dryRunRefusalMessage turns a refusal that would come BEFORE validation (the
-// write would not get as far as validate) into Warnings text. The two #2078
-// placement errors get the same FIXED text PUT answers with: their own text
-// names another conf.d file, which only the server log may see — and this
-// route needs only read permission. Everything else (reserved id, ambiguous
-// tenant file) is the text PUT already returns to its caller.
+// msgTenantFileUnresolved is the fixed text for any other pre-validation
+// failure: those errors (e.g. the resolver's ReadDir) carry server paths.
+const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf.d; see the server log"
+
+// dryRunRefusalMessage turns a refusal that would come BEFORE validation into
+// Warnings text. This route needs only read permission, so only two errors
+// pass through verbatim — the reserved-id refusal and ErrAmbiguousTenantFile,
+// whose text names only this tenant's own files and which PUT already returns
+// as is. Everything else gets fixed text; the full error goes to the log.
 func dryRunRefusalMessage(err error) string {
 	switch {
+	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, confd.ErrAmbiguousTenantFile):
+		return err.Error()
 	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
 		slog.Warn("tenant dry-run: tenant declared by another conf.d file", "error", err)
 		return msgTenantDeclaredElsewhere
@@ -92,6 +103,7 @@ func dryRunRefusalMessage(err error) string {
 		slog.Error("tenant dry-run: conf.d scan failed", "error", err)
 		return msgTenantTreeScan
 	default:
-		return err.Error()
+		slog.Error("tenant dry-run: cannot resolve tenant file", "error", err)
+		return msgTenantFileUnresolved
 	}
 }

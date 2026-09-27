@@ -147,7 +147,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// v2.6.0: PR-based write-back mode for batch operations (ADR-011)
 		// All operations are consolidated into a single PR/MR.
 		// Supports both GitHub PRs and GitLab MRs via platform interfaces.
-		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
+		if d.prWritePath() {
 			batchTenantsPRMode(d, rw, r, req, email, p)
 			return
 		}

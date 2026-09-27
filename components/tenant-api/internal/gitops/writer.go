@@ -1512,7 +1512,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 		case rerr == nil:
 			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
 			if err != nil {
-				return append(errs, "internal error: cannot read current custom alerts: "+err.Error()), notices
+				return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(err)), notices
 			}
 			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
 			if err != nil {
@@ -1520,7 +1520,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 			}
 			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
 		case !os.IsNotExist(rerr):
-			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error()), notices
+			return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(rerr)), notices
 		}
 	}
 	return errs, notices
