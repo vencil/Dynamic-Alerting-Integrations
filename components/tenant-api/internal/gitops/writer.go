@@ -351,6 +351,11 @@ func (w *Writer) unlockTree() {
 // 409 precondition, a transform error) returned before the guard ran: the
 // caller got the branch's answer, and the tree stayed on the branch.
 //
+// ⚠️ It covers reads under the lock only. A handler that reads the tree before
+// calling the Writer (custom-alerts' cheap hash comparison, authorization
+// lookups) can still answer from a stranded branch; the next write that
+// reaches the Writer moves the tree back.
+//
 // WritePR / WritePRBatch do not use it: they anchor on base themselves
 // (checkoutBaseClean) as their first step under the lock.
 func (w *Writer) lockTreeOnBase() error {
