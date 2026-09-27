@@ -458,6 +458,7 @@
         },
         "url": {
           "type": "string",
+          "minLength": 1,
           "title": "Webhook URL",
           "description": "HTTP endpoint to POST alerts to. Subject to webhook domain allowlist policy (if configured).",
           "format": "uri",
@@ -500,12 +501,14 @@
         },
         "smarthost": {
           "type": "string",
+          "minLength": 1,
           "title": "SMTP Server",
           "description": "SMTP server address in host:port format. Example: 'smtp.example.com:587'",
           "examples": ["smtp.example.com:587", "mail.company.com:25"]
         },
         "from": {
           "type": "string",
+          "minLength": 1,
           "title": "From Address",
           "description": "Sender email address. Required: the platform configures SMTP per receiver with no global smtp_from, and Alertmanager rejects an email config without `from` unless a global smtp_from is set.",
           "format": "email",
@@ -568,6 +571,7 @@
         },
         "api_url": {
           "type": "string",
+          "minLength": 1,
           "title": "Slack Webhook URL",
           "description": "Slack incoming webhook URL. Create at https://api.slack.com/messaging/webhooks",
           "format": "uri",
@@ -621,6 +625,7 @@
         },
         "webhook_url": {
           "type": "string",
+          "minLength": 1,
           "title": "Teams Webhook URL",
           "description": "Microsoft Teams incoming webhook URL. Create at https://outlook.webhook.office.com",
           "format": "uri",
@@ -657,6 +662,7 @@
         },
         "url": {
           "type": "string",
+          "minLength": 1,
           "title": "Rocket.Chat Webhook URL",
           "description": "Rocket.Chat incoming webhook URL.",
           "format": "uri",
@@ -692,12 +698,12 @@
     "pagerdutReceiver": {
       "type": "object",
       "title": "PagerDuty Receiver",
-      "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents. Set exactly one of service_key (Events API v1) or routing_key (Events API v2) — not both, not neither.",
-      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field `required` branches (both set matches both branches and fails oneOf; neither matches none). Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. The Go guard (internal/guard/routing.go receiverTypeSpecs ExactlyOneOf) and Python RECEIVER_TYPES (exactly_one_of) read this same shape; their parity tests fail on any other presence keyword here.",
+      "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents. Set exactly one of service_key (Events API v1) or routing_key (Events API v2) — not both, not neither; an empty string counts as not set.",
+      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field branches `{required: [k], properties: {k: {minLength: 1}}}` (both set matches both branches and fails oneOf; neither matches none). The minLength makes an empty string count as unset, matching Alertmanager (its config is a Go struct, so \"\" is the zero value = not given) and the Python / Go checks. Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. The Go guard (internal/guard/routing.go receiverTypeSpecs ExactlyOneOf) and Python RECEIVER_TYPES (exactly_one_of) read this same shape; their parity tests fail on any other presence keyword here.",
       "required": ["type"],
       "oneOf": [
-        { "required": ["service_key"] },
-        { "required": ["routing_key"] }
+        { "required": ["service_key"], "properties": { "service_key": { "minLength": 1 } } },
+        { "required": ["routing_key"], "properties": { "routing_key": { "minLength": 1 } } }
       ],
       "properties": {
         "type": {

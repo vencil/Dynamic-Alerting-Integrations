@@ -111,7 +111,7 @@
     "receiver": {
       "$ref": "tenant-config.schema.json#/definitions/receiver",
       "title": "Receiver Configuration",
-      "$comment": "#2137: a profile receiver is merged into the tenant's _routing and goes through the same route generator, so it uses the tenant schema's receiver definition instead of a second copy (the copy that lived here had drifted: 4 of 6 types, email without from, pagerduty without its key constraint). Resolves against this file's $id, which shares its base with tenant-config.schema.json's $id."
+      "$comment": "#2137: a profile receiver is merged into the tenant's _routing and goes through the same route generator, so it uses the tenant schema's receiver definition instead of a second copy (the copy that lived here had drifted: 4 of 6 types, email without from, pagerduty without its key constraint). Resolves against this file's $id, which shares its base with tenant-config.schema.json's $id — so a validator must load BOTH schemas into its registry / schema store (e.g. jsonschema's referencing.Registry keyed by each $id); loading this file alone leaves the $ref unresolvable."
     }
   }
 }

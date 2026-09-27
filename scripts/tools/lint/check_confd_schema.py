@@ -146,13 +146,19 @@ def _explain(exc, validator) -> str:
                            for s in subs)]
         if len(live) != 1:
             break
-        err = validator.exceptions.best_match(live[0])
-    msg = err.message
+        # Not best_match on a lone error: it would descend into that error's
+        # own oneOf context and surface a bare "'' should be non-empty"
+        # without saying which rule it belongs to.
+        subs = live[0]
+        err = subs[0] if len(subs) == 1 else validator.exceptions.best_match(subs)
     if err is not exc and err.validator == "oneOf" and isinstance(err.schema, dict):
         desc = err.schema.get("description")
         if desc:
-            msg += f" — {desc}"
-    return msg
+            rtype = err.instance.get("type") if isinstance(err.instance, dict) else None
+            # The rule is the useful part; the raw oneOf message would only
+            # restate the branch schemas.
+            return f"invalid {rtype} receiver: {desc}" if rtype else desc
+    return err.message
 
 
 def _iter_yaml_files(config_dir: str) -> list[str]:

@@ -4,7 +4,7 @@ The receiver presence contract — which fields are required, and which groups
 need EXACTLY ONE field set — is declared three times:
 
   - JSON Schema: docs/schemas/tenant-config.schema.json (`required` + a `oneOf`
-    whose branches each require one field)
+    whose branches each require one non-empty field)
   - Python:      scripts/tools/_lib_constants.py RECEIVER_TYPES
                  (`required` + `exactly_one_of`)
   - Go guard:    components/threshold-exporter/app/internal/guard/routing.go
@@ -15,27 +15,48 @@ pinned to it by TestReceiverTypeSpecs_MatchSchema in the same package as
 receiverTypeSpecs. Each side reads the schema as JSON and its own copy as a
 value, so no copy is parsed out of another language's source text.
 
+Emptiness is part of the contract. Python and Go treat "" as unset, as
+Alertmanager does (its config is a Go struct; "" is the zero value), so the
+schema reader demands `minLength >= 1` (`minItems` for arrays) on every
+required field and every exactly-one branch — otherwise an empty key would
+count as "given" in the schema only, and {service_key: "", routing_key: "r"}
+would match both branches.
+
+The shared case table
+(components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json)
+runs here through the schema AND the Python route generator, and through the
+Go guard in TestReceiverPresenceCases — one verdict per row in all three.
+
 It also pins the ACCEPTED field set (schema `properties` vs Python
 required + optional + metadata): the schema is `additionalProperties: false`,
 so a field Python forwards but the schema lacks is rejected by schema
 validation even though the pipeline would use it.
 
-The schema reader fails on any presence-shaping keyword it does not model, so
-an unmodelled constraint cannot read as "no constraint".
+The schema reader fails on any presence-shaping keyword or branch shape it
+does not model, so an unmodelled constraint cannot read as "no constraint".
 """
 from __future__ import annotations
 
 import json
 import os
 
+import jsonschema
 import pytest
 
 from _lib_constants import RECEIVER_TYPES
+from _grar_merge import build_receiver_config
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas", "tenant-config.schema.json")
+_CASES = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "internal",
+                      "guard", "testdata", "receiver_presence_cases.json")
 
 _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired")
+
+
+def _rejects_empty(prop: dict | None) -> bool:
+    prop = prop or {}
+    return prop.get("minLength", 0) >= 1 or prop.get("minItems", 0) >= 1
 
 
 def _schema_receivers() -> dict[str, dict]:
@@ -50,17 +71,25 @@ def _schema_receivers() -> dict[str, dict]:
         bad = [k for k in _UNMODELLED if k in d]
         assert not bad, f"{name} uses {bad}; this parity check does not model it"
         rtype = d["properties"]["type"]["const"]
+        required = sorted(f for f in d.get("required", []) if f != "type")
         groups = []
         if "oneOf" in d:
             group = []
             for i, br in enumerate(d["oneOf"]):
-                assert set(br) == {"required"} and len(br["required"]) == 1, (
-                    f"{name}.oneOf[{i}] is not {{'required': [<one field>]}}: {br}")
-                group.append(br["required"][0])
+                req = br.get("required", [])
+                assert len(req) == 1 and set(br) <= {"required", "properties"}, (
+                    f"{name}.oneOf[{i}] is not {{'required': [k], 'properties': {{k: ...}}}}: {br}")
+                props = br.get("properties", {})
+                assert set(props) <= {req[0]} and set(props.get(req[0], {})) <= {"minLength"}, (
+                    f"{name}.oneOf[{i}].properties constrains something unmodelled: {props}")
+                group.append((req[0], _rejects_empty(props.get(req[0]))))
             groups.append(sorted(group))
         out[rtype] = {
-            "required": sorted(f for f in d.get("required", []) if f != "type"),
-            "exactly_one_of": groups,
+            "required": required,
+            # Python/Go truthiness: an empty value never satisfies presence.
+            "required_rejects_empty": {f: _rejects_empty(d["properties"].get(f)) for f in required},
+            "exactly_one_of": [[f for f, _ in g] for g in groups],
+            "group_rejects_empty": {f: e for g in groups for f, e in g},
             "fields": sorted(f for f in d["properties"] if f != "type"),
         }
     return out
@@ -82,11 +111,14 @@ def _python_receivers() -> dict[str, dict]:
 
 SCHEMA = _schema_receivers()
 PYTHON = _python_receivers()
+with open(_CASES, encoding="utf-8") as _fh:
+    CASES = json.load(_fh)
 
 
 def test_sources_are_read_not_empty():
     assert len(SCHEMA) >= 6
     assert set(SCHEMA) == set(PYTHON)
+    assert len(CASES) >= 7
 
 
 @pytest.mark.parametrize("rtype", sorted(SCHEMA))
@@ -97,9 +129,33 @@ def test_python_matches_schema(rtype, aspect):
         f"!= tenant-config.schema.json {SCHEMA[rtype][aspect]}")
 
 
+@pytest.mark.parametrize("rtype", sorted(SCHEMA))
+def test_schema_rejects_empty_like_python_and_go(rtype):
+    """Python and Go read "" as unset; the schema must too (minLength / minItems)."""
+    accepts_empty = [f for f, ok in {**SCHEMA[rtype]["required_rejects_empty"],
+                                     **SCHEMA[rtype]["group_rejects_empty"]}.items() if not ok]
+    assert not accepts_empty, (
+        f"{rtype}: schema lets {accepts_empty} be empty, but Python and the Go guard "
+        "treat an empty value as unset — add minLength: 1 (minItems for arrays)")
+
+
 def test_group_fields_are_listed_optional():
     """Group fields stay in `optional` so required+optional walkers see them."""
     for rtype, spec in RECEIVER_TYPES.items():
         for group in spec.get("exactly_one_of", []):
             missing = [f for f in group if f not in spec["optional"]]
             assert not missing, f"{rtype}: {missing} in exactly_one_of but not optional"
+
+
+with open(_SCHEMA, encoding="utf-8") as _fh:
+    _VALIDATOR = jsonschema.Draft7Validator(json.load(_fh))
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
+def test_shared_case_table_schema_and_python_agree(case):
+    """Same rows as the Go guard's TestReceiverPresenceCases."""
+    doc = {"tenants": {"t1": {"_routing": {"receiver": case["receiver"]}}}}
+    schema_errors = [e.message for e in _VALIDATOR.iter_errors(doc)]
+    cfg, warnings = build_receiver_config(dict(case["receiver"]), "t1")
+    assert (not schema_errors) == case["valid"], f"schema: {schema_errors}"
+    assert (cfg is not None) == case["valid"], f"python: {warnings}"

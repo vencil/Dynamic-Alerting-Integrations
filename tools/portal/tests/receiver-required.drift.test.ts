@@ -76,5 +76,8 @@ describe('portal receivers carry the pipeline-required fields', () => {
       .toEqual(['exactly one of service_key|routing_key']);
     expect(receiverFieldProblems({ type: 'pagerduty', routing_key: 'r' })).toEqual([]);
     expect(receiverFieldProblems({ type: 'pagerduty', service_key: 'k' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: '', routing_key: 'r' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: '', routing_key: '' }))
+      .toEqual(['exactly one of service_key|routing_key']);
   });
 });

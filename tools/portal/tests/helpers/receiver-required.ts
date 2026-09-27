@@ -12,7 +12,9 @@
  * compared as data against the schema's JSON, so none is regex-parsed out of
  * another language's source. Read shape, identical in all three readers:
  *   `required` minus "type"                                  → required
- *   `oneOf` whose every branch is {"required": [<one field>]} → one group
+ *   `oneOf` whose every branch is
+ *     {"required": [k], "properties": {k: {"minLength": 1}}} → one group
+ *   (minLength is required: "" counts as unset, as in Python and Go)
  * Any other presence keyword on a receiver definition throws (fail loud,
  * never read as "no constraint").
  */
@@ -41,10 +43,16 @@ export const RECEIVER_SPECS: Record<string, ReceiverSpec> = (() => {
     const exactlyOneOf: string[][] = [];
     if (def.oneOf) {
       exactlyOneOf.push(def.oneOf.map((br: any, i: number) => {
-        if (Object.keys(br).join() !== 'required' || br.required.length !== 1) {
-          throw new Error(`${name}.oneOf[${i}] is not {"required": [<one field>]}`);
-        }
-        return br.required[0];
+        const k = br.required?.[0];
+        const props = br.properties ?? {};
+        const shapeOk = br.required?.length === 1
+          && Object.keys(br).every(key => key === 'required' || key === 'properties')
+          && Object.keys(props).every(p => p === k)
+          && Object.keys(props[k] ?? {}).every(kw => kw === 'minLength');
+        if (!shapeOk) throw new Error(`${name}.oneOf[${i}] is not {"required": [k], "properties": {k: {"minLength": 1}}}`);
+        // Python and the Go guard read "" as unset; the branch must too.
+        if (!((props[k]?.minLength ?? 0) >= 1)) throw new Error(`${name}.oneOf[${i}]: ${k} lacks minLength >= 1`);
+        return k;
       }));
     }
     out[def.properties.type.const] = {
@@ -73,9 +81,11 @@ export function findReceivers(doc: any, path: string[] = []): Array<{ path: stri
 export function receiverFieldProblems(receiver: any): string[] {
   const spec = RECEIVER_SPECS[receiver?.type];
   if (!spec) return [`<unknown type ${JSON.stringify(receiver?.type)}>`];
-  const out = spec.required.filter(f => !(f in receiver));
+  // An empty string counts as unset, as in the schema (minLength), Python and Go.
+  const isSet = (f: string) => f in receiver && receiver[f] !== '' && receiver[f] != null;
+  const out = spec.required.filter(f => !isSet(f));
   for (const group of spec.exactlyOneOf) {
-    if (group.filter(f => f in receiver).length !== 1) out.push(`exactly one of ${group.join('|')}`);
+    if (group.filter(isSet).length !== 1) out.push(`exactly one of ${group.join('|')}`);
   }
   return out;
 }

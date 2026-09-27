@@ -217,8 +217,13 @@ def extract_routing_channel(tenant_config: dict) -> str:
         webhook_url = receiver.get("webhook_url", "")
         return f"{recv_type}:{webhook_url}" if webhook_url else ""
     elif recv_type == "pagerduty":
-        service_key = receiver.get("service_key", "")
-        return f"{recv_type}:{service_key}" if service_key else ""
+        # The keys are credentials: name the Events API version, never the
+        # key. service_key wins when both are set, as it does in Alertmanager.
+        if receiver.get("service_key"):
+            return f"{recv_type}:v1"
+        if receiver.get("routing_key"):
+            return f"{recv_type}:v2"
+        return ""
 
     return ""
 

@@ -243,7 +243,12 @@ class TestValidateDir:
         ('{type: pagerduty, service_key: "k", routing_key: "r"}', "exactly one of service_key"),
         ('{type: pagerduty}', "exactly one of service_key"),
         ('{type: email, to: ["a@example.com"], smarthost: "s:25"}', "'from' is a required property"),
-    ], ids=["pd-routing-key", "pd-service-key", "pd-both", "pd-neither", "email-no-from"])
+        ('{type: pagerduty, service_key: "", routing_key: "r"}', None),
+        ('{type: pagerduty, service_key: "k", routing_key: ""}', None),
+        ('{type: pagerduty, service_key: "", routing_key: ""}', "invalid pagerduty receiver: "),
+        ('{type: email, to: ["a@example.com"], smarthost: "s:25", from: ""}', "should be non-empty"),
+    ], ids=["pd-routing-key", "pd-service-key", "pd-both", "pd-neither", "email-no-from",
+            "pd-empty-sk", "pd-empty-rk", "pd-both-empty", "email-empty-from"])
     def test_receiver_contract_and_message(self, confd, schema, receiver, expect):
         """#2137: pagerduty 恰好一個 key、email 必填 from；錯誤訊息要指到該 type 的規則，
         而不是外層 receiver oneOf 的「not valid under any of the given schemas」。"""
