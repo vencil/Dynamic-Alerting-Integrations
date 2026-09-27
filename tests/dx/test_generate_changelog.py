@@ -25,9 +25,9 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION
 _SENTINEL_BASE = "origin/tests-choose-their-own-base"
 
 # The resolver the MODULE imported, captured before any fixture can patch it
-# over. `_hermetic_diff_base` rebinds `gc.resolve_diff_base`, so reading that
+# over. `_hermetic_diff_base` rebinds `gc.resolve_diff_base_ref`, so reading that
 # attribute inside a test says what the fixture did, not what the tool does.
-_GC_RESOLVER_AT_IMPORT = gc.resolve_diff_base
+_GC_RESOLVER_AT_IMPORT = gc.resolve_diff_base_ref
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +36,7 @@ def _hermetic_diff_base(monkeypatch):
 
     GitHub sets GITHUB_BASE_REF for EVERY job of a pull_request run, the
     Python Tests job included, and the cap resolves its base through
-    `_lint_helpers.resolve_diff_base()` — which probes the RUNNER's refs
+    `_lint_helpers.resolve_diff_base_ref()` — which probes the RUNNER's refs
     ($LINT_DIFF_BASE, else origin/$GITHUB_BASE_REF, else origin/main) and
     exits 2 when none resolves. So without this fixture every in-process
     `main()` test would answer a question about the runner's checkout depth:
@@ -50,7 +50,8 @@ def _hermetic_diff_base(monkeypatch):
     resolver against a real repo."""
     monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
     monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
-    monkeypatch.setattr(gc, "resolve_diff_base", lambda *a, **k: _SENTINEL_BASE)
+    monkeypatch.setattr(gc, "resolve_diff_base_ref",
+                        lambda *a, **k: (_SENTINEL_BASE, _SENTINEL_BASE))
 
 
 def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
@@ -995,7 +996,7 @@ class TestSectionGrowthCap:
         out = capsys.readouterr().out
         # ⛔ `over <the resolver's answer>`, which is what pins that main()
         # uses it: the sentinel can only appear here by way of
-        # `resolve_diff_base`. A reinstated local `HEAD` default fails here.
+        # `resolve_diff_base_ref`. A reinstated local `HEAD` default fails here.
         assert "grew by" in out and f"over {_SENTINEL_BASE}" in out
 
 
@@ -1073,13 +1074,13 @@ def _pr_shaped_repo(tmp_path, monkeypatch, entry: str, *,
     run("commit", "-q", "-m", "the PR commit")
 
     monkeypatch.setattr(lint_helpers, "REPO_ROOT", repo)
-    monkeypatch.setattr(gc, "resolve_diff_base", lint_helpers.resolve_diff_base)
+    monkeypatch.setattr(gc, "resolve_diff_base_ref", lint_helpers.resolve_diff_base_ref)
     monkeypatch.chdir(repo)
     return repo
 
 
 class TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed:
-    """The cap's base comes from ``_lint_helpers.resolve_diff_base`` — the one
+    """The cap's base comes from ``_lint_helpers.resolve_diff_base_ref`` — the one
     fail-closed resolver every other diff-aware lint in this repo already used.
 
     ⛔ This file used to carry a SECOND resolver (``default_cap_base`` +
@@ -1192,7 +1193,7 @@ class TestTheGrowthCapHasOneBaseResolverAndItIsFailClosed:
         the cells above (a new local resolver under a new name would still
         pass), which is why it is not the guard — it is the cheap statement of
         intent that survives a rename."""
-        assert _GC_RESOLVER_AT_IMPORT is lint_helpers.resolve_diff_base
+        assert _GC_RESOLVER_AT_IMPORT is lint_helpers.resolve_diff_base_ref
         assert not hasattr(gc, "default_cap_base")
 
 

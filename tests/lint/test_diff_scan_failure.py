@@ -413,3 +413,61 @@ def test_precommit_files_filter_ignores_extension_case(hook_id, matches, misses)
     pattern = re.compile(_hook_files_regex(hook_id))
     assert [p for p in matches if not pattern.search(p)] == [], hook_id
     assert [p for p in misses if pattern.search(p)] == [], hook_id
+
+
+# ---------------------------------------------------------------------------
+# #2205 — the default base is the merge base, not the base ref itself
+# ---------------------------------------------------------------------------
+# A branch BEHIND origin/main: main deleted a stray `_stale.bat` after the
+# fork, the branch still has it. Measured before the fix: diffing the working
+# tree against origin/main listed `_stale.bat` as added, and the branch was
+# told to remove or exempt a file it never touched.
+
+
+def _behind_main(repo: Path, monkeypatch) -> str:
+    _stage(repo, "_stale.bat", b"@echo off\r\ngit commit\r\n")
+    _git(repo, "commit", "-q", "-m", "fork point carries a stray script")
+    fork = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=True,
+                          capture_output=True, text=True, timeout=30).stdout.strip()
+    _git(repo, "rm", "-q", "_stale.bat")
+    _git(repo, "commit", "-q", "-m", "main removes it")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "topic", fork)
+    monkeypatch.setenv("LINT_DIFF_BASE", "origin/main")
+    return fork
+
+
+def test_a_branch_behind_main_is_not_blamed_for_what_main_changed(in_repo, monkeypatch, capsys):
+    fork = _behind_main(in_repo, monkeypatch)
+    assert _lint_helpers.resolve_diff_base() == fork
+    assert _lint_helpers.resolve_diff_base_ref() == ("origin/main", fork)
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 0, f"rc={rc}\n{out}{err}"
+    # The message names the ref, not a bare SHA (blind review, round 1).
+    assert f"diff vs origin/main (merge base {fork[:12]})" in out, out
+
+
+def test_a_branch_behind_main_still_answers_for_its_own_change(in_repo, monkeypatch, capsys):
+    """Anti-vacuity: the same repo with one violation of the branch's own."""
+    _behind_main(in_repo, monkeypatch)
+    _stage(in_repo, "_mine.bat", b"@echo off\r\ngit push\r\n")
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 1, f"rc={rc}\n{out}{err}"
+    assert "_mine.bat" in err and "_stale.bat" not in err, err
+
+
+def test_no_merge_base_is_a_caller_error_not_a_two_way_diff(in_repo, monkeypatch, capsys):
+    first_root = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(in_repo), check=True,
+                                capture_output=True, text=True, timeout=30).stdout.strip()
+    _git(in_repo, "checkout", "-q", "--orphan", "other")
+    _git(in_repo, "rm", "-q", "-r", "-f", ".")
+    _stage(in_repo, "x.txt", b"x\n")
+    _git(in_repo, "commit", "-q", "-m", "unrelated root")
+    _git(in_repo, "update-ref", "refs/remotes/origin/main", first_root)
+    monkeypatch.setenv("LINT_DIFF_BASE", "origin/main")
+    _stage(in_repo, "_probe.bat", b"@echo off\r\ngit commit\r\n")
+    with pytest.raises(_lint_helpers.DiffBaseMissingError, match="no merge base"):
+        _lint_helpers.resolve_diff_base()
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 2, f"rc={rc}\n{out}{err}"
+    assert "OK" not in out, out

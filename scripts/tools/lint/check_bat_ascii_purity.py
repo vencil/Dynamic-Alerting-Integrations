@@ -80,7 +80,7 @@ from _lint_helpers import (  # noqa: E402
     DiffScanError,
     diff_changed_paths,
     parse_bypass_tag,
-    resolve_diff_base,
+    resolve_diff_base_labeled,
 )
 
 
@@ -218,7 +218,7 @@ def main() -> int:
         scan_mode = "full-scan"
     else:
         try:
-            base = args.diff_base or resolve_diff_base()
+            base, base_label = resolve_diff_base_labeled(args.diff_base)
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -227,7 +227,7 @@ def main() -> int:
         except DiffScanError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        scan_mode = f"diff vs {base}"
+        scan_mode = f"diff vs {base_label}"
 
     # Only apply the rule to scripts/ops/*.bat -- other .bat (e.g. dev-
     # container bind-mount scripts) don't go through Desktop Commander

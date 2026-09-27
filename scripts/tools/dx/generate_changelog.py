@@ -55,7 +55,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # fail-open: #1894 and #1903 both went green under `make pr-preflight` and
 # turned three CI jobs red on that single asymmetry.
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'lint'))
-from _lint_helpers import DiffBaseMissingError, resolve_diff_base  # noqa: E402
+from _lint_helpers import DiffBaseMissingError, resolve_diff_base_ref  # noqa: E402
 # ⛔ One ruler. `agent_output_metrics` is the tool that MEASURED the changelog
 # (entry definition, cap); the lint below must count with the same functions
 # or "over the cap" here and "over the cap" there will drift apart.
@@ -871,7 +871,14 @@ def main() -> int:
                 print(f"notice: --cap 0, the new-entry cap is off for {target}")
             if args.cap > 0:
                 try:
-                    base = args.base or resolve_diff_base()
+                    if args.base:
+                        base = base_label = args.base
+                    else:
+                        # Diff against the merge base, named after the ref
+                        # it came from so the message still says which
+                        # branch the cap measured against (#2205).
+                        ref, base = resolve_diff_base_ref()
+                        base_label = ref if base == ref else f"{ref} (merge base {base[:12]})"
                 except DiffBaseMissingError as exc:
                     # ⛔ rc 2, never a fallback to HEAD: a cap judged against
                     # a commit that already contains the entry is a cap that
@@ -900,13 +907,13 @@ def main() -> int:
                     # judged against zero, and a real changelog of
                     # legacy-sized entries is always over.
                     what = "not found" if base_text is None else f"has no [{CAP_SECTION}] section"
-                    print(f"notice: {target} {what} at {base}; the "
+                    print(f"notice: {target} {what} at {base_label}; the "
                           f"[{CAP_SECTION}] growth cap has no base and is skipped")
                 else:
                     issues += [f"{target}: {i}" for i in
-                               lint_entry_caps(text, base_text, args.cap, base_label=base)]
+                               lint_entry_caps(text, base_text, args.cap, base_label=base_label)]
                     issues += [f"{target}: {i}" for i in
-                               lint_unreleased_frozen(text, base_text, base_label=base)]
+                               lint_unreleased_frozen(text, base_text, base_label=base_label)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

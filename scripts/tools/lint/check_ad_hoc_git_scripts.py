@@ -64,7 +64,7 @@ from _lint_helpers import (  # noqa: E402
     DiffScanError,
     diff_changed_paths,
     parse_bypass_tag,
-    resolve_diff_base,
+    resolve_diff_base_labeled,
 )
 
 EXTS = {".bat", ".ps1", ".cmd"}
@@ -191,11 +191,11 @@ def main() -> int:
         offenders = scan_full(repo)
     else:
         try:
-            base = args.diff_base or resolve_diff_base()
+            base, base_label = resolve_diff_base_labeled(args.diff_base)
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        scan_mode = f"diff vs {base}"
+        scan_mode = f"diff vs {base_label}"
         try:
             offenders = scan_diff(repo, base)
         except DiffScanError as e:
