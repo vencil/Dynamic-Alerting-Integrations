@@ -84,10 +84,18 @@ class PreflightReport:
                 for dl in r.detail.strip().split("\n"):
                     print(f"     {dl}")
         print("-" * width)
+        # The verdict line states only what was measured (#2141): a WARN or
+        # SKIP can be "could not check" (gh missing, no PR yet), so neither
+        # may be summarised as "mergeable" or "all checks passed".
+        warned = sum(r.status == Status.WARN for r in self.results)
+        skipped = sum(r.status == Status.SKIP for r in self.results)
         if self.has_failure:
             print("  ❌ BLOCKED — 有必須修復的問題")
         elif self.has_warning:
-            print("  ⚠️  CAUTION — 可合併但建議先處理警告")
+            skip_note = f"、{skipped} 項略過" if skipped else ""
+            print(f"  ⚠️  CAUTION — 沒有檢查失敗；{warned} 項警告或未能判定{skip_note}（見上）")
+        elif skipped:
+            print(f"  ✅ READY — 沒有檢查失敗；{skipped} 項略過（見上）")
         else:
             print("  ✅ READY — 所有檢查通過，可以 merge")
         print("=" * width)

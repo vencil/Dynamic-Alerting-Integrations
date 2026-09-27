@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import subprocess as _subprocess
 from pathlib import Path
@@ -73,6 +74,31 @@ class TestPreflightReport:
         r.print_summary()
         out = capsys.readouterr().out
         assert "READY" in out
+
+    # #2141：WARN／SKIP 可能是「量不到」（gh 不可用、還沒開 PR），總結行不可
+    # 據此說「可合併」或「所有檢查通過」。比的是結構：判定關鍵字、行內的
+    # 計數、以及「是否宣稱全部通過」只在全部 PASS 時為真。
+    @pytest.mark.parametrize("statuses, keyword, counts", [
+        (["PASS", "FAIL", "WARN"], "BLOCKED", []),
+        (["PASS", "WARN"], "CAUTION", [1]),
+        (["PASS", "WARN", "WARN", "SKIP"], "CAUTION", [2, 1]),
+        (["PASS", "SKIP"], "READY", [1]),
+        (["PASS", "PASS"], "READY", []),
+    ], ids=["fail", "warn", "warn+skip", "skip-only", "control-all-pass"])
+    def test_print_summary_claims_only_what_was_measured(self, capsys, statuses,
+                                                         keyword, counts):
+        r = pp.PreflightReport()
+        for i, s in enumerate(statuses):
+            r.add(pp.CheckResult(f"c{i}", pp.Status[s], "m"))
+        r.print_summary()
+        verdict = [ln for ln in capsys.readouterr().out.splitlines()
+                   if any(k in ln for k in ("BLOCKED", "CAUTION", "READY"))]
+        assert len(verdict) == 1, verdict
+        line = verdict[0]
+        claims_all_passed = "可合併" in line or "所有檢查通過" in line
+        got = ([k for k in ("BLOCKED", "CAUTION", "READY") if k in line],
+               [int(n) for n in re.findall(r"\d+", line)], claims_all_passed)
+        assert got == ([keyword], counts, set(statuses) == {"PASS"}), line
 
     def test_print_summary_includes_detail_lines(self, capsys):
         r = pp.PreflightReport()
