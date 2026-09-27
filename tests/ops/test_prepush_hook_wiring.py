@@ -20,8 +20,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1526,7 +1528,7 @@ echo "mkdocs, version 0.0.0-test"
 """
 
 
-def _docs_repo(tmp_path: Path) -> tuple[Path, Path, str, str]:
+def _docs_repo(tmp_path: Path, check: str = _RECORDER) -> tuple[Path, Path, str, str]:
     """Repo with the guards, a recording strict-check, and two branches.
 
     Returns (work, record_file, sha_of_A_head, sha_of_B_head). The working tree
@@ -1536,7 +1538,7 @@ def _docs_repo(tmp_path: Path) -> tuple[Path, Path, str, str]:
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     lint = work / "scripts" / "tools" / "lint"
     lint.mkdir(parents=True)
-    (lint / "mkdocs_strict_check.sh").write_text(_RECORDER, encoding="utf-8")
+    (lint / "mkdocs_strict_check.sh").write_text(check, encoding="utf-8")
     (work / "docs").mkdir()
     (work / "docs" / "index.md").write_text("# index\n", encoding="utf-8")
     # ⛔ `_commit` stages only its own a.txt, so everything this fixture
@@ -1604,6 +1606,8 @@ def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
         "the guard validated the wrong tree: it should have checked out the "
         f"pushed commit {sha_b} but recorded {seen} (working tree is {sha_a})"
     )
+    # The pass half of the verdict; the EXIT trap (#2169) runs on this path too.
+    assert r.returncode == 0, f"a passing build did not let the push through:\n{r.stdout}{r.stderr}"
 
 
 def test_a_push_that_changes_no_docs_is_not_gated_when_another_branch_did(
@@ -1820,9 +1824,12 @@ def test_the_guard_leaves_no_temporary_worktree_behind(tmp_path: Path) -> None:
     the ORIGINAL defect back) it would not qualify, because a leaked worktree
     is a failure mode this fix introduces, not one it restores.
 
-    It is kept because it does discriminate on the mechanism it actually
-    guards: dropping the `git worktree remove` line in `_build_one` turns it
-    red naming the leaked path (measured). The four tests above are the ones
+    ⚠️ Since #2169 it no longer catches a dropped `git worktree remove` in
+    `_build_one` on its own: the EXIT trap removes the last tree anyway, so
+    with one ref this stays green. The two-ref row of
+    `test_an_interrupted_push_leaves_no_temporary_worktree_behind` is what
+    turns red then. What this one still pins is the uninterrupted path: the
+    must-not-fire twin of that test. The four tests above are the ones
     that carry #1690 itself — all four fail on the pre-fix script, this one
     does not, and that difference is the point of writing it down here.
     """
@@ -1831,6 +1838,94 @@ def test_the_guard_leaves_no_temporary_worktree_behind(tmp_path: Path) -> None:
 
     listed = _git(work, "worktree", "list").stdout.strip().splitlines()
     assert len(listed) == 1, f"temporary worktree left registered: {listed}"
+    assert not list((work / ".git").glob("mkdocs-strict-*")), (
+        "temporary worktree directory left on disk"
+    )
+
+
+# The recorder, plus: the build whose number is PREPUSH_TEST_HANG_ON says so and
+# hangs, so the interrupt lands mid-build in a known tree.
+_HANGING_RECORDER = """#!/usr/bin/env bash
+git rev-parse HEAD >> "$PREPUSH_TEST_RECORD"
+if [ "$(wc -l < "$PREPUSH_TEST_RECORD")" -eq "$PREPUSH_TEST_HANG_ON" ]; then
+    : > "$PREPUSH_TEST_STARTED"
+    sleep 30
+fi
+"""
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
+@pytest.mark.parametrize(
+    ("sig", "refs"),
+    [(signal.SIGINT, ("topic",)), (signal.SIGTERM, ("topic",)), (signal.SIGINT, ("topic", "topic2"))],
+    ids=["SIGINT", "SIGTERM", "SIGINT-in-second-tree"],
+)
+def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
+    tmp_path: Path, sig: signal.Signals, refs: tuple[str, ...],
+) -> None:
+    """#2169 — Ctrl-C or SIGTERM mid-build skipped the clean-up that followed
+    the build, leaving the tree in `.git` and registered in `git worktree list`.
+
+    Driven through the installed wiring (git → shim → dispatcher → guard), not
+    the guard alone. The two-ref row interrupts the SECOND tree: clean-up that
+    only knew about the first would pass the other rows.
+    """
+    work, record, _sha_a, _sha_b = _docs_repo(tmp_path, check=_HANGING_RECORDER)
+    assert _git(work, "checkout", "-q", "-b", "topic2").returncode == 0
+    (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: change on topic2 only")
+    assert _git(work, "checkout", "-q", "main").returncode == 0
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    # The user's own worktree, which the clean-up must leave alone: with only
+    # the main tree around, "remove every linked worktree" passes as well.
+    # ⛔ No space in the path: word splitting would then spare it, and an
+    # unquoted "remove every linked worktree" would pass again.
+    user_wt = tmp_path / "user_wt"
+    assert _git(work, "worktree", "add", "-q", "--detach", str(user_wt), "main").returncode == 0
+    before = _git(work, "worktree", "list", "--porcelain").stdout
+
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    (bindir / "mkdocs").write_text(_FAKE_MKDOCS, encoding="utf-8")
+    (bindir / "mkdocs").chmod(0o755)
+    started = tmp_path / "started"
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+           "GIT_PREFLIGHT_BYPASS": "1", "PREPUSH_TEST_RECORD": str(record),
+           "PREPUSH_TEST_STARTED": str(started), "PREPUSH_TEST_HANG_ON": str(len(refs))}
+    env.pop("MKDOCS_STRICT_BYPASS", None)
+
+    # A session of its own, so the signal reaches the whole group like a
+    # terminal's Ctrl-C does; SIGINT back to default, or a pytest run as a
+    # background job starts every child with it ignored.
+    proc = subprocess.Popen(  # subprocess-timeout: ignore
+        ["git", "push", "--dry-run", "origin", *refs], cwd=work, env=env,
+        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not started.exists():
+            assert proc.poll() is None, f"the push ended before the build hung: {proc.communicate(timeout=20)}"
+            assert time.monotonic() < deadline, "the build never started"
+            time.sleep(0.05)
+        # Must-fire half: the tree this test expects to be removed exists now.
+        during = _git(work, "worktree", "list", "--porcelain").stdout
+        assert during.count("\nworktree ") == before.count("\nworktree ") + 1, (
+            f"expected exactly one temporary worktree while the build hangs:\n{during}"
+        )
+        os.killpg(proc.pid, sig)
+        proc.communicate(timeout=20)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    assert len(record.read_text(encoding="utf-8").split()) == len(refs), "hung in the wrong tree"
+    after = _git(work, "worktree", "list", "--porcelain").stdout
+    assert after == before, f"worktrees changed across the interrupted push:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), (
         "temporary worktree directory left on disk"
     )
