@@ -970,6 +970,10 @@ func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
 // our write). Non-git environments skip conflict detection but still
 // return commit errors verbatim.
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, trailer ...string) error {
+	// #1723: never commit onto a PR branch a failed WritePR left checked out.
+	if err := w.leavePRBranch(filePath); err != nil {
+		return err
+	}
 	headBefore, err := w.currentHEAD()
 	if err != nil {
 		// Proceed without conflict detection in non-git environments.

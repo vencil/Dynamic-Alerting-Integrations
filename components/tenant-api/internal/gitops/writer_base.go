@@ -11,11 +11,15 @@
 package gitops
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 // SetBaseBranch sets the PR-mode base branch the Writer branches from and returns
@@ -54,6 +58,72 @@ func (w *Writer) checkoutBaseClean(base string) error {
 		return fmt.Errorf("checkout base %q: %w", base, err)
 	}
 	return nil
+}
+
+// leavePRBranch is the direct-commit guard commitFileChange runs before it
+// touches the tree (#1723). Caller MUST hold w.mu.
+//
+// The hazard: WritePR / WritePRBatch return the worktree to base as their last
+// step, and when that fails twice (ErrBaseRestore) the tree stays on the
+// feature branch after the lock is released. Every direct commit after that —
+// special files, the account registry, direct-mode tenant writes — would land
+// on that branch and report success, and the next PR write's anchoring
+// `checkout -f <base>` would strand those commits where no reader looks.
+//
+// So when HEAD is a branch in the PR namespace (platform.BranchPrefix, the
+// same constant WritePR names its branches with), return to base first:
+//
+//   - The return fails → nothing is written. The error wraps ErrTreeNotOnBase
+//     AND the git error (%w twice), so index.lock contention still reads as
+//     ErrWriteOverloaded. Both mean "retry": no commit and no push happened,
+//     unlike ErrBaseRestore, whose push already did.
+//   - The return succeeds, but filePath is not byte-identical on base → still
+//     nothing is written, ErrTreeNotOnBase. The caller built content from the
+//     copy it read on the feature branch (MutateConfigFile's transform input,
+//     WriteMerged's merge base, WriteIfUnchanged's hash check). Committing
+//     that onto base could replay the unmerged proposal into base, or undo a
+//     base-only commit the branch never had — the branch is cut from
+//     origin/<base>, not from the local base special files commit to. The
+//     tree is now on base, so the retry reads the right copy.
+//   - Identical → the caller's read is the base copy's read; proceed.
+//
+// Everything else keeps the behaviour this guard predates. Direct mode commits
+// on whatever branch the operator checked out, so a non-PR branch is left
+// alone, and so is a HEAD that symbolic-ref cannot name: a detached HEAD is
+// not a state WritePR leaves behind (it only ever checks out named branches),
+// and a read that times out tells us nothing about the branch — refusing
+// there would fail direct mode on a guess. The commit that follows still runs
+// under its own git timeout.
+func (w *Writer) leavePRBranch(filePath string) error {
+	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		return nil
+	}
+	branch := strings.TrimSpace(string(out))
+	base := w.base()
+	if branch == base || !strings.HasPrefix(branch, platform.BranchPrefix) {
+		return nil
+	}
+
+	before, beforeErr := os.ReadFile(filePath)
+	if err := w.checkoutBaseClean(base); err != nil {
+		slog.Error("gitops: worktree is on a PR branch and returning to base failed — nothing written (#1723)",
+			"branch", branch, "base", base, "error", err)
+		return fmt.Errorf("%w: HEAD is PR branch %q and returning to base %q failed, nothing written: %w",
+			ErrTreeNotOnBase, branch, base, err)
+	}
+	slog.Warn("gitops: worktree was on a PR branch — returned to base before a direct commit (#1723)",
+		"branch", branch, "base", base)
+
+	after, afterErr := os.ReadFile(filePath)
+	switch {
+	case beforeErr == nil && afterErr == nil && bytes.Equal(before, after):
+		return nil
+	case errors.Is(beforeErr, os.ErrNotExist) && errors.Is(afterErr, os.ErrNotExist):
+		return nil // absent on both: the caller read "no file" and base agrees
+	}
+	return fmt.Errorf("%w: HEAD was PR branch %q; returned to base %q, but %s differs there, so content derived from the branch's copy was not written — retry",
+		ErrTreeNotOnBase, branch, base, filePath)
 }
 
 // resolveFreshBaseRef fetches origin/<base> (in-lock, TRK-318) and returns the

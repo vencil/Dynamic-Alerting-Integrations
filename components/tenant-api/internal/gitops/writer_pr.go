@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 // PRWriteResult contains the result of a PR-mode write operation.
@@ -131,7 +132,7 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 
 	// Step 2: generate branch name
 	ts := time.Now().UTC().Format("20060102-150405")
-	branchName := fmt.Sprintf("tenant-api/%s/%s", tenantID, ts)
+	branchName := platform.BranchPrefix + tenantID + "/" + ts
 
 	// Step 3: anchor on a clean base, THEN branch from it. Always checking out the
 	// base first (rather than branching from "current HEAD" and returning via the
@@ -345,7 +346,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	defer w.unlockTree()
 
 	ts := time.Now().UTC().Format("20060102-150405")
-	branchName := fmt.Sprintf("tenant-api/batch/%s", ts)
+	branchName := platform.BranchPrefix + "batch/" + ts
 
 	// Anchor on a clean base then branch from it (#638 — see WritePR Step 3).
 	base := w.base()
