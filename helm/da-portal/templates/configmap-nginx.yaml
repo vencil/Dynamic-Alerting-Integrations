@@ -64,6 +64,22 @@ data:
         add_header Content-Type text/plain;
       }
 
+      # ── Simulate preview: explicitly NOT provided (#2125) ─────────────────
+      # POST /api/v1/tenants/simulate is served by threshold-exporter, not
+      # tenant-api, and this chart does not proxy it. Rendered on every tier:
+      # on Tier-2 the exact match wins over the /api/v1/ prefix (which would
+      # hand `simulate` to tenant-api as a tenant {id} -> 405); on Tier-1 it
+      # answers instead of the static `location /`. The fixed code is what the
+      # simulate-preview widget keys on (drift pinned by
+      # tests/shared/test_portal_simulate_not_provided.py).
+      # No add_header here on purpose: any add_header in a location drops the
+      # server-level security headers above; Content-Type comes from
+      # default_type instead.
+      location = /api/v1/tenants/simulate {
+        default_type application/json;
+        return 501 '{"code":"SIMULATE_NOT_PROVIDED","error":"simulate preview is not provided by this deployment: the portal does not proxy /api/v1/tenants/simulate (served by threshold-exporter)"}';
+      }
+
       {{- /* Reverse-proxy locations render only when their upstream URL is set.
          A Tier-1 static-only portal keeps BOTH URLs empty (enforced by the
          open-proxy guard in networkpolicy.yaml, GHSA-3g2h-rf85-5rrv); an empty
