@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
@@ -188,4 +190,69 @@ func TestSpecialFileWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 			assertRetryLanded(t, do(), dir, refs)
 		})
 	}
+}
+
+// A direct PUT that the stranded tree would refuse BEFORE reaching the commit:
+// the branch's own reads — which file declares the tenant, the base-hash
+// comparison — must not answer for base. The branch check runs as soon as the
+// write lock is held, before any of them, so the answer is the retryable 503
+// and the retry is judged on base.
+func TestPutTenantDirect_StrandedOnPRBranch_BranchReadsDoNotAnswer(t *testing.T) {
+	t.Parallel()
+	baseTenant := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
+	cases := map[string]struct {
+		branchFiles map[string]string
+		baseHash    string
+	}{
+		// A: on the branch a second file declares the tenant, which read on
+		// the branch is 409 TENANT_DECLARED_ELSEWHERE; base has no such file.
+		"DeclaredElsewhereOnBranchOnly": {
+			branchFiles: map[string]string{"extra.yaml": "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"},
+		},
+		// B: the client's X-DA-Base-Hash is base's copy; compared against
+		// the branch's copy it is a 409 CONFLICT.
+		"BaseHashOfBaseFile": {
+			branchFiles: map[string]string{"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"},
+			baseHash:    cfg.ComputeSourceHash([]byte(baseTenant)),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := strandedRepoWith(t, map[string]string{"db-a.yaml": baseTenant}, tc.branchFiles)
+			refs := snapshotRefs(t, dir)
+			h := wrapWithRBACMiddleware(
+				PutTenant(&Deps{Writer: gitops.NewWriter(dir, dir), WriteMode: WriteModeDirect}),
+				permissiveRBACManager(t), rbac.PermWrite, TenantIDFromPath)
+			do := func() *httptest.ResponseRecorder {
+				req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",
+					bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"disable\"\n"))
+				if tc.baseHash != "" {
+					req.Header.Set(BaseHashHeader, tc.baseHash)
+				}
+				setRequestIdentity(req, "op@example.com")
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				return rec
+			}
+
+			rec := do()
+			assertRetryable503(t, rec, CodeTreeNotOnBase, dir, refs)
+			assertNoPathLeak(t, rec, dir)
+			if got := strings.TrimSpace(revParseSymbolic(t, dir)); got != "main" {
+				t.Fatalf("HEAD = %q after the 503, want main", got)
+			}
+
+			assertRetryLanded(t, do(), dir, refs)
+		})
+	}
+}
+
+func revParseSymbolic(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("symbolic-ref: %v", err)
+	}
+	return string(out)
 }

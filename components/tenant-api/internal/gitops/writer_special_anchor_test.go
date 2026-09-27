@@ -4,7 +4,8 @@ package gitops
 // (ErrBaseRestore), the worktree stays on the feature branch. Every write that
 // goes through commitFileChange used to commit onto that branch and report
 // success, and the next WritePR's anchoring checkout then stranded those
-// commits. These tests pin the guard in commitFileChange (leavePRBranch).
+// commits. These tests pin the guard (leavePRBranch), which runs as soon as
+// the write lock is held (lockTreeOnBase) and again in commitFileChange.
 //
 // The oracle is git itself, queried with plain commands on refs — never the
 // Writer under test.
@@ -231,5 +232,42 @@ func TestCommitFileChange_NonPRBranchIsLeftAlone(t *testing.T) {
 				t.Errorf("main moved: the write did not stay on the operator's HEAD")
 			}
 		})
+	}
+}
+
+// The branch check runs as soon as the write lock is held, before anything
+// reads the tree (lockTreeOnBase): a transform that would refuse what it reads
+// on the branch never runs there, so its error cannot answer for base. The
+// caller gets the retryable ErrTreeNotOnBase with the tree back on base, and
+// the retry's transform sees base's copy.
+func TestMutateConfigFile_StrandedOnPRBranch_TransformNeverReadsTheBranch(t *testing.T) {
+	dir, w, branch := strandOnPRBranch(t)
+	mainBefore := gitOut(t, dir, "rev-parse", "main")
+	branchBefore := gitOut(t, dir, "rev-parse", branch)
+	errRefused := errors.New("transform refused what it read")
+	calls := 0
+	refuse := func([]byte) ([]byte, error) { calls++; return nil, errRefused }
+
+	err := w.MutateConfigFile(context.Background(), "_groups.yaml", "groups", anchorEmail, refuse)
+	if !errors.Is(err, ErrTreeNotOnBase) || errors.Is(err, errRefused) {
+		t.Fatalf("err = %v, want ErrTreeNotOnBase and not the transform's error", err)
+	}
+	if calls != 0 {
+		t.Errorf("transform ran %d time(s) on the stranded tree", calls)
+	}
+	if got := headBranch(t, dir); got != "main" {
+		t.Errorf("HEAD = %q, want main", got)
+	}
+	if got := gitOut(t, dir, "rev-parse", branch); got != branchBefore {
+		t.Errorf("feature branch moved")
+	}
+
+	groups := "groups:\n  g1:\n    label: G1\n"
+	if err := w.MutateConfigFile(context.Background(), "_groups.yaml", "groups", anchorEmail,
+		func([]byte) ([]byte, error) { return []byte(groups), nil }); err != nil {
+		t.Fatalf("retry on base: %v", err)
+	}
+	if got := gitOut(t, dir, "rev-parse", "main~1"); got != mainBefore {
+		t.Errorf("main~1 = %s, want %s (exactly one new commit on base)", got[:8], mainBefore[:8])
 	}
 }

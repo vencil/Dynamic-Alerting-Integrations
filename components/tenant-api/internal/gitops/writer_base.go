@@ -58,8 +58,10 @@ func (w *Writer) checkoutBaseClean(base string) error {
 	return nil
 }
 
-// leavePRBranch is the direct-commit guard commitFileChange runs before it
-// touches the tree (#1723). Caller MUST hold w.mu.
+// leavePRBranch is the direct-commit guard (#1723). Caller MUST hold w.mu.
+// It runs in lockTreeOnBase, right after the lock is taken and before the
+// caller reads anything from the tree; commitFileChange repeats it as a
+// backstop.
 //
 // The hazard: WritePR / WritePRBatch return the worktree to base as their last
 // step, and when that fails twice (ErrBaseRestore) the tree stays on the
@@ -72,17 +74,17 @@ func (w *Writer) checkoutBaseClean(base string) error {
 // same constant WritePR names its branches with), it tries to return the tree
 // to base, and REFUSES THIS WRITE EITHER WAY with ErrTreeNotOnBase:
 //
-//   - Why refuse even after a successful return: by the time commitFileChange
-//     runs, every decision about this write was made on the feature branch's
-//     tree — which file the tenant resolves to, the declared-elsewhere scan,
-//     root defaults in validation, MutateConfigFile's transform input,
-//     WriteMerged's merge base and its no-op short-circuit, WriteIfUnchanged's
-//     hash check. The branch is cut from origin/<base>, not from the local
-//     base the direct writes commit to, so any of those can differ on base.
-//     Committing the result onto base could replay the unmerged proposal into
-//     it or undo a base-only commit. Nothing short of redoing the whole request
-//     on base is sound, and the retry does exactly that — the tree is on base
-//     now.
+//   - Why refuse even after a successful return: the writer's own reads come
+//     after this check, but the request was prepared before the lock, against
+//     the feature branch's tree — the body and base hash the client derived
+//     from a GET served off it, a handler's pre-lock reads (the custom-alerts
+//     merge and its cheap hash check), the snapshot a group or view handler
+//     authorized against. The branch is cut from origin/<base>, not from the
+//     local base the direct writes commit to, so any of those can differ on
+//     base. Committing the result onto base could replay the unmerged
+//     proposal into it or undo a base-only commit. Nothing short of redoing
+//     the whole request on base is sound, and the retry does exactly that —
+//     the tree is on base now.
 //   - The return fails → the error ALSO wraps the git error (%w twice), so
 //     index.lock contention still reads as ErrWriteOverloaded.
 //

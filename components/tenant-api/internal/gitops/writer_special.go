@@ -84,7 +84,10 @@ func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, author
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	// #1723: the branch check precedes the resolution below (lockTreeOnBase).
+	if err := w.lockTreeOnBase(); err != nil {
+		return err
+	}
 	defer w.unlockTree()
 
 	// Resolved under w.mu so no other write through this Writer can create
@@ -118,7 +121,9 @@ func (w *Writer) writeSpecialFile(ctx context.Context, filename, entityType, aut
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	if err := w.lockTreeOnBase(); err != nil { // #1723
+		return err
+	}
 	defer w.unlockTree()
 
 	return w.commitFileChange(

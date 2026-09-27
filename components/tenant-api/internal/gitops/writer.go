@@ -337,6 +337,31 @@ func (w *Writer) unlockTree() {
 	}
 }
 
+// lockTreeOnBase is lockTree for a direct-commit write (#1723): it takes the
+// writer lock and, before the caller reads anything from the tree, runs
+// leavePRBranch. On error the lock is already released and the caller returns
+// the error as is; on nil the caller holds the lock and must defer unlockTree.
+//
+// ⛔ It must come BEFORE the first read of the tree, not merely before the
+// commit. Every read a direct write makes under the lock — which file the
+// tenant resolves to, the declared-elsewhere scan, validation's root defaults,
+// the base-hash comparison, MutateConfigFile's transform input, WriteMerged's
+// merge base — answers for whatever branch is checked out. With the check at
+// commit time, a read that REFUSED on a stranded tree (409 declared-elsewhere,
+// 409 precondition, a transform error) returned before the guard ran: the
+// caller got the branch's answer, and the tree stayed on the branch.
+//
+// WritePR / WritePRBatch do not use it: they anchor on base themselves
+// (checkoutBaseClean) as their first step under the lock.
+func (w *Writer) lockTreeOnBase() error {
+	w.lockTree()
+	if err := w.leavePRBranch(); err != nil {
+		w.unlockTree()
+		return err
+	}
+	return nil
+}
+
 // SetOnTreeRelease registers fn to run after every write section releases
 // the writer lock, whether the write succeeded or not (see lockTree). Set it
 // once at startup, before the server serves.
@@ -480,9 +505,9 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 
 // Write validates, persists, and commits a tenant's config YAML.
 //
-// Flow (steps 2–6 are shared with writeSpecialFile via commitFileChange):
-//  1. Validate YAML schema (ParseConfig + ValidateTenantKeys)
-//  2. Lock mutex
+// Flow (steps 3–7 are shared with writeSpecialFile via commitFileChange):
+//  1. Admission, lock mutex, leave a stranded PR branch (lockTreeOnBase, #1723)
+//  2. Resolve the tenant file; validate YAML schema (ParseConfig + ValidateTenantKeys)
 //  3. Record HEAD before write
 //  4. Write file to configDir/{tenantID}.yaml
 //  5. git add + git commit --author="<authorEmail>"
@@ -529,6 +554,23 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
+	// Step 1: load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return nil, err
+	}
+	defer w.releaseWrite()
+
+	// Step 2: the lock, and the branch check before any read of the tree
+	// (#1723, lockTreeOnBase). Resolution and validation below read the tree,
+	// so they run under the lock, after the check — like WriteMerged. That
+	// costs this write its admission slot for the (CPU-only, sub-millisecond)
+	// validation; run before the lock, both would answer for a stranded PR
+	// branch, and a refusal there would return without the check ever running.
+	if err := w.lockTreeOnBase(); err != nil {
+		return nil, err
+	}
+	defer w.unlockTree()
+
 	// #1673: resolve the tenant's file first — validate's eol guard reads it,
 	// and the commit below must land on the same one. An ambiguous tenant is
 	// refused here with a typed error, so callers can map it to 409 instead of
@@ -537,22 +579,11 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if err != nil {
 		return nil, err
 	}
-	// Step 1: validate schema before touching disk (and before taking an
-	// admission slot — validation is cheap, CPU-only, and must not consume the
-	// single-writer token).
+	// Step 3: validate schema before touching disk.
 	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
-
-	// Step 2: load-shedding admission (TRK-320) before w.mu.
-	if err := w.acquireWrite(ctx); err != nil {
-		return nil, err
-	}
-	defer w.releaseWrite()
-
-	w.lockTree()
-	defer w.unlockTree()
 
 	// Optimistic concurrency, under the lock and immediately before the write:
 	// anything that lands between here and commitFileChange would have to hold
@@ -821,7 +852,9 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	if err := w.lockTreeOnBase(); err != nil { // #1723: before the first read
+		return nil, err
+	}
 	defer w.unlockTree()
 
 	// #1673: one resolution for the whole flow — the file we read below and the
@@ -969,8 +1002,15 @@ func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
 // from our commit's parent (someone else pushed between our read and
 // our write). Non-git environments skip conflict detection but still
 // return commit errors verbatim.
+//
+// Callers take the lock with lockTreeOnBase (#1723), which is where the
+// branch check that matters runs — before the caller's first read.
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, trailer ...string) error {
-	// #1723: never commit onto a PR branch a failed WritePR left checked out.
+	// #1723 backstop only. Every current caller already ran this check in
+	// lockTreeOnBase, so here it is one symbolic-ref that finds base. It
+	// stays so a future caller that takes plain lockTree still cannot commit
+	// onto a stranded PR branch — though such a caller's reads would already
+	// have answered for that branch; use lockTreeOnBase.
 	if err := w.leavePRBranch(); err != nil {
 		return err
 	}

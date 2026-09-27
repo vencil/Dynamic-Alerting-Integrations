@@ -67,7 +67,11 @@ func (w *Writer) MutateConfigFile(ctx context.Context, filename, entityType, aut
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	// #1723: the branch check precedes the read below — a transform must
+	// never see a stranded PR branch's copy (see lockTreeOnBase).
+	if err := w.lockTreeOnBase(); err != nil {
+		return err
+	}
 	defer w.unlockTree()
 
 	// Defence-in-depth: callers pass a bare constant filename, but clamp to a
