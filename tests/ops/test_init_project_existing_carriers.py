@@ -521,3 +521,73 @@ def test_the_notices_follow_the_cli_language(tmp_path):
     run = _run(out, RERUN_TENANTS, lang="zh_TW.UTF-8")
     assert run.returncode == 0, run.stderr[-800:]
     assert "db-c 可能已由 conf.d/db-c.yml 宣告，未產生 conf.d/db-c.yaml" in run.stderr
+
+
+# ---------------------------------------------------------------------------
+# 本輪決策 D3：stderr 叫客戶跑的 `guard defaults-impact` 要照抄能用
+# ---------------------------------------------------------------------------
+# 上面只斷言「印了這條命令」。印了不等於能用：命令本身、它走的 dispatcher、
+# 以及「該檔應出現在 Scanned files 裡」這句話，都要在真的 da-guard 上成立。
+# 走客戶實際的路徑：`da-tools guard` → guard_dispatch.py → da-guard（以
+# DA_GUARD_BINARY 指向這裡 build 的執行檔）。
+
+import re  # noqa: E402
+import shutil  # noqa: E402
+
+_APP = Path(REPO_ROOT) / "components" / "threshold-exporter" / "app"
+_DISPATCH = Path(REPO_ROOT) / "scripts" / "tools" / "ops" / "guard_dispatch.py"
+_HAS_GO = shutil.which("go") is not None
+_REQUIRE_GO = os.environ.get("VIBE_REQUIRE_GO") == "1"
+_GUARD_HINT = re.compile(r"`da-tools guard defaults-impact --config-dir ([^`]+)`")
+
+
+def test_go_present_when_required_for_the_guard_hint():
+    """Fail-closed：要求 go 的 job 裡缺 go，下面每一格都會靜默 skip。"""
+    if _REQUIRE_GO:
+        assert _HAS_GO, "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
+
+
+@pytest.fixture(scope="module")
+def da_guard(tmp_path_factory):
+    if not _HAS_GO:
+        pytest.skip("go not on PATH: cannot build da-guard (VIBE_REQUIRE_GO=1 "
+                    "turns this into a failure)")
+    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
+    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
+                   cwd=_APP, check=True, timeout=600)
+    return out
+
+
+# `1a-007`：Go 端 extractTenantRaw 對數字形狀的租戶 key 回 "not in file"，
+# ScopeEffective 因此整個 scope 失敗（rc=2），walker 與 exporter 卻照常服務
+# 該租戶——記在 issue 1379。修好時 strict xfail 會轉紅，提醒拿掉這一行。
+_GUARD_XFAIL = {"1a-007": "issue 1379: da-guard resolves tenant key 007 as "
+                          "'not in file' while the walker serves it"}
+
+
+@pytest.mark.parametrize(
+    "case,rel,body,tenant",
+    [pytest.param(*c, id=c[0], marks=pytest.mark.xfail(
+        strict=True, reason=_GUARD_XFAIL[c[0]])) if c[0] in _GUARD_XFAIL
+     else pytest.param(*c, id=c[0]) for c in _SKIP_CASES])
+def test_the_printed_guard_command_runs_and_lists_the_file(
+        tmp_path, da_guard, case, rel, body, tenant):
+    out = _brownfield(tmp_path)
+    _place(out, rel, body)
+    run = _run(out, f"{BASE_TENANTS},{tenant}")
+    assert run.returncode == 0, run.stderr[-800:]
+    hint = _GUARD_HINT.search(run.stderr)
+    assert hint, run.stderr
+
+    guard = subprocess.run(
+        [sys.executable, str(_DISPATCH), "defaults-impact",
+         "--config-dir", hint.group(1)],
+        capture_output=True, text=True, cwd=out, timeout=120,
+        env=dict(os.environ, DA_GUARD_BINARY=str(da_guard)))
+    report = guard.stdout + guard.stderr
+    # 0：乾淨；3：exporter 讀不了某個檔——正是 init 叫客戶去驗的那件事。
+    # 2 是 caller error：客戶照抄拿到的不是報告。
+    assert guard.returncode in (0, 3), report[-800:]
+    assert Path(rel).name in report, report[-800:]
+    if guard.returncode == 0:
+        assert "Scanned files" in report, report[-800:]
