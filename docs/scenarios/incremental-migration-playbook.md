@@ -125,7 +125,7 @@ candidates:
 
 ## 階段 1：試點域部署（單一領域試點）
 
-**目標**：為選定的單一域（如 Redis）在 Dynamic Alerting 平台部署，以影子模式併行於現有告警。新告警被發出但暫不路由至任何 receiver。
+**目標**：為選定的單一域（如 Redis）在 Dynamic Alerting 平台部署，與現有告警並行。Rule Pack 的告警開始評估；加上租戶路由之前，它們會落到舊 Alertmanager 設定裡符合的 route（見步驟 1.8）。
 
 ### 步驟 1.1：生成租戶配置
 
@@ -149,101 +149,97 @@ da-tools scaffold \
 
 ### 步驟 1.3：部署 threshold-exporter
 
-在試點環境中部署 threshold-exporter，掛載 conf.d/ 目錄：
+chart 以 OCI 發布（[ADR-002](../adr/002-oci-registry-over-chartmuseum.md)）。租戶設定放在 values 的 `thresholdConfig.tenants`，chart 會把它渲染成 `threshold-config` ConfigMap，一個 exporter 服務所有租戶。
 
-```bash
-helm repo add vencil https://ghcr.io/vencil/charts
-helm repo update
+⚠️ chart 出貨的 `thresholdConfig.defaults` 只含 Kubernetes、MariaDB、PostgreSQL 的預設值，redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會記一行 `unknown key "redis_memory_used_bytes" not in defaults`。
 
-helm install threshold-exporter-redis vencil/threshold-exporter \
-  --namespace monitoring \
-  --set image.tag=v2.9.0 \
-  --set config.dir=/etc/threshold-exporter/conf.d \
-  --set replicaCount=2 \
-  --values - << 'EOF'
-extraVolumes:
-  - name: config
-    configMap:
-      name: threshold-exporter-config-redis
-extraVolumeMounts:
-  - name: config
-    mountPath: /etc/threshold-exporter/conf.d
-EOF
-
-kubectl create configmap threshold-exporter-config-redis \
-  --from-file=conf.d/redis-prod.yaml \
-  -n monitoring \
-  --dry-run=client -o yaml | kubectl apply -f -
+```yaml
+# values-redis.yaml
+thresholdConfig:
+  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 conf.d/_defaults.yaml
+    redis_memory_used_bytes: 4294967296
+    redis_connected_clients: 200
+    redis_evicted_keys_rate: 100
+    redis_replication_lag: 30
+  tenants:
+    redis-prod:             # 內容＝conf.d/redis-prod.yaml 裡 tenants.redis-prod 底下那一層
+      redis_memory_used_bytes: "8589934592"
 ```
 
-### 步驟 1.4：驗證 Metrics 發出
-
-查詢 threshold-exporter 發出的 metrics：
-
 ```bash
-kubectl port-forward -n monitoring svc/threshold-exporter-redis 8080:8080 &
-curl http://localhost:8080/metrics | grep redis_user_threshold
+helm upgrade --install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
+  -n monitoring -f values-redis.yaml
 ```
 
-**預期**：出現 `redis_user_threshold_memory_warning`, `redis_user_threshold_memory_critical` 等指標，帶有租戶標籤。
+### 步驟 1.4：讓資料庫指標帶上 `tenant` 標籤
 
-### 步驟 1.5：掛載 Rule Pack
+Rule Pack 以 `on(tenant)` 把指標和閾值配對，所以 Redis exporter 的 scrape job 要用 relabel 注入 `tenant` 標籤，做法見 [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)（方案 A：以 namespace 當 tenant）。沒有這一步，Rule Pack 的告警不會觸發。
 
-創建包含 Rule Pack 的 ConfigMap，掛載至 Prometheus：
+⚠️ relabel 之後，直接寫在這些指標上的**舊規則**，產生的告警也會帶 `tenant="redis-prod"`。這會影響階段 2 的路由，見步驟 2.2。
+
+### 步驟 1.5：驗證 Metrics 發出
 
 ```bash
-curl -o rule-pack-redis.yaml \
-  https://raw.githubusercontent.com/vencil/vibe-k8s-lab/main/rule-packs/rule-pack-redis.yaml
-
-kubectl create configmap rule-pack-redis \
-  --from-file=rule-pack-redis.yaml \
-  -n monitoring \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl patch cm prometheus-config -n monitoring --type merge -p '{"data": {"prometheus.yaml": "... (with rule-pack-redis.yaml in rule_files) ..."}}'
-
-kubectl rollout restart deployment/prometheus -n monitoring
+kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 &
+curl -s http://localhost:8080/metrics | grep 'user_threshold{component="redis"'
 ```
 
-### 步驟 1.6：驗證 Recording Rules
+**預期**（每個 redis key 一列；`component` 是 key 第一個 `_` 之前的部分，`metric` 是之後的部分）：
 
-等待 Prometheus 完成規則加載，驗證 recording rules 產生的指標：
+```
+user_threshold{component="redis",metric="connected_clients",severity="warning",tenant="redis-prod"} 200
+user_threshold{component="redis",metric="evicted_keys_rate",severity="warning",tenant="redis-prod"} 100
+user_threshold{component="redis",metric="memory_used_bytes",severity="warning",tenant="redis-prod"} 8.589934592e+09
+user_threshold{component="redis",metric="replication_lag",severity="warning",tenant="redis-prod"} 30
+```
+
+### 步驟 1.6：掛載 Rule Pack
+
+Rule Pack 的 ConfigMap 由 repo 產生好了，直接套用：
+
+```bash
+kubectl apply -f k8s/03-monitoring/configmap-rules-redis.yaml
+```
+
+平台提供的 Prometheus Deployment 已經用 Projected Volume 把 `prometheus-rules-redis` 掛到 `/etc/prometheus/rules/`（`optional: true`），套用後會自動載入。自備 Prometheus 時，掛載方式見 [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)。
+
+### 步驟 1.7：驗證 Recording Rules
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-curl 'http://localhost:9090/api/v1/query?query=redis:memory:usage_percent'
+curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_usage:ratio'
+curl -s 'http://localhost:9090/api/v1/query?query=tenant:alert_threshold:redis_memory_used_bytes'
 ```
 
-**預期**：返回 `redis:memory:usage_percent` 的時序值。
+**預期**：兩個查詢都回傳帶 `tenant="redis-prod"` 的時序。第一個是資料面（需要步驟 1.4 的 relabel），第二個是閾值面（需要步驟 1.3 補的 defaults）。
 
-### 步驟 1.7：驗證告警未被路由
+### 步驟 1.8：確認新告警目前會被送到哪裡
 
-確認新的告警已被 Prometheus 產生，但尚未被 Alertmanager 路由：
+加上租戶路由之前，新告警會落到舊 Alertmanager 設定裡第一條符合的 route，通常就是 root receiver。用 `amtool` 對現有設定測一次：
 
 ```bash
-curl 'http://localhost:9090/api/v1/alerts' | jq '.data.alerts[] | select(.labels.tenant=="redis-prod")'
-curl 'http://localhost:9093/api/v1/alerts' | jq '.[].alerts[] | select(.labels.tenant=="redis-prod")'
+amtool config routes test --config.file=alertmanager.yaml \
+  alertname=RedisHighMemory tenant=redis-prod severity=warning
 ```
 
-**預期**：Prometheus 中有新告警，但 Alertmanager 中無對應分組（尚未添加路由）。
+以一份只有 root receiver `legacy-default`、外加一條 `severity="critical"` → `legacy-pager` 子路由的舊設定為例，輸出是 `legacy-default`：Rule Pack 的告警已經會出現在舊頻道。舊告警和新告警同樣帶 `tenant`，所以沒辦法只靠 `tenant` 把新告警擋在舊頻道之外；要擋，只能另外寫一條以 Rule Pack 的 alertname 比對的路由，而且前提是舊規則沒有用到同樣的名稱。
 
 ### 階段 1 驗證清單
 
 - [ ] threshold-exporter 部署成功，2 個 Pod 運行中
-- [ ] metrics 查詢可得到 `redis_user_threshold_*` 系列指標
+- [ ] `/metrics` 查得到 `user_threshold{component="redis",…}` 各列
+- [ ] Redis 指標帶上 `tenant` 標籤
 - [ ] Rule Pack 已掛載，Prometheus 日誌無錯誤
-- [ ] Recording Rules 產生輸出
-- [ ] Alerting Rules 產生（在 Prometheus 中可見），但未被路由至 Alertmanager receiver
+- [ ] 兩個 recording rule 查詢都有輸出
+- [ ] 已用 `amtool config routes test` 確認新告警目前的去向
 
 ### 階段 1 回滾
 
-若需回滾，執行：
-
 ```bash
-helm uninstall threshold-exporter-redis -n monitoring
-kubectl delete cm rule-pack-redis -n monitoring
-kubectl patch cm prometheus-config -n monitoring --type merge -p '{"data": {"prometheus.yaml": "... (original) ..."}}'
-kubectl rollout restart deployment/prometheus -n monitoring
+helm uninstall threshold-exporter -n monitoring
+kubectl delete -f k8s/03-monitoring/configmap-rules-redis.yaml
+# 再拿掉步驟 1.4 加的 relabel 設定，reload Prometheus
 ```
 
 ---
@@ -254,45 +250,98 @@ kubectl rollout restart deployment/prometheus -n monitoring
 
 ### Step 2.1: Generate Alertmanager Routing Fragment
 
-使用 `generate-routes` 命令為試點租戶生成 Alertmanager 路由配置：
+先在租戶檔加上 `_routing`（receiver 的完整 schema 見 [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)）：
+
+```yaml
+# conf.d/redis-prod.yaml
+tenants:
+  redis-prod:
+    redis_memory_used_bytes: "8589934592"
+    _routing:
+      receiver:
+        type: slack
+        api_url: "https://hooks.slack.com/services/T000/B000/XXXX"
+        channel: "#da-pilot"
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+```
+
+再產生路由片段：
 
 ```bash
 da-tools generate-routes \
   --config-dir conf.d/ \
-  --tenant redis-prod \
-  --output alertmanager-fragment.yaml
+  -o alertmanager-fragment.yaml
 ```
 
-**預期輸出**：YAML 片段包含新路由（指向 da-pilot-slack receiver，匹配 `tenant=redis-prod`）、優先級設置、group_wait / group_interval / repeat_interval 配置。
+**預期輸出**：stderr 印 `Found 1 tenant(s) with routing config: redis-prod` 與 `Written to alertmanager-fragment.yaml (1 routes, 1 receivers, 1 inhibit rules)`。片段裡的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有一條同租戶 critical 抑制 warning 的 inhibit rule。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
 
 ### 步驟 2.2：準備雙軌配置
 
-備份現有 Alertmanager 配置，然後在頂部插入新路由：
+⚠️ 不要用 `generate-routes --apply` 或 `--output-configmap --base-config` 合併進舊的 Alertmanager 設定：這兩個模式會用產生的 route **取代**整個 `route.routes`，舊的子路由會全部消失。雙軌期間請手動合併：
 
 ```bash
 cp alertmanager.yaml alertmanager.yaml.backup-phase1
-
-# 使用 kubectl patch 合併配置（避免 cat <<EOF）
-kubectl create configmap alertmanager-config-phase2 \
-  --from-file=alertmanager.yaml \
-  -n monitoring \
-  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-新路由應於頂部優先匹配 `da_managed: "true" && tenant: redis-prod` 標籤，設 `continue: true` 以允許雙軌記錄。
+把片段的 route 插到 `route.routes` 的**最前面**並手動加上 `continue: true`（工具不會產生它），片段的 receiver 與 inhibit rule 也加進去，最後在 `route.routes` 末尾補一條沒有 matcher 的 catch-all，指回原本的 root receiver：
 
-### 步驟 2.3：預檢查（Shadow Verify Preflight）
+```yaml
+# alertmanager.yaml（雙軌期間）
+route:
+  receiver: legacy-default
+  group_by: [alertname]
+  routes:
+  - matchers: ['tenant="redis-prod"']    # generate-routes 產生的 route
+    receiver: tenant-redis-prod
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    continue: true                       # 手動加
+  - matchers: ['severity="critical"']    # 舊設定原有的子路由，原封不動
+    receiver: legacy-pager
+  - receiver: legacy-default             # 手動加：catch-all
+receivers:
+- name: legacy-default
+  webhook_configs: [{url: 'http://legacy.example/default'}]
+- name: legacy-pager
+  webhook_configs: [{url: 'http://legacy.example/pager'}]
+- name: tenant-redis-prod
+  slack_configs:
+  - api_url: https://hooks.slack.com/services/T000/B000/XXXX
+    channel: '#da-pilot'
+inhibit_rules:
+- source_matchers: ['severity="critical"', 'metric_group=~".+"', 'tenant="redis-prod"']
+  target_matchers: ['severity="warning"', 'metric_group=~".+"', 'tenant="redis-prod"']
+  equal: [metric_group]
+```
 
-運行預檢查，確保雙軌配置合理：
+為什麼兩樣都要手動加：
+
+- 少了 `continue: true`，所有帶 `tenant="redis-prod"` 的告警都只會進新頻道。步驟 1.4 之後舊告警也帶 `tenant`，所以舊的 critical 告警會從 `legacy-pager` 消失。
+- 只加 `continue`、不加 catch-all，舊的 warning 告警還是會離開 `legacy-default`：只要有任何子路由比對成功，Alertmanager 就不會退回 root receiver。
+
+合併後先驗語法，再逐類測去向：
 
 ```bash
-da-tools shadow-verify preflight \
-  --config-dir conf.d/ \
-  --prometheus http://prometheus:9090 \
-  --alertmanager http://alertmanager:9093
+amtool check-config alertmanager.yaml
+amtool config routes test --config.file=alertmanager.yaml \
+  alertname=RedisHighMemory tenant=redis-prod severity=warning
+amtool config routes test --config.file=alertmanager.yaml \
+  alertname=RedisDownLegacy tenant=redis-prod severity=critical
 ```
 
-**預期輸出**：Alertmanager 語法檢查通過、route 優先級無衝突、映射覆蓋率高（>90%）、警告級別合理。若有警告（如 repeat_interval 不一致），評估後決定是否調整。
+**預期**：第一個測試輸出 `tenant-redis-prod,legacy-default`，第二個輸出 `tenant-redis-prod,legacy-pager`。雙軌期間兩個頻道都會收到該租戶的新舊告警，要靠 alertname 區分哪些是 Rule Pack 的（清單見 [Rule Pack 告警參考](../rule-packs/ALERT-REFERENCE.md)）。
+
+### 步驟 2.3：預檢查
+
+```bash
+da-tools generate-routes --config-dir conf.d/ --validate
+amtool check-config alertmanager.yaml
+```
+
+**預期**：`--validate` 檢查租戶的 `_routing`（receiver 格式、時序參數護欄、routing profile 引用與 domain policy），沒有錯誤時結束碼 0；`amtool check-config` 驗合併後的整份設定。`da-tools shadow-verify preflight` 是給 migrate／shadow 流程用的（檢查 prefix mapping、`migration_status: shadow` 的規則與 Alertmanager 的 shadow 攔截），這條流程用不到。
 
 ### 步驟 2.4：監控雙軌運行（1-2 週）
 
@@ -303,113 +352,109 @@ da-tools shadow-verify preflight \
 da-tools alert-quality \
   --prometheus http://prometheus:9090 \
   --tenant redis-prod \
-  --lookback 24h \
+  --period 24h \
   --json \
   > alert-quality-$(date +%Y-%m-%d).json
 ```
 
-**預期輸出**：JSON 包含告警延遲百分位數、誤報率、分組效果評分、以及與舊告警的對比。
+**預期輸出**：JSON 的 `tenants[]` 以租戶為單位，每個 alertname 一筆：噪音（單位時間觸發次數）、陳舊度（距上次觸發幾天）、平均解除時間、被 inhibit／silence 壓制的比例，以及 good／warn／bad 等級，另有租戶總分與 `summary`。工具不會拿新告警和舊告警直接對比，也沒有誤報率。
 
 ### 步驟 2.5：匯總與決策
 
 基於雙軌期間收集的數據，做出切換決策：
 
 **決策準則**：
-- 新告警延遲 < 舊告警延遲（通常 75% 以上改進）
-- 新告警誤報率 <= 舊告警誤報率
-- 新告警分組 > 舊告警分組（更好的可觀測性）
+- Rule Pack 的告警在 `alert-quality` 裡沒有 `bad` 等級，或每一個 `bad` 都已找到原因並調整閾值
+- 舊頻道裡該域真正需要處理的每一次告警，新頻道都有對應的 Rule Pack 告警（逐次對照兩個頻道）
+- 值班人員確認新告警的內容（summary、runbook）足以取代舊告警
 
 若三個條件均滿足，進行階段 3 切換。若有疑慮，延長雙軌時間或回滾。
 
 ### 階段 2 回滾
 
-若雙軌驗證失敗，恢復至階段 1 結束狀態：
+若雙軌驗證失敗，恢復至階段 1 結束狀態：用步驟 2.2 的備份覆蓋 Alertmanager 設定（依你的部署方式更新 ConfigMap 或設定檔），再 reload：
 
 ```bash
-kubectl patch cm alertmanager-config -n monitoring \
-  --type merge -p '{"data": {"alertmanager.yaml": "... (original) ..."}}'
-kubectl rollout restart deployment/alertmanager -n monitoring
+curl -X POST http://localhost:9093/-/reload
 ```
 
 ---
 
 ## 階段 3：切換（切換）
 
-**目標**：禁用試點域的舊告警規則，使 Dynamic Alerting 成為主告警來源。系統無中斷。
+**目標**：移除試點域的舊告警規則，並讓試點租戶的告警只送到新 receiver，使 Dynamic Alerting 成為主告警來源。系統無中斷。
+
+`da-tools cutover` **不適用**這條流程：它是 migrate／shadow 流程的切換工具，需要 `validate_migration` 產生的 readiness JSON，動作是刪除 `shadow-monitor` Job 與 `prometheus-rules-old` ConfigMap、移除 `migration_status` label，這些物件在這條流程裡都不存在。改用下面的手動步驟；migrate／shadow 流程見 [Shadow Monitoring 切換](shadow-monitoring-cutover.md)。
 
 ### 步驟 3.1：乾跑切換預演
 
-在實際執行前，預演一遍切換過程，確保無誤：
+在實際執行前，對兩份設定各做一次離線檢查：
 
 ```bash
-da-tools cutover \
-  --tenant redis-prod \
-  --prometheus http://prometheus:9090 \
-  --alertmanager http://alertmanager:9093 \
-  --dry-run \
-  --verbose
+cp prometheus-rules.yaml prometheus-rules.yaml.backup-phase3
+cp alertmanager.yaml alertmanager.yaml.backup-phase3
+
+# 1. 舊規則：依步驟 0.2 的 migration-plan.csv，在 prometheus-rules.yaml 裡整條刪除
+#    試點域的舊告警規則（連同 expr、labels 整段），再驗格式
+promtool check rules prometheus-rules.yaml
+
+# 2. Alertmanager：拿掉試點租戶 route 的 continue: true，再測去向
+amtool config routes test --config.file=alertmanager.yaml \
+  alertname=RedisHighMemory tenant=redis-prod severity=warning
 ```
 
-**預期輸出**：Dry-run 報告包含當前狀態（Recording Rules、Alerting Rules、Alertmanager 路由）、計畫操作（禁用舊規則、更新路由優先級）、預期結果、健康檢查、以及回滾命令。
+**預期**：`promtool` 回報 `SUCCESS`；`amtool` 只輸出 `tenant-redis-prod`。
 
-**驗證乾跑輸出**：確認只有舊 Alerting Rules 被禁用，Recording Rules 保持啟用；確認 Alertmanager 路由最終指向新 receiver 且不會重複發送。
+**驗證乾跑輸出**：確認被刪的只有試點域的舊告警規則，其他域的規則仍在；確認其他（沒有 `tenant="redis-prod"` 的）告警的去向沒變。
 
 ### 步驟 3.2：執行切換
 
-確認乾跑結果無誤，執行實際切換：
+確認乾跑結果無誤，執行實際切換：把兩份設定套用到叢集（依你的部署方式更新 ConfigMap 或設定檔），再重載：
 
 ```bash
-da-tools cutover \
-  --tenant redis-prod \
-  --prometheus http://prometheus:9090 \
-  --alertmanager http://alertmanager:9093 \
-  --execute
+kubectl rollout restart deployment/prometheus -n monitoring
+curl -X POST http://localhost:9093/-/reload
 ```
-
-**執行步驟**：工具自動禁用舊 Alerting Rules（保留 Recording Rules），更新 Alertmanager 路由（移除 `continue: true`，設新 receiver 為唯一路由），移除影子標籤。
 
 ### 步驟 3.3：全面健康檢查
 
-切換完成後，執行全面檢查：
+切換完成後，確認 Rule Pack 的告警照常評估：
 
 ```bash
-da-tools diagnose \
-  --prometheus http://prometheus:9090 \
-  --alertmanager http://alertmanager:9093 \
-  --tenant redis-prod \
-  --json \
-  > diagnose-post-cutover.json
+da-tools check-alert RedisHighMemory redis-prod \
+  --prometheus http://prometheus:9090
 ```
 
-**預期輸出**：診斷報告包含 recording rules 狀態（ACTIVE）、新 alerting rules 狀態（ACTIVE）、舊 alerting rules 狀態（DISABLED）、路由健康度（100%）、cardinality（< 500）。
+**預期輸出**：該告警對 `redis-prod` 目前的狀態（firing／pending／inactive）。⚠️ `da-tools diagnose` 的健康檢查固定查租戶 namespace 裡 `app=mariadb` 的 Pod，對 Redis 租戶會回 `Pod not found`、`status: error`，不適合用在這一步。
 
-### 步驟 3.4：確認舊告警已禁用
+### 步驟 3.4：確認舊告警已停止送達
 
-確認 Alertmanager 中舊告警已消失，Slack channel 中的舊告警流停止：
+用 Alertmanager v2 API 列出試點租戶目前的告警與它們被送往的 receiver：
 
 ```bash
-curl 'http://localhost:9093/api/v1/alerts' | jq '.[].alerts[] | select(.labels.alertname=="RedisHighMemory" and .labels.da_managed!="true")'
+curl -sG http://localhost:9093/api/v2/alerts \
+  --data-urlencode 'filter=tenant="redis-prod"' \
+  | jq -r '.[] | "\(.labels.alertname) → \([.receivers[].name] | join(","))"'
 ```
 
-**預期**：無返回結果（舊告警已禁用）。
+**預期**：只出現 Rule Pack 的 alertname，而且都只送往 `tenant-redis-prod`。⚠️ Alertmanager v0.27.0 起移除了 v1 API，`/api/v1/alerts` 會回 HTTP 410。
 
 ### 階段 3 驗證清單
 
-- [ ] Dry-run 報告確認無異常
-- [ ] 切換執行成功，無錯誤日誌
-- [ ] Diagnostics 報告：Recording Rules ACTIVE、新 Rules ACTIVE、舊 Rules DISABLED
-- [ ] Alertmanager 中舊告警消失，新告警正常發送
+- [ ] `promtool check rules` 與 `amtool check-config` 都通過
+- [ ] 切換後 Prometheus 與 Alertmanager 日誌無錯誤
+- [ ] `check-alert` 查得到 Rule Pack 告警的狀態
+- [ ] Alertmanager 裡試點租戶只剩 Rule Pack 的告警，且只送往新 receiver
 - [ ] 相應 Slack channel 中告警流穩定（無重複、無遺漏）
 
 ### 階段 3 回滾
 
-若切換失敗，執行回滾：
+若切換失敗，用步驟 3.1 的兩份備份（`*.backup-phase3`）還原並重載：舊規則恢復觸發，試點租戶的 route 恢復 `continue: true`，回到雙軌狀態。
 
 ```bash
-da-tools cutover --tenant redis-prod --rollback
+kubectl rollout restart deployment/prometheus -n monitoring
+curl -X POST http://localhost:9093/-/reload
 ```
-
-工具自動重新啟用舊 Alerting Rules，恢復舊 Alertmanager 路由，恢復影子標籤。
 
 ---
 
@@ -432,10 +477,10 @@ da-tools scaffold \
 cp scaffold_output/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
-# 部署 threshold-exporter（第二個實例）
-# 掛載 Rule Pack
-# 生成路由
-# 雙軌驗證 1-2 週
+# 把新租戶（與 chart 出貨沒有的 defaults）加進同一份 values，
+#   helm upgrade 同一個 release（不需要第二個 exporter）
+# relabel、掛載 Rule Pack
+# 生成路由、雙軌驗證 1-2 週
 # 執行切換
 ```
 
@@ -459,37 +504,27 @@ da-tools validate-config \
 
 ### 步驟 4.3：批量診斷
 
-對所有租戶執行健康檢查：
+對所有租戶執行健康檢查（租戶清單自動取自 chart 建立的 `threshold-config` ConfigMap）：
 
 ```bash
 da-tools batch-diagnose \
-  --config-dir conf.d/ \
   --prometheus http://prometheus:9090 \
-  --alertmanager http://alertmanager:9093 \
   --json \
   > batch-diagnose.json
-
-# 預期：所有租戶 status = GOOD
 ```
+
+**預期**：每個租戶一筆，`status` 為 `healthy` 或 `error`。⚠️ 逐租戶的檢查就是 `diagnose`，固定查 `app=mariadb` 的 Pod，所以非 MariaDB 的租戶會是 `error`（`Pod not found`）；這些租戶改用 `check-alert` 逐一確認。批量診斷不讀 conf.d，也不查 Alertmanager。
 
 ### 步驟 4.4：清理遺留配置
 
-移除不再需要的舊 Prometheus 規則：
+各域的舊告警規則已在各自的階段 3 刪除。全部域遷移完成後，確認舊規則檔只剩刻意保留的規則（例如 Rule Pack 不適用的域），驗證格式後再套用：
 
 ```bash
 cp prometheus-rules.yaml prometheus-rules.yaml.backup-phase4
-
-# 移除已遷移域的舊規則
-grep -v -e "redis" -e "mariadb" -e "kafka" prometheus-rules.yaml \
-  > prometheus-rules-cleaned.yaml
-
-diff prometheus-rules.yaml prometheus-rules-cleaned.yaml
-
-kubectl create configmap prometheus-rules-cleaned \
-  --from-file=prometheus-rules-cleaned.yaml \
-  -n monitoring \
-  --dry-run=client -o yaml | kubectl apply -f -
+promtool check rules prometheus-rules.yaml
 ```
+
+⚠️ 不要用 `grep -v` 逐行刪規則：它只會刪掉含關鍵字的那幾行，留下缺了 `expr` 的殘缺規則（`promtool` 報 `field 'expr' must be set in rule`），而且名稱不含關鍵字的規則（例如 MariaDB 域的 `MySQL…`）根本刪不到。
 
 ### 步驟 4.5：清理測試租戶
 
@@ -497,7 +532,8 @@ kubectl create configmap prometheus-rules-cleaned \
 
 ```bash
 find conf.d -name 'tenant-*.yaml'
-da-tools offboard --tenant test-domain-1
+da-tools offboard test-domain-1 --config-dir conf.d/            # Pre-check
+da-tools offboard test-domain-1 --config-dir conf.d/ --execute  # 實際下架
 da-tools validate-config --config-dir conf.d/
 ```
 
@@ -592,7 +628,7 @@ Rehearsal 內容：
 | 單個 tenant PR revert + git-sync apply | < 5s | < 5s | git-sync polling 5s + scan_dir ≈ 51-273ms |
 | 單個 `_defaults.yaml` revert（region 級）→ 21t affected @ 1000 / 105t @ 5000 | < 600ms reload | < 1.5s reload | BlastRadius bench 266ms / 1308ms |
 | 整波退版（Base PR + 10 tenant PR + 2 cascading defaults）| < 90s | < 4 min | git-sync poll × N + reload × N |
-| `merged_hash` 收斂驗證 | < 30s | < 2 min | `da-tools tenant verify --all` |
+| `merged_hash` 收斂驗證 | < 30s | < 2 min | `da-tools tenant-verify --all` |
 
 **門檻**：實測超過上表 1.5 倍視為異常 → **暫停退版**，先讀 `da_config_reload_duration_seconds` p99 與 `da_config_blast_radius_tenants_affected{effect="applied"}` 看是否落在預期分佈，異常找 maintainer 介入。
 
@@ -625,11 +661,11 @@ Rehearsal 內容：
 
 ### Q1：遷移前需要清理 scrape 配置嗎？
 
-**A**：不需要。Dynamic Alerting 的 Recording Rules 在現有 scrape 配置之上創建一層乾淨的抽象。即使 scrape 配置混亂，Recording Rules 也能聚合、規範化，產生標準化的指標。遷移完成後可逐步改進 scrape 配置。
+**A**：不需要整理，但要加一件事：資料庫 exporter 的 scrape job 要用 relabel 注入 `tenant` 標籤（步驟 1.4）。除此之外，Dynamic Alerting 的 Recording Rules 在現有 scrape 配置之上創建一層乾淨的抽象，把各種 exporter 的指標聚合、規範化成標準化的指標。遷移完成後可逐步改進 scrape 配置。
 
 ### Q2：遷移中途某個域失敗了怎麼辦？
 
-**A**：每個域都是獨立的。若 Redis 切換失敗，只需 `da-tools cutover --tenant redis-prod --rollback`，其他域不受影響。回滾後可重新評估問題，修復後再次嘗試。
+**A**：每個域都是獨立的。若 Redis 切換失敗，照「階段 3 回滾」用 `*.backup-phase3` 還原舊規則與 Alertmanager 設定，其他域不受影響。`da-tools cutover` 沒有回退選項（尚未實作），而且它屬於 migrate／shadow 流程。回滾後可重新評估問題，修復後再次嘗試。
 
 ### Q3：整個遷移需要多長時間？
 
@@ -637,11 +673,11 @@ Rehearsal 內容：
 
 ### Q4：如何監控 threshold-exporter 的效能？
 
-**A**：`threshold-exporter` 本身暴露 Prometheus metrics。查詢 `threshold_exporter_scrape_duration_seconds` 確認掃描延遲，查詢 `threshold_exporter_metrics_generated` 確認産出指標數。
+**A**：`threshold-exporter` 本身暴露 Prometheus metrics。`da_config_scan_duration_seconds` 看設定掃描耗時，`da_config_reload_duration_seconds` 看重載耗時，`count(user_threshold)` 看目前發射的閾值列數。
 
 ### Q5：Double 告警（舊新都發）怎麼辦？
 
-**A**：Phase 2 設 `continue: true` 允許新舊告警同時路由，這是設計的一部分。切換時（Phase 3）禁用舊規則即可消除重複。
+**A**：Phase 2 的試點租戶 route 設 `continue: true`、末尾補 catch-all，新舊兩個頻道都會收到該租戶的新舊告警，這是雙軌的設計（見步驟 2.2）。切換時（Phase 3）刪除舊規則、拿掉 `continue: true` 即可消除重複。
 
 ### Q6：Rule Pack 不適用怎麼辦？
 
