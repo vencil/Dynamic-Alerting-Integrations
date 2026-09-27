@@ -21,6 +21,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     validate_and_clamp,
+    receiver_exactly_one_problem,
     RECEIVER_TYPES,
 )
 
@@ -120,6 +121,10 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
             warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' requires "
                             f"'{field}', skipping")
             return None, warnings
+    problem = receiver_exactly_one_problem(rtype, receiver_obj)
+    if problem:
+        warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+        return None, warnings
 
     # Build AM config — include required + present optional fields
     am_entry = {}

@@ -49,6 +49,8 @@ Mapping file 格式（TSV，每行一個 entry，# 開頭為註解）：
 - 第一欄：原 commit 的 short/full SHA（短 SHA 必須唯一，會用 `git rev-parse` 解析）
 - 第二欄：新 subject line。如果是 `-` 代表 subject 不變，但因 parent 改變仍會產生新 SHA
 - 順序：從最舊到最新（list[0] 最接近 base，list[-1] 是新 HEAD）
+- ⛔ 最後一項必須是目標分支目前的 tip：要改的 commit 之後還有 commit 時，把它們也列上（填 `-`）。
+  沒列到 tip 會讓後面的 commit 從分支上消失，所以工具直接拒絕（exit 2，`--dry-run` 亦同，不寫任何 ref）
 - Body 會從原 commit 保留（`git log -1 --format='%b'`）
 """
 
@@ -393,6 +395,25 @@ def main(argv: list[str] | None = None) -> int:
         target_branch = current
     else:
         target_branch = args.branch  # may be "" to skip
+
+    # 5b. The rewritten chain replaces the branch up to its tip, so a mapping
+    # that stops short of the tip would silently drop every later commit
+    # (#2014). Refuse before writing anything, dry-run included. A branch that
+    # does not exist yet has nothing to drop.
+    if target_branch:
+        try:
+            tip = _git("rev-parse", "--verify", "--quiet", f"refs/heads/{target_branch}")
+        except GitError:
+            tip = ""
+        if tip and tip != metas[-1].old_sha:
+            dropped = _git("rev-list", "--count", f"{metas[-1].old_sha}..{tip}")
+            die_caller_error(
+                f"the last mapping entry {format_sha_short(metas[-1].old_sha)} is not the tip "
+                f"of branch '{target_branch}' ({format_sha_short(tip)}): {dropped} later "
+                f"commit(s) would be dropped.\n"
+                f"List every commit up to the tip (use '-' to keep a subject), "
+                f"or pass --branch '' to only print the new chain."
+            )
 
     # 6. Dirty check
     if not args.allow_dirty and working_tree_is_dirty():

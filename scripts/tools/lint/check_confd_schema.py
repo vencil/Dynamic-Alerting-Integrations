@@ -46,6 +46,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
@@ -125,6 +126,45 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
     return []
 
 
+def _explain(exc, validator) -> str:
+    """Message for `exc`, narrowed through a type-discriminated `oneOf` (#2137).
+
+    A receiver is a `oneOf` over per-type definitions, so any receiver mistake
+    surfaces as "... is not valid under any of the given schemas" — naming
+    neither the type nor the field. When exactly one branch did NOT fail on its
+    `type` const, that branch is the one the author meant: report its error
+    instead (repeating inward), and for a failing `oneOf` inside it report the
+    branch's `description` instead, which states the rule. Anything else keeps
+    the original message.
+    """
+    err = exc
+    while err.validator == "oneOf" and err.context:
+        branches: dict = {}
+        for sub in err.context:
+            branches.setdefault(sub.relative_schema_path[0], []).append(sub)
+        live = [subs for subs in branches.values()
+                if not any(s.validator == "const" and list(s.relative_path) == ["type"]
+                           for s in subs)]
+        if len(live) != 1:
+            break
+        # Not best_match on a lone error: it would descend into that error's
+        # own oneOf context and surface a bare "'' should be non-empty"
+        # without saying which rule it belongs to.
+        subs = live[0]
+        err = subs[0] if len(subs) == 1 else validator.exceptions.best_match(subs)
+    if err is not exc and err.validator == "oneOf" and isinstance(err.schema, dict):
+        desc = err.schema.get("description")
+        if desc:
+            rtype = err.instance.get("type") if isinstance(err.instance, dict) else None
+            # The rule is the useful part; the raw oneOf message would only
+            # restate the branch schemas.
+            return f"invalid {rtype} receiver: {desc}" if rtype else desc
+    if err.validator == "type" and err.instance is None and err.path:
+        # A YAML key with no value (`from:`) — say that, not "None is not of type".
+        return f"'{err.path[-1]}' has no value (YAML null); expected {err.validator_value}"
+    return err.message
+
+
 def _iter_yaml_files(config_dir: str) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(config_dir):
@@ -158,11 +198,13 @@ def validate_dir(config_dir: str, schema: dict, validator,
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                docs = list(yaml.safe_load_all(fh))
+                docs = list(strict_safe_load_all(fh))
         except (OSError, yaml.YAMLError) as exc:
             # Unreadable file or malformed YAML is an environment/caller error, not
             # a schema violation — surface it as exit 2 (open() can raise OSError
-            # too, not only yaml.YAMLError).
+            # too, not only yaml.YAMLError). A key written twice in one mapping is
+            # malformed YAML too (#2123: the exporter's yaml.v3 rejects the file;
+            # safe_load_all would have validated the LAST value only).
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
         for doc in docs:
             if is_defaults:
@@ -192,7 +234,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
                 validator.validate(doc, schema)
             except validator.ValidationError as exc:
                 loc = "/".join(str(p) for p in exc.absolute_path)
-                violations.append(f"ERROR: {rel}: {exc.message} @ /{loc}")
+                violations.append(f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}")
     return checked, violations, sorted(set(skipped))
 
 

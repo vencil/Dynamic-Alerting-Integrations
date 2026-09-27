@@ -23,6 +23,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
+import _lib_io  # noqa: E402
 import _lib_yaml_keys as yk  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "tenant_id_yaml_spelling_matrix.json")
@@ -114,15 +115,37 @@ def test_a_map_tag_on_a_non_mapping_is_a_yaml_error(src, how) -> None:
         yaml.safe_load(src)
 
 
+_TWO_SPELLINGS = 'tenants:\n  123:\n    a: 1\n  "123":\n    a: 2\n'
+
+STRICT_LOADS = {
+    "strict_load_exporter_keys":
+        lambda s: _lib_io.strict_load_exporter_keys(io.StringIO(s)),
+    "strict_load_all_exporter_keys":
+        lambda s: next(_lib_io.strict_load_all_exporter_keys(io.StringIO(s))),
+}
+
+
+@pytest.mark.parametrize("how", sorted(STRICT_LOADS))
+def test_two_spellings_of_one_id_in_one_mapping_are_a_duplicate_key(how) -> None:
+    """`123:` and `"123":` in the SAME mapping are ONE key to the exporter,
+    which rejects the file (`mapping key "123" already defined`). On the
+    strict paths (#2123's loader composed with this one in `_lib_io`) it is
+    a DuplicateKeyError — a yaml.YAMLError, so every reader's syntax-error
+    path takes it. Before #2123 merged this was pinned as a residual: the
+    key loader alone folded the two into one tenant (last wins)."""
+    with pytest.raises(_lib_io.DuplicateKeyError, match="found duplicate key '123'"):
+        STRICT_LOADS[how](_TWO_SPELLINGS)
+
+
 @pytest.mark.parametrize("how", sorted(LOADS))
-def test_two_spellings_of_one_id_in_one_mapping_fold_silently(how) -> None:
-    """⚠️ PINS A KNOWN RESIDUAL, NOT THE TARGET. `123:` and `"123":` in the
-    SAME mapping are one key here (the last wins) — `safe_load` made them two
-    tenants (123 and "123"), and Go rejects the file outright (`mapping key
-    "123" already defined`). Duplicate-key rejection belongs to #2123's
-    shared strict loader; when it lands this test must flip to expecting a
-    yaml.YAMLError, which is the point of pinning it here."""
-    got = LOADS[how]('tenants:\n  123:\n    a: 1\n  "123":\n    a: 2\n')
+def test_the_non_strict_key_loader_still_folds_them(how) -> None:
+    """⚠️ PINS THE REMAINING RESIDUAL. `_lib_yaml_keys` itself is not strict,
+    and the readers that were not strict on main still use it that way
+    (`_lib_confd.declared_tenant_ids`, `diagnose`, `analyze_rule_pack_gaps
+    --tenant-config`): there the two spellings fold into one tenant, the
+    last value wins. Making those readers strict is #2123's call per reader,
+    not this module's."""
+    got = LOADS[how](_TWO_SPELLINGS)
     assert got == {"tenants": {"123": {"a": 2}}}, got
 
 

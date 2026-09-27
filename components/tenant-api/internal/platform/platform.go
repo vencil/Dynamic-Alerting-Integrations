@@ -35,6 +35,16 @@ const (
 	MergeableConflict MergeableState = "conflict"
 )
 
+// BranchPrefix is the namespace of every feature branch tenant-api cuts for
+// a PR/MR (gitops.WritePR / WritePRBatch name theirs "<prefix><tenant>/<ts>"
+// and "<prefix>batch/<ts>"). It is ONE constant because three things must
+// agree on it: the writer that creates the branches, the forge clients that
+// recognise tenant-api's own PRs/MRs among all open ones, and the writer's
+// direct-commit guard that detects a worktree stranded on such a branch
+// (#1723). A second spelling anywhere would let one of them silently stop
+// matching the others.
+const BranchPrefix = "tenant-api/"
+
 // PRInfo holds metadata about a created or existing pull/merge request.
 // The fields are intentionally provider-neutral; "Number" maps to GitHub PR
 // number or GitLab MR IID (project-scoped).

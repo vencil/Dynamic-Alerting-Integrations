@@ -21,8 +21,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import yaml
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_defaults_name,
@@ -34,6 +32,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     unusable_reason,
     warn_multi_carrier,
 )
+from _lib_io import strict_safe_load  # noqa: E402  (#2123)
 
 from . import shape as _shape
 
@@ -54,7 +53,11 @@ MAX_CUSTOM_RECIPES_DEFAULT = 20
 
 
 def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    """Strict (#2123): a key written twice in one mapping raises a YAMLError —
+    the exporter's yaml.v3 rejects that file, so compiling PyYAML's last value
+    would emit alerts for a config that is never served. Callers quarantine it
+    exactly like a syntax error."""
+    return strict_safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def _is_dir(p: Path) -> bool:

@@ -77,7 +77,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 | 測試怎麼寫、注入 seam、`t.Parallel` 決策 | [`test-map.md`](docs/internal/test-map.md) |
 | 公開文件在哪 | [`doc-map.md`](docs/internal/doc-map.md) |
 | Python 工具在哪（CLI：`da-tools <cmd> --help`） | [`tool-map.md`](docs/internal/tool-map.md)；JSX 工具 SOT 在 [`tool-registry.yaml`](docs/assets/tool-registry.yaml) |
-| Planning / Tracking ID（新項目一律 `TRK-NNN`） | [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)、[ADR-019](docs/adr/019-planning-ssot.md) |
+| Planning / Tracking ID（新項目一律 `TRK-<issue 號>`，不要看表取號） | [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)、[ADR-019](docs/adr/019-planning-ssot.md) |
 | 本機起整套 stack | [`try-local/README.md`](try-local/README.md) |
 | secret 洩漏處置（ASSUME COMPROMISE / ROTATE FIRST） | [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md) |
 | IaC lint baseline、Severity→Action、豁免列管 | [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md) |
@@ -102,7 +102,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 ## Pre-commit 品質閘門
 
-114 auto-run + 9 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
+114 auto-run + 8 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
 
 ⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
 

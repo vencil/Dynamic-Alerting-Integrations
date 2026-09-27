@@ -257,6 +257,12 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 				WriteOverloaded(w, r)
 				return
 			}
+			// #1723: the tree was on a PR branch and nothing was written —
+			// retryable, not the 400 fallback below.
+			if errors.Is(err, gitops.ErrTreeNotOnBase) {
+				WriteTreeNotOnBase(w, r, err)
+				return
+			}
 			// The base moved between the pre-check above and the lock. Same
 			// envelope as that pre-check so a client cannot tell which of the
 			// two rejected it — only that it must re-read and retry.

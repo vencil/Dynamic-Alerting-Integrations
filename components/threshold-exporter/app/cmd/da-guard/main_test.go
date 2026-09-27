@@ -258,6 +258,175 @@ func TestRun_EmptyScope_ExitsZero(t *testing.T) {
 	}
 }
 
+// --- a file the exporter's decode rejects: exit 3 (#2123) ---------
+
+// dupKeyTenant writes one threshold twice in one mapping — the shape
+// yaml.v3 rejects (`mapping key "cpu" already defined`), so the exporter's
+// walker skips the file and the tenant in it is never checked.
+const dupKeyTenant = "tenants:\n  tenant-b:\n    cpu: 80\n    cpu: 90\n"
+
+// Broken file + readable file: the readable tenant is checked and clean,
+// but the run must not report the tree as fine — exit 3, file named by its
+// path relative to --config-dir, in the report and on stderr. The second
+// half pins precedence: a real finding on the readable tenant still yields
+// 3, not 1 (the findings cover only part of the tree).
+func TestRun_ParseFailedFileBesideGoodFile_ExitsThree(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		required string
+	}{
+		{"good file clean", "cpu"},
+		{"good file has a finding", "cpu,mem"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			testutil.WriteTree(t, tmp, map[string]string{
+				"conf.d/_defaults.yaml":     "defaults:\n  cpu: 70\n",
+				"conf.d/tenant-a.yaml":      "tenants:\n  tenant-a:\n    cpu: 80\n",
+				"conf.d/team/tenant-b.yaml": dupKeyTenant,
+			})
+			code, stdout, stderr := runOnce(t,
+				"--config-dir", filepath.Join(tmp, "conf.d"),
+				"--required-fields", tc.required,
+			)
+			if code != exitParseFailed {
+				t.Fatalf("exit = %d, want %d. stdout=%q stderr=%q", code, exitParseFailed, stdout, stderr)
+			}
+			if !strings.Contains(stdout, "Files the exporter cannot parse") ||
+				!strings.Contains(stdout, "`team/tenant-b.yaml`") {
+				t.Errorf("report should name the rejected file by relative path: %q", stdout)
+			}
+			if !strings.Contains(stdout, "Tenants in scope: **1**") {
+				t.Errorf("the readable tenant should still be checked: %q", stdout)
+			}
+			// #2123 round 5: exit 3 must not come with the library's
+			// "safe to merge" all-clear (the "good file clean" arm is the
+			// one that has no findings and would print it).
+			if strings.Contains(stdout, "safe to merge") {
+				t.Errorf("an exit-3 report must not call the change safe to merge: %q", stdout)
+			}
+			if !strings.Contains(stderr, "team/tenant-b.yaml") {
+				t.Errorf("stderr should name the rejected file: %q", stderr)
+			}
+		})
+	}
+}
+
+// Only a broken file in scope: before #2123 this was the vacuously-safe
+// branch (exit 0, "defaults change is vacuously safe") — the tenant the
+// file declares simply did not exist for the guard. JSON carries the list.
+func TestRun_OnlyParseFailedFile_ExitsThreeNotVacuous(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{"md", "json"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			testutil.WriteTree(t, tmp, map[string]string{
+				"conf.d/_defaults.yaml":     "defaults: {}\n",
+				"conf.d/team/tenant-b.yaml": dupKeyTenant,
+			})
+			code, stdout, stderr := runOnce(t,
+				"--config-dir", filepath.Join(tmp, "conf.d"),
+				"--scope", filepath.Join(tmp, "conf.d", "team"),
+				"--format", format,
+			)
+			if code != exitParseFailed {
+				t.Fatalf("exit = %d, want %d. stdout=%q stderr=%q", code, exitParseFailed, stdout, stderr)
+			}
+			if strings.Contains(stdout, "vacuously safe") {
+				t.Errorf("a scope whose tenant file is broken is not vacuously safe: %q", stdout)
+			}
+			if format == "json" {
+				var doc struct {
+					ParseFailed []string `json:"parse_failed"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+					t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+				}
+				if len(doc.ParseFailed) != 1 || doc.ParseFailed[0] != "team/tenant-b.yaml" {
+					t.Errorf("parse_failed = %v, want [team/tenant-b.yaml]", doc.ParseFailed)
+				}
+			} else if !strings.Contains(stdout, "`team/tenant-b.yaml`") {
+				t.Errorf("report should name the rejected file: %q", stdout)
+			}
+		})
+	}
+}
+
+// The two decode failures the walker cannot see (#2123 round 2): a
+// `_defaults.yaml` (never decoded by the walker, `_`-prefixed) with a
+// repeated key, and a tenant file whose repeated key sits under a top-level
+// field the walker's typed decode ignores but the effective-config merge
+// (into `any`) rejects. Both used to surface as a resolve error → exit 2
+// ("caller error"); they are the author's file to fix → exit 3, file named.
+func TestRun_DecodeFailureWhileResolving_ExitsThree(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, file string
+		tree       map[string]string
+	}{
+		{"defaults duplicate key", "_defaults.yaml", map[string]string{
+			"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n  cpu: 80\n",
+			"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		}},
+		{"duplicate key under an unknown top-level field", "tenant-b.yaml", map[string]string{
+			"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+			"conf.d/tenant-b.yaml":  "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, format := range []string{"md", "json"} {
+				tmp := t.TempDir()
+				testutil.WriteTree(t, tmp, tc.tree)
+				code, stdout, stderr := runOnce(t,
+					"--config-dir", filepath.Join(tmp, "conf.d"), "--format", format)
+				if code != exitParseFailed {
+					t.Fatalf("[%s] exit = %d, want %d. stdout=%q stderr=%q",
+						format, code, exitParseFailed, stdout, stderr)
+				}
+				if !strings.Contains(stderr, tc.file) {
+					t.Errorf("[%s] stderr should name %s: %q", format, tc.file, stderr)
+				}
+				if format == "json" {
+					var doc struct {
+						ParseFailed []string `json:"parse_failed"`
+					}
+					if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+						t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+					}
+					if len(doc.ParseFailed) != 1 || doc.ParseFailed[0] != tc.file {
+						t.Errorf("parse_failed = %v, want [%s]", doc.ParseFailed, tc.file)
+					}
+				} else if !strings.Contains(stdout, "`"+tc.file+"`") {
+					t.Errorf("report should name %s: %q", tc.file, stdout)
+				}
+			}
+		})
+	}
+}
+
+// Paired control: the broken file is OUTSIDE --scope, so it is not this
+// run's business — the empty scope stays the vacuous exit 0.
+func TestRun_ParseFailedFileOutsideScope_DoesNotCount(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml":      "defaults: {}\n",
+		"conf.d/other/tenant-b.yaml": dupKeyTenant,
+		"conf.d/empty/":              "",
+	})
+	code, stdout, stderr := runOnce(t,
+		"--config-dir", filepath.Join(tmp, "conf.d"),
+		"--scope", filepath.Join(tmp, "conf.d", "empty"),
+	)
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d. stdout=%q stderr=%q", code, exitOK, stdout, stderr)
+	}
+}
+
 // PR-5: redundant-override warn-tier should surface in the report.
 // Tenant overrides cpu=80 with the same value as the merged defaults
 // → guard.checkRedundantOverrides emits a SeverityWarn. Default exit

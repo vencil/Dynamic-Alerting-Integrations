@@ -120,7 +120,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
-		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
+		if d.prWritePath() {
 			// A base hash cannot mean anything here. PR mode writes on a
 			// feature branch and then restores the working tree to base, so
 			// the file this handler could hash is the BASE version — a second
@@ -150,6 +150,12 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(rw, r)
+				return
+			}
+			// #1723: the tree was on a PR branch and nothing was written —
+			// retryable, not the 400 fallback below.
+			if errors.Is(err, gitops.ErrTreeNotOnBase) {
+				WriteTreeNotOnBase(rw, r, err)
 				return
 			}
 			// Same 409 + CONFLICT code as the custom-alerts base_hash check:

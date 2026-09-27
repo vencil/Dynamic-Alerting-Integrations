@@ -44,7 +44,6 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2114)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -58,7 +57,6 @@ try:
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
-        load_yaml_file_exporter_keys,
         parse_duration_seconds,
         safe_label,
     )
@@ -69,9 +67,22 @@ except ImportError:
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
-        load_yaml_file_exporter_keys,
         parse_duration_seconds,
         safe_label,
+    )
+# #2123: policy YAML is read strictly — a key written twice in one mapping is
+# a YAMLError (YamlFileError from the file reader), not PyYAML's last value.
+# #2114: on that same strict read, `exclude_tenants` items are source text
+# (the `*_exporter_keys` variants compose the two loaders in `_lib_io`).
+try:
+    from _lib_io import (
+        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        strict_load_exporter_keys, strict_safe_load,
+    )
+except ImportError:
+    from scripts.tools._lib_io import (  # type: ignore[no-redef]
+        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        strict_load_exporter_keys, strict_safe_load,
     )
 
 # ---------------------------------------------------------------------------
@@ -169,7 +180,7 @@ def load_policies(source: str) -> list[PolicyRule]:
     讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
     對不上租戶 ``"010"``。
     """
-    return rules_from_policy_data(load_yaml_file_exporter_keys(
+    return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
         source, raw_text_sequences=POLICY_TENANT_LISTS))
 
 
@@ -769,9 +780,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             with open(args.policy, encoding="utf-8") as f:
-                # #2114: `exclude_tenants` items as source text, see
-                # `load_policies`. Same pure parser as before.
-                policy_data = load_exporter_keys(
+                # #2123 strict; #2114 `exclude_tenants` items as source
+                # text, see `load_policies`. Same pure parser as before.
+                policy_data = strict_load_exporter_keys(
                     f, raw_text_sequences=POLICY_TENANT_LISTS)
         except OSError as e:
             problem = ("policy_file_unreadable",

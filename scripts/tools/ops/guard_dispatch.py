@@ -28,10 +28,12 @@ Resolution order for the `da-guard` binary:
   3. `da-guard` on $PATH        (typical: shipped via tools/v* release)
   4. Friendly error with install instructions
 
-Exit codes (passthrough from da-guard):
+Exit codes (passthrough from da-guard; the stable contract is the comment
+at the top of cmd/da-guard/main.go):
   0  clean
   1  guard found errors
   2  caller error / binary missing
+  3  config files the exporter cannot decode (#2123)
 
 Usage:
   da-tools guard defaults-impact --config-dir conf.d/
@@ -71,6 +73,10 @@ _USAGE_EN = (
     "  --output <path>              Write report to file instead of stdout.\n"
     "  --warn-as-error              Treat warnings as errors for exit code.\n"
     "\n"
+    "Exit codes (from da-guard):\n"
+    "  0  clean    1  guard found errors    2  caller error / binary missing\n"
+    "  3  config files the exporter cannot decode (see docs/cli-reference.md §guard)\n"
+    "\n"
     "Binary resolution:\n"
     "  1. --da-guard-binary <path>\n"
     "  2. $DA_GUARD_BINARY env var\n"
@@ -99,6 +105,10 @@ _USAGE_ZH = (
     "  --format md|json             輸出格式 (預設 md)。\n"
     "  --output <path>              寫到檔案而非 stdout。\n"
     "  --warn-as-error              將 warning 視為 error 影響 exit code。\n"
+    "\n"
+    "Exit code (來自 da-guard):\n"
+    "  0  通過    1  guard 偵測到 error    2  caller error / 找不到 binary\n"
+    "  3  exporter 無法 decode 的設定檔（見 docs/cli-reference.md §guard）\n"
     "\n"
     "Binary 解析順序:\n"
     "  1. --da-guard-binary <path>\n"

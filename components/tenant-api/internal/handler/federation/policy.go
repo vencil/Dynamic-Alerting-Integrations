@@ -149,6 +149,10 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 				handler.WriteOverloaded(w, r)
 				return
 			}
+			if errors.Is(err, gitops.ErrTreeNotOnBase) { // #1723: retryable, nothing written
+				handler.WriteTreeNotOnBase(w, r, err)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
@@ -437,6 +441,10 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 		if err := d.Writer.WriteFederationSubsetFile(r.Context(), tenantID, email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				handler.WriteOverloaded(w, r)
+				return
+			}
+			if errors.Is(err, gitops.ErrTreeNotOnBase) { // #1723: retryable, nothing written
+				handler.WriteTreeNotOnBase(w, r, err)
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {

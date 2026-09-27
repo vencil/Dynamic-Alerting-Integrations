@@ -177,7 +177,6 @@ lang: zh
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
-| `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |

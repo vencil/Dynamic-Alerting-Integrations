@@ -33,7 +33,10 @@ lang: zh
 | **TRK-001 ~ TRK-099** | `HA-N` 序列 | `HA-11` → `TRK-011` |
 | **TRK-100 ~ TRK-199** | `REG-NNN` 序列 | `REG-004` → `TRK-104` |
 | **TRK-200 ~ TRK-299** | `TECH-DEBT-NNN` / `TD-NN` 序列 | `TECH-DEBT-005` → `TRK-205`、`TD-022` → `TRK-222` |
-| **TRK-300 +** | **post-migration 新分配** | — |
+| **TRK-300 ~ TRK-392** | post-migration 手工配號（已凍結，見下方 TRK-300+ 區段） | — |
+| **TRK-1000 +** | **新條目：追蹤 issue 的號碼**（[ADR-019](../adr/019-planning-ssot.md)，#2106） | issue #2150 → `TRK-2150` |
+
+> ⛔ TRK-001～392 的各區段全部凍結：區段裡的空號不是「下一個可用號」，不要補洞配號。
 
 > `TECH-DEBT-NNN` 與 `TD-NN` 是同一個 namespace 的長短形（v2.7.x 之後簡寫為 `TD-`，數字編號連續），同號 alias 合併到同一個 TRK：`TECH-DEBT-022` ≡ `TD-022` → `TRK-222`。
 >
@@ -129,6 +132,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 ### TRK-300+ — post-migration 新分配（無 legacy 對映）
 
 > 此區段**不是 redirect**（無舊 ID 來源），而是 v2.8.1+ 直接以 `TRK-NNN` 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 `TRK ↔ GitHub issue` 快查。
+>
+> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §TD-NN / HA-NN / REG-NN → TRK-NNN 遷移）。**不要**再看本表取「下一號」，也不要再加列：表上沒有的三位數新號、以及凍結時表上沒有的任何列（含補 legacy 區段的洞），都會被 `check_trk_index_coverage.py` 擋下。
 
 | TRK | Issue | 主題 | Epic |
 |---|---|---|---|
@@ -219,9 +224,12 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-384 | [#1987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1987) | diff-only lint 用 `git diff --name-only` 列檔時，把 git 失敗或逾時吞成空清單 ⇒ 印 OK、回 0，「量不到」被呈現成「量了沒事」。顯式 `--diff-base` 會跳過 `resolve_diff_base` 的 ref 驗證，所以不存在的 ref 會直接走到這裡。同一個形狀共有三支：`check_ad_hoc_git_scripts`、`check_bat_ascii_purity`、`check_repo_name`，已改走共用的 `_lint_helpers.diff_changed_paths`，失敗時丟出 `DiffScanError`，由各自的 `main()` 轉成 rc 2。盲審另外抓到同一形狀的既有缺陷：git 會把非 ASCII 路徑加引號跳脫，於是這類檔名的違規被靜默放過；helper 改用 `-z` 一併修掉。逐行型的同族工具（走 `get_diff_added_lines`）在 git 失敗時會退回全檔掃描，判錯方向安全，不在本項範圍 | TRK-383 |
 | TRK-385 | [#1992](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1992) | 「`open()` 必須帶 encoding」有兩份判定器，而且各錯一邊：pre-commit `open-encoding-audit` 只認 builtin `open`，會漏掉 `Path.open`；`test_sast.py::test_open_has_encoding` 把任何 `x.open(...)` 都算進去，會誤判 `os.open`、`tarfile.open`。owner 裁決走**寧可漏判**：只留 hook 的判定，刪掉 test_sast 那一份，並手修它獨有的那一個真違規。`Path.open`、`read_text`／`write_text` 因此沒有靜態判定在守，移交 TRK-386 | TRK-383 |
 | TRK-386 | [#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005) | `read_text`／`write_text`／`Path.open` 沒帶 encoding 時，靜態判定（hook、ruff `PLW1514`）都看不到；從語法判定 receiver 型別是已經打死的方向。改用執行期 `EncodingWarning` 當判定依據，只擋產品程式碼；`subprocess(text=True)` 先不納管（owner 裁決） | TRK-385 |
+| TRK-387 | [#2014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2014) | `reword_chain.py` 把 mapping 的最後一項當成新 HEAD，卻不檢查它是不是目標分支的 tip：只列要改的那幾顆時照樣改寫、回 0，後面的 commit 從分支上消失（只能靠 backup tag 救回）。改為在寫入任何 ref 之前比對目標分支的 tip，不符就 exit 2，`--dry-run` 亦同；`--branch ''` 與尚不存在的分支沒有東西會被丟掉，照舊放行。不採「自動把後面的 commit 補成 `-`」：那會替使用者擴大改寫範圍 | TRK-383 |
+| TRK-388 | [#2023](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2023) | `check_doc_freshness --check` 把量不到年齡的文件算成新鮮：git 讀不到時間戳時記 unknown 但不影響結果；shallow clone 裡 `git log -1 -- <file>` 對最後修改在邊界之外的文件回邊界 commit，年齡被壓到 clone 深度。owner 裁決採**逐檔判斷**：最後修改的 commit 若列在 `.git/shallow` 就判 unknown，其餘照算；`--check` 有陳舊 exit 1，否則有 unknown exit 2。不採「只要 shallow 就 exit 2」：remote session 永遠是 shallow，會連量得到的文件都丟掉 | TRK-383 |
 | TRK-389 | [#2024](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2024) | `check_ad_hoc_git_scripts` 與 `check_repo_name` 的 diff 掃描把 git 列出的路徑先做 `\` → `/` 替換再拆分。git 的路徑一律以 `/` 分隔，POSIX 上 `\` 是檔名的一般字元，於是根目錄的 `build\evil.bat`、`tests\x.md` 被當成略過目錄下的檔，`scripts\ops\_x.bat` 被當成 allowlist 目錄下的檔，違規靜默放過。改成只以 `/` 拆分；`check_bat_ascii_purity` 沒有這個替換，不在範圍內 | TRK-384 |
 | TRK-390 | [#2025](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2025) | `diff_changed_paths` 用 `--diff-filter=AM` 列檔，路徑上仍有檔、狀態卻不是 A／M 的變動（改名 `R`、`diff.renames=copies` 下的複製 `C`、symlink 換成一般檔的 `T`）都被濾掉 ⇒ `git mv` 到違規位置（含搬移時一併改內容）三支 diff 掃描型 lint 都看不到。改用 `--diff-filter=d`：只排除刪除、不再列舉要保留的狀態。票面兩個修法（`--no-renames`、把 `R` 加進 filter）都仍是列舉，前者漏 `T`、後者漏 `C` 與 `T` | TRK-384 |
 | TRK-391 | [#2059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2059) | `lint-policy.md` 的 lint 數量、各類別的逐項清單與括號計數，以及 JS-toolchain grandfather 對照表，都沒有機制在對帳，工具一增減就漂。依減法原則刪掉，不改對：只留三類的定義與判定方式、少數不附數量的範例；要知道某支 lint 屬哪一類看它自己的 docstring，grandfather 集的 SoT 是 `check_lint_toolchain_fit.py` 的 `ALLOWLIST` | TRK-383 |
+| TRK-392 | [#2060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2060) | tenant-api gitops 測試在 `t.TempDir` 清理時間歇失敗：push 觸發 bare remote 的背景 git maintenance 仍在寫 `objects/` | — |
 
 ## 不在 mapping 範圍
 
@@ -254,7 +262,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 本文件落地（chunk 1）之後：
 
 - chunk 2a — `generate_planning_index.py`（產 `planning-index.md`）
-- chunk 3 — 既有 backlog frontmatter migration（一律 TRK-NNN，後續 entries 從 TRK-300+ 分配）
+- chunk 3 — 既有 backlog frontmatter migration（一律 TRK-NNN；TRK-392 之後改用追蹤 issue 號，見 ADR-019）
 - chunk 2b — `check_planning_status_sync.py` + CI wire（讀 PR body `Resolves TRK-NNN`，驗 frontmatter status）
 - chunk 5 — CLAUDE.md 起手式收編 + dev-rules.md / commit-convention.md 強制 TRK
 

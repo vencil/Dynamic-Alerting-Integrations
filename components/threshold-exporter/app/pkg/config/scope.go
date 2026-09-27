@@ -72,6 +72,19 @@ type ScopedTenants struct {
 	// paths) that contributed at least one tenant ID to Tenants.
 	// Useful for CLI output ("scanned 12 files, found 47 tenants").
 	SourceFiles []string
+
+	// ParseFailed is every config file at-or-below the scope whose bytes
+	// the exporter's decode REJECTS (TreeFile.ParseFailed), as root-relative
+	// slash paths, sorted; nil when there are none (#2123).
+	//
+	// ⛔ Not an error of ScopeEffective, on purpose: the walker skips such a
+	// file and serves the rest of the tree, and callers that mirror the
+	// exporter rely on err == nil here. But a skipped file declares no
+	// tenant, so Tenants silently omits whatever it held — a caller that
+	// turns Tenants into a verdict must read this field too, or a broken
+	// file reads as "nothing in scope" (da-guard's vacuously-safe exit 0,
+	// before #2123).
+	ParseFailed []string
 }
 
 // ScopeEffective resolves the effective config for every tenant
@@ -95,7 +108,9 @@ type ScopedTenants struct {
 //     not a mapping), wrapped as `resolve tenant %q: ...`.
 //
 // A tenant file that is unreadable or not valid YAML is not an error: the
-// walker logs (here: discards) and skips it, as the exporter does.
+// walker logs (here: discards) and skips it, as the exporter does. A file
+// the decode rejects is listed in ScopedTenants.ParseFailed (#2123) so the
+// caller can still tell "no tenants" from "tenants it could not read".
 //
 // configDir and scopeDir are both symlink-resolved (AbsScanRoot) before
 // the containment check, so a symlinked --config-dir and a --scope spelled
@@ -160,16 +175,21 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// does not. A hidden scope yields zero tenants: the walker prunes hidden
 	// directories, so no kept file lives under it.
 	inScope := make(map[string]struct{})
+	var parseFailed []string
 	for _, f := range scan.Files {
-		if len(f.TenantIDs) == 0 || !pathAtOrBelow(f.AbsPath, absScope, rel == ".") {
+		if !pathAtOrBelow(f.AbsPath, absScope, rel == ".") {
 			continue
+		}
+		if f.ParseFailed {
+			parseFailed = append(parseFailed, f.RelKey)
 		}
 		for _, id := range f.TenantIDs {
 			inScope[id] = struct{}{}
 		}
 	}
+	sort.Strings(parseFailed)
 	if len(inScope) == 0 {
-		return &ScopedTenants{}, nil
+		return &ScopedTenants{ParseFailed: parseFailed}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -187,7 +207,8 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// time — O(files × tenants)); the defaults selection is computed once.
 	resolver := newEffectiveResolver(scan)
 	out := &ScopedTenants{
-		Tenants: make([]*EffectiveConfig, 0, len(tenantIDs)),
+		Tenants:     make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed: parseFailed,
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {

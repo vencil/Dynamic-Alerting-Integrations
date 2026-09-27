@@ -90,8 +90,6 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-# #1577 / #2114: the ONE exporter-key loader (moved out of this module).
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -156,6 +154,14 @@ from _lib_python import (  # noqa: E402
     load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
     DOCS_SITE_BASE,
 )
+# #2123: conf.d files are read strictly — a key written twice in one mapping
+# is a YAML error (the exporter's yaml.v3 rejects the file), not last-wins.
+from _lib_io import (  # noqa: E402
+    load_yaml_file_strict, strict_safe_load,
+)
+# #1577 / #2114: the ONE exporter-key loader (`_lib_yaml_keys`, moved out of
+# this module), composed with the strict reading above in `_lib_io`.
+from _lib_io import strict_load_exporter_keys  # noqa: E402
 
 # ============================================================
 # Check results
@@ -406,7 +412,9 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
             label = fpath_p.name
         try:
             with open(fpath, encoding="utf-8") as f:
-                loaded = yaml.safe_load(f)
+                # Strict (#2123): a duplicate key raises a YAMLError naming
+                # the line, and takes the syntax-error branch below.
+                loaded = strict_safe_load(f)
         except yaml.YAMLError as e:
             errors.append(f"{label}: {e}")
             unusable.append(label)
@@ -727,7 +735,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
-    profiles_raw = load_yaml_file(profiles_path, default={})
+    profiles_raw = load_yaml_file_strict(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -763,7 +771,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         if fname.startswith("_") or fname.startswith("."):
             continue
         fpath = str(fpath_p)
-        raw = load_yaml_file(fpath, default={})
+        raw = load_yaml_file_strict(fpath, default={})
         if not isinstance(raw, dict):
             continue
 
@@ -848,7 +856,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         # The read below is the operator's argv. The `_defaults.yaml` read
         # above is the customer's tree and stays a tree finding on purpose.
         try:
-            dsl_data = pe.load_yaml_file(policy_dsl_file)
+            dsl_data = pe.load_yaml_file_strict(policy_dsl_file)
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
             return _argv_error_row(
                 "policy_dsl",
@@ -1026,7 +1034,9 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
             with open(path, encoding="utf-8") as fh:
                 # #2114: tenant ids are the key's raw TEXT, as the exporter
                 # keys them — see `_lib_yaml_keys` for the measured table.
-                data = load_exporter_keys(fh)
+                # #2123: a key repeated in one mapping (by that same
+                # identity) makes the file unreadable here, as in Go.
+                data = strict_load_exporter_keys(fh)
         except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
             unreadable.append(label)
             continue

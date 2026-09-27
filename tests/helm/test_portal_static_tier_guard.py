@@ -18,6 +18,7 @@ tests/shared/test_helm_portal.py::TestNginxConfigmapHasProxy::test_nginx_proxy_b
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -81,6 +82,28 @@ def test_full_render_keeps_both_proxy_locations(repo_root: Path, values_file: st
     assert "location = /preview" in conf
     targets = _PROXY_PASS_RE.findall(conf)
     assert len(targets) == 2, f"應恰有 2 個 proxy_pass，得到 {targets}"
+
+
+@_needs_helm
+@pytest.mark.parametrize("values_file", [None, "values-tier1.yaml", "values-tier2.yaml"])
+def test_simulate_not_provided_location_renders_on_every_tier(
+    repo_root: Path, values_file: str | None
+) -> None:
+    """#2125：每個 tier 都渲染 `location = /api/v1/tenants/simulate` → 501。
+
+    Tier-2 上它以 exact match 蓋過 /api/v1/ prefix（否則 tenant-api 把
+    `simulate` 當 tenant id 回 405）；Tier-1 沒有 /api/v1/ 代理也要明確回 501。
+    code 與 widget 的 drift 斷言見 tests/shared/test_portal_simulate_not_provided.py。
+    """
+    chart = repo_root / "helm/da-portal"
+    conf = _nginx_conf(_render(chart, values_file=chart / values_file if values_file else None))
+
+    # 區塊以獨立一行的 `}` 收尾（body 是 JSON，內含 `}`）。
+    m = re.search(r"location = /api/v1/tenants/simulate \{(.*?)\n\s*\}", conf, re.S)
+    assert m is not None, f"{values_file or 'default'} render 缺 simulate not-provided location"
+    ret = re.search(r"return 501 '(\{.*\})';", m.group(1))
+    assert ret is not None, f"simulate location 應回 501，實得 {m.group(1)!r}"
+    assert json.loads(ret.group(1))["code"] == "SIMULATE_NOT_PROVIDED"
 
 
 @_needs_helm

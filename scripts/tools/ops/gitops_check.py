@@ -41,6 +41,9 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# #2123: a key written twice in one mapping is a YAMLError, as the exporter
+# (yaml.v3) treats it — not PyYAML's silent last-wins.
+from _lib_io import strict_safe_load  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_hidden_name,
@@ -251,7 +254,7 @@ def check_local(dir_path: str) -> CheckResult:
     # Validate _defaults.yaml
     try:
         with open(defaults_path, encoding="utf-8") as f:
-            yaml.safe_load(f)
+            strict_safe_load(f)
     except yaml.YAMLError as e:
         return CheckResult(
             check="local",
@@ -313,7 +316,7 @@ def check_local(dir_path: str) -> CheckResult:
 
             try:
                 with open(file_path, encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
+                    data = strict_safe_load(f)
 
                 # Count metric keys (tenant YAML is flat key-value,
                 # skip internal keys starting with _)

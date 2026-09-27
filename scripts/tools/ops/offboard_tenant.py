@@ -43,6 +43,7 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import strict_safe_load  # noqa: E402  (#2123 duplicate key = YAML error)
 
 
 def find_config_file(tenant, config_dir):
@@ -105,7 +106,10 @@ def load_all_configs(config_dir):
             continue
         try:
             with open(entry, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f) or {}
+                # Strict (#2123): a key written twice in one mapping is a
+                # YAMLError, so the file is named ⚠️ unreadable like a syntax
+                # error instead of reporting PyYAML's last value.
+                data = strict_safe_load(f) or {}
             configs[filename] = {"path": str(entry), "data": data}
         except (OSError, yaml.YAMLError) as e:
             print(f"  ⚠️  無法讀取 {safe_label(filename)}: {safe_label(e)}")

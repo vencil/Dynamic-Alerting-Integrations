@@ -101,6 +101,8 @@ const (
 const (
 	FindingUnknownReceiverType        FindingKind = "unknown_receiver_type"
 	FindingMissingReceiverField       FindingKind = "missing_receiver_field"
+	FindingConflictingReceiverField   FindingKind = "conflicting_receiver_field"
+	FindingInvalidReceiverField       FindingKind = "invalid_receiver_field"
 	FindingEmptyOverrideMatcher       FindingKind = "empty_override_matcher"
 	FindingConflictingOverrideMatcher FindingKind = "conflicting_override_matcher"
 	FindingDuplicateOverrideMatcher   FindingKind = "duplicate_override_matcher"

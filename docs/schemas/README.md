@@ -266,7 +266,7 @@ To update the schema:
 3. **Sync Python**: Update `scripts/tools/_lib_constants.py` (`VALID_RESERVED_KEYS`, `RECEIVER_TYPES`; re-exported via `_lib_python.py`)
 4. **Update schema**: Modify `docs/schemas/tenant-config.schema.json` to match Go/Python definitions
 5. **Update docs**: Reflect changes in relevant documentation (getting-started, architecture-and-design, CHANGELOG)
-6. **Test**: Validate sample configs against new schema in VS Code or with `validate_config.py`. Two drift gates run in CI: `tests/shared/test_reserved_key_py_go_parity.py` (Python↔Go reserved keys) and `tests/dx/test_sync_schema.py` (Go↔JSON-schema); `sync_schema.py --check` is the same Go↔schema check on demand.
+6. **Test**: Validate sample configs against new schema in VS Code or with `validate_config.py`. Two drift gates run in CI: `tests/shared/test_reserved_key_py_go_parity.py` (Python↔Go reserved keys) and `tests/dx/test_sync_schema.py` (Go↔JSON-schema); `sync_schema.py --check` is the same Go↔schema check on demand. Receiver field contracts (required fields and exactly-one groups such as pagerduty `service_key` / `routing_key`) use this schema as the hub: `tests/shared/test_receiver_spec_parity.py` pins Python `RECEIVER_TYPES`, and `TestReceiverTypeSpecs_MatchSchema` pins the Go guard's `receiverTypeSpecs` (`components/threshold-exporter/app/internal/guard/routing.go`).
 
 ---
 

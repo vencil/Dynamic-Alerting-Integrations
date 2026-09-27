@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 // SetBaseBranch sets the PR-mode base branch the Writer branches from and returns
@@ -54,6 +56,69 @@ func (w *Writer) checkoutBaseClean(base string) error {
 		return fmt.Errorf("checkout base %q: %w", base, err)
 	}
 	return nil
+}
+
+// leavePRBranch is the direct-commit guard (#1723). Caller MUST hold w.mu.
+// It runs in lockTreeOnBase, right after the lock is taken and before the
+// caller reads anything from the tree; commitFileChange repeats it as a
+// backstop.
+//
+// The hazard: WritePR / WritePRBatch return the worktree to base as their last
+// step, and when that fails twice (ErrBaseRestore) the tree stays on the
+// feature branch after the lock is released. Every direct commit after that —
+// special files, the account registry, direct-mode tenant writes — would land
+// on that branch and report success, and the next PR write's anchoring
+// `checkout -f <base>` would strand those commits where no reader looks.
+//
+// So when HEAD is a branch in the PR namespace (platform.BranchPrefix, the
+// same constant WritePR names its branches with), it tries to return the tree
+// to base, and REFUSES THIS WRITE EITHER WAY with ErrTreeNotOnBase:
+//
+//   - Why refuse even after a successful return: the writer's own reads come
+//     after this check, but the request was prepared before the lock, against
+//     the feature branch's tree — the body and base hash the client derived
+//     from a GET served off it, a handler's pre-lock reads (the custom-alerts
+//     merge and its cheap hash check), the snapshot a group or view handler
+//     authorized against. The branch is cut from origin/<base>, not from the
+//     local base the direct writes commit to, so any of those can differ on
+//     base. Committing the result onto base could replay the unmerged
+//     proposal into it or undo a base-only commit. Nothing short of redoing
+//     the whole request on base is sound, and the retry does exactly that —
+//     the tree is on base now.
+//   - The return fails → the error ALSO wraps the git error (%w twice), so
+//     index.lock contention still reads as ErrWriteOverloaded.
+//
+// Both outcomes mean "retry": no commit and no push happened, unlike
+// ErrBaseRestore, whose push already did.
+//
+// Everything else keeps the behaviour this guard predates. Direct mode commits
+// on whatever branch the operator checked out, so a non-PR branch is left
+// alone, and so is a HEAD that symbolic-ref cannot name: a detached HEAD is
+// not a state WritePR leaves behind (it only ever checks out named branches),
+// and a read that times out tells us nothing about the branch — refusing
+// there would fail direct mode on a guess. The commit that follows still runs
+// under its own git timeout.
+func (w *Writer) leavePRBranch() error {
+	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		return nil
+	}
+	branch := strings.TrimSpace(string(out))
+	base := w.base()
+	if branch == base || !strings.HasPrefix(branch, platform.BranchPrefix) {
+		return nil
+	}
+
+	if err := w.checkoutBaseClean(base); err != nil {
+		slog.Error("gitops: worktree is on a PR branch and returning to base failed — nothing written (#1723)",
+			"branch", branch, "base", base, "error", err)
+		return fmt.Errorf("%w: HEAD is PR branch %q and returning to base %q failed, nothing written: %w",
+			ErrTreeNotOnBase, branch, base, err)
+	}
+	slog.Warn("gitops: worktree was on a PR branch — returned to base, write refused for retry (#1723)",
+		"branch", branch, "base", base)
+	return fmt.Errorf("%w: HEAD was PR branch %q; the tree is back on base %q, but this write was prepared on the branch, so nothing was written — retry",
+		ErrTreeNotOnBase, branch, base)
 }
 
 // resolveFreshBaseRef fetches origin/<base> (in-lock, TRK-318) and returns the

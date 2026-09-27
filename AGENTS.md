@@ -43,7 +43,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 | 品質閘門的 owner（哪些機械擋、哪些要自覺） | [`docs/internal/hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md) |
 | 測試注入 seam 與平行化決策樹 | [`docs/internal/test-map.md`](docs/internal/test-map.md) |
 | Python 工具總表 | [`docs/internal/tool-map.md`](docs/internal/tool-map.md) |
-| 追蹤 ID（`TRK-NNN`）對照 | [`docs/internal/planning-id-mapping.md`](docs/internal/planning-id-mapping.md) |
+| 追蹤 ID：新項目用 `TRK-<issue 號>`、不看表取號；舊號（TRK-001～392）對照 | [`docs/internal/planning-id-mapping.md`](docs/internal/planning-id-mapping.md) |
 | Release 六線版號 SOP | [`docs/internal/github-release-playbook.md`](docs/internal/github-release-playbook.md) |
 
 ## 工作流 skills

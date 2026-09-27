@@ -349,8 +349,7 @@ route:
 
 **If not this**：
 - (a) `continue: true` 寫錯讓 alert fall-through → 改 `continue: false`
-- (b) AM v0.27 vs v0.32 matcher 語法差異 → 用 `==` 不是 `=~` 除非真要 regex
-- (c) `null` receiver 配置漏（receiver name 拼錯）→ AM log 含 `receiver "null" not found`
+- (b) `null` receiver 配置漏（receiver name 拼錯）→ AM log 含 `undefined receiver "null" used in route`
 
 **Cross-ref**：playbook §12 Phase 2 catalog row「Shadow alert 漏到 production receiver」
 

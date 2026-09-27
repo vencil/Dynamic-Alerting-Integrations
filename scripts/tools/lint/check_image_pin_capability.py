@@ -151,6 +151,10 @@ from _lint_helpers import (  # noqa: E402
     parse_command_map_text as parse_command_map_text_shared,
 )
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_io import (  # noqa: E402  (#2123 shared strict loader)
+    StrictSafeLoader, reject_equal_constructed_keys, strict_safe_load,
+    strict_safe_load_all,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -221,38 +225,27 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
 # built to produce, and a silent pass for whatever ran in that branch. A
 # duplicate key means this gate can no longer claim to have seen every
 # container, so refuse the document instead.
-class _StrictLoader(yaml.SafeLoader):
-    """SafeLoader that raises on a duplicate mapping key instead of picking one."""
+#
+# #2123: the duplicate check is the shared one (`_lib_io.StrictSafeLoader`,
+# yaml.v3's raw-key identity, whole document). This gate compared CONSTRUCTED
+# keys of each mapping's own entries before that (`true:` / `True:` collide,
+# and a `<<:` merge key is refused outright because SafeConstructor has no
+# constructor for it); that comparison stays on top so nothing it refused
+# before is accepted now.
+class _StrictLoader(StrictSafeLoader):
+    """Shared strict loader + this gate's pre-#2123 constructed-key identity."""
 
     def construct_mapping(self, node, deep=False):
-        seen: set = set()
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            try:
-                duplicate = key in seen
-            except TypeError:
-                continue      # unhashable key: super() raises its own error
-            if duplicate:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping", node.start_mark,
-                    f"found duplicate key {key!r}", key_node.start_mark)
-            seen.add(key)
+        reject_equal_constructed_keys(self, node.value, node, deep=deep)
         return super().construct_mapping(node, deep=deep)
 
 
-# The loader is driven directly rather than through `yaml.load(...)`: bandit
-# B506 flags that call for any Loader it cannot name-match to SafeLoader, and
-# a SafeLoader *subclass* is not name-matched. This is what load_all() does.
+# The loader is driven by `_lib_io` rather than through `yaml.load(...)`:
+# bandit B506 flags that call for any Loader it cannot name-match to
+# SafeLoader, and a SafeLoader *subclass* is not name-matched.
 def load_all_strict(text: str) -> list:
     """`yaml.safe_load_all`, but a duplicate mapping key raises ConstructorError."""
-    loader = _StrictLoader(text)
-    try:
-        docs = []
-        while loader.check_data():
-            docs.append(loader.get_data())
-        return docs
-    finally:
-        loader.dispose()
+    return list(strict_safe_load_all(text, loader=_StrictLoader))
 
 
 def load_strict(text: str):
@@ -261,11 +254,7 @@ def load_strict(text: str):
     Mirrors safe_load exactly, second document included: `get_single_data()`
     raises on a multi-document stream rather than quietly reading the first.
     """
-    loader = _StrictLoader(text)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
+    return strict_safe_load(text, loader=_StrictLoader)
 
 
 # --- Go-template stripping --------------------------------------------------

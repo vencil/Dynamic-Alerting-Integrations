@@ -1,11 +1,12 @@
 /**
- * Drift guard (#2033): every receiver the portal teaches carries the fields
- * the routing pipeline requires — not just the schema's. A playground
- * template, gallery template or schema-explorer insert with an email
- * receiver lacking `from` (or pagerduty lacking `service_key`) passes the
- * schema but its whole route is WARN-and-skipped by the generator/guard.
- * The required lists are read live from scripts/tools/_lib_constants.py
- * (RECEIVER_TYPES) and the Go guard (receiverTypeSpecs); see the helper.
+ * Drift guard (#2033, #2137): every receiver the portal teaches satisfies the
+ * routing pipeline's field-presence contract. A playground template, gallery
+ * template or schema-explorer insert with an email receiver lacking `from`, or
+ * a pagerduty receiver with neither (or both) of service_key / routing_key,
+ * has its whole route WARN-and-skipped by the generator/guard. The contract
+ * is read from tenant-config.schema.json, to which the Python RECEIVER_TYPES
+ * and the Go receiverTypeSpecs are each pinned by their own parity test; see
+ * the helper.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -16,7 +17,7 @@ import { load } from 'js-yaml';
 import { buildYamlTemplates } from '../src/interactive/tools/playground.jsx';
 import { SCHEMA, buildInsertYaml } from '../src/interactive/tools/schema-explorer.jsx';
 import { resolveTemplateData } from '../src/interactive/tools/template-gallery/placeholders.js';
-import { RECEIVER_SOURCES, RECEIVER_REQUIRED, findReceivers, missingReceiverFields } from './helpers/receiver-required';
+import { RECEIVER_SPECS, findReceivers, receiverFieldProblems } from './helpers/receiver-required';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // As the gallery serves it: load-time placeholders resolved with a fixed now.
@@ -25,21 +26,18 @@ const GALLERY = resolveTemplateData(
   new Date('2026-09-25T10:00:00Z'),
 );
 
-describe('required-field sources are read, not empty', () => {
-  it('both Python RECEIVER_TYPES and Go receiverTypeSpecs list all six types', () => {
-    for (const src of Object.values(RECEIVER_SOURCES)) {
-      expect(Object.keys(src).sort()).toEqual(['email', 'pagerduty', 'rocketchat', 'slack', 'teams', 'webhook']);
-    }
-    // The two fields the schema does not require are the point of this guard.
-    expect(RECEIVER_REQUIRED.email).toContain('from');
-    expect(RECEIVER_REQUIRED.pagerduty).toContain('service_key');
+describe('the receiver contract is read, not empty', () => {
+  it('the schema defines all six types, incl. email from and the pagerduty key group', () => {
+    expect(Object.keys(RECEIVER_SPECS).sort()).toEqual(['email', 'pagerduty', 'rocketchat', 'slack', 'teams', 'webhook']);
+    expect(RECEIVER_SPECS.email.required).toContain('from');
+    expect(RECEIVER_SPECS.pagerduty).toEqual({ required: [], exactlyOneOf: [['service_key', 'routing_key']] });
   });
 });
 
 function check(label: string, doc: unknown) {
   const found = findReceivers(doc);
   for (const { path, receiver } of found) {
-    expect({ where: `${label}:${path}`, missing: missingReceiverFields(receiver) })
+    expect({ where: `${label}:${path}`, missing: receiverFieldProblems(receiver) })
       .toEqual({ where: `${label}:${path}`, missing: [] });
   }
   return found.length;
@@ -71,8 +69,18 @@ describe('portal receivers carry the pipeline-required fields', () => {
     expect(n).toBeGreaterThanOrEqual(4);
   });
 
-  it('checker positive control: an email receiver without from is flagged', () => {
-    expect(missingReceiverFields({ type: 'email', to: ['a@example.com'], smarthost: 'smtp:587' })).toEqual(['from']);
-    expect(missingReceiverFields({ type: 'pagerduty', routing_key: 'x' })).toEqual(['service_key']);
+  it('checker positive control: missing from, and a pagerduty key group with zero or two keys, are flagged', () => {
+    expect(receiverFieldProblems({ type: 'email', to: ['a@example.com'], smarthost: 'smtp:587' })).toEqual(['from']);
+    expect(receiverFieldProblems({ type: 'pagerduty' })).toEqual(['exactly one of service_key|routing_key']);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: 'k', routing_key: 'r' }))
+      .toEqual(['exactly one of service_key|routing_key']);
+    expect(receiverFieldProblems({ type: 'pagerduty', routing_key: 'r' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: 'k' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: '', routing_key: 'r' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: null, routing_key: 'r' })).toEqual([]);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: null, routing_key: null }))
+      .toEqual(['exactly one of service_key|routing_key']);
+    expect(receiverFieldProblems({ type: 'pagerduty', service_key: '', routing_key: '' }))
+      .toEqual(['exactly one of service_key|routing_key']);
   });
 });

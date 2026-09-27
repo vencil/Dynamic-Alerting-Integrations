@@ -42,6 +42,12 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+# #2123: conf.d YAML is read strictly — a key written twice in one mapping
+# raises (the exporter's yaml.v3 rejects that file) instead of last-wins.
+from _lib_io import strict_safe_load  # noqa: E402
+# #2114: tenant ids as the exporter keys them (raw text), on the same strict
+# reading — `_lib_io` composes the two loaders.
+from _lib_io import strict_load_all_exporter_keys, strict_load_exporter_keys  # noqa: E402
 
 try:
     import yaml
@@ -107,7 +113,7 @@ def _load_yaml(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     if yaml:
-        return yaml.safe_load(content) or {}
+        return strict_safe_load(content) or {}
     # Minimal fallback — only works for simple flat YAML
     raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
 
@@ -158,23 +164,23 @@ def _load_first_document(path: Path) -> Any:
     Mapping keys are the scalar's source TEXT (#2114), as yaml.v3 decodes
     them into the exporter's `map[string]…`: `010:` is tenant "010" and
     `yes:` is "yes", not PyYAML's 8 / True. Values keep PyYAML's types.
+    Strict (#2123): a key written twice in one mapping raises — by the
+    exporter's identity, so `123:` and `"123":` are that duplicate.
     Same pure-Python parser as before.
     """
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
-    # Lazy: this module imports without PyYAML (the RuntimeError above).
-    from _lib_yaml_keys import load_first_document_exporter_keys
     with open(path, "r", encoding="utf-8") as f:
-        return load_first_document_exporter_keys(f)
+        # #2123 strict + #2114 exporter keys, composed in `_lib_io`.
+        return next(strict_load_all_exporter_keys(f), None)
 
 
 def _load_platform_doc(path: Path) -> Any:
     """`path` as ONE document with source-text keys (#2114) — `_load_yaml`'s
-    read (single document, pure parser) for the `--what-if` file's
+    read (single document, strict, pure parser) for the `--what-if` file's
     `tenants:` block, so its ids match the tenant files'."""
-    from _lib_yaml_keys import load_exporter_keys  # lazy, see _load_first_document
     with open(path, "r", encoding="utf-8") as f:
-        return load_exporter_keys(f) or {}
+        return strict_load_exporter_keys(f) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",

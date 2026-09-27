@@ -43,14 +43,19 @@ names the file (#2114 review: before, these leaked ``TypeError`` /
 ⚠️ Measured residuals, deliberately not closed here:
 
 * Go **rejects** a mapping that repeats a key (``mapping key "123" already
-  defined``, also for a repeated ``tenants:``). This loader, like PyYAML,
-  keeps the last one — and because keys are now text, ``123:`` and
-  ``"123":`` in ONE mapping fold into one tenant silently (``safe_load``
-  made them two, 123 and "123"). Duplicate-key rejection is the scope of the
-  shared strict loader in #2123; this test pins today's behaviour so that
-  change is visible when it lands:
-  ``tests/shared/test_tenant_id_yaml_spelling_parity.py``
-  (``test_two_spellings_of_one_id_in_one_mapping_fold_silently``).
+  defined``, also for a repeated ``tenants:``), and keys are compared by
+  raw text — so ``123:`` and ``"123":`` in ONE mapping are that duplicate.
+  This loader ALONE, like PyYAML, keeps the last one. The strict readers do
+  not use it alone: ``_lib_io.StrictExporterKeyLoader`` composes it with
+  #2123's ``RejectDuplicateKeys`` (whose ``_key_identity`` is the same
+  kind + raw text), and every reader that was strict on main reads through
+  that — there the two spellings raise ``DuplicateKeyError``. The residual
+  is the readers that were NOT strict on main and use this loader directly:
+  ``_lib_confd.declared_tenant_ids``, ``diagnose``, and
+  ``analyze_rule_pack_gaps --tenant-config`` fold the two spellings into
+  one tenant (``safe_load`` made them two, 123 and "123"). Whether they
+  become strict is #2123's decision per reader. Both halves are pinned in
+  ``tests/shared/test_tenant_id_yaml_spelling_parity.py``.
 
 ⚠️ Only mapping KEYS change. Values stay PyYAML-typed (``_severity_dedup:
 off`` is still ``False``); every consumer of values is unchanged. The one

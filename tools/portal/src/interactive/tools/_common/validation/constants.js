@@ -2,8 +2,8 @@
 title: "_common — Validation constants"
 purpose: |
   Shared validation constants for tenant config + routing rules:
-  reserved keys, key prefixes, supported receiver types + per-receiver
-  required fields, timing guardrails (group_wait / repeat_interval
+  reserved keys, key prefixes, supported receiver types, timing
+  guardrails (group_wait / repeat_interval
   bounds), and the YAML parser's safety limits (UNSAFE_KEYS,
   MAX_YAML_SIZE).
 
@@ -16,7 +16,6 @@ purpose: |
     RESERVED_KEYS         Set of reserved tenant keys (_silent_mode, _metadata, ...)
     RESERVED_PREFIXES     Array of reserved key prefixes (_state_, _routing)
     RECEIVER_TYPES        Array of supported notification receiver types
-    RECEIVER_REQUIRED     map of receiver_type to required field names
     TIMING_GUARDRAILS     map of timing param to bounds {min, max, unit}
     UNSAFE_KEYS           Set of prototype-pollution keys parser must reject
     MAX_YAML_SIZE         Hard cap (100KB) on parser input length
@@ -35,11 +34,6 @@ const RESERVED_PREFIXES = ['_state_', '_routing'];
 
 const RECEIVER_TYPES = ['webhook', 'email', 'slack', 'teams', 'rocketchat', 'pagerduty'];
 
-const RECEIVER_REQUIRED = {
-  webhook: ['url'], email: ['to', 'smarthost'], slack: ['api_url'],
-  teams: ['webhook_url'], rocketchat: ['url'], pagerduty: ['service_key'],
-};
-
 const TIMING_GUARDRAILS = {
   group_wait: { min: 5, max: 300, unit: 's' },
   group_interval: { min: 5, max: 300, unit: 's' },
@@ -49,4 +43,4 @@ const TIMING_GUARDRAILS = {
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_YAML_SIZE = 100000;
 
-export { RESERVED_KEYS, RESERVED_PREFIXES, RECEIVER_TYPES, RECEIVER_REQUIRED, TIMING_GUARDRAILS, UNSAFE_KEYS, MAX_YAML_SIZE };
+export { RESERVED_KEYS, RESERVED_PREFIXES, RECEIVER_TYPES, TIMING_GUARDRAILS, UNSAFE_KEYS, MAX_YAML_SIZE };

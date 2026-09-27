@@ -84,10 +84,18 @@ class PreflightReport:
                 for dl in r.detail.strip().split("\n"):
                     print(f"     {dl}")
         print("-" * width)
+        # The verdict line states only what was measured (#2141): a WARN or
+        # SKIP can be "could not check" (gh missing, no PR yet), so neither
+        # may be summarised as "mergeable" or "all checks passed".
+        warned = sum(r.status == Status.WARN for r in self.results)
+        skipped = sum(r.status == Status.SKIP for r in self.results)
         if self.has_failure:
             print("  ❌ BLOCKED — 有必須修復的問題")
         elif self.has_warning:
-            print("  ⚠️  CAUTION — 可合併但建議先處理警告")
+            skip_note = f"、{skipped} 項略過" if skipped else ""
+            print(f"  ⚠️  CAUTION — 沒有檢查失敗；{warned} 項警告或未能判定{skip_note}（見上）")
+        elif skipped:
+            print(f"  ✅ READY — 沒有檢查失敗；{skipped} 項略過（見上）")
         else:
             print("  ✅ READY — 所有檢查通過，可以 merge")
         print("=" * width)
@@ -891,8 +899,17 @@ def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
 
     ⛔ Do not widen back to `glob(f"{MARKER_PREFIX}.*")` — `_git_dir` is
     `--git-common-dir`, so that reaches every worktree's markers, and the reader
-    keys on the sha, so it buys nothing. Measurements: #1917. Residual: #1951.
+    keys on the sha, so it buys nothing. Measurements: #1917.
     Pinned by `TestFailPathClearRadius`.
+
+    ⚠️ Residual, kept on purpose (#1951): worktrees standing on the same commit
+    share this one file, so a FAIL in any of them removes the marker another
+    one earned — including a FAIL that is about the tree or machine (scope-drift
+    timeout, pre-commit not runnable), not the commit. The latest result on a
+    sha wins, and it errs toward blocking; the cost is one preflight re-run.
+    ⛔ Do not spare markers "written by another tree": the gate's own
+    temporary-worktree hint writes markers whose tree is then gone, which no
+    FAIL could remove, and the failing tree could push that same sha.
     """
     sha = _head_sha(repo_root)
     if not sha:
@@ -1341,10 +1358,16 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
     if not checks:
         return CheckResult("CI status", Status.WARN, "PR 無 CI checks（workflow 未觸發？）")
 
-    # bucket: "pass" | "fail" | "pending" | "skipping"
+    # gh buckets: "pass" | "fail" | "pending" | "skipping" | "cancel".
+    # Only `pass` counts as passed and only `skipping` is neutral. Anything
+    # else — `cancel`, a missing bucket, or a value gh adds later — carries no
+    # verdict, so it must end in WARN, never fall through to PASS (#2140).
     failed = [c for c in checks if c.get("bucket") == "fail"]
     pending = [c for c in checks if c.get("bucket") == "pending"]
     passed = [c for c in checks if c.get("bucket") == "pass"]
+    skipped = [c for c in checks if c.get("bucket") == "skipping"]
+    no_verdict = [c for c in checks
+                  if c.get("bucket") not in ("pass", "fail", "pending", "skipping")]
 
     if failed:
         # A `continue-on-error: true` workflow job reports as `fail` in
@@ -1392,14 +1415,29 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
                 for c in soft_failed
             ),
         )
-    if pending:
-        names = ", ".join(c["name"] for c in pending[:3])
+    if pending or no_verdict:
+        parts = []
+        if pending:
+            names = ", ".join(c["name"] for c in pending[:3])
+            parts.append(f"{len(pending)} 個 check 還在跑: {names}")
+        if no_verdict:
+            parts.append(f"{len(no_verdict)} 個 check 沒有結論（被取消或狀態不明）")
         return CheckResult(
             "CI status",
             Status.WARN,
-            f"{len(pending)} 個 check 還在跑: {names}",
+            "；".join(parts),
+            detail="\n".join(f"· {c.get('name')} (bucket: {c.get('bucket')})"
+                             for c in no_verdict),
         )
-    return CheckResult("CI status", Status.PASS, f"全部 {len(passed)} 個 checks 通過")
+    if not passed:
+        return CheckResult(
+            "CI status",
+            Status.WARN,
+            f"沒有任何 check 通過（{len(skipped)} 個略過）",
+        )
+    skipped_note = f"，{len(skipped)} 個略過" if skipped else ""
+    return CheckResult("CI status", Status.PASS,
+                       f"全部 {len(passed)} 個 checks 通過{skipped_note}")
 
 
 def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
