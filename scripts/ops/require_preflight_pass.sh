@@ -251,8 +251,9 @@ else
     # preflight skips a following command, and the throwaway is left behind
     # (#2038). The subshell's status is preflight's; the trap does not change it.
     # ⛔ `cd` in a nested subshell: the trap's shell must not stand in the tree
-    # it removes (Windows refuses to delete a process's cwd).
-    # ⚠️ bash: other shells may skip an EXIT trap on a signal (dash on SIGTERM).
+    # it removes (Windows refuses to delete a process's cwd). ⚠️ NOT GUARDED:
+    # Linux deletes a cwd without complaint, so no test here can see this.
+    # ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
     _common="$(CDPATH='' cd "$git_dir" && pwd)"
     _tmp_root="$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || _tmp_root="/tmp"
     printf -v _common_q '%q' "$_common"
