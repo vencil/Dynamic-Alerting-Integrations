@@ -95,7 +95,7 @@ class TestPreflightReport:
                    if any(k in ln for k in ("BLOCKED", "CAUTION", "READY"))]
         assert len(verdict) == 1, verdict
         line = verdict[0]
-        claims_all_passed = "可合併" in line or "所有檢查通過" in line
+        claims_all_passed = any(w in line for w in ("可合併", "可以 merge", "所有檢查通過"))
         got = ([k for k in ("BLOCKED", "CAUTION", "READY") if k in line],
                [int(n) for n in re.findall(r"\d+", line)], claims_all_passed)
         assert got == ([keyword], counts, set(statuses) == {"PASS"}), line
