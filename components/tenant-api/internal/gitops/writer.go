@@ -686,10 +686,10 @@ type MergeFunc func(existing []byte) (string, error)
 // tree is one the exporter rejects anyway, and the fix is removing the other
 // declaration, not writing to either one.
 //
-// Every call walks the tree as it is NOW (a walk served from the prior where
-// files are unchanged — see scanTree). WritePRBatch does not come through
-// here: it walks once per batch and judges each op on that walk plus the
-// batch's own writes (batchTree), which is the same answer.
+// Every call walks the tree as it is NOW, so each op of a batch is judged
+// after the ops before it have written. (Since #2153 the walk takes the
+// previous one as its prior — see scanTree — so an unchanged file is not
+// parsed again; the verdict is still the walker's on the current tree.)
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
@@ -742,6 +742,10 @@ var (
 // unless its hash equals the prior's. The walk is therefore never a cache
 // with its own invalidation rule — this Writer's own writes and the PR
 // paths' checkouts change a file's stat, and the walker judges that.
+// ⚠️ It inherits that contract's known gap: if the prior recorded a file
+// while it was still inside the guard, and the file is then rewritten with
+// the same size within the same mtime tick, a walk made after the guard has
+// passed carries the prior's declarations for the old bytes.
 //
 // ⛔ ONLY A WALK HANDED BACK TO ITS CALLER BECOMES THE PRIOR. The store
 // happens in the walking goroutine, under the same mutex that decides
@@ -830,14 +834,6 @@ func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
 		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
 	}
 	located, lerr := scan.Locate(tenantID)
-	return declaredElsewhereVerdict(tenantID, target, scan.AbsRoot, located, lerr)
-}
-
-// declaredElsewhereVerdict turns a Locate-shaped answer for tenantID into the
-// #2078 verdict on writing target. absRoot is the walk's AbsRoot. Shared by
-// ensureNotDeclaredElsewhere and WritePRBatch's per-op check (batchTree), so
-// the two cannot judge the same answer differently.
-func declaredElsewhereVerdict(tenantID, target, absRoot, located string, lerr error) error {
 	var dup *cfg.DuplicateTenantError
 	switch {
 	case errors.Is(lerr, cfg.ErrTenantNotFound):
@@ -851,7 +847,7 @@ func declaredElsewhereVerdict(tenantID, target, absRoot, located string, lerr er
 	// configDir already resolved — while target is configDir-relative in
 	// whatever form the operator passed. Compare in the walker's form: the
 	// target is always a top-level file, so its walker path is AbsRoot/<base>.
-	if filepath.Clean(located) == filepath.Join(absRoot, filepath.Base(target)) {
+	if filepath.Clean(located) == filepath.Join(scan.AbsRoot, filepath.Base(target)) {
 		return nil
 	}
 	return fmt.Errorf("%w: tenant %s is declared by %s", ErrTenantDeclaredElsewhere, tenantID, located)

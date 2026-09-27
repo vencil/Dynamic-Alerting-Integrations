@@ -2,8 +2,8 @@ package gitops
 
 // #2153 T1: scanTree hands the last completed walk to the next
 // cfg.ScanDirTree as its prior, so an unchanged file is neither read nor
-// parsed again, and WritePRBatch walks the tree once per batch instead of
-// once per op. These tests pin both halves — the reuse actually happens, and
+// parsed again — WritePRBatch's walk before each op included. These tests pin
+// both halves — the reuse actually happens, and
 // every verdict the #2078 guard derives from a walk stays what a cold walk
 // would say — through the walker's own TreeFile.Reused / Parsed flags and the
 // per-Writer onTreeScan seam, never through wall-clock timings.
@@ -324,27 +324,95 @@ func TestTreePrior_ConcurrentWalks(t *testing.T) {
 	}
 }
 
-// batchMerge is a PRBatchOp whose merge result is body, whatever is on disk.
+// batchOp is a PRBatchOp whose merge result is body, whatever is on disk.
 func batchOp(id, body string) PRBatchOp {
 	return PRBatchOp{TenantID: id, Merge: func([]byte) (string, error) { return body, nil }}
 }
 
-// A batch walks conf.d once, not once per op.
-func TestTreePriorBatch_WalksTreeOnce(t *testing.T) {
-	dir := seedTreeRepo(t, map[string]string{"bo-a.yaml": tenantBody("bo-a")})
+// Every op of a batch walks conf.d again, and from the second op on that
+// walk is served from the prior: a file no op touched is not parsed again.
+func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{
+		"lo-a.yaml":              tenantBody("lo-a"),
+		"team/lo-bystander.yaml": tenantBody("lo-bystander"),
+	})
 	w := NewWriter(dir, dir)
+	// onTreeScan runs as walk n starts, when treePrior is walk n-1. Walk 1 is
+	// the cold one; every later walk must carry the untouched file.
 	var walks atomic.Int32
-	w.onTreeScan = func() { walks.Add(1) }
+	var parsedAgain []int32
+	bystanderParsed := func() bool {
+		f := w.treePrior.Load().Files["team/lo-bystander.yaml"]
+		return f == nil || f.Parsed
+	}
+	w.onTreeScan = func() {
+		if n := walks.Add(1); n >= 3 && bystanderParsed() {
+			parsedAgain = append(parsedAgain, n-1)
+		}
+	}
 	if _, err := w.WritePRBatch(context.Background(), []PRBatchOp{
-		batchOp("bo-a", "tenants:\n  bo-a:\n    _silent_mode: \"critical\"\n"),
-		batchOp("bo-b", tenantBody("bo-b")),
-		batchOp("bo-c", tenantBody("bo-c")),
+		batchOp("lo-a", "tenants:\n  lo-a:\n    _silent_mode: \"critical\"\n"),
+		batchOp("lo-b", tenantBody("lo-b")),
+		batchOp("lo-c", tenantBody("lo-c")),
 	}, "op@example.com"); err != nil {
 		t.Fatalf("WritePRBatch: %v", err)
 	}
-	if n := walks.Load(); n != 1 {
-		t.Errorf("a 3-op batch walked conf.d %d times, want 1", n)
+	if n := walks.Load(); n != 3 {
+		t.Fatalf("a 3-op batch walked conf.d %d times, want one walk per op", n)
 	}
+	if bystanderParsed() {
+		parsedAgain = append(parsedAgain, walks.Load())
+	}
+	if len(parsedAgain) > 0 {
+		t.Errorf("untouched file parsed again by walk(s) %v", parsedAgain)
+	}
+}
+
+// assertBatchRefusedAsDuplicate runs [create id, write id again] and wants the
+// second op refused as a duplicate and the whole batch aborted.
+func assertBatchRefusedAsDuplicate(t *testing.T, dir, id string) {
+	t.Helper()
+	w := NewWriter(dir, dir)
+	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
+		batchOp(id, tenantBody(id)),
+		batchOp(id, "tenants:\n  "+id+":\n    _silent_mode: \"critical\"\n"),
+	}, "op@example.com")
+	var dup *cfg.DuplicateTenantError
+	if !errors.Is(err, ErrTenantDeclaredElsewhere) || !errors.As(err, &dup) {
+		t.Fatalf("err = %v, want ErrTenantDeclaredElsewhere carrying the duplicate the first op created", err)
+	}
+	assertCleanOnBase(t, dir, "main", "tenant-api/")
+}
+
+// B1 (A): a dangling link elsewhere in conf.d that points at the top-level
+// file the first op creates is dropped by the walk before that op, and
+// becomes a second declaration the moment the file exists.
+func TestTreePriorBatch_DanglingLinkToCreatedFile(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"dl-other.yaml": tenantBody("dl-other")})
+	if err := os.MkdirAll(filepath.Join(dir, "team"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "dl-new.yaml"), filepath.Join(dir, "team", "alias.yaml")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "dangling alias")
+	assertBatchRefusedAsDuplicate(t, dir, "dl-new")
+}
+
+// B1 (B): a subdirectory hardlink of the top-level file shares its bytes, so
+// writing the tenant into the top-level file declares it twice.
+func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"hl-new.yaml": "tenants: {}\n"})
+	if err := os.MkdirAll(filepath.Join(dir, "team"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(dir, "hl-new.yaml"), filepath.Join(dir, "team", "hl-link.yaml")); err != nil {
+		t.Skipf("hardlink unsupported: %v", err)
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "hardlink")
+	assertBatchRefusedAsDuplicate(t, dir, "hl-new")
 }
 
 // An op that keeps a grandfathered co-tenant in its file keeps that

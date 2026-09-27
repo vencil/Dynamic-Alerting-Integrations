@@ -373,14 +373,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// bytes still re-committed to a body carrying a deprecated spelling.
 	changed := false
 	var notices []string
-	// #2153: the #2078 walk is taken once for the whole batch (on the first
-	// op), and each op is judged on it plus the batch's own writes — see
-	// batchTree for why that is the answer a walk before every op gives.
-	var tree batchTree
 	for _, op := range ops {
 		// #1673: one resolution per op — the file read by readMergeValidate and
 		// the file written below must be the same one.
-		filePath, err := tree.tenantFilePath(w, op.TenantID)
+		filePath, err := w.tenantFilePath(op.TenantID)
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err
@@ -398,7 +394,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
 		}
-		tree.recordWrite(filePath, []byte(content))
 		committed, err := w.gitCommit(filePath, op.TenantID, authorEmail)
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
