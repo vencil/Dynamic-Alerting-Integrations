@@ -120,7 +120,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
-		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
+		if d.prWritePath() {
 			// A base hash cannot mean anything here. PR mode writes on a
 			// feature branch and then restores the working tree to base, so
 			// the file this handler could hash is the BASE version — a second

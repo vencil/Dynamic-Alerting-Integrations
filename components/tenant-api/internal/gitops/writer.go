@@ -1252,11 +1252,11 @@ func TenantDocBytesFromEnv(envValue string) (n int64, malformed bool) {
 
 // CheckTenantDocSize is the pre-parse size gate on one tenant document (#1722).
 //
-// ⛔ EXPORTED SO THE DRY-RUN ENDPOINT ENFORCES THE BYTE-IDENTICAL RULE. POST
-// /tenants/{id}/validate does not call validate(); it re-assembles the same
-// checks by hand, so a gate living only inside validateShape let the dry-run
-// answer `valid: true` for a body the PUT then refused — the write-vs-read
-// asymmetry this repo has closed twice (#704, #1718). One function, two callers.
+// It was exported (#1722) because POST /tenants/{id}/validate then re-assembled
+// validate()'s checks by hand and had to call this gate itself. Since #2124 the
+// dry-run gets its verdict from DryRunValidate, which runs validate() — and so
+// this gate — itself; the handler no longer calls it. It stays exported for the
+// handler-side symmetry test that measures a fixture against the cap.
 //
 // ⚠️ WHAT IT MEASURES DEPENDS ON THE CALLER, so the message must not assert one.
 // The merged document reaches it from exactly two places — readMergeBodyOnly and
@@ -1512,7 +1512,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 		case rerr == nil:
 			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
 			if err != nil {
-				return append(errs, "internal error: cannot read current custom alerts: "+err.Error()), notices
+				return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(err)), notices
 			}
 			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
 			if err != nil {
@@ -1520,7 +1520,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 			}
 			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
 		case !os.IsNotExist(rerr):
-			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error()), notices
+			return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(rerr)), notices
 		}
 	}
 	return errs, notices

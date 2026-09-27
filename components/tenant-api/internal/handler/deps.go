@@ -197,6 +197,13 @@ type Deps struct {
 	MaxBatchBodyBytes int64
 }
 
+// prWritePath reports whether tenant writes take the PR/MR path — the one
+// predicate PutTenant, BatchTenants and the dry-run ValidateTenant branch on,
+// so the dry-run cannot pick a different mode than the write it predicts.
+func (d *Deps) prWritePath() bool {
+	return d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil
+}
+
 // MaxBatchBody returns d.MaxBatchBodyBytes with a fallback to
 // DefaultMaxBatchBodyBytes when unset (zero / negative), so test fixtures
 // that build Deps literally keep working unchanged.
