@@ -78,8 +78,8 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     script prints emoji (✅ / ❌) and would otherwise crash on Windows
     cp950/cp932 consoles. generate_tool_map.py also self-defends via
     `sys.stdout.reconfigure()`, but `-X utf8` here is belt-and-suspenders
-    and matches the pattern used by `.pre-commit-config.yaml` for the
-    42 Python hooks.
+    and matches the pattern used by `.pre-commit-config.yaml` for its
+    Python hooks.
 
     Crash-vs-drift disambiguation: a UnicodeEncodeError / Traceback / bare
     SystemExit in stderr means the generator itself crashed rather than

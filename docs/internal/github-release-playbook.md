@@ -624,8 +624,8 @@ foreach ($r in $fails) {
 
 11. **品質閘門**
     ```bash
-    pre-commit run --all-files                           # 31 auto hooks
-    pre-commit run --hook-stage manual --all-files        # 13 manual hooks
+    pre-commit run --all-files                           # auto stage
+    pre-commit run --hook-stage manual --all-files        # manual stage
     python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
     ```
 

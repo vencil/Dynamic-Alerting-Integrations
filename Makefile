@@ -24,7 +24,7 @@ PYTEST_WORKERS ?= auto
 # repo 自己的中文 commit subject 就會炸 `UnicodeDecodeError: 'cp950' codec can't
 # decode byte 0x8f`——而且例外是在 subprocess 的 reader thread 裡拋的，呼叫端只
 # 拿到 `stdout=None`，接著在下一行炸一個看似無關的 `AttributeError`。
-# pre-commit 的 107 個 entry 全都帶 `-X utf8`，所以 hook 路徑一直免疫；本檔的 83
+# pre-commit 的 python entry 全都帶 `-X utf8`，所以 hook 路徑一直免疫；本檔的 83
 # 處 Python 呼叫則一個都沒有，`make <target>` 才是真正的曝險面。
 #
 # ⛔ 這是**入口止血、不是修法**：真正的修法是讓每個 subprocess 呼叫自己 pin

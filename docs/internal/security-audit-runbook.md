@@ -297,7 +297,7 @@ P 分級：
 
 ⛔ **不要直接 `git commit` + `git push`** — Windows pre-commit 會卡 `head-blob-hygiene`（FUSE phantom lock）。
 
-⛔ **不要用 `--no-verify`** — hook 會擋。
+⛔ **不要用 `--no-verify`** — 它讓 commit 時的本地 hook 全部跳過。
 
 ✅ **Sandbox 路徑**（詳見 [`windows-mcp-playbook.md`](windows-mcp-playbook.md) §修復層 C.1 #3-#4）：
 
@@ -351,7 +351,7 @@ oauth2-proxy 這類 Helm + k8s 都 pin 的元件，常會 drift（Q2 2026 發現
 
 ### 9.3 Auto-mode 下的 force-push 授權
 
-Force-push 即便對 feature branch 也會被 hook 擋。需要 user 明確說「授權 force-push PR #<N> feature branch」（不接受「授權你」這種模糊話術）。事先告知並列出指令本體。
+Force-push（含 feature branch）需要 user 明確說「授權 force-push PR #<N> feature branch」（不接受「授權你」這種模糊話術）。事先告知並列出指令本體。
 
 ---
 
