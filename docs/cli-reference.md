@@ -595,7 +595,7 @@ cron 一律以 **UTC** 解讀，指定時區的選項尚未實作；例如台北
 
 **輸出**
 
-stderr 列出每個排程目前是否在窗口內，最後一行是 `Summary: N created, N skipped, N errors`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence 時記為 skipped。⚠️ 沒給 `--alertmanager` 或帶 `--dry-run` 時，`created` 是「會建立」的數量，實際沒有建立（已知問題，追蹤於 issue 1513）。
+stderr 列出每個排程目前是否在窗口內，最後一行是 `Summary: N created, N skipped, N errors`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ 沒給 `--alertmanager` 或帶 `--dry-run` 時，`created` 是「會建立」的數量，實際沒有建立（已知問題，追蹤於 issue 1513）。
 
 **範例**
 

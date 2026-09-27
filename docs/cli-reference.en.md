@@ -672,7 +672,7 @@ Cron expressions are always read as **UTC**; an option to choose a timezone is n
 
 **Output**
 
-stderr lists whether each schedule is currently inside its window, ending with `Summary: N created, N skipped, N errors`. A created silence matches `tenant="<tenant>"` and `alert_source=""`, is created by `da-tools/maintenance-scheduler`, carries the schedule's `reason` as its comment, and ends when the window ends; if the window already has a silence, it counts as skipped. ⚠️ Without `--alertmanager`, or with `--dry-run`, `created` is the number it *would* create; nothing is actually created (known issue, tracked in issue 1513).
+stderr lists whether each schedule is currently inside its window, ending with `Summary: N created, N skipped, N errors`. A created silence matches `tenant="<tenant>"` and `alert_source=""`, is created by `da-tools/maintenance-scheduler`, carries the schedule's `reason` as its comment, and ends when the window ends; if the window already has a silence that lasts until the window ends, it counts as skipped; if that silence would expire before the window ends, the tool extends it to the window's end (stderr prints `Extended silence …`) and counts the extension as created. ⚠️ Without `--alertmanager`, or with `--dry-run`, `created` is the number it *would* create; nothing is actually created (known issue, tracked in issue 1513).
 
 **Examples**
 
