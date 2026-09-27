@@ -849,3 +849,108 @@ class TestProfileDiffEndToEnd:
             j = json.dumps(output, default=str)
             parsed = json.loads(j)
             assert "key_diffs" in parsed["profile_diffs"][0]
+
+
+# ── Tenant `_` settings (decision H1b) ──────────────────────────────
+
+def _write_settings(directory, tenant_cfg):
+    path = Path(directory) / "db-a.yaml"
+    path.write_text(yaml.safe_dump({"tenants": {"db-a": tenant_cfg}}),
+                    encoding="utf-8", newline="\n")
+
+
+class TestTenantSettingChanges:
+    """`_` 開頭的租戶設定改了，要報出來、rc=1。
+
+    ⛔ 過去 flatten_tenant_config 丟掉所有 `_` key，而沒有別處報它們：拿掉
+    `_state_maintenance`（該租戶告警全部恢復）得到 "No changes detected"、rc=0。
+    """
+
+    BASE = {
+        "mysql_connections": "80",
+        "_silent_mode": "warning",
+        "_state_container_crashloop": "disable",
+        "_severity_dedup": "enable",
+        "_routing": {"receiver": {"type": "webhook", "url": "https://a.example"},
+                     "group_wait": "30s"},
+        "_profile": "standard-db",
+        "_metadata": {"db_type": "mariadb"},
+        "_namespaces": ["ns1"],
+        "_state_maintenance": {"target": "all", "expires": "2099-01-01T00:00:00Z"},
+    }
+
+    @pytest.mark.parametrize("key", [
+        "_silent_mode", "_state_container_crashloop", "_severity_dedup",
+        "_routing", "_profile", "_metadata", "_namespaces", "_state_maintenance",
+    ])
+    def test_removing_any_setting_is_reported(self, tmp_path, key):
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, self.BASE)
+        _write_settings(new, {k: v for k, v in self.BASE.items() if k != key})
+        p = _run_cli(old, new)
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert "No changes detected" not in p.stdout
+        assert f"- `{key}` (removed)" in p.stdout
+
+    def test_a_key_not_known_today_is_reported_too(self, tmp_path):
+        """讀的是所有 `_` key，不是一份已知清單：日後新增的保留 key 也看得到。"""
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, self.BASE)
+        _write_settings(new, {**self.BASE, "_future_key": "on"})
+        p = _run_cli(old, new)
+        assert p.returncode == 1
+        assert "- `_future_key` (added) — `on`" in p.stdout
+
+    def test_nested_change_names_the_leaf(self, tmp_path):
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, self.BASE)
+        changed = {**self.BASE, "_routing": {
+            "receiver": {"type": "webhook", "url": "https://b.example"},
+            "group_wait": "30s"}}
+        _write_settings(new, changed)
+        p = _run_cli(old, new)
+        assert "- `_routing.receiver.url`: `https://a.example` → " \
+               "`https://b.example`" in p.stdout
+        assert "group_wait" not in p.stdout
+
+    def test_custom_alerts_stay_in_their_own_section(self):
+        diff = cd.compute_setting_diff(
+            {"t": {"_custom_alerts": []}},
+            {"t": {"_custom_alerts": [{"name": "x"}]}})
+        # load_settings_from_dir drops it; the diff itself is generic.
+        assert diff
+        with tempfile.TemporaryDirectory() as d:
+            _write_settings(d, {"_custom_alerts": [{"name": "x"}],
+                                "_silent_mode": "all"})
+            assert cd.load_settings_from_dir(d) == {"db-a": {"_silent_mode": "all"}}
+
+    def test_unchanged_settings_are_not_reported(self, tmp_path):
+        _write_settings(tmp_path, self.BASE)
+        p = _run_cli(tmp_path, tmp_path)
+        assert p.returncode == 0
+        assert "Tenant Setting Changes" not in p.stdout
+
+    def test_json_carries_setting_diffs(self, tmp_path):
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, self.BASE)
+        _write_settings(new, {**self.BASE, "_silent_mode": "all"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1
+        doc = json.loads(p.stdout)
+        assert doc["setting_diffs"] == {"db-a": [{
+            "key": "_silent_mode", "old": "warning", "new": "all",
+            "change": "modified"}]}
+
+    def test_a_backtick_in_a_value_cannot_break_the_code_span(self, tmp_path):
+        """值來自 PR 的檔案，屬不可信輸入（F5）。"""
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        _write_settings(old, self.BASE)
+        _write_settings(new, {**self.BASE, "_profile": "x` **bold** `y"})
+        p = _run_cli(old, new)
+        line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_profile`"))
+        assert line.count("`") == 6, line

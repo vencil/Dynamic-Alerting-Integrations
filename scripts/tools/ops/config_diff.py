@@ -283,6 +283,77 @@ def load_custom_alerts_from_dir(dir_path):
     return out
 
 
+# Reserved keys this report already covers in its own section.
+_SETTING_KEYS_REPORTED_ELSEWHERE = frozenset({"_custom_alerts"})
+
+
+def load_settings_from_dir(dir_path):
+    """Load each tenant's own `_`-prefixed settings from a conf.d/ directory.
+
+    Returns {tenant_name: {"_key": value}}. `flatten_tenant_config` drops these
+    keys from the metric diff, and until this section existed nothing else
+    reported them: removing `_state_maintenance` (every alert of the tenant
+    resumes), switching `_silent_mode`, `_routing` or `_profile` all printed
+    "No changes detected" with exit 0. Every `_` key is read — not a list of
+    known ones — so a reserved key added later is reported without touching
+    this tool. `_custom_alerts` is left out: it has its own section.
+
+    Same scope as the metric diff: the tenant file's own declarations, not
+    `_defaults.yaml` inheritance.
+    """
+    if not Path(dir_path).is_dir():
+        return {}
+    raw_configs = _load_tenant_configs_raw(dir_path)
+    return {
+        tenant: {
+            key: value for key, value in (cfg or {}).items()
+            if str(key).startswith("_")
+            and key not in _SETTING_KEYS_REPORTED_ELSEWHERE
+        }
+        for tenant, cfg in raw_configs.items()
+    }
+
+
+def _mapping_changes(old, new, prefix):
+    """Leaf-level changes between two mappings, keys joined with dots.
+
+    Where both sides hold a mapping the walk goes down, so a changed webhook
+    URL reads `_routing.receiver.url: a → b` instead of the whole `_routing`
+    printed twice. Anything else (scalars, lists) is compared whole. Presence
+    decides added / removed, so a key set to null is still a key that exists.
+    """
+    changes = []
+    for key in sorted(set(old) | set(new), key=str):
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if key in old and key in new:
+            if old[key] == new[key]:
+                continue
+            if isinstance(old[key], dict) and isinstance(new[key], dict):
+                changes.extend(_mapping_changes(old[key], new[key], path))
+                continue
+            change = "modified"
+        else:
+            change = "added" if key not in old else "removed"
+        changes.append({"key": path, "old": old.get(key),
+                        "new": new.get(key), "change": change})
+    return changes
+
+
+def compute_setting_diff(old_settings, new_settings):
+    """{tenant: [{"key", "old", "new", "change"}]} for `_` settings.
+
+    change is 'added' / 'removed' / 'modified'; `key` is a dotted path when
+    the change sits inside a mapping (see _mapping_changes).
+    """
+    result = {}
+    for tenant in sorted(set(old_settings) | set(new_settings)):
+        changes = _mapping_changes(old_settings.get(tenant, {}),
+                                   new_settings.get(tenant, {}), "")
+        if changes:
+            result[tenant] = changes
+    return result
+
+
 def _format_recipe_value(val):
     """Recipe field value as code-span-safe text (dicts/lists → compact JSON).
 
@@ -439,7 +510,7 @@ def _format_value(val):
 
 
 def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
-                    custom_alert_diffs=None):
+                    custom_alert_diffs=None, setting_diffs=None):
     """Render a Markdown blast radius report."""
     lines = []
     lines.append("# Config Diff Report")
@@ -497,6 +568,40 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
                     )
             lines.append("")
 
+    # Tenant `_` settings (maintenance, silent mode, routing, profile, ...).
+    # They change what alerts do without touching a threshold, so they get
+    # the same prominence as custom alerts. Values go through _code_span (F5):
+    # they are rendered from the PR's files, i.e. untrusted.
+    if setting_diffs:
+        lines.append("## Tenant Setting Changes")
+        lines.append("")
+        lines.append(
+            "> :warning: `_`-prefixed tenant settings change how alerts "
+            "behave (maintenance, silent mode, state filters, severity dedup, "
+            "routing, profile, metadata) without touching a threshold."
+        )
+        lines.append("")
+        for tenant, changes in setting_diffs.items():
+            summary = _summarize_changes(changes)
+            lines.append(
+                f"### {tenant} — {len(changes)} setting change(s) ({summary})"
+            )
+            lines.append("")
+            for c in changes:
+                key_cs = _code_span(c["key"])
+                if c["change"] == "modified":
+                    lines.append(
+                        f"- {key_cs}: {_code_span(c['old'])} → "
+                        f"{_code_span(c['new'])}"
+                    )
+                elif c["change"] == "added":
+                    lines.append(f"- {key_cs} (added) — {_code_span(c['new'])}")
+                else:
+                    lines.append(
+                        f"- {key_cs} (removed) — was {_code_span(c['old'])}"
+                    )
+            lines.append("")
+
     # Profile changes section (v1.12.0)
     if profile_diffs:
         lines.append("## Profile Changes")
@@ -529,7 +634,8 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
             else:
                 lines.append("")
 
-    if not diffs and not profile_diffs and not custom_alert_diffs:
+    if (not diffs and not profile_diffs and not custom_alert_diffs
+            and not setting_diffs):
         lines.append("No changes detected.")
         return "\n".join(lines)
 
@@ -556,6 +662,7 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
     # "0 tenant(s) changed" while the custom-alert clause below says otherwise.
     changed_tenants = set(diffs)
     changed_tenants.update(custom_alert_diffs or {})
+    changed_tenants.update(setting_diffs or {})
     changed = len(changed_tenants)
     profile_affected = sum(pd["affected_count"] for pd in (profile_diffs or []))
     summary = f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)"
@@ -566,6 +673,12 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
         ca_changes = sum(len(v) for v in custom_alert_diffs.values())
         summary += (
             f", {ca_tenants} tenant(s) with {ca_changes} custom alert change(s)"
+        )
+    if setting_diffs:
+        st_changes = sum(len(v) for v in setting_diffs.values())
+        summary += (
+            f", {len(setting_diffs)} tenant(s) with {st_changes} "
+            f"setting change(s)"
         )
     lines.append(summary)
 
@@ -700,6 +813,10 @@ def _run(args):
         load_custom_alerts_from_dir(args.old_dir),
         load_custom_alerts_from_dir(args.new_dir),
     )
+    setting_diffs = compute_setting_diff(
+        load_settings_from_dir(args.old_dir),
+        load_settings_from_dir(args.new_dir),
+    )
 
     use_json = args.json_output or args.format == "json"
     if use_json:
@@ -707,6 +824,7 @@ def _run(args):
             "metric_diffs": diffs,
             "profile_diffs": profile_diffs,
             "custom_alert_diffs": custom_alert_diffs,
+            "setting_diffs": setting_diffs,
         }
         print(format_json_report(output, default=str))
     else:
@@ -714,10 +832,12 @@ def _run(args):
             diffs, args.old_dir, args.new_dir,
             profile_diffs=profile_diffs,
             custom_alert_diffs=custom_alert_diffs,
+            setting_diffs=setting_diffs,
         ))
 
     # Exit 1 if changes detected (CI signal), 0 if clean
-    has_changes = bool(diffs) or bool(profile_diffs) or bool(custom_alert_diffs)
+    has_changes = (bool(diffs) or bool(profile_diffs)
+                   or bool(custom_alert_diffs) or bool(setting_diffs))
     sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)
 
 

@@ -96,7 +96,7 @@ GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等�
 
 **Data-Driven Threshold Review 雙引擎**：`config-diff`（blast radius 靜態分析）搭配 `backtest`（Prometheus 歷史回測），形成變更前預覽 + 歷史驗證的完整審查流程。
 
-報告內容包括：每個受影響 tenant 的變更清單、變更分類（tighter / looser / added / removed / toggled）、讀這個 key 的告警名（從 rule pack 反查；沒有告警讀它時寫 `—`，找不到 rule pack 時寫 `unknown`）。詳見 [da-tools README 場景八](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/README.md#場景八配置目錄級差異比對v1110)。
+報告內容包括：每個受影響 tenant 的變更清單、變更分類（tighter / looser / added / removed / toggled）、租戶 `_` 開頭設定的變更（維護模式、靜音、路由、profile 等，列出前後值）、讀這個 key 的告警名（從 rule pack 反查；沒有告警讀它時寫 `—`，找不到 rule pack 時寫 `unknown`）。詳見 [`cli-reference.md` config-diff](../cli-reference.md#config-diff)。
 
 ## 3. ConfigMap Assembly
 
