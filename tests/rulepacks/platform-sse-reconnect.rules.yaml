@@ -1,5 +1,5 @@
-# Bare-rules promtool target for the TenantApiSSEReconnectFailure alert (#740 /
-# TRK-326). promtool can't consume the deployed ConfigMap directly (it needs a
+# Bare-rules promtool target for the TenantApiSSEReconnectFailure alert (#740).
+# promtool can't consume the deployed ConfigMap directly (it needs a
 # top-level `groups:` document, not `data: platform-alert.yml: |`), so this is an
 # EXTRACTED COPY of the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
 #

@@ -1,4 +1,4 @@
-# promtool behavioural test for TenantApiSSEReconnectFailure (#740 / TRK-326).
+# promtool behavioural test for TenantApiSSEReconnectFailure (#740).
 # Validates the #740 acceptance contract:
 #   1) FIRES when, AFTER A RESTART, SSE clients had connections but are stuck at 0
 #      — modelled with TWO DISTINCT pod series (old pod-A dies, new pod-B starts)

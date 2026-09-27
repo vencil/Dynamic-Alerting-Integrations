@@ -654,7 +654,7 @@ data:
                 limit together.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md"
 
-          # --- tenant-api SSE reconnect-after-deploy guard (#740 / TRK-326) ---
+          # --- tenant-api SSE reconnect-after-deploy guard (#740) ---
           # #677 (TRK-324) set the tenant-api Deployment to `strategy: Recreate`
           # to kill the phantom-writer overlap. Side effect: every deploy hard-
           # drops all open `GET /api/v1/events` SSE streams. A single reconnect
