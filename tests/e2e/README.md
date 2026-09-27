@@ -83,18 +83,18 @@ test.describe('<Tool Display Name> @critical', () => {
 
 ## TRK-1NN regression-guard 命名
 
-明確的回歸防線 test 用 `TRK-1NN` 編號標記在 test 名稱或 fixture docstring。`TRK-100~199` 是 [`planning-id-mapping.md`](../../docs/internal/planning-id-mapping.md) 定義的「產品 / portal regression registry」分區（ADR-019 planning-SSOT 將舊 `REG-NNN` 凍結、遷移為此區段 — 例如 `REG-004` → `TRK-104`）。**`REG-NNN` 為 frozen legacy namespace，新編號一律用 `TRK-1NN`**；舊 commit / playbook 裡的 `REG-NNN` 仍可 grep，對應關係查 mapping 表。
+明確的回歸防線 test 用 `TRK-1NN` 編號標記在 test 名稱或 fixture docstring。`TRK-100~199` 是 [`planning-id-mapping.md`](../../docs/internal/planning-id-mapping.md) 定義的「產品 / portal regression registry」分區（ADR-019 planning-SSOT 將舊 `REG-NNN` 凍結、遷移為此區段 — 例如 `REG-004` → `TRK-104`）。**`REG-NNN` 為 frozen legacy namespace**；新的回歸防線改用 `TRK-<issue 號>`（見下方 SOP），`TRK-1NN` 只剩既有的幾號；舊 commit / playbook 裡的 `REG-NNN` 仍可 grep，對應關係查 mapping 表。
 
 | 編號 | 防的是 |
 |------|--------|
 | TRK-101 | （reserved — 在 source comments 內標註的第一個 cataloged regression） |
 | TRK-104 | **portal-safe hrefs**：絕對根路徑 `href="/foo"` 在 portal sub-path 部署會 404；`assertNoAbsoluteRootHrefs` helper 防守此類 |
 
-**新 regression test 的 SOP**：
-1. 在 [`planning-id-mapping.md`](../../docs/internal/planning-id-mapping.md) §REG-NNN→TRK-101~199 表找下一個沒用過的 `TRK-1NN`（`grep -rhoE "TRK-1[0-9]{2}" tests/ docs/` 交叉確認）
-2. test 名稱寫 `'<behavior> (TRK-1NN regression guard)'`
-3. spec / fixture 內若有專用 helper，docstring 寫 `(see TRK-1NN)`
-4. 在這個表格新增一行說明，並回填 mapping 表
+**新 regression test 的 SOP**（⛔ mapping 表已凍結在 TRK-392，不要再從上面的區段取號或回填，[ADR-019](../../docs/adr/019-planning-ssot.md)，#2106）：
+1. 開一張追蹤 issue，編號用它的號碼：`TRK-<issue 號>`（例：issue #2150 → `TRK-2150`）
+2. test 名稱寫 `'<behavior> (TRK-<issue 號> regression guard)'`
+3. spec / fixture 內若有專用 helper，docstring 寫 `(see TRK-<issue 號>)`
+4. 在這個表格新增一行說明（mapping 表不用動）
 
 ## Mocking 慣例
 

@@ -1,0 +1,66 @@
+name: TRK Index Coverage
+
+# #2106: the titles surface of check_trk_index_coverage.py, which pre-commit
+# (commits surface only) cannot see. New tracking items are numbered
+# TRK-<issue number> (ADR-019) and never need a table row; the tool only reads
+# three-digit numbers, so a red here means someone hand-allocated a new
+# three-digit TRK instead.
+#
+# Issue and PR events check ONLY the title that fired them, read from the event
+# payload: the red lands on the issue/PR that caused it (never on an unrelated
+# PR), and the payload is authoritative where a fresh list call may lag.
+# `issues` does not fire for pull requests, so PR titles need their own trigger,
+# and `edited` must be listed (the pull_request default types omit it).
+# workflow_dispatch scans every issue/PR title.
+#
+# The freeze itself (no row past TRK-392) is checked from the table alone, so it
+# runs in Python Tests via tests/lint/test_check_trk_index_coverage.py.
+# Not a required check. rc 2 ("could not measure") fails the job like rc 1.
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  # ⛔ Required for the dispatch scan: without it the issues endpoint silently
+  # omits pull requests and PR-only TRK titles go unseen while the job exits 0/1.
+  pull-requests: read
+
+jobs:
+  titles:
+    name: TRK index covers issue/PR titles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Check titles against the TRK index
+        # Titles are bound via env, never interpolated into the script (#1021).
+        # `--title=` form: a title that looks like a flag (`--json`) must stay a value.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          REF: '#${{ github.event.issue.number || github.event.pull_request.number }}'
+        run: |
+          set -euo pipefail
+          tool=scripts/tools/lint/check_trk_index_coverage.py
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            python3 -X utf8 "$tool" --surface titles --ci \
+              --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"
+          else
+            python3 -X utf8 "$tool" --surface titles --ci --title="$TITLE" --title-ref="$REF"
+          fi
