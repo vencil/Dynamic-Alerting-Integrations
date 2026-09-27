@@ -3360,6 +3360,7 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     },
     "docs-ci.yaml": {
         ("docs", "requirements/**"),
+        ("docs", "scripts/ops/_verify_download.sh"),
         ("docs", "scripts/tools/**/*.py"),
         ("docs", "scripts/tools/lint/**/*.sh"),
     },
