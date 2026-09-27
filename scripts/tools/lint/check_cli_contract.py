@@ -899,7 +899,7 @@ def _parse_error(parser: argparse.ArgumentParser, argv: list[str],
 
 def judge_parse(args: list[str], command: str, model: ParserModel,
                 injected: frozenset[str], stats: dict[str, int],
-                file: str, line: int) -> list[Finding]:
+                file: str, line: int, substituted: bool = False) -> list[Finding]:
     """V5: the documented argv handed to the subcommand's own ``parse_args``.
 
     V1 reads the argv one flag at a time against the option list, so a line
@@ -964,12 +964,15 @@ def judge_parse(args: list[str], command: str, model: ParserModel,
         stats["cmd_parse_placeholder_value"] += 1
         return []
     if reason.startswith(_VALUE_FREE_ERRORS[1]) and (
-            _SUBSTITUTION in argv or all(
+            substituted or any(_SUBSTITUTION in tok for tok in argv) or all(
                 _is_placeholder(tok) for tok in reason.split(":", 1)[1].split())):
         # `$(pwd)/conf.d` is one shell word, but the tokenizer collapses the
         # substitution and leaves `/conf.d` beside it: with a `$(…)` on the
         # line the word boundaries are not the shell's, so a "stray word" is
-        # not a finding.
+        # not a finding. The `$(…)` need not survive into the argv: in
+        # `> out-$(date +%F).json` the redirect drops `out-$(...)` with its
+        # target and the residue `.json` is all the argv sees, so the caller
+        # says whether the LINE had one (`substituted`).
         stats["cmd_parse_placeholder_value"] += 1
         return []
     stats["scored"] += 1
@@ -1061,7 +1064,8 @@ def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
         if not seg_findings and carrier == "cmd_segments" and model is not None:
             seg_findings = judge_parse(
                 args, command, model, ctx.injected_for.get(command, frozenset()),
-                ctx.stats, rel, number)
+                ctx.stats, rel, number,
+                substituted=any(_SUBSTITUTION in tok for tok in tokens))
         findings += seg_findings
     return findings
 
