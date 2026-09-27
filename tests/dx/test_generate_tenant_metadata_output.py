@@ -13,7 +13,7 @@ What is pinned here, and the mutant each group was measured against:
 * ``TestNoRegressionVsInPlace`` — the shapes the shared
   ``_atomic_write.atomic_write_text`` was measured to break (symlink output,
   a user's ``<out>.tmp``) plus the fallbacks (unwritable directory, hard
-  link) and the 0644 mode. The symlink / ``.tmp`` tests are red under
+  link, extended attributes) and the 0644 mode. The symlink / ``.tmp`` tests are red under
   ``atomic_write_text``.
 * ``TestCheckOnDamagedOutput`` — every damaged shape is rc 2 "damaged",
   distinct from rc 1 "outdated"; with must-fire controls for ``ok`` and
@@ -303,6 +303,71 @@ class TestNoRegressionVsInPlace:
         assert os.stat(out).st_ino == os.stat(twin).st_ino
         assert _is_fresh_metadata(twin)
         assert "hard links" in capsys.readouterr().err
+
+    def test_an_output_with_xattrs_keeps_them_and_its_inode(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """A replace makes a new inode and drops every xattr — ACLs and the
+        SELinux label are xattrs too. Measured: the in-place writer kept a
+        ``user.*`` xattr, a replace lost it. So such a file goes in place."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        if not hasattr(os, "setxattr"):
+            pytest.skip("no os.setxattr on this platform")
+        try:
+            os.setxattr(out, "user.label", b"keep")
+        except OSError as exc:
+            pytest.skip(f"user xattrs unsupported on the tmp filesystem: {exc}")
+        ino = out.stat().st_ino
+
+        assert _run(monkeypatch, confd, out) == 0
+
+        assert out.stat().st_ino == ino
+        assert os.getxattr(out, "user.label") == b"keep"
+        assert _is_fresh_metadata(out)
+        assert "extended attributes" in capsys.readouterr().err
+
+    def test_a_filesystem_without_xattrs_still_gets_an_atomic_write(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """ENOTSUP from listxattr = nothing a replace could drop."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        ino = out.stat().st_ino
+
+        def listxattr(path, *a, **k):
+            raise OSError(errno.ENOTSUP, "Operation not supported", path)
+
+        monkeypatch.setattr(gtm.os, "listxattr", listxattr, raising=False)
+        _forbid_in_place_write(monkeypatch, out)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+
+        assert rc == 0
+        assert out.stat().st_ino != ino
+        assert _is_fresh_metadata(out)
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_xattrs_that_cannot_be_listed_go_in_place_with_a_warn(
+        self, monkeypatch, confd, tmp_path, capsys,
+    ):
+        """Any other listxattr failure = cannot tell ⇒ conservative."""
+        out = tmp_path / "meta.json"
+        out.write_text(_PREVIOUS, encoding="utf-8")
+        ino = out.stat().st_ino
+
+        def listxattr(path, *a, **k):
+            raise PermissionError(errno.EACCES, "Permission denied", path)
+
+        monkeypatch.setattr(gtm.os, "listxattr", listxattr, raising=False)
+        rc = _run(monkeypatch, confd, out)
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        assert out.stat().st_ino == ino
+        assert _is_fresh_metadata(out)
+        assert f"errno {errno.EACCES}" in err and "WARN" in err
 
     @pytest.mark.parametrize("before", [None, 0o600, 0o666])
     def test_the_mode_is_0644_as_before(self, monkeypatch, confd, tmp_path, before):
