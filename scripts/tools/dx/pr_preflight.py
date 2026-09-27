@@ -891,8 +891,17 @@ def clear_marker(repo_root: Path) -> Tuple[Optional[Path], Optional[str]]:
 
     ⛔ Do not widen back to `glob(f"{MARKER_PREFIX}.*")` — `_git_dir` is
     `--git-common-dir`, so that reaches every worktree's markers, and the reader
-    keys on the sha, so it buys nothing. Measurements: #1917. Residual: #1951.
+    keys on the sha, so it buys nothing. Measurements: #1917.
     Pinned by `TestFailPathClearRadius`.
+
+    ⚠️ Residual, kept on purpose (#1951): worktrees standing on the same commit
+    share this one file, so a FAIL in any of them removes the marker another
+    one earned — including a FAIL that is about the tree or machine (scope-drift
+    timeout, pre-commit not runnable), not the commit. The latest result on a
+    sha wins, and it errs toward blocking; the cost is one preflight re-run.
+    ⛔ Do not spare markers "written by another tree": the gate's own
+    temporary-worktree hint writes markers whose tree is then gone, which no
+    FAIL could remove, and the failing tree could push that same sha.
     """
     sha = _head_sha(repo_root)
     if not sha:
