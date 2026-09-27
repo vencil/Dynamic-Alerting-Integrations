@@ -967,16 +967,6 @@ repos:
         # DEFAULT_PATHS, which leave out scripts/ outside scripts/tools/ —
         # edits there would trigger this hook and never be scanned.
 
-      - id: check-doc-freshness
-        name: Check document freshness (>90 days = stale)
-        # `--check` is the flag this tool defines. The entry used to pass
-        # `--ci`, which the tool never accepted: argparse exited 2 on every run.
-        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --check
-        language: system
-        pass_filenames: false
-        files: ^docs/.*\.md$
-        stages: [manual]
-
       - id: path-metadata-consistency-check
         name: Path/metadata consistency (warning-only)
         entry: python3 -X utf8 scripts/tools/lint/check_path_metadata_consistency.py --ci

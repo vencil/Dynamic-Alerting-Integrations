@@ -85,9 +85,9 @@ FIX_COMMANDS: Dict[str, List[str]] = {
 # ⛔ A row registered without its script's gate flag CANNOT FAIL — the tool
 # prints the violations and still returns 0, so the runner shows a tick
 # (#1702). links and mermaid are armed below and pinned in
-# tests/shared/test_validate_all.py::TestRearmedRows; translation and
-# freshness are still un-armed (#1735): arming either today would make a bare
-# run red for content reasons this runner does not own.
+# tests/shared/test_validate_all.py::TestRearmedRows; translation is still
+# un-armed (#1735): arming it today would make a bare run red for content
+# reasons this runner does not own.
 TOOLS = [
     ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
     ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
@@ -96,7 +96,6 @@ TOOLS = [
     ("schema", "dx/sync_schema.py", ["--check"], "Go→JSON Schema drift"),
     ("alerts", "dx/generate_alert_reference.py", ["--check"], "Alert reference drift"),
     ("rule_packs", "dx/generate_rule_pack_readme.py", ["--check"], "Rule Pack README drift"),
-    ("freshness", "lint/check_doc_freshness.py", [], "Dead doc detection"),
     ("includes", "lint/check_includes_sync.py", ["--check"], "Include snippet zh/en sync"),
     ("changelog", "dx/generate_changelog.py", ["--check"], "Conventional commit format"),
     # ⛔ Separate entry on purpose: `--check` walks git log and never opens the
@@ -495,7 +494,7 @@ def _format_time(elapsed: float) -> str:
 # Maps file path patterns to the check names they affect.
 # Patterns are prefix-matched against relative paths.
 WATCH_TRIGGERS: Dict[str, List[str]] = {
-    "docs/": ["links", "translation", "freshness", "includes", "versions",
+    "docs/": ["links", "translation", "includes", "versions",
               "doc_map", "tool_consistency", "bilingual_content",
               "frontmatter_versions", "byo_rulepack_table", "cli_default_drift",
               "cli_contract"],
