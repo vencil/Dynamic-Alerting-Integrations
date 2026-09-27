@@ -27,20 +27,20 @@ tools:
   - docs/getting-started/for-tenants.md
 - key: playground
   title:
-    en: Tenant YAML Validator
-    zh: YAML 驗證器
+    en: Tenant YAML Syntax Checker
+    zh: YAML 語法檢查器
   file: interactive/tools/playground.jsx
   audience:
   - platform
   - tenant
   icon: validation
   tags:
-  - validation
   - yaml
-  - live preview
+  - syntax
+  - structure
   desc:
-    en: Validate & preview YAML
-    zh: 驗證並預覽 YAML
+    en: Check YAML syntax & structure
+    zh: 檢查 YAML 語法與結構
   related:
   - config-lint
   - schema-explorer

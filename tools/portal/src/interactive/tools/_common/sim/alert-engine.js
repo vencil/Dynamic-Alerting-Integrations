@@ -310,7 +310,9 @@ function simulateAlerts(config, metricValues) {
 
   for (const [metric, val] of Object.entries(metricValues)) {
     const threshold = config[metric];
-    if (!threshold || threshold === 'disable') {
+    // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
+    // which is a real threshold — test for absence, not falsiness.
+    if (threshold === undefined || threshold === null || threshold === '' || threshold === 'disable') {
       alerts.push({
         metric, current: val.current, threshold: null, critical_threshold: null,
         firing: false, critical_firing: false, severity: threshold === 'disable' ? 'disabled' : 'no-threshold',
@@ -326,7 +328,9 @@ function simulateAlerts(config, metricValues) {
     const firing = isFiring(currentVal, thresholdNum);
 
     const critKey = `${metric}_critical`;
-    const critThreshold = config[critKey] ? parseFloat(config[critKey]) : null;
+    const critRaw = config[critKey];
+    const critParsed = critRaw === undefined || critRaw === null || critRaw === '' ? NaN : parseFloat(critRaw);
+    const critThreshold = isNaN(critParsed) ? null : critParsed;
     const critFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
 
     alerts.push({

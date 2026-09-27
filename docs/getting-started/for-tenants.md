@@ -69,7 +69,7 @@ tenants:
 
 ⚠️ 上面第一類（宣告層 `optional_overrides:`）沒有平台預設可回退，**省略＝沒有值＝不產生 series**，不是「用預設」；那一格實際只有「填」與「不填（靜默）」兩態。
 
-> 💡 **互動工具** — 想即時驗證你的 YAML？試試 [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx)。不確定閾值怎麼設？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) 從 p50/p90/p99 推算。
+> 💡 **互動工具** — 想即時檢查你的 YAML 語法與結構（只查語法，值的語意以 exporter 為準）？試試 [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx)。不確定閾值怎麼設？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) 從 p50/p90/p99 推算。
 
 ```yaml
 tenants:

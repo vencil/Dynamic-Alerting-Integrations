@@ -69,7 +69,7 @@ Tri-state design (**for keys that have a platform default**): each metric can be
 
 ⚠️ Group 1 above (the declared tier, `optional_overrides:`) has no platform default to fall back to, so **omitting one means no value and therefore no series** — not "use the default". That tier really has only two states: set it, or leave it silent.
 
-> 💡 **Interactive Tools** — Want to validate your YAML in real-time? Try [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx). Unsure how to set thresholds? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) to derive values from p50/p90/p99.
+> 💡 **Interactive Tools** — Want to check your YAML syntax and structure in real-time (syntax only — the exporter is the authority on what values mean)? Try [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx). Unsure how to set thresholds? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) to derive values from p50/p90/p99.
 
 ```yaml
 tenants:

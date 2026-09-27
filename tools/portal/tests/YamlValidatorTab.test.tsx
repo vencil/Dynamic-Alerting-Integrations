@@ -157,4 +157,16 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
     ).map((el) => el.textContent || '');
     expect(issueTexts.some((txt) => /saturation/i.test(txt))).toBe(false);
   });
+
+  it('surfaces a YAML syntax error as an error row, not "All checks passed" (#2033)', async () => {
+    // js-yaml refuses duplicate keys; parseYaml then returns config = {} and
+    // validateConfig({}) has nothing to say — the parse error must be shown.
+    const q = await renderTab();
+    setYaml(q, 'mysql_connections: "70"\nmysql_connections: "80"');
+    fireEvent.click(q.getByText('Validate'));
+    expect(q.queryByText('All checks passed')).toBeNull();
+    const errorRows = Array.from(document.querySelectorAll('[class*="bg-red-50"]'))
+      .map((el) => el.textContent || '');
+    expect(errorRows.some((txt) => /duplicated mapping key/.test(txt))).toBe(true);
+  });
 });

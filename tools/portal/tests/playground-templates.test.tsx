@@ -7,7 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import TenantYAMLPlayground, { buildYamlTemplates } from '../src/interactive/tools/playground.jsx';
-import { parseYAML } from '../src/interactive/tools/playground/validation.js';
+import { load } from 'js-yaml';
+import { validateTenantConfig } from '../src/interactive/tools/playground/validation.js';
 import COPY from '../src/interactive/tools/_common/data/silent-mode-schema.json';
 
 // Evaluates only the keywords the silentMode definition uses and throws on any
@@ -38,7 +39,8 @@ function check(schema: any, v: any): boolean {
 
 describe('playground redis template _silent_mode', () => {
   const NOW = new Date('2026-09-25T10:00:00.123Z');
-  const value = () => parseYAML(buildYamlTemplates(NOW).redis).data.tenants.cache._silent_mode;
+  // js-yaml is the oracle (#2033), not the tool's own parser.
+  const value = () => (load(buildYamlTemplates(NOW).redis) as any).tenants.cache._silent_mode;
 
   it('expires is the injected now + 24h', () => {
     expect(value().expires).toBe('2026-09-26T10:00:00Z');
@@ -54,6 +56,20 @@ describe('playground redis template _silent_mode', () => {
   });
 });
 
+describe('playground templates pass the parse-layer check (#2033)', () => {
+  // The templates still carry a flat receiver_type (teaching content, out of
+  // scope here); the playground no longer judges semantics, so every template
+  // must come out valid at the parse layer.
+  const templates = buildYamlTemplates(new Date('2026-09-25T10:00:00Z'));
+  for (const [name, src] of Object.entries(templates)) {
+    it(`${name} is valid`, () => {
+      const r = validateTenantConfig(src);
+      expect(r.errors).toEqual([]);
+      expect(r.valid).toBe(true);
+    });
+  }
+});
+
 describe('playground validation status is announced', () => {
   it('has a short polite live status outside the results region', () => {
     render(<TenantYAMLPlayground />);
@@ -61,5 +77,12 @@ describe('playground validation status is announced', () => {
     expect(status.getAttribute('aria-live')).toBe('polite');
     expect(status.getAttribute('role')).toBe('status');
     expect(status.closest('[role="region"]')).toBeNull();
+  });
+
+  it('discloses that only syntax and structure are checked (#2033)', () => {
+    render(<TenantYAMLPlayground />);
+    const note = screen.getAllByTestId('semantics-not-checked')[0];
+    expect(note.textContent).toMatch(/syntax and structure/);
+    expect(note.textContent).toMatch(/exporter/);
   });
 });

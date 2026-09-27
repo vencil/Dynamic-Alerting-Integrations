@@ -34,9 +34,15 @@ function RoutingTraceTab() {
     const routingResult = resolveRoutingLayers(config);
 
     // Build alert trace
-    const threshold = config[traceMetric];
+    // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
+    // a real threshold — so test for a parseable number, not truthiness.
+    const toNum = (v) => {
+      const n = v === undefined || v === null || v === '' ? NaN : parseFloat(v);
+      return isNaN(n) ? null : n;
+    };
+    const threshold = toNum(config[traceMetric]);
     const critKey = `${traceMetric}_critical`;
-    const critThreshold = config[critKey] ? parseFloat(config[critKey]) : null;
+    const critThreshold = toNum(config[critKey]);
     const hasCritical = critThreshold !== null;
 
     // Determine inhibit effect
@@ -57,7 +63,7 @@ function RoutingTraceTab() {
       trace: {
         metric: traceMetric,
         severity: traceSeverity,
-        threshold: threshold ? parseFloat(threshold) : null,
+        threshold,
         criticalThreshold: critThreshold,
         hasCritical,
         isInhibited,

@@ -11,9 +11,8 @@ dependencies: [
 
 import React, { useState, useEffect, useMemo } from 'react';
 
-// PR-portal-16: hand-rolled YAML parser + tenant-config validator extracted
-// to a unit-testable module (was inline + 0%-covered). Kept playground-local
-// (NOT merged with _common/validation — parseDuration contracts differ).
+// Parse-layer check only (#2033): YAML syntax + tenants structure via js-yaml.
+// No semantic verdicts — the exporter is the authority on values.
 import { validateTenantConfig } from './playground/validation.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 import { silentModeExpires } from './tenant-manager/utils/yaml-generators.js';
@@ -202,8 +201,8 @@ export default function TenantYAMLPlayground() {
       <div className="fixed top-0 left-0 right-0 bg-[color:var(--da-color-card-bg)] border-b border-[color:var(--da-color-surface-border)] p-4 shadow-sm z-10">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-[color:var(--da-color-fg)]">{t('租戶 YAML 驗證器', 'Tenant YAML Validator')}</h1>
-            <p className="text-sm text-[color:var(--da-color-muted)] mt-1">{t('用於租戶配置驗證的互動式遊樂場', 'Interactive playground for tenant configuration validation')}</p>
+            <h1 className="text-2xl font-bold text-[color:var(--da-color-fg)]">{t('租戶 YAML 語法檢查器', 'Tenant YAML Syntax Checker')}</h1>
+            <p className="text-sm text-[color:var(--da-color-muted)] mt-1">{t('檢查租戶 YAML 的語法與結構（不檢查值的語意）', 'Checks tenant YAML syntax and structure (not the meaning of values)')}</p>
           </div>
           <div className="flex gap-3">
             <select
@@ -258,7 +257,7 @@ export default function TenantYAMLPlayground() {
         <div className="w-1/2 border-r border-[color:var(--da-color-surface-border)] flex flex-col bg-[color:var(--da-color-card-bg)]">
           <div className="px-6 py-4 border-b border-[color:var(--da-color-surface-border)]">
             <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('租戶 YAML', 'Tenant YAML')}</h2>
-            <p className="text-xs text-[color:var(--da-color-muted)] mt-1">{t('在下方編輯 YAML。驗證實時更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
+            <p className="text-xs text-[color:var(--da-color-muted)] mt-1">{t('在下方編輯 YAML。語法檢查即時更新。', 'Edit YAML below. The syntax check updates in real-time.')}</p>
           </div>
           {showDiff && (
             <div className="border-b border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface)] px-6 py-3 max-h-48 overflow-y-auto">
@@ -296,16 +295,16 @@ export default function TenantYAMLPlayground() {
           </div>
         </div>
 
-        {/* Right Pane: Validation Results */}
+        {/* Right Pane: Check Results */}
         <div className="w-1/2 flex flex-col bg-[color:var(--da-color-surface)] overflow-hidden">
-          {/* Validation Summary */}
+          {/* Check Summary */}
           <div className="px-6 py-4 border-b border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-card-bg)]">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('驗證結果', 'Validation Results')}</h2>
+                <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('檢查結果', 'Check Results')}</h2>
                 <p className="text-xs text-[color:var(--da-color-muted)] mt-1" role="status" aria-live="polite" data-testid="validation-status">
                   {validation.errors.length === 0
-                    ? t('所有檢查都通過了!', 'All checks passed!')
+                    ? t('YAML 語法與結構正確', 'YAML syntax and structure OK')
                     : t(`找到 ${validation.errors.length} 個錯誤`, `${validation.errors.length} error(s) found`)}
                 </p>
               </div>
@@ -322,34 +321,11 @@ export default function TenantYAMLPlayground() {
           </div>
 
           {/* Results Scroll Area */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6" role="region" aria-label={t('驗證結果', 'Validation results')} tabIndex={0}>
-            {/* Summary Stats */}
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
-                <div className="text-2xl font-bold text-[color:var(--da-color-accent)]">{validation.summary.thresholds}</div>
-                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('已配置的閾值', 'Thresholds Configured')}</div>
-              </div>
-              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
-                <div className="text-2xl font-bold text-[color:var(--da-color-info)]">{validation.summary.specialKeys}</div>
-                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('特殊鍵', 'Special Keys')}</div>
-              </div>
-              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
-                <div
-                  className={`text-2xl font-bold ${
-                    validation.summary.routing === 'configured'
-                      ? 'text-[color:var(--da-color-success)]'
-                      : validation.summary.routing === 'error'
-                      ? 'text-[color:var(--da-color-error)]'
-                      : 'text-[color:var(--da-color-muted)]'
-                  }`}
-                >
-                  {validation.summary.routing === 'configured' ? <span aria-hidden="true">✓</span> : '○'}
-                </div>
-                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('路由狀態', 'Routing Status')}</div>
-                <div className="text-xs text-[color:var(--da-color-muted)] mt-2">
-                  {validation.summary.routing === 'configured' ? t('已配置', 'configured') : validation.summary.routing === 'error' ? t('錯誤', 'error') : t('未配置', 'not configured')}
-                </div>
-              </div>
+          <div className="flex-1 overflow-y-auto p-6 space-y-6" role="region" aria-label={t('檢查結果', 'Check results')} tabIndex={0}>
+            {/* Scope disclosure (#2033): constant, not parse-derived. */}
+            <div data-testid="semantics-not-checked" className="text-xs text-[color:var(--da-color-muted)]">
+              {t('本工具只檢查 YAML 語法與結構，不代表 exporter 會接受每個值；語意以 exporter 為準。',
+                 'This tool only checks YAML syntax and structure; it does not mean the exporter will accept every value. The exporter is the authority on semantics.')}
             </div>
 
             {/* Errors */}
@@ -372,60 +348,13 @@ export default function TenantYAMLPlayground() {
               </div>
             )}
 
-            {/* Warnings */}
-            {validation.warnings.length > 0 && (
-              <div>
-                <h3 className="font-semibold text-[color:var(--da-color-warning)] mb-3 flex items-center gap-2">
-                  <span className="text-lg"><span aria-hidden="true">⚠</span></span> {t('警告', 'Warnings')} ({validation.warnings.length})
-                </h3>
-                <div className="space-y-2">
-                  {validation.warnings.map((warn, i) => (
-                    <div
-                      key={i}
-                      className="bg-[color:var(--da-color-warning-soft)] border border-[color:var(--da-color-warning)] rounded-md p-3 text-sm text-[color:var(--da-color-warning)]"
-                    >
-                      <div className="font-mono font-bold text-xs text-[color:var(--da-color-warning)] mb-1">{warn.rule}</div>
-                      <div>{warn.message}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Metrics Preview */}
-            {validation.metrics.length > 0 && (
-              <div>
-                <h3 className="font-semibold text-[color:var(--da-color-fg)] mb-3 flex items-center gap-2">
-                  <span className="text-lg">📊</span> {t('匯出的指標', 'Exported Metrics')} ({validation.metrics.length})
-                </h3>
-                <div className="space-y-2">
-                  {validation.metrics.map((metric, i) => (
-                    <div
-                      key={i}
-                      className="bg-[color:var(--da-color-accent-soft)] border border-[color:var(--da-color-accent)] rounded-md p-3 text-sm font-mono text-[color:var(--da-color-fg)]"
-                    >
-                      <div className="text-[color:var(--da-color-accent)] font-semibold">{metric.name}</div>
-                      <div className="text-xs text-[color:var(--da-color-muted)] mt-1">
-                        tenant="{metric.tenant}" severity="warning" value={metric.value}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* All Valid */}
-            {validation.valid && validation.errors.length === 0 && (
+            {/* Parses cleanly */}
+            {validation.valid && (
               <div className="bg-[color:var(--da-color-success-soft)] border border-[color:var(--da-color-success)] rounded-md p-4 text-center">
                 <div className="text-2xl mb-2"><span aria-hidden="true">✓</span></div>
-                <div className="text-[color:var(--da-color-success)] font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
+                <div className="text-[color:var(--da-color-success)] font-semibold">{t('YAML 可解析', 'YAML parses cleanly')}</div>
                 <div className="text-xs text-[color:var(--da-color-success)] mt-2">
-                  {validation.summary.thresholds} {t('閾值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊鍵', 'special keys')} •
-                  {validation.summary.routing === 'configured' ? t(' 已配置路由', ' routing configured') : t(' 未配置路由', ' no routing')}
-                </div>
-                {/* Constant, not parse-derived (#1988): the validator makes no claim about _silent_mode. */}
-                <div data-testid="silent-mode-not-checked" className="text-xs text-[color:var(--da-color-muted)] mt-2">
-                  {t('此處不檢查 _silent_mode；接受的寫法見 Schema Explorer。', '_silent_mode is not checked here; see Schema Explorer for accepted forms.')}
+                  {t(`${validation.summary.tenants} 個租戶`, `${validation.summary.tenants} tenant(s)`)}
                 </div>
               </div>
             )}
