@@ -1738,6 +1738,11 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     assert _git(work, "checkout", "-q", "main").returncode == 0
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    # The user's own worktree, which the clean-up must leave alone: with only
+    # the main tree around, "remove every linked worktree" passes as well.
+    user_wt = tmp_path / "user wt"
+    assert _git(work, "worktree", "add", "-q", "--detach", str(user_wt), "main").returncode == 0
+    before = _git(work, "worktree", "list", "--porcelain").stdout
 
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -1764,7 +1769,10 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
             assert time.monotonic() < deadline, "the build never started"
             time.sleep(0.05)
         # Must-fire half: the tree this test expects to be removed exists now.
-        assert len(_git(work, "worktree", "list").stdout.strip().splitlines()) == 2
+        during = _git(work, "worktree", "list", "--porcelain").stdout
+        assert during.count("\nworktree ") == before.count("\nworktree ") + 1, (
+            f"expected exactly one temporary worktree while the build hangs:\n{during}"
+        )
         os.killpg(proc.pid, sig)
         proc.communicate(timeout=20)
     finally:
@@ -1774,8 +1782,8 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
             pass
 
     assert len(record.read_text(encoding="utf-8").split()) == len(refs), "hung in the wrong tree"
-    listed = _git(work, "worktree", "list").stdout.strip().splitlines()
-    assert len(listed) == 1, f"temporary worktree left registered: {listed}"
+    after = _git(work, "worktree", "list", "--porcelain").stdout
+    assert after == before, f"worktrees changed across the interrupted push:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), (
         "temporary worktree directory left on disk"
     )
