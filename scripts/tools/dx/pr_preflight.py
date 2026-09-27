@@ -1262,67 +1262,6 @@ def _soft_fail_check_names() -> set[str]:
     return names
 
 
-def _classify_ci_failures(failed_checks: list) -> str:
-    """A/B 分類：比對 main 最近一次 CI run，判斷失敗是 pre-existing 還是 this-PR 引入。
-
-    類似 pre-push drift Layer 1 的 A/B 驗證邏輯，但套用在 CI checks 上。
-    """
-    import json as _json
-
-    # 查 main 最近一次 workflow run 的結論
-    r = run(
-        ["gh", "run", "list", "--branch", "main", "--limit", "1",
-         "--json", "conclusion,headBranch,databaseId"],
-        timeout=15,
-    )
-    if r.returncode != 0 or not r.stdout.strip():
-        return ""  # gh 不可用，跳過分類
-
-    try:
-        runs = _json.loads(r.stdout)
-    except _json.JSONDecodeError:
-        return ""
-
-    if not runs:
-        return ""
-
-    main_run = runs[0]
-    main_conclusion = main_run.get("conclusion", "")
-    run_id = main_run.get("databaseId", "")
-
-    if main_conclusion == "success":
-        return "→ main CI 目前是 ✅ — 這些失敗是本 PR 引入的，必須修"
-
-    # main 也有失敗 — 查具體哪些 job 失敗
-    if run_id:
-        r2 = run(
-            ["gh", "run", "view", str(run_id), "--json", "jobs"],
-            timeout=15,
-        )
-        if r2.returncode == 0:
-            try:
-                data = _json.loads(r2.stdout)
-                main_failed_jobs = {
-                    j["name"] for j in data.get("jobs", [])
-                    if j.get("conclusion") == "failure"
-                }
-                pr_failed_names = {c["name"] for c in failed_checks}
-                only_pr = pr_failed_names - main_failed_jobs
-                shared = pr_failed_names & main_failed_jobs
-
-                parts = []
-                if shared:
-                    parts.append(f"pre-existing（main 也 fail）: {', '.join(sorted(shared))}")
-                if only_pr:
-                    parts.append(f"本 PR 引入: {', '.join(sorted(only_pr))}")
-                if parts:
-                    return "→ A/B 分類: " + " | ".join(parts)
-            except (_json.JSONDecodeError, KeyError):
-                pass
-
-    return f"→ main CI 也是 {main_conclusion} — 部分失敗可能是 pre-existing"
-
-
 def _ci_ran_on_stale_head(pr_number: Optional[int] = None) -> Optional[str]:
     """紅 CI 是否跑在「不是本地 HEAD」的 PR head 上？stale → 回傳 PR head 短 SHA。
 
@@ -1420,10 +1359,6 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
             detail = "\n".join(f"· {c['name']}" for c in hard_failed)
             for c in soft_failed:
                 detail += f"\n· {c['name']} (continue-on-error — non-blocking)"
-            # A/B 分類：比對 main 的 CI 狀態，區分 pre-existing vs this-PR failure
-            ab_note = _classify_ci_failures(hard_failed)
-            if ab_note:
-                detail += f"\n{ab_note}"
             # Fix-push 悖論（#819 死鎖）：紅 CI 跑在 PR 的遠端 head 上；若本地
             # HEAD 與之不一致，這次 push/sync 會取代它並重跑 CI ——「push 前要求
             # 新 SHA 的 CI 綠」邏輯上不可滿足 → 降 WARN 放行。SHA 一致（真
