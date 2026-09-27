@@ -15,14 +15,16 @@
 # own `if:`, by contrast, reports `skipped` — which also satisfies the
 # requirement, and that is the opposite problem: when detect-changes itself
 # fails, every gated job skips and the PR merges having checked nothing
-# (#1398). So the required NAMES belong to the `*-gate` jobs at the end of
-# this file, which always run and fail unless their leg succeeded or was
-# skipped because detect-changes said it was not needed; the legs themselves
-# are named `… — run`. See detect-changes below.
+# (#1398). So the required NAMES of gated legs belong to the `*-gate` jobs at
+# the end of this file, which always run and fail unless their leg succeeded
+# or was skipped because detect-changes said it was not needed; the legs
+# themselves are named `… — run`. check-links is not gated and carries its
+# required name directly (#2107). See detect-changes below.
 #
-# head-blob-hygiene is the one job that intentionally stays unconditional
-# (see its own comment) — it's meant to catch historical blob corruption on
-# every push regardless of whether a given PR touches docs/.
+# Two jobs intentionally stay unconditional (see their own comments):
+# head-blob-hygiene, meant to catch historical blob corruption on every push
+# regardless of whether a given PR touches docs/, and check-links, whose input
+# set no path filter can express (#2107).
 #
 # Jobs:
 #   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
@@ -107,16 +109,13 @@ jobs:
               - "scripts/tools/lint/**/*.sh"
               # i4-runbook-smoke-test verifies its tool downloads with it.
               - "scripts/ops/_verify_download.sh"
-              # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
+              # ⛔ Inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
               # tests/ops/test_ci_path_filter_coverage.py documents it
               # CANNOT see, so this group is maintained by measurement, not by
               # review: every `python … .py` command in every gated leg of this
               # workflow was replayed under an open()/read_text recorder, and
               # these are the tracked files that came back uncovered.
-              #   * .doclinkignore — check_doc_links.py (`check-links`) loads it
-              #     to decide which link failures are WAIVED, so editing it alone
-              #     changes what that required check enforces while skipping it.
               #   * scripts/tools/lint/mkdocs-anchor-debt.txt — the ledger
               #     `mkdocs-build` passes or fails on, compared as a SET in BOTH
               #     directions (`comm -13` then `comm -23`), so deleting a line
@@ -130,7 +129,6 @@ jobs:
               # which shells out) is the one that does. Its inputs are NOT
               # established by this measurement. #2079 re-ran every leg under
               # strace (subprocesses included); its per-leg results are there.
-              - ".doclinkignore"
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"
               - "components/threshold-exporter/README.md"
               # The mkdocs hook `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
@@ -227,10 +225,15 @@ jobs:
           python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 
   check-links:
-    name: Check Documentation Links — run
+    name: Check Documentation Links
     runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
+    # ⛔ Unconditional on purpose (#2107), and it reports the required name
+    # itself — no gate job. Its input set is every Markdown file plus every
+    # link target, wherever it lives; no path filter can express that, so a
+    # PR that only deleted or renamed a linked non-doc file skipped this leg
+    # and merged a broken link. Same reasoning as the `python` catch-all in
+    # ci.yml. Re-adding an `if:` reds test_ci_path_filter_coverage's
+    # path-gated set.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -588,38 +591,6 @@ jobs:
             exit 0
           fi
           echo "::error::validate-mermaid did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  check-links-gate:
-    name: Check Documentation Links
-    runs-on: ubuntu-latest
-    permissions: {}
-    needs: [detect-changes, check-links]
-    # The REQUIRED check (#1398). `check-links` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
-    if: always()
-    steps:
-      - name: Verify the link check succeeded (or was path-skipped as not needed)
-        env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
-          RUN_RESULT: ${{ needs.check-links.result }}
-        run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
-          echo "check-links: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
-            exit 0
-          fi
-          echo "::error::check-links did not succeed (result=$RUN_RESULT)"
           exit 1
 
   check-frontmatter-gate:
