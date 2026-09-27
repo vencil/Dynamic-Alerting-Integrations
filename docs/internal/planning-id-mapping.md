@@ -226,6 +226,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-389 | [#2024](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2024) | `check_ad_hoc_git_scripts` 與 `check_repo_name` 的 diff 掃描把 git 列出的路徑先做 `\` → `/` 替換再拆分。git 的路徑一律以 `/` 分隔，POSIX 上 `\` 是檔名的一般字元，於是根目錄的 `build\evil.bat`、`tests\x.md` 被當成略過目錄下的檔，`scripts\ops\_x.bat` 被當成 allowlist 目錄下的檔，違規靜默放過。改成只以 `/` 拆分；`check_bat_ascii_purity` 沒有這個替換，不在範圍內 | TRK-384 |
 | TRK-390 | [#2025](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2025) | `diff_changed_paths` 用 `--diff-filter=AM` 列檔，路徑上仍有檔、狀態卻不是 A／M 的變動（改名 `R`、`diff.renames=copies` 下的複製 `C`、symlink 換成一般檔的 `T`）都被濾掉 ⇒ `git mv` 到違規位置（含搬移時一併改內容）三支 diff 掃描型 lint 都看不到。改用 `--diff-filter=d`：只排除刪除、不再列舉要保留的狀態。票面兩個修法（`--no-renames`、把 `R` 加進 filter）都仍是列舉，前者漏 `T`、後者漏 `C` 與 `T` | TRK-384 |
 | TRK-391 | [#2059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2059) | `lint-policy.md` 的 lint 數量、各類別的逐項清單與括號計數，以及 JS-toolchain grandfather 對照表，都沒有機制在對帳，工具一增減就漂。依減法原則刪掉，不改對：只留三類的定義與判定方式、少數不附數量的範例；要知道某支 lint 屬哪一類看它自己的 docstring，grandfather 集的 SoT 是 `check_lint_toolchain_fit.py` 的 `ALLOWLIST` | TRK-383 |
+| TRK-392 | [#2060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2060) | tenant-api gitops 測試在 `t.TempDir` 清理時間歇失敗：push 觸發 bare remote 的背景 git maintenance 仍在寫 `objects/` | — |
 
 ## 不在 mapping 範圍
 
