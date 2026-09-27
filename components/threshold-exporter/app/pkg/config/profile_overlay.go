@@ -100,7 +100,7 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 		if yaml.Unmarshal(f.data, &doc) != nil {
 			continue
 		}
-		if len(doc.Profiles) == 0 && !(isCarrier && len(doc.OptionalOverrides) > 0) {
+		if len(doc.Profiles) == 0 && (!isCarrier || len(doc.OptionalOverrides) == 0) {
 			continue
 		}
 		typed, err := ParseConfigFile(f.data)

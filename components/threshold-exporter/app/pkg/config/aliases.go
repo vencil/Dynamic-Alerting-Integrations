@@ -113,7 +113,7 @@ func canonicalKeyFor(key string) (string, bool) {
 
 // legacySpellingFor is the inverse of canonicalKeyFor for the same three
 // shapes: given a canonical-spelled key, it returns the deprecated spelling
-// (if the key's base is an alias target). Used by tenantHasAliasEquivalent.
+// (if the key's base is an alias target). Used by hasAliasEquivalent.
 func legacySpellingFor(key string) (string, bool) {
 	if legacy, ok := legacyKeyByCanonical[key]; ok {
 		return legacy, true
@@ -279,18 +279,14 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 	return rows
 }
 
-// tenantHasAliasEquivalent reports whether overrides already contains key
-// under ANY spelling: the key itself, its canonical form, or the legacy form
-// of that canonical. ApplyProfiles uses this for its fill-in check so a
-// profile value never displaces a tenant's own setting that is merely spelled
-// with the other name of the same threshold (#1231 transition window) — the
-// four-layer priority (tenant beats profile) must hold across spellings.
-func tenantHasAliasEquivalent(overrides map[string]ScheduledValue, key string) bool {
-	return hasAliasEquivalent(overrides, key)
-}
-
-// hasAliasEquivalent is tenantHasAliasEquivalent over any value type, so the
-// walker plane's profile fill-in (raw YAML values) asks the same question.
+// hasAliasEquivalent reports whether overrides already contains key under ANY
+// spelling: the key itself, its canonical form, or the legacy form of that
+// canonical. The profile fill-in (profileFill, shared by ApplyProfiles and the
+// walker plane) uses it so a profile value never displaces a tenant's own
+// setting that is merely spelled with the other name of the same threshold
+// (#1231 transition window) — tenant beats profile across spellings. Generic
+// over the value type so ScheduledValue maps and raw YAML maps ask the same
+// question.
 func hasAliasEquivalent[V any](overrides map[string]V, key string) bool {
 	if _, ok := overrides[key]; ok {
 		return true
