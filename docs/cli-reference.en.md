@@ -2710,7 +2710,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
 | 1 | guard found errors — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
-| 3 | a config file in `--scope`, or in a resolved tenant's chain, that the exporter cannot decode (listed in the report's "Files the exporter cannot parse" section, paths relative to `--config-dir`); fix them and re-run. A `_defaults.yaml`, or a tenant file that only fails while a tenant is being resolved, stops the run before any tenant is checked and only that first file is listed; re-run after fixing it to see the next one. Takes precedence over 1, and replaces the "vacuously safe" 0 when such files are all the scope holds (#2123) |
+| 3 | a YAML file in `--scope` whose name does not start with `_`, or the `_defaults.yaml` in a resolved tenant's chain, that the exporter cannot decode (listed in the report's "Files the exporter cannot parse" section, paths relative to `--config-dir`); fix them and re-run. A `_defaults.yaml`, or a tenant file that only fails while a tenant is being resolved, stops the run before any tenant is checked and only that first file is listed; re-run after fixing it to see the next one. Takes precedence over 1, and replaces the "vacuously safe" 0 when such files are all the scope holds (#2123) |
 
 **Examples**
 
