@@ -1606,6 +1606,8 @@ def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
         "the guard validated the wrong tree: it should have checked out the "
         f"pushed commit {sha_b} but recorded {seen} (working tree is {sha_a})"
     )
+    # The pass half of the verdict; the EXIT trap (#2169) runs on this path too.
+    assert r.returncode == 0, f"a passing build did not let the push through:\n{r.stdout}{r.stderr}"
 
 
 def test_a_push_that_changes_no_docs_is_not_gated_when_another_branch_did(
