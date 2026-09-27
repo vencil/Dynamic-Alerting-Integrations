@@ -329,12 +329,15 @@ class TestMainCLI:
         assert "不存在" in captured.err  # zh diagnostic per the tool
 
     def test_clean_dictionary_exits_zero(self, tmp_path, monkeypatch, capsys):
-        # Positive: a dictionary whose every entry is in active use → exit 0.
+        # Positive: every entry is in active use → exit 0. The legacy key is
+        # the raw series the pack reads; maps_to is the tenant threshold key the
+        # golden alert compares against (issue 1196 — maps_to appearing as a
+        # bare series in an expr is not "in use").
         d = tmp_path / "metric-dict.yaml"
         _write(d,
             "old_metric:\n"
-            "  maps_to: new_metric\n"
-            "  golden_rule: SomeAlert\n"
+            "  maps_to: new_key\n"
+            "  golden_rule: A\n"
             "  rule_pack: db\n"
         )
         monkeypatch.setattr(mod, "METRIC_DICT", d)
@@ -344,7 +347,7 @@ class TestMainCLI:
         _write(rule_packs / "rule-pack-db.yaml",
             "groups:\n  - name: db\n    rules:\n"
             "      - alert: A\n"
-            "        expr: new_metric > 0\n"
+            "        expr: old_metric > on(tenant) tenant:alert_threshold:new_key\n"
         )
         monkeypatch.setattr(mod, "RULE_PACKS_DIR", rule_packs)
         monkeypatch.setattr(mod, "K8S_RULES_DIR", tmp_path / "no-k8s")
@@ -366,7 +369,7 @@ class TestMainCLI:
         d = tmp_path / "metric-dict.yaml"
         _write(d,
             "ghost_metric:\n"
-            "  maps_to: also_ghost\n"
+            "  maps_to: null\n"
             "  rule_pack: db\n"
         )
         monkeypatch.setattr(mod, "METRIC_DICT", d)
@@ -444,3 +447,62 @@ class TestRepoRegistry:
             f"exit code {exc.value.code} from repo scan "
             "(1 = violation, 2 = caller error; both must fail this test)"
         )
+
+
+# ── maps_to 是租戶閾值 key、golden_rule 是真的告警（issue 1196）──────
+#
+# migrate 把 maps_to 當成「請設定這個閾值」告訴使用者，把 golden_rule 當成
+# 「改用這條黃金標準」並因此不產出 custom_ 規則。先前 13 個 maps_to 沒有任何
+# rule pack 讀、10 個 golden_rule 不是存在的告警名，而這支 lint 只發警告
+# （--ci 也回 0），而且它比對 maps_to 的方式（當成 expr 裡的 token）永遠
+# 命中不了 `tenant:alert_threshold:<key>`。
+
+def _alerts_index():
+    return {"PodContainerHighCPU": {"container_cpu"}, "Fixed": set()}
+
+
+def _contract(entries):
+    readers = {}
+    for alert, keys in _alerts_index().items():
+        for k in keys:
+            readers.setdefault(k, []).append(alert)
+    return mod.check_dictionary_contract(
+        entries, set(_alerts_index()), lambda k: tuple(readers.get(k, ())))
+
+
+def test_contract_accepts_a_consistent_entry():
+    assert _contract({"x": {"maps_to": "container_cpu",
+                            "golden_rule": "PodContainerHighCPU"}}) == []
+
+
+def test_contract_accepts_null_maps_to_for_a_fixed_rule():
+    assert _contract({"x": {"maps_to": None, "golden_rule": "Fixed"}}) == []
+
+
+@pytest.mark.parametrize("entry,check", [
+    ({"maps_to": "nobody_reads_me", "golden_rule": None}, "unread-key"),
+    ({"maps_to": None, "golden_rule": "NoSuchAlert"}, "missing-golden-rule"),
+    ({"maps_to": "container_cpu", "golden_rule": "Fixed"}, "golden-rule-ignores-key"),
+])
+def test_contract_flags_each_inconsistency_as_error(entry, check):
+    issues = _contract({"x": entry})
+    assert [(i["check"], i["severity"]) for i in issues] == [(check, "error")]
+
+
+def test_the_real_dictionary_honours_the_contract():
+    import yaml as _yaml
+    data = _yaml.safe_load(mod.METRIC_DICT.read_text(encoding="utf-8"))
+    issues = mod.check_dictionary_contract(data, mod.rule_pack_alert_names(),
+                                           mod.alerts_reading_key)
+    assert issues == [], [i["message"] for i in issues]
+
+
+def test_ci_exits_1_on_a_contract_error(tmp_path, monkeypatch):
+    bad = tmp_path / "metric-dictionary.yaml"
+    bad.write_text("m:\n  maps_to: nobody_reads_me\n  golden_rule: null\n"
+                   "  rule_pack: x\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "METRIC_DICT", bad)
+    monkeypatch.setattr(sys, "argv", ["check_metric_dictionary.py", "--ci"])
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 1

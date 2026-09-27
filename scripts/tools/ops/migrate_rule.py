@@ -1041,13 +1041,15 @@ def render_report(results):
 
     if golden_matches:
         buf.write("-" * 40 + "\n")
-        buf.write("📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值\n")
+        buf.write("📖 建議使用黃金標準 — 有 Metric Key 的，請用 scaffold_tenant.py 設定閾值\n")
         buf.write("-" * 40 + "\n")
         for r in golden_matches:
             golden = r.dict_match
             buf.write(f"  • {r.alert_name}\n")
             buf.write(f"    → 黃金標準: {golden.get('golden_rule', '?')}\n")
-            buf.write(f"    → Metric Key: {golden.get('maps_to', '?')}\n")
+            # maps_to: null = 固定條件的黃金規則，沒有租戶閾值（issue 1196）
+            key = golden.get("maps_to") or "（無：黃金標準以固定條件判斷，沒有租戶閾值可設）"
+            buf.write(f"    → Metric Key: {key}\n")
             buf.write(f"    → Rule Pack: {golden.get('rule_pack', '?')}\n")
             buf.write(f"    → {golden.get('note', '')}\n")
         buf.write("\n")

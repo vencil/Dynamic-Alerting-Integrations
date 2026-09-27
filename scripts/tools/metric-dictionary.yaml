@@ -25,7 +25,7 @@ mysql_global_status_threads_running:
   note: "running-thread SATURATION（非主機 CPU%）；threshold key #1231 由 mysql_cpu 改名（知情推翻 #944「保留」決定；舊拼法 2-release 過渡窗內仍可解析）。真 CPU% 見 PodContainerHighCPU"
 
 mysql_global_status_slow_queries:
-  maps_to: mysql_slow_queries
+  maps_to: null
   golden_rule: MariaDBHighSlowQueries
   rule_pack: mariadb
   note: "rate() 指標 — 使用黃金標準的 sum by(tenant) 聚合"
@@ -49,14 +49,14 @@ mysql_slave_status_slave_sql_running:
   note: "State-based（==0 即 critical、無 threshold key）— 黃金標準已帶 master_server_id>0 intent gate，非 replica 自然安靜"
 
 mysql_global_status_innodb_buffer_pool_pages_data:
-  maps_to: mysql_innodb_buffer_pool
-  golden_rule: MariaDBInnoDBBufferPoolHigh
+  maps_to: null
+  golden_rule: null
   rule_pack: mariadb
   note: "Buffer Pool 百分比 — 黃金標準已內建除法計算"
 
 mysql_global_status_innodb_buffer_pool_pages_total:
-  maps_to: mysql_innodb_buffer_pool
-  golden_rule: MariaDBInnoDBBufferPoolHigh
+  maps_to: null
+  golden_rule: null
   rule_pack: mariadb
   note: "Buffer Pool 分母 — 已整合進黃金標準 Recording Rule"
 
@@ -77,7 +77,7 @@ mysqld_exporter_scrape_duration_seconds:
 # ────────────────────────────────────────
 container_cpu_usage_seconds_total:
   maps_to: container_cpu
-  golden_rule: ContainerHighCPU
+  golden_rule: PodContainerHighCPU
   rule_pack: kubernetes
   note: "容器 CPU — 使用黃金標準的 max by(tenant) 聚合"
 
@@ -95,13 +95,13 @@ container_cpu_cfs_periods_total:
 
 container_memory_working_set_bytes:
   maps_to: container_memory
-  golden_rule: ContainerHighMemory
+  golden_rule: PodContainerHighMemory
   rule_pack: kubernetes
   note: "容器記憶體 — 使用黃金標準的 max by(tenant) 聚合"
 
 kube_pod_container_status_waiting_reason:
-  maps_to: container_crashloop
-  golden_rule: ContainerCrashLoopBackOff
+  maps_to: null
+  golden_rule: ContainerCrashLoop
   rule_pack: kubernetes
   note: "CrashLoopBackOff — 使用 state_filter 控制開關"
 
@@ -116,13 +116,13 @@ redis_memory_used_bytes:
 
 redis_connected_clients:
   maps_to: redis_connected_clients
-  golden_rule: RedisTooManyClients
+  golden_rule: RedisHighConnections
   rule_pack: redis
   note: "Redis 連線數 — 直接設定閾值"
 
 redis_evicted_keys_total:
   maps_to: redis_evicted_keys_rate  # #1196 B: 閾值 key 改名（alert 需求 _rate；原 _total 為 unwired 死 key）
-  golden_rule: RedisHighEviction
+  golden_rule: RedisHighKeyEvictions
   rule_pack: redis
   note: "Redis 驅逐 — rate() 指標"
 
@@ -143,7 +143,7 @@ mongodb_mongod_replset_member_replication_lag:
 
 mongodb_ss_opcounters:
   maps_to: mongodb_opcounters_rate  # #1196 B: 閾值 key 改名（alert 需求 _rate；原 _total 為 unwired 死 key）
-  golden_rule: MongoDBHighOps
+  golden_rule: MongoDBHighOperations
   rule_pack: mongodb
   note: "Operations rate — sum by(tenant) 聚合"
 
@@ -152,13 +152,13 @@ mongodb_ss_opcounters:
 # ────────────────────────────────────────
 elasticsearch_jvm_memory_used_bytes:
   maps_to: es_heap_usage_percent  # #1196 C: 閾值 key 改名（原 es_jvm_memory_used_percent 為 unwired 死 key）
-  golden_rule: ElasticsearchHighJVMMemory
+  golden_rule: ElasticsearchHighHeapUsage
   rule_pack: elasticsearch
   note: "JVM heap — 黃金標準已內建百分比計算"
 
 elasticsearch_filesystem_data_free_bytes:
   maps_to: es_disk_usage_percent  # #1196 C: 閾值 key 改名＋語意反向（free% 15 → used% 85）
-  golden_rule: ElasticsearchLowDiskSpace
+  golden_rule: ElasticsearchHighDiskUsage
   rule_pack: elasticsearch
   note: "磁碟空間 — 黃金標準已內建百分比計算（已用率語意，(1-available/size)*100）"
 
@@ -184,19 +184,19 @@ pg_replication_lag:
   note: "Replication lag — max by(tenant) 聚合"
 
 pg_stat_database_deadlocks:
-  maps_to: pg_deadlocks
+  maps_to: null
   golden_rule: PostgreSQLHighDeadlocks
   rule_pack: postgresql
   note: "Deadlocks — rate() 指標, sum by(tenant) 聚合"
 
 pg_stat_database_xact_commit:
-  maps_to: pg_transactions
+  maps_to: null
   golden_rule: PostgreSQLHighRollbackRatio
   rule_pack: postgresql
   note: "Committed transactions — 搭配 rollback 計算比率"
 
 pg_stat_database_xact_rollback:
-  maps_to: pg_transactions
+  maps_to: null
   golden_rule: PostgreSQLHighRollbackRatio
   rule_pack: postgresql
   note: "Rolled back transactions — 搭配 commit 計算回滾比率"
@@ -301,7 +301,7 @@ ClickHouseMetrics_MemoryTracking:
   note: "Memory tracking — max by(tenant) 聚合"
 
 ClickHouseProfileEvents_FailedQuery:
-  maps_to: clickhouse_failed_queries
+  maps_to: null
   golden_rule: ClickHouseHighFailedQueryRate
   rule_pack: clickhouse
   note: "Failed query rate — rate() 指標, 固定閾值 (無 user override)"
@@ -346,19 +346,19 @@ kafka_server_brokertopicmetrics_messagesin_total:
   note: "Message-in rate — sum by(tenant) rate() 聚合"
 
 kafka_topic_partitions:
-  maps_to: kafka_topic_partitions
+  maps_to: null
   golden_rule: null
   rule_pack: kafka
   note: "Topic partition count — 參考指標, 無對應 alert"
 
 kafka_consumer_group_current_offset:
-  maps_to: kafka_consumer_offset
+  maps_to: null
   golden_rule: null
   rule_pack: kafka
   note: "Consumer group offset — 參考指標, lag 由 lag_sum 計算"
 
 kafka_topic_partition_current_offset:
-  maps_to: kafka_topic_offset
+  maps_to: null
   golden_rule: null
   rule_pack: kafka
   note: "Topic partition offset — 參考指標"
@@ -397,7 +397,7 @@ rabbitmq_node_mem_used:
   note: "Node memory used — 由 normalization rule 計算 % (mem_used / mem_limit)"
 
 rabbitmq_node_mem_limit:
-  maps_to: rabbitmq_node_mem_limit
+  maps_to: null
   golden_rule: null
   rule_pack: rabbitmq
   note: "Node memory limit — 用於 ratio 計算的分母"
@@ -409,19 +409,19 @@ rabbitmq_queue_messages_unacked:
   note: "Unacked messages — max by(tenant), 固定閾值 > 10000"
 
 rabbitmq_identity_info:
-  maps_to: rabbitmq_up
+  maps_to: null
   golden_rule: RabbitMQExporterAbsent
   rule_pack: rabbitmq
   note: "Exporter identity — absent() 偵測 exporter 離線"
 
 rabbitmq_queue_messages_published_total:
-  maps_to: rabbitmq_publish_rate
+  maps_to: null
   golden_rule: null
   rule_pack: rabbitmq
   note: "Publish rate — rate() 參考指標"
 
 rabbitmq_queue_messages_delivered_total:
-  maps_to: rabbitmq_deliver_rate
+  maps_to: null
   golden_rule: null
   rule_pack: rabbitmq
   note: "Deliver rate — rate() 參考指標"
