@@ -8,6 +8,10 @@
   V2  旗標是恰一個長旗標的前綴——argparse ``allow_abbrev`` 會收下並綁到別的旗標、rc 0；一律違規
   V3  cli-reference 選項表第一欄的旗標不在 parser
   V4  script 以 AST 可達的非零結束碼不在 cli-reference 該命令節的結束碼表（只判「可達但未列」）
+  V5  fence 裡的命令交給該 subcommand 真的 ``ArgumentParser.parse_args`` 會失敗（缺必填、多餘的
+      位置參數、``choices``／``type=`` 不收、互斥、個數不對）——只在 V0–V2 沒抓到東西時判；
+      synopsis 行（``[options]``、``...``）不判；含 placeholder 的命令只判「缺必填」與「多餘位置參數」；
+      entrypoint 會注入的旗標（``--prometheus``）視為已給。inline span 與 CLI Playground 不判。
 
 契約來源：``parse_command_map`` 給 subcommand→script，每支 script 用 runpy 跑到 ``parse_args``
 被攔下為止拿到真的 ``ArgumentParser``；``--prometheus`` 從 entrypoint 的 ``PROMETHEUS_COMMANDS`` 讀。
@@ -82,7 +86,7 @@ PORTAL_PLAYGROUND_FILES = ("commands.js", "engine.js")
 PORTAL_REQUIRE_ENV = "CLI_CONTRACT_REQUIRE_NODE"
 _JS_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.S)
 INLINE_IGNORE = "datools-cmd-ignore"
-VERDICTS = ("V0", "V1", "V2", "V3", "V4")
+VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5")
 _TICKET_RE = re.compile(r"^#\d+$")
 
 # Tokens the dispatcher itself answers before any script runs.
@@ -169,6 +173,9 @@ class ParserModel(NamedTuple):
     positionals: tuple[tuple[str, Any, tuple[str, ...] | None], ...]
     subparsers: dict[str, "ParserModel"] | None
     subparser_slot: int | None        # index among positional tokens, or None
+    # The live parser the model was read from. V5 hands it the documented
+    # argv (``judge_parse``); None for a model built without one.
+    parser: argparse.ArgumentParser | None = None
 
 
 class _Captured(Exception):
@@ -220,7 +227,7 @@ def _model(parser: argparse.ArgumentParser) -> ParserModel:
         else:
             decidable = False
     return ParserModel(frozenset(options), arity, tuple(positionals),
-                       subparsers, slot)
+                       subparsers, slot, parser)
 
 
 def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
@@ -416,13 +423,21 @@ def walk_lines(lines: list[str]) -> Iterator[tuple[int, str, _Fence | None]]:
     as content — the same command lines pymdownx.superfences renders.
     """
     fence: _Fence | None = None
+    quoted = False
     blocks = 0
     for number, raw in enumerate(lines, 1):
-        line = _unquote_md(raw)
+        unquoted = _unquote_md(raw)
+        # ⛔ Inside a fence a leading `>` is content, not a blockquote marker,
+        # unless the fence itself opened inside a blockquote. Stripping it
+        # everywhere turned a continuation line `  > out.json` (a shell
+        # redirect) into the bare word `out.json`, which the argv then carried
+        # as a stray positional.
+        line = raw if fence is not None and not quoted else unquoted
         opened = _fence_open(line, blocks)
         if fence is None:
             if opened:
                 fence = opened
+                quoted = unquoted != raw
                 blocks += 1
                 continue
             yield number, line, None
@@ -843,6 +858,133 @@ def _shell_c_index(segment: list[str], start: int) -> int | None:
     return None
 
 
+_SYNOPSIS_MARKS = ("[", "]", "...", "…")
+_PARSE_ERROR = re.compile(r"error: (.*)$")
+_VALUE_FREE_ERRORS = ("the following arguments are required:",
+                      "unrecognized arguments:", "one of the arguments ")
+_REQUIRED_GROUP = re.compile(r"^one of the arguments (.+) is required$")
+
+
+def _is_synopsis(tok: str) -> bool:
+    """`[options]`, `[--flag <x>]`, `<a>...`: usage notation, not an argv."""
+    return tok.startswith("[") or tok.endswith("]") or tok.endswith(("...", "…"))
+
+
+def _parse_error(parser: argparse.ArgumentParser, argv: list[str],
+                 stats: dict[str, int]) -> str | None:
+    """argparse's own error for ``argv`` (None when it parses; "" on a crash)."""
+    err = io.StringIO()
+    cwd = os.getcwd()
+    scratch = tempfile.mkdtemp(prefix="cli-contract-")
+    try:
+        # A `type=` callable runs during parsing; a scratch cwd keeps any path
+        # it touches away from the checkout.
+        os.chdir(scratch)
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            parser.parse_args(argv)
+        return None
+    except SystemExit as exc:
+        if exc.code in (0, None):
+            return None
+    except Exception:  # noqa: BLE001 - a crashing type= is disclosed, not judged
+        stats["cmd_parse_crashed"] += 1
+        return ""
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(scratch, ignore_errors=True)
+    last = (err.getvalue().strip().splitlines() or [""])[-1]
+    m = _PARSE_ERROR.search(last)
+    return m.group(1) if m else last
+
+
+def judge_parse(args: list[str], command: str, model: ParserModel,
+                injected: frozenset[str], stats: dict[str, int],
+                file: str, line: int, substituted: bool = False) -> list[Finding]:
+    """V5: the documented argv handed to the subcommand's own ``parse_args``.
+
+    V1 reads the argv one flag at a time against the option list, so a line
+    whose every flag exists can still fail as a whole: a required flag left
+    out, a word after a store_true flag that becomes an extra positional, a
+    value ``choices``/``type=`` refuse. Only the real parser answers that.
+
+    Placeholders are words standing for a value the reader fills in, so an
+    error ABOUT a value is not judged while any placeholder is on the line;
+    a missing required argument or an extra positional does not depend on
+    what the values are, so those still are.
+
+    A flag entrypoint.py injects (``--prometheus``) is supplied only to answer
+    "is it missing": the dispatcher appends it when ``$PROMETHEUS_URL`` is
+    set, so a line that fails for that reason alone passes on a retry with it
+    and is disclosed. It is NOT added up front — measured on
+    ``discover-mappings --endpoint``, adding it makes argparse refuse the line
+    as mutually exclusive, which is what happens to a reader who has the
+    variable set, not to one who copies the line as written.
+    """
+    parser = model.parser
+    if parser is None:
+        return []
+    if any(_is_synopsis(tok) for tok in args):
+        stats["cmd_synopsis"] += 1
+        return []
+    # V1 accepts an injected flag even where the parser does not declare it
+    # (it is the dispatcher's word); drop it with its value so V5 does not
+    # report the same token a second time.
+    argv: list[str] = []
+    i = 0
+    while i < len(args):
+        name, eq, _ = args[i].partition("=")
+        if name in injected and name not in model.options:
+            i += 1 if eq or i + 1 >= len(args) or _looks_like_flag(args[i + 1]) else 2
+            continue
+        argv.append(args[i])
+        i += 1
+    reason = _parse_error(parser, argv, stats)
+    if not reason:
+        return []
+    group = _REQUIRED_GROUP.match(reason)
+    if reason.startswith(_VALUE_FREE_ERRORS[0]) or group:
+        # "the following arguments are required: A, B" needs all of them;
+        # a required mutually exclusive group ("one of the arguments A B is
+        # required") needs any one — the injected one is enough.
+        named = set((group.group(1) if group else reason.split(":", 1)[1])
+                    .replace(",", " ").split())
+        supply = named & injected & model.options if group else named
+        if supply and supply <= injected and supply <= model.options:
+            for flag in sorted(supply)[:1] if group else sorted(supply):
+                argv += [flag, "http://injected.invalid"]
+            retry = _parse_error(parser, argv, stats)
+            if retry is None:
+                stats["cmd_injected_assumed"] += 1
+                return []
+            if not retry:
+                return []
+            reason = retry
+    if not reason.startswith(_VALUE_FREE_ERRORS) \
+            and any(_is_placeholder(tok) for tok in args):
+        stats["cmd_parse_placeholder_value"] += 1
+        return []
+    if reason.startswith(_VALUE_FREE_ERRORS[1]) and (
+            substituted or any(_SUBSTITUTION in tok for tok in argv) or all(
+                _is_placeholder(tok) for tok in reason.split(":", 1)[1].split())):
+        # `$(pwd)/conf.d` is one shell word, but the tokenizer collapses the
+        # substitution and leaves `/conf.d` beside it: with a `$(…)` on the
+        # line the word boundaries are not the shell's, so a "stray word" is
+        # not a finding. The `$(…)` need not survive into the argv: in
+        # `> out-$(date +%F).json` the redirect drops `out-$(...)` with its
+        # target and the residue `.json` is all the argv sees, so the caller
+        # says whether the LINE had one (`substituted`).
+        stats["cmd_parse_placeholder_value"] += 1
+        return []
+    stats["scored"] += 1
+    return [Finding(
+        "V5", file, line, command, reason,
+        f"`da-tools {command}` rejects this argv as a whole: `{reason}` — "
+        f"copying the line gives rc=2 even though every flag on it exists. "
+        f"Fix the line (a missing required flag, a stray word after a flag "
+        f"that takes no value, a value outside `choices`); a deliberately "
+        f"partial example needs `# {INLINE_IGNORE}: <why>`.")]
+
+
 class _Ctx(NamedTuple):
     command_map: dict[str, str]
     parsers: dict[str, ParserModel]
@@ -918,6 +1060,12 @@ def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
             seg_findings = judge_argv(
                 args, command, ctx.parsers.get(command),
                 ctx.injected_for.get(command, frozenset()), ctx.stats, rel, number)
+        model = ctx.parsers.get(command)
+        if not seg_findings and carrier == "cmd_segments" and model is not None:
+            seg_findings = judge_parse(
+                args, command, model, ctx.injected_for.get(command, frozenset()),
+                ctx.stats, rel, number,
+                substituted=any(_SUBSTITUTION in tok for tok in tokens))
         findings += seg_findings
     return findings
 
@@ -1211,6 +1359,120 @@ def scan_commands(doc: Path, rel: str, ctx: _Ctx, errors: list[str]) -> list[Fin
                 continue
             findings += _dedupe(judge_tokens(tokens, rel, number, ctx, "inline_spans"),
                                 reason)
+    return findings
+
+
+_TABLE_CMD = re.compile(r"^`(?:da-tools\s+)?([A-Za-z][\w-]*)`")
+# A column that carries a command's flags: 常用 Flag / Key Flags / 最小參數 /
+# Minimum Parameters. Matched on the header, not on the cell shape, so a
+# prose column that merely mentions a flag stays prose.
+_FLAG_COLUMN = re.compile(r"flag|參數|param", re.I)
+
+
+def _flag_union(model: ParserModel) -> ParserModel:
+    """Every option of the parser and all its sub-parsers, as one flat model.
+
+    A flag-list cell names flags without saying which action they belong to,
+    so a tool with sub-commands is judged against the union: a flag no action
+    declares is still caught, a flag declared by a different action than the
+    reader needs is not (disclosed as NOT scored).
+    """
+    options = set(model.options)
+    arity = dict(model.arity)
+    for sub in (model.subparsers or {}).values():
+        u = _flag_union(sub)
+        options |= u.options
+        arity.update(u.arity)
+    return ParserModel(frozenset(options), arity, (), None, None)
+
+
+def scan_command_tables(doc: Path, rel: str, ctx: _Ctx,
+                        errors: list[str]) -> list[Finding]:
+    """Carrier D (本輪決策 D1): a command column paired with its flag column.
+
+    A row whose first cell is a subcommand (`` `diagnose` ``) and whose header
+    names a flag column is read as that command's flags. A cell of code spans
+    (`` `--config-dir <dir>` ``) is an argv fragment and gets V0–V2 like a
+    fenced line would, minus V5 (a fragment is not a whole command line); a
+    cell of bare text (``--config-dir <PATH>, --namespace <NS>``) is a list
+    and each flag is resolved on its own. A span that already starts with
+    ``da-tools`` is the inline-span carrier's.
+    """
+    findings: list[Finding] = []
+    lines = doc.read_text(encoding="utf-8").splitlines()
+    header: list[str] | None = None
+    for number, line, fence in walk_lines(lines):
+        if fence is not None or not line.lstrip().startswith("|"):
+            header = None
+            continue
+        cells = _cells(line)
+        if header is None:
+            header = cells
+            continue
+        if set("".join(cells)) <= set("-: |"):
+            continue
+        m = _TABLE_CMD.match(cells[0].strip()) if cells else None
+        if not m or m.group(1) not in ctx.command_map:
+            continue
+        columns = [i for i, h in enumerate(header[1:], 1)
+                   if _FLAG_COLUMN.search(h) and i < len(cells)]
+        if not columns:
+            continue
+        command = m.group(1)
+        model = ctx.parsers.get(command)
+        injected = ctx.injected_for.get(command, frozenset())
+        reason = None
+        ig = _ROW_IGNORE.search(line) if INLINE_IGNORE in line else None
+        if ig:
+            reason = _ignore_reason(ig)
+            if not reason:
+                errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
+                              f"write `<!-- {INLINE_IGNORE}: <why> -->`")
+                continue
+            ctx.stats["ignored"] += 1
+            ctx.ignore_sites.add((rel, number))
+        ctx.stats["table_cmd_rows"] += 1
+        found: list[Finding] = []
+        for i in columns:
+            cell = cells[i]
+            if ig:
+                cell = _ROW_IGNORE.sub("", cell)
+            spans = _SPAN.findall(cell)
+            if model is None:
+                ctx.stats["cmd_no_parser"] += 1
+                continue
+            if spans:
+                for span in spans:
+                    tokens = tokenize(span)
+                    if tokens is None:
+                        ctx.stats["cmd_unparseable"] += 1
+                        continue
+                    if tokens[:1] == ["da-tools"]:
+                        continue
+                    found += judge_argv(tokens, command, model, injected,
+                                        ctx.stats, rel, number)
+                continue
+            union = _flag_union(model)
+            if model.subparsers:
+                ctx.stats["table_flags_by_union"] += 1
+            for flag in _FLAG_IN_CELL.findall(cell):
+                ctx.stats["scored"] += 1
+                if flag in injected:
+                    continue
+                res = resolve_flag(flag, union)
+                if res.verdict == "V1":
+                    found.append(Finding(
+                        "V1", rel, number, command, flag,
+                        f"the `{command}` row lists `{flag}`, which `{command}` "
+                        f"does not declare — a reader who copies it gets "
+                        f"`unrecognized arguments`, rc=2 (本輪決策 D1)."))
+                elif res.verdict == "V2":
+                    found.append(Finding(
+                        "V2", rel, number, command, flag,
+                        f"the `{command}` row lists `{flag}`, which argparse "
+                        f"only accepts as an abbreviation of `{res.option}` "
+                        f"(#1514). Spell it out."))
+        findings += _dedupe(found, reason)
     return findings
 
 
@@ -1586,7 +1848,9 @@ _STAT_KEYS = (
     "cmd_unparseable", "table_rows_positional", "table_rows_no_parser",
     "reference_sections_unmatched", "exit_tables_no_script",
     "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
-    "unscanned_carrier_files", "portal_commands", "portal_unavailable")
+    "unscanned_carrier_files", "portal_commands", "portal_unavailable",
+    "cmd_synopsis", "cmd_injected_assumed", "cmd_parse_placeholder_value",
+    "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union")
 
 
 class PortalCommand(NamedTuple):
@@ -1742,6 +2006,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     findings: list[Finding] = []
     for doc in docs:
         findings += scan_commands(doc, _rel(doc, repo_root), ctx, errors)
+        findings += scan_command_tables(doc, _rel(doc, repo_root), ctx, errors)
     portal_dir = repo_root / PORTAL_PLAYGROUND_DIR.relative_to(REPO_ROOT)
     scanned_js: frozenset[Path] = frozenset()
     if portal is None:
@@ -1816,7 +2081,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     s = stats
     return [
         f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
-        f"inline code spans, {s['cmd_manifest_argvs']} manifest args lists, "
+        f"inline code spans, {s['table_cmd_rows']} command-table rows, {s['cmd_manifest_argvs']} manifest args lists, "
         f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
         f"Playground command lines"
         + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
@@ -1850,6 +2115,18 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
         f"(portal JS/JSX, shell scripts) outside this scan set",
+        f"NOT scored per action: {s['table_flags_by_union']} command-table flag "
+        f"lists of a tool with sub-commands, judged against the union of every "
+        f"action's flags (a flag that exists on a different action passes)",
+        f"NOT parse-checked (V5): inline code spans, command-table cells and "
+        f"CLI Playground lines, "
+        f"{s['cmd_synopsis']} synopsis lines (`[options]`, `...`), "
+        f"{s['cmd_parse_placeholder_value']} lines whose parse error is about a "
+        f"value while a placeholder is on the line (or a stray word beside a "
+        f"`$(…)` the tokenizer splits), {s['cmd_parse_crashed']} "
+        f"lines whose parse crashed; {s['cmd_injected_assumed']} lines pass only "
+        f"because entrypoint.py appends `--prometheus` — which it does only when "
+        f"$PROMETHEUS_URL is set (the image default is empty: rc=2 as written)",
         "⚠️ NOT scored is a disclosure, not coverage: this check cannot see those.",
     ]
 

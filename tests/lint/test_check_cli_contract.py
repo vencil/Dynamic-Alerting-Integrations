@@ -57,6 +57,7 @@ def _widget_parser() -> argparse.ArgumentParser:
     p.add_argument("--config-file")
     p.add_argument("--tenant-config")
     p.add_argument("--rounds", type=int)
+    p.add_argument("--ratio", type=float)
     p.add_argument("--format")
     p.add_argument("--tags", nargs="*")
     return p
@@ -201,9 +202,9 @@ class TestV1UndeclaredFlag:
         "da-tools widget --help",
         "da-tools widget -h",
         "da-tools widget db-a --rounds -5",          # negative number is a value
-        "da-tools widget db-a --rounds -.5",
+        "da-tools widget db-a --ratio -.5",          # …and so is `-.5` (float)
         "da-tools widget db-a --tags a b c --json-output",
-        "da-tools widget db-a -- --not-a-flag",
+        "da-tools widget -- --not-a-flag",           # after `--`: the positional
         "da-tools widget db-a --config-dir <dir> --json-output",
         "da-tools widget db-a --$FLAG",              # placeholder flag, disclosed
         "da-tools widget db-a -vq",                  # short cluster, both store_true
@@ -730,6 +731,187 @@ class TestV4ExitCodeTable:
             ("代碼", "說明"), ("Code", "Description"), ("Code", "意義"),
             ("Code", "含義"), ("Code", "Meaning"), ("Exit Code", "含義", "CI 行為"),
         }
+
+
+def _probe_parser() -> argparse.ArgumentParser:
+    """Shaped like discover-mappings: a required, injectable --prometheus
+    that is mutually exclusive with --endpoint."""
+    p = argparse.ArgumentParser(prog="probe")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--prometheus")
+    src.add_argument("--endpoint")
+    p.add_argument("--mode", choices=["fast", "slow"])
+    return p
+
+
+class TestV5ParseArgs:
+    """V5：fence 裡的命令整條交給真的 parse_args（本輪決策 D5，含 D2 的 choices／type=）。"""
+
+    def test_a_missing_required_positional(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget --config-dir conf.d/")
+        assert _open(r.findings) == [
+            ("V5", "widget", "the following arguments are required: tenant")]
+
+    def test_a_word_after_a_flag_that_takes_no_value(self, tmp_path):
+        """V1 看不到：每個旗標都存在，多出來的是位置參數（照抄 rc=2）。"""
+        r = _fence_scan(tmp_path, "da-tools widget db-a --json-output out.json")
+        assert _open(r.findings) == [
+            ("V5", "widget", "unrecognized arguments: out.json")]
+
+    def test_a_value_type_refuses(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget db-a --rounds three")
+        assert _open(r.findings) == [
+            ("V5", "widget", "argument --rounds: invalid int value: 'three'")]
+
+    def test_a_value_outside_choices(self, tmp_path):
+        r = _scan(tmp_path, docs=[_doc(tmp_path, _fence(
+            "da-tools probe --endpoint http://x --mode medium"))],
+            parsers={"probe": mod._model(_probe_parser())},
+            command_map={"probe": "probe.py"})
+        assert [(v, c, t.split(" (choose")[0]) for v, c, t in _open(r.findings)] == [
+            ("V5", "probe", "argument --mode: invalid choice: 'medium'")]
+
+    def test_mutually_exclusive_flags(self, tmp_path):
+        r = _scan(tmp_path, docs=[_doc(tmp_path, _fence(
+            "da-tools probe --endpoint http://x --prometheus http://y"))],
+            parsers={"probe": mod._model(_probe_parser())},
+            command_map={"probe": "probe.py"})
+        assert _open(r.findings) == [
+            ("V5", "probe", "argument --prometheus: not allowed with argument --endpoint")]
+
+    def test_v1_findings_are_not_reported_twice(self, tmp_path):
+        """同一行 V1 已抓到，V5 不再判（它也會失敗，但那是同一個錯）。"""
+        r = _fence_scan(tmp_path, "da-tools widget --bogus")
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_redirect_on_a_continuation_line_is_not_a_stray_word(self, tmp_path):
+        """⛔ `  > out.json` 在 fence 裡是 shell 重導向，不是 markdown 引用。"""
+        r = _fence_scan(tmp_path, "da-tools widget db-a \\",
+                        "  --json-output \\", "  > out.json")
+        assert _open(r.findings) == []
+
+    def test_a_fence_inside_a_blockquote_is_still_read(self, tmp_path):
+        doc = _doc(tmp_path, "> ```bash\n> da-tools widget db-a --bogus\n> ```\n")
+        r = _scan(tmp_path, docs=[doc])
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_placeholder_value_is_not_judged(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget db-a --rounds <N>")
+        assert _open(r.findings) == []
+        assert r.stats["cmd_parse_placeholder_value"] == 1
+
+    def test_a_placeholder_does_not_hide_a_missing_required(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget --config-dir <dir>")
+        assert _open(r.findings) == [
+            ("V5", "widget", "the following arguments are required: tenant")]
+
+    def test_a_synopsis_line_is_disclosed_not_judged(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget <tenant> [options]")
+        assert _open(r.findings) == []
+        assert r.stats["cmd_synopsis"] == 1
+
+    def test_a_substitution_does_not_become_a_stray_word(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget db-a --config-dir $(pwd)/conf.d")
+        assert _open(r.findings) == []
+
+    @pytest.mark.parametrize("target", [
+        "out-$(date +%F).json", "$(pwd)/out.json", "--config-dir=$(pwd)/conf.d"])
+    def test_a_substitution_the_argv_never_sees_still_counts(self, tmp_path, target):
+        """`> out-$(date).json`：重導向連目標丟掉，argv 只剩殘段 `.json`（量過
+        incremental-migration-playbook 的 alert-quality 那行，實跑不會 rc=2）；
+        `--config-dir=$(pwd)/conf.d` 的 `$(…)` 黏在旗標上，不是獨立一個字。"""
+        line = (f"da-tools widget db-a {target}" if target.startswith("--")
+                else f"da-tools widget db-a > {target}")
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == []
+        assert r.stats["cmd_parse_placeholder_value"] == 1
+
+    def test_without_a_substitution_the_same_residue_is_red(self, tmp_path):
+        """正控制：同一個多出來的字，行上沒有 `$(…)` 就照判。"""
+        r = _fence_scan(tmp_path, "da-tools widget db-a > out.json .json")
+        assert _open(r.findings) == [
+            ("V5", "widget", "unrecognized arguments: .json")]
+
+    def test_inline_spans_are_not_parse_checked(self, tmp_path):
+        r = _scan(tmp_path, docs=[_doc(tmp_path, "Run `da-tools widget --config-dir x`.\n")])
+        assert _open(r.findings) == []
+
+    def test_sh_c_strings_in_a_fence_are_parse_checked(self, tmp_path):
+        r = _fence_scan(tmp_path, 'sh -c "da-tools widget --config-dir x"')
+        assert _open(r.findings) == [
+            ("V5", "widget", "the following arguments are required: tenant")]
+
+    def test_an_injected_flag_counts_only_when_it_is_what_is_missing(self, tmp_path):
+        """entrypoint 只在設了 $PROMETHEUS_URL 時補 --prometheus：缺它的行揭露、不判；
+        有 --endpoint 的行不能先補上它——那會被判成互斥（量過 discover-mappings）。"""
+        kw = dict(parsers={"probe": mod._model(_probe_parser())},
+                  command_map={"probe": "probe.py"}, reference_docs=(_reference(tmp_path),),
+                  injected={"probe"}, exit_codes={}, repo_root=tmp_path, portal=[])
+        r = mod.scan(docs=[_doc(tmp_path, _fence("da-tools probe --mode fast"))], **kw)
+        assert _open(r.findings) == []
+        assert r.stats["cmd_injected_assumed"] == 1
+        r = mod.scan(docs=[_doc(tmp_path, _fence("da-tools probe --endpoint http://x"))], **kw)
+        assert _open(r.findings) == []
+        assert r.stats["cmd_injected_assumed"] == 0
+
+    def test_a_ledger_row_can_suppress_v5(self):
+        assert "V5" in mod.VERDICTS
+
+
+class TestCommandTables:
+    """表格載體（本輪決策 D1）：命令欄＋旗標欄同列配對。"""
+
+    _HEAD = "| 命令 | 說明 | 常用 Flag |\n|------|------|------|\n"
+
+    def _table(self, tmp_path, *rows, head=None):
+        return _scan(tmp_path, docs=[_doc(tmp_path, (head or self._HEAD) + "".join(rows))])
+
+    def test_a_flag_list_cell_is_judged_flag_by_flag(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --config-dir <PATH>, --bogus, --verb |\n")
+        assert _open(r.findings) == [("V1", "widget", "--bogus"),
+                                     ("V2", "widget", "--verb")]
+        assert r.stats["table_cmd_rows"] == 1
+
+    def test_an_injected_flag_in_a_list_passes(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --prometheus <URL> |\n")
+        assert _open(r.findings) == []
+
+    def test_a_code_span_cell_is_an_argv_fragment(self, tmp_path):
+        head = "| 命令 | 用途 | 最小參數 |\n|---|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | x | `db-a --config-dir <dir> --bogus` |\n",
+                        head=head)
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_span_that_is_already_a_command_is_left_to_the_inline_carrier(self, tmp_path):
+        head = "| Command | Purpose | Minimum Parameters |\n|---|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | x | `da-tools widget db-a --bogus` |\n",
+                        head=head)
+        # one finding, from the inline-span carrier — not two
+        assert _open(r.findings) == [("V1", "widget", "--bogus")]
+
+    def test_a_table_without_a_flag_column_is_prose(self, tmp_path):
+        head = "| 命令 | 說明 |\n|---|---|\n"
+        r = self._table(tmp_path, "| `widget` | 支援 --bogus 之類的說明文字 |\n", head=head)
+        assert _open(r.findings) == []
+        assert r.stats["table_cmd_rows"] == 0
+
+    def test_a_row_whose_first_cell_is_not_a_command_is_skipped(self, tmp_path):
+        r = self._table(tmp_path, "| `not-a-command` | x | --bogus |\n")
+        assert _open(r.findings) == []
+
+    def test_a_tool_with_actions_is_judged_against_the_union(self, tmp_path):
+        r = self._table(tmp_path, "| `tool2` | x | --repo <R>, --message <M>, --bogus |\n")
+        assert _open(r.findings) == [("V1", "tool2", "--bogus")]
+        assert r.stats["table_flags_by_union"] == 1
+
+    def test_an_ignored_row_is_suppressed_with_its_reason(self, tmp_path):
+        r = self._table(tmp_path, "| `widget` | x | --bogus <!-- datools-cmd-ignore: planned -->|\n")
+        assert _open(r.findings) == []
+        assert [f.ignored for f in r.findings] == ["planned"]
+
+    def test_the_real_tables_are_read(self):
+        r = mod.scan()
+        assert r.stats["table_cmd_rows"] >= 200, r.stats["table_cmd_rows"]
 
 
 class TestBaselineLedger:
