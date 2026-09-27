@@ -49,9 +49,13 @@ def _run(out: Path, tenants: str, *extra: str, lang: str = "en_US.UTF-8"):
                PYTHONDONTWRITEBYTECODE="1")
     env.pop("DA_LANG", None)
     env.pop("LC_ALL", None)
+    # cwd＝輸出目錄：結尾「下一步」的路徑以執行 init 的目錄為基準（issue
+    # 1379），這樣下面對 `Edit conf.d/...` 的斷言（含「不得出現」那一條）才
+    # 量得到東西；否則路徑會帶著 tmp 前綴，負向斷言恆真。
     return subprocess.run(
         [sys.executable, str(TOOL), "--non-interactive", "--tenants", tenants,
          "--rule-packs", "mariadb", "-o", str(out), *extra],
+        cwd=out if out.is_dir() else None,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300, env=env)
 
@@ -144,6 +148,7 @@ def test_a_tenant_the_customers_file_may_declare_is_skipped(
     assert f"da-tools guard defaults-impact --config-dir {conf}" in run.stderr
     # 摘要（stdout）也列出、且「下一步」不叫客戶去編輯沒產生的檔案
     assert f"conf.d/{rel}" in run.stdout
+    assert "Edit conf.d/db-a.yaml" in run.stdout  # 下一行的負向斷言有對象
     assert f"Edit conf.d/{tenant}.yaml" not in run.stdout
     assert "Traceback" not in run.stderr
 
