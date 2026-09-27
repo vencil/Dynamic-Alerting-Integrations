@@ -77,6 +77,18 @@ on:
       - "components/threshold-exporter/app/internal/guard/**"
       - "components/threshold-exporter/app/pkg/config/scope.go"
       - "components/threshold-exporter/app/pkg/config/hierarchy.go"
+      # What ScopeEffective reads besides the two files above (#1968 nit 1,
+      # #2117): the walker and its name classifier decide which files are
+      # tenants / chain carriers / root platform files, and the platform
+      # overlay and profile expansion are merged into every tenant the guard
+      # sees (aliases.go carries the profile fill-in's spelling rule). A PR
+      # changing only one of them changes the guard's input without running
+      # the guard.
+      - "components/threshold-exporter/app/internal/confdname/**"
+      - "components/threshold-exporter/app/pkg/config/tree_scan.go"
+      - "components/threshold-exporter/app/pkg/config/platform_overlay.go"
+      - "components/threshold-exporter/app/pkg/config/profile_overlay.go"
+      - "components/threshold-exporter/app/pkg/config/aliases.go"
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"

@@ -11,7 +11,8 @@ asserts the same table on /metrics.
 
 The `walker` column (#2019) is the walker plane: describe_tenant.py's
 `--show-sources` view here, `pkg/config.ResolveEffective` (/effective) on the
-Go side — the same effective config and the same `platform_overlay` field.
+Go side — the same effective config and the same `platform_overlay` and
+`profile_overlay` (#2117) fields.
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ TREE_KEYS = {"name", "files", "expect"}
 # this half asserts `dedup` / `group_wait` / `walker` and only pins the key
 # set of the rest.
 EXPECT_KEYS = {"metric", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
-WALKER_KEYS = {"effective_config", "platform_overlay"}
+WALKER_KEYS = {"effective_config", "platform_overlay", "profile_overlay"}
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -68,6 +69,11 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
                 assert overlay is None or (
                     overlay and all(set(e) == {"file", "keys"} and e["keys"] for e in overlay)
                 ), (tree["name"], tenant, overlay)
+                profile = walker["profile_overlay"]
+                assert profile is None or (
+                    profile and all(set(e) == {"profile", "file", "keys"} and e["keys"]
+                                    for e in profile)
+                ), (tree["name"], tenant, profile)
 
 
 def _build(tree: dict, root: Path) -> None:
@@ -112,6 +118,11 @@ def test_walker_plane_matches_the_table(tree, tmp_path: Path) -> None:
         # Omitted, not null/empty, when the layer supplies nothing — the Go
         # field is `platform_overlay,omitempty`.
         assert ("platform_overlay" in info) == (want["walker"]["platform_overlay"] is not None)
+        # #2117: the profile's attribution, same omission rule
+        # (`profile_overlay,omitempty`).
+        assert info.get("profile_overlay") == want["walker"]["profile_overlay"], (
+            tree["name"], tenant, info.get("profile_overlay"))
+        assert ("profile_overlay" in info) == (want["walker"]["profile_overlay"] is not None)
     assert set(scanner.tenants) <= set(tree["expect"]), (tree["name"], set(scanner.tenants))
 
 

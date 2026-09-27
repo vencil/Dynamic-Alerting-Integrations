@@ -143,6 +143,7 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-
 也就是 **domain 層**。（`container_memory` 是加引號的字串，那個是租戶自己設的。）
 若輸出另有 `platform_overlay`，其中列出的鍵來自根目錄平台檔 `tenants:` 區塊給這個租戶的值
 （#2019），既不是 defaults chain 也不是租戶檔——這些鍵的來源以該清單為準，不看引號。
+同理，`profile_overlay` 列出租戶以 `_profile` 選用的 profile 補上的鍵（#2117）。
 若只想為這個租戶調整 `mysql_connections`，在 tenant 檔案中覆蓋即可：
 
 ```yaml

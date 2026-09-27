@@ -1111,3 +1111,95 @@ class TestPlatformOverlayCLI:
         res = self._run("123", "--conf-d", str(conf_d))
         assert res.returncode == dt.EXIT_VIOLATION, (res.returncode, res.stderr)
         assert "duplicate tenant ID '123'" in res.stderr and "a.yaml" in res.stderr and "b.yaml" in res.stderr
+
+
+class TestProfileOverlayCLI:
+    """#2117: the CLI surfaces of profile expansion. The merge semantics are
+    pinned against /metrics by the shared matrix
+    (tests/shared/platform_tenant_overlay_matrix.json p-rows)."""
+
+    DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+    PROFILES = "profiles:\n  std:\n    mysql_connections: 60\n"
+
+    def _tree(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(self.DEFAULTS, encoding="utf-8")
+        (conf_d / "_profiles.yaml").write_text(self.PROFILES, encoding="utf-8")
+        (conf_d / "tx.yaml").write_text("tenants:\n  tx:\n    _profile: std\n", encoding="utf-8")
+        (conf_d / "ty.yaml").write_text("tenants:\n  ty: {}\n", encoding="utf-8")
+        return conf_d
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
+            capture_output=True, text=True, timeout=10)
+
+    def test_default_output_carries_profile_overlay_only_when_supplied(self, tmp_path):
+        conf_d = self._tree(tmp_path)
+        tx = self._run("tx", "--conf-d", str(conf_d))
+        assert tx.returncode == 0, tx.stderr
+        out = json.loads(tx.stdout)
+        assert out["effective_config"] == {"_profile": "std", "mysql_connections": 60}
+        assert out["profile_overlay"] == [
+            {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]
+        ty = self._run("ty", "--conf-d", str(conf_d))
+        assert ty.returncode == 0, ty.stderr
+        assert "profile_overlay" not in json.loads(ty.stdout)
+
+    def test_what_if_on_the_carrier_keeps_the_profile(self, tmp_path):
+        """Same bytes substituted: the simulated side expands the profile as
+        the baseline does — no phantom `mysql_connections` diff."""
+        conf_d = self._tree(tmp_path)
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(conf_d / "_defaults.yaml"))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["merged_hash_changed"] is False, out
+
+    def test_what_if_edit_of_a_profile_is_simulated(self, tmp_path):
+        """A what-if carrier that adds `profiles:` (standing in for the root
+        carrier) moves the simulated value; `_profiles.yaml`'s later value
+        still wins per key, as the merge order says."""
+        conf_d = self._tree(tmp_path)
+        (conf_d / "_profiles.yaml").write_text("profiles:\n  std:\n    pg_connections: 90\n",
+                                               encoding="utf-8")
+        edited = tmp_path / "edited.yaml"
+        edited.write_text(self.DEFAULTS + self.PROFILES, encoding="utf-8")
+        scanner = dt.ConfDScanner(conf_d)
+        replace = {str((conf_d / "_defaults.yaml").resolve()): yaml.safe_load(edited.read_text())}
+        layer, _platform, profile = scanner._tenant_layer("tx", {}, replace=replace)
+        assert layer["mysql_connections"] == 60 and layer["pg_connections"] == 90, layer
+        assert profile == [
+            {"profile": "std", "file": "_defaults.yaml", "keys": ["mysql_connections"]},
+            {"profile": "std", "file": "_profiles.yaml", "keys": ["pg_connections"]}]
+
+    def test_alias_spelling_in_the_tenant_file_blocks_the_fill_in(self, tmp_path):
+        """#1231 × #2117: a tenant writing the deprecated spelling already
+        sets the threshold, so the profile's canonical key is not filled in
+        (ApplyProfiles' hasAliasEquivalent)."""
+        # The deprecated spelling comes from the alias table, not a literal:
+        # the #1231 pre-commit hook forbids the retired key as a live value.
+        legacy = dt._legacy_spelling("mysql_threads_running")
+        if legacy is None:
+            pytest.skip("no deprecated spelling of mysql_threads_running in its alias window")
+        conf_d = self._tree(tmp_path)
+        (conf_d / "_profiles.yaml").write_text(
+            "profiles:\n  std:\n    mysql_threads_running: 40\n", encoding="utf-8")
+        (conf_d / "tx.yaml").write_text(
+            f"tenants:\n  tx:\n    _profile: std\n    {legacy}: 45\n", encoding="utf-8")
+        info = dt.ConfDScanner(conf_d).source_info("tx")
+        assert "mysql_threads_running" not in info["effective_config"], info
+        assert "profile_overlay" not in info
+
+    def test_a_declared_key_is_not_filled_in(self, tmp_path):
+        """#1189 × #2117: a key the root carrier declares in
+        `optional_overrides` is never filled in from a profile."""
+        conf_d = self._tree(tmp_path)
+        (conf_d / "_defaults.yaml").write_text(
+            self.DEFAULTS + "optional_overrides:\n  - redis_x\n", encoding="utf-8")
+        (conf_d / "_profiles.yaml").write_text(
+            self.PROFILES + "    redis_x: 5\n", encoding="utf-8")
+        info = dt.ConfDScanner(conf_d).source_info("tx")
+        assert "redis_x" not in info["effective_config"], info
+        assert info["profile_overlay"] == [
+            {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]

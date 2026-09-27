@@ -69,6 +69,7 @@ type overlayMatrix struct {
 type overlayWalker struct {
 	EffectiveConfig map[string]any                 `json:"effective_config"`
 	PlatformOverlay []config.PlatformOverlaySource `json:"platform_overlay"`
+	ProfileOverlay  []config.ProfileOverlaySource  `json:"profile_overlay"` // #2117
 }
 
 func loadOverlayMatrix(t *testing.T) overlayMatrix {
@@ -224,6 +225,7 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				// cannot pin a walker answer that disagrees with /metrics.
 				assertWalkerRow(t, dir, tree.Name, tenant, want.Walker)
 				assertWalkerAgreesWithMetrics(t, tree.Name, tenant, want.Walker, want.Metric, want.SilentMode, want.ExporterDedup)
+				assertWalkerCriticalRowsServed(t, mgr, tree.Name, tenant, want.Walker)
 			}
 			// No tenant the table does not name is served — otherwise an
 			// orphan row passes by checking only the tenants it lists.
@@ -261,9 +263,47 @@ func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker
 	if !reflect.DeepEqual(ec.PlatformOverlay, want.PlatformOverlay) {
 		t.Errorf("%s: /effective %s platform_overlay = %+v, want %+v", tree, tenant, ec.PlatformOverlay, want.PlatformOverlay)
 	}
+	if !reflect.DeepEqual(ec.ProfileOverlay, want.ProfileOverlay) {
+		t.Errorf("%s: /effective %s profile_overlay = %+v, want %+v", tree, tenant, ec.ProfileOverlay, want.ProfileOverlay)
+	}
 	body, _ := json.Marshal(ec)
 	if has := bytes.Contains(body, []byte(`"platform_overlay"`)); has != (want.PlatformOverlay != nil) {
 		t.Errorf("%s: /effective %s JSON carries platform_overlay=%v, want %v: %s", tree, tenant, has, want.PlatformOverlay != nil, body)
+	}
+	if has := bytes.Contains(body, []byte(`"profile_overlay"`)); has != (want.ProfileOverlay != nil) {
+		t.Errorf("%s: /effective %s JSON carries profile_overlay=%v, want %v: %s", tree, tenant, has, want.ProfileOverlay != nil, body)
+	}
+}
+
+// assertWalkerCriticalRowsServed is the #2117 `_critical` cross-check: every
+// `<base>_critical` key the walker column carries is the value of the
+// critical-severity row /metrics serves for <base>. A profile supplying
+// `pg_connections_critical` produces a real critical row (ApplyProfiles'
+// `_critical` exemption), so the walker plane must report it.
+func assertWalkerCriticalRowsServed(t *testing.T, m *ConfigManager, tree, tenant string, w *overlayWalker) {
+	t.Helper()
+	if w == nil {
+		return
+	}
+	served := map[string]float64{}
+	for _, r := range m.GetConfig().Resolve() {
+		if r.Tenant == tenant && r.Severity == "critical" {
+			served[r.Component+"_"+r.Metric] = r.Value
+		}
+	}
+	for k, v := range w.EffectiveConfig {
+		base, ok := strings.CutSuffix(k, "_critical")
+		if !ok || strings.HasPrefix(k, "_") {
+			continue
+		}
+		want, err := strconv.ParseFloat(fmt.Sprint(v), 64)
+		if err != nil {
+			t.Errorf("%s: %s walker %s=%v is not a number", tree, tenant, k, v)
+			continue
+		}
+		if got, ok := served[base]; !ok || got != want {
+			t.Errorf("%s: %s walker %s=%v, /metrics critical row for %s = (%v, served=%v)", tree, tenant, k, v, base, got, ok)
+		}
 	}
 }
 

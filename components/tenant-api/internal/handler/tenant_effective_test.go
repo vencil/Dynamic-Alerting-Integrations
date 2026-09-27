@@ -392,3 +392,48 @@ func TestGetTenantEffective_PlatformOverlay(t *testing.T) {
 		t.Errorf("ty: no platform file names it, yet the response carries platform_overlay: %s", body)
 	}
 }
+
+// #2117: a tenant's `_profile` is expanded exactly as /metrics expands it
+// (fill-in, the tenant file winning), and `profile_overlay` names the
+// profile, the file its values came from and the keys it supplied. The
+// field is omitted for a tenant on no profile.
+func TestGetTenantEffective_ProfileOverlay(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 80\n  pg_connections: 100\n")
+	writeFile(t, filepath.Join(dir, "_profiles.yaml"),
+		"profiles:\n  std:\n    mysql_connections: 60\n    pg_connections: 90\n")
+	writeFile(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx:\n    _profile: std\n    pg_connections: 95\n")
+	writeFile(t, filepath.Join(dir, "ty.yaml"), "tenants:\n  ty: {}\n")
+
+	get := func(id string) []byte {
+		t.Helper()
+		h := GetTenantEffective(&Deps{ConfigDir: dir})
+		w := httptest.NewRecorder()
+		h(w, newRequestWithChiParam("GET", "/api/v1/tenants/"+id+"/effective", "id", id, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, body: %s", id, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+
+	var ec cfg.EffectiveConfig
+	if err := json.Unmarshal(get("tx"), &ec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := ec.EffectiveConfig["mysql_connections"]; got != float64(60) {
+		t.Errorf("mysql_connections = %v, want the profile's 60", got)
+	}
+	if got := ec.EffectiveConfig["pg_connections"]; got != float64(95) {
+		t.Errorf("pg_connections = %v, want the tenant file's 95 (tenant beats profile)", got)
+	}
+	want := []cfg.ProfileOverlaySource{{Profile: "std", File: "_profiles.yaml", Keys: []string{"mysql_connections"}}}
+	if !reflect.DeepEqual(ec.ProfileOverlay, want) {
+		t.Errorf("profile_overlay = %+v, want %+v", ec.ProfileOverlay, want)
+	}
+
+	if body := get("ty"); bytes.Contains(body, []byte(`"profile_overlay"`)) {
+		t.Errorf("ty: on no profile, yet the response carries profile_overlay: %s", body)
+	}
+}

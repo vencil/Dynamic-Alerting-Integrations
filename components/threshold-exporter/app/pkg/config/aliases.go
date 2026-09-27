@@ -221,19 +221,42 @@ func canonicalizeOverrides(overrides map[string]ScheduledValue) (map[string]Sche
 	if deprecated == 0 {
 		return overrides, 0
 	}
-	out := make(map[string]ScheduledValue, len(overrides))
-	for k, v := range overrides {
+	return canonicalView(overrides), deprecated
+}
+
+// canonicalView is canonicalizeOverrides' map half over any value type: the
+// input with every deprecated spelling moved onto its canonical key, the
+// canonical spelling winning when both are present. The input is never
+// mutated; a map without a deprecated key is returned as is.
+//
+// Generic so the walker plane's profile expansion (profile_overlay.go, over
+// raw YAML values) canonicalizes a profile with THIS rule rather than a copy
+// of it — ApplyProfiles (typed, /metrics) and the walker (untyped,
+// /effective) must pick the same keys (#2117).
+func canonicalView[V any](m map[string]V) map[string]V {
+	clean := true
+	for k := range m {
+		if _, isAlias := canonicalKeyFor(k); isAlias {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return m
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
 		canon, isAlias := canonicalKeyFor(k)
 		if !isAlias {
 			out[k] = v
 			continue
 		}
-		if _, canonPresent := overrides[canon]; canonPresent {
+		if _, canonPresent := m[canon]; canonPresent {
 			continue // canonical wins; deprecated duplicate ignored
 		}
 		out[canon] = v
 	}
-	return out, deprecated
+	return out
 }
 
 // appendWithLegacyTwin appends row and, when canonicalKey is the target of a
@@ -263,6 +286,12 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 // with the other name of the same threshold (#1231 transition window) — the
 // four-layer priority (tenant beats profile) must hold across spellings.
 func tenantHasAliasEquivalent(overrides map[string]ScheduledValue, key string) bool {
+	return hasAliasEquivalent(overrides, key)
+}
+
+// hasAliasEquivalent is tenantHasAliasEquivalent over any value type, so the
+// walker plane's profile fill-in (raw YAML values) asks the same question.
+func hasAliasEquivalent[V any](overrides map[string]V, key string) bool {
 	if _, ok := overrides[key]; ok {
 		return true
 	}

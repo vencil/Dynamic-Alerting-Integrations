@@ -26,7 +26,10 @@ package main
 //
 // ⚠️ The request carries no platform files, so the root platform files'
 // per-tenant `tenants:` layer that /effective applies (#2019) is NOT
-// applied here — see config.SimulateEffective's header.
+// applied here — see config.SimulateEffective's header. A tenant's
+// `_profile` IS expanded (#2117), but only from the `profiles:` block of
+// the chain's ROOT entry (L0): `_profiles.yaml` is not part of the request
+// shape, so a profile defined only there is not expanded here.
 //
 // Why base64 for YAML payloads: YAML inside JSON requires escaping
 // quotes/newlines, which is fragile when callers paste from a file.

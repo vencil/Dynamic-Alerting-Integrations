@@ -48,6 +48,12 @@ from _lib_io import strict_safe_load  # noqa: E402
 # #2114: tenant ids as the exporter keys them (raw text), on the same strict
 # reading — `_lib_io` composes the two loaders.
 from _lib_io import strict_load_all_exporter_keys, strict_load_exporter_keys  # noqa: E402
+# #2117: the #1231 alias boundary (deprecated key spelling → canonical), for
+# profile expansion's "does the tenant already set this key" check. The
+# repo-layout path is `ops/`; the image is flat (build.sh ships both).
+# Appended, not prepended, so no `ops/` module can shadow one already found.
+sys.path.append(os.path.join(str(_THIS_DIR), "..", "ops"))
+from _grar_validate import DEPRECATED_KEY_ALIASES, _canonical_tenant_key  # noqa: E402
 
 try:
     import yaml
@@ -259,6 +265,134 @@ def _tenant_body(tconfig: Any) -> Any:
     return {} if tconfig is None else tconfig
 
 
+# ---------------------------------------------------------------------------
+# Profile expansion (#2117) — MUST stay in lockstep with
+# pkg/config/profile_overlay.go; tests/shared/platform_tenant_overlay_matrix.json
+# `walker` column pins both against /metrics.
+# ---------------------------------------------------------------------------
+
+_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
+
+
+def _legacy_spelling(key: str) -> "str | None":
+    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
+    (exact, `_critical`-suffixed, dimensional), or None."""
+    if key in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key]
+    if key.endswith("_critical"):
+        base = key.removesuffix("_critical")
+        if base in _LEGACY_BY_CANONICAL:
+            return _LEGACY_BY_CANONICAL[base] + "_critical"
+    brace = key.find("{")
+    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
+    return None
+
+
+def _has_alias_equivalent(own: dict, key: str) -> bool:
+    """Go `hasAliasEquivalent`: `own` sets `key` under ANY spelling."""
+    if key in own:
+        return True
+    canon, _ = _canonical_tenant_key(key)
+    if canon != key and canon in own:
+        return True
+    legacy = _legacy_spelling(canon)
+    return legacy is not None and legacy in own
+
+
+def _canonical_view(m: dict) -> dict:
+    """Go `canonicalView`: deprecated spellings moved onto the canonical key,
+    the canonical spelling winning when both are present."""
+    out: dict = {}
+    for k, v in m.items():
+        canon, is_alias = _canonical_tenant_key(k)
+        if is_alias and canon in m:
+            continue  # canonical wins; deprecated duplicate ignored
+        out[canon] = v
+    return out
+
+
+def _profile_fill(canon_profile: dict, own: dict, declared: set) -> dict:
+    """Go `profileFill`: the entries of `canon_profile` that fill in for a
+    tenant whose own layer is `own` — not a key `own` sets under any
+    spelling, not a key declared in `optional_overrides` (by its base before
+    `{`), except the `_critical` shape."""
+    fill: dict = {}
+    for key, value in canon_profile.items():
+        brace = key.find("{")
+        declared_key = key[:brace] if brace > 0 else key
+        is_declared = declared_key in declared and not key.endswith("_critical")
+        if _has_alias_equivalent(own, key) or is_declared:
+            continue
+        fill[key] = value
+    return fill
+
+
+def _read_profiles(files: "list[tuple[str, Any]]") -> dict:
+    """Go `newPlatformProfiles`: `files` is `(name, first document)` of the
+    root platform files in merge order. Returns `{"by_name": {profile:
+    {key: (file, value)}}, "files": [...], "declared": set}` — a profile
+    merged per name, per key, a later file over an earlier one; `declared`
+    the canonical `optional_overrides` of a defaults carrier.
+
+    ⚠️ Not mirrored (as `_read_platform_files`): Go also drops a file its
+    typed decode rejects."""
+    by_name: dict = {}
+    order: list = []
+    declared: set = set()
+    for fname, doc in files:
+        if not isinstance(doc, dict):
+            continue
+        oo = doc.get("optional_overrides")
+        if is_defaults_name(fname) and isinstance(oo, list):
+            declared.update(_canonical_tenant_key(str(k))[0] for k in oo)
+        profiles = doc.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            continue
+        order.append(fname)
+        for pname, body in profiles.items():
+            entries = by_name.setdefault(_tenant_id(pname), {})
+            for k, v in (body if isinstance(body, dict) else {}).items():
+                entries[k] = (fname, v)
+    return {"by_name": by_name, "files": order, "declared": declared}
+
+
+def _profile_name(value: Any) -> str:
+    """Go `profileNameOf`: a string `_profile`, stripped; "" otherwise
+    (the schema types it as a string)."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _expand_profile(own: Any, profiles: dict,
+                    chain: "dict | None" = None) -> "tuple[Any, list[dict]]":
+    """Go `PlatformProfiles.expand`: `own` (the tenant block with the
+    platform overlay applied) with the elected profile's keys filled in,
+    and the attribution `[{profile, file, keys}]` in merge order —
+    `_overlay_tenant`'s rules (never `_metadata`, never a null on a
+    threshold key, a null on a reserved key only when `chain` has it)."""
+    if not isinstance(own, dict):
+        return own, []
+    name = _profile_name(own.get("_profile"))
+    profile = profiles["by_name"].get(name) if name else None
+    if not profile:
+        return own, []
+    fill = _profile_fill(_canonical_view(profile), own, profiles["declared"])
+    if not fill:
+        return own, []
+    out = dict(own)
+    by_file: dict[str, list[str]] = {}
+    for k, (fname, v) in fill.items():
+        out[k] = v
+        if k == "_metadata":
+            continue
+        if v is None and not (k.startswith("_") and k in (chain or {})):
+            continue
+        by_file.setdefault(fname, []).append(k)
+    sources = [{"profile": name, "file": f, "keys": sorted(by_file[f])}
+               for f in profiles["files"] if f in by_file]
+    return out, sources
+
+
 class ConfDScanner:
     """Scan a conf.d/ directory and build the inheritance graph."""
 
@@ -286,6 +420,7 @@ class ConfDScanner:
         # Set when the compiler resolver raised — output is degraded to the
         # deep_merge (REPLACE) fallback for `_custom_alerts`; callers can detect it.
         self.custom_alerts_resolution_error: str | None = None
+        self._profiles: dict | None = None  # #2117: `profiles()` cache
         self._scan()
         self._resolve_custom_alerts()
 
@@ -517,6 +652,9 @@ class ConfDScanner:
         """
         chosen_root = {entry for entry, _resolved in self._defaults_by_dir.get(self.conf_d, [])}
         out: list[tuple[str, Path, dict]] = []
+        # #2117: the same files' first documents, for their `profiles:`
+        # (and the carrier's `optional_overrides:`) — `_read_profiles`.
+        self._platform_docs: list[tuple[str, Path, Any]] = []
         for fp in sorted((p for p in entries if p.parent == self.conf_d
                           and is_reserved_name(p.name)), key=lambda p: p.name):
             if is_defaults_name(fp.name) and fp not in chosen_root:
@@ -528,7 +666,21 @@ class ConfDScanner:
             # Kept even when it supplies nothing: `--what-if` may stand a
             # new version of it in (platform_blocks' `replace`).
             out.append((fp.name, fp.resolve(), _platform_tenant_blocks(doc)))
+            self._platform_docs.append((fp.name, fp.resolve(), doc))
         return out
+
+    def profiles(self, replace: "dict[str, Any] | None" = None) -> dict:
+        """The root platform files' merged `profiles:` set (#2117,
+        `_read_profiles`). `replace` as for `platform_blocks`: a resolved
+        path → a document standing in for that file (`--what-if`)."""
+        if not replace and self._profiles is not None:
+            return self._profiles
+        docs = [(name, replace[str(resolved)] if replace and str(resolved) in replace else doc)
+                for name, resolved, doc in self._platform_docs]
+        result = _read_profiles(docs)
+        if not replace:
+            self._profiles = result
+        return result
 
     def platform_blocks(self, tenant_id: str,
                         replace: "dict[str, dict] | None" = None
@@ -651,10 +803,9 @@ class ConfDScanner:
         merged = self._chain_merged(tenant_id)
 
         # Apply tenant config (highest priority), with every key it does not
-        # write taken from the root platform files' entries for it (#2019).
-        tenant_raw, _sources = _overlay_tenant(self.tenants[tenant_id],
-                                               self.platform_blocks(tenant_id), merged)
-        merged = deep_merge(merged, tenant_raw)
+        # write taken from the root platform files' entries for it (#2019),
+        # then every key neither writes from the profile it elects (#2117).
+        merged = deep_merge(merged, self._tenant_layer(tenant_id, merged)[0])
 
         # #772: when the compiler resolved any `_custom_alerts` for this tenant,
         # OVERWRITE deep_merge's array-REPLACE result with the ADR-024 UNION (own +
@@ -688,10 +839,26 @@ class ConfDScanner:
         supplied values to `tenant_id`'s effective config, merge order, each
         with the keys it supplied (#2019). Empty when that layer supplies
         nothing. Same name and shape as the Go EffectiveConfig field."""
-        _combined, sources = _overlay_tenant(self.tenants[tenant_id],
-                                             self.platform_blocks(tenant_id),
-                                             self._chain_merged(tenant_id))
-        return sources
+        return self._tenant_layer(tenant_id, self._chain_merged(tenant_id))[1]
+
+    def profile_overlay(self, tenant_id: str) -> list[dict]:
+        """`[{profile, file, keys}]`: the profile `tenant_id` elects and, per
+        root platform file its filled-in values came from (merge order), the
+        keys it supplied to the effective config (#2117). Empty when the
+        profile supplies nothing. Same name and shape as the Go
+        EffectiveConfig field."""
+        return self._tenant_layer(tenant_id, self._chain_merged(tenant_id))[2]
+
+    def _tenant_layer(self, tenant_id: str, chain: dict,
+                      replace: "dict[str, Any] | None" = None
+                      ) -> "tuple[Any, list[dict], list[dict]]":
+        """The override merged over `chain`: the tenant block, the platform
+        overlay (#2019) under it, the elected profile (#2117) under both —
+        and the two attributions. `replace` as for `platform_blocks`."""
+        own, platform_sources = _overlay_tenant(
+            self.tenants[tenant_id], self.platform_blocks(tenant_id, replace=replace), chain)
+        layer, profile_sources = _expand_profile(own, self.profiles(replace=replace), chain)
+        return layer, platform_sources, profile_sources
 
     def _chain_merged(self, tenant_id: str) -> dict:
         """The tenant's defaults chain merged L0 → Ln (no tenant layer)."""
@@ -727,6 +894,10 @@ class ConfDScanner:
         overlay = self.platform_overlay(tenant_id)
         if overlay:
             info["platform_overlay"] = overlay
+        # Omitted when empty, as Go's `profile_overlay,omitempty` (#2117).
+        profile = self.profile_overlay(tenant_id)
+        if profile:
+            info["profile_overlay"] = profile
         info["effective_config"] = effective
         return info
 
@@ -999,13 +1170,12 @@ def main() -> None:
             ddata = simulated_defaults_data.get(str(dp), {})
             defaults_block = ddata.get("defaults", ddata) if isinstance(ddata, dict) else {}
             simulated = deep_merge(simulated, defaults_block)
-        # #2019: the same platform per-tenant layer as the baseline — taken
-        # from the what-if document when it stands in for a root platform
-        # file, so an edit to its `tenants:` block is simulated too.
-        sim_tenant, _sources = _overlay_tenant(
-            scanner.tenants[tid],
-            scanner.platform_blocks(tid, replace={str(what_if_path): what_if_platform_doc}),
-            simulated)
+        # #2019 / #2117: the same platform per-tenant layer and profile
+        # expansion as the baseline — taken from the what-if document when
+        # it stands in for a root platform file, so an edit to its
+        # `tenants:` or `profiles:` block is simulated too.
+        sim_tenant = scanner._tenant_layer(
+            tid, simulated, replace={str(what_if_path): what_if_platform_doc})[0]
         simulated = deep_merge(simulated, sim_tenant)
         what_if_merged_hash = _canonical_hash(simulated)
 
@@ -1046,6 +1216,9 @@ def main() -> None:
         overlay = scanner.platform_overlay(tid)
         if overlay:
             result["platform_overlay"] = overlay
+        profile = scanner.profile_overlay(tid)
+        if profile:
+            result["profile_overlay"] = profile
         result["effective_config"] = scanner.effective_config(tid)
     print(_output(result))
 

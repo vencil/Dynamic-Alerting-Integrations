@@ -1323,7 +1323,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/effective": {
             "get": {
-                "description": "Returns the tenant config after merging the _defaults.yaml\nchain from L0 (conf.d root) down to the tenant's own file,\nwith the root platform files' per-tenant ` + "`" + `tenants:` + "`" + ` entries\napplied between the chain and the tenant file (the tenant\nfile wins key by key); platform_overlay names the files and\nkeys that layer supplied and is omitted when it supplied none.\nIncludes two SHA-256 hashes (truncated to 16 hex chars):\nsource_hash for raw file content and merged_hash for the\ncanonical-JSON of the merged dict. Parity target:\nscripts/tools/dx/describe_tenant.py.",
+                "description": "Returns the tenant config after merging the _defaults.yaml\nchain from L0 (conf.d root) down to the tenant's own file,\nwith the root platform files' per-tenant ` + "`" + `tenants:` + "`" + ` entries\napplied between the chain and the tenant file (the tenant\nfile wins key by key); platform_overlay names the files and\nkeys that layer supplied and is omitted when it supplied none.\nA tenant's _profile is expanded as /metrics expands it: the\nprofile (from the root platform files' profiles: blocks) fills\nin keys neither the tenant file nor the platform entries set;\nprofile_overlay names the profile, the files and the keys it\nsupplied and is omitted when it supplied none.\nIncludes two SHA-256 hashes (truncated to 16 hex chars):\nsource_hash for raw file content and merged_hash for the\ncanonical-JSON of the merged dict. Parity target:\nscripts/tools/dx/describe_tenant.py.",
                 "produces": [
                     "application/json"
                 ],
@@ -1839,6 +1839,13 @@ const docTemplate = `{
                         "$ref": "#/definitions/config.PlatformOverlaySource"
                     }
                 },
+                "profile_overlay": {
+                    "description": "ProfileOverlay names the profile the tenant is on (` + "`" + `_profile` + "`" + `, from\nthe tenant file or the platform overlay) and, per root platform file\nthat profile's filled-in values came from (merge order), the\ntop-level keys it supplied to EffectiveConfig — only keys neither the\ntenant file nor the platform overlay writes (#2117). Omitted when the\nprofile contributes nothing (no ` + "`" + `_profile` + "`" + `, an unknown profile, or\nevery key already set). Same name and shape as describe_tenant.py.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/config.ProfileOverlaySource"
+                    }
+                },
                 "source_file": {
                     "type": "string"
                 },
@@ -1867,6 +1874,23 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "config.ProfileOverlaySource": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string"
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "profile": {
+                    "type": "string"
                 }
             }
         },

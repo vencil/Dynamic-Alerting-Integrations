@@ -148,7 +148,9 @@ unquoted number, so it came from a platform `_defaults.yaml` — and the chain s
 layer. (`container_memory` is a quoted string: that one the tenant set itself.)
 When the output also carries `platform_overlay`, the keys it lists came from a root
 platform file's `tenants:` block for this tenant (#2019), not from the chain or the
-tenant file — that list, not the quoting, is the answer for them.
+tenant file — that list, not the quoting, is the answer for them. Likewise
+`profile_overlay` lists the keys the profile the tenant elects with `_profile`
+filled in (#2117).
 To adjust `mysql_connections` for this tenant only, override it in the tenant file:
 
 ```yaml
