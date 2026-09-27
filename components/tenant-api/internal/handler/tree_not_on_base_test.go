@@ -155,6 +155,11 @@ func TestDirectWrite_StrandedOnPRBranch_ReturnsToBase503ThenRetry(t *testing.T) 
 // The return to base fails too (index.lock held): still a retryable 503, and
 // nothing moves. The lock contention reads as WRITE_OVERLOADED, which every
 // ladder checks first.
+//
+// ⚠️ This pins the ladder order only, NOT the guard: without leavePRBranch the
+// same held lock fails `git add` with WRITE_OVERLOADED too, so this test stays
+// green. The guard's refusal on this path is pinned in gitops by
+// TestCommitFileChange_StrandedOnPRBranch_ReturnFailsWritesNothing.
 func TestDirectWrite_StrandedOnPRBranch_ReturnFails503(t *testing.T) {
 	t.Parallel()
 	for name, do := range map[string]func(*testing.T, string) *httptest.ResponseRecorder{

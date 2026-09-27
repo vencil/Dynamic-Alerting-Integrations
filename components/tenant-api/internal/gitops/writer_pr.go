@@ -246,8 +246,8 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// instead of reporting success, and the error names the branch and whether
 	// it reached origin. Step 8 is skipped: we are still on that branch, so it
 	// cannot be deleted. The next PR-mode write's Step 3 re-anchor on the base
-	// clears the stranded tree; the special-file writes (writer_special.go)
-	// commit to whatever is checked out and do NOT re-anchor.
+	// clears the stranded tree, and so does the next write through
+	// commitFileChange (leavePRBranch, #1723) — which refuses that one write.
 	if err := w.restoreBase(base, branchName, pushed); err != nil {
 		return nil, err
 	}
