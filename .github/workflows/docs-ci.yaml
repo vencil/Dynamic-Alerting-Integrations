@@ -498,9 +498,11 @@ jobs:
             --ci
 
   i4-runbook-smoke-test:
-    # Validates every jq / amtool / promtool / yq invocation in
-    # docs/integration/troubleshooting-checklist.md against mock JSON/YAML
-    # fixtures. Catches typos before customers do at 3am on-call.
+    # Runs copies of some jq / amtool / promtool / yq snippets from
+    # docs/integration/troubleshooting-checklist.md, hand-pasted into the
+    # script, against mock JSON/YAML fixtures. It does not read the
+    # checklist; tests/lint/test_i4_runbook_doc_anchor.py checks the copies
+    # still match it (#2142).
     #
     # Per post-#377 retrospective Q2 + Gemini's "don't defer this to CI;
     # manual scripts bit-rot regardless of churn rate". Tool downloads

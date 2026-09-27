@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Smoke test for docs/integration/troubleshooting-checklist.md (I-4)
 #
-# Runs each jq / amtool / promtool / yq invocation referenced in I-4
-# against mock JSON / YAML fixtures matching the expected API surface
-# shapes, to catch typos before customers do.
+# Runs COPIES of some of the checklist's jq / amtool / promtool / yq
+# snippets, pasted in below, against mock JSON / YAML fixtures. This
+# script does not read the checklist and does not cover every command in
+# it. tests/lint/test_i4_runbook_doc_anchor.py checks each assert_* copy
+# still appears verbatim in the checklist section it names (both
+# languages); the `# i4-doc-anchor:` markers below record the copies that
+# differ on purpose, and why (#2142).
 #
 # Per post-#377 retrospective Q2 + Gemini's "focus on jq filter syntax
 # and amtool params" suggestion.
@@ -171,6 +175,7 @@ vmagent_remotewrite_conn{url="http://vm:8480"} 5'
 echo "── §1.1.1 NetworkPolicy / exporter scrape ──"
 # No jq in this section. Commands are pure kubectl + curl.
 # Verify exec-into-pod / curl patterns parse (syntax-only).
+# i4-doc-anchor: exempt — the checklist's <vmagent-ns> placeholder is filled in
 assert_yaml "§1.1.1 NetworkPolicy ingress YAML" '
 spec:
   ingress:
@@ -183,17 +188,11 @@ spec:
           protocol: TCP'
 
 # =============================================================================
-# §1.2.1 Rule evaluator no reload
-# =============================================================================
-echo
-echo "── §1.2.1 Rule evaluator reload ──"
-assert_jq "§1.2.1 Prom runtimeinfo .data.lastConfigTime" "$PROM_RUNTIMEINFO" '.data.lastConfigTime // empty'
-
-# =============================================================================
 # §1.2.2 Shadow label not removed
 # =============================================================================
 echo
 echo "── §1.2.2 Shadow label removal ──"
+# i4-doc-anchor: exempt — the checklist's <rule-name> placeholder is filled in
 assert_jq "§1.2.2 Prom rules .data.groups[].rules[] select by name" "$PROM_RULES" '.data.groups[].rules[] | select(.name | contains("MyAlert")) | .labels'
 assert_jq "§1.2.2 AM alerts .[].labels" "$AM_ALERTS" '.[].labels'
 
@@ -202,6 +201,7 @@ assert_jq "§1.2.2 AM alerts .[].labels" "$AM_ALERTS" '.[].labels'
 # =============================================================================
 echo
 echo "── §1.3.1 AM matcher order ──"
+# i4-doc-anchor: exempt — points at a missing config file so only argument parsing is exercised
 assert_amtool "§1.3.1 amtool config routes test syntax" "amtool config routes test --config.file=/nonexistent severity=critical alertname=Test 2>&1 || true"
 
 # =============================================================================
@@ -210,7 +210,9 @@ assert_amtool "§1.3.1 amtool config routes test syntax" "amtool config routes t
 echo
 echo "── §1.3.2 Silencer drift ──"
 assert_jq "§1.3.2 AM silences jq .[].matchers[] select alertname" "$AM_SILENCES" '.[].matchers[] | select(.name == "alertname") | .value'
+# i4-doc-anchor: exempt — points at an unreachable Alertmanager so only argument parsing is exercised
 assert_amtool "§1.3.2 amtool silence add syntax" "amtool silence add --alertmanager.url=http://nonexistent:9093 --duration=2h --comment='test' alertname=Test 2>&1 || true"
+# i4-doc-anchor: exempt — the checklist's <am> placeholder points at an unreachable Alertmanager
 assert_amtool "§1.3.2 amtool silence query -o json syntax" "amtool silence query -o json --alertmanager.url=http://nonexistent:9093 2>&1 || true"
 
 # =============================================================================
@@ -238,14 +240,13 @@ remote_write:
 # =============================================================================
 echo
 echo "── §1.4.3 VM disk zones ──"
-# kubectl edit PVC + manual partition delete patterns. No jq directly.
+assert_jq "§1.4.3 VM labels .data | length" "$PROM_LABELS" '.data | length'
 
 # =============================================================================
 # §1.4.4 Cardinality 暴漲
 # =============================================================================
 echo
 echo "── §1.4.4 Cardinality ──"
-assert_jq "§1.4.4 VM labels .data | length" "$PROM_LABELS" '.data | length'
 assert_jq "§1.4.4 VM series top-20 by metric (group_by/map/sort)" "$PROM_SERIES" '.data | group_by(.__name__) | map({metric: .[0].__name__, n: length}) | sort_by(-.n) | .[0:20]'
 assert_jq "§1.4.4 VM series label keys (drill-down)" "$PROM_SERIES" '.data[] | keys[]'
 
@@ -266,6 +267,7 @@ assert_jq "§1.5.2 Grafana dashboard panels datasource" "$GRAFANA_DASHBOARD" '.d
 assert_jq "§1.5.2 Grafana datasources list" "$GRAFANA_DATASOURCES" '.[] | {uid, name, type}'
 assert_jq "§1.5.2 Grafana .meta.provisioned check" "$GRAFANA_DASHBOARD" '.meta | {provisioned, provisionedExternalId, isFolder, slug}'
 # The dashboard JSON walk for UID rewrite (uses .walk function)
+# i4-doc-anchor: exempt — the checklist's <old-uid> / <new-uid> placeholders are filled in
 assert_jq "§1.5.2 dashboard .walk UID rewrite" "$GRAFANA_DASHBOARD" '.dashboard | walk(if type == "object" and .uid == "prometheus" then .uid = "victoriametrics" else . end)'
 
 # =============================================================================
@@ -281,10 +283,13 @@ assert_jq "§1.6.1 Prom tsdb_head_series numeric extract" "$PROM_QUERY_VECTOR" '
 # =============================================================================
 echo
 echo "── §2.1.1 PromQL parse ──"
+# i4-doc-anchor: exempt — the checklist has no literal expr here, only 'YOUR_EXPR_HERE'
 assert_promql "§2.1.1 simple PromQL" 'mysql_up == 0'
+# i4-doc-anchor: exempt — the checklist has no literal expr here, only 'YOUR_EXPR_HERE'
 assert_promql "§2.1.1 with for clause" 'rate(http_requests_total[5m]) > 100'
 # Step 3 of the runbook reproduces a single expr; `promtool query parse`
 # (what it used to say) does not exist — issue 1381.
+# i4-doc-anchor: unanchored-begin — the checklist's 'YOUR_EXPR_HERE' is filled in
 if promtool --experimental promql format 'mysql_up == 0' > /dev/null 2>&1; then
     echo -e "  ${GREEN}✅${NC} §2.1.1 promtool --experimental promql format"
     PASS=$((PASS + 1))
@@ -293,6 +298,7 @@ else
     FAIL=$((FAIL + 1))
     FAILURES+=("§2.1.1 promtool --experimental promql format")
 fi
+# i4-doc-anchor: unanchored-end
 
 # =============================================================================
 # §2.1.2 Hardcoded tenant id
@@ -303,6 +309,7 @@ echo "── §2.1.2 Tenant id violations ──"
 # tenant_id_violations[] is not implemented — issue 1381). Check the
 # documented patterns hit a hard-coded literal (rc=0) and stay quiet on the
 # tenant-agnostic form (rc=1); rc=2 would mean the pattern itself is broken.
+# i4-doc-anchor: unanchored-begin — the patterns run against fixture files, not <conf.d-dir>/ <rules-dir>/
 T212=$(mktemp -d /tmp/i4-212.XXXXXX)
 printf '%s\n' "- expr: 'mysql_up{instance=\"db-prod-1\"} == 0'" "- expr: 'mysql_up{tenant=\"shop-prod\"} == 0'" > "$T212/bad.yaml"
 printf '%s\n' "- expr: 'mysql_up == 0'" "- expr: 'mysql_up{instance=~\"db-prod-.*\"} == 0'" > "$T212/good.yaml"
@@ -319,6 +326,7 @@ for pat in 'instance\s*=\s*"[a-z0-9-]+"' 'tenant\s*=\s*"[a-z0-9-]+"'; do
     fi
 done
 rm -rf "$T212"
+# i4-doc-anchor: unanchored-end
 
 # =============================================================================
 # §2.1.3 Orphan rule
@@ -327,8 +335,9 @@ echo
 echo "── §2.1.3 Orphan rule ──"
 # The runbook's gate here is a yq + `amtool config routes test` loop (the
 # analyzer that would emit orphan_rules[] is not implemented — issue 1381).
-# Run that loop verbatim against a fixture: exactly the unrouted alert must
-# be listed, the routed one and the recording rule must not.
+# Run that loop against a fixture (with <rules-file> filled in): exactly the
+# unrouted alert must be listed, the routed one and the recording rule must not.
+# i4-doc-anchor: unanchored-begin — <rules-file> is filled in and the loop runs in a fixture directory
 T213=$(mktemp -d /tmp/i4-213.XXXXXX)
 cat > "$T213/alertmanager.yml" <<'AMEOF'
 route:
@@ -379,6 +388,8 @@ else
     FAILURES+=("§2.1.3 amtool config routes")
 fi
 rm -rf "$T213"
+# i4-doc-anchor: unanchored-end
+# i4-doc-anchor: exempt — points at an unreachable Alertmanager so only argument parsing is exercised
 assert_amtool "§2.1.3 amtool alert add syntax" "amtool alert add alertname=test_orphan severity=critical --alertmanager.url=http://nonexistent:9093 2>&1 || true"
 
 # =============================================================================
@@ -395,7 +406,7 @@ assert_jq "§2.3 read schema_version" "$STATE_JSON" '.schema_version'
 # Form 2 schema migrate jq filter
 assert_jq "§2.3 schema 1.0→1.1 migration jq" "$STATE_JSON" '.schema_version = "1.1" | .gate_log = (.gate_log // [])'
 # Form 3 manifest rebuild
-assert_jq "§2.3 manifest pattern" '{"schema_version":"1.0","states":[]}' '.states += [{"cluster":"new-cluster","path":".da/state/new-cluster.json"}]'
+assert_jq "§2.3 manifest pattern" '{"schema_version":"1.0","states":[]}' '.states += [{"cluster": "new-cluster", "path": ".da/state/new-cluster.json"}]'
 # Prevention: state-split — extract per-cluster
 assert_jq "§2.3 state-split per-cluster extract" "$STATE_JSON" '.scope.clusters[]'
 
