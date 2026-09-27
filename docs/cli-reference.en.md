@@ -2925,9 +2925,11 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 
 | Code | Meaning |
 |---|---|
-| 0 | Tenant exists; if `--expect-merged-hash` supplied, it matched |
+| 0 | Tenant exists and is declared by exactly one file; if `--expect-merged-hash` supplied, it matched. `--all`: no tenant is declared more than once |
 | 1 | Usage / IO error (missing tenant_id, conf-d not found, `--all` + `--expect-*` mutually exclusive, etc.) |
-| 2 | Tenant not found OR `--expect-merged-hash` mismatch (this is the incremental migration playbook checklist item 6 stop-signal) |
+| 2 | Tenant not found, `--expect-merged-hash` mismatch, OR **duplicate declaration** (the same tenant in two or more files) (this is the incremental migration playbook checklist item 6 stop-signal). `--all`: any tenant is declared more than once |
+
+**Duplicate declaration** ([#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)): when one tenant is declared by several files, the tool computes no hash — the scanner keeps just one of them, chosen by filename order, so hashing it would let item 6 pass falsely whenever the stray file sorts first. Single-tenant mode (with or without `--expect-merged-hash`) exits 2 with JSON `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}` (`files` sorted, conf.d-relative paths); the human output lists each file as `declared in: <file>`. `--all` reports that tenant as an error entry of the same shape (no `merged_hash`), still reports every other tenant, and exits 2; the human `# total:` line counts verified and duplicate-declared (not verified) tenants separately. Fix: delete the extra declaration so the tenant lives in exactly one file, then re-run (`validate-config`'s `tenant_uniqueness` reports the same state).
 
 ---
 

@@ -5825,12 +5825,17 @@ class TestRoundEightMutationSurvivors:
         prereq = prereqs[0] if lang == 'zh' else prereqs[1]
         marker = '叢集憑證' if lang == 'zh' else 'cluster credentials'
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = dict(self._CFG, ci='github', deploy=deploy)
-            created = ip.run_init(config, tmpdir)
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                ip._print_summary(created, tmpdir, config)
-            out = buf.getvalue()
+            # 在輸出目錄執行：下一步的路徑以 cwd 為基準（issue 1379），
+            # 這裡斷言的是句子內容，不是路徑基準。離開前先還原 cwd，
+            # 否則 Windows 刪不掉仍是 cwd 的暫存目錄。
+            with monkeypatch.context() as m:
+                m.chdir(tmpdir)
+                config = dict(self._CFG, ci='github', deploy=deploy)
+                created = ip.run_init(config, tmpdir)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, tmpdir, config)
+                out = buf.getvalue()
         line = next((ln for ln in out.splitlines() if marker in ln), None)
         assert line is not None, (
             f'找不到 {lang} 的憑證句（_LANG={ip._LANG!r}）。\n{out}')
@@ -6002,3 +6007,116 @@ class TestTheRetiredDeployMethodStaysRetired:
             'and it needs the nightly delivered-scan entry restored with it.')
         refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()]
         assert not any('argoproj' in ref for ref in refs), refs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 結尾「下一步」印的路徑：以執行 init 的目錄為基準（issue 1379 的載體之一）
+# ═══════════════════════════════════════════════════════════════════════════
+_TOOL = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "init_project.py")
+_ENTRYPOINT = os.path.join(REPO_ROOT, "components", "da-tools", "app",
+                           "entrypoint.py")
+
+
+def _init_in(repo, out, lang, deploy="helm"):
+    import subprocess
+    env = dict(os.environ, LANG=lang, PYTHONUTF8="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    env.pop("DA_LANG", None)
+    env.pop("LC_ALL", None)
+    run = subprocess.run(
+        [sys.executable, _TOOL, "--non-interactive", "--ci", "both",
+         "--deploy", deploy, "--tenants", "t1", "-o", out],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=300, env=env)
+    assert run.returncode == 0, run.stderr[-800:]
+    return run.stdout
+
+
+def _named_paths(summary):
+    """Every output path the next steps tell the reader to open or edit.
+
+    Matched up to the ` — ` / `（` / ` into` that ends the path in each
+    sentence, not by `\\S+`, so a path containing a space is still caught.
+    """
+    found = []
+    for pat in (r"(?:Edit|編輯) (.+?) — ",
+                r"from (.+?) into your",
+                r"把 (.+?) 裡的",
+                r"filled in in (.+?) — ",
+                r"已備妥（(.+?) 的 thresholdConfig"):
+        found += re.findall(pat, summary, flags=re.M)
+    return found
+
+
+@pytest.mark.parametrize("lang", ["en_US.UTF-8", "zh_TW.UTF-8"])
+@pytest.mark.parametrize("out", ["alerting", "alerting app", "."])
+def test_next_step_paths_work_where_init_was_run(lang, out, tmp_path):
+    """⛔ 照抄結尾的 Validate 提示必須 rc=0，下一步點名的每個檔都必須存在。
+
+    子目錄模式（`-o alerting`）原本印 `validate-config --config-dir conf.d/`：
+    讀者還站在 repo 根目錄，照抄得到 `config-dir not found`、rc=2；「編輯
+    conf.d/t1.yaml」會在編輯器裡開一個新的空檔。指南的 docker 前綴掛的是目前
+    目錄，所以這裡以 init 的執行目錄（cwd）為基準判定。`alerting app`：路徑
+    含空白時 Validate 那一行必須加引號，否則照抄被拆成兩個參數、rc=2。
+
+    ⚠️ 在真的 work-tree 裡量（有 `.git`）：非 repo 目錄走的是另一條分支，
+    曾因此得到假陰性。`-o .` 是對照組：兩個基準重合，拼法不能變。
+    """
+    import shlex
+    import subprocess
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    summary = _init_in(repo, out, lang)
+
+    validate = [ln for ln in summary.splitlines()
+                if "da-tools validate-config" in ln]
+    assert len(validate) == 1, summary
+    argv = shlex.split(validate[0].split("da-tools", 1)[1])
+    assert argv[0] == "validate-config", argv
+    run = subprocess.run([sys.executable, _ENTRYPOINT, *argv], cwd=repo,
+                         capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=300)
+    assert run.returncode == 0, (
+        f"copying the printed hint from {repo} gave rc={run.returncode}:\n"
+        f"{validate[0]}\n{run.stdout[-400:]}{run.stderr[-400:]}")
+
+    paths = _named_paths(summary)
+    # defaults, tenant, pre-commit snippet, helm values.yaml
+    assert len(paths) == 4, (paths, summary)
+    for p in paths:
+        assert (repo / p).is_file(), f"{p} does not exist from {repo}\n{summary}"
+    if out == ".":
+        assert "--config-dir conf.d/" in validate[0], validate[0]
+
+
+def test_kustomize_and_restore_paths_are_prefixed_too(tmp_path):
+    """同一段摘要裡另外兩處路徑：kustomize 的符號連結步驟，以及覆寫警告的
+    `git checkout -- <conf.d>`（只在覆寫既有檔時印）。"""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "alerting" / "conf.d").mkdir(parents=True)
+    (repo / "alerting" / "conf.d" / "t1.yaml").write_text(
+        "tenants:\n  t1: {}\n", encoding="utf-8")
+    summary = _init_in(repo, "alerting", "en_US.UTF-8", deploy="kustomize")
+    link = re.search(r"Create symlinks from (\S+) to (\S+)", summary)
+    assert link, summary
+    for p in link.groups():
+        assert (repo / p).is_dir(), f"{p} is not a directory from {repo}"
+    restore = re.search(r"git checkout -- (\S+?)\)", summary)
+    assert restore, summary
+    assert (repo / restore.group(1)).is_dir(), restore.group(1)
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError, ValueError])
+def test_a_path_that_cannot_be_made_relative_never_fails_the_run(
+        failure, monkeypatch):
+    """⛔ 這個函式在所有檔都寫完之後才跑：cwd 已被刪（getcwd 丟
+    FileNotFoundError）或 Windows 跨磁碟（relpath 丟 ValueError）時，退回
+    `-o` 的拼法，而不是讓已完成的 init 以 traceback 收尾。"""
+    def boom(*_a, **_k):
+        raise failure("simulated")
+    if failure is FileNotFoundError:
+        monkeypatch.setattr(ip.os, "getcwd", boom)
+    else:
+        monkeypatch.setattr(ip.os.path, "relpath", boom)
+    assert ip._as_typed_here("/abs/out", "conf.d/") == "/abs/out/conf.d/"
