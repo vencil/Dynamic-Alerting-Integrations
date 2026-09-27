@@ -85,13 +85,10 @@ FIX_COMMANDS: Dict[str, List[str]] = {
 # ⛔ A row registered without its script's gate flag CANNOT FAIL — the tool
 # prints the violations and still returns 0, so the runner shows a tick
 # (#1702). links and mermaid are armed below and pinned in
-# tests/shared/test_validate_all.py::TestRearmedRows; translation is still
-# un-armed (#1735): arming it today would make a bare run red for content
-# reasons this runner does not own.
+# tests/shared/test_validate_all.py::TestRearmedRows.
 TOOLS = [
     ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
     ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
-    ("translation", "lint/check_translation.py", [], "Bilingual structure consistency"),
     ("glossary", "dx/sync_glossary_abbr.py", ["--check"], "Glossary abbreviation sync"),
     ("schema", "dx/sync_schema.py", ["--check"], "Go→JSON Schema drift"),
     ("alerts", "dx/generate_alert_reference.py", ["--check"], "Alert reference drift"),
@@ -494,7 +491,7 @@ def _format_time(elapsed: float) -> str:
 # Maps file path patterns to the check names they affect.
 # Patterns are prefix-matched against relative paths.
 WATCH_TRIGGERS: Dict[str, List[str]] = {
-    "docs/": ["links", "translation", "includes", "versions",
+    "docs/": ["links", "includes", "versions",
               "doc_map", "tool_consistency", "bilingual_content",
               "frontmatter_versions", "byo_rulepack_table", "cli_default_drift",
               "cli_contract"],

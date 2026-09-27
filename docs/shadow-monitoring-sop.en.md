@@ -274,12 +274,26 @@ docker run --rm --network=host \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
-# Expected output:
-#   [DRY RUN] Would delete job shadow-monitor in namespace monitoring
-#   [DRY RUN] Would remove old recording rules for tenant db-a
-#   [DRY RUN] Would remove migration_status:shadow label
-#   [DRY RUN] Would remove Alertmanager shadow route for db-a
-#   [DRY RUN] Would verify alerts via check-alert + diagnose
+# Expected output (lists the kubectl commands it would run, changes nothing;
+# the v2.9.0 image prints this on stdout, later versions on stderr):
+# ▸ Stop Shadow Monitor Job...
+#   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove old Recording Rules...
+#   [dry-run] kubectl delete configmap prometheus-rules-old -n monitoring --ignore-not-found=true
+#   ✓ (dry-run)
+# ▸ Remove shadow label from rules...
+#   [dry-run] kubectl label configmap prometheus-rules -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Remove Alertmanager shadow route...
+#   [dry-run] kubectl label configmap alertmanager-config -n monitoring migration_status-
+#   ✓ (dry-run)
+# ▸ Verify tenant health...
+#   [dry-run] query http://localhost:9090 for tenant=db-a health
+#   ✓ (dry-run)
+#
+# ✅ Cutover completed successfully.
+# Next: run 'da-tools batch-diagnose' for full health report.
 
 # Step 2: Execute cutover
 docker run --rm --network=host \
@@ -307,7 +321,7 @@ done
 | Quick test in dev environment | Use `--force` | Testing doesn't require strict convergence |
 | Production without confirmed convergence | **Do not use** | Risk too high, complete convergence checks first |
 
-> **Note**: `--force` only skips readiness checks; it will not skip post-cutover `check-alert` / `diagnose` health verification. If post-cutover verification fails, the tool will error but will not auto-rollback — you must manually execute §7.2 rollback steps.
+> **Note**: `--force` only skips the readiness check. All five steps still run, including the final health verification. That verification checks one thing: whether `count(user_threshold{tenant="<tenant>"})` returns a result. It does not run `check-alert` or `diagnose`, so run `da-tools batch-diagnose` separately after cutover. If any step fails, the tool prints `❌ Cutover failed at step: <step>` and exits non-zero, but it does not roll back automatically. The steps before the failed one have already taken effect, so you must run the §7.2 rollback steps manually.
 
 ### 7.1b Manual Cutover Steps
 
