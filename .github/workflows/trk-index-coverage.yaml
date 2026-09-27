@@ -49,6 +49,7 @@ jobs:
 
       - name: Check titles against the TRK index
         # Titles are bound via env, never interpolated into the script (#1021).
+        # `--title=` form: a title that looks like a flag (`--json`) must stay a value.
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
@@ -61,5 +62,5 @@ jobs:
             python3 -X utf8 "$tool" --surface titles --ci \
               --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"
           else
-            python3 -X utf8 "$tool" --surface titles --ci --title "$TITLE" --title-ref "$REF"
+            python3 -X utf8 "$tool" --surface titles --ci --title="$TITLE" --title-ref="$REF"
           fi
