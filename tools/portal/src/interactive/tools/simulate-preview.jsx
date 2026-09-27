@@ -18,6 +18,21 @@ import { Loading } from './_common/components/Loading.jsx';
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
+/* ── Deployment contract: "simulate is not provided here" (#2125) ─────
+ *
+ * The simulate endpoint lives in threshold-exporter
+ * (`components/threshold-exporter/app/handler_simulate.go`, wired in
+ * `main.go` buildMux), NOT in tenant-api — and no shipped portal
+ * deployment proxies it: both the image's `components/da-portal/nginx.conf`
+ * and the Helm `helm/da-portal/templates/configmap-nginx.yaml` answer
+ * `location = /api/v1/tenants/simulate` with a fixed 501 JSON body
+ * carrying this code. The widget recognises ONLY that exact pair
+ * (status 501 + JSON `code`); any other failure stays a generic error.
+ * Drift between this constant and the two nginx configs is pinned by
+ * tests/shared/test_portal_simulate_not_provided.py.
+ * ──────────────────────────────────────────────────────────────────── */
+const SIMULATE_NOT_PROVIDED_CODE = 'SIMULATE_NOT_PROVIDED';
+
 /* ── URL param helpers (S#94 deep-link pattern reuse) ────────────────
  *
  * `?tenant_id=<id>` pre-fills the tenant ID input (matches the
@@ -33,9 +48,9 @@ const t = window.__t || ((zh, en) => en);
  * value (NOT just the placeholder hint) — that way `canSimulate` is
  * true on mount and the auto-simulate effect fires immediately. PR-2
  * first-CI-fail caught the bug where Tenant ID was '' on mount and the
- * `state-ready` / `state-error` testids never rendered. Mirrors the
- * docstring example in
- * `components/tenant-api/internal/handler/config_simulate_test.go`.
+ * `state-ready` / `state-error` testids never rendered. Same shape as
+ * the tenant fixtures in
+ * `components/threshold-exporter/app/config_simulate_test.go`.
  * ──────────────────────────────────────────────────────────────────── */
 const DEFAULT_TENANT_ID = 'example-tenant';
 
@@ -62,7 +77,7 @@ function getInitialTenantId() {
 /* ── base64 encoding helper ──────────────────────────────────────────
  *
  * The `/api/v1/tenants/simulate` endpoint takes base64-encoded YAML
- * (see internal/handler/config_simulate.go SimulateRequest):
+ * (see components/threshold-exporter/app/pkg/config/simulate.go SimulateRequest):
  * base64 dodges JSON quote/newline escaping, and byte-exact round
  * trips matter for the merged_hash. We use `unescape(encodeURIComponent(...))`
  * so non-ASCII (e.g. Chinese identifiers in comments) survive the
@@ -134,8 +149,8 @@ function SimulatePreview() {
         // prevented the request from getting a response.
         if (err && err.name === 'AbortError') return null;
         throw new Error(
-          t('無法連線到後端 API。請確認 tenant-api 服務在 /api/v1/tenants/simulate。',
-            'Could not reach backend API. Verify tenant-api is serving /api/v1/tenants/simulate.')
+          t('無法連線到 simulate 端點（網路錯誤）。',
+            'Could not reach the simulate endpoint (network error).')
         );
       }
 
@@ -144,12 +159,23 @@ function SimulatePreview() {
         // the handler returns for 400/404/405/413; fall back to status
         // text if the body isn't JSON.
         let detail = resp.statusText || `HTTP ${resp.status}`;
+        let errBody = null;
         try {
-          const errBody = await resp.json();
-          if (errBody && typeof errBody.error === 'string') detail = errBody.error;
+          errBody = await resp.json();
         } catch (_) {
-          /* keep detail as statusText */
+          /* non-JSON body: keep detail as statusText */
         }
+        // #2125: the deployment's explicit "not provided" answer — exact
+        // status + code match only; no guessing from other statuses.
+        if (resp.status === 501 && errBody && errBody.code === SIMULATE_NOT_PROVIDED_CODE) {
+          const e = new Error(
+            t('此部署不提供模擬預覽：portal 沒有代理 /api/v1/tenants/simulate（該端點由 threshold-exporter 提供）。',
+              'Simulate preview is not provided by this deployment: the portal does not proxy /api/v1/tenants/simulate (the endpoint is served by threshold-exporter).')
+          );
+          e.notProvided = true;
+          throw e;
+        }
+        if (errBody && typeof errBody.error === 'string') detail = errBody.error;
         const e = new Error(detail);
         e.status = resp.status;
         throw e;
@@ -187,7 +213,7 @@ function SimulatePreview() {
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setErrorInfo({ message: err.message, status: err.status });
+        setErrorInfo({ message: err.message, status: err.status, notProvided: !!err.notProvided });
         setStatus(STATUS.ERROR);
       });
 
@@ -209,7 +235,7 @@ function SimulatePreview() {
         setStatus(STATUS.READY);
       }
     } catch (err) {
-      setErrorInfo({ message: err.message, status: err.status });
+      setErrorInfo({ message: err.message, status: err.status, notProvided: !!err.notProvided });
       setStatus(STATUS.ERROR);
     }
   };
@@ -227,8 +253,8 @@ function SimulatePreview() {
         </h1>
         <p className="text-sm text-[color:var(--da-color-muted)]">
           {t(
-            '貼上 tenant.yaml + defaults，呼叫 POST /api/v1/tenants/simulate，預覽合併後的 effective config + merged_hash。',
-            'Paste tenant.yaml + defaults, call POST /api/v1/tenants/simulate, preview the merged effective config + merged_hash.'
+            '貼上 tenant.yaml + defaults，呼叫 POST /api/v1/tenants/simulate，預覽合併後的 effective config + merged_hash。出貨的 portal 部署會回「此部署不提供」；需自行把該路徑代理到 threshold-exporter 才能使用。',
+            'Paste tenant.yaml + defaults, call POST /api/v1/tenants/simulate, preview the merged effective config + merged_hash. Shipped portal deployments answer "not provided"; proxy that path to threshold-exporter yourself to use it.'
           )}
         </p>
       </div>
@@ -348,7 +374,20 @@ function SimulatePreview() {
             />
           )}
 
-          {status === STATUS.ERROR && errorInfo && (
+          {status === STATUS.ERROR && errorInfo && errorInfo.notProvided && (
+            <div
+              data-testid="simulate-preview-state-not-provided"
+              role="status"
+              className="p-3 rounded border border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface-hover)] text-sm text-[color:var(--da-color-fg)]"
+            >
+              <div className="font-semibold">
+                {t('此部署不提供模擬預覽', 'Simulate preview not provided')}
+              </div>
+              <div className="mt-1 break-words">{errorInfo.message}</div>
+            </div>
+          )}
+
+          {status === STATUS.ERROR && errorInfo && !errorInfo.notProvided && (
             <div
               data-testid="simulate-preview-state-error"
               role="alert"
@@ -429,8 +468,8 @@ function SimulatePreview() {
 
       <div className="text-xs text-[color:var(--da-color-muted)]">
         {t(
-          '提示：endpoint 為 stateless + 無 auth；payload 上限 1 MiB；defaults_chain 為選填。本工具呼叫 POST /api/v1/tenants/simulate，body 為 base64-encoded YAML（見 SimulateRequest）。',
-          'Tip: endpoint is stateless + unauthenticated; payload cap 1 MiB; defaults_chain optional. This widget POSTs to /api/v1/tenants/simulate with base64-encoded YAML (see SimulateRequest).'
+          '提示：本工具以同源 POST /api/v1/tenants/simulate（body 為 base64-encoded YAML）；該端點由 threshold-exporter 提供（stateless，payload 上限 1 MiB，defaults_chain 選填）。出貨的 portal 部署（image 與 Helm）不代理此端點，會回 501「不提供」。',
+          'Tip: this widget POSTs same-origin to /api/v1/tenants/simulate (base64-encoded YAML body). The endpoint is served by threshold-exporter (stateless, 1 MiB payload cap, defaults_chain optional); the shipped portal deployments (image and Helm) do not proxy it and answer 501 "not provided".'
         )}
       </div>
     </div>
@@ -438,3 +477,4 @@ function SimulatePreview() {
 }
 
 export default SimulatePreview;
+export { SIMULATE_NOT_PROVIDED_CODE };

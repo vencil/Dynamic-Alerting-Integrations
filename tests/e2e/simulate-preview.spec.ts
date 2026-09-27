@@ -9,7 +9,10 @@
  *   3. URL `?tenant_id=<id>` pre-fills the Tenant ID input (S#94
  *      deep-link convention reuse)
  *   4. 4xx error response surfaces structured error banner
- *   5. Network failure (route-aborted) surfaces the unreachable-API
+ *   5. The deployment's fixed 501 + `SIMULATE_NOT_PROVIDED` answer
+ *      (#2125 — shipped nginx configs do not proxy simulate) renders
+ *      the dedicated "not provided" state
+ *   6. Network failure (route-aborted) surfaces the unreachable-API
  *      error message
  *
  * Selector discipline (S#94 lesson): every interactive element is
@@ -177,10 +180,37 @@ test.describe('Simulate Preview Widget @critical', () => {
     await expect(errBanner).toContainText(/tenant id not present/);
   });
 
+  test('shows "not provided" state on the deployment 501 + SIMULATE_NOT_PROVIDED', async ({
+    page,
+  }) => {
+    // #2125: the shipped nginx configs (image + Helm) answer this exact
+    // path with a fixed 501 JSON; the widget must render the dedicated
+    // not-provided state, not the generic error banner.
+    await page.route('**/api/v1/tenants/simulate', async (route) => {
+      await route.fulfill({
+        status: 501,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'SIMULATE_NOT_PROVIDED',
+          error: 'simulate preview is not provided by this deployment',
+        }),
+      });
+    });
+
+    await loadPortalTool(page, 'simulate-preview');
+
+    const box = page.getByTestId('simulate-preview-state-not-provided');
+    await expect(box).toBeVisibleWithDiagnostics({ timeout: 10000 });
+    await expect(box).toContainText(/not provided|不提供/);
+    await expect(box).not.toContainText('tenant-api');
+    await expect(page.getByTestId('simulate-preview-state-error')).toHaveCount(0);
+  });
+
   test('surfaces unreachable-API error when fetch fails', async ({ page }) => {
     // Abort every simulate request — Playwright surfaces this to the
     // browser as a network error, which our widget's catch path turns
-    // into the "Could not reach backend API" banner.
+    // into the "Could not reach the simulate endpoint (network error)"
+    // banner — which must not point at tenant-api (#2125).
     await page.route('**/api/v1/tenants/simulate', async (route) => {
       await route.abort('failed');
     });
@@ -191,5 +221,6 @@ test.describe('Simulate Preview Widget @critical', () => {
     // S#98: diagnostic matcher (same rationale as 4xx scenario above).
     await expect(errBanner).toBeVisibleWithDiagnostics({ timeout: 10000 });
     await expect(errBanner).toContainText(/Could not reach|無法連線/);
+    await expect(errBanner).not.toContainText('tenant-api');
   });
 });
