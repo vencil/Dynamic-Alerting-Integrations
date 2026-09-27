@@ -6,9 +6,9 @@ version: v2.9.0
 lang: zh
 ---
 
-# Lint Policy — 50 個 lint 工具的治理規範
+# Lint Policy — lint 工具的治理規範
 
-> 對 [`scripts/tools/lint/check_*.py`](../../scripts/tools/lint/) 50 個 lint 工具的分類、scope、bypass 機制、allowlist 治理。
+> 對 [`scripts/tools/lint/`](../../scripts/tools/lint/) 下 lint 工具的分類、scope、bypass 機制、allowlist 治理。
 > 觸發來自 PR #375 retrospective 對 (b)/(c) class lint anti-pattern 的識別。
 >
 > **EN mirror**：本文件仍在 outline 階段；待 [ADR-019](../adr/019-planning-ssot.md) Accepted 後與 lint-policy 一併 ship `lint-policy.en.md`。
@@ -26,9 +26,9 @@ PR #375 cleanup 過程中暴露：
 
 | Class | 性質 | 何時用列舉 | 例子 |
 |---|---|---|---|
-| **(a) Bounded enumeration** | 列舉是政策 SOT 的鏡像；新增條目就是政策變動 | commit scope（`.commitlintrc.yaml` 定義 17 個）/ Rule Pack 數 / valid frontmatter 欄位 / Go test build tag enum | `check_commit_scope_doc.py` / `check_changelog_no_tbd.py` / `check_hardcode_tenant.py` |
-| **(b) Negative pattern + false-positive escape** | 規則本身是 negative（找壞東西的 regex / AST），allowlist 列舉「這個 pattern 命中但其實合法」的少數例外 | 偵測代號 / 路徑 / 命名違反 + 已知合法例外 | `check_codename_leak.py` / `check_codename_gate.py` / `check_repo_name.py` / `check_ad_hoc_git_scripts.py`（~12 個） |
-| **(c) Fuzzy semantic enumeration** | 試圖列舉一個本質模糊的概念（語義空間不可窮舉） | 「使用者可見字串」/「推銷語言」/「過時敘述」 | 目前沒有 |
+| **(a) Bounded enumeration** | 列舉是政策 SOT 的鏡像；新增條目就是政策變動 | commit scope（`.commitlintrc.yaml`）/ Rule Pack 數 / valid frontmatter 欄位 / Go test build tag enum | `check_commit_scope_doc.py` / `check_hardcode_tenant.py` |
+| **(b) Negative pattern + false-positive escape** | 規則本身是 negative（找壞東西的 regex / AST），allowlist 列舉「這個 pattern 命中但其實合法」的少數例外 | 偵測代號 / 路徑 / 命名違反 + 已知合法例外 | `check_codename_leak.py` / `check_codename_gate.py` / `check_repo_name.py` / `check_ad_hoc_git_scripts.py` |
+| **(c) Fuzzy semantic enumeration** | 試圖列舉一個本質模糊的概念（語義空間不可窮舉） | 「使用者可見字串」/「推銷語言」/「過時敘述」 | — |
 
 ### 判定邊界（Decision Tree）
 
@@ -167,39 +167,9 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 - [ ] permanent 還 transitional？transitional 給 expires_at
 - [ ] 是否有更精確的 negative pattern 可以從根本不誤抓（避免 allowlist 膨脹）
 
-## 6. 50 個現存 lint 分類表（first cut）
+## 6. 某支 lint 屬於哪一類
 
-> 完整表格將在 [ADR-019](../adr/019-planning-ssot.md) 工具實作完成後由 `generate_planning_index.py` 自動產出 `planning-index.md`；此處先列分類 summary。
-
-### (a) class — ~36 個
-
-`check_bilingual_*` (3) / `check_doc_*` (5) / `check_frontmatter_versions.py` / `check_includes_sync.py` / `check_jsx_loader_compat.py` / `check_makefile_targets.py` / `check_metric_dictionary.py` / `check_path_metadata_consistency.py` / `check_playbook_freshness.py` / `check_property_pilot_*` (2) / `check_rule_pack_*` (3) / `check_structure.py` / `check_subprocess_timeout.py` / `check_tool_consistency.py` / `check_translation_*` (2) / `lint_*.py` (~5) 等。
-
-特徵：列舉是 SOT 的鏡像，policy 變動才需要更新。
-
-### (b) class — ~12 個
-
-| Lint | Allowlist 內容 | diff-only 狀態 |
-|---|---|---|
-| `check_codename_leak.py` | 技術縮寫（SHA-256, RFC-, ISO-, UTF-8 等 12 條） | ✅ PR #382 |
-| `check_codename_gate.py` | Layer 2 glossary-driven（內建 safe：ADR-/TRK-/CVE-/SHA-/UTF-/X- header 等 + glossary Approved 詞）。`--ci` blocking（#710 Phase B），bypass tag `codename-gate` | full-scan（deterministic、0 FP；非 diff-only） |
-| `check_repo_name.py` | `/workspaces/vibe-k8s-lab` 等 dev container 路徑 | ✅ PR #383 |
-| `check_changelog_no_tbd.py` | HTML comment 內 / brackets 內的 TBD | ✅ PR #383 |
-| `check_ad_hoc_git_scripts.py` | `scripts/ops/` 已 sanctioned scripts | ✅ PR #387 |
-| `check_bat_ascii_purity.py` | 已知必要 non-ASCII | ✅ PR #387（pre-commit `files:` 自然 diff-aware）|
-| `check_design_token_usage.py` | hardcoded color allowlist (legacy theme) | ✅ PR #387 |
-| `check_dev_rules_enforcement.py` | dev-rules 內合法 placeholder | OK（diff-only acceptable） |
-| `check_dist_source_consistency.py` | excluded fixtures | OK |
-| `check_flaky_registry.py` | grandfathered tests | OK |
-| `check_head_blob_hygiene.py` | 已知 large fixtures | OK |
-| `check_jsx_i18n.py` | 已 i18n marker 標記過 | OK |
-| `check_planning_status_sync.py` | （待 ADR-019 ship 後新增）| OK |
-
-**Action item**：上述 6 個 (b) class lint 在 PR ship 後（V-2 phase）批次 refactor 為 diff-only。
-
-### (c) class
-
-目前沒有。
+本文件不維護逐項分類清單：清單沒有機制對帳，工具一增減就會漂。要知道某支 lint 屬於哪一類，看它自己的 docstring（有寫的會在 `Lint class` 段）；沒寫的依 §2 的判定邊界判斷。新工具在 docstring 寫明所屬類別。
 
 ## 7. 新增 lint 的審核 checklist
 
@@ -279,22 +249,11 @@ cheatsheet 的逐值對照表屬一次性易腐內容，已隨 Phase 1 收尾移
 1. **Allowlist 過期 sweep**：`check_allowlist_expiry.py --ci` 執行，過期條目處理
 2. **(c) class 重評**：是否仍有價值？是否該升級成 (b) 或 (a)？是否該 retire？
 3. **新 lint 提案 review**：累積的「該機器化但還沒做」候選統一拍板
-4. **JS-toolchain-migratable sweep**（§7 gate 的 grandfather 集）：檢查下表
+4. **JS-toolchain-migratable sweep**（§7 gate 的 grandfather 集）：檢查標了
    `Migratable=YES` 的 DIY lint 是否有可隨手改寫為 ESLint/stylelint rule 者
-   （不強制遷移，僅作為該檔需大改 / 前端 toolchain 演進時的路標）。SoT 為
-   `check_lint_toolchain_fit.py` 的 `ALLOWLIST`（`--list` 印出實際命中集）。
-
-| Lint | Migratable | 備註 |
-|---|---|---|
-| `check_design_token_usage.py` | YES | style={{}} hex/px + 飽和 stroke token 當文字色（WCAG 1.4.3，#904）；今 ESLint 覆蓋 <60%（diff-only+bypass+雙語），FE 若採 Tailwind/Styled-Components 則應重評為 ESLint rule |
-| `check_jsx_i18n.py` | YES | jsx-loader.html 的 `window.__t` dup-param + language-toggle 同值偵測 |
-| `check_window_x_no_fallback.py` | YES | module-scope `const X = window.__X` pattern（ESLint no-restricted-syntax 適配） |
-| `check_undefined_tokens.py` | YES | `--da-*` token refs 未定義於 design-tokens.css |
-| `check_tool_registry_jsx_parity.py` | NO | registry↔filesystem parity，本質非單檔 JS lint |
-| `check_jsx_loader_compat.py` | NO | 綁定自訂 JSX loader allowlist + babel |
-| `lint_jsx_babel.py` | NO | 已呼叫 @babel/node，本身即 toolchain |
-| `lint_tool_consistency.py` | NO | registry↔JSX↔markdown graph lint |
-| `validate_docs_versions.py` | NO | 跨多檔型版號一致性，非 JS rule |
+   （不強制遷移，僅作為該檔需大改 / 前端 toolchain 演進時的路標）。清單的 SoT 是
+   `check_lint_toolchain_fit.py` 的 `ALLOWLIST`：可遷移的那幾條，理由以 `Migratable=YES` 開頭；
+   `--list` 印出實際命中集。本文件不另列一份。
 
 ## Future Work
 

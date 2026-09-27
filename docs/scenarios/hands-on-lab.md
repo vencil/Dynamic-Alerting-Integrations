@@ -14,6 +14,8 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
+> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到三處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）。
+
 > 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
 
 ## 實驗概覽
@@ -62,122 +64,173 @@ docker run --rm -it \
 find . -type f | sort
 ```
 
-預期輸出（縮排省略）：
+預期輸出：
 
 ```
-.da-init.yaml
-.github/workflows/dynamic-alerting.yaml
-.pre-commit-config.da.yaml
-conf.d/_defaults.yaml
-conf.d/prod-mariadb.yaml
-conf.d/prod-redis.yaml
-conf.d/prod-kafka.yaml
-conf.d/staging-pg.yaml
-conf.d/prod-oracle.yaml
-kustomize/base/kustomization.yaml
+./.da-init.yaml
+./.github/workflows/dynamic-alerting.yaml
+./.pre-commit-config.da.yaml
+./conf.d/_defaults.yaml
+./conf.d/prod-kafka.yaml
+./conf.d/prod-mariadb.yaml
+./conf.d/prod-oracle.yaml
+./conf.d/prod-redis.yaml
+./conf.d/staging-pg.yaml
+./kustomize/base/README.md
+./kustomize/base/kustomization.yaml
+./kustomize/overlays/dev/kustomization.yaml
+./kustomize/overlays/prod/kustomization.yaml
 ```
+
+打開任一個 `conf.d/<租戶名稱>.yaml`：除了開頭的註解，內容是 `tenants:` 底下一層 `<租戶名稱>:`，閾值與 `_routing` 都寫在第二層底下。練習 2 會沿用這個外框。
 
 ## 練習 2：配置 Tenant 閾值
 
-編輯每個 tenant 檔案設定真實閾值。
+把每個租戶檔換成下面的內容（開頭的註解可留可刪）。每一段都保留 init 產生的 `tenants:` → `<租戶名稱>:` 兩層外框：少了這兩層，驗證會找不到任何租戶，卻照樣顯示通過（見練習 3 的提醒）。
 
-**prod-mariadb.yaml** — 電商資料庫：
-
-```yaml
-mysql_connections: "150"
-mysql_connections_critical: "200"
-mysql_threads_running: "40"    # threads_running 飽和（併發執行緒數，NOT host CPU%）；平台預設 30
-container_cpu: "75"
-container_memory: "80"
-
-_routing:
-  receiver:
-    type: slack
-    api_url: https://hooks.slack.com/services/T00/B00/xxx
-  group_by: [alertname, severity]
-  group_wait: "30s"
-  repeat_interval: "4h"
-
-_metadata:
-  owner: ecommerce-team
-  tier: production
-```
-
-**prod-redis.yaml** — 會話快取（使用 routing profile）：
+**conf.d/prod-mariadb.yaml** — 電商資料庫：
 
 ```yaml
-redis_memory_used_bytes: "3221225472"
-redis_memory_used_bytes_critical: "4294967296"
-redis_connected_clients: "3000"
-container_cpu: "70"
-container_memory: "80"
+tenants:
+  prod-mariadb:
+    mysql_connections: "150"
+    mysql_connections_critical: "200"
+    mysql_threads_running: "40"    # threads_running 飽和（併發執行緒數，NOT host CPU%）；平台預設 30
+    container_cpu: "75"
+    container_memory: "80"
 
-_routing_profile: team-sre-apac
+    _routing:
+      receiver:
+        type: slack
+        api_url: https://hooks.slack.com/services/T00/B00/xxx
+      group_by: [alertname, severity]
+      group_wait: "30s"
+      repeat_interval: "4h"
 
-_metadata:
-  owner: sre-apac
-  tier: production
+    _metadata:
+      owner: ecommerce-team
+      tier: production
 ```
 
-**prod-kafka.yaml** — 事件管道（PagerDuty）：
+**conf.d/prod-redis.yaml** — 會話快取（使用 routing profile）：
 
 ```yaml
-kafka_consumer_lag: "50000"
-kafka_consumer_lag_critical: "200000"
-kafka_broker_count: "3"
-kafka_active_controllers: "1"
-kafka_under_replicated_partitions: "0"
-jvm_gc_pause: "0.8"
-jvm_memory: "85"
+tenants:
+  prod-redis:
+    redis_memory_used_bytes: "3221225472"
+    redis_memory_used_bytes_critical: "4294967296"
+    redis_connected_clients: "3000"
+    container_cpu: "70"
+    container_memory: "80"
 
-_routing:
-  receiver:
-    type: pagerduty
-    service_key: "<your-pagerduty-service-key>"
-  group_by: [alertname, topic]
-  group_wait: "1m"
-  repeat_interval: "12h"
+    _routing_profile: team-sre-apac
+
+    _metadata:
+      owner: sre-apac
+      tier: production
 ```
 
-**staging-pg.yaml** — 預備環境 + 維護窗口：
+**conf.d/prod-kafka.yaml** — 事件管道（PagerDuty）：
 
 ```yaml
-pg_connections: "100"
-pg_replication_lag: "60"
+tenants:
+  prod-kafka:
+    kafka_consumer_lag: "50000"
+    kafka_consumer_lag_critical: "200000"
+    kafka_broker_count: "3"
+    kafka_active_controllers: "1"
+    kafka_under_replicated_partitions: "0"
+    jvm_gc_pause: "0.8"
+    jvm_memory: "85"
 
-_state_maintenance:
-  expires: "2099-03-20T06:00:00Z"
-
-_silent_mode:
-  target: warning        # 必填 —— 要靜音哪些嚴重度（warning | critical | all | disable）
-  expires: "2099-03-18T12:00:00Z"
-
-_routing:
-  receiver:
-    type: email
-    to: ["dba-oncall@example.com"]
-    smarthost: "smtp.example.com:587"
-    from: "alerting@example.com"
-  group_wait: "5m"
-  repeat_interval: "24h"
+    _routing:
+      receiver:
+        type: pagerduty
+        service_key: "<your-pagerduty-service-key>"
+      group_by: [alertname, topic]
+      group_wait: "1m"
+      repeat_interval: "12h"
 ```
 
-**prod-oracle.yaml** — 金融資料庫 + domain policy：
+**conf.d/staging-pg.yaml** — 預備環境 + 維護窗口：
 
 ```yaml
-oracle_sessions_active: "100"
-oracle_sessions_active_critical: "150"
-oracle_tablespace_used_percent: "75"
-oracle_tablespace_used_percent_critical: "85"
+tenants:
+  staging-pg:
+    pg_connections: "100"
+    pg_replication_lag: "60"
 
-_routing_profile: domain-finance-tier1
-_domain_policy: finance
+    _state_maintenance:
+      expires: "2099-03-20T06:00:00Z"
 
-_metadata:
-  owner: finance-dba-team
-  domain: finance
-  compliance: SOX
+    _silent_mode:
+      target: warning        # 必填 —— 要靜音哪些嚴重度（warning | critical | all | disable）
+      expires: "2099-03-18T12:00:00Z"
+
+    _routing:
+      receiver:
+        type: email
+        to: ["dba-oncall@example.com"]
+        smarthost: "smtp.example.com:587"
+        from: "alerting@example.com"
+      group_wait: "5m"
+      repeat_interval: "24h"
 ```
+
+**conf.d/prod-oracle.yaml** — 金融資料庫（使用 routing profile，受 finance domain policy 約束）：
+
+```yaml
+tenants:
+  prod-oracle:
+    oracle_sessions_active: "100"
+    oracle_sessions_active_critical: "150"
+    oracle_tablespace_used_percent: "75"
+    oracle_tablespace_used_percent_critical: "85"
+
+    _routing_profile: domain-finance-tier1
+
+    _metadata:
+      owner: finance-dba-team
+      domain: finance
+      tags: [sox-compliant]
+```
+
+prod-redis 與 prod-oracle 引用的兩個 routing profile，以及約束 prod-oracle 的 domain policy，是平台層級的設定，各有專屬檔名，不寫在租戶檔裡。在 `conf.d/` 新增這兩個檔：
+
+**conf.d/_routing_profiles.yaml** — 可被多個租戶引用的具名路由設定：
+
+```yaml
+routing_profiles:
+  team-sre-apac:
+    receiver:
+      type: slack
+      api_url: https://hooks.slack.com/services/T00/B00/sre-apac
+    group_by: [tenant, alertname, severity]
+    group_wait: "30s"
+    repeat_interval: "4h"
+
+  domain-finance-tier1:
+    receiver:
+      type: pagerduty
+      service_key: "<your-finance-pagerduty-key>"
+    group_by: [tenant, alertname, severity]
+    group_wait: "30s"
+    repeat_interval: "1h"
+```
+
+**conf.d/_domain_policy.yaml** — 業務領域的合規約束（練習 8 會用到）：
+
+```yaml
+domain_policies:
+  finance:
+    description: "金融資料庫的通知合規要求"
+    tenants: [prod-oracle]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_domain_policy.yaml` 時這個區塊才會被讀；在租戶檔裡寫 `_domain_policy: finance` 不會套用任何政策，驗證只會報 `unknown reserved key '_domain_policy'`。
 
 ## 練習 3：驗證所有配置
 
@@ -188,7 +241,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-預期輸出（照練習 1、2 做完之後的實測結果；`schema` 底下 WARN 列的順序每次執行可能不同）：
+預期輸出（照練習 1、2 做完之後的實測結果）：
 
 ```
 ============================================================
@@ -196,19 +249,10 @@ docker run --rm \
 ============================================================
 
 [PASS] yaml_syntax
-       6 files parsed successfully
+       8 files parsed successfully
 
-[WARN] schema
-         WARN: prod-kafka: unknown key 'jvm_memory' not in defaults
-         WARN: prod-kafka: unknown key 'kafka_broker_count' not in defaults
-         WARN: prod-oracle: _routing_profile references unknown profile 'domain-finance-tier1'
-         WARN: prod-oracle: unknown key 'oracle_sessions_active' not in defaults
-         WARN: prod-oracle: unknown key 'oracle_sessions_active_critical' not in defaults
-         WARN: prod-oracle: unknown reserved key '_domain_policy' (typo?)
-         WARN: prod-redis: _routing_profile references unknown profile 'team-sre-apac'
-         WARN: prod-redis: unknown key 'redis_memory_used_bytes' not in defaults
-         WARN: prod-redis: unknown key 'redis_memory_used_bytes_critical' not in defaults
-       -> Suggested action: ...
+[PASS] schema
+       No schema warnings
 
 [PASS] routes
        5 routes, 5 receivers, 5 inhibit_rules
@@ -223,14 +267,17 @@ docker run --rm \
        5 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 5 pass | 1 warn | 0 fail
+  Total: 6 checks | 6 pass | 0 warn | 0 fail
 ------------------------------------------------------------
-  Result: WARN (pass with warnings)
+  Result: PASS
 ```
 
-結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。`schema` 那 9 列 WARN 來自練習 2 的範例值：有幾個 key 不在 `_defaults.yaml` 裡，兩個 `_routing_profile` 指向尚未定義的 profile。實際導入時請逐列確認 key 名稱。
+結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
 
-⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段整份貼成了檔案，漏掉 init 產生的 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
+- `schema` 這一列也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
+- `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined`。
+
+⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
 
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 
@@ -255,20 +302,34 @@ docker run --rm \
   generate-routes --config-dir /data/conf.d --validate
 ```
 
-預期輸出摘要：
+預期輸出（第一次執行）：
 
 ```
-Generated routes for 5 tenants:
-  prod-mariadb  → slack     (group_wait: 30s, repeat: 4h)
-  prod-redis    → slack     (profile: team-sre-apac)
-  prod-kafka    → pagerduty (group_wait: 1m, repeat: 12h)
-  staging-pg    → email     (group_wait: 5m, repeat: 24h)
-  prod-oracle   → pagerduty (profile: domain-finance-tier1)
-  + 5 inhibit rules (severity dedup)
-Written: /data/output/alertmanager-routes.yaml
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
 ```
 
-每個 tenant 都有獨立的路由區塊，包含 receiver、group_by、timing 參數和 severity dedup 的 inhibit rules。
+第二次執行（`--validate`）：
+
+```
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+OK: all configs valid
+```
+
+每個租戶在產出檔 `.output/alertmanager-routes.yaml` 的 `route.routes` 底下各有一段（`matchers: tenant="…"`），`receivers` 與 `inhibit_rules` 各 5 筆。對照練習 2 的設定：
+
+| 租戶 | receiver | group_wait | repeat_interval | 來自 |
+|---|---|---|---|---|
+| prod-kafka | pagerduty | 1m | 12h | 租戶 `_routing` |
+| prod-mariadb | slack | 30s | 4h | 租戶 `_routing` |
+| prod-oracle | pagerduty | 30s | 1h | profile `domain-finance-tier1` |
+| prod-redis | slack | 30s | 4h | profile `team-sre-apac` |
+| staging-pg | email | 5m | 24h | 租戶 `_routing` |
 
 **檢查點**：找到 `inhibit_rules` 區段。它如何防止 critical 和 warning 的重複通知？
 
@@ -285,7 +346,7 @@ docker run --rm \
 1. **平台預設** → webhook, 30s group_wait
 2. **Routing profile** `team-sre-apac` → 覆蓋為 slack, 30s wait, 4h repeat
 3. **Tenant _routing** → （未設定，使用 profile）
-4. **Platform enforced** → NOC 副本
+4. **Platform enforced**（`_defaults.yaml` 的 `_routing_enforced`）→ （未設定：init 產生的 `_defaults.yaml` 沒有這一層，輸出顯示 `(empty)`。平台團隊設定後，它會在所有租戶路由之前插入一條 `continue: true` 的平台路由，例如讓 NOC 一律收到副本）
 
 **檢查點**：prod-redis 最終 resolve 的 receiver_type 是什麼？哪一層設定的？
 
@@ -308,16 +369,41 @@ Diff 精確顯示哪個 tenant、哪些 metric 受影響 — 這就是 CI 中會
 
 ## 練習 7：三態運營
 
-檢查 `staging-pg.yaml`：
+`staging-pg.yaml` 同時設了兩種運營狀態，效果不一樣：
 
-- **`_state_maintenance`**：告警仍然評估但路由到維護處理。`expires` 時間戳代表該狀態在到期後自動恢復。
-- **`_silent_mode`**：告警完全抑制 — 不發送通知。同樣有 `expires` 安全機制。
+| 狀態 | 告警觸發 | 記錄進 TSDB | 送出通知 | 由誰擋下 |
+|---|---|---|---|---|
+| `_silent_mode`（本例 `target: warning`） | ✅ | ✅ | ❌（只擋 warning） | Alertmanager inhibit |
+| `_state_maintenance` | ❌ | ❌ | ❌ | Prometheus（rule pack 的 `unless`） |
 
-試著移除 `_state_maintenance` 再跑驗證 — 你會看到 tenant 恢復正常路由。
+兩者都帶 `expires`，到期自動恢復正常。行為矩陣的完整說明見 [Config-Driven 設計 §2.7](../design/config-driven.md)。
+
+這兩種狀態在告警執行期間才生效：`validate-config`、`explain-route`、`generate-routes` 的輸出都不會因為它們改變。要看到它們，讓 threshold-exporter 讀這個 `conf.d/`，看它輸出的旗標 metric：
+
+```bash
+docker run --rm -d --name da-lab-exporter \
+  -p 8080:8080 \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/threshold-exporter:latest \
+  --config-dir /data/conf.d
+
+curl -s localhost:8080/metrics | grep -E '^user_(state_filter\{filter="maintenance"|silent_mode)'
+```
+
+預期輸出：
+
+```
+user_silent_mode{target_severity="warning",tenant="staging-pg"} 1
+user_state_filter{filter="maintenance",severity="info",tenant="staging-pg"} 1
+```
+
+接著刪掉 `staging-pg.yaml` 裡整個 `_state_maintenance` 區塊（兩行），等約 30 秒（exporter 預設每 30 秒重新載入），再跑一次同一個 `curl`：`maintenance` 那一行消失，靜音那一行還在。rule pack 以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 讀這個 metric，所以 staging-pg 的告警會重新觸發；warning 的通知仍被靜音擋著，critical 則會送出。
+
+做完後停掉 exporter：`docker stop da-lab-exporter`（`--rm` 會一併刪除容器）。
 
 ## 練習 8：Domain Policy 測試
 
-試著把 prod-oracle 的路由改成 Slack：
+試著把 prod-oracle 的路由改成 Slack：在 `conf.d/prod-oracle.yaml` 的 `prod-oracle:` 底下（和 `_metadata` 同一層）加上
 
 ```yaml
 _routing:

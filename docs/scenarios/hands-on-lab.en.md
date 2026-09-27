@@ -14,6 +14,8 @@ lang: en
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 
+> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows three differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); and `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears).
+
 > 💡 **Want to see the product running in ~1 minute instead of typing CLI commands?** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) (recommended first stop: da-portal UI in the browser + a real firing alert, no K8s; `⏱️ <1 min · 🟢 Docker only`). **This lab** focuses on the hands-on **da-tools CLI workflow** (config / routing / blast radius; `⏱️ 30–45 min · 🟡 Medium (CLI)`) — complementary, different depth, not either/or.
 
 ## Lab Overview
@@ -62,127 +64,178 @@ Verify the generated structure:
 find . -type f | sort
 ```
 
-Expected output (indentation omitted):
+Expected output:
 
 ```
-.da-init.yaml
-.github/workflows/dynamic-alerting.yaml
-.pre-commit-config.da.yaml
-conf.d/_defaults.yaml
-conf.d/prod-mariadb.yaml
-conf.d/prod-redis.yaml
-conf.d/prod-kafka.yaml
-conf.d/staging-pg.yaml
-conf.d/prod-oracle.yaml
-kustomize/base/kustomization.yaml
+./.da-init.yaml
+./.github/workflows/dynamic-alerting.yaml
+./.pre-commit-config.da.yaml
+./conf.d/_defaults.yaml
+./conf.d/prod-kafka.yaml
+./conf.d/prod-mariadb.yaml
+./conf.d/prod-oracle.yaml
+./conf.d/prod-redis.yaml
+./conf.d/staging-pg.yaml
+./kustomize/base/README.md
+./kustomize/base/kustomization.yaml
+./kustomize/overlays/dev/kustomization.yaml
+./kustomize/overlays/prod/kustomization.yaml
 ```
+
+Open any `conf.d/<tenant name>.yaml`: apart from the header comments, it is `tenants:` with one `<tenant name>:` level under it, and thresholds and `_routing` go under that second level. Exercise 2 keeps this frame.
 
 ## Exercise 2: Configure Tenant Thresholds
 
-Edit each tenant file to set realistic thresholds.
+Replace the content of each tenant file with the following (keep or drop the header comments). Every snippet keeps the two outer levels init generated, `tenants:` → `<tenant name>:`. Without them validation finds no tenants and still reports a pass (see the note in Exercise 3).
 
-**prod-mariadb.yaml** — E-Commerce database:
+**conf.d/prod-mariadb.yaml** — E-Commerce database:
 
 ```yaml
 # E-Commerce MariaDB — tighter connection threshold for high-traffic
-mysql_connections: "150"
-mysql_connections_critical: "200"
-mysql_threads_running: "40"    # threads_running saturation (concurrent threads, NOT host CPU%); platform default 30
-container_cpu: "75"
-container_memory: "80"
+tenants:
+  prod-mariadb:
+    mysql_connections: "150"
+    mysql_connections_critical: "200"
+    mysql_threads_running: "40"    # threads_running saturation (concurrent threads, NOT host CPU%); platform default 30
+    container_cpu: "75"
+    container_memory: "80"
 
-_routing:
-  receiver:
-    type: slack
-    api_url: https://hooks.slack.com/services/T00/B00/xxx
-  group_by: [alertname, severity]
-  group_wait: "30s"
-  repeat_interval: "4h"
+    _routing:
+      receiver:
+        type: slack
+        api_url: https://hooks.slack.com/services/T00/B00/xxx
+      group_by: [alertname, severity]
+      group_wait: "30s"
+      repeat_interval: "4h"
 
-_metadata:
-  owner: ecommerce-team
-  tier: production
-  runbook_url: https://runbooks.example.com/ecommerce-mariadb
+    _metadata:
+      owner: ecommerce-team
+      tier: production
+      runbook_url: https://runbooks.example.com/ecommerce-mariadb
 ```
 
-**prod-redis.yaml** — Session cache using a routing profile:
+**conf.d/prod-redis.yaml** — Session cache using a routing profile:
 
 ```yaml
 # Session Cache — Redis with shared routing profile
-redis_memory_used_bytes: "3221225472"
-redis_memory_used_bytes_critical: "4294967296"
-redis_connected_clients: "3000"
-container_cpu: "70"
-container_memory: "80"
+tenants:
+  prod-redis:
+    redis_memory_used_bytes: "3221225472"
+    redis_memory_used_bytes_critical: "4294967296"
+    redis_connected_clients: "3000"
+    container_cpu: "70"
+    container_memory: "80"
 
-_routing_profile: team-sre-apac
+    _routing_profile: team-sre-apac
 
-_metadata:
-  owner: sre-apac
-  tier: production
+    _metadata:
+      owner: sre-apac
+      tier: production
 ```
 
-**prod-kafka.yaml** — Event pipeline with PagerDuty:
+**conf.d/prod-kafka.yaml** — Event pipeline with PagerDuty:
 
 ```yaml
-kafka_consumer_lag: "50000"
-kafka_consumer_lag_critical: "200000"
-kafka_broker_count: "3"
-kafka_active_controllers: "1"
-kafka_under_replicated_partitions: "0"
-jvm_gc_pause: "0.8"
-jvm_memory: "85"
+tenants:
+  prod-kafka:
+    kafka_consumer_lag: "50000"
+    kafka_consumer_lag_critical: "200000"
+    kafka_broker_count: "3"
+    kafka_active_controllers: "1"
+    kafka_under_replicated_partitions: "0"
+    jvm_gc_pause: "0.8"
+    jvm_memory: "85"
 
-_routing:
-  receiver:
-    type: pagerduty
-    service_key: "<your-pagerduty-service-key>"
-  group_by: [alertname, topic]
-  group_wait: "1m"
-  repeat_interval: "12h"
+    _routing:
+      receiver:
+        type: pagerduty
+        service_key: "<your-pagerduty-service-key>"
+      group_by: [alertname, topic]
+      group_wait: "1m"
+      repeat_interval: "12h"
 ```
 
-**staging-pg.yaml** — Staging with maintenance window:
+**conf.d/staging-pg.yaml** — Staging with maintenance window:
 
 ```yaml
-pg_connections: "100"
-pg_replication_lag: "60"
-container_cpu: "90"
-container_memory: "95"
+tenants:
+  staging-pg:
+    pg_connections: "100"
+    pg_replication_lag: "60"
+    container_cpu: "90"
+    container_memory: "95"
 
-_state_maintenance:
-  expires: "2099-03-20T06:00:00Z"
+    _state_maintenance:
+      expires: "2099-03-20T06:00:00Z"
 
-_silent_mode:
-  target: warning        # required — which severities to silence (warning | critical | all | disable)
-  expires: "2099-03-18T12:00:00Z"
+    _silent_mode:
+      target: warning        # required — which severities to silence (warning | critical | all | disable)
+      expires: "2099-03-18T12:00:00Z"
 
-_routing:
-  receiver:
-    type: email
-    to: ["dba-oncall@example.com"]
-    smarthost: "smtp.example.com:587"
-    from: "alerting@example.com"
-  group_wait: "5m"
-  repeat_interval: "24h"
+    _routing:
+      receiver:
+        type: email
+        to: ["dba-oncall@example.com"]
+        smarthost: "smtp.example.com:587"
+        from: "alerting@example.com"
+      group_wait: "5m"
+      repeat_interval: "24h"
 ```
 
-**prod-oracle.yaml** — Finance DB with domain policy:
+**conf.d/prod-oracle.yaml** — Finance DB (routing profile, constrained by the finance domain policy):
 
 ```yaml
-oracle_sessions_active: "100"
-oracle_sessions_active_critical: "150"
-oracle_tablespace_used_percent: "75"
-oracle_tablespace_used_percent_critical: "85"
+tenants:
+  prod-oracle:
+    oracle_sessions_active: "100"
+    oracle_sessions_active_critical: "150"
+    oracle_tablespace_used_percent: "75"
+    oracle_tablespace_used_percent_critical: "85"
 
-_routing_profile: domain-finance-tier1
-_domain_policy: finance
+    _routing_profile: domain-finance-tier1
 
-_metadata:
-  owner: finance-dba-team
-  domain: finance
-  compliance: SOX
+    _metadata:
+      owner: finance-dba-team
+      domain: finance
+      tags: [sox-compliant]
 ```
+
+The two routing profiles that prod-redis and prod-oracle reference, and the domain policy that constrains prod-oracle, are platform-level settings with their own file names — they do not go in tenant files. Add these two files to `conf.d/`:
+
+**conf.d/_routing_profiles.yaml** — named routing settings any tenant can reference:
+
+```yaml
+routing_profiles:
+  team-sre-apac:
+    receiver:
+      type: slack
+      api_url: https://hooks.slack.com/services/T00/B00/sre-apac
+    group_by: [tenant, alertname, severity]
+    group_wait: "30s"
+    repeat_interval: "4h"
+
+  domain-finance-tier1:
+    receiver:
+      type: pagerduty
+      service_key: "<your-finance-pagerduty-key>"
+    group_by: [tenant, alertname, severity]
+    group_wait: "30s"
+    repeat_interval: "1h"
+```
+
+**conf.d/_domain_policy.yaml** — compliance constraints for a business domain (used in Exercise 8):
+
+```yaml
+domain_policies:
+  finance:
+    description: "Notification compliance for the finance databases"
+    tenants: [prod-oracle]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+A domain policy names the tenants it constrains in its `tenants:` list. The block is only read from a file named `_domain_policy.yaml`; writing `_domain_policy: finance` in a tenant file applies no policy, and validation only reports `unknown reserved key '_domain_policy'`.
 
 ## Exercise 3: Validate All Configs
 
@@ -193,7 +246,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-Expected output (measured after doing Exercises 1 and 2 as written; the order of the WARN lines under `schema` can differ between runs):
+Expected output (measured after doing Exercises 1 and 2 as written):
 
 ```
 ============================================================
@@ -201,19 +254,10 @@ Expected output (measured after doing Exercises 1 and 2 as written; the order of
 ============================================================
 
 [PASS] yaml_syntax
-       6 files parsed successfully
+       8 files parsed successfully
 
-[WARN] schema
-         WARN: prod-kafka: unknown key 'jvm_memory' not in defaults
-         WARN: prod-kafka: unknown key 'kafka_broker_count' not in defaults
-         WARN: prod-oracle: _routing_profile references unknown profile 'domain-finance-tier1'
-         WARN: prod-oracle: unknown key 'oracle_sessions_active' not in defaults
-         WARN: prod-oracle: unknown key 'oracle_sessions_active_critical' not in defaults
-         WARN: prod-oracle: unknown reserved key '_domain_policy' (typo?)
-         WARN: prod-redis: _routing_profile references unknown profile 'team-sre-apac'
-         WARN: prod-redis: unknown key 'redis_memory_used_bytes' not in defaults
-         WARN: prod-redis: unknown key 'redis_memory_used_bytes_critical' not in defaults
-       -> Suggested action: ...
+[PASS] schema
+       No schema warnings
 
 [PASS] routes
        5 routes, 5 receivers, 5 inhibit_rules
@@ -228,14 +272,17 @@ Expected output (measured after doing Exercises 1 and 2 as written; the order of
        5 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 5 pass | 1 warn | 0 fail
+  Total: 6 checks | 6 pass | 0 warn | 0 fail
 ------------------------------------------------------------
-  Result: WARN (pass with warnings)
+  Result: PASS
 ```
 
-The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed. The 9 WARN lines under `schema` come from Exercise 2's sample values: a few keys are not in `_defaults.yaml`, and the two `_routing_profile` values point at profiles that are not defined. Check each key name when you adopt this for real.
+The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
 
-⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you pasted the Exercise 2 snippets as whole files and dropped the two outer levels (`tenants:` and `<tenant name>:`) that init generated. Every check then reads PASS while nothing was validated.
+- The `schema` row also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
+- The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined` after Exercise 2.
+
+⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. Every check then reads PASS while nothing was validated.
 
 **Checkpoint**: Can you explain why `group_wait: "2s"` produces a WARN under `routes`, and why the value that takes effect is 5s? (Hint: the guardrail range is 5s–5m; a value below the floor is clamped to 5s — a warning, not a failure)
 
@@ -260,20 +307,34 @@ docker run --rm \
   generate-routes --config-dir /data/conf.d --validate
 ```
 
-Expected output summary:
+Expected output (first run):
 
 ```
-Generated routes for 5 tenants:
-  prod-mariadb  → slack     (group_wait: 30s, repeat: 4h)
-  prod-redis    → slack     (profile: team-sre-apac)
-  prod-kafka    → pagerduty (group_wait: 1m, repeat: 12h)
-  staging-pg    → email     (group_wait: 5m, repeat: 24h)
-  prod-oracle   → pagerduty (profile: domain-finance-tier1)
-  + 5 inhibit rules (severity dedup)
-Written: /data/output/alertmanager-routes.yaml
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
 ```
 
-Each tenant gets its own route block, with receiver, group_by, timing parameters, and inhibit rules for severity dedup.
+Second run (`--validate`):
+
+```
+Config files: 8 read, 0 skipped
+Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
+Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+OK: all configs valid
+```
+
+Each tenant gets its own block under `route.routes` in `.output/alertmanager-routes.yaml` (`matchers: tenant="…"`), with 5 `receivers` and 5 `inhibit_rules`. Against the Exercise 2 settings:
+
+| Tenant | receiver | group_wait | repeat_interval | From |
+|---|---|---|---|---|
+| prod-kafka | pagerduty | 1m | 12h | tenant `_routing` |
+| prod-mariadb | slack | 30s | 4h | tenant `_routing` |
+| prod-oracle | pagerduty | 30s | 1h | profile `domain-finance-tier1` |
+| prod-redis | slack | 30s | 4h | profile `team-sre-apac` |
+| staging-pg | email | 5m | 24h | tenant `_routing` |
 
 **Checkpoint**: Find the `inhibit_rules` section. How does it prevent duplicate warnings when a critical alert fires?
 
@@ -290,7 +351,7 @@ This shows the four-layer merge for prod-redis:
 1. **Platform defaults** → webhook, 30s group_wait
 2. **Routing profile** `team-sre-apac` → overrides to slack, 30s wait, 4h repeat
 3. **Tenant _routing** → (none, uses profile)
-4. **Platform enforced** → NOC copy
+4. **Platform enforced** (`_routing_enforced` in `_defaults.yaml`) → (not set: the `_defaults.yaml` init generates has no such layer, so the output shows `(empty)`. When the platform team sets it, it inserts a `continue: true` platform route ahead of every tenant route — for example so the NOC always gets a copy)
 
 **Checkpoint**: What receiver_type does prod-redis resolve to? Which layer set it?
 
@@ -315,19 +376,43 @@ The diff shows exactly which tenant and metrics are affected — this is what ge
 
 ## Exercise 7: Three-State Operations
 
-Examine `staging-pg.yaml`:
+`staging-pg.yaml` sets two operational states at once, and they do different things:
 
-- **`_state_maintenance`**: Alerts still evaluate but route to maintenance-specific handling. The `expires` timestamp means the state auto-reverts to normal after that time.
-- **`_silent_mode`**: Alerts are fully suppressed — no notifications sent. Also has `expires` for safety.
+| State | Alert fires | Recorded in TSDB | Notification sent | Blocked by |
+|---|---|---|---|---|
+| `_silent_mode` (here `target: warning`) | ✅ | ✅ | ❌ (warning only) | Alertmanager inhibit |
+| `_state_maintenance` | ❌ | ❌ | ❌ | Prometheus (the rule packs' `unless`) |
 
-Try removing `_state_maintenance` and re-running validate — you'll see the tenant return to normal routing.
+Both carry `expires` and revert to normal on their own when it passes. The full behavior matrix is in [Config-Driven Design §2.7](../design/config-driven.en.md).
+
+Both states take effect only while alerts are being evaluated: they change nothing in the output of `validate-config`, `explain-route` or `generate-routes`. To see them, point threshold-exporter at this `conf.d/` and look at the flag metrics it exposes:
+
+```bash
+docker run --rm -d --name da-lab-exporter \
+  -p 8080:8080 \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/threshold-exporter:latest \
+  --config-dir /data/conf.d
+
+curl -s localhost:8080/metrics | grep -E '^user_(state_filter\{filter="maintenance"|silent_mode)'
+```
+
+Expected output:
+
+```
+user_silent_mode{target_severity="warning",tenant="staging-pg"} 1
+user_state_filter{filter="maintenance",severity="info",tenant="staging-pg"} 1
+```
+
+Now delete the whole `_state_maintenance` block (two lines) from `staging-pg.yaml`, wait about 30 seconds (the exporter reloads every 30 seconds by default), and run the same `curl` again: the `maintenance` line is gone and the silent-mode line stays. The rule packs read this metric through `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, so staging-pg's alerts fire again; warning notifications are still held back by silent mode, while critical ones go out.
+
+When you are done, stop the exporter: `docker stop da-lab-exporter` (`--rm` removes the container too).
 
 ## Exercise 8: Domain Policy Test
 
-Try changing prod-oracle's routing to use Slack:
+Try changing prod-oracle's routing to use Slack: in `conf.d/prod-oracle.yaml`, add this under `prod-oracle:` (at the same level as `_metadata`):
 
 ```yaml
-# In prod-oracle.yaml, replace _routing_profile line with:
 _routing:
   receiver:
     type: slack

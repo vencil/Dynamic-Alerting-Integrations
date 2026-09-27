@@ -220,6 +220,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-385 | [#1992](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1992) | 「`open()` 必須帶 encoding」有兩份判定器，而且各錯一邊：pre-commit `open-encoding-audit` 只認 builtin `open`，會漏掉 `Path.open`；`test_sast.py::test_open_has_encoding` 把任何 `x.open(...)` 都算進去，會誤判 `os.open`、`tarfile.open`。owner 裁決走**寧可漏判**：只留 hook 的判定，刪掉 test_sast 那一份，並手修它獨有的那一個真違規。`Path.open`、`read_text`／`write_text` 因此沒有靜態判定在守，移交 TRK-386 | TRK-383 |
 | TRK-386 | [#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005) | `read_text`／`write_text`／`Path.open` 沒帶 encoding 時，靜態判定（hook、ruff `PLW1514`）都看不到；從語法判定 receiver 型別是已經打死的方向。改用執行期 `EncodingWarning` 當判定依據，只擋產品程式碼；`subprocess(text=True)` 先不納管（owner 裁決） | TRK-385 |
 | TRK-390 | [#2025](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2025) | `diff_changed_paths` 用 `--diff-filter=AM` 列檔，路徑上仍有檔、狀態卻不是 A／M 的變動（改名 `R`、`diff.renames=copies` 下的複製 `C`、symlink 換成一般檔的 `T`）都被濾掉 ⇒ `git mv` 到違規位置（含搬移時一併改內容）三支 diff 掃描型 lint 都看不到。改用 `--diff-filter=d`：只排除刪除、不再列舉要保留的狀態。票面兩個修法（`--no-renames`、把 `R` 加進 filter）都仍是列舉，前者漏 `T`、後者漏 `C` 與 `T` | TRK-384 |
+| TRK-391 | [#2059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2059) | `lint-policy.md` 的 lint 數量、各類別的逐項清單與括號計數，以及 JS-toolchain grandfather 對照表，都沒有機制在對帳，工具一增減就漂。依減法原則刪掉，不改對：只留三類的定義與判定方式、少數不附數量的範例；要知道某支 lint 屬哪一類看它自己的 docstring，grandfather 集的 SoT 是 `check_lint_toolchain_fit.py` 的 `ALLOWLIST` | TRK-383 |
 
 ## 不在 mapping 範圍
 

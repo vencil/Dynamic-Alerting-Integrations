@@ -534,30 +534,42 @@ class TestCheckCIStatus:
         assert result.status == pp.Status.WARN
         assert "1 個 check 還在跑" in result.message
 
-    def test_failure_triggers_ab_classification(self, monkeypatch):
-        # check_ci_status returns FAIL and calls _classify_ci_failures.
-        # Stub _classify to return a known string so we can assert detail.
-        checks = [{"name": "Lint", "state": "FAILURE", "bucket": "fail"}]
-        # 1st run: gh pr checks → fail. Then _classify_ci_failures will
-        # call run() again, but we stub _classify_ci_failures directly.
-        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
-        monkeypatch.setattr(pp, "_classify_ci_failures",
-                            lambda failed: "→ stubbed AB classification")
+    def test_hard_failure_does_not_guess_its_cause_from_main_runs(self, monkeypatch):
+        # #1996：`gh run list --branch main --limit 1` 回的是 main 上任一
+        # workflow 的最新 run，不載「main 的 CI 結論」——不能據此斷言失敗是
+        # 本 PR 引入的。這裡讓 main 的最新 run 是綠的：若 preflight 仍去查
+        # main、再下結論，就會印出那句肯定句。另放一個通過的 check，讓
+        # 「從 PR 自己的通過／失敗數推成因」的寫法也有機會現形。
+        checks = [{"name": "Lint", "state": "FAILURE", "bucket": "fail"},
+                  {"name": "Tests", "state": "SUCCESS", "bucket": "pass"}]
+        cmds = []
+
+        def fake_run(cmd, *a, **kw):
+            cmds.append(cmd)
+            if cmd[:3] == ["gh", "pr", "checks"]:
+                return _cp(0, json.dumps(checks))
+            if cmd[:3] == ["gh", "run", "list"]:
+                return _cp(0, json.dumps([{"conclusion": "success",
+                                           "headBranch": "main",
+                                           "databaseId": 1}]))
+            return _cp(1, "", "unexpected command")
+
+        monkeypatch.setattr(pp, "run", fake_run)
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
         # Hermetic: don't read the repo's real workflow soft-fail set, else a
         # future continue-on-error on "Lint" would flip this FAIL→WARN (CR #820).
         monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
-        assert result.status == pp.Status.FAIL
-        assert "1 failed" in result.message
-        assert "stubbed AB" in result.detail
+        # 整筆結果逐欄相等，不比對措辭。
+        assert (result.name, result.status, result.message, result.detail) == (
+            "CI status", pp.Status.FAIL, "1 failed / 1 passed / 0 pending", "· Lint")
+        assert all(c[:3] == ["gh", "pr", "checks"] for c in cmds), cmds
 
     # 三態語意（fix-push 悖論 carve-out，#819 / 對抗式 review 攻擊面 2）：
     #   stale（PR head 為本地 HEAD 祖先）→ WARN；same-sha / 非祖先 / 不可判定 → FAIL。
     def test_hard_fail_on_stale_pr_head_downgrades_to_warn(self, monkeypatch):
         checks = [{"name": "Portal Tests", "state": "FAILURE", "bucket": "fail"}]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
-        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "→ ab")
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: "abcd1234")
         monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
@@ -569,7 +581,6 @@ class TestCheckCIStatus:
         # merge-readiness（PR head == 本地 HEAD）：紅 CI 必須維持 FAIL 的牙齒。
         checks = [{"name": "Go Tests", "state": "FAILURE", "bucket": "fail"}]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
-        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
         monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
@@ -654,7 +665,6 @@ class TestCheckCIStatus:
         ]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: {"Soft Check"})
-        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
         assert "1 failed" in result.message

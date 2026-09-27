@@ -124,6 +124,14 @@ MODULE_SINKS: dict[str, frozenset[str]] = {
 # Unambiguous write methods of a path-like object: no builtin type has these
 # with a non-writing meaning, so any receiver counts.
 PATH_METHOD_SINKS = frozenset({"write_text", "write_bytes", "mkdir", "chmod", "touch"})
+# Whole-file atomic writers, called by NAME (bare or `mod.name`) — #2082.
+# Their own tmp/fdopen/replace sinks live inside a `def`, where this walk
+# stops, so without these the CALL SITE in `main` was invisible: deleting its
+# `with output_write(...)` left the gate green while an OSError the helper
+# does not convert escaped as a traceback at rc=1. A closed list of names
+# that write and do nothing else, not a `*atomic*` pattern: a pattern would
+# also match readers and predicates, and nobody would audit the next one.
+NAMED_WRITER_SINKS = frozenset({"atomic_write_text", "atomic_replace_output"})
 # `open` and its aliases; only a WRITE mode is a sink.
 OPEN_NAMES = frozenset({"open"})
 OPEN_MODULE_NAMES = {"io": frozenset({"open"}), "codecs": frozenset({"open"})}
@@ -329,6 +337,8 @@ def _method_open_mode_is_write(node: ast.Call) -> bool | None:
 def _classify_sink(node: ast.Call) -> str | None:
     """The sink label for *node*, or ``None`` if it does not write."""
     func = node.func
+    if _name_of(func) in NAMED_WRITER_SINKS:
+        return f"{_name_of(func)}()"
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         mod, attr = func.value.id, func.attr
         if attr in MODULE_SINKS.get(mod, ()):
@@ -635,6 +645,9 @@ class TestSinkVocabulary:
         ("shutil.copy2(src, dst)", "shutil.copy2"),
         ("shutil.move(src, dst)", "shutil.move"),
         ("shutil.copytree(src, dst)", "shutil.copytree"),
+        ("atomic_write_text(p, s)", "atomic_write_text()"),
+        ("_atomic_write.atomic_write_text(p, s)", "atomic_write_text()"),
+        ("atomic_replace_output(p, s)", "atomic_replace_output()"),
     ])
     def test_write_sinks_are_seen(self, src, sink):
         assert [(c.sink, c.guard) for c in scan_source(src)] == [(sink, None)]
