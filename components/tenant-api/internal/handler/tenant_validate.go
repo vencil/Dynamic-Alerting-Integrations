@@ -13,8 +13,7 @@ import (
 // ValidateResponse is returned by POST /api/v1/tenants/{id}/validate.
 //
 // Two-channel contract (#1231 1b, mirroring cfg.KeyValidation): Warnings is
-// the BLOCKING set — exactly what the write boundary (gitops.validate) would
-// reject, and the only input to Valid. Notices is the advisory set
+// the BLOCKING set and the only input to Valid. Notices is the advisory set
 // (deprecated-key alias notices): a body carrying them still validates AND
 // still writes; they tell the author what to migrate before the transition
 // window closes.
