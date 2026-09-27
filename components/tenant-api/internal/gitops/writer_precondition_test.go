@@ -1,8 +1,8 @@
 package gitops
 
 // Optimistic-concurrency coverage for WriteIfUnchanged: the base-hash check
-// runs under the writer lock, immediately before the commit, and a failed
-// check must leave the file exactly as it was.
+// runs under the writer lock, and a failed check must leave the file exactly
+// as it was.
 
 import (
 	"context"
