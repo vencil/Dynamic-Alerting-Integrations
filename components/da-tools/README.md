@@ -224,10 +224,10 @@ $DA baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對（auto-convergence）
 docker run --rm --network=host \
-  -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
+  -v $(pwd)/migration_output/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
   -e PROMETHEUS_URL=$PROM \
   ghcr.io/vencil/da-tools \
-  validate --mapping /data/mapping.csv --watch --rounds 5
+  validate --mapping /data/prefix-mapping.yaml --watch --rounds 5
 ```
 
 ### 5.2 規則遷移（離線、無 Prometheus）
@@ -240,9 +240,9 @@ docker run --rm \
   ghcr.io/vencil/da-tools \
   migrate /data/my-rules.yml -o /data/output --dry-run --triage
 
-# 產出：
-#   /data/output/migration_output/  ← 轉換後的規則
-#   /data/output/triage.csv         ← 需人工審閱清單
+# 產出（--triage 只做分桶分析，不產生規則檔）：
+#   /data/output/triage-report.csv  ← 每條規則的分桶與建議處置，供人工審閱
+# 拿掉 --dry-run --triage 才會在 -o 目錄產生規則三件套與 prefix-mapping.yaml
 ```
 
 ### 5.3 GitOps 完整 ConfigMap 產出
