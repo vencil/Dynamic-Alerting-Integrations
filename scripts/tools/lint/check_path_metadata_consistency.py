@@ -48,7 +48,7 @@ from _lib_exitcodes import EXIT_OK  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_reserved_name,
-    unusable_config_entries,
+    list_config_tree,
     unusable_reason,
 )
 
@@ -107,7 +107,19 @@ def iter_tenant_files(config_dir: Path,
     # `0 mismatch(es) across 0 tenant file(s)`, rc=0, stderr empty — a lint
     # calling a tree clean because it never opened it. The exporter
     # (`scanDirHierarchical`, `config_hierarchy.go`) reads both spellings.
-    listing = config_dir.rglob("*") if entries is None else entries
+    #
+    # ⛔ NOT `rglob("*")` (#2081). The exporter's walker
+    # (`pkg/config.ScanDirTree`) prunes `.`-prefixed directories and drops
+    # `.`-prefixed files; `rglob` prunes no `.`-prefixed name, so it also
+    # walks into a ConfigMap mount's `..<ts>/` payload. Measured before this
+    # change: `.old.yaml` and
+    # `.snap/acme.yaml` were scanned and reported, and on a ConfigMap-mount
+    # layout (`..2026_09_25/acme.yaml` + `..data` link + `acme.yaml` link)
+    # the one tenant file was read twice — `2 mismatch(es) across 2 tenant
+    # file(s)` where the exporter sees one file. `list_config_tree` is the
+    # shared walk that mirrors the exporter (#2054).
+    listing = (list_config_tree(config_dir).files
+               if entries is None else entries)
     for path in sorted(
         p for p in listing
         if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
@@ -298,17 +310,25 @@ def main() -> int:
     # file(s)" tail describe three different trees if anything changes under
     # `conf.d` mid-run. `scan`/`scan_file` stay as they are — they are the
     # tested entry points; only `main` stops re-walking.
-    entries = sorted(config_dir.rglob("*"))
-    # ⛔ Both spellings (#1603) — this has to move WITH `iter_tenant_files`
-    # above, or the "not checked" report and the selection disagree about
-    # which files exist and an unreadable `.yml` carrier goes unnamed.
-    for bad in unusable_config_entries(
-        [p for p in entries if not is_reserved_name(p.name)],
-    ):
-        print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
-              file=sys.stderr)
+    #
+    # ⛔ The "not checked" report comes from `listing.unusable`, NOT from
+    # `unusable_config_entries(listing.files)`: `files` holds only regular
+    # files, so asking it for unusable entries always answers `[]` and every
+    # test that pins a named-not-skipped entry would go quiet (#2081).
+    # `unusable` carries the same hidden pruning as `files`, and both
+    # spellings (#1603), so the report and the selection agree about which
+    # entries exist.
+    listing = list_config_tree(config_dir)
+    for bad in listing.unusable:
+        # The `_` name filter is for ENTRIES only. A directory the walk could
+        # not read is named whatever it is called: the exporter descends
+        # `_`-prefixed directories, so a locked `_arch/` hides tenants too
+        # (same rule as `describe_tenant`, #2054).
+        if bad in listing.unscannable or not is_reserved_name(bad.name):
+            print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
+                  file=sys.stderr)
 
-    tenant_files = list(iter_tenant_files(config_dir, entries))
+    tenant_files = list(iter_tenant_files(config_dir, listing.files))
     mismatches: list[Mismatch] = []
     for filepath in tenant_files:
         mismatches.extend(scan_file(filepath, config_dir))

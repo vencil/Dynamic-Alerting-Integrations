@@ -13,6 +13,11 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -366,17 +371,11 @@ class TestScanFileOSError:
 #
 # ⚠️ SCOPE. These pin the extension-SPELLING axis only, and neither of the
 # other two divergences has a ticket of its own behind it:
-#   * Hidden names: dot-prefixed carriers reach `iter_tenant_files` (the
-#     module imports `is_reserved_name` but not `is_hidden_name`) while the
-#     exporter skips them. Pre-existing, unchanged here; closing it stops
-#     checking files that are checked today.
-#     ⚠️ #1911 (the conf.d family ticket) names the class — one tree,
-#     several enumerators — not this reader's hidden-axis answer. The
-#     hidden-axis tickets filed so far are about other readers: #1589 is
-#     the exporter's `pkg/config` enumerator (path-vs-basename) and
-#     #1827 is `assemble_config_dir` assembling `.`-prefixed carriers —
-#     neither is a Python reader scanning `.hidden.yaml`, so this
-#     disclosure still has to carry itself.
+#   * Hidden names: CLOSED by #2081 and pinned by `TestHiddenAxis` below.
+#     Both walks (`iter_tenant_files` and `main`) used `rglob("*")`, so
+#     `.old.yaml`, `.snap/…` and a ConfigMap mount's `..<ts>/` payload were
+#     scanned although the exporter skips them — the last one reading one
+#     tenant file twice. Both now take `_lib_confd.list_config_tree`.
 #   * Entries `is_file()` drops are named by `main` — that half of #1607 is
 #     wired up in this module.
 
@@ -536,6 +535,199 @@ class TestExtensionSpellingAxis:
             f"({CONFIG_SUFFIXES!r}) and the lint scanned {tenants}, "
             f"expected {expected}"
         )
+
+
+# ── The HIDDEN-name axis (#2081) ─────────────────────────────────────
+
+
+def _symlink_or_skip(link: Path, target: str) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover
+        pytest.skip(f"cannot create symlink here: {exc}")
+
+
+class TestHiddenAxis:
+    """Only what the exporter's walker reads is scanned — no hidden paths.
+
+    `pkg/config.ScanDirTree` prunes `.`-prefixed directories, drops
+    `.`-prefixed files and never descends a directory symlink. Every case
+    here carries its 必響對照: the SAME bytes under a non-hidden name must
+    still be reported, so a lint that stopped reading anything at all
+    cannot pass these.
+    """
+
+    OK = _tenant_yaml("acme", environment="staging")
+    BAD = _tenant_yaml("acme", environment="prod")
+
+    def _seed(self, config_dir: Path, shape: str, *, hidden: bool) -> Path:
+        dot = "." if hidden else ""
+        _write(config_dir / "staging" / "acme.yaml", self.OK)
+        if shape == "file":
+            _write(config_dir / "staging" / f"{dot}old.yaml", self.BAD)
+        else:
+            _write(config_dir / "staging" / f"{dot}snap" / "acme.yaml",
+                   self.BAD)
+        return config_dir
+
+    @pytest.mark.parametrize("shape", ["file", "dir"])
+    def test_hidden_carrier_is_not_scanned(
+        self, shape, tmp_path, monkeypatch, capsys,
+    ):
+        (tmp_path / ".git").mkdir()
+        vis = self._seed(tmp_path / "vis" / "conf.d", shape, hidden=False)
+        hid = self._seed(tmp_path / "hid" / "conf.d", shape, hidden=True)
+
+        # 必響對照 FIRST: same bytes, visible name -> reported, both entry
+        # points. Without it the assertions below prove nothing.
+        assert len(cpmc.scan(vis)) == 1
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(vis), "--ci")
+        assert "1 mismatch(es) across 2 tenant file(s)" in err, (out, err)
+
+        # `scan` goes through `iter_tenant_files`' own walk ...
+        assert cpmc.scan(hid) == []
+        assert [p.name for p in cpmc.iter_tenant_files(hid)] == ["acme.yaml"]
+        # ... and `main` through its single walk. Both must agree.
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(hid), "--ci")
+        assert "0 mismatch(es) across 1 tenant file(s)" in out, (out, err)
+        assert "warning:" not in out + err
+
+    def test_configmap_mount_payload_is_read_once(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """kubelet's ConfigMap layout: `..<ts>/` payload, `..data` -> it,
+        `acme.yaml` -> `..data/acme.yaml`. The exporter reads the one
+        tenant file via the root link only; `rglob` read it twice."""
+        (tmp_path / ".git").mkdir()
+
+        def mount(config_dir: Path, payload: str, data: str) -> Path:
+            _write(config_dir / "staging" / payload / "acme.yaml", self.BAD)
+            _symlink_or_skip(config_dir / "staging" / data, payload)
+            _symlink_or_skip(config_dir / "staging" / "acme.yaml",
+                             f"{data}/acme.yaml")
+            return config_dir
+
+        cm = mount(tmp_path / "cm" / "conf.d", "..2026_09_25", "..data")
+        # 必響對照: payload directory NOT hidden -> it is a real directory
+        # the exporter does read, so both copies are reported.
+        vis = mount(tmp_path / "vis" / "conf.d", "2026_09_25", "data")
+
+        assert len(cpmc.scan(vis)) == 2
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(vis), "--ci")
+        assert "2 mismatch(es) across 2 tenant file(s)" in err, (out, err)
+
+        ms = cpmc.scan(cm)
+        assert [Path(m.file).relative_to(cm).as_posix() for m in ms] == [
+            "staging/acme.yaml"], ms
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(cm), "--ci")
+        assert "1 mismatch(es) across 1 tenant file(s)" in err, (out, err)
+        # ⚠️ Not asserted: the DISPLAYED path. `main` shows
+        # `Path(m.file).resolve()` relative to the repo root, which follows
+        # the link into `..2026_09_25/` — a display choice that predates
+        # #2081 and is not what this class pins (which files are READ).
+
+    def test_hidden_ancestor_of_conf_d_does_not_hide_the_tree(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Only names BELOW conf.d count. A checkout under `.claude/worktrees/`
+        or a cache dir puts a `.`-segment in every ABSOLUTE path, so a filter
+        that tests all of `p.parts` would call the tree `0 across 0`."""
+        (tmp_path / ".git").mkdir()
+        conf = self._seed(tmp_path / ".cache" / "conf.d", "file", hidden=False)
+
+        assert len(cpmc.scan(conf)) == 1
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(conf), "--ci")
+        assert "1 mismatch(es) across 2 tenant file(s)" in err, (out, err)
+
+    def test_not_checked_report_skips_hidden_entries_only(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The "not checked" report walks what the selection walks: a broken
+        link under a visible name is named, the same link under `.snap/`
+        is not (the exporter never looks there)."""
+        (tmp_path / ".git").mkdir()
+        conf = self._seed(tmp_path / "conf.d", "file", hidden=False)
+        (conf / "staging" / ".snap").mkdir()
+        _symlink_or_skip(conf / "staging" / "brk.yaml", "missing.yaml")
+        _symlink_or_skip(conf / "staging" / ".snap" / "brk.yaml",
+                         "missing.yaml")
+
+        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                               "--config-dir", str(conf), "--ci")
+        warned = [ln for ln in err.splitlines() if "not checked" in ln]
+        # 必響對照: the visible broken link IS named.
+        assert any(ln.startswith(f"{conf / 'staging' / 'brk.yaml'}:0:")
+                   for ln in warned), err
+        assert not any(".snap" in ln for ln in warned), err
+
+
+def _run_as_unprivileged(argv: list[str], cwd: str):
+    """Run `argv` where a chmod-000 directory really cannot be read.
+
+    Under uid 0 the mode bits do not stop a read, so drop to `nobody` via
+    `setpriv`; as any other uid (CI runners) run it as is.
+    """
+    if os.name == "nt":
+        pytest.skip("chmod 000 does not make a directory unreadable on Windows")
+    if os.geteuid() == 0:
+        setpriv = shutil.which("setpriv")
+        if setpriv is None:
+            pytest.skip("running as root and `setpriv` is not installed, so "
+                        "no chmod-000 directory can be made unreadable")
+        argv = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups",
+                *argv]
+        # A root checkout can sit where `nobody` cannot traverse (`/root` is
+        # 0700), and then the child fails before it scans anything. Probe the
+        # interpreter + script + imports as the same uid; skip, not fail.
+        probe = subprocess.run([*argv[:6], "--help"], cwd=cwd,
+                               capture_output=True, text=True,
+                               encoding="utf-8", timeout=60)
+        if probe.returncode != 0:
+            pytest.skip("uid 65534 cannot run the script from this checkout: "
+                        + (probe.stderr.strip().splitlines() or ["?"])[-1])
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+
+
+def test_unreadable_directories_are_named_even_when_underscored():
+    """A directory the walk cannot enumerate hides every tenant under it, so
+    it is named — `_locked/` exactly like `locked/`: the `_` filter is for
+    ENTRIES (the exporter descends `_`-prefixed directories)."""
+    # Not `tmp_path`: under root it sits in a 0700 directory `nobody` cannot
+    # traverse, which would make conf.d itself the unreadable thing.
+    base = Path(tempfile.mkdtemp(prefix="cpmc-2081-"))
+    locked = [base / "conf.d" / "_locked", base / "conf.d" / "locked"]
+    try:
+        base.chmod(0o755)
+        conf = base / "conf.d"
+        _write(conf / "staging" / "acme.yaml",
+               _tenant_yaml("acme", environment="prod"))
+        for d in locked:
+            _write(d / "t.yaml", _tenant_yaml("t", environment="prod"))
+        for d in (conf, conf / "staging"):
+            d.chmod(0o755)
+        (conf / "staging" / "acme.yaml").chmod(0o644)
+        for d in locked:
+            d.chmod(0)
+        script = Path(cpmc.__file__).resolve()
+        r = _run_as_unprivileged(
+            [sys.executable, str(script), "--config-dir", str(conf), "--ci"],
+            cwd=str(base),
+        )
+        # 必響對照: the readable part of the tree WAS scanned.
+        assert "1 mismatch(es) across 1 tenant file(s)" in r.stderr, r
+        for d in locked:
+            assert f"{d}:0: warning: not checked" in r.stderr, (d, r.stderr)
+    finally:
+        for d in locked:
+            if d.exists():
+                d.chmod(0o755)
+        shutil.rmtree(base, ignore_errors=True)
 
 
 # ── the hook's trigger must not be narrower than the script's selection ──
