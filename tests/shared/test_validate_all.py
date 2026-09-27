@@ -1096,14 +1096,14 @@ class TestMainCLI:
             calls.append(short_name)
             return (short_name, "pass", 0.1, "ok", "output")
 
-        cli_argv('validate_all', '--skip', 'versions,links', '--only', 'freshness')
+        cli_argv('validate_all', '--skip', 'versions,links', '--only', 'translation')
         monkeypatch.setattr(va, "_run_one", recording)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
         assert exc_info.value.code == 0
-        assert calls == ["freshness"], (
-            "--only picks freshness and --skip subtracts two names that were "
-            "never selected, so exactly freshness must run")
+        assert calls == ["translation"], (
+            "--only picks translation and --skip subtracts two names that were "
+            "never selected, so exactly translation must run")
         assert len(capsys.readouterr().out) > 0
 
     def test_ci_stops_on_failure(self, monkeypatch, capsys, cli_argv):
@@ -3293,9 +3293,8 @@ class TestRearmedRows:
     row at least parses its own args is ``TestEveryRowParsesItsOwnArgs``
     above; it says nothing about whether a row can fail). The withdrawn
     check and what it had measured are in the commit message.
-    ``translation`` and ``freshness`` are still un-armed and tracked in
-    #1735: arming either would make a bare run red for content reasons
-    (#1735's own ⛔).
+    ``translation`` is still un-armed and tracked in #1735: arming it would
+    make a bare run red for content reasons (#1735's own ⛔).
     """
 
     PINNED = {
