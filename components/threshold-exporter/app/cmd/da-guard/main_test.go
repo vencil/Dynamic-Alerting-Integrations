@@ -301,6 +301,12 @@ func TestRun_ParseFailedFileBesideGoodFile_ExitsThree(t *testing.T) {
 			if !strings.Contains(stdout, "Tenants in scope: **1**") {
 				t.Errorf("the readable tenant should still be checked: %q", stdout)
 			}
+			// #2123 round 5: exit 3 must not come with the library's
+			// "safe to merge" all-clear (the "good file clean" arm is the
+			// one that has no findings and would print it).
+			if strings.Contains(stdout, "safe to merge") {
+				t.Errorf("an exit-3 report must not call the change safe to merge: %q", stdout)
+			}
 			if !strings.Contains(stderr, "team/tenant-b.yaml") {
 				t.Errorf("stderr should name the rejected file: %q", stderr)
 			}

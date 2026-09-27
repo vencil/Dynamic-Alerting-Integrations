@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` scope 內的租戶檔（或解析租戶時繼承鏈上的 `_defaults.yaml`）exporter 的 YAML decode 失敗（語法錯、重複鍵；報告列出檔名，修檔後重跑）。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
+Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` scope 內任一非 `_` 開頭的 YAML 檔（或解析租戶時繼承鏈上的 `_defaults.yaml`）exporter 無法 decode（報告列出檔名，修檔後重跑）。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
 
 ---
 

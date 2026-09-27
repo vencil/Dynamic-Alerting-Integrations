@@ -31,11 +31,17 @@
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
 //	2  caller error (bad flags, missing/invalid path, IO failure)
-//	3  a tenant file in scope, or a `_defaults.yaml` in the chain of a
-//	   tenant being resolved, fails the exporter's YAML decode (syntax
-//	   error, duplicate key), so the tenants depending on it were not
-//	   checked. The report names the file(s) (relative to --config-dir);
-//	   the author fixes them and re-runs (#2123).
+//	3  the exporter cannot decode a non-`_` YAML file in scope, or the
+//	   `_defaults.yaml` in the chain of a tenant being resolved (#2123).
+//	   "A non-`_` YAML file in scope" is exactly the set the walker
+//	   parses (config.IsScannedFileName): every file at or below --scope,
+//	   recursively, whose name ends in .yaml / .yml in any case, and that
+//	   neither starts with `_` nor sits under a `.`-prefixed directory or
+//	   starts with `.` itself. The chain's `_defaults.yaml` is the defaults
+//	   carrier the exporter selects at each level (`.yml` and any casing
+//	   included), and may sit above --scope. No reason is enumerated: any
+//	   decode failure of those files counts. The report names the file(s)
+//	   (relative to --config-dir); the author fixes them and re-runs.
 //	   Two sources: tenant files the walker's decode rejects (the other
 //	   tenants are still checked), and a file whose decode fails while a
 //	   tenant is being resolved — a `_defaults.yaml` in its chain, or a
@@ -142,9 +148,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
-			"  3  a tenant file in scope, or a _defaults.yaml in a resolved tenant's chain,\n"+
-			"     fails the exporter's YAML decode (syntax error, duplicate key); the report\n"+
-			"     names it (fix it, re-run)\n")
+			"  3  the exporter cannot decode a non-_ YAML file in scope, or the _defaults.yaml\n"+
+			"     in a resolved tenant's chain; the report names it (fix it, re-run)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -431,7 +436,17 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 		b.WriteString("> ⚠️ " + n + "\n\n")
 	}
 	b.WriteString(parseFailedMarkdown(scoped.ParseFailed))
-	b.WriteString(report.Markdown())
+	body := report.Markdown()
+	if len(scoped.ParseFailed) > 0 {
+		// #2123: the guard library's all-clear line says the change is safe
+		// to merge; with files the exporter cannot decode it is not. Swapped
+		// here, not in GuardReport.Markdown(), so no other caller's output
+		// changes. TestRun_ParseFailedFileBesideGoodFile_ExitsThree asserts
+		// "safe to merge" is absent, so a reworded library line cannot slip
+		// past this replacement unseen.
+		body = strings.Replace(body, noFindingsSafeLine, noFindingsNotSafeLine, 1)
+	}
+	b.WriteString(body)
 	if len(scoped.SourceFiles) > 0 {
 		b.WriteString("\n<details><summary>Scanned files</summary>\n\n")
 		for _, f := range scoped.SourceFiles {
@@ -555,6 +570,14 @@ func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.Decode
 	return nil
 }
 
+// noFindingsSafeLine is internal/guard's all-clear line (render.go);
+// noFindingsNotSafeLine replaces it when files failed the decode (#2123).
+const (
+	noFindingsSafeLine    = "✅ No findings — defaults change is safe to merge.\n"
+	noFindingsNotSafeLine = "No findings among the tenants that were checked; the change cannot be " +
+		"judged until the files listed above decode (exit 3).\n"
+)
+
 // parseFailedMarkdown is the report block naming the files whose exporter
 // YAML decode fails (#2123); "" when there are none, so a clean tree's
 // report is byte-identical to before. Neutral on purpose: the list may hold
@@ -566,8 +589,7 @@ func parseFailedMarkdown(files []string) string {
 	}
 	var b strings.Builder
 	b.WriteString("### Files the exporter cannot parse\n\n")
-	b.WriteString("The exporter's YAML decode fails on these files, so the tenants that " +
-		"depend on them were not checked. Fix them and re-run (exit 3):\n\n")
+	b.WriteString("The exporter cannot decode these files. Fix them and re-run (exit 3):\n\n")
 	for _, f := range files {
 		b.WriteString("- `" + f + "`\n")
 	}
@@ -578,8 +600,8 @@ func parseFailedMarkdown(files []string) string {
 // reportParseFailed is the stderr line for exit 3, so a CI log names the
 // files even when the report went to --output.
 func reportParseFailed(errOut io.Writer, files []string) {
-	fmt.Fprintf(errOut, "%s: %d file(s) fail the exporter's YAML decode "+
-		"(the tenants that depend on them were not checked): %s — fix them and re-run\n",
+	fmt.Fprintf(errOut, "%s: %d file(s) fail the exporter's YAML decode: %s — "+
+		"fix them and re-run (exit 3)\n",
 		programName, len(files), strings.Join(files, ", "))
 }
 
