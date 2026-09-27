@@ -117,10 +117,10 @@ helm install da-portal \
 │ nginx (this image)       │         │ tenant-api / oauth2-proxy  │
 │  - serve docs/...        │ proxy → │  - GET /tenants/search     │
 │  - CSP / HSTS headers    │         │  - PUT /tenants/{id}       │
-│  - SPA fallback          │         │  - POST /tenants/simulate  │
-│  - /healthz K8s probe    │         │  - X-Forwarded-{Email,User,│
-└──────────────────────────┘         │    Groups} 注入            │
-                                     └────────────────────────────┘
+│  - SPA fallback          │         │  - X-Forwarded-{Email,User,│
+│  - /healthz K8s probe    │         │    Groups} 注入            │
+│  - tenants/simulate: 501 │         └────────────────────────────┘
+└──────────────────────────┘
 ```
 
 關鍵點：
@@ -129,6 +129,7 @@ helm install da-portal \
 - **工具是 esbuild ESM bundle** — source 在 `tools/portal/src/`，`make portal-build` 產 `docs/assets/dist/`；瀏覽器直接 import，**不在瀏覽器端 transpile**
 - **vendor probe** — `jsx-loader.html` 啟動跑同源 sync XHR 試 `vendor/react.production.min.js`；HTTP 200 走 local，否則退 CDN（React 18.3.1 / ReactDOM / Tailwind / Lucide 0.436.0）
 - **tenant-api proxy** — `nginx.conf` 的 `/api/v1/` 預設 upstream 為 `tenant-api.tenant-api.svc.cluster.local:8080`（tenant-api 位於專屬 `tenant-api` namespace，#1004），自動轉 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-User` / `X-Forwarded-Groups`
+- **simulate 不代理**（[#2125](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2125)）— `POST /api/v1/tenants/simulate` 由 threshold-exporter 提供、不在 tenant-api，本 image 與 Helm chart 都**不**代理它：`location = /api/v1/tenants/simulate` 固定回 `501` + `{"code":"SIMULATE_NOT_PROVIDED",...}`（exact match 優先於 `/api/v1/` prefix；Helm 各 tier 都渲染），simulate-preview 工具據此顯示「此部署不提供模擬預覽」
 
 ---
 

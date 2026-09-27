@@ -103,7 +103,7 @@ The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the 
 
 **Namespace rules (effective v2.8.1, per [ADR-019 §Namespace Policy](../adr/019-planning-ssot.md#namespace-policy三-namespace-共存)):**
 
-- **`TRK-NNN`** is the **only** namespace for new tracking items — unifies the legacy `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN` four-way split. Numeric ranges encode the source namespace (see [`planning-id-mapping.md`](planning-id-mapping.md) §編號分區).
+- **`TRK-NNN`** is the **only** namespace for new tracking items — unifies the legacy `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN` four-way split. Numeric ranges encode the source namespace (see [`planning-id-mapping.md`](planning-id-mapping.md) §編號分區). ⛔ New items are numbered by their newly-opened tracking issue — `TRK-<issue number>`, four digits or more; three-digit numbers belong to the table frozen at TRK-392 and must not be allocated (ADR-019, #2106).
 - Legacy IDs in old commit messages / external citations still work during the transition window — CI auto-translates via the mapping doc but emits a warning. New commits must use `TRK-NNN`.
 - **`ADR-NNN`** (architecture decision history) and **`S#NNN`** (sprint ledger) remain independent namespaces — referencing them in commit body is informational, **no auto-close behaviour** (they are not backlog items).
 

@@ -215,10 +215,11 @@ tools:
   - c-4
   - c-7b
   desc:
-    en: Live preview of merged tenant config via POST /api/v1/tenants/simulate;
-      paste tenant.yaml + defaults, see effective_config + merged_hash
-    zh: 經 POST /api/v1/tenants/simulate 預覽合併後的 tenant 配置；貼上 tenant.yaml + defaults，
-      看 effective_config + merged_hash
+    en: Preview merged tenant config (effective_config + merged_hash) via POST
+      /api/v1/tenants/simulate; shipped portal deployments answer "not provided"
+      — proxy that path to threshold-exporter yourself to use it
+    zh: 經 POST /api/v1/tenants/simulate 預覽合併後的 tenant 配置（effective_config + merged_hash）；出貨部署回「此部署不提供」，需自行把該路徑代理到
+      threshold-exporter 才能使用
   related:
   - tenant-manager
   - alert-builder

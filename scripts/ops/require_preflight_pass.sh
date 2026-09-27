@@ -258,12 +258,16 @@ fi
 cat >&2 <<EOF
 
 ╔══════════════════════════════════════════════════════════════╗
-║  ⛔ Push blocked — preflight not run on the pushed commit    ║
+║  ⛔ Push blocked — no preflight PASS for this commit         ║
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
 ║  Pushing: ${_missing_branch} -> ${_missing_sha}
 ║  HEAD:    ${head_sha}
 ║  Missing marker: $(basename "$marker")
+║                                                              ║
+║  No marker means one of: preflight never ran on this commit,
+║  it did not pass, or a later FAIL on this commit removed it —
+║  from ANY worktree standing on it, since markers are shared.
 ║                                                              ║
 ║  ⛔ The marker names a COMMIT, not "now". If HEAD above is a
 ║  different commit, running preflight where you stand writes

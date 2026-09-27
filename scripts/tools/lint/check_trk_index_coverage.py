@@ -39,7 +39,15 @@ TRK 在第 2 欄）。散文裡提到某個 TRK **不算**它被定義了——�
 clone 上實測（掃描面 = subject + trailer）：把 #1627 的六列拿掉之後，**commits
 面一個都找不到、回綠**；六個全部只由 titles 面看得到（TRK-363←#1545、365←#1558、
 366←#1564、367←#1571、368←#1574、380←#1757）。⇒ **只跑 commits 面的 pre-commit
-hook 對這一類是弱後備，不是偵測器**；真正的偵測要 titles 面（需 token，見上）。
+hook 對這一類是弱後備，不是偵測器**；titles 面由 ``.github/workflows/trk-index-coverage.yaml``
+跑（#2106）：issue／PR 事件只驗觸發它的那一個標題（``--title``，不需 token），
+``workflow_dispatch`` 才全量掃。
+
+⛔ 只認**三位數**號碼是刻意的，不是遺漏：表凍結在 TRK-392，新條目改用
+``TRK-<issue 號>``（ADR-019，#2106），那些號碼本身就指向 issue、不需要登記。所以
+表上沒有的三位數新號＝有人照舊看表手配號，正是要擋的東西；表上出現凍結時
+沒有的號碼（TRK-392 以後、四位數、或補 legacy 區段的洞）同樣算違規（手配號的
+人會順手補列，讓自己的引用「在表上」）。
 
 Usage
 -----
@@ -48,11 +56,12 @@ Usage
     python3 scripts/tools/lint/check_trk_index_coverage.py                      # commits 面
     python3 scripts/tools/lint/check_trk_index_coverage.py --surface all --ci   # 全量（需 GH_TOKEN）
     python3 scripts/tools/lint/check_trk_index_coverage.py --json
+    python3 scripts/tools/lint/check_trk_index_coverage.py --surface titles --ci --title "TRK-393: x"  # 只驗一個標題
 
 Exit codes
 ----------
 - ``0`` — 掃過了，被引用的 TRK 都在表上（**量了沒事**；若 ``PARTIAL`` 另見警告）
-- ``1`` — 有 TRK 被引用卻不在表上（``--ci``）
+- ``1`` — 有 TRK 被引用卻不在表上，或表上出現凍結時沒有的號碼（``--ci``）
 - ``2`` — **量不到**：表解析不出來／表是空的／要求了 titles 面卻拿不到。
 """
 from __future__ import annotations
@@ -79,7 +88,7 @@ _MAPPING = Path("docs/internal/planning-id-mapping.md")
 
 # (?<![\w-]) / (?![\w-]) 讓 TRK-3811 與 xTRK-381 都不會誤配
 _TRK_RE = re.compile(r"(?<![\w-])TRK-(\d{3})(?![\w-])")
-_TRK_CELL_RE = re.compile(r"^TRK-(\d{3})$")
+_TRK_CELL_RE = re.compile(r"^TRK-(\d{3,})$")  # 四位數的列也要讀到，才擋得下
 _API_HOST = "https://api.github.com/"
 _API = _API_HOST + "repos/{owner}/{repo}/issues"
 # owner / repo 由 argv 給，先收斂成 GitHub 實際允許的字元集，避免它們把路徑帶去別處。
@@ -137,16 +146,39 @@ def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
     return hits, not shallow
 
 
+class TitlesTruncated(RuntimeError):
+    """翻到頁數上限仍有下一頁：沒翻到的標題不能當成掃過了。"""
+
+
+_MAX_PAGES = 40
+# 表凍結時的號碼（ADR-019，#2106）：之後只許少、不許多。新條目用 TRK-<issue 號>，
+# 不再登記。⛔ 用集合不用上限：legacy 區段有洞，「補洞」一樣是照舊手配號。
+_FROZEN = "001-018,101,103-104,201-203,205-212,216-222,224,226,228-240,242,300-392"
+_FROZEN_SET = frozenset(
+    n for part in _FROZEN.split(",")
+    for n in range(int(part.partition("-")[0]), int(part.partition("-")[2] or part) + 1))
+_FROZEN_MAX = max(_FROZEN_SET)
+_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+
+
 def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
     """issue / PR 標題裡的 TRK。⛔ search API 對本 token 回 403 ⇒ 列 issue 本地過濾。"""
     if not (_SLUG_RE.match(owner) and _SLUG_RE.match(repo)):
         raise ValueError(f"owner/repo 不是合法的 GitHub slug: {owner!r}/{repo!r}")
     hits: dict[str, str] = {}
-    page = 1
-    while page <= 40:
-        url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100&page={page}"
-        # 述詞而不是註解：host 與 scheme 是常數前綴，argv 只能影響其後的路徑段，
-        # 而那兩段已由 _SLUG_RE 收斂過。
+    # ⛔ 跟 Link: rel="next" 走 cursor 分頁，不自己拼 `page=N`：issues API 對大資料集
+    # 拒收頁碼式分頁（匿名請求第 11 頁起 422，訊息要求改用 after/before）。
+    # ⚠️ 這個端點會**靜默省略**token 讀不到的 PR：沒有 pull-requests: read 的
+    # GITHUB_TOKEN 只拿到 issue，rc 照樣 0/1（#2106 實測少 6 個只出現在 PR 標題的 TRK）。
+    # 工具分辨不出來，權限由呼叫端（workflow）負責給齊。
+    url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100"
+    pages = 0
+    while url:
+        # ⛔ 上限只防無窮迴圈；撞到上限時剩下的（最舊的）標題沒被看過，要回 rc 2。
+        if pages >= _MAX_PAGES:
+            raise TitlesTruncated(f"翻了 {_MAX_PAGES} 頁仍有下一頁")
+        # 述詞而不是註解：第一頁的 host 是常數前綴、路徑段已由 _SLUG_RE 收斂；
+        # 之後的 URL 來自回應的 Link header，同樣只准回到 _API_HOST。
         if not url.startswith(_API_HOST):
             raise ValueError(f"refusing to fetch a non-GitHub URL: {url!r}")
         req = urllib.request.Request(  # nosec B310  # https-only, host pinned to _API_HOST above
@@ -159,12 +191,12 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
         )
         with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310  # same, scheme+host asserted
             batch = json.load(resp)
-        if not batch:
-            break
+            m = _NEXT_RE.search(resp.headers.get("Link") or "")
+        pages += 1
         for it in batch:
-            for m in _TRK_RE.finditer(it.get("title") or ""):
-                hits.setdefault(m.group(1), f"#{it['number']}")
-        page += 1
+            for hit in _TRK_RE.finditer(it.get("title") or ""):
+                hits.setdefault(hit.group(1), f"#{it['number']}")
+        url = m.group(1) if m else ""
     return hits
 
 
@@ -194,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
                     help=i18n_text("GitHub owner", "GitHub owner"))
     ap.add_argument("--gh-repo", default="dynamic-alerting-integrations",
                     help=i18n_text("GitHub repo 名", "GitHub repo name"))
+    ap.add_argument("--title", default=None,
+                    help=i18n_text("只驗這一個標題（titles 面，不需 token；workflow 由事件 payload 傳入）",
+                                   "check only this one title (titles surface, no token needed)"))
+    ap.add_argument("--title-ref", default="(--title)",
+                    help=i18n_text("--title 的出處（如 #2150），用於報告", "where --title came from, for the report"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
@@ -220,7 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         surfaces.append(f"commits({len(hits)}{'' if complete else ', PARTIAL/shallow'})")
         partial = partial or not complete
 
-    if args.surface in ("titles", "all"):
+    if args.title is not None:
+        hits = {m.group(1): args.title_ref for m in _TRK_RE.finditer(args.title)}
+        used.update(hits)
+        surfaces.append(f"title {args.title_ref}({len(hits)})")
+    elif args.surface in ("titles", "all"):
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         if not token:
             print(
@@ -231,7 +272,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             hits = title_trks(args.owner, args.gh_repo, token)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        # ValueError：slug 不合法、Link 指向別的 host、JSON 壞掉——都是量不到，不是違規。
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                TitlesTruncated, ValueError) as exc:
             print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{exc}）", file=sys.stderr)
             return 2
         for k, v in hits.items():
@@ -239,26 +282,34 @@ def main(argv: list[str] | None = None) -> int:
         surfaces.append(f"titles({len(hits)})")
 
     missing = sorted(n for n in used if n not in defined)
+    # ⛔ 凍結要有機制，不能只是散文：照舊看表取號的人會順手補一列，那一列會讓
+    # 它自己的引用「在表上」而轉綠（#2106 盲審實測，含補 legacy 區段的洞）。
+    past_freeze = sorted((n for n in defined if int(n) not in _FROZEN_SET), key=int)
 
     if args.json:
         print(json.dumps(
             {"defined": len(defined), "used": len(used), "surfaces": surfaces,
              "partial": partial,
-             "missing": [{"trk": n, "seen_at": used[n]} for n in missing]},
+             "missing": [{"trk": n, "seen_at": used[n]} for n in missing],
+             "past_freeze": past_freeze},
             ensure_ascii=False, indent=2))
     else:
         print(f"[trk-index] 表上定義 {len(defined)} 個 TRK；掃描面：{', '.join(surfaces)}")
         if partial:
             print("[trk-index] ⚠️ PARTIAL：shallow clone，commit 面只看得到一部分 —— "
                   "「沒找到」不等於「沒有」。完整結果請在有完整歷史處或加 --surface all 重跑。")
-        if missing:
-            for n in missing:
-                print(f"  ✗ TRK-{n} 被引用（{used[n]}）卻不在 {_MAPPING} 的索引裡")
-            print(f"[trk-index] 共 {len(missing)} 個洞。補列或明記「此號未使用」都可以。")
+        for n in past_freeze:
+            print(f"  ✗ TRK-{n} 被登記在 {_MAPPING}，但表已凍結（到 TRK-{_FROZEN_MAX}）："
+                  "新條目改用 TRK-<issue 號>，不要再加列或補洞")
+        for n in missing:
+            print(f"  ✗ TRK-{n} 被引用（{used[n]}）卻不在 {_MAPPING} 的索引裡 → "
+                  "三位數屬於凍結的舊表，新條目改用四位數以上的新追蹤 issue 號")
+        if missing or past_freeze:
+            print(f"[trk-index] 共 {len(missing) + len(past_freeze)} 個問題。")
         else:
             print("[trk-index] ✅ 量了沒事：被引用的 TRK 都在表上")
 
-    if missing and args.ci:
+    if (missing or past_freeze) and args.ci:
         return 1
     return 0
 
