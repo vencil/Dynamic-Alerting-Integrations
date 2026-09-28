@@ -78,4 +78,28 @@ grep -q "CVE-2026-9001" frag-imgE.txt && fail "case5 LOW must be excluded"
 grep -q "CVE-2026-9002" frag-imgE.txt && fail "case5 unfixed HIGH must be excluded"
 echo "ok: case5 (defensive filter excludes LOW + unfixed)"
 
+# --- Case 6: no Results on a marked static-binary image → "no inventory", not clean ---
+cat > trivy-imgF.json <<'JSON'
+{ "SchemaVersion": 2, "ArtifactName": "busybox:1.36", "ArtifactType": "container_image",
+  "Metadata": { "ImageID": "sha256:abc" } }
+JSON
+TRIVY_ALLOW_NO_INVENTORY=true bash "$SCRIPT" imgF
+head1="$(head -n1 frag-imgF.txt)"
+[ "$head1" = "$(printf 'imgF\t0')" ] || fail "case6 header expected 'imgF<TAB>0', got '$head1'"
+grep -q "no package inventory" frag-imgF.txt || fail "case6 missing no-inventory line"
+grep -q "clean (0 fixable" frag-imgF.txt && fail "case6 must NOT be reported as clean"
+echo "ok: case6 (marked static image → no inventory)"
+
+# --- Case 7: same report WITHOUT the marker → still aborts (no fail-open) ---
+if bash "$SCRIPT" imgF >/dev/null 2>&1; then
+  fail "case7 unmarked image without Results should abort, but exited 0"
+fi
+echo "ok: case7 (unmarked → abort)"
+
+# --- Case 8: marker set but report not a Trivy report → still aborts ---
+if TRIVY_ALLOW_NO_INVENTORY=true bash "$SCRIPT" imgC >/dev/null 2>&1; then
+  fail "case8 marked image with drifted schema should abort, but exited 0"
+fi
+echo "ok: case8 (marked + drifted schema → abort)"
+
 echo "PASS: all summarize_trivy_cve.sh cases"
