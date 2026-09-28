@@ -1342,6 +1342,10 @@ class TestYamlTypedScalarParity:
         # PyYAML raised ValueError on these and dropped the whole tenant file.
         ("date-month-13", "_x:\n  at: 2026-13-01\n", None,
          '{"_x":{"at":"2026-13-01"},"mysql_connections":50}'),
+        ("date-day-0", "_x:\n  at: 2026-12-00\n", None,
+         '{"_x":{"at":"2026-12-00"},"mysql_connections":50}'),
+        ("date-arabic-indic-digits", "_x:\n  at: ٢٠٢٦-١٢-٣١\n", None,
+         '{"_x":{"at":"٢٠٢٦-١٢-٣١"},"mysql_connections":50}'),
         ("date-feb-30", "_x:\n  at: 2026-02-30\n", None,
          '{"_x":{"at":"2026-02-30"},"mysql_connections":50}'),
         # time.Parse's zone bounds: an hour above 24 or a minute above 60 is
@@ -1397,15 +1401,27 @@ class TestYamlTypedScalarParity:
         ("explicit-timestamp-empty", "_x:\n  at: !!timestamp\n"),
         ("explicit-timestamp-quoted-empty", '_x:\n  at: !!timestamp ""\n'),
         ("explicit-timestamp-block-keep", "_x:\n  at: !!timestamp |\n    2026-12-31\n"),
-        # time.Parse accepts a 24h+ offset, time.Time.MarshalJSON does not:
-        # pkg/config's CanonicalJSON fails (review 2 F1).
-        ("zone-24-00", "_x:\n  at: 2026-12-31T10:20:30+24:00\n"),
-        ("zone-minus-23-60", "_x:\n  at: 2026-12-31T10:20:30-23:60\n"),
-        ("zone-24-01", "_x:\n  at: 2026-12-31T10:20:30+24:01\n"),
     ]
 
-    # What the reader still cannot align. `None` = yaml.v3 refuses the file.
+    # What the reader still cannot align. `None` = the exporter has no
+    # merged_hash for t1 (yaml.v3 refuses the file, or CanonicalJSON fails).
     DIVERGENT = [
+        # Go parses a 24h+ zone offset, but CanonicalJSON fails once the value
+        # is in the tenant's effective config, so the exporter has no hash;
+        # this tool renders it as usual (review 3 F1: refusing the file was
+        # wider than Go — see TestYamlTimestampScope).
+        ("zone-24-00", "_x:\n  at: 2026-12-31T10:20:30+24:00\n", None, None),
+        ("zone-minus-23-60", "_x:\n  at: 2026-12-31T10:20:30-23:60\n", None, None),
+        ("zone-24-01", "_x:\n  at: 2026-12-31T10:20:30+24:01\n", None, None),
+        ("zone-24-00-one-digit-fields", "_x:\n  at: 2026-1-2T1:2:3+24:00\n", None, None),
+        # An explicit `!!timestamp` is refused for VALUES only: yaml.v3 also
+        # refuses the file for one on a key or a tenant id; here the key is
+        # its text (review 3 F3; tenant id: TestYamlTimestampScope).
+        ("key-ts-foo-direct", "!!timestamp foo: 1\n", None, None),
+        ("key-ts-foo-nested", "_x:\n  !!timestamp foo: 1\n", None, None),
+        # …and yaml.v3 decodes a quoted key tagged `!!timestamp` as a time.
+        ("key-ts-quoted", "_x:\n  !!timestamp '2026-12-31': 1\n", None,
+         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":1},"mysql_connections":50}'),
         # An explicit tag PyYAML's own resolver would also have inferred leaves
         # no trace once composed: read as the plain `2026-1-2`, i.e. a time.
         ("explicit-str-on-a-go-only-timestamp", "_x:\n  at: !!str 2026-1-2\n", None,
@@ -1487,6 +1503,44 @@ class TestYamlTypedScalarParity:
         assert "Traceback" not in res.stderr
         out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
         assert out
+
+
+class TestYamlTimestampScope:
+    """#2371 review 3 F1: a 24h+ zone offset stops the exporter only once it
+    is IN a tenant's effective config (CanonicalJSON). Anywhere else in the
+    tree t1 is still described, as Go describes it. Whole files, because the
+    point is what else is in them. Go column measured with pkg/config."""
+
+    DEFAULTS = "defaults:\n  mysql_connections: 50\n"
+    CASES = [
+        pytest.param(
+            "tenants:\n  t1:\n    mysql_connections: 60\n  t2:\n    _x:\n      at: 2026-12-31T10:20:30+24:00\n",
+            DEFAULTS, '{"mysql_connections":60}', id="other-tenant-in-file-24h"),
+        pytest.param(
+            "tenants:\n  t1:\n    mysql_connections: 60\nextra: 2026-12-31T10:20:30+24:00\n",
+            DEFAULTS, '{"mysql_connections":60}', id="root-sibling-24h"),
+        pytest.param(
+            "tenants:\n  t1:\n    _x: 1\n", DEFAULTS + "  _x: 2026-12-31T10:20:30+24:00\n",
+            '{"_x":1,"mysql_connections":50}', id="overridden-default-24h"),
+        # yaml.v3 refuses the file for an explicit `!!timestamp` on a tenant
+        # id; this tool refuses it for values only (review 3 F3).
+        pytest.param(
+            "tenants:\n  !!timestamp foo:\n    a: 1\n  t1:\n    a: 2\n", DEFAULTS, None,
+            id="tenantid-ts-foo", marks=pytest.mark.xfail(
+                strict=True, reason="#2371: `!!timestamp` refused on values only, not tenant ids")),
+    ]
+
+    @pytest.mark.parametrize("tenant_yaml,defaults_yaml,go_json", CASES)
+    def test_t1_is_described_as_go_describes_it(self, tmp_path, tenant_yaml, defaults_yaml, go_json):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(defaults_yaml, encoding="utf-8")
+        (conf_d / "t1.yaml").write_text(tenant_yaml, encoding="utf-8")
+        if go_json is None:  # the exporter has no t1
+            with pytest.raises(KeyError):
+                dt.ConfDScanner(conf_d).effective_config("t1")
+            return
+        assert dt._canonical_json(dt.ConfDScanner(conf_d).effective_config("t1")) == go_json
 
 
 class TestYamlMappingKeyParity:

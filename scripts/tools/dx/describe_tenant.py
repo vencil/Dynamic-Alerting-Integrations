@@ -525,18 +525,6 @@ def _go_key_spelling(loader: Any, node: Any) -> str:
     return _go_plain_key(text)
 
 
-def _go_time_value(parsed: tuple, text: str, node: Any) -> str:
-    """A time VALUE yaml.v3 parsed, as the exporter's canonical JSON writes
-    it — refused (see `_GoKeyLoader._construct_timestamp`) when its zone
-    offset is 24h or more, which time.Time.MarshalJSON cannot encode."""
-    zone = parsed[-1]
-    if zone != "Z" and int(zone[1:3]) >= 24:
-        raise yaml.constructor.ConstructorError(
-            None, None, f"timestamp {text!r}: zone offset of 24h or more, which the "
-            "exporter cannot encode (time.Time.MarshalJSON)", node.start_mark)
-    return _go_time_json(*parsed)
-
-
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
@@ -571,19 +559,19 @@ class _GoKeyLoader(StrictExporterKeyLoader):
         of which PyYAML raised ValueError on and dropped the whole file), the
         value is the source text, as yaml.v3 keeps it.
 
-        Two shapes are refused, taking the file down this tool's existing
-        "does not parse" path:
-          - an EXPLICIT `!!timestamp` yaml.v3 cannot parse (`!!timestamp
-            foo`, an empty one, a quoted or block one): yaml.v3 refuses the
-            file ("cannot decode !!str `foo` as a !!timestamp"). Explicit is
-            knowable only where PyYAML would not have inferred the tag from
-            the plain text; `!!timestamp 2026-13-01` looks implicit and stays
-            text (a known divergence).
-          - a zone offset of 24h or more (`+24:00`, `-23:60`): time.Parse
-            accepts it, but time.Time.MarshalJSON refuses it, so the
-            exporter cannot compute this tenant's merged_hash at all. Not
-            describing the file is the nearest this tool gets to that; a
-            made-up rendering would be a hash the exporter never has."""
+        An EXPLICIT `!!timestamp` VALUE yaml.v3 cannot parse (`!!timestamp
+        foo`, an empty one, a quoted or block one) is refused, taking the
+        file down this tool's existing "does not parse" path, as yaml.v3
+        refuses the file. Explicit is knowable only where PyYAML would not
+        have inferred the tag from the plain text; `!!timestamp 2026-13-01`
+        looks implicit and stays text (a known divergence).
+
+        ⛔ A zone offset of 24h or more (`+24:00`) is rendered like any other
+        time. time.Parse accepts it; only time.Time.MarshalJSON refuses it,
+        and only once the value is IN a tenant's effective config — another
+        tenant in the same file, a root-level sibling key, or an overridden
+        default does not stop the exporter. Refusing the file here was wider
+        than that (a known divergence where the value does reach it)."""
         text = self.construct_scalar(node)
         parsed = _go_parse_timestamp(text)
         if parsed is None:
@@ -593,7 +581,7 @@ class _GoKeyLoader(StrictExporterKeyLoader):
                 raise yaml.constructor.ConstructorError(
                     None, None, f"cannot decode {text!r} as a !!timestamp", node.start_mark)
             return text
-        return _go_time_value(parsed, text, node)
+        return _go_time_json(*parsed)
 
     def _construct_str(self, node):
         """A scalar PyYAML reads as a string that yaml.v3 reads as a time —
@@ -605,7 +593,7 @@ class _GoKeyLoader(StrictExporterKeyLoader):
                 and self.resolve(yaml.ScalarNode, text, (True, False)) == _YAML_STR_TAG):
             parsed = _go_parse_timestamp(text)
             if parsed:
-                return _go_time_value(parsed, text, node)
+                return _go_time_json(*parsed)
         return text
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
