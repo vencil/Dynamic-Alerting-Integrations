@@ -41,6 +41,7 @@ package main
 // an orphaned timer channel in early prototypes; AfterFunc is cleaner).
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -281,6 +282,10 @@ type reloadPriorState struct {
 	// (#2117): what this tick's is compared with, and reused as is when no
 	// root platform file moved.
 	profiles *config.PlatformProfiles
+	// mergeRetry is the tenants the last tick could not recompute because
+	// a read failed (#2100): recomputed on this tick even if nothing that
+	// feeds them moved.
+	mergeRetry map[string]struct{}
 }
 
 // reloadScanState bundles the hierarchy projection of this tick's scan
@@ -315,8 +320,11 @@ type reloadScanState struct {
 type reloadResult struct {
 	newMergedHashes   map[string]string
 	newParsedDefaults map[string]map[string]any
-	reloaded          int
-	noOp              int
+	// newMergeRetry is this tick's failed-read tenants (#2100), installed
+	// as hierarchy.mergeRetry. nil = none.
+	newMergeRetry map[string]struct{}
+	reloaded      int
+	noOp          int
 }
 
 // snapshotPriorState reads every m.* field that diffAndReload needs into
@@ -336,6 +344,7 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 		graph:            m.hierarchy.graph,          // #1964: prior chain membership
 		platform:         m.hierarchy.platform,       // #2019: prior platform per-tenant blocks
 		profiles:         m.hierarchy.profiles,       // #2117: prior profiles
+		mergeRetry:       m.hierarchy.mergeRetry,     // #2100: failed-read tenants to retry
 		hierarchicalMode: m.hierarchy.enabled,
 		tree:             m.flat.tree,
 	}
@@ -504,8 +513,9 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		scopePaths = append(scopePaths, profilePaths...)
 	}
 	defaultsChanged := membershipChanged || len(scopePaths) > 0
+	_, retrying := prior.mergeRetry[tid]
 
-	if !sourceChanged && !defaultsChanged {
+	if !sourceChanged && !defaultsChanged && !retrying {
 		// Reuse cached merged_hash — nothing that feeds this tenant moved.
 		if prev, ok := prior.mergedHashes[tid]; ok {
 			res.newMergedHashes[tid] = prev
@@ -518,7 +528,25 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	overlay := config.PlatformOverlayFor(scan.platform, tid)
 	mh, mergeErr := m.recomputeMergedHashWith(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles}, tenantFiles)
 	if mergeErr != nil {
-		logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
+		// #2100: a failed READ is not a fact about the inputs this tick
+		// commits (their hashes come from the scan), so the tenant is
+		// retried on the next tick even if nothing moves. A parse/merge
+		// error is a fact about those bytes: retrying unchanged bytes
+		// fails the same way, so it is not retried (and its parse-failure
+		// signal is not re-emitted every tick). One attempt per tick; the
+		// skip line is written when the failure starts, not on every
+		// retry that fails again.
+		if isMergeReadError(mergeErr) {
+			if res.newMergeRetry == nil {
+				res.newMergeRetry = make(map[string]struct{})
+			}
+			res.newMergeRetry[tid] = struct{}{}
+			if !retrying {
+				logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
+			}
+		} else {
+			logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
+		}
 		// Preserve any prior merged_hash we had so the /effective
 		// endpoint still serves the last-known-good value. Absent prior
 		// → mark empty (tenant will read as merge-failing).
@@ -528,6 +556,13 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		return
 	}
 	res.newMergedHashes[tid] = mh
+	if retrying {
+		m.getLogger().Printf("INFO: merged_hash for tenant=%s recomputed after an earlier read failure", tid)
+	}
+	// A retry that catches up with nothing moved on disk is not a reload:
+	// neither branch below fires, so the reload attribution (triggers,
+	// no-op/shadowed, blast radius) is what it was before #2100 — the
+	// failing tick never counted this tenant, and neither does this one.
 
 	if sourceChanged {
 		res.reloaded++
@@ -624,7 +659,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 	// #2153: one read + parse per tenant file for this tick's merges, not
 	// one per tenant it declares — tenants visited file by file. This tick
 	// only: the next tick starts empty, so no parse outlives its bytes.
-	tenantFiles := &tenantFilesOnce{onParse: m.onReloadTenantParse}
+	tenantFiles := &tenantFilesOnce{onParse: m.onReloadTenantParse, read: m.reloadMergeRead}
 	for _, tid := range tenantsByFile(scan.tenants) {
 		m.classifyTenant(tid, scan.tenants[tid], prior, scan, &res, buckets, tenantFiles)
 	}
@@ -698,6 +733,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.hierarchy.platform = scan.platform
 	m.hierarchy.profiles = scan.profiles
+	m.hierarchy.mergeRetry = result.newMergeRetry
 	afterHierarchyInstall := m.afterHierarchyInstall
 	m.mu.Unlock()
 
@@ -804,15 +840,16 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 // then the tenant file's (config.ComputeMergedHashDoc keeps a syntax error
 // until the merge reaches the tenant file, as the byte form did).
 func (m *ConfigManager) recomputeMergedHashWith(tenantID, tenantFile string, defaultsChain []string, layers config.TenantLayers, tenantFiles *tenantFilesOnce) (string, error) {
-	doc, err := tenantFiles.get(tenantFile, os.ReadFile)
+	read := tenantFiles.reader()
+	doc, err := tenantFiles.get(tenantFile, read)
 	if err != nil {
-		return "", err
+		return "", mergeReadError{err}
 	}
 	chainBytes := make([][]byte, 0, len(defaultsChain))
 	for _, dp := range defaultsChain {
-		b, rerr := os.ReadFile(dp)
+		b, rerr := read(dp)
 		if rerr != nil {
-			return "", rerr
+			return "", mergeReadError{rerr}
 		}
 		chainBytes = append(chainBytes, b)
 	}
@@ -821,6 +858,20 @@ func (m *ConfigManager) recomputeMergedHashWith(tenantID, tenantFile string, def
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
 	return h, mergeErr
+}
+
+// mergeReadError marks a recomputeMergedHashWith error as a failed file
+// read rather than a parse/merge failure of the bytes read (#2100): the
+// reload retries the former on the next tick. Transparent otherwise —
+// same message, and errors.Is/As see the read error through Unwrap.
+type mergeReadError struct{ err error }
+
+func (e mergeReadError) Error() string { return e.err.Error() }
+func (e mergeReadError) Unwrap() error { return e.err }
+
+func isMergeReadError(err error) bool {
+	var re mergeReadError
+	return errors.As(err, &re)
 }
 
 // tenantFilesOnce is the tenant file one merge pass (a cold load, or one
@@ -854,6 +905,19 @@ type tenantFilesOnce struct {
 	readErr error
 	// onParse is a test seam, nil in production: called once per parse.
 	onParse func(absPath string)
+	// read is a test seam, nil in production (= os.ReadFile): the read
+	// recomputeMergedHashWith makes for the tenant file AND for each
+	// defaults-chain file of the same merge (#2100). Set from
+	// ConfigManager.reloadMergeRead.
+	read func(string) ([]byte, error)
+}
+
+// reader is t.read, or os.ReadFile when no seam is set.
+func (t *tenantFilesOnce) reader() func(string) ([]byte, error) {
+	if t.read != nil {
+		return t.read
+	}
+	return os.ReadFile
 }
 
 // get is absPath's parsed document, reading it with read unless it is the

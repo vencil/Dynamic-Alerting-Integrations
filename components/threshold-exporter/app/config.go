@@ -100,6 +100,13 @@ type hierarchyState struct {
 	// above were computed with (#2117) — a tenant's `_profile` fills in keys
 	// on /metrics (ApplyProfiles), so it is part of what merged_hash hashes.
 	profiles *config.PlatformProfiles
+	// mergeRetry is the tenants whose merged_hash recompute failed to READ
+	// a file on the last reload tick (#2100). Their mergedHashes entry is
+	// the last-known-good value, but hashes/graph/platform above already
+	// hold that tick's inputs — so the next tick would compare equal and
+	// never try again. classifyTenant recomputes every tenant in this set
+	// once per tick until a read succeeds. nil = none.
+	mergeRetry map[string]struct{}
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
 	// subtree defaults chain supplies but that NO emitter can iterate
@@ -197,6 +204,16 @@ type ConfigManager struct {
 	// parallel test observes only its own manager's ticks. Set it before the
 	// tick; it is read on the reloading goroutine.
 	onReloadTenantParse func(absPath string)
+
+	// reloadMergeRead is a test seam, nil in production (#2100): the file
+	// read a reload tick's merged_hash recompute makes — the tenant file and
+	// every defaults-chain file (classifyAndCount → tenantFilesOnce.read).
+	// nil means os.ReadFile. It exists so a test can fail exactly the
+	// recompute's read while the tree scan (which carries an unmoved file by
+	// its mtime, unread) succeeds — the shape of a transient read failure.
+	// Per-manager, set before the tick, read on the reloading goroutine —
+	// same contract as onReloadTenantParse.
+	reloadMergeRead func(absPath string) ([]byte, error)
 
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
@@ -1682,6 +1699,9 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.hierarchy.tenantSources = tenants
 	m.hierarchy.hashes = scan.AbsHashes()
 	m.hierarchy.mergedHashes = newMergedHashes
+	// A cold load recomputes every tenant; one it could not is absent from
+	// newMergedHashes, which the next tick already recomputes (#2100).
+	m.hierarchy.mergeRetry = nil
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.hierarchy.platform = platform
