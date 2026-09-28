@@ -379,6 +379,15 @@ class TestPlatformIndependence:
         assert [p.name for _s, p in tc.helper_scope(tools)] == ["_helper.py"]
 
 
+class TestAMissingRoot:
+    def test_both_halves_of_the_partition_report_nothing(self, tmp_path):
+        """`iterdir` on a missing directory raises; both scopes must return
+        an empty list instead, the way the old `glob` did."""
+        missing = tmp_path / "no-such-tools"
+        assert tc.count_scope(missing) == []
+        assert tc.helper_scope(missing) == []
+
+
 class TestThePartitionIsComplete:
     def test_every_py_in_scope_is_a_tool_or_a_helper_never_both(self, tmp_path):
         """`generate_tool_map` lists tools in tables and helpers in a
