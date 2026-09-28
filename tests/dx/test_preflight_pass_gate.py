@@ -632,15 +632,18 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     assert r2.returncode == 1, f"control did not fire. stderr={r2.stderr}"
 
 
-def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
+_MAKE_CMD = "make pr-preflight"
+_PY_CMD = "python scripts/tools/dx/pr_preflight.py"
+
+
+def _follow_the_hint(stderr: str, cwd: Path, cmd: str = _MAKE_CMD) -> tuple[str, Path]:
     """Paste the banner's instruction into a shell standing in `cwd`, with
-    `make pr-preflight` swapped for a probe; return (HEAD, directory) where the
-    probe ran.
+    `cmd` swapped for a probe; return (HEAD, directory) where the probe ran.
 
     ⛔ The shell must end where it started: a relative refspec is re-read from
     there on the next push.
     """
-    r = _paste_the_hint(stderr, cwd, 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"')
+    r = _paste_the_hint(stderr, cwd, 'printf "\\0probe\\0%s\\0%s\\0" "$(git rev-parse HEAD)" "$(pwd -P)"', cmd)
     assert r.returncode == 0, f"the instruction failed: {r.stderr}"
     assert "\0probe\0" in r.stdout, f"the instruction did not reach the probe: {r.stderr}"
     head, landed, _ = r.stdout.split("\0probe\0", 1)[1].split("\0", 2)
@@ -650,12 +653,13 @@ def _follow_the_hint(stderr: str, cwd: Path) -> tuple[str, Path]:
     return head, Path(landed)
 
 
-def _paste_the_hint(stderr: str, cwd: Path, preflight: str) -> subprocess.CompletedProcess:
-    """Run the banner's one instruction line with `make pr-preflight` replaced
-    by `preflight`, then report where the shell ended; rc is the line's."""
-    lines = [ln.strip() for ln in stderr.splitlines() if "make pr-preflight" in ln]
+def _paste_the_hint(stderr: str, cwd: Path, preflight: str,
+                    cmd: str = _MAKE_CMD) -> subprocess.CompletedProcess:
+    """Run the banner's one instruction line with `cmd` replaced by
+    `preflight`, then report where the shell ended; rc is the line's."""
+    lines = [ln.strip() for ln in stderr.splitlines() if cmd in ln]
     assert len(lines) == 1, f"expected one instruction line: {stderr}"
-    script = (lines[0].replace("make pr-preflight", preflight)
+    script = (lines[0].replace(cmd, preflight)
               + '; r=$?; printf "\\0after\\0%s" "$(pwd -P)"; exit $r')
     return subprocess.run(  # subprocess-timeout: ignore
         ["bash", "-c", script], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -718,6 +722,44 @@ def test_pushing_a_clean_tree_at_the_pushed_commit_points_back_at_it(tmp_path: P
     """
     wt, (sha,) = _held_worktree(tmp_path, name)
     head, landed = _follow_the_hint(_blocked(wt, sha).stderr, tmp_path)
+    assert (head, landed) == (sha, wt.resolve())
+
+
+def _path_without(scratch: Path, name: str) -> str:
+    """This PATH with `name` gone: every directory holding it (/bin and
+    /usr/bin can be the same place) is swapped for a copy made of symlinks to
+    everything else in it."""
+    assert shutil.which(name), f"{name} is not on PATH here, so hiding it proves nothing"
+    dirs = []
+    for i, d in enumerate(os.environ["PATH"].split(os.pathsep)):
+        if (Path(d) / name).exists():
+            copy = scratch / str(i)
+            copy.mkdir(parents=True)
+            for entry in Path(d).iterdir():
+                if entry.name != name:
+                    (copy / entry.name).symlink_to(entry)
+            d = str(copy)
+        dirs.append(d)
+    path = os.pathsep.join(dirs)
+    assert shutil.which(name, path=path) is None, f"{name} still reachable"
+    return path
+
+
+def test_without_make_the_banner_names_a_command_this_shell_can_run(tmp_path: Path):
+    """#1920 — a Windows host's Git Bash has no make; the line must still run.
+
+    The tests above are the control: with make on PATH they find `make pr-preflight`.
+    """
+    wt, (sha,) = _held_worktree(tmp_path, "held-wt")
+    shim = _make_fake_gh(wt.parent / "bin-held-wt", state="OPEN")
+    path = _path_without(wt.parent / "no-make", "make")
+    r = _run_gate(wt, _refspec("held", sha), env_extra={
+        "GIT_PREFLIGHT_STRICT": "1", "PATH": f"{shim}{os.pathsep}{path}",
+        "TMPDIR": str(wt.parent),
+    })
+    assert r.returncode == 1, f"stderr={r.stderr}"
+    assert _MAKE_CMD not in r.stderr, f"told a shell without make to run make:\n{r.stderr}"
+    head, landed = _follow_the_hint(r.stderr, tmp_path, cmd=_PY_CMD)
     assert (head, landed) == (sha, wt.resolve())
 
 

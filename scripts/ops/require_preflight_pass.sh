@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# require_preflight_pass.sh — pre-push gate: verify `make pr-preflight`
-# ran against the commits being PUSHED before allowing the push.
+# require_preflight_pass.sh — pre-push gate: verify pr-preflight
+# (scripts/tools/dx/pr_preflight.py, `make pr-preflight`) ran against the
+# commits being PUSHED before allowing the push.
 #
 # Purpose:
 #   Prevent pushing pre-preflight commits that CI will likely reject. The
@@ -235,6 +236,13 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
 # re-read from wherever that shell stands.
 # ⛔ A `status` that fails is not "clean": unknown must not pick the tree.
+# The instruction must run in the shell reading it, and a Windows host's Git
+# Bash has no make (#1920): ask this shell, the one the push came from.
+if command -v make >/dev/null 2>&1; then
+    _preflight_cmd="make pr-preflight"
+else
+    _preflight_cmd="python scripts/tools/dx/pr_preflight.py"
+fi
 _here=""
 if [ "$_missing_sha" = "$head_sha" ] \
     && _dirty="$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" \
@@ -243,7 +251,7 @@ if [ "$_missing_sha" = "$head_sha" ] \
 fi
 if [ -n "$_here" ]; then
     printf -v _here_q '%q' "$_here"
-    _checkout_hint="    (cd ${_here_q} && make pr-preflight)"
+    _checkout_hint="    (cd ${_here_q} && ${_preflight_cmd})"
 else
     # ⛔ `&&` before the trap: a failed `add` (path already there) must not
     # remove what is there. `$$` keeps two pushes' paths apart.
@@ -260,7 +268,7 @@ else
     printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
     # Quoted twice: the shell you paste into reads it once, the trap once more.
     printf -v _remove_q '%q' "git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
-    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && make pr-preflight))"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && ${_preflight_cmd}))"
 fi
 
 # No marker — block with actionable instructions.

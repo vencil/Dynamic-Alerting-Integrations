@@ -47,10 +47,11 @@ case "${1:-}" in
             "usage: bash scripts/ops/install_prepush_hook.sh" \
             "" \
             "Installs the pre-push guard shim, chaining any hook already there." \
-            "To ask whether the guards are wired, run: make pr-preflight" >&2
+            "To ask whether the guards are wired, run: make pr-preflight" \
+            "  (no make, e.g. Git Bash on Windows: python scripts/tools/dx/pr_preflight.py)" >&2
         exit 0 ;;
     *)
-        warn "unknown argument: $1 (there is no --check; use \`make pr-preflight\`)"
+        warn "unknown argument: $1 (there is no --check; use \`make pr-preflight\`, or \`python scripts/tools/dx/pr_preflight.py\` without make)"
         exit 2 ;;
 esac
 
