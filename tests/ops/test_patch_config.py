@@ -10,6 +10,7 @@
   6. run_cmd() — 指令執行
 """
 
+import io
 import json
 from unittest import mock
 
@@ -18,6 +19,7 @@ import yaml
 
 import patch_config as pc  # noqa: E402
 from _patch_config_fake import FakeCluster  # noqa: E402
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -399,6 +401,11 @@ def _cm(**data):
 
 def _decl(tenant, **metrics):
     return yaml.safe_dump({"tenants": {tenant: metrics}})
+
+
+def _exporter_keys(text):
+    """`text` read the way the exporter reads it: keys as source text."""
+    return load_exporter_keys(io.StringIO(text))
 
 
 def _own(cm, tenant, metric):
@@ -939,12 +946,20 @@ class TestWriteAndCliEdges:
         with pytest.raises(pc.ConfigMapShapeError, match="not a YAML mapping"):
             pc.patch_multifile(cm, "ta", "k", "3")
 
-    @pytest.mark.parametrize("tid", ["010", "yes"])
-    def test_write_that_would_rename_the_tenant_is_refused(self, tid):
+    @pytest.mark.parametrize("tid", ["010", "yes", "8"])
+    def test_a_tenant_yaml_would_retype_is_patched_under_its_own_id(self, tid):
+        """#2216 / #2237: the rewrite read the key with PyYAML's typing, so
+        `010:` came back `8:` and the write was refused (fail-closed; a
+        tenant `8` could not be patched at all). The key is now read as the
+        exporter reads it — its source text — and written back as that id."""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "t.yaml": f"tenants:\n  {tid}: {{m: '1', n: '2'}}\n"})
-        with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
-            pc.patch_multifile(cm, tid, "m", "5")
+        patch = pc.patch_multifile(cm, tid, "m", "5")
+        assert patch is not None
+        written = patch["data"]["t.yaml"]
+        assert _exporter_keys(written) == {"tenants": {tid: {"m": "5", "n": "2"}}}
+        cm["data"]["t.yaml"] = written
+        assert _own(cm, tid, "m") == ("t.yaml", "5")
 
     def test_new_key_already_holding_another_tenant_is_refused(self):
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,

@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -29,8 +30,10 @@ import check_routing_profiles as crp  # noqa: E402
 import da_assembler  # noqa: E402
 import deprecate_rule  # noqa: E402
 import diagnose  # noqa: E402
+import patch_config as pc  # noqa: E402
 import policy_engine as pe  # noqa: E402
 from _lib_confd import declared_tenant_ids  # noqa: E402
+from _patch_config_fake import FakeCluster  # noqa: E402
 
 
 def _tree(root: Path, files: dict[str, str]) -> Path:
@@ -445,3 +448,164 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
     assert da_assembler.render_cr_file(cr, tmp_path) == 0
     got = _as_text(tmp_path / "m.yaml")
     assert got == {"tenants": {row["exporter_key"]: {"container_cpu": "2"}}}, got
+
+
+# ── patch-config: the tenant patched is the tenant named (#2216, #2237) ──
+#
+# `_patch_carrier` rewrote the carrier from `yaml.safe_load(old)`: a lone
+# `010:` / `8:` / `yes:` came back renamed and the write was refused (#2216,
+# fail-closed — a numeric tenant could not be patched at all), and two keys
+# the exporter reads as two tenants but PyYAML as one value (`8` and `010`)
+# were folded into one, the other tenant overwritten (#2237). Keys are now
+# read as source text; the whole carrier is still re-dumped, so the other
+# tenant's block is compared as the exporter reads it.
+
+_PC_BLOCK = "    connections: '1'\n    mem: '5'\n"
+_PC_DEFAULTS = "defaults:\n  connections: 100\n  mem: 80\n"
+
+
+def _pc_cm(mode: str, tenants_body: str) -> dict:
+    """A ConfigMap whose one tenant carrier holds `tenants_body`: multi-file
+    (`_defaults.yaml` + `t.yaml`) or legacy (one `config.yaml`)."""
+    if mode == "legacy":
+        return {"data": {"config.yaml": _PC_DEFAULTS + "tenants:\n" + tenants_body}}
+    return {"data": {"_defaults.yaml": _PC_DEFAULTS,
+                     "t.yaml": "tenants:\n" + tenants_body}}
+
+
+def _pc_tenants(text: str) -> dict:
+    return _lib_yaml_keys.load_exporter_keys(io.StringIO(text))["tenants"]
+
+
+@pytest.mark.parametrize("mode", ["multi-file", "legacy"])
+@pytest.mark.parametrize("row", _MATRIX_IDS, ids=lambda r: r["source"])
+def test_patch_config_keeps_every_matrix_spelling(row, mode):
+    """Every spelling of the shared Go/Python table: patched under the
+    exporter's id, and read back as that id after the write."""
+    tid = row["exporter_key"]
+    cm = _pc_cm(mode, f"  {row['source']}:\n" + _PC_BLOCK)
+    patch = pc.build_patch(cm, mode, tid, "connections", "3")
+    assert patch is not None
+    (key, text), = patch["data"].items()
+    assert key == ("config.yaml" if mode == "legacy" else "t.yaml")
+    assert _pc_tenants(text) == {tid: {"connections": "3", "mem": "5"}}, text
+
+
+# Pairs the exporter reads as TWO tenants and PyYAML as one value.
+_PC_COLLISIONS = [("8", "010"), ("true", "yes"), ("1", "true"),
+                  ("16", "0x10"), ("750", "12:30")]
+
+
+@pytest.mark.parametrize("patch_first", [True, False],
+                         ids=["patch-first", "patch-second"])
+@pytest.mark.parametrize("pair", _PC_COLLISIONS, ids="/".join)
+def test_patch_config_leaves_the_colliding_tenant_alone(pair, patch_first):
+    """#2237: `8:` and `010:` in one legacy `config.yaml`. Before: the write
+    folded them and `8` got `010`'s block (the post-write check then rolled
+    it back, rc 1). Now only the named tenant changes."""
+    a, b = pair
+    cm = _pc_cm("legacy", f"  {a}:\n    connections: '2'\n    mem: '50'\n"
+                          f"  {b}:\n" + _PC_BLOCK)
+    target, other = (a, b) if patch_first else (b, a)
+    before = _pc_tenants(cm["data"]["config.yaml"])
+    patch = pc.build_patch(cm, "legacy", target, "connections", "3")
+    after = _pc_tenants(patch["data"]["config.yaml"])
+    assert set(after) == {a, b}, after
+    assert after[other] == before[other], after
+    assert after[target] == {**before[target], "connections": "3"}, after
+
+
+def test_patch_config_keeps_a_profile_outside_tenants_typed():
+    """Only `tenants.<id>._profile` is read as text. The loader's opt-in
+    matches the key name at every depth: `defaults: {_profile: 010}` came
+    back `'010'`, and the exporter, which decodes `defaults:` as a float64
+    map, then refused the whole config (review of eecc80f1). The tenant's
+    own `_profile: 010` in the same file still stays text."""
+    text = (_PC_DEFAULTS + "  _profile: 010\n"
+            "tenants:\n  acme:\n    _profile: 010\n    connections: '1'\n")
+    cm = _pc_cm("legacy", "")
+    cm["data"]["config.yaml"] = text
+    patch = pc.build_patch(cm, "legacy", "acme", "connections", "3")
+    written = patch["data"]["config.yaml"]
+    got = _lib_yaml_keys.load_exporter_keys(io.StringIO(written))
+    assert got["defaults"] == {"connections": 100, "mem": 80, "_profile": 8}, written
+    assert all(isinstance(v, (int, float)) for v in got["defaults"].values()), written
+    assert got["tenants"] == {"acme": {"_profile": "010", "connections": "3"}}, written
+
+
+def test_patch_config_refuses_a_write_that_changes_the_declared_tenants(monkeypatch):
+    """The post-rewrite set guard: with the re-read typed again (the reader
+    before #2237), `010:` is written as `8:` beside a new `010:` — the key
+    would declare {8, 010} where it declared {010}. Refused, nothing sent."""
+    import yaml
+    monkeypatch.setattr(pc, "strict_load_exporter_keys",
+                        lambda text, **_kw: yaml.safe_load(text))
+    cm = _pc_cm("multi-file", "  010:\n" + _PC_BLOCK)
+    with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
+        pc.build_patch(cm, "multi-file", "010", "connections", "3")
+
+
+def test_patch_config_keeps_a_profile_reference_bound(tmp_path):
+    """`_profile: 010` names profile `010:`. With only the KEY read as text
+    the rewrite still wrote `_profile: 8` — the binding silently broken at
+    rc 0 (#2237 step 0). Same shape as the deprecate_rule test above."""
+    defaults = ("defaults:\n  connections: 100\n  container_cpu: 80\n"
+                'profiles:\n  010:\n    container_cpu: "55"\n')
+    cm = {"data": {"_defaults.yaml": defaults,
+                   "t.yaml": ("tenants:\n  acme:\n    _profile: 010\n"
+                              "    connections: '1'\n")}}
+    patch = pc.build_patch(cm, "multi-file", "acme", "connections", "3")
+    written = patch["data"]["t.yaml"]
+    assert _pc_tenants(written) == {
+        "acme": {"_profile": "010", "connections": "3"}}, written
+    d = _tree(tmp_path, {"_defaults.yaml": defaults, "t.yaml": written})
+    p = subprocess.run(
+        [sys.executable, str(TOOLS / "dx" / "describe_tenant.py"), "acme",
+         "--conf-d", str(d)],
+        capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    eff = json.loads(p.stdout)["effective_config"]
+    assert eff["container_cpu"] == "55", eff
+
+
+def _render_as_text(data, pod=None):
+    """`_patch_config_fake.render_thresholds`, keyed by source text as the
+    real exporter is (that toy reads with PyYAML typing, which would fold
+    `8` and `010` into one tenant's series)."""
+    lines = []
+    for key in sorted(data):
+        if key.startswith("_") or not data[key]:
+            continue
+        doc = _lib_yaml_keys.load_exporter_keys(io.StringIO(data[key])) or {}
+        for tenant, block in sorted((doc.get("tenants") or {}).items()):
+            for metric, value in sorted((block or {}).items()):
+                if not metric.startswith("_"):
+                    lines.append(f'user_threshold{{metric="{metric}",'
+                                 f'tenant="{tenant}"}} {value}')
+    return "\n".join(lines) + "\n"
+
+
+def test_patch_config_apply_sends_one_patch_for_the_colliding_pair(capsys):
+    """The #2237 fixture through `main()`'s apply path. Before: rc 1 and two
+    patches (the write, then the rollback the post-write check forced)."""
+    data = {"config.yaml": _PC_DEFAULTS + (
+        "tenants:\n  8:\n    connections: '2'\n    mem: '50'\n"
+        "  010:\n" + _PC_BLOCK)}
+    cluster = FakeCluster(data, render=_render_as_text, mode="single-file")
+    argv = ["patch_config.py", "010", "connections", "3",
+            "--poll-interval", "0.001", "--reload-timeout", "0.05"]
+    try:
+        with mock.patch("patch_config.run_cmd", side_effect=cluster), \
+                mock.patch("sys.argv", argv):
+            try:
+                pc.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code
+    finally:
+        pc.SIGNALS.reset()  # apply keeps its signal handlers otherwise
+    assert code == 0, capsys.readouterr()
+    assert len(cluster.patches) == 1, cluster.patches
+    assert _pc_tenants(cluster.data["config.yaml"]) == {
+        "8": {"connections": "2", "mem": "50"},
+        "010": {"connections": "3", "mem": "5"}}

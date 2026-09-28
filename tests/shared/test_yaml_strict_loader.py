@@ -229,6 +229,10 @@ _EXPORTER_KEY_ENTRIES = {
     "strict_load_exporter_keys+raw_text_sequences":
         lambda d: strict_load_exporter_keys(d, raw_text_sequences=("x",)),
     "strict_load_all_exporter_keys": lambda d: next(strict_load_all_exporter_keys(d)),
+    "strict_load_exporter_keys+raw_text_scalars":
+        lambda d: strict_load_exporter_keys(d, raw_text_scalars=("_profile",)),
+    "strict_load_all_exporter_keys+raw_text_scalars":
+        lambda d: next(strict_load_all_exporter_keys(d, raw_text_scalars=("_profile",))),
 }
 
 
@@ -260,6 +264,41 @@ def test_the_composed_loader_is_strict_and_pure_underneath():
     # The non-strict key loader is not accepted where a strict one is required.
     with pytest.raises(TypeError):
         strict_safe_load("a: 1\n", loader=ExporterKeyLoader)
+
+
+_PROFILE_SRC = ("tenants:\n  a:\n    _profile: 010\n    cpu: 010\n"
+                "  b:\n    _profile: ~\n  c:\n    _profile: yes\n"
+                "exclude_tenants: [010]\n")
+
+
+@pytest.mark.parametrize("load", [
+    strict_load_exporter_keys,
+    lambda s, **kw: next(strict_load_all_exporter_keys(s, **kw)),
+], ids=["strict_load_exporter_keys", "strict_load_all_exporter_keys"])
+def test_strict_raw_text_scalars_matches_the_lenient_loader(load):
+    """#2216 / #2237: `raw_text_scalars` means what `_lib_yaml_keys`'s
+    parameter of the same name means — only the opted-in key's scalar value
+    is source text, a null stays None, every other value keeps its type."""
+    got = load(_PROFILE_SRC, raw_text_scalars=("_profile",))
+    assert got["tenants"] == {"a": {"_profile": "010", "cpu": 8},
+                              "b": {"_profile": None},
+                              "c": {"_profile": "yes"}}, got
+    assert got["exclude_tenants"] == [8], got  # a sequence is not a scalar
+    assert got == load_exporter_keys(io.StringIO(_PROFILE_SRC),
+                                     raw_text_scalars=("_profile",))
+    # Control: without the opt-in the value keeps PyYAML's type.
+    assert load(_PROFILE_SRC)["tenants"]["a"]["_profile"] == 8
+    # Both sets are part of the loader-class cache key: opting into the
+    # sequences only must not hand back a class that retypes scalars too.
+    both = load(_PROFILE_SRC, raw_text_sequences=("exclude_tenants",))
+    assert both["tenants"]["a"]["_profile"] == 8
+    assert both["exclude_tenants"] == ["010"]
+
+
+def test_strict_raw_text_scalars_is_still_strict():
+    with pytest.raises(DuplicateKeyError):
+        strict_load_exporter_keys('a:\n  _profile: 010\n  _profile: "010"\n',
+                                  raw_text_scalars=("_profile",))
 
 
 def test_load_yaml_file_strict_exporter_keys_keeps_the_strict_readers_contract(tmp_path):
