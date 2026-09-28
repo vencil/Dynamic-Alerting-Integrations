@@ -14,6 +14,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,8 +82,9 @@ func loadParityMatrix(t *testing.T) parityMatrix {
 	return m
 }
 
-// tenantBlock is tenants.<id> of the root file that declares it (the matrix
-// trees keep every tenant in its own root file, with no platform overlay).
+// tenantBlock is tenants.<id> of the root tenant file that declares it (the
+// matrix trees keep every tenant in its own root file; a root platform
+// file's entry for it is the overlay, Layers.TenantBlock).
 func tenantBlock(t *testing.T, files map[string]string, tenantID string) map[string]any {
 	t.Helper()
 	for name, content := range files {
@@ -185,6 +187,13 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 				}
 			}
 			layers, pols, probs := LoadRoot(dir, nil)
+			// #2291: routing where the generator never reads it — the
+			// defaults carriers come from the exporter's own walk.
+			scoped, err := config.ScopeEffective(dir, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			probs = append(probs, UnreadRouting(dir, scoped.DefaultsFiles, nil)...)
 			gotPlatform := [][3]string{}
 			for _, p := range probs {
 				gotPlatform = append(gotPlatform, [3]string{p.Kind, p.File, p.Field})
@@ -192,8 +201,11 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			jsonEq(t, "platform", sortRows(gotPlatform), sortRows(append([][3]string{}, tree.Platform...)))
 			for tenantID, want := range tree.Expect {
 				t.Run(tenantID, func(t *testing.T) {
+					// The generator's tenant layer: the tenant file's keys over
+					// the root platform overlay (#2291). tenant-api's PUT body
+					// carries no overlay, so its model below takes the file alone.
 					block := tenantBlock(t, tree.Files, tenantID)
-					resolved, ok, _, unknown := Resolve(tenantID, block, layers)
+					resolved, ok, _, unknown := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers)
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))

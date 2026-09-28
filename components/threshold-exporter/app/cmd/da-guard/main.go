@@ -115,7 +115,10 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"Typical use: pass dirname of the changed _defaults.yaml in a CI hook.")
 	fs.StringVar(&f.requiredFields, "required-fields", "",
 		"Comma-separated dotted paths every tenant's effective config must have "+
-			"(e.g. 'thresholds.cpu,routing.receiver.type'). Empty disables the schema check.")
+			"(e.g. 'thresholds.cpu,_routing.receiver.type'). A '_routing' or '_routing.*' path is "+
+			"judged against the tenant's RESOLVED routing (_routing_defaults -> routing profile -> "+
+			"the tenant's _routing, what the route generator renders), not the effective config. "+
+			"Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
 		"Per-tenant predicted-metric-count ceiling; 0 disables. When omitted, the cap the exporter "+
 			"enforces is used: max_metrics_per_tenant from the ROOT _defaults.yaml of --config-dir "+
@@ -331,9 +334,12 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //
 //   - EffectiveConfigs[id]      ← ec.EffectiveConfig
 //   - RoutingByTenant[id]       ← the tenant's RESOLVED routing (#2280):
-//     routingpolicy.Resolve over ec.EffectiveConfig's `_routing` /
-//     `_routing_profile` and the conf.d root's `_routing_defaults` and
-//     routing profiles — the same three layers the route generator merges
+//     routingpolicy.Resolve over the tenant file's `_routing` /
+//     `_routing_profile` laid over the root platform overlay's (#2291,
+//     never the effective config) and the conf.d root's
+//     `_routing_defaults` and routing profiles — the same three layers the
+//     route generator merges. `--required-fields _routing.*` is judged
+//     against it too.
 //   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
 //   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
 //
@@ -354,6 +360,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	routing := make(map[string]map[string]any)
 	provenance := make(map[string]routingpolicy.Provenance)
 	unknownProfiles := make(map[string]string)
+	disabled := make(map[string]bool)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
 
@@ -367,7 +374,12 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	for _, pf := range scoped.ParseFailed {
 		failed[pf] = true
 	}
-	layers, policies, problems := routingpolicy.LoadRoot(f.configDir, func(rel string) bool { return failed[rel] })
+	skip := func(rel string) bool { return failed[rel] }
+	layers, policies, problems := routingpolicy.LoadRoot(f.configDir, skip)
+	// #2291: routing written where the generator never reads it (a defaults
+	// block, a threshold profile) — the exporter merges it into the
+	// effective config, but no route is rendered from it.
+	problems = append(problems, routingpolicy.UnreadRouting(f.configDir, scoped.DefaultsFiles, skip)...)
 
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.EffectiveConfig
@@ -376,7 +388,18 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// `_routing_defaults`, `{{tenant}}` substituted. Tenants with no
 		// routing (disabled, or no layer supplies anything) are absent from
 		// the map — no finding, per guard/types.go.
-		resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, ec.EffectiveConfig, layers)
+		//
+		// ⛔ #2291: the tenant layer is what the GENERATOR reads — the tenant
+		// file's `_routing` / `_routing_profile` over the root platform
+		// files' `tenants.<id>` entries (layers.TenantBlock) — never
+		// ec.EffectiveConfig, which also carries the defaults chain and the
+		// threshold profile. Routing there is never rendered (UnreadRouting
+		// names it); reading it here judged routes that do not exist.
+		block := layers.TenantBlock(ec.TenantID, ec.TenantOverridesRaw)
+		if routingpolicy.IsDisabled(block["_routing"]) {
+			disabled[ec.TenantID] = true
+		}
+		resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
 		if ok {
 			routing[ec.TenantID] = resolved
 			provenance[ec.TenantID] = prov
@@ -405,6 +428,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RequiredFields:         required,
 		RoutingByTenant:        routing,
 		RoutingProvenance:      provenance,
+		RoutingDisabled:        disabled,
 		UnknownRoutingProfiles: unknownProfiles,
 		DomainPolicies:         policies,
 		PlatformProblems:       problems,

@@ -33,7 +33,15 @@
     "readers drop them before any merge; Python records a blocking WARN (--validate fails),",
     "da-guard an error finding with an empty tenant.",
     "python_differs: null, or the values the Python side produces where the YAML readers disagree",
-    "(the Go columns above hold for every Go reader); `reason` says why."
+    "(the Go columns above hold for every Go reader); `reason` says why.",
+    "#2291 - the tenant layer is what the route generator reads: the tenant file's _routing /",
+    "_routing_profile over the root platform files' tenants.<id> entries for those two keys (each",
+    "replaced WHOLE by the tenant file's). Routing in a defaults block (a `defaults:` mapping, or",
+    "the whole top level of a defaults file without one) or in a threshold profile (`profiles:`)",
+    "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
+    "platform row, field = the key path in that file. The generator itself reports nothing there,",
+    "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
+    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first."
   ],
   "trees": [
     {
@@ -966,6 +974,217 @@
           "policy": [],
           "rejected_routes": [],
           "unknown_profile": "",
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "threshold-profile-routing-is-not-read",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-prof\n",
+        "_profiles.yaml": "profiles:\n  p1:\n    cpu_usage_percent: 60\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-prof.yaml": "tenants:\n  t-prof:\n    _profile: p1\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_profiles.yaml",
+          "profiles.p1._routing"
+        ]
+      ],
+      "expect": {
+        "t-prof": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "unwrapped-defaults-routing-is-not-read",
+      "files": {
+        "_defaults.yaml": "cpu_usage_percent: 80\n_routing:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://w.example/hook\n",
+        "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-flat\n",
+        "t-flat.yaml": "tenants:\n  t-flat:\n    _severity_dedup: disable\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_defaults.yaml",
+          "_routing"
+        ]
+      ],
+      "expect": {
+        "t-flat": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "platform-overlay-routing-is-read",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-ovl\n    - t-ovl-own\n    - t-ovl-ref\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  chat:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n",
+        "_platform.yaml": "tenants:\n  t-ovl:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n  t-ovl-own:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n  t-ovl-ref:\n    _routing_profile: chat\n",
+        "t-ovl.yaml": "tenants:\n  t-ovl:\n    cpu_usage_percent: '85'\n",
+        "t-ovl-own.yaml": "tenants:\n  t-ovl-own:\n    _routing:\n      receiver:\n        type: webhook\n        url: https://w.example/hook\n",
+        "t-ovl-ref.yaml": "tenants:\n  t-ovl-ref:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-ovl": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-ovl-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-ovl-ref": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "platform-overlay-yaml-merge-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-mk\n    - t-mk-own\n    - t-mk-seq\n",
+        "_platform.yaml": "chat: &chat\n  _routing:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\nhook: &hook\n  _routing:\n    receiver:\n      type: webhook\n      url: https://w.example/hook\ntenants:\n  t-mk:\n    <<: *chat\n  t-mk-own:\n    <<: *chat\n    _routing:\n      receiver:\n        type: webhook\n        url: https://w.example/own\n  t-mk-seq:\n    <<: [*chat, *hook]\n",
+        "t-mk.yaml": "tenants:\n  t-mk:\n    cpu_usage_percent: '85'\n",
+        "t-mk-own.yaml": "tenants:\n  t-mk-own:\n    cpu_usage_percent: '85'\n",
+        "t-mk-seq.yaml": "tenants:\n  t-mk-seq:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-mk": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-mk-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-mk-seq": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
           "tenant_api": {
             "put": "ok",
             "batch": null

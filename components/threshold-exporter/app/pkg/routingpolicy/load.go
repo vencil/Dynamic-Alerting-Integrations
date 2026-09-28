@@ -21,6 +21,37 @@ type Layers struct {
 	// body is not a mapping: the name is KNOWN (a reference to it is not an
 	// unknown profile) but it contributes nothing, as in the Python reader.
 	Profiles map[string]map[string]any
+
+	// Overlay is, per tenant id, the `_routing` / `_routing_profile` keys of
+	// the root platform files' `tenants:` entries (#2291) — the platform's
+	// per-tenant layer the Python reader merges under the tenant's own file
+	// (_lib_confd.overlay_platform_tenants): a later file replaces a key an
+	// earlier one set. Tenant ids are the keys' source TEXT. nil = none.
+	// TenantBlock lays a tenant's own keys over it.
+	Overlay map[string]map[string]any
+}
+
+// routingBlockKeys are the tenant-block keys Resolve reads.
+var routingBlockKeys = [...]string{"_routing", "_routing_profile"}
+
+// TenantBlock returns the block Resolve reads for tenantID, as the route
+// generator builds it (#2291): the root platform overlay's `_routing` /
+// `_routing_profile`, each replaced WHOLE by the tenant file's own key when
+// the tenant file writes it (a null included — `dict.update`, so
+// `_routing: null` drops the platform's `_routing`). own is the tenant
+// file's block (may be nil). Nothing else is read: routing in the defaults
+// chain or in a threshold profile is never rendered, whatever the exporter
+// merges into the effective config.
+func (l Layers) TenantBlock(tenantID string, own map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range routingBlockKeys {
+		if v, ok := own[k]; ok {
+			out[k] = v
+		} else if v, ok := l.Overlay[tenantID][k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Problem kinds. Each names one platform-file structure the checks depend on
@@ -381,6 +412,7 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 				}
 			}
 		}
+		overlayFrom(top, &layers)
 		if isPolicy {
 			nodes, err := policyNodesFrom(top)
 			if err != nil {
@@ -396,6 +428,98 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 	pols, pprobs := buildPolicies(policyNodes, policyOrigin)
 	probs = append(probs, pprobs...)
 	return layers, pols, probs
+}
+
+// overlayFrom records the `_routing` / `_routing_profile` keys of one root
+// platform file's `tenants:` entries in layers.Overlay, over what earlier
+// files set. A `tenants:` that is not a mapping, or an entry body that is not
+// one, contributes nothing (the Python reader skips it too; the exporter
+// drops such a file whole, so da-guard has already named it).
+func overlayFrom(top *yaml.Node, layers *Layers) {
+	t := lookup(top, "tenants")
+	if t == nil || t.Kind != yaml.MappingNode {
+		return
+	}
+	for _, e := range mappingEntries(t) {
+		// ⛔ The body is DECODED, not looked up node by node: a YAML merge
+		// key (`ta: {<<: *base}`) is expanded only by the decoder, and the
+		// Python reader and the exporter both see the merged keys (#2291
+		// review: a `_routing` supplied through `<<:` was missed here).
+		var decoded any
+		if e.value == nil || e.value.Decode(&decoded) != nil {
+			continue
+		}
+		body, ok := asStringMap(decoded)
+		if !ok {
+			continue
+		}
+		tid := e.key
+		for _, k := range routingBlockKeys {
+			v, present := body[k]
+			if !present {
+				continue
+			}
+			if layers.Overlay == nil {
+				layers.Overlay = map[string]map[string]any{}
+			}
+			if layers.Overlay[tid] == nil {
+				layers.Overlay[tid] = map[string]any{}
+			}
+			layers.Overlay[tid][k] = v
+		}
+	}
+}
+
+type mapEntry struct {
+	key   string // the key's source text (tenant ids are text: `010` is "010")
+	value *yaml.Node
+}
+
+// mappingEntries lists a mapping node's entries with YAML merge keys
+// expanded the decoder's way: a `<<:` source (an alias to a mapping, or a
+// sequence of them, earlier sources winning) supplies the keys the mapping
+// does not write itself; an explicit key replaces a merged one whole.
+// Keys keep their source text, which a decode into a map would lose.
+func mappingEntries(m *yaml.Node) []mapEntry {
+	var merged, own []mapEntry
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k, v := m.Content[i], deref(m.Content[i+1])
+		if k.Tag == "!!merge" || (k.Tag == "" && k.Value == "<<") {
+			sources := []*yaml.Node{v}
+			if v != nil && v.Kind == yaml.SequenceNode {
+				sources = v.Content
+			}
+			seen := map[string]bool{}
+			for _, e := range merged {
+				seen[e.key] = true
+			}
+			for _, s := range sources {
+				s = deref(s)
+				if s == nil || s.Kind != yaml.MappingNode {
+					continue
+				}
+				for _, e := range mappingEntries(s) {
+					if !seen[e.key] {
+						seen[e.key] = true
+						merged = append(merged, e)
+					}
+				}
+			}
+			continue
+		}
+		own = append(own, mapEntry{key: k.Value, value: v})
+	}
+	written := map[string]bool{}
+	for _, e := range own {
+		written[e.key] = true
+	}
+	out := make([]mapEntry, 0, len(merged)+len(own))
+	for _, e := range merged {
+		if !written[e.key] {
+			out = append(out, e)
+		}
+	}
+	return append(out, own...)
 }
 
 func trimUnusable(err error) string {

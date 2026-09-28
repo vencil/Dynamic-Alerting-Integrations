@@ -149,6 +149,66 @@ func TestCheckRequiredFields_FlagsExplicitNull(t *testing.T) {
 	}
 }
 
+// #2291: a `_routing[.<path>]` required field reads the RESOLVED routing
+// (RoutingByTenant), never the effective config — which carries a `_routing`
+// the route generator never renders and lacks the one `_routing_defaults`
+// supplies.
+func TestCheckRequiredFields_RoutingFieldsReadTheResolvedRouting(t *testing.T) {
+	t.Parallel()
+	rendered := map[string]any{"receiver": map[string]any{"type": "webhook"}}
+	got := checkRequiredFields(CheckInput{
+		EffectiveConfigs: map[string]map[string]any{
+			// effective config has no _routing, resolved routing does
+			"routed": {"cpu": 1},
+			// effective config has a _routing nothing renders, no resolved routing
+			"shadowed": {"_routing": rendered},
+			"nulled":   {},
+		},
+		RoutingByTenant: map[string]map[string]any{
+			"routed": rendered,
+			"nulled": {"receiver": map[string]any{"type": nil}},
+		},
+		RequiredFields: []string{"_routing.receiver.type", "_routing", "cpu"},
+	})
+	var rows []string
+	for _, f := range got {
+		rows = append(rows, f.TenantID+" "+f.Field)
+		if f.Kind != FindingMissingRequired || f.Severity != SeverityError {
+			t.Errorf("finding %+v: want error missing_required", f)
+		}
+		if !strings.Contains(f.Message, "resolved routing") && f.Field != "cpu" {
+			t.Errorf("message %q should say it judged the resolved routing", f.Message)
+		}
+	}
+	want := []string{
+		"nulled _routing.receiver.type", "nulled cpu",
+		"shadowed _routing.receiver.type", "shadowed _routing", "shadowed cpu",
+	}
+	if strings.Join(rows, "|") != strings.Join(want, "|") {
+		t.Errorf("findings %q\nwant %q", rows, want)
+	}
+}
+
+// A tenant that opted out (`_routing: disable`) is still missing a required
+// routing field, but the message says it is an opt-out, not an omission.
+func TestCheckRequiredFields_DisabledRoutingIsNamedAsSuch(t *testing.T) {
+	t.Parallel()
+	got := checkRequiredFields(CheckInput{
+		EffectiveConfigs: map[string]map[string]any{"off": {}, "absent": {}},
+		RoutingDisabled:  map[string]bool{"off": true},
+		RequiredFields:   []string{"_routing.receiver.type"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("got %d findings, want 2: %+v", len(got), got)
+	}
+	for _, f := range got {
+		named := strings.Contains(f.Message, "disabled by `_routing: disable`")
+		if named != (f.TenantID == "off") {
+			t.Errorf("tenant %q: message %q (names the opt-out = %v)", f.TenantID, f.Message, named)
+		}
+	}
+}
+
 // --- redundant.go tests ---------------------------------------------
 
 func TestCheckRedundantOverrides_NoOpWhenInputsMissing(t *testing.T) {

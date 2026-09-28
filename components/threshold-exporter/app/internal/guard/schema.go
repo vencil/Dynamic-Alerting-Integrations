@@ -31,7 +31,10 @@ package guard
 // the v2.8.0 mandatory-fields list locks down. Until then the
 // caller's RequiredFields list captures pure presence assertions.
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // checkRequiredFields runs the schema validation pass.
 //
@@ -53,6 +56,10 @@ func checkRequiredFields(input CheckInput) []Finding {
 	for _, tenantID := range tenants {
 		merged := input.EffectiveConfigs[tenantID]
 		for _, field := range input.RequiredFields {
+			if routingField(field) {
+				out = append(out, checkRequiredRoutingField(tenantID, field, input.RoutingByTenant, input.RoutingDisabled[tenantID])...)
+				continue
+			}
 			value, found := resolvePath(merged, field)
 			if !found {
 				out = append(out, Finding{
@@ -80,4 +87,61 @@ func checkRequiredFields(input CheckInput) []Finding {
 		}
 	}
 	return out
+}
+
+// routingField reports whether a required field names the tenant's routing:
+// `_routing` itself or a path under it (#2291).
+func routingField(field string) bool {
+	return field == "_routing" || strings.HasPrefix(field, "_routing.")
+}
+
+// checkRequiredRoutingField judges a `_routing[.<path>]` required field
+// against the tenant's RESOLVED routing (CheckInput.RoutingByTenant: what the
+// route generator renders — `_routing_defaults` → routing profile → the
+// tenant's `_routing`), never against the effective config. The effective
+// config carries a `_routing` the generator never reads (a defaults block, a
+// threshold profile) and lacks the one `_routing_defaults` supplies, so it
+// was wrong in both directions. A tenant with no resolved routing is missing
+// every such field; one whose routing is turned off (disabled) is told so,
+// since an explicit opt-out and an omission need different fixes.
+func checkRequiredRoutingField(tenantID, field string, routing map[string]map[string]any, disabled bool) []Finding {
+	resolved, routed := routing[tenantID]
+	var value any
+	found := false
+	if routed {
+		value, found = resolvePath(resolved, strings.TrimPrefix(strings.TrimPrefix(field, "_routing"), "."))
+	}
+	switch {
+	case !routed && disabled:
+		return []Finding{{
+			Severity: SeverityError,
+			Kind:     FindingMissingRequired,
+			TenantID: tenantID,
+			Field:    field,
+			Message: fmt.Sprintf(
+				"required field %q is missing because tenant %q's routing is disabled by `_routing: disable` (no route is rendered); drop the field from --required-fields for opted-out tenants, or re-enable the routing",
+				field, tenantID),
+		}}
+	case !found:
+		return []Finding{{
+			Severity: SeverityError,
+			Kind:     FindingMissingRequired,
+			TenantID: tenantID,
+			Field:    field,
+			Message: fmt.Sprintf(
+				"required field %q is missing from tenant %q's resolved routing (_routing_defaults, then its routing profile, then its own _routing — what the route generator renders)",
+				field, tenantID),
+		}}
+	case value == nil:
+		return []Finding{{
+			Severity: SeverityError,
+			Kind:     FindingMissingRequired,
+			TenantID: tenantID,
+			Field:    field,
+			Message: fmt.Sprintf(
+				"required field %q is present but null in tenant %q's resolved routing — no value for the route generator to render",
+				field, tenantID),
+		}}
+	}
+	return nil
 }

@@ -237,7 +237,7 @@ tenants:
 
 在 CI / pre-commit 階段攔 schema / routing / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
-routing 檢查的是租戶**解析後**的 routing（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）：根目錄 `_routing_defaults` → `_routing_profile` 指向的 profile → 租戶 `_routing`，與 route generator 同一套合併（共用 `app/pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 與 Python 端對齊）。主 receiver、`overrides`、ADR-007 `routes` 都做形狀檢查，並依 `_domain_policy.yaml` 判 receiver type（forbidden 與 allowed 分開判）。新增的 finding kind 與嚴重度見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+routing 檢查的是租戶**解析後**的 routing（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）：根目錄 `_routing_defaults` → `_routing_profile` 指向的 profile → 租戶 `_routing`，與 route generator 同一套合併（共用 `app/pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 與 Python 端對齊）。主 receiver、`overrides`、ADR-007 `routes` 都做形狀檢查，並依 `_domain_policy.yaml` 判 receiver type（forbidden 與 allowed 分開判）。租戶那一層只讀租戶檔與根目錄平台檔 `tenants.<id>` 的 `_routing` / `_routing_profile`（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)），寫在 defaults 區塊或 threshold profile 裡的 routing 由 `routing_in_unread_location` 點名。新增的 finding kind 與嚴重度見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash
 da-guard --config-dir conf.d/ --required-fields cpu,memory   # 上限取根 _defaults.yaml 的 max_metrics_per_tenant（未設 = 500）
