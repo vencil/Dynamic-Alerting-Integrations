@@ -2034,7 +2034,7 @@ da-tools offboard <tenant> [options]
 
 **輸出**
 
-Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
+Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
 **範例**
 
@@ -2049,8 +2049,8 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功；不帶 `--execute` 時只做 pre-check，**pre-check 未通過也是 0** |
-| `1` | `--execute` 下 pre-check 未通過（tenant 不存在等）或 I/O 失敗 |
+| `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
+| `1` | pre-check 未通過（找不到租戶檔、有無法解析的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
 | `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
 
 ---
@@ -2457,7 +2457,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | `--scope` 內非 `_` 開頭的 YAML 檔，或被解析租戶繼承鏈上的 `_defaults.yaml`，exporter 無法 decode（報告的「Files the exporter cannot parse」段落列出，路徑相對於 `--config-dir`），修好後重跑。`_defaults.yaml`，或解析租戶時才失敗的租戶檔，會讓這次執行在檢查任何租戶之前停下，只列出第一個出錯的檔；修好後重跑才會看到下一個。優先於 1；scope 裡只有這種檔時也回 3、不回「vacuously safe」的 0（#2123） |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **範例**
 

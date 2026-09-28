@@ -82,8 +82,13 @@ def find_config_file(tenant, config_dir):
     return None
 
 
-def load_all_configs(config_dir):
-    """載入 conf.d 下所有設定檔案。"""
+def load_all_configs(config_dir, unreadable=None):
+    """載入 conf.d 下所有設定檔案。
+
+    unreadable: optional list; the name of every YAML file that could not be
+    read (I/O error, YAML error incl. a duplicate key) is appended to it, so
+    the caller can count it instead of only seeing the ⚠️ line (#2179).
+    """
     configs = {}
     base = Path(config_dir)
     # #1911: flat by design here — but a hierarchical conf.d must not
@@ -113,6 +118,8 @@ def load_all_configs(config_dir):
             configs[filename] = {"path": str(entry), "data": data}
         except (OSError, yaml.YAMLError) as e:
             print(f"  ⚠️  無法讀取 {safe_label(filename)}: {safe_label(e)}")
+            if unreadable is not None:
+                unreadable.append(filename)
     return configs
 
 
@@ -156,9 +163,19 @@ def run_precheck(tenant, config_dir):
         issues.append("設定檔案不存在")
 
     # 2. 載入所有 configs
-    configs = load_all_configs(config_dir)
+    unreadable = []
+    configs = load_all_configs(config_dir, unreadable)
     report.append(f"\n📂 掃描目錄: {safe_label(config_dir)} "
                   f"({len(configs)} 個檔案)\n")
+    # #2179: a file that cannot be read is a blocker, not a footnote. The
+    # cross-reference check and the verdict below cannot see into it, so
+    # without this line it read as "✅ 無跨檔案引用" + "✅ Pre-check 通過" and
+    # --execute deleted the tenant file.
+    if unreadable:
+        report.append("❌ 無法讀取的設定檔 (修好後重跑 Pre-check):")
+        for name in unreadable:
+            report.append(f"   → {safe_label(name)}")
+        issues.append(f"無法讀取的設定檔: {safe_label(', '.join(unreadable))}")
 
     # 3. Cross-reference check
     refs = check_cross_references(tenant, configs)
@@ -251,6 +268,10 @@ def main():
             sys.exit(EXIT_VIOLATION)
     else:
         print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
+        if not can_proceed:
+            # #2179: a failed pre-check is a failed run, with or without
+            # --execute (it used to print "❌ Pre-check 失敗" and exit 0).
+            sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

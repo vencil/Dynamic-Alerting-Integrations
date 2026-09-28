@@ -40,6 +40,7 @@ from _lib_io import (  # noqa: E402  (#1789)
     exit_on_output_write_error,
     output_write,
 )
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216)
 
 try:
     import yaml
@@ -81,6 +82,12 @@ def render_cr_to_yaml(cr: dict) -> str:
     """Convert a ThresholdConfig CR spec into tenant YAML content.
 
     The output format matches hand-written conf.d/<tenant>.yaml exactly.
+
+    Tenant ids must arrive as ``str`` (#2216): ``yaml.dump`` quotes a text
+    key YAML would retype (``'010':``), so the exporter reads back the same
+    id. A non-str key (``8``) is already a renamed tenant and cannot be
+    recovered here — the reader is where it is kept (``render_cr_file``;
+    the API path hands over JSON, whose keys are strings).
     """
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
@@ -381,9 +388,13 @@ def render_cr_file(
     dry_run: bool = False,
 ) -> int:
     """Render a single CR YAML file to config-dir (offline mode)."""
+    # #2216: keys as the exporter reads them (the scalar's source text,
+    # #2114) — a `tenants:` key read as `010` → 8 was rendered as `8:`, a
+    # tenant the CR never named. `render_cr_to_yaml` dumps the text back,
+    # quoted wherever YAML would retype it. Not strict, as before (#2123).
     try:
         with open(cr_path, encoding="utf-8") as fh:
-            cr = yaml.safe_load(fh)
+            cr = load_exporter_keys(fh)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR

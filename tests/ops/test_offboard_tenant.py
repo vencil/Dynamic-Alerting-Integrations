@@ -347,3 +347,76 @@ def test_precheck_explains_a_tenant_whose_carrier_is_unusable(
     assert "找不到設定檔案" in text
     assert "is a directory, not a config file" in text, (
         f"the pre-check refused without saying why.\n{text}")
+
+
+# ---------------------------------------------------------------------------
+# #2179 — a file the pre-check cannot read is a failed pre-check, not a pass
+# ---------------------------------------------------------------------------
+#
+# #2179 step 0: `_platform.yaml` with a key written twice under
+# `tenants.<tenant>` could not be read, so the cross-reference it holds was
+# invisible and the pre-check printed "✅ 無跨檔案引用" + "✅ Pre-check 通過",
+# rc 0 — and `--execute` deleted the tenant file.
+
+
+def _confd_with_unreadable_platform(tmp_path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text("defaults:\n  cpu: 70\n", encoding="utf-8")
+    (root / "_platform.yaml").write_text(
+        'tenants:\n  tenant-a:\n    mem: "44"\n    mem: "45"\n', encoding="utf-8")
+    (root / "tenant-a.yaml").write_text(
+        'tenants:\n  tenant-a:\n    cpu: "80"\n', encoding="utf-8")
+    return root
+
+
+def test_precheck_counts_and_names_an_unreadable_file(tmp_path):
+    root = _confd_with_unreadable_platform(tmp_path)
+
+    can_proceed, report = ot.run_precheck("tenant-a", str(root))
+    text = "\n".join(report)
+
+    assert can_proceed is False, text
+    assert "_platform.yaml" in text, f"the report must name the unreadable file:\n{text}"
+    assert "Pre-check 通過" not in text
+    assert "Pre-check 失敗" in text
+
+
+def test_precheck_mode_exits_nonzero_when_the_precheck_fails(tmp_path, monkeypatch):
+    root = _confd_with_unreadable_platform(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root)])
+
+    with pytest.raises(SystemExit) as exc_info:
+        ot.main()
+    assert exc_info.value.code == 1
+
+
+def test_precheck_mode_exits_nonzero_for_a_missing_tenant(tmp_path, monkeypatch):
+    d = _make_config_dir(tmp_path, {})
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-x", "--config-dir", d])
+
+    with pytest.raises(SystemExit) as exc_info:
+        ot.main()
+    assert exc_info.value.code == 1
+
+
+def test_execute_refuses_when_a_file_is_unreadable(tmp_path, monkeypatch):
+    root = _confd_with_unreadable_platform(tmp_path)
+    monkeypatch.setattr(sys, "argv",
+                        ["offboard_tenant.py", "tenant-a", "--config-dir", str(root), "--execute"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        ot.main()
+    assert exc_info.value.code == 1
+    assert (root / "tenant-a.yaml").exists(), "the tenant file must not be deleted"
+
+
+def test_precheck_mode_with_only_a_warning_still_exits_zero(tmp_path, monkeypatch):
+    """Paired control: a cross-reference is a ⚠️, not a ❌ — rc stays 0."""
+    d = _make_config_dir(tmp_path, {
+        "tenant-a.yaml": {"tenants": {"tenant-a": {"cpu": "80"}}},
+        "_platform.yaml": {"tenants": {"tenant-a": {"mem": "44"}}},
+    })
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", d])
+
+    ot.main()  # no SystemExit

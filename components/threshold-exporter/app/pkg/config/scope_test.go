@@ -55,6 +55,36 @@ func TestScopeEffective_ListsParseFailedFilesInScope(t *testing.T) {
 	}
 }
 
+// #2179: ParseFailed is the exporter's own build's parse-failure list, so a
+// root `_` platform file the decode rejects is listed even when the scope is
+// a subdirectory (it shapes every tenant there), while a nested
+// `_defaults.yaml` with a wrong-typed value is not (the exporter skips that
+// key, not the file). A duplicate tenant outside the scope still does not
+// fail it — the exporter's build runs on a scan with no inheritance graph.
+func TestScopeEffective_ParseFailedIsTheExportersVerdict(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml":   "defaults:\n  cpu: abc\n",
+		"conf.d/_profiles.yaml":   "profiles:\n  gold:\n    mem: 1\n    mem: 2\n",
+		"conf.d/a/_defaults.yaml": "defaults:\n  mem: abc\n",
+		"conf.d/a/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		"conf.d/b/_defaults.yaml": "defaults: [unclosed\n",
+		"conf.d/x/one.yaml":       "tenants:\n  tenant-x: {}\n",
+		"conf.d/x/two.yaml":       "tenants:\n  tenant-x: {}\n",
+	})
+	root := filepath.Join(tmp, "conf.d")
+
+	got, err := ScopeEffective(root, filepath.Join(root, "a"))
+	if err != nil {
+		t.Fatalf("ScopeEffective err = %v", err)
+	}
+	want := []string{"_defaults.yaml", "_profiles.yaml"}
+	if strings.Join(got.ParseFailed, ",") != strings.Join(want, ",") {
+		t.Errorf("ParseFailed = %v, want %v (b/_defaults.yaml is outside the scope; "+
+			"a/_defaults.yaml's type error is not a dropped file)", got.ParseFailed, want)
+	}
+}
+
 // #2123 round 2: a decode failure met while resolving (a chain defaults file,
 // or a tenant file the walker accepted) is still an error of ScopeEffective,
 // with its historical text, but errors.As finds a *DecodeError naming the file.

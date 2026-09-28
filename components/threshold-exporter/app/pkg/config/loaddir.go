@@ -66,26 +66,41 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 	if len(scan.Files) == 0 {
 		return nil, nil, fmt.Errorf("no .yaml files found in %s", dir)
 	}
+	built, err := loadDirBuild(scan, dir, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &built.Config, built.ParseFailed, nil
+}
 
+// loadDirBuild is LoadDir's build step over a scan it already has: the
+// subtree defaults chain and ParseDefaultsFiles derived from that scan, then
+// BuildFlatConfig. Split out so ScopeEffective can take the exporter's
+// parse-failure verdict (FlatBuild.ParseFailed) from its own scan instead of
+// re-deriving "which files are broken" (#2179).
+//
+// A scan with a duplicate-tenant Conflict has no inheritance graph (the
+// exporter rejects such a tree before this step; ScopeEffective does not
+// when the duplicate is outside its scope), so no subtree chain applies.
+// Per-file parse verdicts do not depend on the chain.
+func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger) (FlatBuild, error) {
 	// Mirrors populateHierarchyStateFrom: a tree with neither a defaults file
 	// nor a tenant installs no hierarchy state, so no subtree chain applies.
 	var tenantDefaults map[string][]string
 	var parsedDefaults map[string]map[string]any
 	if len(scan.Defaults) > 0 || len(scan.Tenants) > 0 {
-		tenantDefaults = scan.InheritanceGraph().TenantDefaults
+		if g := scan.InheritanceGraph(); g != nil {
+			tenantDefaults = g.TenantDefaults
+		}
 		parsedDefaults = ParseDefaultsFiles(scan.Defaults, scanDefaultsSource(scan), logger)
 	}
 
-	built, err := BuildFlatConfig(scan, FlatBuildInput{
+	return BuildFlatConfig(scan, FlatBuildInput{
 		Root:           dir,
 		TenantDefaults: tenantDefaults,
 		ParsedDefaults: parsedDefaults,
 		Logger:         logger,
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return &built.Config, built.ParseFailed, nil
 }
 
 // scanDefaultsSource serves ParseDefaultsFiles from the bytes this scan

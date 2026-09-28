@@ -64,7 +64,7 @@ from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
     parse_bypass_tag,
-    resolve_diff_base,
+    resolve_diff_base_labeled,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -572,11 +572,11 @@ def main():
         diff_base = None
     else:
         try:
-            diff_base = args.diff_base or resolve_diff_base()
+            diff_base, base_label = resolve_diff_base_labeled(args.diff_base)
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        scan_mode = f"diff vs {diff_base}"
+        scan_mode = f"diff vs {base_label}"
 
     hex_issues, px_issues, token_issues, slate_issues = scan_jsx_files(diff_base=diff_base)
 
