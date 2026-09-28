@@ -42,6 +42,23 @@ What the fixtures cover (NOT every ADR-017 clause; see "Known gaps" below):
                      `_defaults.yaml` is deleted; a sibling `_` key survives
                      (#1550)
 The last three are subtrees of the mixed-mode tree, like carrier-selection.
+- served-chain:      numeric L0 -> L1 -> L2 chain in the shipped shape; a
+                     tenant override, an L2 override of L0 and an L0 value
+                     through two levels, plus a root-level sibling tenant
+                     (served-root) that no subtree carrier reaches (#2387)
+- served-disable:    "disable" on a key inherited from L0 while L1 overrides
+                     the other one (#2387)
+
+Served vs not served (#2387): l0-only, full-l0-l3, array-replace,
+opt-out-null and metadata-skipped carry a ROOT _defaults.yaml the exporter
+drops whole (a non-numeric root value), so /metrics serves none of it; parity
+on those five proves the readers agree, not that they describe served
+values. They are kept as merge-core corpus and listed in
+tests/golden/not_served.json; the served-* trees are the counterpart in a
+shape /metrics does serve. Which tree is which is enforced on the Go side
+(components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs
+`da-guard served-values` over every fixture tree), since that is where the
+exporter's load lives.
 
 Chain discovery is checked on both sides from the tree itself: here by
 describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder

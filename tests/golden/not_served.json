@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Golden fixture trees the exporter deliberately does NOT serve (#2387).",
+    "Each one's ROOT _defaults.yaml carries a defaults: value that is not a number,",
+    "so the exporter drops the whole file (parse_failed, #1957) and /metrics serves",
+    "none of it. They are kept as merge-core corpus: the semantics they pin cannot be",
+    "written in a root shape the exporter accepts. Parity on them proves the two merge",
+    "readers agree with each other, not that they describe what is served.",
+    "Guard: components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs",
+    "`da-guard served-values` over every tests/golden/fixtures/*/conf.d. A tree listed",
+    "here must exit 3; every other tree must exit 0. Do not add a tree here to make",
+    "that test green: fix the fixture, unless it pins a merge rule no served shape can.",
+    "Do not regenerate golden.json to move these trees into a served shape (see the",
+    "header of config_golden_parity_test.go)."
+  ],
+  "trees": {
+    "l0-only": "root defaults hold a nested `threshold:` map and a string `alert_group`: root-level scalar override inside a nested map",
+    "full-l0-l3": "root defaults hold a string `level`, a nested `threshold:` map and a `pages:` array: 4-level nested-map merge and array replace",
+    "array-replace": "root defaults hold a `receivers:` array and a nested `threshold:` map: arrays replace, not concat",
+    "opt-out-null": "root defaults hold a nested `threshold:` map and a string `alert_group`: null on a nested non-reserved key keeps the inherited value",
+    "metadata-skipped": "root defaults hold a `_metadata:` map and a nested `threshold:` map: `_metadata` is never inherited"
+  }
+}

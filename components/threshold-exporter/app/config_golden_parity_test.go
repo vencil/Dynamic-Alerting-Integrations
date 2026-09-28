@@ -39,6 +39,17 @@ package main
 //   reserved-null-delete — a `_` key inherited from L0 and nulled in an L1
 //                       _defaults.yaml is deleted; a sibling `_` key survives
 //                       (#1550)
+//   served-chain      — numeric L0 -> L1 -> L2 chain in the shipped shape, plus
+//                       a root-level sibling tenant (served-root) (#2387)
+//   served-disable    — "disable" on an L0 key while L1 overrides another
+//                       (#2387)
+//
+// ⚠️ Five trees (l0-only, full-l0-l3, array-replace, opt-out-null,
+// metadata-skipped) have a ROOT _defaults.yaml the exporter drops whole, so
+// /metrics serves none of it: parity there proves the readers agree with each
+// other, not that they describe served values. They are kept as merge-core
+// corpus and listed in tests/golden/not_served.json;
+// cmd/da-guard/golden_served_test.go holds that list to the trees (#2387).
 //
 // Chain discovery: MergedHash / EffectiveConfig read the defaults chain out of
 // golden.json on purpose (they isolate the merge core). The chain itself is
