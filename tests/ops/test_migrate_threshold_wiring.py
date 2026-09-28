@@ -189,13 +189,16 @@ def test_generated_rules_fire_end_to_end_under_promtool(tmp_path):
                  "exp_alerts": [{"exp_labels": {
                      "tenant": "t1", "severity": "warning", "source": "legacy",
                      "migration_status": "shadow", "metric_group": "connected"},
-                     # 原規則的 {{ $labels.instance }} 在 by(tenant) 聚合後已不存在
-                     "exp_annotations": {"summary": "Too many connections on "}}]},
+                     # 原規則的 {{ $labels.instance }} 在 by(tenant) 聚合後已不存在，
+                     # 改讀 tenant（issue 1818，見 test_migrate_label_refs_and_validate_pairs）
+                     "exp_annotations": {"summary": "Too many connections on t1"
+                                                    "（原為 instance，已依租戶聚合）"}}]},
                 {"eval_time": "10m", "alertname": "CustomMySQLTooManyConnectionsCritical",
                  "exp_alerts": [{"exp_labels": {
                      "tenant": "t1", "severity": "critical", "source": "legacy",
                      "migration_status": "shadow", "metric_group": "connected"},
-                     "exp_annotations": {"summary": "Critical connections on "}}]},
+                     "exp_annotations": {"summary": "Critical connections on t1"
+                                                    "（原為 instance，已依租戶聚合）"}}]},
             ],
         }],
     }), encoding="utf-8")

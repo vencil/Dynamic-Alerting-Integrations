@@ -32,6 +32,7 @@ import re
 import os
 import csv
 import io
+import json
 import argparse
 from pathlib import Path
 
@@ -464,6 +465,9 @@ class MigrationResult:
         self.triage_action = None     # "auto" | "review" | "skip" | "use_golden"
         self.original_expr = ""
         self.base_metric = None       # 原規則讀的指標名（prefix-mapping 用）
+        self.record_name = None       # 新的 recording rule 名（validate 的新查詢）
+        self.recording_lhs_original = None  # 原規則的 LHS（validate 的舊查詢）
+        self.dropped_label_refs = []  # 改讀 tenant 的 $labels 名
 
 
 def lookup_dictionary(metric_name, dictionary):
@@ -553,9 +557,91 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     return rules, record_name, threshold_name
 
 
+# recording rule 一律 `by(tenant)`，告警的 $labels 只剩 tenant。
+_SURVIVING_LABELS = frozenset({"tenant"})
+_LABEL_REF = re.compile(r'\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)')
+_SIMPLE_LABEL_ACTION = re.compile(
+    r'\{\{-?\s*\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)\s*-?\}\}')
+_MATCHER = re.compile(
+    r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+
+
+def static_label_values(lhs):
+    """原式子裡被等值 matcher 定死的 label：{label: value}。
+
+    只在式子只讀一個指標、且每個 selector 都以 `=` 把該 label 釘成同一個值時
+    才算定死：多個指標時另一邊的 series 可能帶別的值；`!=`／`=~`／`!~` 或
+    含跳脫字元的值也不算。
+    """
+    if len(set(extract_all_metrics(lhs))) != 1:
+        return {}
+    bodies = re.findall(r'\{([^}]*)\}', lhs)
+    if not bodies:
+        return {}
+    per_selector = []
+    for body in bodies:
+        pinned = {}
+        for name, op, value in _MATCHER.findall(body):
+            if op == "=" and "\\" not in value:
+                pinned[name] = value
+        per_selector.append(pinned)
+    common = per_selector[0]
+    return {k: v for k, v in common.items()
+            if all(sel.get(k) == v for sel in per_selector[1:])}
+
+
+def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
+    """改寫 annotation／label 模板裡、聚合後不存在的 `$labels.X`。
+
+    舊告警的 $labels 是原查詢 series 的 label；遷移後查詢是
+    `<agg> by(tenant) (...)`，只剩 tenant，其他引用照抄會渲染成空字串
+    （issue 1818）。owner 裁決保留 by(tenant)：
+    - 被等值 matcher 定死的 label 代入字面值，渲染結果與舊告警相同；
+    - 其他改讀 `$labels.tenant` 並附原 label 名，呼叫端負責警告。
+    `keep` 是不改寫的名字（規則自己的 static label 本來就不在 $labels 裡，
+    舊告警同樣渲染成空，改了反而改變行為）。`explain` 為真時在改寫處附上原
+    label 名；label 值會被拿去路由與去重，不附。
+
+    Returns (rewritten dict, sorted list of rewritten-to-tenant label names).
+    """
+    static = static_label_values(lhs)
+    untouched = _SURVIVING_LABELS | {"alertname"} | set(keep)
+    dropped = set()
+
+    def simple(m):
+        name = m.group(1)
+        if name in untouched:
+            return m.group(0)
+        if name in static:
+            return static[name]
+        dropped.add(name)
+        if not explain:
+            return "{{ $labels.tenant }}"
+        return f"{{{{ $labels.tenant }}}}（原為 {name}，已依租戶聚合）"
+
+    def inner(m):
+        name = m.group(1)
+        if name in untouched:
+            return m.group(0)
+        if name in static:
+            return json.dumps(static[name])  # Go template 的字串常值
+        dropped.add(name)
+        return "$labels.tenant"
+
+    rewritten = {}
+    for k, v in templates.items():
+        if isinstance(v, str):
+            v = _LABEL_REF.sub(inner, _SIMPLE_LABEL_ACTION.sub(simple, v))
+        rewritten[k] = v
+    return rewritten, sorted(dropped)
+
+
 def _build_alert_rule(rule, alert_name, parsed, record_name,
                       threshold_name, prefix):
-    """產生 Alert Rule（含 labels/annotations 繼承）。"""
+    """產生 Alert Rule（含 labels/annotations 繼承）。
+
+    Returns (alert_rule, 改讀 tenant 的 label 名 list)。
+    """
     alert_prefix = "Custom" if prefix else ""
     alert_rule = {
         "alert": f"{alert_prefix}{alert_name}" if prefix else alert_name,
@@ -570,15 +656,19 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
     }
     if 'for' in rule:
         alert_rule['for'] = rule['for']
-    labels = dict(rule.get('labels', {}))
+    static_keys = set(rule.get('labels', {}))
+    labels, dropped_l = rewrite_dropped_label_refs(
+        dict(rule.get('labels', {})), parsed['lhs'], keep=static_keys, explain=False)
     if prefix:
         labels['source'] = 'legacy'
         labels['migration_status'] = 'shadow'
     if labels:
         alert_rule['labels'] = labels
+    dropped_a = []
     if 'annotations' in rule:
-        alert_rule['annotations'] = rule['annotations']
-    return alert_rule
+        alert_rule['annotations'], dropped_a = rewrite_dropped_label_refs(
+            dict(rule['annotations']), parsed['lhs'], keep=static_keys)
+    return alert_rule, sorted(set(dropped_l) | set(dropped_a))
 
 
 def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
@@ -673,8 +763,16 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     result.recording_rules.extend(rec_rules)
 
     # === 產出 3. Alert Rule ===
-    result.alert_rules.append(_build_alert_rule(
-        rule, alert_name, parsed, record_name, threshold_name, prefix))
+    alert_rule, dropped = _build_alert_rule(
+        rule, alert_name, parsed, record_name, threshold_name, prefix)
+    result.alert_rules.append(alert_rule)
+    result.dropped_label_refs = dropped
+    if dropped:
+        result.notes.append(
+            f"annotation／label 引用了依租戶聚合後不存在的 label（{', '.join(dropped)}），"
+            f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
+    result.record_name = record_name
+    result.recording_lhs_original = parsed['lhs']
 
     return result
 
@@ -891,12 +989,21 @@ def write_prefix_mapping(results, output_dir, prefix):
             # 不存在的 `<指標>_critical`。
             original = r.base_metric or (
                 key.replace(prefix, "", 1) if key.startswith(prefix) else key)
-            mapping[key] = {
+            entry = {
                 "original_metric": original,
                 "alert_name": r.alert_name,
                 "golden_match": r.dict_match.get("maps_to") if r.dict_match else None,
                 "golden_rule": r.dict_match.get("golden_rule") if r.dict_match else None,
             }
+            # validate --mapping 的比對組。新值是 recording rule 本身；舊值是原規則的
+            # LHS 以同一種方式依租戶聚合——rate 類要保留 rate()，聚合要用同一個
+            # agg，否則兩邊量綱或 record 名對不上（issue 1818）。改用黃金標準的
+            # 規則不產出 recording rule，沒有新值可比，不寫。
+            if (r.triage_action != "use_golden" and r.record_name
+                    and r.recording_lhs_original and r.agg_mode):
+                entry["old_query"] = f"{r.agg_mode} by(tenant) ({r.recording_lhs_original})"
+                entry["new_query"] = r.record_name
+            mapping[key] = entry
 
     if not mapping:
         return None
@@ -1100,6 +1207,17 @@ def render_recording_rules(results, prefix="custom_"):
     return buf.getvalue()
 
 
+_PLAIN_SCALAR = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$')
+
+
+def _yaml_scalar(value):
+    """label 值：簡單字串照舊不加引號，其他（含 `{{ … }}` 模板）寫成雙引號純量。"""
+    text = str(value)
+    if _PLAIN_SCALAR.match(text) and yaml.safe_load(text) == text:
+        return text
+    return json.dumps(text, ensure_ascii=False)
+
+
 def render_alert_rules(results, prefix="custom_"):
     """組出 platform-alert-rules.yaml 內容字串 (純函式，無 IO)。"""
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
@@ -1115,6 +1233,10 @@ def render_alert_rules(results, prefix="custom_"):
         if r.status == "unparseable" or r.triage_action == "use_golden":
             continue
         buf.write(f"      # --- {r.alert_name} ---\n")
+        dropped = getattr(r, "dropped_label_refs", None)
+        if dropped:
+            buf.write(f"      # ⚠️ 原 annotation／label 引用的 {', '.join(dropped)} 在依租戶聚合後"
+                      f"不存在，已改讀 $labels.tenant\n")
         # Write alert rule with proper indentation
         for ar in r.alert_rules:
             buf.write(f"      - alert: {ar['alert']}\n")
@@ -1127,11 +1249,13 @@ def render_alert_rules(results, prefix="custom_"):
             if 'labels' in ar:
                 buf.write("        labels:\n")
                 for lk, lv in ar['labels'].items():
-                    buf.write(f"          {lk}: {lv}\n")
+                    buf.write(f"          {lk}: {_yaml_scalar(lv)}\n")
             if 'annotations' in ar:
                 buf.write("        annotations:\n")
                 for ak, av in ar['annotations'].items():
-                    buf.write(f"          {ak}: \"{av}\"\n")
+                    # 雙引號純量要跳脫：annotation 常見 `printf "%.2f"`，
+                    # 直接包一層引號會產出 parse 不了的 YAML。
+                    buf.write(f"          {ak}: {json.dumps(str(av), ensure_ascii=False)}\n")
         buf.write("\n")
     return buf.getvalue()
 
