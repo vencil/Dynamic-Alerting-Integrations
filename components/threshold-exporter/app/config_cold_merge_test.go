@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -476,7 +477,9 @@ func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
 		t.Errorf("broken nested defaults on reload: parse_failure{_defaults.yaml} +%v, want +2 "+
 			"(1 dependent tenant + the flat plane's nested probe); log:\n%s", d, buf.String())
 	}
-	assertLogLineWith(t, buf.String(), "ERROR: skip unparseable defaults/profiles file "+nested+":")
+	// The path is %q-quoted since #2278 (a non-UTF-8 file name must not
+	// reach the log raw), so the flat plane's line reads `file "<path>":`.
+	assertLogLineWith(t, buf.String(), "ERROR: skip unparseable defaults/profiles file "+strconv.Quote(nested)+":")
 }
 
 // TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce pins the
