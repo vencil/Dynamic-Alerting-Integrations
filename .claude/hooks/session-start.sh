@@ -7,7 +7,7 @@
 #   *silently or misleadingly* without these things. Each was added because a
 #   session actually lost time to it:
 #
-#   1. pre-commit missing        → `.git/hooks/` is empty, so all 105 hooks are
+#   1. pre-commit missing        → `.git/hooks/` is empty, so every hook is
 #                                  simply not run at commit time. Nothing warns
 #                                  you; commits just sail through ungated.
 #   2. shallow clone has no tags → `image-pin-capability-check` aborts with

@@ -914,7 +914,7 @@ Windows 側剛修完的檔案（pre-commit hook EOF 換行、CI 剛寫完的 log
 
 #### 3. `run_hooks_sandbox.sh` — sandbox-side pre-commit gate
 
-`win_git_escape.bat commit-file` 內部跑 `git commit --no-verify`（陷阱 #36：pre-commit 的 shebang 寫死 Linux python path，Windows 側 git.exe 呼叫 hook 直接 404）。這意味著走 Windows 逃生門時，**本地 pre-commit hooks 完全被繞過**——只剩 CI 接住，但 CI 失敗時你已經 push 上去了。
+`win_git_escape.bat commit-file` 內部跑 `git commit --no-verify`（陷阱 #36：pre-commit 的 shebang 寫死 Linux python path，Windows 側 git.exe 呼叫 hook 直接 404）。這意味著走 Windows 逃生門時，**本地 pre-commit hooks 完全被繞過**。
 
 這個 wrapper 在 Cowork VM（sandbox）側跑 pre-commit，補上那個漏洞：
 
@@ -925,8 +925,7 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 
 為什麼 sandbox 側可行：
 1. **乾淨 ext4**，無 FUSE dentry cache / lock 陷阱
-2. 31 個 auto-stage hook 都是純 Python（+ pyyaml）— 完全不需 docker / Go / Helm
-3. 用 `pre-commit run --files` 模式，**繞過 pre-commit 的 stash 邏輯**（避開 FUSE 側 `.git/index` 可能 corrupt 的問題，見規則 #2b）
+2. 用 `pre-commit run --files` 模式，**繞過 pre-commit 的 stash 邏輯**（避開 FUSE 側 `.git/index` 可能 corrupt 的問題，見規則 #2b）
 
 輸出格式（grep-friendly 最後一行）：
 - 成功：`HOOKS STATUS=PASS FILES=<n> DURATION=<s>s`

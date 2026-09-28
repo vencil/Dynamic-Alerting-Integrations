@@ -14,10 +14,7 @@
 # Why sandbox-side:
 #   1. Cowork VM has a clean native ext4 filesystem — no FUSE cache
 #      staleness or dentry-lock traps.
-#   2. All 31 auto-stage hooks in .pre-commit-config.yaml are pure Python
-#      (+ pyyaml). None require docker, Go, or Helm, so the sandbox is a
-#      complete execution environment for them.
-#   3. `pre-commit run --files <list>` bypasses pre-commit's stash logic,
+#   2. `pre-commit run --files <list>` bypasses pre-commit's stash logic,
 #      which would otherwise trip on FUSE-side `.git/index` corruption.
 #
 # Usage:
