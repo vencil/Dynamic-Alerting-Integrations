@@ -582,6 +582,37 @@ func TestServedValues_AliasSpellingServedIsNotUnserved(t *testing.T) {
 	}
 }
 
+// Both spellings in one tenant: /metrics serves the canonical key's value, so
+// the old spelling's own value is unserved — even though the canonical key it
+// maps to is in values. Alone, the old spelling is what is served (above).
+func TestServedValues_AliasShadowedByCanonicalIsUnserved(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_cpu: \"44\"\n    mysql_threads_running: \"50\"\n",
+	}, "")
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["tenant-a"]
+	wantValue(t, doc, "tenant-a", "mysql_threads_running", 50)
+	if got, ok := tv.Unserved["mysql_cpu"]; !ok || got != "44" {
+		t.Errorf(`unserved["mysql_cpu"] = %#v (present=%v), want "44"; unserved = %v`, got, ok, tv.Unserved)
+	}
+	if _, ok := tv.Unserved["mysql_threads_running"]; ok {
+		t.Errorf("the canonical key is served, yet unserved = %v", tv.Unserved)
+	}
+
+	// Control: the old spelling alone is served under the canonical key.
+	code, doc, _, stderr = served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_cpu: 44\n",
+	}, "")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "mysql_threads_running", 44)
+	if _, ok := doc.Tenants["tenant-a"].Unserved["mysql_cpu"]; ok {
+		t.Errorf("mysql_cpu alone is served, yet unserved = %v", doc.Tenants["tenant-a"].Unserved)
+	}
+}
+
 func TestServedValues_UnservedScheduleKeepsItsWindows(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{

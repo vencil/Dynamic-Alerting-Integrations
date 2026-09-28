@@ -369,8 +369,13 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 		}
 
 		for k, sv := range overrides {
-			canon, _ := config.CanonicalKeyFor(k)
-			if _, served := tv.Values[canon]; served {
+			canon, isAlias := config.CanonicalKeyFor(k)
+			// A retired spelling whose canonical key the same tenant also
+			// writes is shadowed: the canonical key's value is the one
+			// served, so the alias's own value is not.
+			_, canonWritten := overrides[canon]
+			shadowed := isAlias && canonWritten
+			if _, served := tv.Values[canon]; served && !shadowed {
 				continue
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
