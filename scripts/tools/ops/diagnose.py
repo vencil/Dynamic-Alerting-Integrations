@@ -42,7 +42,10 @@ from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2114)
+# #2231: STRICT — a file holding a key twice is one the exporter drops whole,
+# so every conf.d read here takes the same skip + WARN path as bad syntax
+# instead of resolving whichever value PyYAML kept last.
+from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2114, #2231)
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     iter_config_files,
@@ -206,7 +209,7 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
                 # #2114: tenant keys as source TEXT — the exporter's id, and
                 # what the CLI's `tenant` argument is. `123:` in a platform
                 # file used to be the int 123 and never matched "123".
-                raw = load_exporter_keys(f)
+                raw = strict_load_exporter_keys(f)
         except (OSError, yaml.YAMLError):
             # ⛔ Still silent, deliberately — see #1522. `check()` calls this
             # AND `resolve_inheritance_chain` over the same directory, so
@@ -380,7 +383,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     declared = []
     try:
         with open(defaults_path, encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
+            raw = strict_safe_load(f) or {}
         if isinstance(raw, dict):
             defaults_raw = raw.get("defaults", {}) or {}
             listed = raw.get("optional_overrides") or []
@@ -406,7 +409,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         try:
             with open(entry, encoding="utf-8") as f:
                 # #2114: tenant keys as source TEXT (see lookup_tenant_profile).
-                raw = load_exporter_keys(f) or {}
+                raw = strict_load_exporter_keys(f) or {}
         except (OSError, yaml.YAMLError) as e:
             _skip_read_failure(fname, e)
             continue
@@ -433,7 +436,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         profiles_path = base / "_profiles.yaml"
         try:
             with open(profiles_path, encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
+                raw = strict_safe_load(f)
             # ⛔ NOT `or {}`. That coerces every FALSY document — `[]`, `0`,
             # `false` — into an empty mapping, so a `_profiles.yaml` whose
             # whole body is `[]` loses the profile layer with zero signal:

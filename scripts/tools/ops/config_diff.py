@@ -31,9 +31,9 @@ from _lib_python import (  # noqa: E402
     is_disabled as _is_disabled,
     iter_yaml_files,
     load_tenant_configs as _load_tenant_configs_raw,
-    load_yaml_file,
     VALID_RESERVED_KEYS,
 )
+from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = YAML error)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _threshold_alerts import alerts_for_key  # noqa: E402
 
@@ -73,7 +73,10 @@ def load_profiles_from_dir(dir_path):
     if not base.is_dir():
         return {}
     profiles_path = str(base / "_profiles.yaml")
-    raw = load_yaml_file(profiles_path, default={})
+    # Strict (#2231): the exporter drops a _profiles.yaml holding a key
+    # twice, so a diff of whichever value PyYAML kept last is a diff of a
+    # file nobody applies — refuse it like bad syntax (main() -> rc 2).
+    raw = load_yaml_file_strict(profiles_path, default={})
     return raw.get("profiles", {}) if isinstance(raw, dict) else {}
 
 

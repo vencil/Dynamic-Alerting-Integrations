@@ -33,12 +33,12 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
     load_tenant_configs as _load_tenant_configs_dir,
     load_yaml_file,
-    load_yaml_file_exporter_keys,
     write_json_or_die,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -87,7 +87,9 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
 
     if tenant_config:
         # #2114: tenant ids as source text, as the directory branch reads them.
-        data = load_yaml_file_exporter_keys(tenant_config, default={})
+        # #2231: and strictly, as it does — a key written twice is a file the
+        # exporter drops, so it exits 2 like bad syntax.
+        data = load_yaml_file_strict_exporter_keys(tenant_config, default={})
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
             # Multi-tenant wrapper format (mirrors _lib_io.load_tenant_configs)
             for t_name, t_data in data["tenants"].items():

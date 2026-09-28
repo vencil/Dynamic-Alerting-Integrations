@@ -47,10 +47,13 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import is_disabled, http_get_json, query_prometheus_range, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+# #2231: a conf.d file holding a key twice is one the exporter drops whole;
+# strict reads raise YamlFileError for it, the path bad syntax already takes.
+from _lib_io import load_yaml_file_strict, strict_safe_load  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
@@ -533,9 +536,9 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
             # naming one here would report a loss that did not happen
             # (the #1607 round settled that wording).
             continue
-        new_data = load_yaml_file(str(path), default={})
+        new_data = load_yaml_file_strict(str(path), default={})
         baseline_path = str(baseline_base / basename)
-        old_data = load_yaml_file(baseline_path, default={})
+        old_data = load_yaml_file_strict(baseline_path, default={})
 
         # Compare all metric keys
         all_keys = set(list(new_data.keys()) + list(old_data.keys()))
@@ -668,7 +671,7 @@ def load_conf_files(paths):
         if (path.name.startswith("_") or is_hidden_name(path.name)
                 or not path.is_file()):
             continue
-        data = load_yaml_file(str(path), default={})
+        data = load_yaml_file_strict(str(path), default={})
         if isinstance(data, dict):
             parsed[path.stem] = data
     return parsed
@@ -804,7 +807,9 @@ def _flat_keys_at_head1(tenant):
         return set()
     import yaml
     try:
-        data = yaml.safe_load(result.stdout) or {}
+        # Strict (#2231): a HEAD~1 file holding a key twice was one the
+        # exporter dropped whole — treated like bad syntax (no removal kept).
+        data = strict_safe_load(result.stdout) or {}
     except yaml.YAMLError:
         return set()
     tenants = data.get("tenants") if isinstance(data, dict) else None
