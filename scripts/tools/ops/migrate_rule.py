@@ -8,6 +8,7 @@
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
 6. Prefix Mapping           → migration_output/prefix-mapping.yaml
+7. Defaults 片段            → migration_output/defaults-snippet.yaml
 
 用法:
   python3 migrate_rule.py <legacy_rules.yml>                    # 預設檔案輸出
@@ -20,7 +21,8 @@
 
 v4 升級 (AST Engine — Phase 11):
   - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
-  - AST-Informed String Surgery: 精準 prefix 替換 + tenant label 注入
+  - AST-Informed String Surgery: 精準 tenant label 注入（前綴只加在 key 與 record 名稱，
+    不改來源指標名，issue 1818）
   - Reparse 驗證: 確保改寫後的 PromQL 仍然合法
   - Graceful degradation: promql-parser 不可用時自動降級為 regex
 """
@@ -195,28 +197,6 @@ def detect_semantic_break_ast(expr_str):
         return False
 
     return _walk_calls(ast)
-
-
-def rewrite_expr_prefix(expr_str, rename_map):
-    """AST-Informed String Surgery: 精準替換 metric 名稱 (加 prefix)。
-
-    rename_map: dict {old_name: new_name}
-    使用 word-boundary regex，確保不誤改 label name 或子字串。
-    改寫後 reparse 驗證；驗證失敗回傳原始字串。
-    """
-    result = expr_str
-    for old_name, new_name in rename_map.items():
-        if old_name == new_name:
-            continue
-        result = re.sub(r'\b' + re.escape(old_name) + r'\b', new_name, result)
-
-    # Validate rewrite
-    if HAS_AST:
-        try:
-            promql_parser.parse(result)
-        except Exception:
-            return expr_str  # 驗證失敗，回退原始
-    return result
 
 
 def rewrite_expr_tenant_label(expr_str, metric_names):
@@ -475,6 +455,7 @@ class MigrationResult:
         self.dict_match = None        # dict entry from metric-dictionary.yaml
         self.triage_action = None     # "auto" | "review" | "skip" | "use_golden"
         self.original_expr = ""
+        self.base_metric = None       # 原規則讀的指標名（prefix-mapping 用）
 
 
 def lookup_dictionary(metric_name, dictionary):
@@ -513,8 +494,22 @@ def _build_unparseable_result(alert_name, expr, severity, rule, dictionary):
     return result
 
 
-def _build_recording_rules(parsed, prefixed_key, severity, agg_mode,
-                           prefix, has_golden, use_ast):
+def split_threshold_key(key):
+    """把閾值 key 拆成 threshold-exporter 發射的 (component, metric)。
+
+    與 exporter 的 parseMetricKey 同一規則
+    （components/threshold-exporter/app/pkg/config/parse.go）：以第一個 `_`
+    拆開；沒有 `_`、或 `_` 在開頭時 component 為 "default"。`custom_mysql_x` 發射成
+    `user_threshold{component="custom", metric="mysql_x"}`，所以 selector
+    不能寫 `metric="custom_mysql_x"`——那樣永遠選不到（issue 1818）。
+    """
+    idx = key.find("_")
+    if idx <= 0:
+        return "default", key
+    return key[:idx], key[idx + 1:]
+
+
+def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     """產生 Recording Rules（含 AST 改寫）。
 
     Returns (recording_rules_list, record_name, threshold_name).
@@ -524,22 +519,17 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode,
     threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
 
     # v4: AST-Informed String Surgery — 改寫 LHS 表達式
+    # 只注入 tenant label，不改指標名。前綴只用在 key 與 record 名稱上：
+    # 來源指標是客戶既有的 exporter 發的，沒有任何東西會產生
+    # `custom_<指標>` 這個名字的 series，改名後 recording rule 恆為空
+    # （issue 1818）。
     recording_lhs = parsed['lhs']
     if use_ast and HAS_AST:
         all_metrics = parsed.get('all_metrics', [])
-        # Step 1: Prefix injection (如果需要)
-        if prefix and not has_golden and all_metrics:
-            rename_map = {}
-            for m_name in all_metrics:
-                if not m_name.startswith(prefix):
-                    rename_map[m_name] = f"{prefix}{m_name}"
-            if rename_map:
-                recording_lhs = rewrite_expr_prefix(recording_lhs, rename_map)
-        # Step 2: Tenant label injection
-        rewritten_metrics = extract_metrics_ast(recording_lhs) or all_metrics
-        if rewritten_metrics:
-            recording_lhs = rewrite_expr_tenant_label(recording_lhs, rewritten_metrics)
+        if all_metrics:
+            recording_lhs = rewrite_expr_tenant_label(recording_lhs, all_metrics)
 
+    component, metric = split_threshold_key(prefixed_key)
     rules = [
         {
             "record": record_name,
@@ -548,7 +538,8 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode,
         {
             "record": threshold_name,
             "expr": (f'max by(tenant) (user_threshold'
-                     f'{{metric="{prefixed_key}", severity="{severity}"}})'),
+                     f'{{component="{component}", metric="{metric}", '
+                     f'severity="{severity}"}})'),
         },
     ]
     return rules, record_name, threshold_name
@@ -648,6 +639,7 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     result.agg_reason = agg_reason
     result.original_expr = expr
     result.dict_match = dict_match
+    result.base_metric = metric_key
 
     # Triage action
     if has_golden:
@@ -669,7 +661,7 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
 
     # === 產出 2. Recording Rules ===
     rec_rules, record_name, threshold_name = _build_recording_rules(
-        parsed, prefixed_key, severity, agg_mode, prefix, has_golden, use_ast)
+        parsed, prefixed_key, severity, agg_mode, use_ast)
     result.recording_rules.extend(rec_rules)
 
     # === 產出 3. Alert Rule ===
@@ -751,6 +743,67 @@ def apply_auto_suppression(results):
     return paired
 
 
+def _emitting(results):
+    return [r for r in results
+            if r.status != "unparseable" and r.triage_action != "use_golden"
+            and r.tenant_config]
+
+
+def route_unpaired_critical_to_base(results):
+    """只有 critical、沒有同指標 warning 的規則，改讀 base 閾值列（in-place）。
+
+    原本那條規則對所有實例生效。遷移後 warning 層靠 defaults-snippet 對所有
+    租戶生效，critical 層卻不能放進 defaults（exporter 只在租戶自己設了
+    `<base>_critical` 時才發射 critical 列）。所以只有 critical 的規則若照常
+    讀 `<key>_critical`，遷移後沒有任何租戶會響（issue 1818）。改讀 base 那
+    一列、alert label 仍標 critical，與原規則「全域生效」的語意相同。
+    有 warning 配對的 critical 維持讀 critical 層。
+    回傳改寫的條數。
+    """
+    warning_bases = {k for r in _emitting(results) if r.severity != "critical"
+                     for k in r.tenant_config}
+    routed = 0
+    for r in _emitting(results):
+        if r.severity != "critical":
+            continue
+        key = next(iter(r.tenant_config))
+        if not key.endswith("_critical"):
+            continue
+        base = key[:-len("_critical")]
+        if base in warning_bases:
+            continue
+        old_thr = f"tenant:alert_threshold:{key}"
+        new_thr = f"tenant:alert_threshold:{base}"
+        r.tenant_config = {base: r.tenant_config[key]}
+        for rr in r.recording_rules:
+            if rr["record"] == old_thr:
+                rr["record"] = new_thr
+                rr["expr"] = rr["expr"].replace('severity="critical"', 'severity="warning"')
+        for ar in r.alert_rules:
+            ar["expr"] = ar["expr"].replace(old_thr, new_thr)
+        r.notes.append(
+            f"只有 critical、沒有 warning 的規則：閾值寫在 {base}（base 列），"
+            f"告警仍標 severity=critical。這樣 defaults-snippet 才能對所有租戶生效；"
+            f"critical 層（{key}）無法放進 defaults。")
+        routed += 1
+    return routed
+
+
+def detect_threshold_conflicts(results):
+    """同一個閾值 key 被多條規則以不同值設定時，回傳 {key: [(alert, value), ...]}。
+
+    遷移後同一個 key 只能有一個值，讀它的告警都會用這個值。先前是後寫的
+    規則悄悄勝出，tenant-config 還寫出重複的 YAML key（issue 1818）。現在一律
+    取第一條規則的值，衝突逐條點名。
+    """
+    seen = {}
+    for r in _emitting(results):
+        for k, v in r.tenant_config.items():
+            seen.setdefault(k, []).append((r.alert_name, v))
+    return {k: entries for k, entries in seen.items()
+            if len({v for _, v in entries}) > 1}
+
+
 # ============================================================
 # v3: Triage Mode — CSV 報告
 # ============================================================
@@ -826,7 +879,10 @@ def write_prefix_mapping(results, output_dir, prefix):
         if r.status == "unparseable":
             continue
         for key in r.tenant_config.keys():
-            original = key.replace(prefix, "", 1) if key.startswith(prefix) else key
+            # `_critical` key 的原指標與 warning 那條相同；從 key 去前綴會得到
+            # 不存在的 `<指標>_critical`。
+            original = r.base_metric or (
+                key.replace(prefix, "", 1) if key.startswith(prefix) else key)
             mapping[key] = {
                 "original_metric": original,
                 "alert_name": r.alert_name,
@@ -886,18 +942,27 @@ def render_tenant_config(results):
         if r.triage_action == "use_golden":
             continue  # 建議使用黃金標準的不輸出到 tenant config
         for k, v in r.tenant_config.items():
-            tenant_configs[k] = v
+            tenant_configs.setdefault(k, v)
+    conflicts = detect_threshold_conflicts(results)
 
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
     buf.write("# ============================================================\n")
+    buf.write("# ⚠️ 先把 defaults-snippet.yaml 合併進 _defaults.yaml：沒宣告的 key\n")
+    buf.write("#    exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設值\n")
+    buf.write("#    不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。\n")
     buf.write("# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n")
     buf.write("# tenants:\n")
     buf.write("#   my-tenant-name:\n")
     for k, v in tenant_configs.items():
         buf.write(f'#     {k}: "{v}"\n')
+    for k, entries in conflicts.items():
+        listed = ", ".join(f"{a}={v}" for a, v in entries)
+        buf.write(f"# ⚠️ 閾值衝突：{k} 被多條規則設定（{listed}），"
+                  f"一律取第一條的值 {entries[0][1]}；讀它的告警都用這個值。\n")
     buf.write("\n")
+    written = set()
     for r in results:
         if r.status == "unparseable" or r.triage_action == "use_golden":
             continue
@@ -906,6 +971,12 @@ def render_tenant_config(results):
             for note in r.notes:
                 buf.write(f"# 📖 {note}\n")
         for k, v in r.tenant_config.items():
+            if k in written:
+                # 同一個 key 只能出現一次（重複的 YAML key 會被後者蓋掉，
+                # 嚴格的 loader 則直接拒收）。
+                buf.write(f'# {k}: "{v}"  ← 與上方同一個 key，未採用（見檔頭的閾值衝突）\n')
+                continue
+            written.add(k)
             buf.write(f'{k}: "{v}"\n')
         if r.dim_hints:
             buf.write("# 維度標籤替代語法:\n")
@@ -914,6 +985,65 @@ def render_tenant_config(results):
                 dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
                 buf.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
         buf.write("\n")
+    return buf.getvalue()
+
+
+def _defaults_value(raw):
+    """閾值字串轉成 defaults 可讀的數字（exporter 以 float64 解 defaults）。"""
+    value = float(raw)
+    return int(value) if value.is_integer() else value
+
+
+def render_defaults_snippet(results):
+    """組出 defaults-snippet.yaml 內容字串 (純函式，無 IO)。
+
+    threshold-exporter 只發射 `_defaults.yaml` 宣告過的 key：租戶檔裡沒宣告
+    的 key 只得到 `unknown key ... not in defaults` 警告。所以 migrate 產出的
+    key 必須連同一份 defaults 一起交付，否則三件套在 runtime 不會發射任何閾值
+    （issue 1818）。
+
+    只放 base key，值取自原規則：宣告後對所有租戶生效，與原本那條全域規則
+    相同。`<base>_critical` 不能放進 defaults——exporter 會把它當成另一個
+    base 指標發射成 severity="warning"，不是 critical 層；critical 層只在
+    租戶檔自己設了 `<base>_critical`、且 base 在 defaults 裡時才發射
+    （resolveCriticalRows）。所以只有 critical 的規則也要宣告 base key
+    （值同 critical）；migrate 沒有產出讀 base key 的 warning 告警，這列不會
+    觸發任何告警。
+    """
+    defaults = {}
+    critical_bases = {}
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        for k, v in r.tenant_config.items():
+            if k.endswith("_critical"):
+                critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
+            else:
+                # 與 tenant-config 相同：第一條規則的值勝出（衝突另行點名）
+                defaults.setdefault(k, _defaults_value(v))
+    for base, v in critical_bases.items():
+        defaults.setdefault(base, v)
+
+    buf = io.StringIO()
+    buf.write("# ============================================================\n")
+    buf.write("# Defaults 片段 — 合併進 conf.d/_defaults.yaml 的 defaults: 區塊\n")
+    buf.write("# ============================================================\n")
+    buf.write("# threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，\n")
+    buf.write("# tenant-config.yaml 的值只會得到 `unknown key ... not in defaults`\n")
+    buf.write("# 警告，不發射任何 user_threshold，上面的告警規則永遠不會響。\n")
+    buf.write("#\n")
+    buf.write("# 值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域\n")
+    buf.write("# 規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical\n")
+    buf.write("# 的租戶，各自把 tenant-config.yaml 裡的 <key>_critical 寫進自己的檔案。\n")
+    buf.write("# 只有 critical 的舊規則已改讀 base 列，它的值就在這裡，對所有租戶生效。\n")
+    buf.write("# ⚠️ 值必須是數字：寫 \"disable\" 之類的字串，exporter 會丟掉整個\n")
+    buf.write("#    defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 \"disable\"。\n")
+    buf.write("# ============================================================\n")
+    if not defaults:
+        buf.write("defaults: {}\n")
+        return buf.getvalue()
+    buf.write(yaml.safe_dump({"defaults": defaults}, default_flow_style=False,
+                             allow_unicode=True, sort_keys=False))
     return buf.getvalue()
 
 
@@ -1023,6 +1153,13 @@ def render_report(results):
     buf.write(f"  ⚠️  複雜表達式 (已自動猜測): {len(complex_rules)}\n")
     buf.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
     buf.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
+    conflicts = detect_threshold_conflicts(results)
+    if conflicts:
+        buf.write("⚠️ 閾值衝突（同一個 key 被多條規則設不同值，遷移後只能有一個值）:\n")
+        for k, entries in conflicts.items():
+            listed = ", ".join(f"{a}={v}" for a, v in entries)
+            buf.write(f"  - {k}: {listed} → 採用 {entries[0][1]}\n")
+        buf.write("  讀這個 key 的告警都會用採用的值；原本各自不同門檻的告警請改寫成不同的 key。\n\n")
 
     # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
     golden_parseable = len([r for r in results
@@ -1116,6 +1253,10 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
 
     # --- v3: Prefix Mapping ---
     mapping_path = write_prefix_mapping(results, output_dir, prefix)
+
+    # --- defaults-snippet.yaml (exporter 只發射 defaults 宣告過的 key) ---
+    defaults_path = str(Path(output_dir) / "defaults-snippet.yaml")
+    write_text_or_die(defaults_path, render_defaults_snippet(results), flag=_OUTPUT_FLAG)
 
     # 桶計數 (回傳值) — 自 results 獨立純計算，與 render_report 內部一致。
     perfect = [r for r in results if r.status == "perfect"]
@@ -1271,6 +1412,13 @@ def main():
     n_paired = apply_auto_suppression(results)
     if n_paired:
         print(f"[🔗] Auto-Suppression: {n_paired} 組 warning↔critical 配對完成")
+    n_routed = route_unpaired_critical_to_base(results)
+    if n_routed:
+        print(f"[↪] {n_routed} 條只有 critical 的規則改讀 base 閾值列，"
+              "defaults-snippet 才能對所有租戶生效")
+    for k, entries in detect_threshold_conflicts(results).items():
+        listed = ", ".join(f"{a}={v}" for a, v in entries)
+        print(f"⚠️  閾值衝突：{k} 被多條規則設不同值（{listed}），採用第一條的 {entries[0][1]}")
 
     # 輸出
     if args.triage:
@@ -1294,6 +1442,8 @@ def main():
         if n_unparseable:
             print(f"[!] {n_unparseable} 條需人工處理 (LLM Prompt 已寫入報告)")
         print(f"📁 檔案已輸出至 {args.output_dir}/")
+        print("⚠️  先把 defaults-snippet.yaml 合併進 conf.d/_defaults.yaml 的 "
+              "defaults: 區塊；沒宣告的 key，threshold-exporter 不會發射閾值。")
         if prefix:
             print(f"🏷️  前綴: {prefix} (Prefix Mapping 已輸出)")
 

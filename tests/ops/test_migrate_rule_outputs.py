@@ -1,7 +1,7 @@
 """Tests for migrate_rule.py output writers + CLI orchestrator.
 
 The existing test_migrate_ast.py covers the AST helpers (extract_metrics_ast,
-rewrite_expr_prefix, etc.). This file fills the audit-flagged gap (Top 5 #5):
+rewrite_expr_tenant_label, etc.). This file fills the audit-flagged gap (Top 5 #5):
 the CLI orchestrator + the file-writing / report-rendering layer that takes
 MigrationResult objects to disk.
 
@@ -338,6 +338,9 @@ class TestRenderTenantConfig:
             "# ============================================================\n"
             "# Tenant Config — 複製到 conf.d/<tenant>.yaml\n"
             "# ============================================================\n"
+            "# ⚠️ 先把 defaults-snippet.yaml 合併進 _defaults.yaml：沒宣告的 key\n"
+            "#    exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設值\n"
+            "#    不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。\n"
             "# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n"
             "# tenants:\n"
             "#   my-tenant-name:\n"

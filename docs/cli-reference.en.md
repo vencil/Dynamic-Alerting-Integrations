@@ -2085,6 +2085,7 @@ docker run --rm \
 - `migration_output/migration-report.txt` — Detailed report
 - `migration_output/triage-report.csv` — Rules requiring manual review
 - `migration_output/prefix-mapping.yaml` — Metric prefix mapping
+- `migration_output/defaults-snippet.yaml` — a `defaults:` snippet to merge into `_defaults.yaml`. threshold-exporter only emits declared keys, so the values in `tenant-config.yaml` have no effect until it is merged. The values come from the original rules; once declared, the warning tier applies to every tenant. A critical tier paired with a warning cannot be declared in defaults: each tenant that wants it sets `<key>_critical` in its own file; a legacy rule with only a critical tier reads the base row, so its value is in the snippet (the v2.9.0 image does not produce this file yet)
 
 **Triage Mode**:
 

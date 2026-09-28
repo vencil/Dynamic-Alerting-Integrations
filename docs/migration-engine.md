@@ -19,7 +19,7 @@ lang: zh
 flowchart LR
     A["Original PromQL<br/>string"] --> B["promql_parser<br/>.parse()"]
     B -->|"read-only AST"| C["walk_ast()<br/>Collect VectorSelector<br/>nodes"]
-    C --> D["rewrite_expr()<br/>1. custom_ prefix<br/>2. tenant label"]
+    C --> D["rewrite_expr_tenant_label()<br/>tenant label 注入"]
     D --> E["Reparse +<br/>prettify()"]
     E -->|"✅ Valid"| F["Output<br/>Rewritten PromQL"]
     B -->|"❌ Parse fails"| G["Fallback<br/>Regex path"]
@@ -37,7 +37,6 @@ flowchart LR
 |------|------|
 | `extract_metrics_ast()` | AST 精準辨識 metric name，取代 regex + blacklist 方式 |
 | `extract_label_matchers_ast()` | 提取所有 label matcher（含 `=~` regex matcher） |
-| `rewrite_expr_prefix()` | `custom_` 前綴注入，使用 word-boundary regex 防止子字串誤替換 |
 | `rewrite_expr_tenant_label()` | `tenant=~".+"` label 注入，確保租戶隔離 |
 | `detect_semantic_break_ast()` | 偵測 `absent()` / `predict_linear()` 等語意中斷函式 |
 
@@ -56,7 +55,7 @@ flowchart LR
 完整遷移路徑整合 AST 引擎、Shadow Monitoring 與 Triage 模式：
 
 1. **Triage**：`migrate_rule.py --triage` 產出 CSV 清單，分類每條規則的遷移策略（direct / prefix / skip）
-2. **遷移執行**：AST 引擎處理 prefix 注入與 tenant label 注入
+2. **遷移執行**：AST 引擎注入 tenant label。`custom_` 前綴只加在閾值 key 與 recording rule 名稱上，不改來源指標名：來源 series 是客戶既有 exporter 發的，改名後 recording rule 會是空集合（issue 1818）
 3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（預設容差 `--tolerance 0.001`）
 4. **上線**：透過 `scaffold_tenant.py` 產出完整的租戶配置包
 

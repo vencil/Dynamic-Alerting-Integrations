@@ -127,8 +127,8 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶
 工具自動處理：
 
 - **三種輸入情境**：`✅ 完美解析` / `⚠️ 複雜表達式 (含警告方塊)` / `🚨 無法解析 (產出 LLM Prompt)`
-- **三件套輸出**：`tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`
-- **Auto-Suppression**：同 metric 的 warning + critical 自動配對，warning alert 注入第二層 `unless` 子句
+- **三件套輸出**：`tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`，另附 `defaults-snippet.yaml`：要先合併進 `_defaults.yaml`，exporter 才會發射這些閾值
+- **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
 
 AST 引擎深度（為什麼 `promql-parser` 比 regex 準）+ 完整啟發規則 + Auto-Suppression 配對邏輯：[`migration-engine.md`](migration-engine.md)。CLI flag 矩陣：[`cli-reference.md#migrate`](cli-reference.md#migrate)。三件套部署位置（ConfigMap 合併 vs 獨立掛載）：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。

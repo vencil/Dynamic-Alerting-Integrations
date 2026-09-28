@@ -195,14 +195,21 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 # Output (migration_output/):
 #   - platform-recording-rules.yaml, platform-alert-rules.yaml
 #     (new rules; the alert rules carry the migration_status: shadow label)
-#   - tenant-config.yaml (threshold keys to paste into each tenant's conf.d file)
+#   - defaults-snippet.yaml (merge into the defaults: block of _defaults.yaml first; the
+#     exporter only emits declared keys. Values come from the original rules; the
+#     warning tier applies to every tenant)
+#   - tenant-config.yaml (for the warning tier, only tenants that need a value different
+#     from the default; <key>_critical cannot go in defaults, so every tenant that wants
+#     the critical tier pastes it into its own conf.d file; a legacy rule that only had a
+#     critical tier is the exception: it reads the base row, already in defaults-snippet.yaml)
 #   - prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
 #   - migration-report.txt, triage-report.csv (conversion reports)
-# There is no "only these tenants" option; the tenant is decided by which tenant file
-# you paste tenant-config.yaml into.
-# ⚠️ The threshold recording rules it emits currently do not match the labels the exporter
-#    emits, and the keys are only emitted once declared in _defaults.yaml (tracked in
-#    issue 1818); review them by hand before deploying.
+# There is no "only these tenants" option; to keep a tenant from getting this alert, set
+# the key to "disable" in that tenant's file.
+# ⚠️ The migrate in the v2.9.0 image does not have these fixes yet (its threshold selector
+#    does not match the labels the exporter emits, its recording rule reads a prefixed
+#    metric name, and it produces no defaults-snippet.yaml); review its output by hand
+#    before deploying.
 
 # 2.2 Deploy the new rules (shadow state): merge both rule files into Prometheus's rule
 #     ConfigMap (environment-specific: ConfigMap or Helm)
