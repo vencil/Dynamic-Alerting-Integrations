@@ -366,11 +366,12 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 3. **Array merging**: Only replacement supported, no appending. If new receiver needed, list old ones too
 4. **Environment variable escape**: Env variables in `_defaults.yaml` are local to that file; tenant files cannot reference them
 
-### 🛡️ Automated Checks
+### 🛡️ Checks You Can Wire In (not on by default)
 
-- Pre-commit hook: Prevents `_defaults.yaml` from containing hardcoded tenant IDs
-- Config validation: Detects duplicate receivers, undefined rule group references
-- Git hook: Any `conf.d/` modification triggers `da-tools validate-config` + `describe_tenant.py` checks
+This directory layout comes with no automatic checks. What catches mistakes is `da-tools validate-config`, wired into your own CI or pre-commit:
+
+- What it actually validates, and what only warns without blocking: see [GitOps CI Integration §2.2](gitops-ci-integration.en.md#22-stage-1-validate)
+- Run it locally on every `conf.d/` change: see [§4 Pre-commit Hooks](gitops-ci-integration.en.md#4-shift-left-pre-commit-hooks)
 
 ## Related Resources
 
