@@ -625,10 +625,8 @@ class TestHiddenAxis:
         _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
                                "--config-dir", str(cm), "--ci")
         assert "1 mismatch(es) across 1 tenant file(s)" in err, (out, err)
-        # ⚠️ Not asserted: the DISPLAYED path. `main` shows
-        # `Path(m.file).resolve()` relative to the repo root, which follows
-        # the link into `..2026_09_25/` — a display choice that predates
-        # #2081 and is not what this class pins (which files are READ).
+        # The DISPLAYED path is pinned by `TestDisplayPath` (#2127); this
+        # class pins which files are READ.
 
     def test_hidden_ancestor_of_conf_d_does_not_hide_the_tree(
         self, tmp_path, monkeypatch, capsys,
@@ -664,6 +662,111 @@ class TestHiddenAxis:
         assert any(ln.startswith(f"{conf / 'staging' / 'brk.yaml'}:0:")
                    for ln in warned), err
         assert not any(".snap" in ln for ln in warned), err
+
+
+class TestDisplayPath:
+    """The path a finding SHOWS is the path that was scanned (#2127).
+
+    The finding is about directory segments, so the displayed file must be
+    the one whose segments disagree — not wherever its leaf link points.
+    Every case runs both output modes, because `--ci` and the human format
+    each computed the display on their own before #2127.
+    """
+
+    OK = _tenant_yaml("acme", environment="staging")
+    BAD = _tenant_yaml("acme", environment="prod")
+
+    @staticmethod
+    def _both_modes(monkeypatch, capsys, root: Path, conf: Path
+                    ) -> tuple[list[str], str]:
+        """(`--ci` warning lines, human-mode stdout)."""
+        _, ci_out, err = _run_cli(monkeypatch, capsys, root,
+                                  "--config-dir", str(conf), "--ci")
+        assert "1 mismatch(es)" in err, (ci_out, err)
+        _, human, err = _run_cli(monkeypatch, capsys, root,
+                                 "--config-dir", str(conf))
+        assert "1 mismatch(es)" in err, (human, err)
+        return [ln for ln in ci_out.splitlines() if ":0: warning:" in ln], human
+
+    def test_configmap_mount_shows_the_link_not_the_payload(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        (tmp_path / ".git").mkdir()
+        conf = tmp_path / "conf.d"
+        _write(conf / "staging" / "..2026_09_25" / "acme.yaml", self.BAD)
+        _symlink_or_skip(conf / "staging" / "..data", "..2026_09_25")
+        _symlink_or_skip(conf / "staging" / "acme.yaml", "..data/acme.yaml")
+
+        ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
+        assert ci == [
+            "conf.d/staging/acme.yaml:0: warning: path/metadata mismatch "
+            "tenant=acme field=environment path=staging metadata=prod"], ci
+        assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
+            human), human
+        assert "..2026_09_25" not in "\n".join(ci) + human
+
+    def test_symlinked_file_shows_the_link_not_its_target(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """`prod/acme.yaml -> ../staging/acme.yaml`: the target is consistent
+        in its own directory, so naming it sends the operator to the one
+        file that needs no edit."""
+        (tmp_path / ".git").mkdir()
+        conf = tmp_path / "conf.d"
+        _write(conf / "staging" / "acme.yaml", self.OK)
+        (conf / "prod").mkdir()
+        _symlink_or_skip(conf / "prod" / "acme.yaml", "../staging/acme.yaml")
+
+        ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
+        assert len(ci) == 1 and ci[0].startswith(
+            "conf.d/prod/acme.yaml:0: warning:"), ci
+        assert "WARN path/metadata mismatch: conf.d/prod/acme.yaml\n" in (
+            human), human
+        assert "staging/acme.yaml" not in "\n".join(ci) + human
+
+    def test_plain_tree_display_is_unchanged(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """必響對照: no links anywhere -> the same repo-relative display as
+        before #2127."""
+        (tmp_path / ".git").mkdir()
+        conf = tmp_path / "conf.d"
+        _write(conf / "staging" / "acme.yaml", self.BAD)
+
+        ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
+        assert len(ci) == 1 and ci[0].startswith(
+            "conf.d/staging/acme.yaml:0: warning:"), ci
+        assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
+            human), human
+
+    def test_repo_reached_through_a_symlink_stays_repo_relative(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """`main` resolves `--config-dir`, so scanned paths are physical.
+        Whether the repo root or the `--config-dir` argument goes through a
+        link, the display must still be repo-relative, not absolute."""
+        real = tmp_path / "real"
+        (real / ".git").mkdir(parents=True)
+        _write(real / "conf.d" / "staging" / "acme.yaml", self.BAD)
+        link = tmp_path / "link"
+        _symlink_or_skip(link, "real")
+        want = "conf.d/staging/acme.yaml:0: warning:"
+        human_want = "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n"
+
+        # (a) repo root handed back through the link, config dir likewise.
+        monkeypatch.setattr(cpmc, "find_repo_root", lambda: link)
+        ci, human = self._both_modes(monkeypatch, capsys, link,
+                                     link / "conf.d")
+        assert len(ci) == 1 and ci[0].startswith(want), ci
+        assert human_want in human, human
+
+        # (b) the real `find_repo_root` (`Path.cwd()`, a physical path) with
+        # `--config-dir` an absolute path through the link.
+        monkeypatch.undo()
+        ci, human = self._both_modes(monkeypatch, capsys, real,
+                                     link / "conf.d")
+        assert len(ci) == 1 and ci[0].startswith(want), ci
+        assert human_want in human, human
 
 
 def _run_as_unprivileged(argv: list[str], cwd: str):

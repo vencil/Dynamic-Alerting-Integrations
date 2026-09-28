@@ -238,11 +238,29 @@ def scan(config_dir: Path) -> list[Mismatch]:
     return all_mismatches
 
 
-def _format_mismatch(m: Mismatch, repo_root: Path) -> str:
+def _display_path(file: str, repo_root: Path) -> Path:
+    """The path to SHOW for a finding: the file as scanned, repo-relative.
+
+    ⛔ Only `abspath`, never `resolve()` on the file itself (#2127). The
+    finding is about the path the exporter READ — its directory segments are
+    what disagree with `_metadata`. `resolve()` follows the leaf link, so a
+    ConfigMap mount (`acme.yaml -> ..data/acme.yaml`) was shown as the
+    `..<ts>/` payload, and `prod/acme.yaml -> ../staging/acme.yaml` was shown
+    as `staging/acme.yaml`: the one copy that is consistent, i.e. the wrong
+    file to edit.
+
+    `repo_root` IS resolved: `main` resolves `config_dir`, so the scanned
+    paths are physical, and a `repo_root` reached through a symlink must be
+    compared in the same terms or every finding falls back to absolute.
+    """
     try:
-        display = Path(m.file).resolve().relative_to(repo_root.resolve())
+        return Path(os.path.abspath(file)).relative_to(repo_root.resolve())
     except ValueError:
-        display = Path(m.file)
+        return Path(file)
+
+
+def _format_mismatch(m: Mismatch, repo_root: Path) -> str:
+    display = _display_path(m.file, repo_root)
     return (
         f"WARN path/metadata mismatch: {display}\n"
         f"  tenant={m.tenant}  field={m.field}"
@@ -336,12 +354,7 @@ def main() -> int:
 
     if args.ci:
         for m in mismatches:
-            try:
-                display = Path(m.file).resolve().relative_to(
-                    repo_root.resolve()
-                )
-            except ValueError:
-                display = Path(m.file)
+            display = _display_path(m.file, repo_root)
             print(
                 f"{display}:0: warning: path/metadata mismatch "
                 f"tenant={m.tenant} field={m.field} "
