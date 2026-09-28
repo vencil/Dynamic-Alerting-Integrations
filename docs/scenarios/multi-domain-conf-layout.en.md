@@ -147,7 +147,7 @@ tenants:
 > ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326), 2026-09-28):
 > the routing plane will follow the same directory hierarchy as the threshold plane —
 > `_routing_defaults` from each level's `_defaults.yaml` merged shallowly per top-level key
-> (deeper level wins, `null` removes the inherited key); `_routing_enforced` at the root
+> (deeper level wins; `null` follows ADR-017's existing per-field rules); `_routing_enforced` at the root
 > only; `_routing_profiles.yaml` and `_domain_policy.yaml` allowed in subdirectories and
 > scoped to their subtree; the same tenant id declared in more than one file is a blocking
 > error. Full semantics:

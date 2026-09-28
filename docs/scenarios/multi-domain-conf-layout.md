@@ -141,7 +141,7 @@ tenants:
 >
 > 🗓️ **已決定改為階層，實作在後續 PR**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)，
 > 2026-09-28）：路由面將跟閾值面走同一套目錄階層——各層 `_defaults.yaml` 的
-> `_routing_defaults` 逐鍵淺合併（深層勝，`null` 移除繼承來的鍵）；`_routing_enforced`
+> `_routing_defaults` 逐鍵淺合併（深層勝，`null` 沿用 ADR-017 既有的逐欄位規則）；`_routing_enforced`
 > 只認根目錄；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於
 > 所在子樹；同一個租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
 > [ADR-017「Amendment 2026-09-28」](../adr/017-defaults-yaml-inheritance-dual-hash.md)。

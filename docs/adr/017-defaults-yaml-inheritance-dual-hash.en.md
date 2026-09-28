@@ -507,16 +507,21 @@ Walker: Python `_lib_confd.list_config_tree()`; Go `config.ScanDirTree` +
 directory holding only a README contributes nothing).
 
 **(a) `_routing_defaults` across levels: shallow merge per top-level key.** The deeper
-level wins, and an explicit `null` removes the inherited key. Then the routing profile,
-then the tenant's own `_routing` (order unchanged):
+level wins. An explicit `null` follows the existing "Null values" rules above, with no new
+rule: on the four fields (`group_by` / `group_wait` / `group_interval` / `repeat_interval`)
+`null` opts out of inheritance and the rendered route omits the field; `receiver` and
+`overrides` are **excluded** — writing them as `null` in a subdirectory level's
+`_routing_defaults` is a **blocking error** (rc 2), because otherwise every tenant in that
+subtree without its own receiver would lose its route and alerts would silently fall to the
+catch-all. Then the routing profile, then the tenant's own `_routing` (order unchanged):
 
 ```
 rd(t)       = L0._routing_defaults ⊕ L1._routing_defaults ⊕ … ⊕ Ln._routing_defaults
 resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
   a ⊕ b: for each top-level key k of b —
-           b[k] is null → delete k      (the inherited key is removed)
-           otherwise    → a[k] = b[k]   (the whole value; no recursion into it)
+           a[k] = b[k]   (the whole value, no recursion into it; a null is stored
+                          too, and omitted or refused downstream per the field rules)
 ```
 
 Same shape as the existing profile/tenant merge (`merge_routing_with_defaults` in
@@ -532,8 +537,9 @@ Trigger: a customer or team explicitly needs a NOC route scoped to one subtree.
 **(c) Routing profiles.** `_routing_profiles.yaml` / `.yml` may sit in a subdirectory; its
 profiles are visible to the tenants in that subtree. A tenant resolves
 `_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
-profile name is **unique across the whole tree**: the same name defined at two places is
-an error.
+profile name is **unique across the whole tree**: the same name defined in two files is an
+error — including `_routing_profiles.yaml` and `.yml` both at the root (today the later file
+silently overrides; this is a behaviour change).
 
 **(d) Domain policies.** `_domain_policy.yaml` / `.yml` may sit in a subdirectory and
 applies only within its subtree. A subtree policy whose `tenants:` names a tenant outside
@@ -553,7 +559,8 @@ exporter does.
 **Replaces the #2326 step-1 stopgap.** The stopgap failed the generator with rc 2 whenever a
 subdirectory held a config file. Once the tree is read, that is no longer an error; the
 blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2; a duplicate
-tenant id → rc 2; the (c) and (d) errors as stated above.
+tenant id → rc 2; `receiver` or `overrides` written as `null` in a subdirectory level's
+`_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
 
 ## Alternatives Considered
 

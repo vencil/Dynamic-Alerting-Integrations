@@ -452,7 +452,11 @@ PR 落地。⛔ 合併之前，路由面只讀 conf.d **根目錄**（ADR-016 §
 `_lib_confd.list_config_tree()`；Go `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏
 目錄、回報目錄 symlink、只有 README 的目錄不貢獻任何東西）。
 
-**(a) 各層 `_routing_defaults`：頂層逐鍵淺合併。** 深層勝，顯式 `null` 移除繼承來的鍵。
+**(a) 各層 `_routing_defaults`：頂層逐鍵淺合併。** 深層勝。顯式 `null` 沿用上方「Null 值」
+一節的既有規則，不另訂：四個欄位（`group_by` / `group_wait` / `group_interval` /
+`repeat_interval`）寫 `null` 即退出繼承、產出的 route 省略該欄位；`receiver` 與 `overrides`
+**不適用**——子目錄層的 `_routing_defaults` 把它們寫成 `null` 是**阻擋錯誤**（rc 2），否則
+整個子樹裡沒有自己 receiver 的租戶會一起失去 route、告警靜默落到 catch-all。
 接著是 routing profile，再來是租戶本體的 `_routing`（順序不變）：
 
 ```
@@ -460,8 +464,8 @@ rd(t)       = L0._routing_defaults ⊕ L1._routing_defaults ⊕ … ⊕ Ln._rout
 resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
   a ⊕ b：對 b 的每個頂層鍵 k——
-           b[k] 為 null → 刪除 k        （移除繼承來的鍵）
-           其他         → a[k] = b[k]   （整個值取代，不往下遞迴）
+           a[k] = b[k]   （整個值取代，不往下遞迴；null 也照存，
+                          由下游依上面的欄位規則省略或拒絕）
 ```
 
 與現有的 profile / 租戶合併同一個形狀（`_grar_merge.py` 的 `merge_routing_with_defaults`、
@@ -475,7 +479,8 @@ rc 2）。延後：疊加式、以子樹為範圍的強制路由。觸發條件�
 
 **(c) Routing profiles。** `_routing_profiles.yaml` / `.yml` 可以放在子目錄，其中的 profile
 對該子樹裡的租戶可見。租戶解析 `_routing_profile: X` 時，找的是自己這一層或祖先層定義的
-profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩處即為錯誤。
+profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個檔案即為錯誤——根目錄同時有
+`_routing_profiles.yaml` 與 `.yml` 且撞名也算（今天是依檔名順序後者靜默覆蓋，這是行為變更）。
 
 **(d) Domain policies。** `_domain_policy.yaml` / `.yml` 可以放在子目錄，只作用於所在子樹。
 子樹 policy 的 `tenants:` 點名子樹外的租戶是**錯誤**（`--strict` 下 ERROR，否則 WARN），
@@ -490,7 +495,8 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩處�
 
 **取代 #2326 第 1 步止血。** 止血版是只要子目錄有設定檔，生成器就回 rc 2。整棵樹都讀之後，
 這本身不再是錯誤；阻擋條件改為：子目錄檔案裡出現 `_routing_enforced` → rc 2；租戶 id 重複
-→ rc 2；以及上面 (c)、(d) 所列的錯誤。
+→ rc 2；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
+（見 (a)）；以及上面 (c)、(d) 所列的錯誤。
 
 ## 考量的替代方案
 

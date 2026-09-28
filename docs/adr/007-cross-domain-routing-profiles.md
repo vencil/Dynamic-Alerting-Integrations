@@ -293,7 +293,8 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 - **Routing profiles**：`_routing_profiles.yaml` / `.yml` 可以放在子目錄，其中的 profile
   對該子樹裡的租戶可見。租戶解析 `_routing_profile: X` 時，找的是自己這一層或祖先層定義的
-  profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩處即為錯誤。
+  profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個檔案即為錯誤（根目錄同時有 `.yaml`
+  與 `.yml` 且撞名也算；今天是後者靜默覆蓋，這是行為變更）。
 - **Domain policies**：`_domain_policy.yaml` / `.yml` 可以放在子目錄，只作用於所在子樹。
   子樹 policy 的 `tenants:` 點名子樹外的租戶是**錯誤**（`--strict` 下 ERROR，否則 WARN），
   訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條

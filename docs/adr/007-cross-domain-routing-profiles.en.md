@@ -293,8 +293,9 @@ In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en
 - **Routing profiles**: `_routing_profiles.yaml` / `.yml` may sit in a subdirectory, and its
   profiles are visible to the tenants in that subtree. A tenant resolves
   `_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
-  profile name is **unique across the whole tree**: the same name defined at two places is
-  an error.
+  profile name is **unique across the whole tree**: the same name defined in two files is an
+  error (including `.yaml` and `.yml` both at the root; today the later one silently
+  overrides, so this is a behaviour change).
 - **Domain policies**: `_domain_policy.yaml` / `.yml` may sit in a subdirectory and applies
   only within its subtree. A subtree policy whose `tenants:` names a tenant outside that
   subtree is an **error** (ERROR under `--strict`, WARN otherwise), with a message distinct
