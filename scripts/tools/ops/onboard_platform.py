@@ -310,8 +310,32 @@ def analyze_alertmanager(am_config, tenant_label=DEFAULT_TENANT_LABEL):
     # Flatten route tree
     flat_routes = flatten_route_tree(root_route, tenant_label=tenant_label)
 
-    for entry in flat_routes:
+    # A tenant can own several routes (per-alert sub-routes). Its default
+    # routing is the most general one: fewest accumulated matchers, a later
+    # route winning a tie. Tree order alone cannot decide it — a child is
+    # flattened AFTER its parent, so "last wins" would pick a sub-route's
+    # receiver whenever sub-routes are nested under the tenant route, which
+    # is how generate_alertmanager_routes renders _routing.overrides (#2252).
+    default_idx = {}
+    for idx, entry in enumerate(flat_routes):
         tenant = entry["tenant"]
+        if not tenant:
+            continue
+        prev = default_idx.get(tenant)
+        if (prev is None or len(entry["matchers"])
+                <= len(flat_routes[prev]["matchers"])):
+            default_idx[tenant] = idx
+
+    for idx, entry in enumerate(flat_routes):
+        tenant = entry["tenant"]
+
+        if tenant and default_idx[tenant] != idx:
+            skipped_routes.append({
+                "receiver": entry["receiver"],
+                "reason": f"narrower route of {tenant_label} '{tenant}' "
+                          f"(per-alert routing is not reverse-mapped)",
+            })
+            continue
 
         if not tenant:
             # Non-tenant route (e.g., default, platform enforced)

@@ -313,6 +313,43 @@ class TestAnalyzeAlertmanager:
         assert routings["db-a"]["receiver"]["type"] == "webhook"
         assert routings["db-b"]["receiver"]["type"] == "slack"
 
+    _RECEIVERS = [
+        {"name": "default"},
+        make_am_receiver("tenant-t1", url="https://main.example.com"),
+        make_am_receiver("tenant-t1-override-0", url="https://ovr.example.com"),
+    ]
+
+    def test_nested_subroute_does_not_replace_tenant_default(self):
+        """#2252: sub-routes nested under the tenant route are flattened AFTER
+        it; the tenant's default must still be the tenant route's receiver."""
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "tenant-t1",
+                     "repeat_interval": "4h",
+                     "routes": [{"matchers": ['alertname="DiskFull"'],
+                                 "receiver": "tenant-t1-override-0",
+                                 "repeat_interval": "1h"}]}],
+            receivers=self._RECEIVERS,
+        )
+        routings, summary = analyze_alertmanager(am)
+        assert routings["t1"]["receiver"]["url"] == "https://main.example.com"
+        assert routings["t1"]["repeat_interval"] == "4h"
+        assert {"receiver": "tenant-t1-override-0",
+                "reason": "narrower route of tenant 't1' "
+                          "(per-alert routing is not reverse-mapped)",
+                } in summary["skipped_routes"]
+
+    def test_flat_sibling_subroute_still_loses_to_tenant_route(self):
+        """Pre-#2252 flat layout (override sibling BEFORE the tenant route)
+        keeps resolving to the tenant route's receiver."""
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="t1"', 'alertname="DiskFull"'],
+                     "receiver": "tenant-t1-override-0"},
+                    {"matchers": ['tenant="t1"'], "receiver": "tenant-t1"}],
+            receivers=self._RECEIVERS,
+        )
+        routings, _ = analyze_alertmanager(am)
+        assert routings["t1"]["receiver"]["url"] == "https://main.example.com"
+
 
 class TestCheckTimingGuardrails:
     """檢查時序機制的有效性。"""
