@@ -18,7 +18,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
@@ -938,16 +937,17 @@ def trace_alert_routing(
         steps.append({"step": 4, "action": "inhibit_rules",
                       "detail": ("Unknown: inhibit rules not available "
                                  f"({unknown})"),
-                      "inhibit_rules": None})
+                      "inhibit_rules_yaml": None})
     else:
-        # yaml.safe_load can yield non-JSON types (an unquoted date becomes
-        # datetime.date); normalise once here so the text and --json
-        # renderers both get JSON-safe values.
+        # As YAML text, dumped like the generator writes alertmanager.yml:
+        # a base rule may hold values JSON cannot carry (dates, !!binary).
         rules = yaml.safe_load(am_yml).get("inhibit_rules") or []
         steps.append({
             "step": 4, "action": "inhibit_rules",
             "detail": INHIBIT_NOTE,
-            "inhibit_rules": json.loads(json.dumps(rules, default=str)),
+            "inhibit_rules_yaml": yaml.dump(rules, default_flow_style=False,
+                                            allow_unicode=True,
+                                            sort_keys=False),
         })
 
     # Step 5: receiver-type constraints, scoped like the generator's check
@@ -1005,15 +1005,13 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
             lines.append(f"     {label}")
             for row in step["rendered_tree"]:
                 lines.append(f"       {safe_label(row)}")
-        if step.get("inhibit_rules") is not None:
+        if step.get("inhibit_rules_yaml") is not None:
             label = ("生效的 inhibit rules:" if lang == "zh"
                      else "Effective inhibit rules:")
             lines.append(f"     {label}")
-            if not step["inhibit_rules"]:
-                lines.append("       (none)")
-            for rule in step["inhibit_rules"]:
-                text = json.dumps(rule, ensure_ascii=False)
-                lines.append(f"       - {safe_label(text)}")
+            rows = step["inhibit_rules_yaml"].splitlines()
+            for row in ["(none)"] if rows == ["[]"] else rows:
+                lines.append(f"       {safe_label(row)}")
         if "enforced_receiver" in step:
             label = "強制接收者:" if lang == "zh" else "Enforced:"
             lines.append(f"     {label} {safe_label(step['enforced_receiver'])}")

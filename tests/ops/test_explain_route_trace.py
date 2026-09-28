@@ -448,7 +448,7 @@ class TestBaseConfigFlag:
             "(unknown: the generator refuses this config)"
         # No config, no inhibit rules to list.
         step4 = trace["steps"][3]
-        assert step4["inhibit_rules"] is None
+        assert step4["inhibit_rules_yaml"] is None
         assert step4["detail"].startswith("Unknown: inhibit rules not available")
 
     def test_trace_own_bug_is_not_swallowed(self, monkeypatch, tmp_path):
@@ -492,7 +492,7 @@ class TestInhibitRulesStep:
         rules = yaml.safe_load(am_yml)["inhibit_rules"]
         assert _SILENT_MODE_RULE in rules  # the base's own rule is kept
         step4 = trace["steps"][3]
-        assert step4["inhibit_rules"] == rules
+        assert yaml.safe_load(step4["inhibit_rules_yaml"]) == rules
         assert "not evaluate" in step4["detail"]
         assert not {"inhibited", "inhibit_reason"} & (set(trace) | set(step4))
         for lang, note in (("en", "does not evaluate"), ("zh", "不評估")):
@@ -503,30 +503,46 @@ class TestInhibitRulesStep:
             assert note in out and "TenantSilentWarning" in out
             assert "Inhibited:" not in out and "抑制:" not in out
 
+    @pytest.mark.parametrize("extra", [
+        "    since: 2020-01-01\n",       # date value
+        "    2020-01-01: a\n",           # date key
+        "    !!binary aGk=: a\n",        # !!binary key
+        "    v: !!binary aGVsbG8=\n",    # !!binary value
+        "    v: .nan\n",
+        "    v: .inf\n",
+    ], ids=["v-date", "k-date", "k-binary", "v-binary", "v-nan", "v-inf"])
     def test_non_json_yaml_values_do_not_crash(self, capsys, tmp_path,
-                                               monkeypatch):
-        """An unquoted date loads as ``datetime.date``: both renderers must
-        still print the rule (rc 0), not raise ``TypeError``."""
+                                               monkeypatch, extra):
+        """A base rule may hold what JSON cannot carry: step 4 is the rules
+        handed to amtool as YAML text, and --json stays strict JSON."""
         base = tmp_path / "base.yml"
         base.write_text(
             "route: {receiver: ops}\nreceivers: [{name: ops}]\n"
             "inhibit_rules:\n"
-            "- source_match: {severity: critical, since: 2020-01-01,"
-            " retries: 3, paged: true}\n"
-            "  target_match: {severity: info}\n"
-            "  equal: [tenant]\n", encoding="utf-8")
-        monkeypatch.setattr(er, "run_amtool_trace",
-                            lambda *_a, **_k: (None, "stubbed"))
+            "- target_match: {severity: info, tenant: x}\n"
+            "  equal: [tenant]\n"
+            "  source_match:\n    severity: critical\n    tenant: x\n"
+            + extra, encoding="utf-8")
+        handed: list[str] = []
+
+        def _stub(am_yml, *_a, **_k):
+            handed.append(am_yml)
+            return None, "stubbed"
+        monkeypatch.setattr(er, "run_amtool_trace", _stub)
         conf = _tree(tmp_path)
-        args = ["--base-config", str(base)]
-        [rule] = [r for r in _trace(capsys, conf, *args)["steps"][3]
-                  ["inhibit_rules"] if "source_match" in r]
-        assert rule["source_match"] == {"severity": "critical",
-                                        "since": "2020-01-01",
-                                        "retries": 3, "paged": True}
-        assert er.main(["--config-dir", str(conf), "--tenant", _TT,
-                        "--trace", *args]) == 0
-        assert '"since": "2020-01-01"' in capsys.readouterr().out
+        args = ["--config-dir", str(conf), "--tenant", _TT, "--trace",
+                "--base-config", str(base)]
+        assert er.main([*args, "--json"]) == 0
+
+        def _reject(const):
+            raise ValueError(f"non-standard JSON constant {const}")
+        [trace] = json.loads(capsys.readouterr().out, parse_constant=_reject)
+        rules = yaml.safe_load(handed[0])["inhibit_rules"]
+        # Compared as dumps: NaN != NaN.
+        assert yaml.safe_dump(yaml.safe_load(
+            trace["steps"][3]["inhibit_rules_yaml"])) == yaml.safe_dump(rules)
+        assert er.main(args) == 0
+        assert "source_match:" in capsys.readouterr().out
 
 
 @needs_amtool
