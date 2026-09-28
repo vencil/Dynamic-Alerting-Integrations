@@ -6,7 +6,7 @@ capture expected source_hash + merged_hash, emit golden.json.
 The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
-reserved-key null deletion, `_routing` null and canonical-JSON escaping rows
+reserved-key null deletion, nested-null and canonical-JSON escaping rows
 are scenarios 11-13 below; its chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
@@ -406,42 +406,51 @@ def s_canonical_json_escaping():
 """)
 
 
-# Scenario 12: `_routing` group_* null (ADR-017 §Merge 語意). ⛔ What this
-# pins is the MERGE plane, and there the four routing fields are NOT special:
-# deep_merge deletes on null only when the key itself is `_`-prefixed
-# (ADR-017: 判準是「是否 `_` 前綴」，不是「是否路由欄位」), and `group_*` sit
-# one level under `_routing`. So:
-#   group_by / group_wait     inherited from `defaults:`, nulled here
+# Scenario 12: a NESTED null under an inherited reserved key (ADR-017 §Merge
+# 語意). deep_merge deletes on null only when the key itself is `_`-prefixed
+# (ADR-017: 判準是「是否 `_` 前綴」); the sub-keys here sit one level under
+# the reserved key and are not `_`-prefixed. So:
+#   inherited_list / inherited_str   inherited from `defaults:`, nulled here
 #                             -> the inherited value is RETAINED
-#   group_interval / repeat_interval  not inherited, nulled here
+#   never_set_a / never_set_b        not inherited, nulled here
 #                             -> ABSENT from effective_config: the null is a
-#                                no-op, not copied through, because `_routing`
+#                                no-op, not copied through, because `_x`
 #                                itself was inherited and so is merged key by
 #                                key rather than replaced
-# The ADR's "null 退出繼承 / 產出的 route 省略該欄位" is carried out by the
-# route generator (_grar_merge.py, a falsy check over `_routing_defaults` +
-# the tenant file's own `_routing`), which reads neither describe_tenant's
-# merge nor pkg/config's; the golden oracle does not cover that plane. This
-# row makes both merge implementations agree on the representation that
-# da-guard reads (`EffectiveConfig["_routing"]`), and turns red if either
-# side starts treating a nested routing null as a deletion.
-def s_routing_null():
-    d = reset("mixed-mode") / "routing-null"
+#   added                     tenant-only sub-mapping -> present
+# The row turns red if either merge implementation (describe_tenant /
+# pkg/config) starts treating a nested null as a deletion, or copies it
+# through as a JSON null.
+#
+# ⛔ The key is a deliberately meaningless `_x`, not `_routing` (#2417). This
+# row used `_routing` until #2362 (#2291) made da-guard reject `_routing`
+# inside a `defaults:` block (`routing_in_unread_location`: the route
+# generator never reads routing from there), which made a whole-tree da-guard
+# run over this fixture exit 1. The same change moved da-guard's routing
+# reads off `EffectiveConfig["_routing"]` onto the layers the generator reads
+# (layers.TenantBlock + routingpolicy.Resolve), so `_routing` bought nothing
+# here that any reserved key does not. `_x` was picked because no code path special-cases
+# it: both merges carry it through like any `_` key, and da-guard reports
+# nothing for it. What ADR-017 says a `_routing` null does to the generated
+# route is the route generator's plane (_grar_merge.py), which neither merge
+# runs and this oracle does not cover.
+def s_reserved_nested_null():
+    d = reset("mixed-mode") / "reserved-nested-null"
     write(d / "_defaults.yaml", """defaults:
-  _routing:
-    group_by: ["alertname"]
-    group_wait: "30s"
+  _x:
+    inherited_list: ["alertname"]
+    inherited_str: "30s"
 """)
     write(d / "tenants.yaml", """tenants:
-  tenant-route:
-    _routing:
-      receiver:
+  tenant-nested:
+    _x:
+      added:
         type: "webhook"
         url: "https://hooks.example.com/alerts"
-      group_by: ~
-      group_wait: ~
-      group_interval: ~
-      repeat_interval: ~
+      inherited_list: ~
+      inherited_str: ~
+      never_set_a: ~
+      never_set_b: ~
 """)
 
 
@@ -481,7 +490,7 @@ SCENARIOS = [
     ("carrier-selection-pair", "tenant-pair", s_carrier_selection),  # 2 tenants, 1 tree
     ("carrier-selection-sub", "tenant-sub", None),
     ("canonical-json-escaping", "tenant-escape", s_canonical_json_escaping),
-    ("routing-null", "tenant-route", s_routing_null),
+    ("reserved-nested-null", "tenant-nested", s_reserved_nested_null),
     ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
 ]
 
@@ -530,7 +539,7 @@ def main() -> int:
         "carrier-selection-pair": "mixed-mode",
         "carrier-selection-sub": "mixed-mode",
         "canonical-json-escaping": "mixed-mode",
-        "routing-null": "mixed-mode",
+        "reserved-nested-null": "mixed-mode",
         "reserved-null-delete": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
