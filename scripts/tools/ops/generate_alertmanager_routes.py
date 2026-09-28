@@ -135,7 +135,7 @@ from _grar_render import (  # noqa: E402
 # here AND by validate_config (as `gen.blocking_generation_errors`), so the two
 # verdicts cannot drift apart (#2164). Used, so no F401 marker.
 from _grar_validate import (  # noqa: E402
-    blocking_generation_errors, is_receiver_name_collision,
+    blocking_generation_errors, is_duplicate_tenant, is_receiver_name_collision,
 )
 import yaml  # noqa: E402
 
@@ -492,6 +492,26 @@ def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
     sys.exit(EXIT_VIOLATION)
 
 
+def _refuse_duplicate_tenants(schema_warnings: list[str]) -> None:
+    """#2315: one tenant id in two tenant files — refused in EVERY mode.
+
+    Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
+    the exporter rejects the WHOLE tree in this state, so no route set
+    generated from it describes anything that will run, and a ConfigMap
+    written or applied from it is the worst outcome. Before this the reader
+    merged the two blocks and exited 0 in every mode (render, --validate,
+    --output-configmap, with or without --strict).
+    """
+    dups = [w for w in schema_warnings if is_duplicate_tenant(w)]
+    if not dups:
+        return
+    print(f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
+          "nothing was written or applied:", file=sys.stderr)
+    for e in dups:
+        print(safe_label(e), file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
 def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:
     """Print summary of loaded configs."""
     if enforced_routing:
@@ -827,6 +847,7 @@ def main() -> None:
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
         tree.as_tuple()
     _refuse_unreadable_tenant_files(tree)
+    _refuse_duplicate_tenants(schema_warnings)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)

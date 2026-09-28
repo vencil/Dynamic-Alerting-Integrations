@@ -1438,6 +1438,43 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     return ids
 
 
+def nested_tenant_declarations(config_dir: "str | os.PathLike[str]"
+                               ) -> "dict[str, list[str]]":
+    """``{tenant_id: [label, ...]}`` for the tenant files BELOW the root.
+
+    For a FLAT reader that must still answer the exporter's question "is this
+    tenant declared twice?" (#2315): the walker recurses, so ``tx`` in
+    ``tx.yaml`` and in ``team/tx.yaml`` makes the exporter reject the whole
+    tree even though a flat reader routes only the root. The flat reader
+    collects its own root declarations while it reads, adds these, and asks
+    ``duplicate_declarations``. Not a read of the nested files' CONTENT —
+    the flat reader still announces them with ``warn_nested``.
+
+    Same "declares" as ``validate_config.check_tenant_uniqueness``: a non-``_``
+    file's ``tenants:`` keys as text, through the strict loader, so a file
+    that does not load declares nothing (as in Go, where it is a parse
+    failure). A label is the root-relative POSIX path. A tree with no nested
+    files costs one listing.
+    """
+    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
+
+    root = Path(config_dir)
+    declared: dict[str, list[str]] = {}
+    for path in nested_yaml_files(root):
+        if is_reserved_name(path.name):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = strict_load_exporter_keys(fh)
+        except Exception:  # noqa: BLE001 — declares nothing; see docstring
+            continue
+        if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
+            label = path.relative_to(root).as_posix()
+            for tenant in data["tenants"]:
+                declared.setdefault(tenant, []).append(label)
+    return declared
+
+
 def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"
                            ) -> "dict[Any, list[str]]":
     """The tenants declared by MORE THAN ONE carrier, each with its sorted

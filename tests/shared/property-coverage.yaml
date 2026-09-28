@@ -266,8 +266,10 @@ modules:
       _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; example-covered by test_generate_alertmanager_routes.py::TestDeprecatedKeyAliases (exact/_critical/dimensional/prefix-typo-reject) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
       _canonicalize_alias_keys: "#1231 alias pre-pass (canonical view + NOTICE lines); covered by TestDeprecatedKeyAliases (old/new defaults, both-spellings dedup, notice wording pins) via validate_tenant_keys"
       is_receiver_name_collision: "#2279 one-line prefix test on RECEIVER_NAME_COLLISION_PREFIX; example-pinned by test_grar_receiver_name_collision.py (generate_routes line + not-a-policy-error cases)"
-      blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
+      blocking_generation_errors: "#2279 three-category filter (WARN…skipping | duplicate receiver name | #2315 duplicate tenant) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
       receiver_name_collisions: "#2279 group-by-name over (name, source) pairs; example-covered by test_grar_receiver_name_collision.py (routes- and overrides-type collisions name both sources, no-collision control)"
+      is_duplicate_tenant: "#2315 one-line prefix test on DUPLICATE_TENANT_PREFIX; example-pinned by test_grar_duplicate_tenant.py (tree line, CLI refusal in every mode, not-a-policy-error case)"
+      duplicate_tenant_errors: "#2315 formatter over _lib_confd.duplicate_declarations' {id: [files]} (the grouping is that shared predicate's); example-covered by test_grar_duplicate_tenant.py (root pair, .yaml+.yml, root+nested name every file; overlay / distinct-tenant / filename controls)"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

@@ -219,6 +219,13 @@ RECEIVER_COLLISION_ROUTES_HINT = (
     "tenant whose id ends in -route-<n> or -override-<n> next to the tenant "
     "it extends. Rename one of the tenants (or remove one of the entries); "
     "the receivers themselves are not invalid.")
+# #2315: a duplicate-tenant line makes the schema row FAIL through the shared
+# predicate; the skipped-entry advice above would send the reader to fix a
+# value, when what is wrong is that two files declare one tenant.
+DUPLICATE_TENANT_SCHEMA_HINT = (
+    "A tenant above is declared in more than one file (the tenant_uniqueness "
+    "row names them too). Decide which single file owns it and remove it from "
+    "the others; the exporter rejects the whole config dir until then.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unknown — that is the platform's side missing, not a "
@@ -652,6 +659,9 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
             hint = POLICY_ONLY_SCHEMA_HINT
         return _make_result("schema", FAIL, schema_warnings, hint=hint)
     if skipped:
+        if all(gen.is_duplicate_tenant(w) for w in skipped):
+            return _make_result("schema", FAIL, schema_warnings,
+                                hint=hint or DUPLICATE_TENANT_SCHEMA_HINT)
         return _make_result("schema", FAIL, schema_warnings,
                             hint=hint or SKIPPED_ENTRY_SCHEMA_HINT)
     return _make_result("schema", WARN, schema_warnings, hint=hint)
