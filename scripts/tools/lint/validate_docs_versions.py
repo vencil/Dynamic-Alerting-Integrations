@@ -155,12 +155,22 @@ def read_source_versions() -> Dict[str, str]:
     return versions
 
 
-def count_rule_packs() -> Dict[str, object]:
+def count_rule_packs(rule_packs_dir: Path = None,
+                     k8s_rules_dir: Path = None) -> Dict[str, object]:
     """Count Rule Packs and rules from actual YAML files.
 
     Returns dict with keys: pack_count, recording, alert, total,
     and per_pack detail list.
+
+    ⛔ The ONE pack counter (#1451): `bump_docs` writes the README badge and
+    `generate_rule_pack_readme` writes rule-packs/README.md from this same
+    function. The directories default to the module constants, read at call
+    time so tests that monkeypatch those still take effect.
     """
+    if rule_packs_dir is None:
+        rule_packs_dir = RULE_PACKS_DIR
+    if k8s_rules_dir is None:
+        k8s_rules_dir = K8S_RULES_DIR
     packs = {}
 
     # #741 S3b: custom-alerts is a TENANT-authored deployed pack, not platform
@@ -169,7 +179,7 @@ def count_rule_packs() -> Dict[str, object]:
     _EXCLUDE = {"custom-alerts"}
 
     # rule-packs/ directory (recording rules + operational alerts)
-    for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
+    for f in sorted(rule_packs_dir.glob("rule-pack-*.yaml")):
         name = f.stem.replace("rule-pack-", "")
         if name in _EXCLUDE:
             continue
@@ -185,7 +195,7 @@ def count_rule_packs() -> Dict[str, object]:
         packs[name] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have alert rules not in rule-packs/ source)
-    for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
+    for f in sorted(k8s_rules_dir.glob("configmap-rules-*.yaml")):
         name = f.stem.replace("configmap-rules-", "")
         if name in _EXCLUDE:
             continue

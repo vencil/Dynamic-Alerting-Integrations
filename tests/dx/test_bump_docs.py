@@ -1667,6 +1667,138 @@ class TestCountSourceUnreadable:
         assert "NO-SOURCE" in capsys.readouterr().out
 
 
+class TestRulePackCountSharedWithChecker:
+    """#1451：Rule Pack badge 的寫入端與檢查端共用同一個計數函式。
+
+    舊寫入端讀 platform-data.json，讀不到就算 configmap 檔數扣掉
+    `-platform`——那個集合留下 `custom-alerts`、漏掉 `platform`，跟檢查端
+    （扣 `custom-alerts`、含 `platform`）一進一出，只是數量剛好相等。
+    """
+
+    @staticmethod
+    def _tree(tmp_path, configmaps):
+        k8s = tmp_path / "k8s" / "03-monitoring"
+        k8s.mkdir(parents=True)
+        for name in configmaps:
+            (k8s / f"configmap-rules-{name}.yaml").write_text(
+                "kind: ConfigMap\ndata: {}\n", encoding="utf-8")
+        packs = tmp_path / "rule-packs"
+        packs.mkdir()
+        return packs, k8s
+
+    @staticmethod
+    def _point_counter_at(monkeypatch, packs, k8s):
+        """Patch the module the WRITER holds, not `sys.modules[...]`.
+
+        ⚠️ Another test file loads `validate_docs_versions` afresh, so by the
+        time this runs `sys.modules` may hold a different module object than
+        the one `bump_docs.count_rule_packs` closes over — patching that one
+        is a no-op and the count comes back from the real repo.
+        """
+        g = bump_docs.count_rule_packs.__globals__
+        monkeypatch.setitem(g, "RULE_PACKS_DIR", packs)
+        monkeypatch.setitem(g, "K8S_RULES_DIR", k8s)
+
+    def test_writer_counts_what_the_checker_counts(self, tmp_path,
+                                                   monkeypatch):
+        """只有 `platform`、沒有 `custom-alerts`：舊 fallback 在這裡少算 1。"""
+        packs, k8s = self._tree(tmp_path, ["platform", "redis"])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        assert bump_docs.count_rule_packs()["pack_count"] == 2
+        assert bump_docs._count_rule_packs() == 2
+
+    def test_tenant_custom_alerts_is_not_a_platform_pack(self, tmp_path,
+                                                         monkeypatch):
+        packs, k8s = self._tree(tmp_path, ["custom-alerts", "redis"])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        assert bump_docs._count_rule_packs() == 1
+
+    def test_no_rule_pack_source_is_no_source(self, tmp_path, monkeypatch):
+        """沒有 fallback 可以把數字補上：讀不到就是 NO-SOURCE。"""
+        packs, k8s = self._tree(tmp_path, [])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        rules = {r["id"]: r for r in bump_docs._build_count_rules()}
+        assert rules["readme-rule-pack-badge"]["source_ok"] is False
+
+
+class TestFrontMatterPerFileInvariant:
+    """#1450：front matter 帶 `version:` 的檔，該行必須被規則命中。
+
+    GLOB-DEAD 只看整條 glob；docs/**/*.md 的 front matter 規則幾乎每份都
+    命中，爛掉一份群組仍然健康、`--check` 照樣綠。實測：把一份的
+    `version: v2.9.0` 改成 `version: 2.9.0`，修前 `--check` rc 0。
+    """
+
+    @staticmethod
+    def _docs_rule():
+        rules = [r for r in bump_docs._build_rules()["platform"]
+                 if r.get("glob_dir") == "docs"
+                 and r.get("frontmatter_key") == "version"]
+        assert len(rules) == 1, rules
+        return rules[0]
+
+    def _run(self, tmp_path, monkeypatch, files, scope=None):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        for name, text in files.items():
+            (docs / name).write_text(text, encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = [self._docs_rule()]
+        if scope is not None:
+            rules = bump_docs._scoped_rules(rules, scope)
+        return {c[1].rsplit(" in ", 1)[-1]: c[0]
+                for c in bump_docs.apply_rules(rules, "2.9.0",
+                                               check_only=True)}
+
+    def test_both_front_matter_globs_opt_in(self):
+        """拿掉任一條的 `frontmatter_key`，那棵樹就回到只剩群組層級。"""
+        dirs = {r["glob_dir"] for r in bump_docs._build_rules()["platform"]
+                if r.get("frontmatter_key") == "version"}
+        assert dirs == {"docs", bump_docs.PORTAL_JSX_FRONTMATTER_ROOT}, dirs
+
+    def test_a_drifted_front_matter_line_is_dead(self, tmp_path, monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "ok.md": "---\ntitle: a\nversion: v2.9.0\n---\n\nbody\n",
+            "drifted.md": "---\ntitle: b\nversion: 2.9.0\n---\n\nbody\n",
+        })
+        assert got["docs/drifted.md"] == "DEAD", got
+        assert got["docs/ok.md"] == "OK", got
+
+    def test_a_body_line_does_not_rescue_the_front_matter(self, tmp_path,
+                                                          monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "a.md": "---\nversion: 2.9.0\n---\n\n```\nversion: v1.0\n```\n",
+        })
+        assert got["docs/a.md"] == "DEAD", got
+
+    def test_no_front_matter_key_is_not_a_defect(self, tmp_path, monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "ok.md": "---\nversion: v2.9.0\n---\n",
+            "plain.md": "# no front matter\n",
+            "other.md": "---\ntitle: c\n---\n",
+        })
+        assert got["docs/plain.md"] == "OK", got
+        assert got["docs/other.md"] == "OK", got
+
+    def test_still_reported_under_scope(self, tmp_path, monkeypatch):
+        """與 GLOB-DEAD 不同：單檔自己的 front matter 在子集裡一樣成立。"""
+        (tmp_path / "docs" / "sub").mkdir(parents=True)
+        (tmp_path / "docs" / "sub" / "x.md").write_text(
+            "---\nversion: 2.9.0\n---\n", encoding="utf-8")
+        # 範圍外的兄弟檔：沒有它 scope 就沒縮小任何東西，不會蓋 scope_narrowed。
+        (tmp_path / "docs" / "y.md").write_text(
+            "---\nversion: v2.9.0\n---\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = bump_docs._scoped_rules([self._docs_rule()], "docs/sub")
+        assert rules and all(r.get("scope_narrowed") for r in rules), rules
+        statuses = [c[0] for c in bump_docs.apply_rules(rules, "2.9.0",
+                                                        check_only=True)]
+        assert statuses == ["DEAD"], statuses
+
+
 class TestScopeMustSelectSomething:
     """`--scope` 過濾到 0 條規則是 caller error，不是通過（#1407 F8）。"""
 

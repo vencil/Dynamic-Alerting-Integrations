@@ -94,6 +94,10 @@ def packs(tmp_path):
     """
     dst = tmp_path / "rule-packs"
     shutil.copytree(REPO_ROOT / "rule-packs", dst)
+    # #1451: the pack count reads the configmaps beside rule-packs/ too (the
+    # `platform` pack lives only there); without them the generator refuses.
+    shutil.copytree(REPO_ROOT / "k8s" / "03-monitoring",
+                    tmp_path / "k8s" / "03-monitoring")
     return dst
 
 
@@ -189,3 +193,47 @@ def test_check_wins_over_update(packs):
         "--check 在前 ⇒ 不得寫檔。若這行紅了，`ARGS=\"--check\"` 會變成靜默寫檔，"
         "Makefile 那個「不接 $(ARGS)」的決定就要重做。"
     )
+
+
+# ── #1451: the prose count IS the checker's count, not a parallel one ──
+
+def _tree(tmp_path, rule_packs, configmaps, with_k8s=True):
+    rp = tmp_path / "rule-packs"
+    rp.mkdir()
+    for name in rule_packs:
+        (rp / f"rule-pack-{name}.yaml").write_text("groups: []\n",
+                                                   encoding="utf-8")
+    if with_k8s:
+        k8s = tmp_path / "k8s" / "03-monitoring"
+        k8s.mkdir(parents=True)
+        for name in configmaps:
+            (k8s / f"configmap-rules-{name}.yaml").write_text(
+                "kind: ConfigMap\ndata: {}\n", encoding="utf-8")
+    return rp
+
+
+def test_a_pack_without_a_configmap_still_counts(tmp_path):
+    """舊版只數 configmap：有 rule-pack-*.yaml 卻還沒產 configmap 的 pack 會漏算。"""
+    rp = _tree(tmp_path, ["a", "b"], ["a", "platform"])
+    assert grpr.count_preloaded_packs(rp) == 3
+    assert grpr.count_preloaded_packs(rp) == vdv.count_rule_packs(
+        rp, tmp_path / "k8s" / "03-monitoring")["pack_count"]
+
+
+def test_no_k8s_tree_is_an_error_not_an_approximation(tmp_path):
+    """舊版會改數 rule-pack 檔（含 custom-alerts 充當 platform）湊出近似值。"""
+    rp = _tree(tmp_path, ["a", "custom-alerts"], [], with_k8s=False)
+    with pytest.raises(FileNotFoundError, match="platform"):
+        grpr.count_preloaded_packs(rp)
+
+
+def test_check_on_a_detached_copy_exits_caller_error(tmp_path):
+    rp = _tree(tmp_path, ["a"], [], with_k8s=False)
+    (rp / "README.md").write_text("x\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable,
+         str(REPO_ROOT / "scripts" / "tools" / "dx" / "generate_rule_pack_readme.py"),
+         "--check", "--rule-packs-dir", str(rp)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "03-monitoring" in result.stderr

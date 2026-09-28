@@ -22,7 +22,9 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from validate_docs_versions import count_rule_packs  # noqa: E402
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
 # repo). The original default used three (→ the non-existent scripts/rule-packs/),
@@ -250,32 +252,24 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
 def count_preloaded_packs(rule_packs_dir: Path) -> int:
     """Prose pack-count: the platform's preloaded rule packs.
 
-    = the configmap-rules-*.yaml set minus the tenant-authored custom-alerts
-    pack (which the coverage TABLE also excludes, per #741 S3b). Counting the
-    configmaps — not rule-pack-*.yaml — matches the AUTHORITATIVE set in
-    validate_docs_versions.count_rule_packs (rule-packs ∪ k8s configmaps −
-    custom-alerts): the configmaps add the configmap-only `platform`
-    self-monitoring pack that has no rule-pack-*.yaml. This is the "15" used
-    canonically across the docs (and enforced for the root READMEs by
-    validate_docs_versions). Falls back to the rule-pack file count if the k8s
-    tree isn't reachable (e.g. a --rule-packs-dir override pointed at a
-    detached copy).
+    ⛔ #1451: delegates to `validate_docs_versions.count_rule_packs`, the same
+    counter the README badge is written and checked with. This used to count
+    the configmaps itself (missing any rule-pack-*.yaml without a configmap)
+    and, with no k8s tree beside `rule_packs_dir`, fell back to a different
+    set that approximated the right number by counting custom-alerts in place
+    of `platform`.
+
+    Raises FileNotFoundError when that k8s tree is missing (a
+    `--rule-packs-dir` pointed at a detached copy): the `platform` pack lives
+    only there, so any number from rule-packs/ alone would be wrong.
     """
-    exclude = {"custom-alerts"}
-    configmap_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
-    if configmap_dir.is_dir():
-        return sum(
-            1 for f in configmap_dir.glob("configmap-rules-*.yaml")
-            if f.stem.replace("configmap-rules-", "") not in exclude
-        )
-    # Degraded fallback (k8s tree unreachable): count ALL rule-pack files,
-    # INCLUDING custom-alerts. This deliberately does NOT reuse `exclude` —
-    # rule-packs/ has no `platform` configmap-only pack, so counting
-    # custom-alerts numerically substitutes for it to approximate the
-    # authoritative 15. Excluding it here would undercount to 14, diverging
-    # from the configmap-based primary branch above. (Hit only on a
-    # --rule-packs-dir override to a detached copy; never in CI / normal use.)
-    return len(list(rule_packs_dir.glob("rule-pack-*.yaml")))
+    k8s_rules_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
+    if not k8s_rules_dir.is_dir():
+        raise FileNotFoundError(
+            f"{k8s_rules_dir} not found — the pack count needs it beside "
+            f"{rule_packs_dir} (the configmap-only `platform` pack lives "
+            f"there)")
+    return count_rule_packs(rule_packs_dir, k8s_rules_dir)["pack_count"]
 
 
 def main():
@@ -304,11 +298,11 @@ def main():
 
     try:
         rows, total_records, total_alerts = generate_table_rows(args.rule_packs_dir)
+        pack_count = count_preloaded_packs(args.rule_packs_dir)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    pack_count = count_preloaded_packs(args.rule_packs_dir)
     generated_content = generate_readme_content(rows, total_records, total_alerts, pack_count)
     readme_path = args.rule_packs_dir / "README.md"
 
