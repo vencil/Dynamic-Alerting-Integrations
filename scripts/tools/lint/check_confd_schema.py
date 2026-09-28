@@ -471,8 +471,13 @@ def main() -> int:
     try:
         checked_schema_registry(schema, platform_schema, profiles_schema)
     except UnresolvableSchemaRef as exc:
-        print(f"ERROR: platform schema {safe_label(args.platform_schema)} with "
-              f"--schema {safe_label(args.schema)}: {safe_label(exc)}",
+        # The unresolved $ref can sit in the platform OR the routing-profiles
+        # schema (#2245); the exception names which, so the prefix stays
+        # neutral and lists every schema argument.
+        print(f"ERROR: schemas (--schema {safe_label(args.schema)}, "
+              f"--platform-schema {safe_label(args.platform_schema)}, "
+              f"--routing-profiles-schema "
+              f"{safe_label(args.routing_profiles_schema)}): {safe_label(exc)}",
               file=sys.stderr)
         return EXIT_CALLER_ERROR
 
