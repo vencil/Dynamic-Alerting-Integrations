@@ -620,5 +620,5 @@ def test_the_module_is_importable_from_outside_scripts_tools():
         "print('ok')"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                       cwd=str(_REPO_ROOT / "docs"), timeout=60)
+                       encoding="utf-8", cwd=str(_REPO_ROOT / "docs"), timeout=60)
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
