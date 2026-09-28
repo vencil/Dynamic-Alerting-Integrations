@@ -718,6 +718,13 @@ jobs:
           # is why the gate lives here rather than only in local pre-commit.
           # Fail-closed: an unfetched tag is exit 2, never a silent pass.
           pre-commit run image-pin-capability-check --all-files
+          # The same image carrier, from the source side (#1503): build.sh ↔
+          # COMMAND_MAP, the shipped set's transitive imports / data files, and
+          # the layout-depth rule (a shipped tool must not locate repo files by
+          # counting levels, #1494 / #1501). Before this line the hook ran
+          # locally only; in CI the rule was reached solely through its pytest
+          # twin in Python Tests.
+          pre-commit run build-completeness-check --all-files
           # Guards against the docs-ci.yaml dead-auto-commit bug (PR #983 review):
           # a `git push` in any workflow with no `contents: write` grant silently
           # no-ops. Wired here (not path-filtered) so editing ANY workflow file

@@ -1185,6 +1185,12 @@ def main() -> None:
             # unwritable workspace is still rc=2 + one line, not a traceback.
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        except observed_map_lib.RulePacksNotFoundError as exc:
+            # #1501: no packs means nothing to extract FROM — regenerating
+            # anyway would merge an empty extract over the committed map and
+            # drop every entry. Refuse, and say where it looked.
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         # #1112: prose → stderr. `--generate-observed-map` is a maintenance
         # sub-command (regenerate a repo data file and exit), not a
         # recommendation run — so its `--json` document is the write summary

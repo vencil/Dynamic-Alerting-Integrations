@@ -231,6 +231,43 @@ sys.stdout.write("\n__FLAT_LAYOUT_RESULTS__" + json.dumps(
 _RESULTS_MARKER = "__FLAT_LAYOUT_RESULTS__"
 
 
+def _stage_shipped_set(flat: Path, tool_paths, data_paths) -> None:
+    """Copy the shipped set into *flat* the way build.sh does (flatten + strip)."""
+    # Same flattening build.sh performs: destination is one directory.
+    for rel in tool_paths:
+        shutil.copy2(TOOLS_SRC / rel, flat / Path(rel).name)
+    for rel in data_paths:
+        shutil.copy2(REPO_ROOT / rel, flat / Path(rel).name)
+
+    # build.sh strips the repo-layout parent-dir `sys.path.insert` lines
+    # from its copies, so the image does not carry them. Replicated here
+    # with build.sh's own pattern, because NOT replicating it was wrong in
+    # both directions: the harness diverged from the image, AND every line
+    # left in inserts the leaf's parent — a SHARED directory at image
+    # depth — onto sys.path.
+    #
+    # ⛔ Two earlier versions of this comment were false. The first said
+    # the parent directory does not exist (it does). The second said it is
+    # empty (it is `/tmp`, or the drive root). The pattern below is a
+    # second copy of build.sh's rule and can drift from it, which is a real
+    # cost — the assertion after it makes the drift visible rather than
+    # silent: build.sh's sed matches only the `_THIS_DIR` spelling, so a
+    # measured TEN shipped lines survive it and still run in the image.
+    stripped = 0
+    for copy in flat.glob("*.py"):
+        text = copy.read_text(encoding="utf-8")
+        kept = [ln for ln in text.splitlines(keepends=True)
+                if not _BUILD_SH_STRIP_RE.search(ln)]
+        if len(kept) != len(text.splitlines(keepends=True)):
+            stripped += 1
+            copy.write_text("".join(kept), encoding="utf-8")
+    assert stripped, (
+        "the build.sh strip pattern matched nothing — either build.sh "
+        "changed its sed and this copy did not follow, or the staging "
+        "step is not copying what it thinks it is"
+    )
+
+
 @pytest.fixture(scope="module")
 def flat_import_results():
     """Copy the shipped set into an image-depth directory and import each one."""
@@ -255,39 +292,7 @@ def flat_import_results():
         pytest.skip(f"no writable image-depth path on this host: {exc}")
 
     try:
-        # Same flattening build.sh performs: destination is one directory.
-        for rel in tool_paths:
-            shutil.copy2(TOOLS_SRC / rel, flat / Path(rel).name)
-        for rel in data_paths:
-            shutil.copy2(REPO_ROOT / rel, flat / Path(rel).name)
-
-        # build.sh strips the repo-layout parent-dir `sys.path.insert` lines
-        # from its copies, so the image does not carry them. Replicated here
-        # with build.sh's own pattern, because NOT replicating it was wrong in
-        # both directions: the harness diverged from the image, AND every line
-        # left in inserts the leaf's parent — a SHARED directory at image
-        # depth — onto sys.path.
-        #
-        # ⛔ Two earlier versions of this comment were false. The first said
-        # the parent directory does not exist (it does). The second said it is
-        # empty (it is `/tmp`, or the drive root). The pattern below is a
-        # second copy of build.sh's rule and can drift from it, which is a real
-        # cost — the assertion after it makes the drift visible rather than
-        # silent: build.sh's sed matches only the `_THIS_DIR` spelling, so a
-        # measured TEN shipped lines survive it and still run in the image.
-        stripped = 0
-        for copy in flat.glob("*.py"):
-            text = copy.read_text(encoding="utf-8")
-            kept = [ln for ln in text.splitlines(keepends=True)
-                    if not _BUILD_SH_STRIP_RE.search(ln)]
-            if len(kept) != len(text.splitlines(keepends=True)):
-                stripped += 1
-                copy.write_text("".join(kept), encoding="utf-8")
-        assert stripped, (
-            "the build.sh strip pattern matched nothing — either build.sh "
-            "changed its sed and this copy did not follow, or the staging "
-            "step is not copying what it thinks it is"
-        )
+        _stage_shipped_set(flat, tool_paths, data_paths)
         payload = [
             [Path(rel).stem, str(flat / Path(rel).name)]
             for rel in tool_paths if rel.endswith(".py")
@@ -512,3 +517,122 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
         )
     finally:
         shutil.rmtree(cleanup_root, ignore_errors=True)
+
+
+# ── #1501: finding repo data, not counting levels — behaviourally ──────────────
+#
+# The import test above only sees the LOUD half (a depth assumption that raises).
+# `_observed_map_lib` and `_registry_lib` had the QUIET half: `_THIS_DIR` plus
+# three `".."` imports fine at image depth and resolves to `/`. The observed-map
+# regeneration then globbed `/rule-packs/`, found nothing, and merged an empty
+# extract over the committed map — every entry DROPPED, rc 0. These run the real
+# command in the staged image layout, so they do not care how the path is spelled.
+
+
+@pytest.fixture
+def staged_image_dir():
+    """A fresh image-depth directory holding the shipped set, build.sh-style."""
+    try:
+        flat, cleanup_root = _dir_with_image_ancestor_count()
+    except OSError as exc:
+        if os.name == "posix":
+            pytest.fail(f"no image-depth directory on a POSIX host: {exc}")
+        pytest.skip(f"no writable image-depth path on this host: {exc}")
+    try:
+        _stage_shipped_set(flat, sorted(parse_build_sh_tool_paths()),
+                           sorted(parse_build_sh_repo_data_files()))
+        # ⛔ Precondition, not decoration: a marker on the ancestor chain would
+        # make the repo branch of the lookup reachable, and this would no
+        # longer be the image's situation.
+        stray = [str(base / m) for base in (flat, *flat.parents)
+                 for m in (".git", "Makefile", "pyproject.toml")
+                 if (base / m).exists()]
+        assert not stray, (
+            f"project-root markers above the staged dir make this host unlike "
+            f"the image: {stray}")
+        yield flat
+    finally:
+        shutil.rmtree(cleanup_root, ignore_errors=True)
+
+
+def _run_flat(flat: Path, *argv: str) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(flat)
+    return subprocess.run(
+        [sys.executable, *argv], cwd=str(flat), env=env,
+        capture_output=True, text=True, encoding="utf-8", timeout=300,
+    )
+
+
+def _map_keys(path: Path) -> "set[str]":
+    import yaml
+    return set((yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+               .get("keys", {}) or {})
+
+
+def test_generate_observed_map_keeps_every_key_under_the_image_layout(
+    staged_image_dir,
+):
+    """#1501: regenerating in the image must not silently wipe the map."""
+    flat = staged_image_dir
+    committed = _map_keys(TOOLS_SRC / "ops" / "metric_observed_map.yaml")
+    assert committed, "committed observed-map parsed empty — nothing to compare"
+
+    proc = _run_flat(flat, "threshold_recommend.py",
+                     "--generate-observed-map", "--json")
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    summary = json.loads(proc.stdout)["observed_map"]
+    assert summary["dropped"] == 0, (
+        f"regeneration in the image layout dropped {summary['dropped']} "
+        f"entries — the rule packs were not found:\n{proc.stderr[-2000:]}")
+    assert _map_keys(flat / "metric_observed_map.yaml") == committed
+
+
+def test_generate_observed_map_refuses_when_no_pack_is_reachable(
+    staged_image_dir,
+):
+    """⛔ No packs is a loud rc 2 naming where it looked — never an empty map."""
+    flat = staged_image_dir
+    for pack in flat.glob("rule-pack-*.yaml"):
+        pack.unlink()
+    map_path = flat / "metric_observed_map.yaml"
+    original = map_path.read_bytes()
+
+    proc = _run_flat(flat, "threshold_recommend.py", "--generate-observed-map")
+    assert proc.returncode == 2, (proc.returncode, proc.stderr[-2000:])
+    assert "no rule packs reachable" in proc.stderr, proc.stderr[-2000:]
+    assert str(flat) in proc.stderr, proc.stderr[-2000:]
+    assert map_path.read_bytes() == original, "the committed map was rewritten"
+
+
+def test_registry_repo_functions_fail_loudly_under_the_image_layout(
+    staged_image_dir,
+):
+    """The image ships `_registry_lib` for its predicates, not its repo files.
+
+    Import must survive (scaffold-tenant / init / onboard import it at module
+    scope), the pure predicates must work, and every function that needs a
+    repo file must raise ``RepoTreeNotFoundError`` instead of opening a path
+    under ``/``.
+    """
+    probe = (
+        "import json, _registry_lib as L\n"
+        "out = {'root': L._REPO_ROOT,"
+        " 'predicate': L.is_shipped_optional_key('x')}\n"
+        "for name, call in [('load', lambda: L.load_registry()),\n"
+        "                   ('write', lambda: L.write_registry()),\n"
+        "                   ('surfaces', lambda: L.surface_specs({}))]:\n"
+        "    try:\n"
+        "        call()\n"
+        "        out[name] = None\n"
+        "    except L.RepoTreeNotFoundError as exc:\n"
+        "        out[name] = str(exc)\n"
+        "print(json.dumps(out))\n"
+    )
+    proc = _run_flat(staged_image_dir, "-c", probe)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["root"] is None
+    assert out["predicate"] is True
+    for name in ("load", "write", "surfaces"):
+        assert out[name] and "repo-only" in out[name], (name, out)

@@ -71,13 +71,41 @@ except ImportError:  # pragma: no cover - environments without jsonschema
     jsonschema = None  # type: ignore
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-# scripts/tools/ops/ -> repo root is three levels up.
-_REPO_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
+from _lib_compat import find_project_root  # noqa: E402
 
-REGISTRY_PATH = os.path.join(_REPO_ROOT, "rule-packs", "threshold-registry.yaml")
-SCHEMA_PATH = os.path.join(
-    _REPO_ROOT, "docs", "schemas", "threshold-registry.schema.json"
-)
+# ⛔ Found, not counted (#1501). This used to be `_THIS_DIR` + three `".."`,
+# which is the repo root in a checkout and `/` in the da-tools image (every
+# tool flattened into `/opt/da-tools/`). The image ships this module for its
+# pure predicates (scaffold_tenant / init_project / onboard_platform import
+# them) and carries none of the repo files below, so None is the correct
+# answer there — and every function that needs one of those files goes
+# through `_repo_path_or_raise`, which says so instead of opening `/rule-packs/…`.
+_ROOT = find_project_root(_THIS_DIR)
+_REPO_ROOT: Optional[str] = str(_ROOT) if _ROOT is not None else None
+
+
+class RepoTreeNotFoundError(FileNotFoundError):
+    """A repo-only function ran where no project root is reachable (#1501)."""
+
+
+def _in_repo(*parts: str) -> Optional[str]:
+    return os.path.join(_REPO_ROOT, *parts) if _REPO_ROOT is not None else None
+
+
+def _repo_path_or_raise(path: Optional[str], what: str) -> str:
+    if path is None:
+        raise RepoTreeNotFoundError(
+            f"{what} lives in the repository tree, and no project root "
+            f"(.git / Makefile / pyproject.toml) is reachable from {_THIS_DIR} "
+            f"— this function is repo-only (the da-tools image carries no repo "
+            f"tree); pass an explicit path instead"
+        )
+    return path
+
+
+REGISTRY_PATH = _in_repo("rule-packs", "threshold-registry.yaml")
+SCHEMA_PATH = _in_repo("docs", "schemas", "threshold-registry.schema.json")
 
 CRITICAL_SUFFIX = "_critical"
 
@@ -469,7 +497,7 @@ def write_registry(
     sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
     from _lib_python import write_text_secure  # noqa: E402
 
-    out = path or REGISTRY_PATH
+    out = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
     doc = build_registry_doc(rule_packs)
     body = yaml.safe_dump(
         doc, sort_keys=False, allow_unicode=True, default_flow_style=False
@@ -486,7 +514,7 @@ def load_registry(path: Optional[str] = None) -> dict:
     """Load the committed registry document (the whole doc, not just keys)."""
     if yaml is None:
         raise RuntimeError("pyyaml required")
-    p = path or REGISTRY_PATH
+    p = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
     with open(p, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 
@@ -502,7 +530,8 @@ def validate_registry(
         raise RuntimeError("jsonschema required")
     import json
 
-    sp = schema_path or SCHEMA_PATH
+    sp = schema_path or _repo_path_or_raise(
+        SCHEMA_PATH, "the threshold-registry schema")
     with open(sp, encoding="utf-8") as fh:
         schema = json.load(fh)
     validator = jsonschema.Draft7Validator(schema)
@@ -627,12 +656,9 @@ def diff_vs_scaffold(doc: dict, rule_packs: Optional[dict] = None) -> list[str]:
 # fresh render between them. Hand-written prose OUTSIDE the block is never
 # touched (and is separately covered by the header-prose membership lint).
 
-HELM_VALUES_PATH = os.path.join(
-    _REPO_ROOT, "helm", "threshold-exporter", "values.yaml"
-)
-DEV_DEFAULTS_PATH = os.path.join(
-    _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d",
-    "_defaults.yaml",
+HELM_VALUES_PATH = _in_repo("helm", "threshold-exporter", "values.yaml")
+DEV_DEFAULTS_PATH = _in_repo(
+    "components", "threshold-exporter", "config", "conf.d", "_defaults.yaml",
 )
 # ⛔ The try-local seed used to be the THIRD copy of the declared list,
 # hand-maintained by a comment that told the reader "if the generated copies
@@ -641,8 +667,8 @@ DEV_DEFAULTS_PATH = os.path.join(
 # comment-shaped (which is where the counter-example caveat lives) was
 # invisible to it and the seed silently became the one shipped conf.d without
 # the caveat (blind review, #1344). Generating it deletes the manual step.
-TRY_LOCAL_DEFAULTS_PATH = os.path.join(
-    _REPO_ROOT, "try-local", "seed", "conf.d", "_defaults.yaml",
+TRY_LOCAL_DEFAULTS_PATH = _in_repo(
+    "try-local", "seed", "conf.d", "_defaults.yaml",
 )
 
 _MARKER_STEM = "GENERATED:threshold-registry:"
@@ -1686,6 +1712,7 @@ def surface_specs(doc: dict) -> list[dict]:
     Two surfaces per file is fine: ``regen_surfaces`` re-reads each file inside
     the loop, so the second splice sees the first one's write.
     """
+    root = _repo_path_or_raise(_REPO_ROOT, "the generated surfaces")
     specs = [
         {
             "id": "helm-defaults",
@@ -1728,7 +1755,7 @@ def surface_specs(doc: dict) -> list[dict]:
             continue
         specs.append({
             "id": f"pack-{pack_name}",
-            "path": os.path.join(_REPO_ROOT, *pack_meta["rule_pack_file"].split("/")),
+            "path": os.path.join(root, *pack_meta["rule_pack_file"].split("/")),
             "indent": "",
             "body": render_pack_header_lines(doc, pack_name),
         })
@@ -1788,7 +1815,8 @@ def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
     if doc is None:
         doc = load_registry()
     touched = []
-    repo_root = os.path.realpath(_REPO_ROOT)
+    repo_root = os.path.realpath(
+        _repo_path_or_raise(_REPO_ROOT, "the generated surfaces"))
     for spec in surface_specs(doc):
         # Containment: surface paths derive from committed registry fields
         # (e.g. rule_pack_file) that --regen consumes WITHOUT schema
