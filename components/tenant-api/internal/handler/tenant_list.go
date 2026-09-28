@@ -168,6 +168,44 @@ func tenantConfigError(data []byte) string {
 	return ""
 }
 
+// tenantFileNotLoadableError refuses a PARTIAL write (PUT .../custom-alerts,
+// the tenant and group batch patches) into an existing tenant file that
+// tenantConfigError rejects (#2373 review F1). Those writes merge the client's
+// change into the file's current content, and GET cannot vouch for that
+// content — it answers such a file with config_error and without the derived
+// fields — so a client editing from GET (the portal's custom-alerts modal
+// reads the missing list as []) would write its partial view back over the
+// real one. The whole-file PUT /tenants/{id} is the repair path and does not
+// go through here.
+type tenantFileNotLoadableError struct{ Reason string }
+
+func (e *tenantFileNotLoadableError) Error() string {
+	return fmt.Sprintf("the tenant config file cannot be loaded as a tenant config (config_error: %s) "+
+		"and threshold-exporter skips it; a partial update is refused - repair the file with a "+
+		"whole-file PUT /api/v1/tenants/{id} first", e.Reason)
+}
+
+// checkPartialWriteBase returns a *tenantFileNotLoadableError when existing —
+// the tenant file a partial write would merge into — is not a usable tenant
+// config. Empty bytes (no file yet) are not refused: that is a new tenant.
+func checkPartialWriteBase(existing []byte) error {
+	if reason := tenantConfigError(existing); reason != "" {
+		return &tenantFileNotLoadableError{Reason: reason}
+	}
+	return nil
+}
+
+// writeTenantFileNotLoadable answers a refused partial write: 409 CONFLICT
+// (the request is fine; the server-side file is in a state it cannot be
+// applied to), with config_error so the client can say why.
+func writeTenantFileNotLoadable(w http.ResponseWriter, r *http.Request, e *tenantFileNotLoadableError) {
+	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+		Error: e.Error(),
+		Code:  CodeConflict,
+		Extra: map[string]any{"config_error": e.Reason},
+	})
+}
+
 // loadAllTenants scans configDir for tenant config files and extracts tenant
 // summaries.
 //

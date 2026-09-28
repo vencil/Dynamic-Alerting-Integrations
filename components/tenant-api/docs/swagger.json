@@ -661,7 +661,7 @@
         },
         "/api/v1/groups/{id}/batch": {
             "post": {
-                "description": "Apply a patch to all tenants in a group.",
+                "description": "Apply a patch to all tenants in a group.\nA member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.",
                 "consumes": [
                     "application/json"
                 ],
@@ -816,7 +816,7 @@
         },
         "/api/v1/tenants/batch": {
             "post": {
-                "description": "Apply patch operations to multiple tenants in one call.",
+                "description": "Apply patch operations to multiple tenants in one call.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not applied: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.",
                 "consumes": [
                     "application/json"
                 ],
@@ -865,7 +865,7 @@
                         }
                     },
                     "409": {
-                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written). Direct mode reports this per op in results[].code instead.",
+                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code CONFLICT, with config_error; repair it with a whole-file PUT first); nothing written. Direct mode reports these per op in results[].code instead.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -987,7 +987,7 @@
         },
         "/api/v1/tenants/{id}": {
             "get": {
-                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds and custom_alerts are empty and no validation fields are set.",
+                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:\nthe file's content is not vouched for). Partial writes refuse such a file with 409 until a whole-file PUT repairs it.",
                 "produces": [
                     "application/json"
                 ],
@@ -1174,7 +1174,7 @@
         },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
-                "description": "Merges the supplied recipe array into the tenant's\n`_custom_alerts` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.",
+                "description": "Merges the supplied recipe array into the tenant's\n`_custom_alerts` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 CONFLICT with `config_error` when the tenant's file cannot be loaded as a tenant config\n(malformed_yaml | invalid_config, as on GET): repair it with a whole-file PUT /api/v1/tenants/{id} first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2960,7 +2960,7 @@
             "type": "object",
             "properties": {
                 "config_error": {
-                    "description": "ConfigError is set when the tenant's file cannot be loaded as a tenant\nconfig (#2373) — the same reason GET /api/v1/tenants reports on the\ntenant's row: malformed_yaml (not parseable as YAML) or invalid_config\n(parses as YAML but cannot be loaded as a tenant config — wrong shape,\nerrors only a typed decode detects, or a declared tenant id that is not\nvalid UTF-8). threshold-exporter skips such a file whole, so nothing is\nderived from it: raw_yaml and source_hash are returned (so the file can\nbe opened and fixed), resolved_thresholds and custom_alerts are empty,\nand validation_warnings / validation_notices are absent. Absent on a\nusable file.",
+                    "description": "ConfigError is set when the tenant's file cannot be loaded as a tenant\nconfig (#2373) — the same reason GET /api/v1/tenants reports on the\ntenant's row: malformed_yaml (not parseable as YAML) or invalid_config\n(parses as YAML but cannot be loaded as a tenant config — wrong shape,\nerrors only a typed decode detects, or a declared tenant id that is not\nvalid UTF-8). threshold-exporter skips such a file whole, so nothing is\nderived from it: raw_yaml and source_hash are returned (so the file can\nbe opened and fixed), and resolved_thresholds, custom_alerts,\nvalidation_warnings and validation_notices are ABSENT — not empty,\nwhich would read as \"none\". Partial writes (PUT .../custom-alerts, the\nbatch patches) refuse such a file with 409; a whole-file PUT repairs\nit. Absent on a usable file.",
                     "type": "string",
                     "enum": [
                         "malformed_yaml",

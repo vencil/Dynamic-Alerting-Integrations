@@ -69,6 +69,8 @@ type PutCustomAlertsResponse struct {
 // @Description `_custom_alerts` (comment-preserving AST edit), validates
 // @Description (S5 Go validator), and commits. Optimistic concurrency via
 // @Description base_hash (409 on drift). Empty array deletes the key.
+// @Description 409 CONFLICT with `config_error` when the tenant's file cannot be loaded as a tenant config
+// @Description (malformed_yaml | invalid_config, as on GET): repair it with a whole-file PUT /api/v1/tenants/{id} first.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -167,6 +169,18 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 		if err != nil {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		// #2373 review F1: a file threshold-exporter rejects is answered by
+		// GET without custom_alerts, so a client's list was not built from
+		// the file's real recipes — merging it in would replace them. Refused
+		// before the base_hash check: a matching hash proves only that the
+		// client read THIS file, not that it saw its recipes. The in-lock
+		// WriteIfUnchanged compares the same bytes, so `raw` is the base.
+		var notLoadable *tenantFileNotLoadableError
+		if err := checkPartialWriteBase(raw); errors.As(err, &notLoadable) {
+			writeTenantFileNotLoadable(w, r, notLoadable)
 			return
 		}
 

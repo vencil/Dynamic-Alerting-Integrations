@@ -46,6 +46,8 @@ type GroupBatchResponse struct {
 //
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group.
+// @Description A member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
+// @Description is not patched: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
 // @Tags        groups
 // @Accept      json
 // @Produce     json

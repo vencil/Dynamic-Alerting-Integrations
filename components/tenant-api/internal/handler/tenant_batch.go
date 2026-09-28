@@ -83,6 +83,8 @@ type BatchResponse struct {
 //
 // @Summary     Batch tenant operations
 // @Description Apply patch operations to multiple tenants in one call.
+// @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
+// @Description is not applied: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -91,7 +93,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written). Direct mode reports this per op in results[].code instead."
+// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code CONFLICT, with config_error; repair it with a whole-file PUT first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
@@ -246,6 +248,14 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		if writeWriteFlowError(rw, r, err) {
 			return
 		}
+		// #2373 review F1: an op's tenant file is one threshold-exporter
+		// rejects; the whole PR is refused (nothing is written), like the
+		// other per-tenant refusals WritePRBatch reports.
+		var notLoadable *tenantFileNotLoadableError
+		if errors.As(err, &notLoadable) {
+			writeTenantFileNotLoadable(rw, r, notLoadable)
+			return
+		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
 		// commits — return a clean "no changes" success, never a forge error.
 		// #1231 F5: ErrNoChanges is the one error WritePRBatch pairs with a
@@ -362,6 +372,7 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 	if err != nil {
 		msg := err.Error()
 		code := ""
+		var notLoadable *tenantFileNotLoadableError
 		switch {
 		case errors.Is(err, gitops.ErrConflict):
 			msg = "conflict: retry after refresh"
@@ -382,6 +393,10 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 		case errors.Is(err, gitops.ErrTenantTreeScan):
 			slog.Error("batch op refused: conf.d scan failed", "tenant", op.TenantID, "error", err)
 			msg, code = msgTenantTreeScan, CodeInternal
+		case errors.As(err, &notLoadable):
+			// #2373 review F1: nothing written; the file must be repaired
+			// with a whole-file PUT first.
+			msg, code = notLoadable.Error(), CodeConflict
 		}
 		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg, Code: code}
 	}
@@ -412,6 +427,13 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (string, error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
 		return buildPatchYAML(tenantID, patch), nil
+	}
+	// #2373 review F1: refuse a file threshold-exporter rejects. The patch
+	// would land in a file no plane serves, and "succeeded" would read as
+	// applied. This runs inside the merge closure, so it judges the base the
+	// writer actually merges into (under the lock, on the fresh base).
+	if err := checkPartialWriteBase(existing); err != nil {
+		return "", err
 	}
 
 	var doc yaml.Node

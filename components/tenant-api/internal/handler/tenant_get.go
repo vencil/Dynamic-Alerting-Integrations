@@ -56,10 +56,22 @@ type TenantDetail struct {
 	// errors only a typed decode detects, or a declared tenant id that is not
 	// valid UTF-8). threshold-exporter skips such a file whole, so nothing is
 	// derived from it: raw_yaml and source_hash are returned (so the file can
-	// be opened and fixed), resolved_thresholds and custom_alerts are empty,
-	// and validation_warnings / validation_notices are absent. Absent on a
-	// usable file.
+	// be opened and fixed), and resolved_thresholds, custom_alerts,
+	// validation_warnings and validation_notices are ABSENT — not empty,
+	// which would read as "none". Partial writes (PUT .../custom-alerts, the
+	// batch patches) refuse such a file with 409; a whole-file PUT repairs
+	// it. Absent on a usable file.
 	ConfigError string `json:"config_error,omitempty" enums:"malformed_yaml,invalid_config"`
+}
+
+// tenantDetailNotLoadable is TenantDetail for a file with a config_error: the
+// same JSON names, minus every field derived from the file's content
+// (resolved_thresholds, custom_alerts, validation_*), which are absent.
+type tenantDetailNotLoadable struct {
+	ID          string `json:"id"`
+	RawYAML     string `json:"raw_yaml"`
+	SourceHash  string `json:"source_hash"`
+	ConfigError string `json:"config_error"`
 }
 
 // GetTenant handles GET /api/v1/tenants/{id}
@@ -68,7 +80,8 @@ type TenantDetail struct {
 // @Description Returns the raw YAML and resolved thresholds for a single tenant.
 // @Description When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
 // @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
-// @Description skips such a file, so resolved_thresholds and custom_alerts are empty and no validation fields are set.
+// @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
+// @Description the file's content is not vouched for). Partial writes refuse such a file with 409 until a whole-file PUT repairs it.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -118,15 +131,19 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// row carries. Nothing is derived from it: the exporter serves none
 		// of its tenants, so thresholds resolved from it would describe
 		// values no plane holds. 200, not 4xx/5xx, so an editor can still
-		// load the file (and its source_hash) to fix it.
+		// load the file (and its source_hash) to fix it. The derived fields
+		// are ABSENT, not [] (#2373 review F1): an empty list reads as an
+		// authoritative "none", and a client editing from it would write
+		// that back over the file's real content (the partial writes refuse
+		// such a file for the same reason — checkPartialWriteBase). Not null
+		// either: the spec types them as arrays (Swagger 2.0 has no
+		// nullable) and does not require them, so absence stays valid.
 		if reason := tenantConfigError(data); reason != "" {
-			writeJSON(w, http.StatusOK, TenantDetail{
-				ID:           tenantID,
-				RawYAML:      string(data),
-				Resolved:     []cfg.ResolvedThreshold{},
-				SourceHash:   cfg.ComputeSourceHash(data),
-				CustomAlerts: []map[string]any{},
-				ConfigError:  reason,
+			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
+				ID:          tenantID,
+				RawYAML:     string(data),
+				SourceHash:  cfg.ComputeSourceHash(data),
+				ConfigError: reason,
 			})
 			return
 		}

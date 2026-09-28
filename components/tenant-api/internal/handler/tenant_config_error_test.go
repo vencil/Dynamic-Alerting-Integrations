@@ -109,16 +109,14 @@ func TestGetTenant_ConfigError(t *testing.T) {
 				t.Errorf("source_hash = %q, want %q", d.SourceHash, want)
 			}
 			// ... but nothing derived from a file the exporter does not serve.
-			if len(d.Resolved) != 0 {
-				t.Errorf("resolved_thresholds = %+v, want empty", d.Resolved)
-			}
-			if len(d.CustomAlerts) != 0 {
-				t.Errorf("custom_alerts = %+v, want empty", d.CustomAlerts)
-			}
-			// Arrays stay arrays (the spec declares them; null would break clients).
-			for _, k := range []string{"resolved_thresholds", "custom_alerts"} {
-				if _, ok := raw[k].([]any); !ok {
-					t.Errorf("%s = %#v, want a JSON array", k, raw[k])
+			// ABSENT, not [] (#2373 review F1): an empty list reads as an
+			// authoritative "this tenant has none", and a client editing from
+			// it would write that back over the file's real content. Not null
+			// either: the spec types both as arrays (Swagger 2.0 has no
+			// nullable) and does not require them, so absent stays schema-valid.
+			for _, k := range []string{"resolved_thresholds", "custom_alerts", "validation_warnings", "validation_notices"} {
+				if v, ok := raw[k]; ok {
+					t.Errorf("%s present (%#v), want absent", k, v)
 				}
 			}
 		})

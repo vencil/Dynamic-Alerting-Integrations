@@ -912,9 +912,11 @@ definitions:
           errors only a typed decode detects, or a declared tenant id that is not
           valid UTF-8). threshold-exporter skips such a file whole, so nothing is
           derived from it: raw_yaml and source_hash are returned (so the file can
-          be opened and fixed), resolved_thresholds and custom_alerts are empty,
-          and validation_warnings / validation_notices are absent. Absent on a
-          usable file.
+          be opened and fixed), and resolved_thresholds, custom_alerts,
+          validation_warnings and validation_notices are ABSENT — not empty,
+          which would read as "none". Partial writes (PUT .../custom-alerts, the
+          batch patches) refuse such a file with 409; a whole-file PUT repairs
+          it. Absent on a usable file.
         enum:
         - malformed_yaml
         - invalid_config
@@ -1610,7 +1612,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Apply a patch to all tenants in a group.
+      description: |-
+        Apply a patch to all tenants in a group.
+        A member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
+        is not patched: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
       parameters:
       - description: Group ID
         in: path
@@ -1724,7 +1729,8 @@ paths:
         Returns the raw YAML and resolved thresholds for a single tenant.
         When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
         source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
-        skips such a file, so resolved_thresholds and custom_alerts are empty and no validation fields are set.
+        skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
+        the file's content is not vouched for). Partial writes refuse such a file with 409 until a whole-file PUT repairs it.
       parameters:
       - description: Tenant ID
         in: path
@@ -1866,6 +1872,8 @@ paths:
         `_custom_alerts` (comment-preserving AST edit), validates
         (S5 Go validator), and commits. Optimistic concurrency via
         base_hash (409 on drift). Empty array deletes the key.
+        409 CONFLICT with `config_error` when the tenant's file cannot be loaded as a tenant config
+        (malformed_yaml | invalid_config, as on GET): repair it with a whole-file PUT /api/v1/tenants/{id} first.
       parameters:
       - description: Tenant ID
         in: path
@@ -2153,7 +2161,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Apply patch operations to multiple tenants in one call.
+      description: |-
+        Apply patch operations to multiple tenants in one call.
+        Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
+        is not applied: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
       parameters:
       - description: Batch operations
         in: body
@@ -2183,8 +2194,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: 'PR write-back mode: a tenant in the batch is already declared
-            by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written).
-            Direct mode reports this per op in results[].code instead.'
+            by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config
+            file cannot be loaded as a tenant config (code CONFLICT, with config_error;
+            repair it with a whole-file PUT first); nothing written. Direct mode reports
+            these per op in results[].code instead.'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
