@@ -879,19 +879,27 @@ func (t *tenantFilesOnce) get(absPath string, read func(string) ([]byte, error))
 // file next to the others — the order in which tenantFilesOnce parses each
 // file once. Grouped, not sorted: it runs on every reload tick, a no-change
 // tick included, and a sort whose comparator looks up two map entries per
-// comparison cost that tick more than the grouping does (bench gate on
-// #2255). Neither the file order nor the order within a file is defined; a
+// comparison cost that tick more than grouping does (bench gate on #2255).
+// Counted then placed into one pre-sized slice, not appended per file: a
+// slice per file grew hundreds of allocations per tick (bench gate on
+// #2261). Neither the file order nor the order within a file is defined; a
 // merge pass's result does not depend on it (each tenant's merge is
 // independent; the maps it fills are keyed by tenant), which was Go's
 // random map order before.
 func tenantsByFile(tenants map[string]string) []string {
-	byFile := make(map[string][]string)
-	for tid, file := range tenants {
-		byFile[file] = append(byFile[file], tid)
+	next := make(map[string]int) // file → its tenants' count, then next slot
+	for _, file := range tenants {
+		next[file]++
 	}
-	ids := make([]string, 0, len(tenants))
-	for _, group := range byFile {
-		ids = append(ids, group...)
+	start := 0
+	for file, n := range next {
+		next[file] = start
+		start += n
+	}
+	ids := make([]string, len(tenants))
+	for tid, file := range tenants {
+		ids[next[file]] = tid
+		next[file]++
 	}
 	return ids
 }
