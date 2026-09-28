@@ -144,3 +144,10 @@ scripts/tools/ops/bench-canary/.golangci.yml
 # ledger drops rows, so their findings come back open (gate rc=1), and an
 # unparseable one is fatal (rc=2).
 docs/internal/cli-contract-baseline.yaml
+
+# ADR 總覽頁：手寫的逐篇摘要移除、索引改由 generate_adr_index.py 產生
+# （30915 → 7761 bytes）。Damage is caught independently: the index lives
+# between sentinels that `adr-index-check` re-renders, so a truncated file
+# either loses rows (drift, rc=1) or a sentinel (rc=2).
+docs/adr/README.en.md
+docs/adr/README.md

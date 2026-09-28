@@ -16,37 +16,6 @@ WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.en.md' contains
 WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.md' contains a link '../architecture-and-design.md#設計概念總覽', but the doc 'architecture-and-design.md' does not contain an anchor '#設計概念總覽'.
 WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.md' contains a link '../benchmarks.md#1-規模能撐多少租戶', but the doc 'benchmarks.md' does not contain an anchor '#1-規模能撐多少租戶'.
 WARNING -  Doc file 'adr/025-alerting-plane-self-liveness.md' contains a link '../integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞', but the doc 'integration/byo-alertmanager-integration.md' does not contain an anchor '#11-平台自監控告警的投遞'.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#004-federation-architecture--central-exporter-first', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#016-confd-directory-hierarchy--mixed-mode', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#017-_defaultsyaml-inheritance-semantics--dual-hash-hot-reload', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#019-planning-ssot--frontmatter-contract--discovery-based-index', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#020-tenant-federation--label-injection-proxy-over-self-built-endpoint', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#021-tenant-log-query--authorization-plane-only-ingestion-decoupled', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#022-tenant-api-dev-auth-bypass--four-layer-containment', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#023-tenant-api-write-plane--single-writer-invariant--resilience-containment', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.en.md' contains a link '#024-version-aware-threshold--declarative-cutover-via-the-existing-dimensional-version-label', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#001-嚴重度-dedup-採用-inhibit-規則', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#002-oci-registry-替代-chartmuseum', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#003-sentinel-alert-模式', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#004-federation-架構中央-exporter-優先', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#005-投影卷掛載-rule-pack', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#006-租戶映射拓撲-11-n1-1n', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#007-跨域路由設定檔與域策略', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#008-operator-native-整合路徑', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#009-tenant-manager-crud-api-架構', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#011-pr-based-write-back-模式', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#012-threshold-heatmap-色盲補丁', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#013-元件健康度與-token-density-指標', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#014-wizard-token-arbitrary-value-遷移策略', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#015-data-theme-單軌-dark-mode', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#016-confd-目錄分層--混合模式', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#017-_defaultsyaml-繼承語意--dual-hash-hot-reload', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#019-planning-ssot--frontmatter-contract--discovery-based-index', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#020-tenant-federation--label-injection-proxy-over-self-built-endpoint', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#021-tenant-log-query--authorization-plane-only-ingestion-decoupled', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#022-tenant-api-dev-auth-bypass--四層圍堵', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#023-tenant-api-寫入平面--single-writer-invariant-與韌性圍堵', but there is no such anchor on this page.
-WARNING -  Doc file 'adr/README.md' contains a link '#024-version-aware-threshold--透過既有-dimensional-version-label-達成-declarative-cutover', but there is no such anchor on this page.
 WARNING -  Doc file 'alerting-best-practices.md' contains a link '#0-告警的價值鏈', but there is no such anchor on this page.
 WARNING -  Doc file 'alerting-best-practices.md' contains a link '#2-actionable的完整定義冪等光譜', but there is no such anchor on this page.
 WARNING -  Doc file 'alerting-best-practices.md' contains a link '#3-為什麼動作面比決策面難驗', but there is no such anchor on this page.

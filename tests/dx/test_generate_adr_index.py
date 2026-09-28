@@ -20,10 +20,15 @@ Pinned contracts
    - Idempotent (running --write twice leaves the file identical).
    - Drift gate: `--check` returns 1 when the rendered table differs from disk.
    - Missing sentinel → ValueError with actionable message.
+   - Adjacent sentinels (no line between them) are accepted — that is what the
+     missing-sentinel message tells you to add.
 
-5. **Real-corpus integration**:
+5. **Targets**: architecture-and-design.md + docs/adr/README.md + README.en.md.
+   The EN table uses the `.en.md` sibling's title and link, else the ZH file.
+
+6. **Real-corpus integration**:
    - The generator parses every shipped `docs/adr/[0-9]*-*.md` without error.
-   - `--check` against the live target doc passes (post-merge consumer expectation).
+   - Every live target is in sync (post-merge consumer expectation).
 """
 from __future__ import annotations
 
@@ -203,6 +208,25 @@ class TestRenderTable:
             "| ADR-021 | [Baz](adr/021-baz.md) | 🟡 Proposed | v2.8.0 |\n"
         )
 
+    def test_en_uses_sibling_title_and_link_else_zh(self):
+        entries = [
+            gai.AdrEntry("001", "中文", "✅", "Accepted", "v1.0.0", "adr/001-foo.md",
+                         en_title="English", en_filename="001-foo.en.md"),
+            gai.AdrEntry("002", "僅中文", "✅", "Accepted", "", "adr/002-bar.md"),
+        ]
+        out = gai.render_table(entries, "./", "en")
+        assert out.splitlines()[0] == "| ADR | Title | Status | Version |"
+        assert "| ADR-001 | [English](./001-foo.en.md) |" in out
+        assert "| ADR-002 | [僅中文](./002-bar.md) |" in out
+
+    def test_parse_reads_en_sibling(self, tmp_path):
+        zh = tmp_path / "001-foo.md"
+        _write_adr(zh, title="ADR-001: 中文", status_block="✅ **Accepted**")
+        (tmp_path / "001-foo.en.md").write_text(
+            '---\ntitle: "ADR-001: English"\n---\n', encoding="utf-8")
+        e = gai.parse_adr(zh)
+        assert (e.en_title, e.en_filename) == ("English", "001-foo.en.md")
+
     def test_blank_version_em_dash(self):
         entries = [gai.AdrEntry("001", "Foo", "🟡", "Proposed", "", "adr/001-foo.md")]
         out = gai.render_table(entries)
@@ -226,6 +250,11 @@ class TestReplaceSentinelBlock:
         assert gai.SENTINEL_END in new
         assert "NEW TABLE" in new
         assert "old garbage" not in new
+
+    def test_adjacent_sentinels(self):
+        content = f"a\n{gai.SENTINEL_START}\n{gai.SENTINEL_END}\nb\n"
+        new = gai.replace_sentinel_block(content, "T\n")
+        assert new == f"a\n{gai.SENTINEL_START}\nT\n\n{gai.SENTINEL_END}\nb\n"
 
     def test_missing_sentinel_raises(self):
         with pytest.raises(ValueError, match="Sentinel block missing"):
@@ -356,14 +385,15 @@ class TestRealCorpus:
             assert entry.status_emoji, f"{f.name}: empty emoji"
             assert entry.status_name, f"{f.name}: empty status name"
 
-    def test_live_target_doc_in_sync(self):
-        """If this fails, run `make adr-index` to regenerate the table."""
+    @pytest.mark.parametrize("target,prefix,lang", gai.DEFAULT_TARGETS,
+                             ids=lambda v: v.name if isinstance(v, Path) else v)
+    def test_live_targets_in_sync(self, target, prefix, lang):
+        """If this fails, run `make adr-index` to regenerate the tables."""
         adr_files = gai.discover_adrs()
         entries = [gai.parse_adr(p) for p in adr_files]
-        table = gai.render_table(entries)
-        current = gai.TARGET_DOC.read_text(encoding="utf-8")
-        new = gai.replace_sentinel_block(current, table)
+        table = gai.render_table(entries, prefix, lang)
+        current = target.read_text(encoding="utf-8")
+        new = gai.replace_sentinel_block(current, table, target)
         assert new == current, (
-            "ADR index in docs/architecture-and-design.md is stale. "
-            "Run `make adr-index` to refresh."
+            f"ADR index in {target.name} is stale. Run `make adr-index` to refresh."
         )
