@@ -37,12 +37,11 @@ name: Component Docker Build (PR smoke)
 # ⛔ CORRECTION (#1337): this block used to add "release.yaml's own image CVE
 # scan is likewise treated as informational (#448)". That is FALSE — every
 # release job sets `exit-code: 1` with no `continue-on-error`, so a fixable
-# HIGH/CRITICAL fails the release job. What is true, and is the likely origin of
-# the confusion, is that the scan runs POST-PUSH: the image is already in the
-# registry by then, so what it blocks is the release job going green, not the
-# publication of that image. (And in every job but release-da-tools it is the
-# last step, so nothing further is prevented either; only release-da-tools has
-# signing / SBOM / archive / GitHub-Release steps after it.)
+# HIGH/CRITICAL fails the release job. At #1337 the scan still ran POST-PUSH
+# (the likely origin of the confusion — a red scan did not hold the image
+# back). Since #1278 it runs PRE-publish: release.yaml pushes a candidate tag,
+# scans that digest, and only then promotes it to the formal tags, so a red
+# scan there now really withholds the release.
 
 on:
   pull_request:

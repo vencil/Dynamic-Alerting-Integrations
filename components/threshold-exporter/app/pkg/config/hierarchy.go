@@ -52,7 +52,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -831,17 +833,106 @@ func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
 }
 
 func canonicalJSON(data any) ([]byte, error) {
+	out, err := encodeCanonical(data)
+	if err == nil {
+		return out, nil
+	}
+	// encoding/json has no token for a non-finite float and refuses the
+	// whole document; Python's json.dumps (allow_nan=True, the default in
+	// describe_tenant.py's _canonical_hash) writes NaN / Infinity /
+	// -Infinity. A YAML `.inf` / `.nan` anywhere in a tenant (a routing
+	// override, a threshold) made every Go reader of the merged hash —
+	// da-guard, the exporter, tenant-api — fail the tenant while the Python
+	// tools read the same tree fine. Only that error takes the slow path,
+	// so every document encoding/json accepts stays byte-identical.
+	var unsupported *json.UnsupportedValueError
+	if !errors.As(err, &unsupported) {
+		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := writeCanonicalNonFinite(&buf, data); err != nil {
+		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// encodeCanonical is encoding/json with no HTML escaping and no trailing
+// newline — the canonical form of every value encoding/json accepts.
+func encodeCanonical(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(data); err != nil {
-		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
 	out := buf.Bytes()
 	if n := len(out); n > 0 && out[n-1] == '\n' {
 		out = out[:n-1]
 	}
 	return out, nil
+}
+
+// writeCanonicalNonFinite writes v the way json.dumps(sort_keys=True,
+// separators=(",", ":")) does, descending into the containers a decoded
+// YAML tree holds (map[string]any, []any) so a non-finite float at any
+// depth becomes Python's token. Every other value goes through
+// encodeCanonical, so it renders exactly as on the fast path.
+func writeCanonicalNonFinite(buf *bytes.Buffer, v any) error {
+	switch x := v.(type) {
+	case float64:
+		switch {
+		case math.IsNaN(x):
+			buf.WriteString("NaN")
+			return nil
+		case math.IsInf(x, 1):
+			buf.WriteString("Infinity")
+			return nil
+		case math.IsInf(x, -1):
+			buf.WriteString("-Infinity")
+			return nil
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			kb, err := encodeCanonical(k)
+			if err != nil {
+				return err
+			}
+			buf.Write(kb)
+			buf.WriteByte(':')
+			if err := writeCanonicalNonFinite(buf, x[k]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+		return nil
+	case []any:
+		buf.WriteByte('[')
+		for i, e := range x {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonicalNonFinite(buf, e); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+		return nil
+	}
+	b, err := encodeCanonical(v)
+	if err != nil {
+		return err
+	}
+	buf.Write(b)
+	return nil
 }
 
 // ============================================================
