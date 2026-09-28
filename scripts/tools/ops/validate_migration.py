@@ -144,25 +144,54 @@ def run_single_comparison(prom_url, old_query, new_query, label):
 
 
 def load_mapping_pairs(mapping_path):
-    """從 prefix-mapping.yaml 載入比對組。"""
+    """從 prefix-mapping.yaml 載入比對組。
+
+    migrate 會為每個 key 寫下 `old_query`（原規則 LHS 依租戶聚合）與
+    `new_query`（recording rule 名），兩邊同量綱、同聚合。舊版 migrate 產的
+    檔沒有這兩欄，只能退回「原始指標 vs `tenant:<key>:max`」：rate 類與
+    `:sum` 的比對組在那種檔上比不出東西（issue 1818），所以對每一組印警告，
+    請使用者用新版 migrate 重產。
+
+    改用黃金標準（有 `golden_rule`）的項沒有 migrate 產出的 recording rule，
+    舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
+    """
     with open(mapping_path, 'r', encoding='utf-8') as f:
         mapping = yaml.safe_load(f) or {}
 
     pairs = []
+    legacy = []
+    golden = []
     for prefixed_key, info in mapping.items():
-        original = info.get("original_metric")
-        if not original:
+        if not isinstance(info, dict):
             continue
-        # 構造新舊 Recording Rule 名稱
-        # 舊: 原始 metric name (直接查詢)
-        # 新: tenant:<prefixed_key>:<agg> (需猜測 agg，但 recording rule 已存在)
+        original = info.get("original_metric")
+        old_query, new_query = info.get("old_query"), info.get("new_query")
+        if not (old_query and new_query):
+            if info.get("golden_rule"):
+                golden.append(prefixed_key)
+                continue
+            if not original:
+                continue
+            # `_critical` 項讀的是同一條 recording rule。
+            base_key = prefixed_key[:-len("_critical")] if prefixed_key.endswith(
+                "_critical") else prefixed_key
+            old_query, new_query = original, f"tenant:{base_key}:max"
+            legacy.append(prefixed_key)
         pairs.append({
             "label": prefixed_key,
-            "old_query": original,
-            "new_query": f"tenant:{prefixed_key}:max",  # 預設 max，使用者可在 CSV 中修改
+            "old_query": old_query,
+            "new_query": new_query,
             "alert_name": info.get("alert_name", ""),
             "golden_match": info.get("golden_match"),
         })
+    if golden:
+        print(f"ℹ️  {len(golden)} 項改用黃金標準，migrate 沒有為它們產生 recording rule，"
+              f"不在這裡比對: {', '.join(golden)}", file=sys.stderr)
+    if legacy:
+        print(f"⚠️  {mapping_path} 沒有 old_query／new_query（舊版 migrate 產出），"
+              f"{len(legacy)} 組改用「原始指標 vs tenant:<key>:max」比對；rate 類或 :sum "
+              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(legacy)}",
+              file=sys.stderr)
     return pairs
 
 
