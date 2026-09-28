@@ -2307,15 +2307,54 @@ class TestRoundFourSurvivors:
         """⛔ #1407 的招牌修法（JSX front matter / image pin 兩組 glob）可以被
         整組刪掉而測試全綠：沒有任何斷言說「有規則指向 PORTAL_JSX_DIR」。
         既有的測試只檢查那個目錄裡有 .jsx，反空洞下限又寬到刪六條都看不見。
+
+        #1614 起 front matter 那條改指 `PORTAL_JSX_FRONTMATTER_ROOT`（與檢查端
+        共用），所以兩棵樹一起算。
         """
+        portal_roots = {bump_docs.PORTAL_JSX_DIR,
+                        bump_docs.PORTAL_JSX_FRONTMATTER_ROOT}
         rooted = [
             r for rules in bump_docs._build_rules().values() for r in rules
             if r.get("file") == "__glob__"
-            and r.get("glob_dir") == bump_docs.PORTAL_JSX_DIR
+            and r.get("glob_dir") in portal_roots
         ]
         assert len(rooted) >= 3, (
             "portal 那棵樹上的 glob 規則消失了——44 份 JSX front matter 停在 "
             f"舊版號正是 #1407 的成因。目前 rooted={len(rooted)}")
+
+    def test_jsx_frontmatter_writer_and_checker_see_same_files(self):
+        """⛔ #1614：寫入端（本檔的 front matter glob）與檢查端
+        （`validate_docs_versions.check_e2e_and_jsx_versions`）看的 JSX 必須是
+        同一批。
+
+        以前寫入端只看 `PORTAL_JSX_DIR`、檢查端看整個 `tools/portal/src`，
+        差集是 `getting-started/wizard.jsx`——它被檢查、卻從不被改，下一次
+        bump 平台版號就以 `--fix` 修不掉的 error 擋住 CI。
+
+        檢查端用一個不可能的版號跑，於是每個它比對到的檔都會回一筆 issue；
+        寫入端則取 front matter 規則真的會命中的檔。兩個集合必須相等。
+        """
+        import validate_docs_versions as vdv
+
+        checker = {
+            i.file for i in vdv.check_e2e_and_jsx_versions("0.0.0-never")
+            if i.check == "jsx-frontmatter-version"
+        }
+        writer = set()
+        for r in bump_docs._expand_glob_rules(
+                bump_docs._build_rules()["platform"]):
+            f = r.get("file", "")
+            if not (r.get("from_glob") and f.endswith(".jsx")
+                    and r["desc"].startswith("front matter version:")):
+                continue
+            text = (bump_docs.REPO_ROOT / f).read_text(encoding="utf-8")
+            if re.search(r["pattern"], text):
+                writer.add(Path(f).as_posix())
+        checker = {Path(f).as_posix() for f in checker}
+        assert checker, "檢查端一個 JSX 都沒比對到——範圍大概又搬家了"
+        assert checker == writer, (
+            f"只被檢查、不會被 bump 的：{sorted(checker - writer)}；"
+            f"只被 bump、沒人檢查的：{sorted(writer - checker)}")
 
     def test_the_docs_globs_are_actually_targeted(self):
         """⛔ 上一條替 `tools/portal/` 關上的那個門，`docs/` 這邊還開著。

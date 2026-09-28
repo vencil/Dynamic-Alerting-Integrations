@@ -28,6 +28,14 @@ RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
 K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
 DOCS_DIR = REPO_ROOT / "docs"
 
+# The one tree whose `.jsx` front matter `version:` tracks the platform
+# version. Shared by BOTH ends — `bump_docs.py` writes it, and
+# `validate_docs_versions.check_e2e_and_jsx_versions` checks it. They used to
+# name two different trees, so `getting-started/wizard.jsx` was checked but
+# never written, and the next platform bump would have failed CI (#1614).
+# Repo-relative POSIX string because bump_docs globs from REPO_ROOT.
+PORTAL_JSX_FRONTMATTER_ROOT = "tools/portal/src"
+
 # ============================================================================
 # File scan configuration: which directories and patterns to scan
 # ============================================================================

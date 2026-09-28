@@ -41,6 +41,7 @@ from _version_patterns import (
     DA_TOOLS_TAG_PATTERN,
     EXPORTER_VERSION_PATTERNS,
     PLATFORM_VERSION_FRONTMATTER_PATTERN,
+    PORTAL_JSX_FRONTMATTER_ROOT,
     BARE_TAG_PATTERN,
     TOOLS_RELEASE_TAG_PATTERN,
     DA_BINARY_VERSION_OUTPUT_PATTERN,
@@ -1267,7 +1268,12 @@ def check_e2e_and_jsx_versions(expected_platform: str) -> List[Issue]:
     # ⚠️ Severity is `error`, not `warn`: as a warning it could never make
     # `--ci` non-zero, so even after the path was corrected nothing would
     # have stopped the drift from shipping.
-    jsx_dir = REPO_ROOT / "tools" / "portal" / "src"
+    #
+    # ⛔ The root is shared with the writer (`bump_docs.py`) through
+    # PORTAL_JSX_FRONTMATTER_ROOT. A checker that sees more files than the
+    # writer fails the next platform bump with an error `--fix` cannot clear
+    # (#1614).
+    jsx_dir = REPO_ROOT / PORTAL_JSX_FRONTMATTER_ROOT
     if not jsx_dir.is_dir():
         issues.append(Issue(
             "jsx-frontmatter-version", "error",
