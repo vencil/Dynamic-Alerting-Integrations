@@ -446,6 +446,14 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 
+	// #2153: the size maxima of what was just committed. Directory mode
+	// measures the per-file partials; single-file Load measures its one
+	// file itself, before ApplyProfiles folds profile keys into the tenant
+	// maps (the merged cfg here would overstate a tenant's own mapping).
+	if flatScan != nil {
+		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
+	}
+
 	// #1521: the flat scanner that produced `cfg` is not recursive while
 	// the hierarchical scanner behind /effective is. Compare the two
 	// tenant populations here — this is the only site in the package that
@@ -540,10 +548,14 @@ func (m *ConfigManager) Load() error {
 		cfg.Profiles = make(map[string]map[string]ScheduledValue)
 	}
 
+	// #2153: measured before ApplyProfiles — see commitConfig.
+	shape := configShapeOf(&cfg)
+
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
 
 	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
+	m.getMetrics().SetConfigShape(shape)
 	return nil
 }
 
