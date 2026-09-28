@@ -111,7 +111,7 @@ if "%PY_CMD%"=="" (
 if "%PY_CMD%"=="" (
     if exist "%LOCALAPPDATA%\Python\bin\python.exe" set "PY_CMD=%LOCALAPPDATA%\Python\bin\python.exe"
 )
-REM If still unset, commit/commit-file will fail with a clear error below.
+REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
 REM --- Find Repo ---
@@ -155,9 +155,8 @@ if /i "%CMD%"=="fix-hooks"   goto :do_fix_hooks
 goto :usage
 
 :do_status
-"%GIT_CMD%" status -sb >"%OUT%" 2>"%ERR%"
+"%GIT_CMD%" status -sb >"%OUT%" 2>"%ERR%" || goto :failed
 type "%OUT%"
-if %ERRORLEVEL% NEQ 0 type "%ERR%"
 goto :done
 
 :do_add
@@ -174,14 +173,9 @@ if "!FILES!"=="" (
     echo Usage: win_git_escape.bat add file1 [file2...]
     goto :done_err
 )
-"%GIT_CMD%" add !FILES! >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: staged files
-    type "%OUT%"
-) else (
-    echo FAILED:
-    type "%ERR%"
-)
+"%GIT_CMD%" add !FILES! >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: staged files
+type "%OUT%"
 goto :done
 
 :do_commit
@@ -203,15 +197,9 @@ if "%PY_CMD%"=="" (
 "%PY_CMD%" "%~dp0commit_helper.py" check-ascii "%MSG%"
 if %ERRORLEVEL% NEQ 0 goto :done_err
 REM Use %~2 not %2 -- batch auto-handles quotes
-"%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: committed
-    type "%OUT%"
-) else (
-    echo FAILED:
-    type "%ERR%"
-    type "%OUT%"
-)
+"%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: committed
+type "%OUT%"
 goto :done
 
 :do_commit_file
@@ -238,15 +226,9 @@ if "%PY_CMD%"=="" (
     echo Looked in PATH, py launcher, and %%LOCALAPPDATA%%\Programs\Python\*
     goto :done_err
 )
-"%PY_CMD%" "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: committed
-    type "%OUT%"
-) else (
-    echo FAILED:
-    type "%ERR%"
-    type "%OUT%"
-)
+"%PY_CMD%" "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: committed
+type "%OUT%"
 goto :done
 
 :do_push
@@ -286,44 +268,35 @@ if "%TAG%"=="" (
     echo Usage: win_git_escape.bat tag v1.0.0
     goto :done_err
 )
-"%GIT_CMD%" tag "%TAG%" >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: tagged %TAG%
-) else (
-    echo FAILED:
-    type "%ERR%"
-)
+"%GIT_CMD%" tag "%TAG%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: tagged %TAG%
 goto :done
 
 :do_branch
 set "BR=%~2"
 if "%BR%"=="" (
-    "%GIT_CMD%" branch -a >"%OUT%" 2>"%ERR%"
+    "%GIT_CMD%" branch -a >"%OUT%" 2>"%ERR%" || goto :failed
     type "%OUT%"
     goto :done
 )
-"%GIT_CMD%" checkout -b "%BR%" >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: created and switched to %BR%
-) else (
-    REM Branch may already exist -- try plain checkout
-    "%GIT_CMD%" checkout "%BR%" >"%OUT%" 2>"%ERR%"
-    if %ERRORLEVEL% EQU 0 (
-        echo OK: switched to %BR%
-    ) else (
-        echo FAILED:
-        type "%ERR%"
-    )
-)
+REM switch, not checkout: `checkout <name>` also takes a path and would
+REM discard that path's uncommitted changes (`branch .`).
+"%GIT_CMD%" show-ref --verify --quiet "refs/heads/%BR%" >nul 2>&1 && goto :branch_switch
+"%GIT_CMD%" switch -c "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: created and switched to %BR%
+goto :done
+:branch_switch
+"%GIT_CMD%" switch "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: switched to %BR%
 goto :done
 
 :do_log
-"%GIT_CMD%" log --oneline -20 >"%OUT%" 2>"%ERR%"
+"%GIT_CMD%" log --oneline -20 >"%OUT%" 2>"%ERR%" || goto :failed
 type "%OUT%"
 goto :done
 
 :do_diff
-"%GIT_CMD%" diff --stat >"%OUT%" 2>"%ERR%"
+"%GIT_CMD%" diff --stat >"%OUT%" 2>"%ERR%" || goto :failed
 type "%OUT%"
 goto :done
 
@@ -340,23 +313,29 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 echo [2/3] Git status...
-"%GIT_CMD%" status -sb
+set "PF_FAIL="
+"%GIT_CMD%" status -sb || set "PF_FAIL=1"
 echo.
 echo [3/3] Remote connection...
 "%GIT_CMD%" remote -v
 echo.
+if defined PF_FAIL (
+    echo === Preflight FAILED: see git errors above ===
+    goto :done_err
+)
 echo === Preflight complete ===
 goto :done
 
 :do_pr_preflight
 REM pr-preflight: PR closing check -- calls pr_preflight.py
 echo === PR Preflight Check ===
-set "PR_NUM=%~2"
-if "%PR_NUM%"=="" (
-    python scripts/tools/dx/pr_preflight.py --skip-hooks
-) else (
-    python scripts/tools/dx/pr_preflight.py --skip-hooks --pr %PR_NUM%
+if "%PY_CMD%"=="" (
+    echo ERROR: python not found. Install Python or the `py` launcher, then retry.
+    goto :done_err
 )
+set "PR_ARGS="
+if not "%~2"=="" set "PR_ARGS=--pr %~2"
+"%PY_CMD%" scripts/tools/dx/pr_preflight.py --skip-hooks %PR_ARGS%
 REM Propagate the tool's rc (#1472); a bare `goto :done` is `exit /b 0`.
 if %ERRORLEVEL% NEQ 0 goto :done_err
 goto :done
@@ -403,9 +382,17 @@ echo   win_git_escape.bat commit-file _msg.txt
 echo.
 goto :done
 
+REM --- A git (or commit_helper) call failed: show why, then return 1. ---
+REM A bare `goto :done` here is `exit /b 0` -- the #1472 / #1918 shape.
+:failed
+echo FAILED:
+type "%ERR%"
+type "%OUT%"
+goto :done_err
+
 REM --- Exit label (success): restore cwd + return 0. ---
-REM Every :do_* block ends with `goto :done`. Without this label cmd.exe
-REM returns errorlevel=1 silently, making successful commands look failed.
+REM Without this label cmd.exe returns errorlevel=1 silently, making
+REM successful commands look failed.
 :done
 popd
 endlocal
