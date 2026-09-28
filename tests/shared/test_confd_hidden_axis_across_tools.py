@@ -279,20 +279,17 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "assemble_config_dir": ("ops/assemble_config_dir.py",
                             _assemble_config_dir),
     "deprecate_rule": ("ops/deprecate_rule.py", _deprecate_rule),
-}
-
-# Readers that STILL read hidden paths on this tree. Measured on the base of
-# #2067 (reported there, deliberately not fixed in the same change):
-#   check_confd_schema: `.snap/ghostsnap.yaml` is listed — `_iter_yaml_files`
-#     drops hidden FILE names but prunes no hidden DIRECTORY; a broken file
-#     under `.snap/` makes `--config-dir` exit 2.
-#   check_retire_drift: `ghost` and `ghostsnap` are declared tenants — its
-#     `rglob("*")` walk has no hidden filter at all (its docstring defers
-#     the axis to #1630, which closed without it).
-KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
+    # #2360: both were KNOWN_OPEN below until they pruned hidden directories
+    # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
     "check_retire_drift": ("lint/check_retire_drift.py", _check_retire_drift),
 }
+
+# Readers that STILL read hidden paths on this tree, pinned as leaking so a
+# fix that lands without moving the reader into `CELLS` turns red. Empty
+# since #2360 moved `check_confd_schema` and `check_retire_drift` into
+# `CELLS`; a newly found leak is added here (measured) until it is fixed.
+KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {

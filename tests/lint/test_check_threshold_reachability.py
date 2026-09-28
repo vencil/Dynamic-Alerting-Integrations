@@ -3829,9 +3829,9 @@ def test_the_artifact_key_floor_backstops_a_vanished_group(monkeypatch):
     reached, which is the precise defect `_trip_artifact_key_floor`'s comment
     records having had to fix once already. The replacement is the largest
     group still IN the denominator that is not shipped: `full-l0-l3`, 13 keys
-    of the counted 68, taking the total to 55 against a floor of 56.
+    of the counted 76, taking the total to 63 against a floor of 64.
 
-    ⚠️ That leaves ONE key of margin, on purpose and not by luck — 56 is the
+    ⚠️ That leaves ONE key of margin, on purpose and not by luck — 64 is the
     lowest floor at which dropping the biggest counted non-shipped group still
     speaks, and the bracket test's message is what tells you to raise it if the
     margin ever goes negative. `_VANISHED_GROUP` is shared with

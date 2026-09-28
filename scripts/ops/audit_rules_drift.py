@@ -430,6 +430,19 @@ def render_report(
 # --------------------------------------------------------------------------- main
 
 
+def _display_path(path: Path) -> Path:
+    """repo 內的路徑印相對、其餘印絕對（#2343）。
+
+    ``--out`` 可以是相對路徑（argparse 不 resolve）或 repo 外的絕對路徑，
+    直接 ``relative_to(REPO_ROOT)`` 會在報表已寫出之後丟 ValueError。
+    """
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        return resolved
+
+
 @exit_on_output_write_error
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="季度 rule-corpus drift 稽核 (TRK-307)")
@@ -483,7 +496,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
     with output_write(out, flag=flag):
         atomic_write_text(out, report, flag=flag)
-    sys.stdout.write(f"wrote drift report: {out.relative_to(REPO_ROOT)}\n")
+    sys.stdout.write(f"wrote drift report: {_display_path(out)}\n")
     if not memory_available:
         sys.stderr.write(
             "note: memory 目錄不存在，feedback 檢查已跳過（CI 環境正常；"

@@ -49,12 +49,41 @@ type TenantDetail struct {
 	// the client never parses YAML — the backend owns the round-trip on both
 	// read and write. Empty slice when the tenant has none.
 	CustomAlerts []map[string]any `json:"custom_alerts"`
+	// ConfigError is set when the tenant's file cannot be loaded as a tenant
+	// config (#2373) — the same reason GET /api/v1/tenants reports on the
+	// tenant's row: malformed_yaml (not parseable as YAML) or invalid_config
+	// (parses as YAML but cannot be loaded as a tenant config — wrong shape,
+	// errors only a typed decode detects, or a declared tenant id that is not
+	// valid UTF-8). threshold-exporter skips such a file whole, so nothing is
+	// derived from it: raw_yaml and source_hash are returned (so the file can
+	// be opened and fixed), and resolved_thresholds, custom_alerts,
+	// validation_warnings and validation_notices are ABSENT — not empty,
+	// which would read as "none". Partial writes (PUT .../custom-alerts, the
+	// batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
+	// the tenant file itself is repaired. Absent on a usable file.
+	ConfigError string `json:"config_error,omitempty" enums:"malformed_yaml,invalid_config"`
+}
+
+// tenantDetailNotLoadable is TenantDetail for a file with a config_error: the
+// same JSON names, minus every field derived from the file's content
+// (resolved_thresholds, custom_alerts, validation_*), which are absent.
+type tenantDetailNotLoadable struct {
+	ID          string `json:"id"`
+	RawYAML     string `json:"raw_yaml"`
+	SourceHash  string `json:"source_hash"`
+	ConfigError string `json:"config_error"`
 }
 
 // GetTenant handles GET /api/v1/tenants/{id}
 //
 // @Summary     Get tenant config
 // @Description Returns the raw YAML and resolved thresholds for a single tenant.
+// @Description When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
+// @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
+// @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
+// @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
+// @Description tenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a
+// @Description YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -98,6 +127,29 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #2373: a file threshold-exporter rejects whole (cfg.ParseTenantFile
+		// — not YAML, the wrong shape, or a non-UTF-8 declared tenant id) is
+		// served as its content plus config_error, the same reason the list
+		// row carries. Nothing is derived from it: the exporter serves none
+		// of its tenants, so thresholds resolved from it would describe
+		// values no plane holds. 200, not 4xx/5xx, so an editor can still
+		// load the file (and its source_hash) to fix it. The derived fields
+		// are ABSENT, not [] (#2373 review F1): an empty list reads as an
+		// authoritative "none", and a client editing from it would write
+		// that back over the file's real content (the partial writes refuse
+		// such a file for the same reason — checkPartialWriteBase). Not null
+		// either: the spec types them as arrays (Swagger 2.0 has no
+		// nullable) and does not require them, so absence stays valid.
+		if reason := tenantConfigError(data); reason != "" {
+			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
+				ID:          tenantID,
+				RawYAML:     string(data),
+				SourceHash:  cfg.ComputeSourceHash(data),
+				ConfigError: reason,
+			})
+			return
+		}
+
 		// Merge over the root platform surface: the defaults carrier, the
 		// platform files' per-tenant `tenants:` layer (#2208) and the
 		// profile the tenant elects (#1385).
@@ -126,10 +178,12 @@ func GetTenant(d *Deps) http.HandlerFunc {
 
 		customAlerts, err := customalerts.Extract(string(data), tenantID)
 		if err != nil {
-			// A parse error here means the tenant file is not valid YAML; surface
-			// it rather than returning a 200 with silently-empty custom_alerts.
-			// Keep the raw parser error (which can echo file contents) in the
-			// server log only; return a stable, non-sensitive message to clients.
+			// Unreachable since #2373: Extract fails only on bytes that are not
+			// YAML, which tenantConfigError answers above with config_error.
+			// Kept as a guard should Extract grow another failure. Surface it rather than returning a 200 with silently-empty
+			// custom_alerts. Keep the raw parser error (which can echo file
+			// contents) in the server log only; return a stable, non-sensitive
+			// message to clients.
 			slog.Error("failed to parse tenant custom alerts", "tenant", tenantID, "err", err)
 			WriteJSONError(w, r, http.StatusInternalServerError, "failed to parse tenant custom alerts")
 			return

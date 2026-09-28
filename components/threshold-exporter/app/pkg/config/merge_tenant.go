@@ -528,6 +528,14 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 			for k, v := range defaults.StateFilters {
 				merged.StateFilters[k] = v
 			}
+			// #2369: the per-tenant cap /metrics truncates at, so GET's
+			// ResolveAt cuts where the exporter cuts. Only the ROOT carrier
+			// (this one) may set it — the exporter's rule (#2028) and
+			// RootMaxMetricsPerTenant's; the tenant body's value is never
+			// read. READ-side only: nothing in ValidateTenantKeys consults
+			// it, so the write gate is unchanged (pinned by
+			// TestMergeTenantMaxMetricsDoesNotReachTheWriteGate).
+			merged.MaxMetricsPerTenant = defaults.MaxMetricsPerTenant
 		}
 	}
 

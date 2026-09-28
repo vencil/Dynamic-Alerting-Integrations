@@ -11,8 +11,11 @@ exporter (which reads both spellings) keeps emitting
 removed, TenantExporterAbsent fires a false-positive critical, and this
 gate said rc=0.
 
-Scope: only the spelling axis. Hidden (`.`-prefixed) entries are still
-READ by this gate, as before (#1630 is a separate measurement).
+#2360 (hidden axis): `.`-prefixed files and everything under a `.`-prefixed
+directory are skipped, as the exporter's walker skips them. Before the fix
+`.ghost.yaml` and `.snap/s.yaml` were declared tenants here. The cross-tool
+cell is `tests/shared/test_confd_hidden_axis_across_tools.py`; the tests
+below add the operator-facing consequence and the dot-named-root boundary.
 """
 from __future__ import annotations
 
@@ -91,3 +94,27 @@ def test_yml_tenant_without_a_k8s_target_is_a_violation(tmp_path: Path) -> None:
     assert result["declared"] == {"alpha": "postgres"}
     assert len(result["violations"]) == 1, result["violations"]
     assert "'alpha'" in result["violations"][0]
+
+
+def test_hidden_carriers_declare_no_tenant(tmp_path: Path) -> None:
+    """#2360: a hidden file and a file under a hidden directory carry a
+    tenant the exporter never reads, so neither may be declared — else the
+    gate demands a K8s target for a tenant that emits no series."""
+    root = _tree(tmp_path / "conf.d", "alpha.yaml")
+    (root / ".ghost.yaml").write_text(
+        _BODY.replace("alpha", "ghost_hidden_file"), encoding="utf-8")
+    (root / ".snap").mkdir()
+    (root / ".snap" / "s.yaml").write_text(
+        _BODY.replace("alpha", "ghost_hidden_dir"), encoding="utf-8")
+    assert crd.conf_d_declared_db_type_tenants(root) == {"alpha": "postgres"}
+    helm = tmp_path / "helm"
+    helm.mkdir()
+    result = crd.evaluate(root, helm, tmp_path / "no-namespaces.yaml")
+    assert not any("ghost" in v for v in result["violations"]), result
+
+
+def test_a_dot_named_conf_d_root_is_still_read(tmp_path: Path) -> None:
+    """Only names BELOW the conf.d root are judged: the exporter reads the
+    directory it is handed whatever it is called."""
+    root = _tree(tmp_path / ".confd", "alpha.yaml")
+    assert crd.conf_d_declared_db_type_tenants(root) == {"alpha": "postgres"}

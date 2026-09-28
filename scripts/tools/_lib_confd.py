@@ -1438,6 +1438,57 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     return ids
 
 
+def tenant_declarations(config_dir: "str | os.PathLike[str]"
+                        ) -> "tuple[dict[str, set[str]], list[str]]":
+    """``({tenant_id: {label, ...}}, unreadable)`` over the whole tree.
+
+    ⛔ THE one answer to "which files declare which tenant" — the scan
+    ``validate_config.check_tenant_uniqueness`` runs and the routing
+    generator's duplicate refusal reuses (#2315), so the two cannot disagree
+    about a duplicate. Feed the first element to ``duplicate_declarations``.
+
+    Selection mirrors the exporter's walker: ``iter_config_files`` (recursive,
+    case-insensitive, both spellings) and ``is_reserved_name`` (a ``_`` file
+    is never read for tenants). A declaration is a key of a mapping-shaped
+    ``tenants:`` in a file that loads through the strict loader, keyed by its
+    raw text (#2114); a key repeated in one mapping (#2123) makes the file
+    unreadable. A label is the root-relative POSIX path (the file name when
+    it is not under the root). *unreadable* lists the labels of the files
+    that did not load, in walk order — a limit on the answer, which the
+    caller must name.
+    """
+    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
+
+    root = Path(config_dir)
+    declared: dict[str, set[str]] = {}
+    unreadable: list[str] = []
+    for path in iter_config_files(root):
+        if is_reserved_name(path.name):
+            continue
+        try:
+            label = path.relative_to(root).as_posix()
+        except ValueError:
+            label = path.name
+        try:
+            with open(path, encoding="utf-8") as fh:
+                # #2114: tenant ids are the key's raw TEXT, as the exporter
+                # keys them — see `_lib_yaml_keys` for the measured table.
+                # #2123: a key repeated in one mapping (by that same
+                # identity) makes the file unreadable here, as in Go.
+                data = strict_load_exporter_keys(fh)
+        except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
+            unreadable.append(label)
+            continue
+        if not isinstance(data, dict):
+            continue
+        tenants = data.get("tenants")
+        if not isinstance(tenants, dict):
+            continue
+        for tenant_id in tenants:
+            declared.setdefault(tenant_id, set()).add(label)
+    return declared, unreadable
+
+
 def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"
                            ) -> "dict[Any, list[str]]":
     """The tenants declared by MORE THAN ONE carrier, each with its sorted
