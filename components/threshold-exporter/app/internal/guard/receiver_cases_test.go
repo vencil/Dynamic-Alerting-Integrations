@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,11 +33,18 @@ func TestReceiverPresenceCases(t *testing.T) {
 		t.Fatalf("parse cases: %v (n=%d)", err, len(cases))
 	}
 	for _, tc := range cases {
-		// #2295: a `yaml` row is decoded as da-guard decodes conf.d (yaml.v3).
+		// #2295: a `yaml` row is decoded as da-guard decodes a conf.d
+		// receiver (pkg/pyyamlcompat over the yaml.v3 node).
 		if tc.YAML != "" {
-			if err := yaml.Unmarshal([]byte(tc.YAML), &tc.Receiver); err != nil {
+			var n yaml.Node
+			if err := yaml.Unmarshal([]byte(tc.YAML), &n); err != nil {
 				t.Fatalf("%s: yaml: %v", tc.Name, err)
 			}
+			m, ok := pyyamlcompat.Decode(&n).(map[string]any)
+			if !ok {
+				t.Fatalf("%s: yaml is not a mapping with string keys", tc.Name)
+			}
+			tc.Receiver = m
 		}
 		t.Run(tc.Name, func(t *testing.T) {
 			var errs []string

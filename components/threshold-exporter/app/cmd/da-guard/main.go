@@ -329,6 +329,27 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 	return false
 }
 
+// pyyamlOwn is the tenant file's block Resolve reads for ec, with the
+// receivers of its `_routing` as the route generator's PyYAML reads them
+// (#2295): the exporter's merge decodes the file with yaml.v3, which keeps a
+// plain `on` a string that PyYAML reads as a boolean. Nothing else in the
+// block changes; ec.TenantOverridesRaw is not modified. pyRouting holds
+// routingpolicy.PyYAMLRoutingByTenant per source file.
+func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) map[string]any {
+	own := ec.TenantOverridesRaw
+	r, has := own["_routing"]
+	py, found := pyRouting[ec.SourceFile][ec.TenantID]
+	if !has || !found {
+		return own
+	}
+	out := make(map[string]any, len(own))
+	for k, v := range own {
+		out[k] = v
+	}
+	out["_routing"] = routingpolicy.WithPyYAMLReceivers(r, py)
+	return out
+}
+
 // buildCheckInput assembles a guard.CheckInput from the scoped
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
@@ -381,6 +402,20 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	// effective config, but no route is rendered from it.
 	problems = append(problems, routingpolicy.UnreadRouting(f.configDir, scoped.DefaultsFiles, skip)...)
 
+	// #2295: each tenant file's `_routing` blocks as PyYAML reads them, read
+	// once per file (a file declares many tenants, #2153); see pyyamlOwn.
+	pyRouting := map[string]map[string]any{}
+	for _, ec := range scoped.Tenants {
+		if _, done := pyRouting[ec.SourceFile]; !done {
+			data, err := os.ReadFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
+			if err == nil {
+				pyRouting[ec.SourceFile] = routingpolicy.PyYAMLRoutingByTenant(data)
+			} else {
+				pyRouting[ec.SourceFile] = nil
+			}
+		}
+	}
+
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.EffectiveConfig
 		// The tenant's routing as the generator renders it: its own
@@ -395,7 +430,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// ec.EffectiveConfig, which also carries the defaults chain and the
 		// threshold profile. Routing there is never rendered (UnreadRouting
 		// names it); reading it here judged routes that do not exist.
-		block := layers.TenantBlock(ec.TenantID, ec.TenantOverridesRaw)
+		block := layers.TenantBlock(ec.TenantID, pyyamlOwn(ec, pyRouting))
 		if routingpolicy.IsDisabled(block["_routing"]) {
 			disabled[ec.TenantID] = true
 		}

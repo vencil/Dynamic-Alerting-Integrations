@@ -297,7 +297,7 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：只擋 Alertmanager 會拒收、導致整份設定 reload 失敗的值，以 amtool 0.34.1 的判定為準。
 
 - `send_resolved`、email 的 `require_tls`：接受 `true`／`false`、空值（視同沒設），以及 YAML 1.1 的布林字 `yes`／`no`／`on`／`off`（各有小寫、首字大寫、全大寫三種寫法），路由產生器一律寫成布林。`maybe`、`1`、`""` 擋。
-- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`bearer_token_file` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`bearer_token_file`／`proxy_url`／`no_proxy` 必須是字串：YAML 1.1 會讀成布林、數字或日期的值（`on`、`0123`、`1:30`、`2024-01-01`）一律擋，加引號只救得了 `0123` 這類純數字（da-guard／tenant-api 看不到引號），其餘請換值。
+- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`bearer_token_file` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`bearer_token_file`／`proxy_url`／`no_proxy` 必須是字串（YAML 會讀成布林、數字或日期的值請加引號）。
 - `http_config.proxy_url`：必須是字串；da-guard 與 tenant-api 只擋 Go `net/url` 解析不了的值（例如 `::x`、host 含空白、`%zz`、非法 port），路由產生器則交給 `--validate` 的 amtool 判。`proxy_from_environment: true` 不能與非空的 `proxy_url` 或 `no_proxy` 並用；`no_proxy` 需要 `proxy_url`；`proxy_connect_header` 需要非空的 `proxy_url` 或 `proxy_from_environment`。
 
 刻意比 Alertmanager 嚴格的形狀，以共享表 [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json) 中標 `strict` 的列為準。

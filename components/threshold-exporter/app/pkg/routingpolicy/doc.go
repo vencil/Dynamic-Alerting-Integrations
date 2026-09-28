@@ -30,7 +30,8 @@
 // side. A behaviour change on either side goes into the matrix first.
 //
 // Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
-// cannot import internal/guard. Besides the standard library and yaml.v3 it
+// cannot import internal/guard. Besides the standard library, yaml.v3 and
+// pkg/pyyamlcompat (receivers as the generator's PyYAML reads them, #2295) it
 // imports only pkg/config — for the root walker (config.RootPlatformFiles:
 // the one directory lister, #1911) and config.IsDisabled — and never
 // net/http (import_direction_test.go, depguard).

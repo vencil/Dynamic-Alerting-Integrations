@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -100,6 +101,12 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	routing, ok := doc.Tenants[tenantID]["_routing"].(map[string]any)
 	if !ok {
 		return nil
+	}
+	// #2295: the receivers as the route generator's PyYAML reads them —
+	// plain `on` a boolean, quoted "on" a string (yaml.v3 alone makes both
+	// the string "on").
+	if py, found := routingpolicy.PyYAMLRoutingByTenant([]byte(yamlContent))[tenantID]; found {
+		routing, _ = routingpolicy.WithPyYAMLReceivers(routing, py).(map[string]any)
 	}
 	base := fmt.Sprintf("tenants.%s._routing", tenantID)
 	var out []ReceiverViolation

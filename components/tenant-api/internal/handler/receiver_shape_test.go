@@ -95,6 +95,16 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 			[]string{"tenants.rs-t._routing.receiver.http_config.bearer_token"}},
 		{"http_config proxy_url unparsable", webhookOK + "        http_config:\n          proxy_url: '::not a url'\n",
 			[]string{"tenants.rs-t._routing.receiver.http_config.proxy_url"}},
+		// #2295: the receiver is read as the route generator's PyYAML reads
+		// it — plain `on` / `1:30` are a boolean and an integer, which the
+		// generator would skip; quoted they are the strings it takes.
+		{"bearer_token plain on", webhookOK + "        http_config:\n          bearer_token: on\n",
+			[]string{"tenants.rs-t._routing.receiver.http_config.bearer_token"}},
+		{"bearer_token quoted on", webhookOK + "        http_config:\n          bearer_token: \"on\"\n", nil},
+		{"bearer_token quoted 1:30", webhookOK + "        http_config:\n          bearer_token: '1:30'\n", nil},
+		{"override receiver bearer_token plain 1:30", webhookOK + "      overrides:\n      - alertname: X\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: 1:30}}\n",
+			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token"}},
 		{"every receiver of the body, one violation each", "      receiver:\n        type: bogus\n" +
 			"      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n" +
 			"      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty, service_key: a, routing_key: b}\n",

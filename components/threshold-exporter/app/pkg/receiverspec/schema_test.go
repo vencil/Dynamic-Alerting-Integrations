@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -168,7 +169,7 @@ func TestPresenceCases(t *testing.T) {
 		})
 	}
 	// #2295: the YAML-text rows are the only ones that exercise the Go
-	// reader (yaml.v3 hands `yes` over as a string); keep some.
+	// reader (quoted and plain `on` differ only there); keep some.
 	if yamlRows == 0 {
 		t.Fatal("no `yaml` rows in the case table; the YAML 1.1 boolean words go untested")
 	}
@@ -198,9 +199,10 @@ type presenceCase struct {
 }
 
 // loadCases reads the shared table. A row carries its receiver either as JSON
-// (`receiver`) or as YAML text (`yaml`, #2295), which is decoded here with
-// yaml.v3 — the reader da-guard and tenant-api use — so the row pins what Go
-// makes of plain `yes` / `y`, which JSON cannot express.
+// (`receiver`) or as YAML text (`yaml`, #2295), which is decoded here the way
+// da-guard and tenant-api decode a receiver (pkg/pyyamlcompat over the
+// yaml.v3 node) — so the row pins what Go makes of plain `yes` / `y` / `on`
+// against quoted `"on"`, which JSON cannot express.
 func loadCases(t *testing.T) []presenceCase {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "receiver_presence_cases.json"))
@@ -216,9 +218,15 @@ func loadCases(t *testing.T) []presenceCase {
 			t.Fatalf("%s: a row carries exactly one of `receiver` and `yaml`", c.Name)
 		}
 		if c.YAML != "" {
-			if err := yaml.Unmarshal([]byte(c.YAML), &cases[i].Receiver); err != nil {
+			var n yaml.Node
+			if err := yaml.Unmarshal([]byte(c.YAML), &n); err != nil {
 				t.Fatalf("%s: yaml: %v", c.Name, err)
 			}
+			m, ok := pyyamlcompat.Decode(&n).(map[string]any)
+			if !ok {
+				t.Fatalf("%s: yaml is not a mapping with string keys", c.Name)
+			}
+			cases[i].Receiver = m
 		}
 	}
 	return cases

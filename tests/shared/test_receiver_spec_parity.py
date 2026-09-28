@@ -43,10 +43,10 @@ method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
 proxy_url parses as a URL is left to amtool (the generator's --validate gate);
 the Go side checks it itself, so those rows carry `python_differs` (the Python
 verdict and why), as tests/shared/routing_policy_parity_matrix.json does. A row may carry its receiver
-as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and yaml.v3 on
-the Go side, which is where the two readers differ: yaml.v3 keeps plain `on` /
-`1:30` as strings that PyYAML retypes, so Go refuses such text in string fields
-(quoted or not — it cannot see quotes; see the plain-scalar table below). `schema_valid`
+as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and, on the Go
+side, with pkg/pyyamlcompat over the yaml.v3 node, which types a plain scalar the
+way PyYAML does (plain `on` a boolean, quoted `"on"` a string; see the
+plain-scalar table below). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
 http_config keys its additionalProperties refuses); `strict` names each row
 Alertmanager accepts but the platform refuses on purpose.
@@ -255,15 +255,17 @@ def test_pipeline_writes_yaml_bool_words_as_booleans():
 # --- PyYAML's implicit typing of plain scalars (#2295) ----------------------
 #
 # bearer_token / bearer_token_file / proxy_url / no_proxy must be strings.
-# yaml.v3 (da-guard, tenant-api) hands `on` or `1:30` over as a string, while
-# PyYAML (the route generator) reads a boolean or an integer — the generator
-# then skips the receiver and the tenant's routes vanish with rc 0. The Go
-# side refuses such text (receiverspec pyyamlImplicitKind); which text that
-# is comes from PyYAML itself, not from memory: the table below is PyYAML's
-# SafeLoader verdict on each candidate, and the Go test
-# TestPyYAMLImplicitKind_MatchesPyYAML reads it.
+# yaml.v3 alone hands plain `on` or `1:30` over as a string, while PyYAML (the
+# route generator) reads a boolean or an integer — the generator would skip a
+# receiver da-guard and tenant-api accepted. So the Go readers decode
+# receivers with pkg/pyyamlcompat, which types a plain scalar as PyYAML does
+# and keeps a quoted one a string. Which plain text PyYAML retypes comes from
+# PyYAML itself, not from memory: the table below is PyYAML's SafeLoader
+# verdict on each candidate, and pkg/pyyamlcompat's TestDecode_MatchesPyYAML
+# reads it.
 
-_PLAIN_SCALARS = os.path.join(os.path.dirname(_CASES), "pyyaml_plain_scalars.json")
+_PLAIN_SCALARS = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pkg",
+                              "pyyamlcompat", "testdata", "pyyaml_plain_scalars.json")
 
 
 def _plain_scalar_candidates() -> list[str]:
