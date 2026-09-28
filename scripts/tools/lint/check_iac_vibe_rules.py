@@ -297,7 +297,7 @@ def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
 
     try:
         proc = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=180
+            cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         print(f"ERROR: hadolint invocation failed: {e}", file=sys.stderr)

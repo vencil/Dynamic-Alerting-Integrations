@@ -416,7 +416,7 @@ def main() -> int:
         ["node", "-e", NODE_SCRIPT],
         input=json.dumps(files),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=30,
         env=env,
     )

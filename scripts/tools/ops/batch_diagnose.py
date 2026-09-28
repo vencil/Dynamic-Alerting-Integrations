@@ -62,7 +62,7 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15,
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
         if result.returncode != 0:
             print(f"ERROR: kubectl failed: {result.stderr.strip()}", file=sys.stderr)

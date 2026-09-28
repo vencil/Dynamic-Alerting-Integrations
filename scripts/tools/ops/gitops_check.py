@@ -103,17 +103,24 @@ class GitOpsReport:
 # ---------------------------------------------------------------------------
 # Git repo checks
 # ---------------------------------------------------------------------------
-def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[bool, str, str]:
-    """Run shell command, return (success, stdout, stderr)."""
+def _run_cmd(cmd: list[str], timeout: int = 10,
+             keep_stdout: bool = True) -> tuple[bool, str, str]:
+    """Run shell command, return (success, stdout, stderr).
+
+    keep_stdout=False discards stdout unread, for a command whose stdout is
+    binary (git archive writes a tar): decoding it as text is what made the
+    path check fail on a cp950 host (#1374).
+    """
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE if keep_stdout else subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
             check=False,
         )
-        return result.returncode == 0, result.stdout.strip(), result.stderr.strip()
+        return result.returncode == 0, (result.stdout or "").strip(), result.stderr.strip()
     except FileNotFoundError:
         return False, "", _h(
             f"命令不存在: {cmd[0]}",
@@ -179,7 +186,7 @@ def check_repo(
 
     path_ok, path_out, path_err = _run_cmd(
         ["git", "archive", f"--remote={url}", branch, path],
-        timeout=10,
+        timeout=10, keep_stdout=False,
     )
     if path_ok:
         details["config_path_verified"] = True

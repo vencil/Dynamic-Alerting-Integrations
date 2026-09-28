@@ -65,7 +65,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         cmd,
         env=merged_env,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
         timeout=60,
     )

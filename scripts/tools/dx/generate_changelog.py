@@ -480,7 +480,7 @@ def _git_show(ref: str, path: str) -> Optional[str]:
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         if top.returncode != 0:
             return None
@@ -656,7 +656,7 @@ def _committed_fragments(root: Path, rev: str) -> Optional[List[str]]:
     try:
         r = subprocess.run(
             ["git", "-C", str(root), "ls-tree", "--name-only", rev, f"{FRAGMENT_DIR}/"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return None

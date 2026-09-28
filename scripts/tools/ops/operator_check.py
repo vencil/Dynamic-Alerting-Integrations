@@ -118,7 +118,7 @@ class OperatorChecker:
             result = subprocess.run(
                 full_cmd,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=10,
             )
             return result.stdout, result.stderr, result.returncode

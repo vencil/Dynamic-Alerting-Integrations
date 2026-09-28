@@ -49,6 +49,7 @@ Validates:
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,40 @@ class TestRunCmd:
         )
         assert success is False
         assert "error message" in stderr
+
+
+class TestRepoPathAgainstRealGit:
+    """check_repo's path step against a real local repository (#1374).
+
+    `git archive` writes a tar to stdout. Read as locale text, bytes the codec
+    rejects made the path check fail on a zh-TW Windows host (cp950) while
+    the path existed. The tracked file carries a byte no text codec accepts,
+    so the check only passes if stdout is not decoded. On a UTF-8 host the
+    old code passed too: this test discriminates on Windows only.
+    """
+
+    def test_existing_path_is_verified(self, tmp_path):
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git not installed")
+        repo = tmp_path / "repo"
+        (repo / "conf").mkdir(parents=True)
+        (repo / "conf" / "_defaults.yaml").write_bytes(b"# \xff\xfe\x80 \xe4\xb8\xad\n")
+
+        def _git(*args):
+            subprocess.run([git, *args], cwd=repo, check=True, capture_output=True,
+                           timeout=60)
+
+        _git("init", "-q", "-b", "main")
+        _git("-c", "user.name=t", "-c", "user.email=t@example.invalid",
+             "-c", "commit.gpgsign=false", "add", "-A")
+        _git("-c", "user.name=t", "-c", "user.email=t@example.invalid",
+             "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init")
+
+        result = gc.check_repo(repo.as_posix(), "main", "conf/_defaults.yaml")
+
+        assert result.details["branch_found"] is True
+        assert result.details["config_path_verified"] is True, result.details
 
 
 # ── 2. check_repo() Tests ──────────────────────────────────────────────────
