@@ -161,7 +161,8 @@ def test_validate_config_fails_and_does_not_contradict_itself(nested: Path):
     assert "nothing in it is loaded" not in out, out
 
 
-def test_validate_config_flat_kubelet_layout_still_passes(flat: Path):
+def test_validate_config_flat_kubelet_layout_still_passes(flat: Path, amtool_accepts):
+    # #2311: without an amtool the routes row is WARN by design.
     r = _run(VALIDATE, "--config-dir", flat)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
