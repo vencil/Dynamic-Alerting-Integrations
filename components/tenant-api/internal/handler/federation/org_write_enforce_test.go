@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -23,11 +24,12 @@ import (
 )
 
 const (
-	fedOrgClaimHeader = "X-Auth-Request-Org"
-	fedOrgGroup       = "fed-org-admins"
-	fedOrgTenant      = "tenant-org-fed"
-	fedOrgMember      = "ORG-ALPHA"
-	fedOrgOutsider    = "ORG-BETA"
+	fedOrgClaimHeader  = "X-Auth-Request-Org"
+	fedOrgGroup        = "fed-org-admins"
+	fedOrgReadAllGroup = "fed-read-all"
+	fedOrgTenant       = "tenant-org-fed"
+	fedOrgMember       = "ORG-ALPHA"
+	fedOrgOutsider     = "ORG-BETA"
 )
 
 const fedOrgRBACYAML = `groups:
@@ -41,7 +43,14 @@ const fedOrgRBACYAML = `groups:
 // the production constructor (validateConfig + claim-header declaration).
 func newFedOrgEnforceRBAC(t *testing.T) *rbac.Manager {
 	t.Helper()
-	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", fedOrgRBACYAML)
+	return newFedOrgEnforceRBACFrom(t, fedOrgRBACYAML)
+}
+
+// newFedOrgEnforceRBACFrom is newFedOrgEnforceRBAC over an arbitrary rule set,
+// for cases whose read-org-set must differ from their admin-org-set.
+func newFedOrgEnforceRBACFrom(t *testing.T, rbacYAML string) *rbac.Manager {
+	t.Helper()
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", rbacYAML)
 	mgr, err := rbac.NewManager(rbacFile, map[string]string{"org": fedOrgClaimHeader})
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
@@ -179,9 +188,9 @@ func TestOrgWriteEnforce_DeleteFederationToken(t *testing.T) {
 
 func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 	t.Parallel()
-	run := func(t *testing.T, callerOrg string) (*httptest.ResponseRecorder, *atomic.Int32) {
+	run := func(t *testing.T, rbacYAML, groups, callerOrg string) (*httptest.ResponseRecorder, *atomic.Int32) {
 		t.Helper()
-		rbacMgr := newFedOrgEnforceRBAC(t)
+		rbacMgr := newFedOrgEnforceRBACFrom(t, rbacYAML)
 		configDir := setupConfigDir(t, nil)
 		initGitRepo(t, configDir)
 		writer := newTestWriter(configDir)
@@ -205,6 +214,7 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 			"id", fedOrgTenant, bytes.NewBufferString(`{"metrics":[]}`))
 		req.Header.Set("Content-Type", "application/json")
 		req = fedOrgIdentity(req, callerOrg)
+		req.Header.Set("X-Forwarded-Groups", groups)
 		w := httptest.NewRecorder()
 		wrapWithRBACMiddleware(PutTenantFederation(d), rbacMgr, rbac.PermRead, handler.TenantIDFromPath).ServeHTTP(w, req)
 		return w, &writes
@@ -212,7 +222,7 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 
 	t.Run("outsider_denied_403_no_write", func(t *testing.T) {
 		t.Parallel()
-		w, writes := run(t, fedOrgOutsider)
+		w, writes := run(t, fedOrgRBACYAML, fedOrgGroup, fedOrgOutsider)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
 		}
@@ -222,7 +232,56 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 	})
 	t.Run("member_allowed_200", func(t *testing.T) {
 		t.Parallel()
-		w, writes := run(t, fedOrgMember)
+		w, writes := run(t, fedOrgRBACYAML, fedOrgGroup, fedOrgMember)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if n := writes.Load(); n != 1 {
+			t.Errorf("writer commits = %d, want 1", n)
+		}
+	})
+
+	// #1754: with the single-group fixture above the read-org-set equals the
+	// admin-org-set, so the outsider is already rejected by the PermRead
+	// middleware and the handler's own PermAdmin org gate is never reached.
+	// Split the grants so the two sets differ: an org-blind read grant on every
+	// tenant (passes the middleware read-by-id gate for any org) plus an
+	// org-scoped admin grant. Rules OR together, so an outsider holding both
+	// groups passes read but has no rule granting admin in its org — the
+	// handler's OrgAllowed(PermAdmin) is the ONLY thing that can deny it.
+	splitYAML := `groups:
+  - name: ` + fedOrgReadAllGroup + `
+    tenants: ["*"]
+    permissions: [read]
+  - name: ` + fedOrgGroup + `
+    tenants: ["*"]
+    permissions: [read, write, admin]
+    org-scope: org
+`
+	splitGroups := fedOrgReadAllGroup + "," + fedOrgGroup
+
+	t.Run("read_passes_admin_org_gate_denies_403_no_write", func(t *testing.T) {
+		t.Parallel()
+		w, writes := run(t, splitYAML, splitGroups, fedOrgOutsider)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 from the handler's PermAdmin org gate; body=%s", w.Code, w.Body.String())
+		}
+		// Pin that the 403 came from the handler, not the middleware: only the
+		// handler's gate names the federation subset in its message.
+		if !strings.Contains(w.Body.String(), "federation subset") {
+			t.Fatalf("403 did not come from PutTenantFederation's admin org gate "+
+				"(middleware rejected first?); body=%s", w.Body.String())
+		}
+		if n := writes.Load(); n != 0 {
+			t.Errorf("denied subset edit committed %d time(s), want 0", n)
+		}
+	})
+	// Contrast: same split rule set, member org → the org-scoped admin grant
+	// applies, proving the denial above is the org axis and not a missing
+	// permission in the fixture.
+	t.Run("split_rules_member_allowed_200", func(t *testing.T) {
+		t.Parallel()
+		w, writes := run(t, splitYAML, splitGroups, fedOrgMember)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
