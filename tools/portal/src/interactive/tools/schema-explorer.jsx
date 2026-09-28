@@ -127,6 +127,7 @@ const SCHEMA = [
       { key: 'group_interval', type: 'string', desc: t('告警分組間隔', 'Alert group interval'), rulePack: 'all', example: '"5m"', range: '5s–5m' },
       { key: 'repeat_interval', type: 'string', desc: t('重複通知間隔', 'Repeat notification interval'), rulePack: 'all', example: '"4h"', range: '1m–72h' },
       { key: 'overrides', type: 'array', desc: t('Per-rule 路由覆寫', 'Per-rule routing overrides'), rulePack: 'all' },
+      { key: 'routes', type: 'array', desc: t('依 label 等值分流的子路由（排在 overrides 之後；ADR-007）', 'Label-equality sub-routes, matched after overrides (ADR-007)'), rulePack: 'all' },
     ],
   },
   {

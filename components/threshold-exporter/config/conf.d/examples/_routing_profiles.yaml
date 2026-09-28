@@ -6,6 +6,20 @@
 # Merge order: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced
 #
 # Naming convention: team-{team}-{region} or domain-{domain}-{tier}
+#
+# Each profile has the same shape as a tenant's _routing
+# (routing-profiles.schema.json $refs tenant-config.schema.json#/definitions/routing).
+# The merge is shallow: a key the tenant's _routing sets replaces the
+# profile's value wholesale — including `routes` (write `routes: []` to drop
+# the profile's routes for one tenant).
+#
+# `routes` (ADR-007): label-equality sub-routes. Each entry becomes a child of
+# the tenant's main route, AFTER the tenant's `overrides`:
+#   overrides → routes → the main receiver (first match wins)
+# `match` is label: value equality only (no regex, no `continue`); the
+# tenant="<id>" matcher stays on the parent route. Timing / group_by not set on
+# an entry are inherited from the tenant's main route. Domain policies and the
+# --policy webhook allowlist check these receivers too.
 
 routing_profiles:
   # SRE team in APAC region
@@ -18,6 +32,8 @@ routing_profiles:
     group_interval: 5m
     repeat_interval: 4h
     routes:
+      # severity="critical" → PagerDuty, re-notify every 15m; other alerts
+      # stay on the Slack receiver above.
       - match: { severity: critical }
         receiver:
           type: pagerduty

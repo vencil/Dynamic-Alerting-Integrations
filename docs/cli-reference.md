@@ -2878,6 +2878,8 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 路由合併管線除錯器 — 顯示每個 tenant 的四層路由合併展開（ADR-007），包括 `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`。
 
+`overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。
+
 **用法**
 
 ```bash

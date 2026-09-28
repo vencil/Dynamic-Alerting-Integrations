@@ -10,6 +10,9 @@ Functions:
     _process_override_receiver / _build_override_route
     expand_routing_overrides
 
+  Label-match sub-routes (ADR-007 `routes`, #2245):
+    expand_routing_routes (entry predicate: _grar_validate.route_entry_matchers)
+
   Platform enforced routing (v1.7.0 / v1.10.0 per-tenant {{tenant}} expansion):
     _build_per_tenant_enforced_route / _build_single_enforced_route
     _build_enforced_routes
@@ -35,7 +38,10 @@ from _grar_merge import (  # noqa: E402
     _substitute_tenant,
     build_receiver_config,
 )
-from _grar_validate import validate_receiver_domains  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    route_entry_matchers,
+    validate_receiver_domains,
+)
 
 
 # ============================================================
@@ -213,6 +219,90 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
 
 
 # ============================================================
+# Label-match sub-routes (ADR-007 `routes`, #2245)
+# ============================================================
+
+def _route_receiver_name(tenant: str, idx: int) -> str:
+    """AM receiver name for ``routes[idx]`` — distinct from the override
+    receivers (``tenant-<t>-override-<idx>``) of the same tenant."""
+    return f"tenant-{tenant}-route-{idx}"
+
+
+def expand_routing_routes(tenant: str, routing_config: dict,
+                          allowed_domains: list[str] | None = None
+                          ) -> tuple[list[dict], list[dict], list[str]]:
+    """Expand ADR-007 label-match ``routes`` into child routes (#2245).
+
+    Each valid entry becomes a CHILD of the tenant's main route, placed by
+    ``_build_tenant_routes`` AFTER the override children, so the order is
+    overrides → routes → the main route's own receiver. A child carries its
+    own equality matchers + receiver + whatever timing / ``group_by`` it
+    declares; the rest is inherited from the tenant's main route by
+    Alertmanager (see ``expand_routing_overrides``).
+
+    Invalid entries are skipped with a ``WARN … skipping`` line, like invalid
+    overrides — which ``--validate`` (and validate-config's routes row)
+    treats as blocking.
+
+    Returns:
+        (sub_routes, receivers, warnings), same shape as
+        ``expand_routing_overrides``.
+    """
+    sub_routes: list[dict] = []
+    receivers: list[dict] = []
+    warnings: list[str] = []
+
+    entries = routing_config.get("routes")
+    if entries is None or entries == []:
+        return sub_routes, receivers, warnings
+    if not isinstance(entries, list):
+        warnings.append(f"  WARN: {tenant}: 'routes' must be a list, skipping")
+        return sub_routes, receivers, warnings
+
+    for idx, entry in enumerate(entries):
+        ctx = f"{tenant}-route-{idx}"
+        # Structural checks (dict, supported keys, equality `match`) are the
+        # SAME predicate list_tenant_subroutes uses, so domain policy sees
+        # exactly the entries rendered here.
+        matchers, matcher_warnings = route_entry_matchers(entry, idx, tenant)
+        warnings.extend(matcher_warnings)
+        if matchers is None:
+            continue
+
+        receiver_obj = entry.get("receiver")
+        if not receiver_obj:
+            warnings.append(f"  WARN: {tenant}: routes[{idx}] missing "
+                            "'receiver', skipping")
+            continue
+        am_config, recv_warnings = build_receiver_config(receiver_obj, ctx)
+        warnings.extend(recv_warnings)
+        if am_config is None:
+            continue
+        if allowed_domains:
+            domain_warnings = validate_receiver_domains(
+                receiver_obj, ctx, allowed_domains)
+            warnings.extend(domain_warnings)
+            if any("not in allowed_domains" in w for w in domain_warnings):
+                continue
+
+        receiver_name = _route_receiver_name(tenant, idx)
+        sub_route: dict = {"matchers": matchers, "receiver": receiver_name}
+        group_by = entry.get("group_by")
+        if group_by and isinstance(group_by, list):
+            sub_route["group_by"] = group_by
+        timing, timing_warnings = _apply_timing_params(entry, ctx)
+        warnings.extend(timing_warnings)
+        sub_route.update(timing)
+        sub_routes.append(sub_route)
+
+        receiver = {"name": receiver_name}
+        receiver.update(am_config)
+        receivers.append(receiver)
+
+    return sub_routes, receivers, warnings
+
+
+# ============================================================
 # Platform Enforced Routing (NOC/SRE always-on notifications)
 # ============================================================
 
@@ -383,9 +473,11 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
       1. Validate receiver config (required, must have type)
       2. Build Alertmanager receiver config (webhook, email, slack, etc.)
       3. Apply domain policy constraints if allowed_domains is provided
-      4. Expand per-rule routing overrides
+      4. Expand per-rule routing overrides, then the ADR-007 label-match
+         ``routes`` (#2245)
       5. Build tenant route with matchers, receiver name, timing, and group_by,
-         carrying the override routes as its children (#2252)
+         carrying the override routes and then the ``routes`` children as its
+         children (#2252 / #2245)
 
     Args:
         routing_configs: {tenant_name: routing_config_dict} resolved from defaults and overrides
@@ -434,6 +526,13 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         warnings.extend(override_warnings)
         receivers.extend(override_receivers)
 
+        # #2245：ADR-007 的 label 等值子路由（profile 或 tenant 的 `routes`），
+        # 同樣掛在主 route 底下，排在 overrides 之後。
+        label_sub_routes, label_receivers, label_warnings = \
+            expand_routing_routes(tenant, cfg, allowed_domains=allowed_domains)
+        warnings.extend(label_warnings)
+        receivers.extend(label_receivers)
+
         # Receiver name 由 tenant 推導
         receiver_name = f"tenant-{tenant}"
 
@@ -454,9 +553,11 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         route.update(timing)
 
         # #2252：tenant="<id>" matcher 只在這個父節點；子路由只帶自己的
-        # alertname / metric_group matcher，AM 只有父節點命中才會往下比對。
-        if override_sub_routes:
-            route["routes"] = override_sub_routes
+        # matcher，AM 只有父節點命中才會往下比對。順序：overrides → routes
+        # （#2245）→ 都沒命中才落到這個主 route 自己的 receiver。
+        children = override_sub_routes + label_sub_routes
+        if children:
+            route["routes"] = children
 
         routes.append(route)
 

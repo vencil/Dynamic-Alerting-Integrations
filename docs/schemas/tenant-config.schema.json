@@ -385,8 +385,8 @@
     "routing": {
       "type": "object",
       "title": "Alert Routing Configuration",
-      "description": "Per-tenant alert routing to custom receivers. Supports one primary receiver and per-alertname/metric_group overrides. Replaces _routing_defaults. See architecture-and-design.md §2.9 and cli-reference.md.",
-      "$comment": "#1339 P1 — explicit null is accepted on exactly four fields (group_by, group_wait, group_interval, repeat_interval) and nowhere else in this definition. Rationale, all measured against generate_alertmanager_routes.py with identical fixtures: on those four a null suppresses the inherited _routing_defaults value and the generated route simply omits the field, and there is no other way to express 'do not inherit this one' because the timing fields have no 'disable' sentinel. 'receiver: ~' is deliberately still rejected — it makes the tenant's ENTIRE route disappear ('WARN: missing required receiver, skipping'), so a one-character typo would silently reroute every alert for that tenant to the catch-all. 'overrides: ~' is rejected because it is a no-op (nothing above a tenant supplies overrides to opt out of) and accepting it would teach a gesture that does nothing.",
+      "description": "Per-tenant alert routing to custom receivers. Supports one primary receiver, per-alertname/metric_group overrides and label-match sub-routes (routes). Replaces _routing_defaults. Also the shape of one routing profile in _routing_profiles.yaml (routing-profiles.schema.json $refs this definition, ADR-007). See architecture-and-design.md §2.9 and cli-reference.md.",
+      "$comment": "#1339 P1 — explicit null is accepted on exactly four fields (group_by, group_wait, group_interval, repeat_interval) and nowhere else in this definition. Rationale, all measured against generate_alertmanager_routes.py with identical fixtures: on those four a null suppresses the inherited _routing_defaults value and the generated route simply omits the field, and there is no other way to express 'do not inherit this one' because the timing fields have no 'disable' sentinel. 'receiver: ~' is deliberately still rejected — it makes the tenant's ENTIRE route disappear ('WARN: missing required receiver, skipping'), so a one-character typo would silently reroute every alert for that tenant to the catch-all. 'overrides: ~' is rejected because it is a no-op (nothing above a tenant supplies overrides to opt out of) and accepting it would teach a gesture that does nothing. 'routes: ~' is rejected too (#2245): a tenant opts out of its routing profile's routes with 'routes: []', which replaces them (shallow merge).",
       "properties": {
         "receiver": {
           "$ref": "#/definitions/receiver",
@@ -429,6 +429,14 @@
           "description": "List of routing overrides for specific alert names or metric groups. First matching override wins. See architecture-and-design.md §2.9.",
           "items": {
             "$ref": "#/definitions/routingOverride"
+          }
+        },
+        "routes": {
+          "type": "array",
+          "title": "Label-Match Sub-Routes (ADR-007)",
+          "description": "Sub-routes selected by label equality (e.g. escalate severity=critical to PagerDuty). Rendered as children of the tenant's main route AFTER the overrides, so the order is overrides → routes → the main route's own receiver; the first matching child wins. A tenant _routing.routes replaces a routing profile's routes wholesale (shallow merge, same as overrides). Not accepted in _routing_defaults.",
+          "items": {
+            "$ref": "#/definitions/routingRoute"
           }
         }
       },
@@ -844,6 +852,55 @@
         "repeat_interval": {
           "type": "string",
           "title": "Override Repeat Interval"
+        }
+      },
+      "additionalProperties": false
+    },
+    "routingRoute": {
+      "type": "object",
+      "title": "Label-Match Sub-Route (ADR-007)",
+      "description": "One sub-route under the tenant's main route. The generator renders `match` as equality matchers only (label=\"value\"); the tenant=\"<id>\" matcher stays on the parent route. Timing / group_by left out are inherited from the tenant's main route, and declared timing goes through the same guardrails as the main route.",
+      "$comment": "#2245 — label equality only: no regex, no `continue`, no Alertmanager `matchers` strings. An empty `match` would shadow the main receiver for every alert of the tenant, hence minProperties 1.",
+      "required": ["match", "receiver"],
+      "properties": {
+        "match": {
+          "type": "object",
+          "title": "Label Equality Match",
+          "description": "Label name → exact value, all of which must be equal for the sub-route to match (e.g. {severity: critical}).",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "examples": [{ "severity": "critical" }]
+        },
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Sub-Route Receiver",
+          "description": "Receiver for alerts matching this sub-route."
+        },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "Sub-Route Group By"
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Sub-Route Group Wait",
+          "description": "Go duration. Guardrail: 5s–5m.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Sub-Route Group Interval",
+          "description": "Go duration. Guardrail: 5s–5m.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Sub-Route Repeat Interval",
+          "description": "Go duration. Guardrail: 1m–72h.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
         }
       },
       "additionalProperties": false

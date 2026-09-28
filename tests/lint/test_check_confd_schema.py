@@ -555,6 +555,16 @@ class TestUnresolvableCrossFileRef:
         assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
         assert self._REF in result.stderr, result.stderr
 
+    def test_error_prefix_names_every_schema_argument(self, confd, bad_schema):
+        """#2245: the unresolved $ref may sit in the platform OR the
+        routing-profiles schema, so the prefix must not pin it on one file."""
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run_with_schema(confd, bad_schema)
+        first = result.stderr.splitlines()[0]
+        for flag in ("--schema", "--platform-schema", "--routing-profiles-schema"):
+            assert flag in first, first
+        assert not first.startswith("ERROR: platform schema"), first
+
     def test_repo_schema_is_unchanged(self, confd):
         _write(confd, "_defaults.yaml", self._ROUTING_DEFAULTS)
         _write(confd, "t1.yaml", self._TENANT)

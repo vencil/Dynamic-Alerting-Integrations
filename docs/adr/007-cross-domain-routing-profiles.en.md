@@ -39,18 +39,24 @@ Define named routing configurations in `_routing_profiles.yaml`; tenants referen
 # _routing_profiles.yaml — in config-dir
 routing_profiles:
   team-sre-apac:
-    receiver: slack-sre-apac
+    receiver:
+      type: slack
+      api_url: "https://hooks.slack.com/services/T00/B00/sre-apac"
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     group_interval: 5m
     repeat_interval: 4h
     routes:
       - match: { severity: critical }
-        receiver: pagerduty-sre-apac
+        receiver:
+          type: pagerduty
+          service_key: "sre-apac-critical-key"
         repeat_interval: 15m
 
   team-dba-global:
-    receiver: slack-dba
+    receiver:
+      type: webhook
+      url: "https://alerting.internal/dba-global"
     group_by: [tenant, alertname, db_type]
     group_wait: 1m
     group_interval: 10m
@@ -66,6 +72,10 @@ db-a:
 ```
 
 **Merge Semantics**: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced` (NOC override, immutable). Later layers override earlier ones, but `_routing_enforced` always takes final precedence.
+
+A profile has the same fields as a tenant's `_routing` (`routing-profiles.schema.json` references `tenant-config.schema.json#/definitions/routing` rather than keeping a second copy). The merge is shallow: any key the tenant's `_routing` sets replaces the profile's value wholesale, `routes` and `overrides` included; to drop a profile's `routes` for one tenant, write `routes: []`.
+
+**`routes` (label-match sub-routes)**: each `match` is label equality only (`{label: value}`, all must be equal), with no regex and no `continue`. The generator renders each entry as a child of the tenant's main route, after the children produced by `overrides`, so matching order is `overrides` → `routes` → the main route's own receiver, first match wins. The `tenant="<id>"` matcher stays on the main route; a child carries only the matchers from its own `match`. `group_wait` / `group_interval` / `repeat_interval` / `group_by` a child leaves out are inherited from the tenant's main route, and the ones it sets go through the same timing guardrails. Receivers are named `tenant-<id>-route-<i>`, separate from the overrides' `tenant-<id>-override-<i>`. Invalid entries (empty `match`, invalid label name, non-string value, unsupported key) are skipped with a `WARN … skipping` line, which fails `--validate`. `_routing_defaults` does not accept `routes`.
 
 ### Layer 2: Domain Policies
 
@@ -254,7 +264,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - `scaffold_tenant.py --routing-profile` — Onboarding integration, new tenants can reference profiles directly (9 tests)
 - `_parse_config_files()` → `_parse_platform_config()` + `_parse_tenant_overrides()` sub-function refactor
 - Example configs `conf.d/examples/_routing_profiles.yaml`, `conf.d/examples/_domain_policy.yaml`
-- JSON Schema: `routing-profiles.schema.json`, `domain-policy.schema.json`
+- JSON Schema: `routing-profiles.schema.json` (references `tenant-config.schema.json`'s `routing` definition since #2245), `domain-policy.schema.json`
 - Go/Python dual-side `_routing_profile` reserved key sync
 - Self-Service Portal: routing profile validation + example toggle UI
 
@@ -265,6 +275,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.5.0** (completed): receiver-type constraints moved forward to API-time enforcement (tenant-api 403 responses); timing (`max_repeat_interval` / `min_group_wait`) and `enforce_group_by` constraints remain validated at assembly time
 - **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
 - **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
+- **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate

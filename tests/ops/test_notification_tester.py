@@ -77,6 +77,27 @@ class TestExtractReceivers:
         types = [r["type"] for r in result]
         assert types == ["webhook", "slack", "pagerduty"]
 
+    def test_routes_receivers_follow_overrides(self):
+        """ADR-007 `routes` 的 receiver 也提取，排在 overrides 之後（#2245）。"""
+        config = {
+            "_routing": {
+                "receiver": {"type": "webhook", "url": "https://main.example.com"},
+                "overrides": [
+                    {"alertname": "A", "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/T/B/X"}},
+                ],
+                "routes": [
+                    {"match": {"severity": "critical"},
+                     "receiver": {"type": "pagerduty", "service_key": "k"}},
+                    {"match": {"severity": "warning"}},  # 無 receiver → 略過
+                    "not-a-mapping",
+                ],
+            },
+        }
+        result = nt.extract_receivers("tenant-x", config)
+        assert [(r["type"], r["_label"]) for r in result] == [
+            ("webhook", "tenant-x-main"), ("slack", "tenant-x-override-0"),
+            ("pagerduty", "tenant-x-route-0")]
+
     def test_override_without_receiver(self):
         """Override 項目若缺少 receiver 應跳過。"""
         config = {

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-03-16
-updated_at: 2026-05-13
+updated_at: 2026-09-28
 ---
 # ADR-007: 跨域路由設定檔與域策略
 
@@ -44,18 +44,24 @@ updated_at: 2026-05-13
 # _routing_profiles.yaml — 位於 config-dir
 routing_profiles:
   team-sre-apac:
-    receiver: slack-sre-apac
+    receiver:
+      type: slack
+      api_url: "https://hooks.slack.com/services/T00/B00/sre-apac"
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     group_interval: 5m
     repeat_interval: 4h
     routes:
       - match: { severity: critical }
-        receiver: pagerduty-sre-apac
+        receiver:
+          type: pagerduty
+          service_key: "sre-apac-critical-key"
         repeat_interval: 15m
 
   team-dba-global:
-    receiver: slack-dba
+    receiver:
+      type: webhook
+      url: "https://alerting.internal/dba-global"
     group_by: [tenant, alertname, db_type]
     group_wait: 1m
     group_interval: 10m
@@ -71,6 +77,10 @@ db-a:
 ```
 
 **合併語意**：`_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`（NOC 覆蓋，不可變）。後者覆蓋前者，但 `_routing_enforced` 永遠最終覆蓋。
+
+Profile 的欄位與 tenant `_routing` 相同（`routing-profiles.schema.json` 直接引用 `tenant-config.schema.json#/definitions/routing`，不另寫一份）。合併是淺合併：tenant `_routing` 寫了哪個鍵，就整份取代 profile 的同名鍵，`routes` 與 `overrides` 也一樣；要讓某個 tenant 不用 profile 的 `routes`，寫 `routes: []`。
+
+**`routes`（依 label 分流的子路由）**：每條 `match` 只做 label 等值比對（`{label: value}`，全部相等才命中），不支援 regex 與 `continue`。產生器把每條 `routes` 產成 tenant 主路由底下的一條子路由，排在 `overrides` 產生的子路由之後，所以比對順序是 `overrides` → `routes` → 主路由自己的 receiver，先命中者勝。`tenant="<id>"` matcher 只在主路由上，子路由只帶自己 `match` 轉成的 matcher；子路由沒寫的 `group_wait` / `group_interval` / `repeat_interval` / `group_by` 沿用 tenant 主路由，有寫的走與主路由相同的 timing 護欄。receiver 名稱為 `tenant-<id>-route-<i>`，與 override 的 `tenant-<id>-override-<i>` 分開。不合法的條目（`match` 為空、label 名不合法、值不是字串、含不支援的鍵）以 `WARN … skipping` 略過，`--validate` 會因此失敗。`_routing_defaults` 不接受 `routes`。
 
 ### 第二層：Domain Policies（域策略）
 
@@ -259,7 +269,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - `scaffold_tenant.py --routing-profile` — Onboarding 整合，新 tenant 可直接引用 profile（9 tests）
 - `_parse_config_files()` → `_parse_platform_config()` + `_parse_tenant_overrides()` 子函式重構
 - 範例配置 `conf.d/examples/_routing_profiles.yaml`、`conf.d/examples/_domain_policy.yaml`
-- JSON Schema：`routing-profiles.schema.json`、`domain-policy.schema.json`
+- JSON Schema：`routing-profiles.schema.json`（#2245 起引用 `tenant-config.schema.json` 的 `routing` 定義）、`domain-policy.schema.json`
 - Go/Python 雙端 `_routing_profile` reserved key 同步
 - Self-Service Portal：routing profile 驗證 + 範例切換 UI
 
@@ -270,6 +280,8 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.5.0**（已完成）：receiver-type 約束前移至 API-time enforcement（tenant-api 403 回應）；時序（`max_repeat_interval` / `min_group_wait`）與 `enforce_group_by` 約束仍於組譯期驗證
 - **v2.6.0**（已完成）：`generate_alertmanager_routes.py` 重構（21 helpers extracted），`_build_receiver_config()` 改為 strategy pattern
 - **v2.10.0**（開發中）：`--strict` 接線至 CLI 與 CI——組譯期 domain-policy 違規由 WARN 轉 ERROR 並 blocking（`--validate --strict` exit 1，違規訊息含實際值 vs 域限制 + 修法提示）
+
+- **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

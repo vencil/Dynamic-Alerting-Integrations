@@ -93,6 +93,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "_process_override_receiver",
         "_validate_override_matcher",
         "expand_routing_overrides",
+        "expand_routing_routes",  # #2245 ADR-007 label-match sub-routes
         "generate_inhibit_rules",
         "generate_routes",
     ),

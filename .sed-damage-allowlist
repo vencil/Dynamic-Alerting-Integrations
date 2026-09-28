@@ -157,3 +157,11 @@ docs/adr/README.md
 # and took it 207 → 3 lines. Damage is caught independently: a truncated ledger
 # drops entries, and the check reports them as NEW anchor problems (rc=1).
 scripts/tools/lint/mkdocs-anchor-debt.txt
+
+# #2245: routing-profiles.schema.json dropped its own copy of the routing
+# definition (routingProfile / profileSubRoute / receiver, 4996 → 1771 bytes)
+# for a `$ref` to tenant-config.schema.json#/definitions/routing. Genuine
+# refactor, not damage. Damage is caught independently: a truncated file is
+# invalid JSON (check_confd_schema rc 2), and its content is asserted by
+# tests/ops/test_routing_profile_routes.py::TestSchemaConsolidation.
+docs/schemas/routing-profiles.schema.json
