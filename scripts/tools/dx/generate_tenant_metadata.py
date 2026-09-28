@@ -44,6 +44,7 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import strict_safe_load  # noqa: E402  (#2231 duplicate key = YAML error)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     exit_on_output_write_error,
@@ -335,7 +336,10 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
         if is_reserved_name(yaml_file.name) or is_hidden_name(yaml_file.name):
             continue
         try:
-            data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+            # Strict (#2231): a file holding a key twice is one the exporter
+            # drops whole, so it is warned about and skipped like bad syntax
+            # instead of listing whichever value PyYAML kept last.
+            data = strict_safe_load(yaml_file.read_text(encoding="utf-8"))
             if data and "tenants" in data and isinstance(data["tenants"], dict):
                 tenant_configs.update(data["tenants"])
         except Exception as e:

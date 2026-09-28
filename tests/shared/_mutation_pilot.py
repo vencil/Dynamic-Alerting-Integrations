@@ -900,8 +900,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/ops/test_grar_strict_hardening.py",
         label="domain_policies: strict group_wait is-not-None regressed to truthiness (bare 0 skipped)",
         fn_name="check_domain_policies",
-        old='                    tenant_gw = rc.get("group_wait")\n                    if tenant_gw is not None:',
-        new='                    tenant_gw = rc.get("group_wait")\n                    if tenant_gw:',
+        old='                        tenant_gw = rc.get("group_wait")\n                        if tenant_gw is not None:',
+        new='                        tenant_gw = rc.get("group_wait")\n                        if tenant_gw:',
         # Round-5 SURVIVOR turned finding: the hardening suite only covered
         # "0s" (truthy string); bare int 0 slipped the truthiness branch.
         # Killed by the test added for it (asserts correct behavior).

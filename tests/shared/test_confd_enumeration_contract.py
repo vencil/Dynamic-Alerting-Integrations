@@ -314,8 +314,6 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
         "`--rules` is a PrometheusRule candidate file/dir (glob *.yaml/*.yml), not a tenant conf.d",
     "dx/pr_preflight.py":
         "globs .github/workflows",
-    "lint/check_bat_ascii_purity.py":
-        "iterdir over scripts/ops/ for --full-scan (#2196)",
     "lint/check_chart_ship_surface.py":
         "iterdir over the root of each helm/<chart> the release pipeline "
         "packages — a repo-owned tree, never a tenant conf.d (#1755)",

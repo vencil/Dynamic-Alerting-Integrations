@@ -389,6 +389,33 @@ def test_extension_look_alikes_stay_out_of_scope(name, mode, in_repo, monkeypatc
     assert rc == 0, f"{name}/{mode}: rc={rc}\n{out}{err}"
 
 
+# #2240 — every entry point covers scripts/ops/ at any depth. diff mode and
+# pre-commit ``files:`` always did; --full-scan was flat and read a nested
+# violation as clean.
+_NON_ASCII_BAT = "@echo off\r\nrem café\r\n".encode("utf-8")
+
+
+@pytest.mark.parametrize("mode", ["diff", "full-scan"])
+@pytest.mark.parametrize("rel", ["scripts/ops/sub/_probe.bat", "scripts/ops/a/b/_probe.BAT"])
+def test_a_nested_violation_is_seen(rel, mode, in_repo, monkeypatch, capsys):
+    _stage(in_repo, rel, _NON_ASCII_BAT)
+    argv = ["--diff-base", "HEAD"] if mode == "diff" else ["--full-scan"]
+    rc, out, err = _run(monkeypatch, capsys, bat, argv)
+    assert rc == 1, f"{mode}: {rel} read as clean, rc={rc}\n{out}{err}"
+    assert Path(rel).name in err, err
+
+
+@pytest.mark.parametrize("mode", ["diff", "full-scan"])
+def test_a_neighbouring_directory_stays_out_of_scope(mode, in_repo, monkeypatch, capsys):
+    _stage(in_repo, "scripts/ops/_legal.bat", b"@echo off\r\n")
+    for rel in ("scripts/opsx/_probe.bat", "other/scripts/ops/_probe.bat",
+                "scripts/_probe.bat"):
+        _stage(in_repo, rel, _NON_ASCII_BAT)
+    argv = ["--diff-base", "HEAD"] if mode == "diff" else ["--full-scan"]
+    rc, out, err = _run(monkeypatch, capsys, bat, argv)
+    assert rc == 0, f"{mode}: rc={rc}\n{out}{err}"
+
+
 def _hook_files_regex(hook_id: str) -> str:
     import yaml  # noqa: PLC0415 - only this section needs it
     cfg_path = Path(_TOOLS_DIR).parents[2] / ".pre-commit-config.yaml"
@@ -403,7 +430,7 @@ def _hook_files_regex(hook_id: str) -> str:
      ["_x.BAT", "a/_x.Ps1", "_x.CMD", "_x.bat"],
      ["_x.batx", "_x_bat", "notes.batch"]),
     ("bat-ascii-purity-check",
-     ["scripts/ops/_x.BAT", "scripts/ops/_x.bat"],
+     ["scripts/ops/_x.BAT", "scripts/ops/_x.bat", "scripts/ops/sub/_x.bat"],
      ["scripts/ops/_x.batx", "other/_x.BAT"]),
 ])
 def test_precommit_files_filter_ignores_extension_case(hook_id, matches, misses):

@@ -4,7 +4,9 @@ the way that tool refuses a syntax error (#2123).
 The exporter (yaml.v3) rejects such a file; before #2123 every tool in
 `_TOOLS` took PyYAML's last value and exited 0. The fixture shapes
 (`_TENANT_VARIANTS`, `_DEFAULTS_VARIANTS`) are ones the exporter was
-measured to reject.
+measured to reject. #2231 added `_profiles.yaml` as a third target
+(`_PROFILES_VARIANTS`) and the readers that diff, list, resolve or generate
+from a conf.d rather than judge it.
 
 ⛔ The expected outcome is NOT written down per tool. Each tool is run on the
 same tree with a real syntax error in the same file, and a duplicate must
@@ -57,29 +59,74 @@ _DEFAULTS_VARIANTS = {
     "syntax": "defaults:\n  mysql_connections: [80\n",
     "dup_key": "defaults:\n  mysql_connections: 80\n  mysql_connections: 90\n",
 }
+# #2231: written (and the tenant given `_profile: p1`) only for a tool whose
+# targets include "profiles", so no other tool's fixture changes.
+_PROFILES = "profiles:\n  p1:\n    mysql_connections: 60\n"
+_PROFILES_VARIANTS = {
+    "clean": _PROFILES,
+    "syntax": "profiles:\n  p1: [unclosed\n",
+    "dup_key": "profiles:\n  p1:\n    mysql_connections: 60\n    mysql_connections: 65\n",
+}
+# Read by generate_tenant_mapping_rules, whose `--validate` checks the ids
+# it names against the tenant files.
+_INSTANCE_MAPPING = ("instance_tenant_mapping:\n  i1:\n"
+                     "    - tenant: tenant-a\n      filter: 'db=\"x\"'\n")
+_TARGET_FILE = {"tenant": "tenant-a.yaml", "defaults": "_defaults.yaml",
+                "profiles": "_profiles.yaml"}
 
-# (script, argv after it — {d} is the conf.d, {out} a scratch dir), whether
-# it reads `_defaults.yaml`, whether the fixture needs a policy.
+# (script, argv after it — {d} is the conf.d, {out} a scratch dir, {old} a
+# clean copy of the same tree for the tools that diff against a baseline),
+# which files of the tree it reads (its targets), whether the fixture needs a
+# policy. A tool is given "profiles" only where a `_profiles.yaml` syntax
+# error was measured to change its outcome; elsewhere that row would fail
+# its own anti-vacuity half, proving nothing.
+_T, _TD, _TDP = (frozenset({"tenant"}), frozenset({"tenant", "defaults"}),
+                 frozenset({"tenant", "defaults", "profiles"}))
 _TOOLS = {
-    "validate_config": ("ops/validate_config.py", ["--config-dir", "{d}"], True, False),
-    "check_confd_schema": ("lint/check_confd_schema.py", ["--config-dir", "{d}"], True, False),
-    "check_routing_profiles": ("lint/check_routing_profiles.py", ["--config-dir", "{d}"], True, False),
+    "validate_config": ("ops/validate_config.py", ["--config-dir", "{d}"], _TDP, False),
+    "check_confd_schema": ("lint/check_confd_schema.py", ["--config-dir", "{d}"], _TDP, False),
+    "check_routing_profiles": ("lint/check_routing_profiles.py", ["--config-dir", "{d}"],
+                               _TDP, False),
     "generate_routes_validate": ("ops/generate_alertmanager_routes.py",
-                                 ["--config-dir", "{d}", "--validate"], True, False),
+                                 ["--config-dir", "{d}", "--validate"], _TDP, False),
     "compile_custom_alerts": ("dx/compile_custom_alerts.py",
-                              ["--config-dir", "{d}", "--out", "{out}/pack.yaml"], True, False),
-    "policy_engine": ("ops/policy_engine.py", ["--config-dir", "{d}", "--ci"], True, True),
-    "gitops_check_local": ("ops/gitops_check.py", ["local", "--dir", "{d}"], True, False),
-    "describe_tenant": ("dx/describe_tenant.py", ["tenant-a", "--conf-d", "{d}"], True, False),
-    "tenant_verify": ("dx/tenant_verify.py", ["tenant-a", "--conf-d", "{d}"], True, False),
+                              ["--config-dir", "{d}", "--out", "{out}/pack.yaml"], _TDP, False),
+    "policy_engine": ("ops/policy_engine.py", ["--config-dir", "{d}", "--ci"], _TD, True),
+    "gitops_check_local": ("ops/gitops_check.py", ["local", "--dir", "{d}"], _TD, False),
+    "describe_tenant": ("dx/describe_tenant.py", ["tenant-a", "--conf-d", "{d}"], _TD, False),
+    "tenant_verify": ("dx/tenant_verify.py", ["tenant-a", "--conf-d", "{d}"], _TD, False),
     "assemble_config_dir_validate": ("ops/assemble_config_dir.py",
                                      ["--sources", "{d}", "--output", "{out}/asm", "--validate"],
-                                     True, False),
+                                     _TDP, False),
     # --dry-run: stops at the OPA input document, no OPA needed.
     "policy_opa_bridge": ("ops/policy_opa_bridge.py", ["--config-dir", "{d}", "--dry-run"],
-                          True, False),
+                          _TD, False),
     "offboard_tenant_precheck": ("ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{d}"],
-                                 True, False),
+                                 _TDP, False),
+    # #2231 — readers that give no pass/fail on the file but whose output,
+    # exit code or write followed PyYAML's last value.
+    "config_diff": ("ops/config_diff.py", ["--old-dir", "{old}", "--new-dir", "{d}"],
+                    frozenset({"tenant", "profiles"}), False),
+    # rc 0 all three ways; told apart by naming the file (its WARNING line).
+    "generate_tenant_metadata": ("dx/generate_tenant_metadata.py",
+                                 ["--config-dir", "{d}", "--dry-run"], _T, False),
+    "diagnose_show_inheritance": ("ops/diagnose.py",
+                                  ["tenant-a", "--config-dir", "{d}", "--show-inheritance"],
+                                  _TDP, False),
+    # Port 9 (discard) refuses at once; --skip-if-unavailable then exits 0
+    # for a tree with changes, so only the read path can give it rc 2.
+    "backtest_threshold": ("ops/backtest_threshold.py",
+                           ["--config-dir", "{d}", "--baseline", "{old}",
+                            "--prometheus", "http://127.0.0.1:9", "--skip-if-unavailable"],
+                           _T, False),
+    "generate_tenant_mapping_rules_validate": ("ops/generate_tenant_mapping_rules.py",
+                                               ["--config-dir", "{d}", "--validate",
+                                                "--dry-run"], _T, False),
+    # The `--config-dir` branch reads through load_tenant_configs (strict
+    # since #2123); the single-file branch is its own read.
+    "analyze_rule_pack_gaps_file": ("ops/analyze_rule_pack_gaps.py",
+                                    ["--tenant-config", "{d}/tenant-a.yaml"], _T, False),
+    "migrate_conf_d": ("dx/migrate_conf_d.py", ["--conf-d", "{d}"], _T, False),
 }
 
 # A tool whose (rc, file named) could be the same for a clean tree and a
@@ -88,31 +135,53 @@ _TOOLS = {
 # exits 1 on an unreadable file; the marker still pins which path it took.)
 _UNREADABLE_MARKER = {
     "offboard_tenant_precheck": "無法讀取",
+    # Names every layer's source file in the chain and exits 0 either way;
+    # an unreadable layer is its skip line.
+    "diagnose_show_inheritance": "WARN: skip",
 }
+
+
+def _write_tree(d: str, tool: str, target: str, variant: str) -> None:
+    """The fixture conf.d for *tool*, with *variant* in *target*'s file."""
+    _script, _argv, targets, policy = _TOOLS[tool]
+    pol = _POLICY if policy else ""
+    defaults = _DEFAULTS + pol
+    tenant = _TENANT
+    profiles = _PROFILES
+    if target == "tenant":
+        tenant = _TENANT_VARIANTS[variant]
+    elif target == "defaults" and variant != "clean":
+        defaults = _DEFAULTS_VARIANTS[variant] + pol
+    elif target == "profiles":
+        profiles = _PROFILES_VARIANTS[variant]
+    os.makedirs(d)
+    pathlib.Path(d, "_defaults.yaml").write_text(defaults, encoding="utf-8")
+    if "profiles" in targets:
+        # Only the first `tenant-a:` gets it: a duplicate stays a duplicate.
+        tenant = tenant.replace("  tenant-a:\n", "  tenant-a:\n    _profile: p1\n", 1)
+        pathlib.Path(d, "_profiles.yaml").write_text(profiles, encoding="utf-8")
+    if tool == "generate_tenant_mapping_rules_validate":
+        pathlib.Path(d, "_instance_mapping.yaml").write_text(_INSTANCE_MAPPING,
+                                                              encoding="utf-8")
+    pathlib.Path(d, "tenant-a.yaml").write_text(tenant, encoding="utf-8")
 
 
 @functools.lru_cache(maxsize=None)
 def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool, bool]:
     """(exit code, names the broken file?, prints its unreadable marker?)."""
-    script, argv, _reads_defaults, policy = _TOOLS[tool]
-    defaults = _DEFAULTS + (_POLICY if policy else "")
-    tenant = _TENANT
-    if target == "tenant":
-        tenant = _TENANT_VARIANTS[variant]
-    elif variant != "clean":
-        defaults = _DEFAULTS_VARIANTS[variant] + (_POLICY if policy else "")
+    script, argv, _targets, _policy = _TOOLS[tool]
     with tempfile.TemporaryDirectory() as tmp:
         d = os.path.join(tmp, "conf.d")
-        os.makedirs(d)
-        pathlib.Path(d, "_defaults.yaml").write_text(defaults, encoding="utf-8")
-        pathlib.Path(d, "tenant-a.yaml").write_text(tenant, encoding="utf-8")
+        old = os.path.join(tmp, "old")
+        _write_tree(d, tool, target, variant)
+        _write_tree(old, tool, "tenant", "clean")
         r = subprocess.run(
             [sys.executable, str(TOOLS / script)]
-            + [a.format(d=d, out=tmp) for a in argv],
+            + [a.format(d=d, out=tmp, old=old) for a in argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             cwd=tmp, timeout=180)
     out = r.stdout + r.stderr
-    named = ("tenant-a.yaml" if target == "tenant" else "_defaults.yaml") in out
+    named = _TARGET_FILE[target] in out
     marker = _UNREADABLE_MARKER.get(tool)
     return r.returncode, named, bool(marker) and marker in out
 
@@ -120,7 +189,8 @@ def _outcome(tool: str, target: str, variant: str) -> tuple[int, bool, bool]:
 _CASES = (
     [(t, "tenant", v) for t in _TOOLS for v in ("dup_key", "dup_tenant_id", "dup_tenants_block",
                                                  "dup_tenant_id_by_spelling")]
-    + [(t, "defaults", "dup_key") for t, spec in _TOOLS.items() if spec[2]]
+    + [(t, g, "dup_key") for t, spec in _TOOLS.items()
+       for g in ("defaults", "profiles") if g in spec[2]]
 )
 
 

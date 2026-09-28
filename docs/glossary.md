@@ -229,4 +229,4 @@ lang: zh
 | [Architecture & Design](./architecture-and-design.md) | 核心架構與設計詳解 |
 | [CLI Reference](./cli-reference.md) | da-tools 完整指令參考 |
 | [API Reference](./api/README.md) | threshold-exporter API 端點 |
-| [Alert Reference](rule-packs/ALERT-REFERENCE.md) | 96 個告警含義速查 |
+| [Alert Reference](rule-packs/ALERT-REFERENCE.md) | 告警含義速查 |
