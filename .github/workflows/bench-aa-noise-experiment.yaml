@@ -123,7 +123,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: components/threshold-exporter/app/go.mod
 
       # Compile ONCE. bench_interleave.sh does the same and explains why: `go
       # test -bench` recompiles on every invocation, and the Go compiler is

@@ -34,7 +34,7 @@ jobs:
       - name: Setup Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: components/tenant-api/go.mod
 
       # The script starts the pinned GitLab CE, polls /-/health (no sleep), mints
       # api + read_api PATs via rails runner (retried for Gitaly/Sidekiq warmup),

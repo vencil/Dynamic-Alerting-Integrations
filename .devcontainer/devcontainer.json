@@ -45,8 +45,12 @@
     // `vv2.12.2` and fails. The workflow's GOLANGCI_VERSION *does* carry the
     // `v`; do not copy it across verbatim. Equality of the two is asserted by
     // tests/ops/test_go_lint_module_coverage.py.
+    // `version` MUST equal components/threshold-exporter/app/go.mod's `go`
+    // directive (the Go SSOT; tests/ops/test_go_toolchain_parity.py). It sat at
+    // "1.23" while every module required 1.26.x, so each local build silently
+    // relied on GOTOOLCHAIN=auto downloading a different toolchain (#1278).
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.23",
+      "version": "1.26.8",
       "golangciLintVersion": "2.12.2"
     },
     // 5. Python (確保有 pip)

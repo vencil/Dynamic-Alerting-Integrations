@@ -1,12 +1,14 @@
 # #463 multi-arch: pin the builder to the native BUILDPLATFORM and
 # cross-compile to TARGETARCH below — far faster than emulating the Go
 # compile under QEMU.
-# Go 1.26.5 clears CVE-2026-39822 in the SHIPPED binary (#1058): Trivy reads the
-# toolchain version embedded by the compiler, so the fix is purely which builder
-# compiles it. The alpine3.22 -> alpine3.23 move is forced (no 1.26.5-alpine3.22
-# tag exists upstream) and is INERT here: CGO_ENABLED=0 below, and this stage is
-# discarded — the runtime base is the distroless image at the bottom of the file.
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23 AS builder
+# Trivy reads the toolchain version embedded by the compiler, so a stdlib CVE in
+# the SHIPPED binary is fixed purely by which builder compiles it (#1058). The
+# builder's Go version MUST equal this module's go.mod `go` directive — go.mod is
+# the SSOT, and tests/ops/test_go_toolchain_parity.py fails on any skew (#1278:
+# 1.26.8 clears the 1.26.5 stdlib CVE set). The builder's alpine suffix is INERT
+# here: CGO_ENABLED=0 below, and this stage is discarded — the runtime base is
+# the distroless image at the bottom of the file.
+FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./

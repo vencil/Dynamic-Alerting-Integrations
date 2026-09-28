@@ -2115,6 +2115,11 @@ jobs:
     # coverage-artifact upload need nothing beyond repo read.
     permissions:
       contents: read
+    # `matrix.go` is only the check-name LABEL (the "Go Tests (1.26)" family):
+    # the toolchain comes from the module's go.mod `go` directive, the Go SSOT
+    # that the Dockerfile builder and the dev container also match (#1278;
+    # tests/ops/test_go_toolchain_parity.py). A floating "1.26" let CI build on
+    # whatever 1.26.x the runner resolved while the image shipped another.
     strategy:
       matrix:
         go: ["1.26"]
@@ -2123,10 +2128,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Go ${{ matrix.go }}
+      - name: Set up Go (version from go.mod)
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: components/threshold-exporter/app/go.mod
 
       - name: Cache Go modules + build cache
         # Module cache (~/go/pkg/mod) is the primary key; build cache rides
@@ -2187,6 +2192,7 @@ jobs:
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
       contents: read
+    # `matrix.go` is a check-name label only — see go-tests-threshold-exporter.
     strategy:
       matrix:
         go: ["1.26"]
@@ -2195,10 +2201,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Go ${{ matrix.go }}
+      - name: Set up Go (version from go.mod)
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: components/tenant-api/go.mod
 
       - name: Cache Go modules + build cache
         # path expanded to include ~/.cache/go-build so `go install swag@latest`
@@ -2329,7 +2335,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: tests/alertmanager-inhibit/go.mod
 
       - name: Cache Go modules + build cache
         uses: actions/cache@v5
@@ -2381,7 +2387,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: tests/e2e-bench/receiver/go.mod
 
       - name: Run e2e-bench receiver unit tests
         working-directory: tests/e2e-bench/receiver
@@ -2420,10 +2426,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      # Toolchain from the threshold-exporter go.mod (the Go SSOT), NOT from
+      # scripts/tools/ops/go.mod: that module's `go 1.23` is a deliberate
+      # compatibility FLOOR (#1816 — `go run bench_filter.go` must work under
+      # GOTOOLCHAIN=local on older toolchains), not the version to build with.
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: components/threshold-exporter/app/go.mod
 
       - name: Run bench-filter unit tests
         working-directory: scripts/tools/ops
