@@ -119,3 +119,18 @@ Suggested alert: fire when `sys_bytes` approaches 90% of `limits.memory` (an ear
 | High reload frequency + `sys_bytes` near limit | set `goMemLimit` ≈ `limits.memory` × 0.75 |
 | GOMEMLIMIT set but still near limit + sparse reloads | also enable `freeOsMemAfterReload: true` |
 | Config changes are already sparse | raise `reloadInterval` (e.g. `5m`) |
+
+## Cold-load time and the startupProbe
+
+At startup the exporter loads the whole conf.d tree **before** it starts its HTTP server, so `/health`, `/ready` and `/metrics` refuse connections for as long as the load takes. The load time is dominated by YAML decoding, and the decoder compares every key of a mapping with every other key to find duplicates. The **number of tenants declared in one file** and the **key count of one mapping** therefore make the load grow faster than linearly ([#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)).
+
+The chart ships a `startupProbe` by default (`/health`, `periodSeconds: 10`, `failureThreshold: 60`, i.e. up to 10 minutes). Liveness and readiness probes do not run until the startupProbe succeeds, so a slow cold load is not restarted by liveness. If your load takes longer than 10 minutes, raise `startupProbe.failureThreshold`; set `startupProbe: null` to omit the probe.
+
+| Signal | Source | Purpose |
+|---|---|---|
+| `da_config_initial_load_duration_seconds` | exporter | Seconds the startup load took. The startupProbe budget (`periodSeconds × failureThreshold`) must exceed this, with headroom for the tree to grow |
+| `da_config_max_tenants_per_file` | exporter | Largest number of tenants declared under `tenants:` in any one file. In the thousands, split the tenants across several files |
+| `da_config_max_mapping_keys` | exporter | Largest key count of any one mapping (`defaults`, `state_filters`, `tenants`, one tenant's overrides, `profiles`, one profile) in any one file. Counts only mappings the exporter decodes into its config |
+| `da_config_reload_duration_seconds` | exporter | Duration of each reload. The buckets now reach 600s, so a minutes-long reload no longer lands entirely in `+Inf` |
+
+Both maximum gauges are whole-tree maxima with no file-name label, so their series count does not grow with the number of files. They are re-set on every config commit, so they drop once a large file is split.
