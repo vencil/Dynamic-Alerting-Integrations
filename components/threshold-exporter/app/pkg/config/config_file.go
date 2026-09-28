@@ -1,6 +1,12 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+	"sort"
+	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
+)
 
 // ParseConfigFile is the ONE decode of a conf.d file's bytes into a
 // ThresholdConfig (#1957). Every plane that asks "is this file valid, and
@@ -40,8 +46,54 @@ import "gopkg.in/yaml.v3"
 // flat plane's historical decode — pinned against that oracle over a variant
 // corpus by config_file_test.go. The tenant set of a file is the key set of
 // the returned Tenants.
+//
+// ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
+// that is not valid UTF-8; that is right for a `_`-prefixed platform file
+// (see ParseTenantFile) and wrong for a file that DECLARES tenants.
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
 	return cfg, err
+}
+
+// ParseTenantFile is ParseConfigFile for a file that declares tenants — a
+// non-`_` conf.d file (the walker's parseTenantDecls) or the single config
+// file of file mode — plus one rejection: a tenant id that is not valid
+// UTF-8 (#2266; YAML can spell one with `!!binary`). The error names every
+// such id, sorted, so the message is the same on every run.
+//
+// ⛔ WHY REJECT THE FILE, NOT THE TENANT. A declared tenant id becomes a
+// Prometheus label value, and client_golang's WithLabelValues panics on
+// non-UTF-8 — on the scrape goroutine, which has no recover, so the whole
+// exporter died. Rejecting the file gives it the verdict every other bad
+// tenant file gets (skipped whole, WARN, da_config_parse_failure_total), and
+// since the walker's verdict is the flat plane's too, on every plane.
+//
+// ⛔ WHY NOT IN ParseConfigFile. A `_` platform file's `tenants:` entry names
+// a tenant; it never declares one — the merge keeps an entry only for a
+// tenant some tenant file declares (declaredTenantIDs), and the platform
+// overlay is looked up by declared id. A non-UTF-8 key there therefore can
+// never reach a label (every declared id passed this check) and is dropped
+// and WARNed as an orphan (reportPlatformOrphans). Rejecting the whole
+// platform file instead dropped every tenant's defaults with it (#2266
+// blind review, F1).
+func ParseTenantFile(data []byte) (ThresholdConfig, error) {
+	cfg, err := ParseConfigFile(data)
+	if err != nil {
+		return cfg, err
+	}
+	var bad []string
+	for tid := range cfg.Tenants {
+		if !utf8.ValidString(tid) {
+			bad = append(bad, tid)
+		}
+	}
+	if len(bad) > 0 {
+		sort.Strings(bad)
+		if len(bad) > 1 {
+			return ThresholdConfig{}, fmt.Errorf("tenant ids %q are not valid UTF-8", bad)
+		}
+		return ThresholdConfig{}, fmt.Errorf("tenant id %q is not valid UTF-8", bad[0])
+	}
+	return cfg, nil
 }

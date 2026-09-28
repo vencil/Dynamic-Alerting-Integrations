@@ -219,10 +219,12 @@ func TestServedValues_MetadataInherited(t *testing.T) {
 func TestServedValues_ParseFailedFile_ExitsThreeAndNamesIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ file, body string }{
-		"tenant file":                  {"tenant-b.yaml", "tenants:\n  tenant-b: [1]\n"},
-		"root defaults (typed decode)": {"_defaults.yaml", "defaults:\n  mysql_connections: abc\n"},
-		"root profiles (typed decode)": {"_profiles.yaml", "profiles: [1, 2]\n"},
-		"nested defaults (syntax)":     {"sub/_defaults.yaml", "defaults: [oops\n"},
+		"tenant file": {"tenant-b.yaml", "tenants:\n  tenant-b: [1]\n"},
+		// `dP8=` is "t\xff": the exporter skips the whole file (#2266).
+		"tenant file, non-UTF-8 tenant id": {"tenant-b.yaml", "tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n"},
+		"root defaults (typed decode)":     {"_defaults.yaml", "defaults:\n  mysql_connections: abc\n"},
+		"root profiles (typed decode)":     {"_profiles.yaml", "profiles: [1, 2]\n"},
+		"nested defaults (syntax)":         {"sub/_defaults.yaml", "defaults: [oops\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := map[string]string{
@@ -743,11 +745,9 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		// `dP8=` is "t\xff"
-		"tenant id": {map[string]string{
-			"_defaults.yaml": defaultsOnly,
-			"tenant-a.yaml":  "tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n",
-		}, `tenant "t\xff"`},
+		// A tenant id that is not valid UTF-8 is not here: since #2266 the
+		// tenant file declaring it fails the decode (exit 3, see
+		// TestServedValues_ParseFailedFile_ExitsThreeAndNamesIt).
 		// mysql_connections{q="\xff"} and mysql_connections{q="\xfe"}: both become {q="\ufffd"} in JSON.
 		"tenant key": {map[string]string{
 			"_defaults.yaml": defaultsOnly,

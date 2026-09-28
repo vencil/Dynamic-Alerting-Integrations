@@ -34,7 +34,7 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))
 
-	cfg, err = config.ParseConfigFile(data)
+	cfg, err = config.ParseTenantFile(data)
 	if err != nil {
 		return cfg, "", fmt.Errorf("parse config %s: %w", path, err)
 	}

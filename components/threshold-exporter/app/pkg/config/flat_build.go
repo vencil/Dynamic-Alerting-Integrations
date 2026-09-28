@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -247,7 +248,7 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 	if metrics != nil {
 		metrics.IncParseFailure(filepath.Base(fullPath))
 	}
-	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+	logger.Printf("ERROR: skip unparseable defaults/profiles file %q: %v (entire block dropped — fix file or remove)", fullPath, err)
 	return nil, false
 }
 
@@ -263,15 +264,19 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 // logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
 // the flat-mode parse paths report failures identically.
 func parsePartialConfig(name, path string, data []byte, metrics ScanObserver, logger *log.Logger) (ThresholdConfig, bool) {
-	partial, err := ParseConfigFile(data)
+	decode := ParseTenantFile // same verdict as the walker's (#2266)
+	if strings.HasPrefix(scanKeyBase(name), "_") {
+		decode = ParseConfigFile
+	}
+	partial, err := decode(data)
 	if err != nil {
 		if metrics != nil {
 			metrics.IncParseFailure(filepath.Base(path))
 		}
 		if strings.HasPrefix(scanKeyBase(name), "_") {
-			logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
+			logger.Printf("ERROR: skip unparseable defaults/profiles file %q: %v (entire block dropped — fix file or remove)", path, err)
 		} else {
-			logger.Printf("WARN: skip unparseable file %s: %v", path, err)
+			logger.Printf("WARN: skip unparseable file %q: %v", path, err)
 		}
 		return partial, false
 	}
@@ -477,6 +482,12 @@ func reportPlatformOrphans(configs map[string]ThresholdConfig, exists map[string
 		}
 		sort.Strings(ids)
 		for _, tid := range ids {
+			if !utf8.ValidString(tid) {
+				// Never a declared tenant (ParseTenantFile, #2266); the line
+				// below would write the raw bytes into the log.
+				logger.Printf("WARN: tenants entry %q in platform file %q ignored — tenant id is not valid UTF-8, so no tenant file can declare it", tid, name)
+				continue
+			}
 			logger.Printf("WARN: tenants.%s in platform file %s ignored — no tenant file declares tenant %q; "+
 				"a platform file can only provide defaults for a tenant that already exists", tid, name, tid)
 		}
@@ -511,7 +522,10 @@ func reportNestedPlatformTenants(name string, probe any, logger *log.Logger) {
 		return
 	}
 	sort.Strings(ids)
-	logger.Printf("WARN: tenants: block in nested platform file %s ignored (tenants %s) — "+
+	for i, tid := range ids {
+		ids[i] = fmt.Sprintf("%q", tid) // a key is data: never raw bytes in the log (#2266)
+	}
+	logger.Printf("WARN: tenants: block in nested platform file %q ignored (tenants %s) — "+
 		"the tenants: block of a nested platform file is not read by any plane; "+
 		"only a root platform file can provide per-tenant defaults", name, strings.Join(ids, ", "))
 }

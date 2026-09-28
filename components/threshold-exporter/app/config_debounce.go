@@ -435,12 +435,12 @@ func (m *ConfigManager) rebuildParsedDefaults(prior reloadPriorState, scan reloa
 		}
 		b, rerr := os.ReadFile(dp)
 		if rerr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
+			m.getLogger().Printf("WARN: parsedDefaults: read %q: %v", dp, rerr)
 			continue
 		}
 		parsed, perr := parseDefaultsBytes(b)
 		if perr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
+			m.getLogger().Printf("WARN: parsedDefaults: parse %q: %v", dp, perr)
 			continue
 		}
 		out[dp] = parsed
@@ -932,7 +932,7 @@ func emitParseFailureSignal(metrics *configMetrics, logger *log.Logger, tenantID
 		if strings.Contains(msg, needle) {
 			metrics.IncParseFailure(filepath.Base(dp))
 			logger.Printf(
-				"ERROR: skip unparseable defaults/profiles file %s (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
+				"ERROR: skip unparseable defaults/profiles file %q (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
 				dp, i, tenantID, mergeErr,
 			)
 			return
