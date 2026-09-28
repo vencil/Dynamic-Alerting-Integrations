@@ -1724,6 +1724,81 @@ class TestRulePackCountSharedWithChecker:
         assert rules["readme-rule-pack-badge"]["source_ok"] is False
 
 
+class TestFrontMatterPerFileInvariant:
+    """#1450：front matter 帶 `version:` 的檔，該行必須被規則命中。
+
+    GLOB-DEAD 只看整條 glob；docs/**/*.md 的 front matter 規則幾乎每份都
+    命中，爛掉一份群組仍然健康、`--check` 照樣綠。實測：把一份的
+    `version: v2.9.0` 改成 `version: 2.9.0`，修前 `--check` rc 0。
+    """
+
+    @staticmethod
+    def _docs_rule():
+        rules = [r for r in bump_docs._build_rules()["platform"]
+                 if r.get("glob_dir") == "docs"
+                 and r.get("frontmatter_key") == "version"]
+        assert len(rules) == 1, rules
+        return rules[0]
+
+    def _run(self, tmp_path, monkeypatch, files, scope=None):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        for name, text in files.items():
+            (docs / name).write_text(text, encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = [self._docs_rule()]
+        if scope is not None:
+            rules = bump_docs._scoped_rules(rules, scope)
+        return {c[1].rsplit(" in ", 1)[-1]: c[0]
+                for c in bump_docs.apply_rules(rules, "2.9.0",
+                                               check_only=True)}
+
+    def test_both_front_matter_globs_opt_in(self):
+        """拿掉任一條的 `frontmatter_key`，那棵樹就回到只剩群組層級。"""
+        dirs = {r["glob_dir"] for r in bump_docs._build_rules()["platform"]
+                if r.get("frontmatter_key") == "version"}
+        assert dirs == {"docs", bump_docs.PORTAL_JSX_FRONTMATTER_ROOT}, dirs
+
+    def test_a_drifted_front_matter_line_is_dead(self, tmp_path, monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "ok.md": "---\ntitle: a\nversion: v2.9.0\n---\n\nbody\n",
+            "drifted.md": "---\ntitle: b\nversion: 2.9.0\n---\n\nbody\n",
+        })
+        assert got["docs/drifted.md"] == "DEAD", got
+        assert got["docs/ok.md"] == "OK", got
+
+    def test_a_body_line_does_not_rescue_the_front_matter(self, tmp_path,
+                                                          monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "a.md": "---\nversion: 2.9.0\n---\n\n```\nversion: v1.0\n```\n",
+        })
+        assert got["docs/a.md"] == "DEAD", got
+
+    def test_no_front_matter_key_is_not_a_defect(self, tmp_path, monkeypatch):
+        got = self._run(tmp_path, monkeypatch, {
+            "ok.md": "---\nversion: v2.9.0\n---\n",
+            "plain.md": "# no front matter\n",
+            "other.md": "---\ntitle: c\n---\n",
+        })
+        assert got["docs/plain.md"] == "OK", got
+        assert got["docs/other.md"] == "OK", got
+
+    def test_still_reported_under_scope(self, tmp_path, monkeypatch):
+        """與 GLOB-DEAD 不同：單檔自己的 front matter 在子集裡一樣成立。"""
+        (tmp_path / "docs" / "sub").mkdir(parents=True)
+        (tmp_path / "docs" / "sub" / "x.md").write_text(
+            "---\nversion: 2.9.0\n---\n", encoding="utf-8")
+        # 範圍外的兄弟檔：沒有它 scope 就沒縮小任何東西，不會蓋 scope_narrowed。
+        (tmp_path / "docs" / "y.md").write_text(
+            "---\nversion: v2.9.0\n---\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = bump_docs._scoped_rules([self._docs_rule()], "docs/sub")
+        assert rules and all(r.get("scope_narrowed") for r in rules), rules
+        statuses = [c[0] for c in bump_docs.apply_rules(rules, "2.9.0",
+                                                        check_only=True)]
+        assert statuses == ["DEAD"], statuses
+
+
 class TestScopeMustSelectSomething:
     """`--scope` 過濾到 0 條規則是 caller error，不是通過（#1407 F8）。"""
 

@@ -765,6 +765,11 @@ def _build_platform_rules():
             "desc": f"front matter version: in {_glob_dir}/{_ext}",
             "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
             "replacement": lambda v: f"version: v{v}",
+            # Per-file invariant on top of the group-level GLOB-DEAD (#1450):
+            # a file whose front matter declares `version:` must have that
+            # line matched, or it is never bumped again while the group
+            # stays healthy. See _frontmatter_declares_unmatched().
+            "frontmatter_key": "version",
             # docs/**/*.md reaches docs/CHANGELOG.md. Front matter is above
             # the first `## [vX.Y.Z]` heading so it stays live and is still
             # bumped; the flag costs nothing here and keeps the invariant
@@ -1747,6 +1752,42 @@ def _requires_match(rule):
     return not rule.get("from_glob", False)
 
 
+_FRONT_MATTER_BLOCK = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
+def _frontmatter_declares_unmatched(rule, content):
+    """Does this file's front matter declare the rule's key, unmatched? (#1450)
+
+    GLOB-DEAD only sees a whole glob. On a glob that matches most of its
+    tree, one file whose `version:` line drifted into another shape (no `v`,
+    say) is never bumped again while the group stays healthy and `--check`
+    stays green. The file's own front matter says whether it SHOULD match,
+    so that is the per-file predicate — no checked-in snapshot to refresh.
+
+    The match is looked for inside the front matter block, not the whole
+    file: a `version: v…` line further down would otherwise let a broken
+    front matter pass (and would be the line that gets rewritten).
+
+    ⚠️ Only rules that carry `frontmatter_key` opt in. The other docs globs
+    stay group-level: their shapes also occur legitimately in forms the
+    pattern must NOT rewrite (an ADR's historical header, a `vX.Y.Z`
+    template placeholder, an unpinned image example), so no per-file
+    predicate for them is free of false positives. Measured before choosing.
+
+    Deliberately NOT skipped under `--scope` (unlike GLOB-DEAD): a file's
+    own front matter is as true in a subset as in the whole tree.
+    """
+    key = rule.get("frontmatter_key")
+    if not key:
+        return False
+    m = _FRONT_MATTER_BLOCK.match(content)
+    if not m or not re.search(rf"^{re.escape(key)}\s*:", m.group(1),
+                              re.MULTILINE):
+        return False
+    block = "\n" + m.group(1) + "\n"
+    return not re.search(rule["pattern"], block, re.MULTILINE)
+
+
 GLOB_EMPTY_FILE = "__glob_empty__"
 
 
@@ -1983,6 +2024,11 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                   and that footer has no pipe. "Expands to >=1 file" — the
                   previous, test-only assertion — passes happily for all
                   three: 260 files, zero matches.
+
+    A group-level verdict cannot see ONE file rotting inside a glob that
+    matches most of its tree. Rules carrying `frontmatter_key` add a
+    per-file DEAD for that case — see _frontmatter_declares_unmatched() for
+    why only those rules can.
     """
     rules = _expand_glob_rules(rules)
     changes = []
@@ -2074,6 +2120,14 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
 
         matches = re.findall(pattern, scan_text, re.MULTILINE)
         _note_glob(rule, len(matches))
+        if _frontmatter_declares_unmatched(rule, scan_text):
+            changes.append(("DEAD", rule["desc"],
+                            f"front matter of {rule['file']} declares "
+                            f"`{rule['frontmatter_key']}:` but pattern "
+                            f"{pattern!r} does not match it — this file will "
+                            f"never be bumped. Fix the line's shape in the "
+                            f"file (e.g. `version: vX.Y.Z`)."))
+            continue
         if not matches:
             if _requires_match(rule):
                 changes.append(("DEAD", rule["desc"],
