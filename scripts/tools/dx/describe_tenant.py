@@ -171,8 +171,8 @@ def _file_hash(path: Path) -> str:
 #                 sequence becomes encoding/json's six-character escape
 #                 (backslash, then `ufffd`) in the JSON text, NOT a raw U+FFFD
 #
-# ⛔ Timestamp values the reader still cannot align (tests/dx/
-# test_describe_tenant.py TestYamlTypedScalarParity, strict xfails):
+# ⛔ Timestamp values the reader still cannot align (strict xfails in
+# tests/dx/test_describe_tenant.py, TestYamlTypedScalarParity):
 #   - an explicit `!!timestamp` yaml.v3 cannot parse, on a text PyYAML
 #     would have tagged `!!timestamp` anyway (`!!timestamp
 #     2026-12-31T10:20:30`, `!!timestamp 2026-13-01`): yaml.v3 refuses the
