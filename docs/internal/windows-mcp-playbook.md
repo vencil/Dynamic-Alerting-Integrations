@@ -862,7 +862,7 @@ git remote set-url origin git@github.com:<owner>/<repo>.git
 | `scripts/ops/win_async_exec.ps1` | MCP 60s timeout | 派工 → 拿 PID → sandbox 側輪詢 log 檔案 |
 | `scripts/ops/win_read_fresh.ps1` | FUSE dentry cache | 用 Win32 `ReadAllBytes` 讀 source → 寫到新 inode（預設 `<path>.fresh`） |
 | `scripts/ops/run_hooks_sandbox.sh` | sandbox-side pre-commit gate（補 Windows 側 `--no-verify` 的漏洞） | `bash scripts/ops/run_hooks_sandbox.sh a.md b.yaml` |
-| `make win-commit` | 包 hook-gate + `win_git_escape.bat` 三步（pre-commit → add → commit-file → push） | `make win-commit MSG=_msg.txt FILES="a b" SKIP=head-blob-hygiene` |
+| `make win-commit` | 包 hook-gate + `win_git_escape.bat` 三步（pre-commit → add → commit-file → push） | `make win-commit MSG=_msg.txt FILES="a b"` |
 
 #### 1. `win_async_exec.ps1` — fire-and-forget
 
