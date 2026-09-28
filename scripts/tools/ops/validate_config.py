@@ -179,6 +179,7 @@ from _lib_io import (  # noqa: E402
 # #1577 / #2114: the ONE exporter-key loader (`_lib_yaml_keys`, moved out of
 # this module), composed with the strict reading above in `_lib_io`.
 from _lib_io import strict_load_exporter_keys  # noqa: E402
+from _lib_io import YamlFileError, load_yaml_file_strict_exporter_keys  # noqa: E402  (#2297)
 
 # ============================================================
 # Check results
@@ -853,6 +854,27 @@ def _is_reserved_key(key: str) -> bool:
     return False
 
 
+def _load_tenant_file_profile_text(path: str) -> object:
+    """A tenant file for the `_profile` check (#2297): ``load_yaml_file_strict``'s
+    contract ({} for a missing / empty file, :class:`YamlFileError` for bad
+    syntax, a duplicate key or non-UTF-8), with the exporter's reading —
+    mapping keys and every `_profile:` value are their source TEXT, so
+    `_profile: 010` names profile "010" (PyYAML's 8 was skipped as a non-str
+    and a reference to no profile passed).
+
+    Local rather than a flag on ``_lib_io``'s path loaders: those are being
+    reworked under #2115, and the other callers must not change here."""
+    if not (path and Path(path).is_file()):
+        return {}
+    try:
+        stream = io.StringIO(Path(path).read_bytes().decode("utf-8"))
+        stream.name = str(path)
+        data = strict_load_exporter_keys(stream, raw_text_scalars=("_profile",))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
+    return {} if data is None else data
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -874,7 +896,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
-    profiles_raw = load_yaml_file_strict(profiles_path, default={})
+    # #2297: profile names are the keys' source text, as the exporter keys
+    # them — `010:` is "010", the name a tenant's `_profile: 010` reads as.
+    profiles_raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -910,7 +934,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         if fname.startswith("_") or fname.startswith("."):
             continue
         fpath = str(fpath_p)
-        raw = load_yaml_file_strict(fpath, default={})
+        raw = _load_tenant_file_profile_text(fpath)
         if not isinstance(raw, dict):
             continue
 
@@ -925,6 +949,8 @@ def check_profiles(config_dir: str) -> dict[str, object]:
             if not isinstance(t_data, dict):
                 continue
             tenant_count += 1
+            # A str whenever written as a scalar (#2297): a plain `123` is
+            # the name "123" and is checked, not skipped as an int.
             profile = t_data.get("_profile")
             if not profile or not isinstance(profile, str):
                 continue
