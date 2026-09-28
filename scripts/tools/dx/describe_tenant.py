@@ -184,6 +184,12 @@ def _file_hash(path: Path) -> str:
 #   - a tab between date and time: PyYAML's scanner refuses the file
 #     (`found character '\t'`), yaml.v3 keeps the text. A parser difference
 #     (#2123), not a typing one.
+#   - a zone offset of 24h or more (`+24:00`, `-23:60`): yaml.v3 parses it,
+#     but Go's CanonicalJSON fails once the value lands in a tenant's
+#     effective config (no merged_hash); here it is rendered as a time.
+#   - an explicit `!!timestamp` that is not a time on a KEY or tenant ID
+#     (`!!timestamp foo: 1`): yaml.v3 refuses the file; here the key is
+#     its text. The refusal above covers VALUES only.
 #
 # Mapping KEYS are a separate path (json's `default` is never called for a
 # key): see `_GoKey` below.

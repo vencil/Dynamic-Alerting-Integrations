@@ -1452,8 +1452,9 @@ class TestYamlTypedScalarParity:
     @pytest.mark.parametrize(
         "body,defaults,go_json",
         [pytest.param(*c[1:], marks=pytest.mark.xfail(
-            strict=True, reason="#2371: explicit tag lost at compose time, or a "
-                                "PyYAML/yaml.v3 parser difference — see DIVERGENT"))
+            strict=True, reason="#2371: explicit tag lost at compose time, a "
+                                "PyYAML/yaml.v3 parser difference, or a >=24h zone "
+                                "Go's CanonicalJSON refuses — see DIVERGENT"))
          for c in DIVERGENT],
         ids=[c[0] for c in DIVERGENT])
     def test_known_divergence_from_go(self, tmp_path, body, defaults, go_json):
