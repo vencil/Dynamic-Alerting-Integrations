@@ -197,6 +197,8 @@ _routing_defaults:
 
 The `{{tenant}}` placeholder expands to each tenant's name. Tenant YAML's `_routing` can override this default.
 
+⚠️ Do not write `_routing` under `defaults:` in the root `_defaults.yaml`: the route generator does not read it there, and the exporter, unable to decode it, drops the whole `defaults:` block (every platform threshold). The `root_defaults` row of `da-tools validate-config` rejects that shape (#2291).
+
 ### Configuring Tenant Profiles
 
 ```yaml

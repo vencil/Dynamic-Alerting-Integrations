@@ -32,6 +32,10 @@ Checks:
   9. Tenant uniqueness — one tenant id declared by two files makes the exporter
                     reject the ENTIRE config dir (`DuplicateTenantError`), so
                     this one FAIL is about every tenant in the tree (#1577)
+  10. Root defaults — no `_routing*` key under `defaults:` in the root
+                    _defaults.yaml: a mapping there makes the exporter drop
+                    every platform threshold, and the route generator reads
+                    routing only from top-level `_routing_defaults` (#2291)
 
 Hierarchical trees: several rows (today schema, routes, policy and
 policy_dsl) get their tenants from a reader that is FLAT — it reads only the
@@ -101,10 +105,13 @@ from _lib_confd import (  # noqa: E402
     FlatRead,
     duplicate_declarations,
     is_reserved_name,
+    is_defaults_name,
     iter_config_files,
     observe_flat_reads,
     printable_name,
+    readable_carriers,
     resolve_defaults_file,
+    select_defaults_carrier,
     unusable_config_paths,
     unusable_reason,
 )
@@ -1205,6 +1212,116 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
 
 
 # ============================================================
+# Check 10: Root `defaults:` block (#2291)
+# ============================================================
+#: Top-level keys of a `_defaults.yaml` that the routing generator reads. A
+#: `_routing*` key written one level too deep, under `defaults:`, is reached by
+#: none of them.
+_TOP_LEVEL_ROUTING_KEYS = frozenset({"_routing_defaults", "_routing_enforced"})
+
+
+def _root_defaults_routing_detail(rel: str, key: str, value: object) -> str:
+    """One FAIL line for a `_routing*` key under the root `defaults:`."""
+    if key == "_routing":
+        move = ("move its contents to a top-level `_routing_defaults:` block "
+                "in the same file — that is where platform routing defaults "
+                "are read from")
+    elif key in _TOP_LEVEL_ROUTING_KEYS:
+        move = (f"`{key}` is a top-level key: move it out of `defaults:` to "
+                f"the top level of the file")
+    else:
+        move = ("remove it; platform routing defaults go in a top-level "
+                "`_routing_defaults:` block")
+    # ⛔ The consequence depends on the value, and the two are not the same
+    # severity. The root `defaults:` is `map[string]float64` in the exporter
+    # (pkg/config/types.go ThresholdConfig), so a mapping, list, string or
+    # boolean there fails the decode and the exporter drops the root file's
+    # WHOLE `defaults:` block — every platform threshold, while the load
+    # itself still succeeds (measured, #2291: `Defaults=map[]`, 0 resolved
+    # rows, one `ERROR: skip unparseable defaults/profiles file` log line).
+    # A number or null decodes and is skipped as a threshold; it is still a
+    # routing setting nothing applies.
+    # ⚠️ Judged by PyYAML's type, not yaml.v3's: a plain scalar the two read
+    # differently (`1e3` is a string to PyYAML, a float to yaml.v3) gets the
+    # louder sentence. The FAIL itself does not depend on it.
+    decodes = value is None or (isinstance(value, (int, float))
+                                and not isinstance(value, bool))
+    if decodes:
+        effect = ("threshold-exporter skips it as a threshold and the route "
+                  "generator never reads `defaults:`, so this routing setting "
+                  "is applied by nothing")
+    else:
+        kind = {dict: "mapping", list: "list", str: "string",
+                bool: "boolean"}.get(type(value), type(value).__name__)
+        effect = (f"its value is a {kind}, and the root "
+                  f"`defaults:` holds numbers only: threshold-exporter cannot "
+                  f"decode this file's `defaults:` block and drops ALL of it — "
+                  f"every platform threshold, not just this key. The route "
+                  f"generator never reads `defaults:` either")
+    return f"{rel}: `defaults.{key}` — {effect}; {move}."
+
+
+def check_root_defaults(config_dir: str) -> dict[str, object]:
+    """No `_routing*` key under the ROOT `_defaults.yaml`'s `defaults:` (#2291).
+
+    ``defaults:`` holds platform thresholds. Routing defaults live in the
+    top-level ``_routing_defaults:`` block, and a ``_routing`` written under
+    ``defaults:`` instead gets a different answer from every reader:
+
+    * threshold-exporter decodes the root ``defaults:`` as
+      ``map[string]float64``. A mapping there fails that decode and the whole
+      block is dropped — every platform threshold, with the load still
+      reported as successful (see ``_root_defaults_routing_detail``).
+    * the route generator reads platform routing only from top-level
+      ``_routing_defaults`` and never looks inside ``defaults:``.
+    * the defaults-chain merge (``/effective``, da-guard) carries it into the
+      tenant's effective ``_routing`` — a view of routing that never ships.
+
+    The owner's ruling on #2291 is to refuse the shape rather than teach any
+    reader to accept it, so every ``_routing``-prefixed key FAILs whatever its
+    value, and the detail line says how bad the value makes it.
+
+    ⛔ ROOT ONLY, and the file is the one the exporter selects. A subtree
+    ``_defaults.yaml`` is merged by the hierarchical plane, which tolerates
+    ``_routing`` keys (``subtree_defaults.go`` ``reservedShapeWins``); that
+    shape is tracked with the hierarchical route walker (#1568), not here.
+    ``platform-defaults.schema.json`` is applied to every ``_defaults*`` file
+    at any depth and cannot tell the root from a subtree, so the rule lives in
+    this check and the schema is unchanged.
+
+    ⚠️ The root carrier is found without ``resolve_defaults_file``: that
+    helper records nested ``_defaults.yaml`` files as skipped by a flat read,
+    which would turn this row WARN on every ADR-017 tree for files it is
+    deliberately not about. Selection is ``select_defaults_carrier`` over the
+    readable carriers, the rule every plane shares (#1674). The candidates
+    come from the shared recursive enumerator filtered to the root level, not
+    from a second, flat listing of the directory.
+    """
+    root = Path(config_dir)
+    entries = [p for p in iter_config_files(root)
+               if len(p.relative_to(root).parts) == 1
+               and is_defaults_name(p.name)]
+    readable, _unreadable = readable_carriers(entries)
+    carrier = select_defaults_carrier(readable)
+    if carrier is None:
+        return _make_result("root_defaults", PASS,
+                            ["no root _defaults.yaml — nothing to check"])
+    rel = carrier.name
+    raw = load_yaml_file_strict(str(carrier), default={})
+    block = raw.get("defaults") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return _make_result("root_defaults", PASS,
+                            [f"{rel}: no `defaults:` mapping — nothing to check"])
+    details = [_root_defaults_routing_detail(rel, str(k), v)
+               for k, v in block.items()
+               if isinstance(k, str) and k.startswith("_routing")]
+    if details:
+        return _make_result("root_defaults", FAIL, details)
+    return _make_result("root_defaults", PASS, [
+        f"{rel}: {len(block)} key(s) under `defaults:`, no `_routing*` key"])
+
+
+# ============================================================
 # Report
 # ============================================================
 def _docs_url(rel_path: str) -> str:
@@ -1313,6 +1430,15 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "exporter refuses the whole config dir while a tenant is declared "
         "twice.",
         "docs/scenarios/multi-domain-conf-layout.md",
+    ),
+    # #2291: `defaults:` is for thresholds; routing defaults are a sibling
+    # block. Each row above already says which key and what to do with it.
+    "root_defaults": (
+        "Move routing settings out of `defaults:` in the root _defaults.yaml: "
+        "`_routing` becomes a top-level `_routing_defaults:` block (the only "
+        "place platform routing defaults are read from); `defaults:` keeps "
+        "numeric thresholds only.",
+        "docs/cli-reference.md#validate-config",
     ),
     # #1653: not a check — the one row `main()` emits under --json when
     # --config-dir is not a directory and no check could run at all.
@@ -1852,6 +1978,11 @@ def main() -> None:
     # finds makes the exporter refuse the whole tree, so there is no flag
     # under which a customer would want this one skipped.
     results.append(_run_check("tenant_uniqueness", check_tenant_uniqueness,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 10. Root `defaults:` block (#2291) — unconditional, same reason: a
+    # `_routing` mapping there costs the exporter every platform threshold.
+    results.append(_run_check("root_defaults", check_root_defaults,
                               args.config_dir, _config_dir=args.config_dir))
 
     # Report

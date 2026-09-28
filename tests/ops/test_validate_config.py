@@ -1857,6 +1857,8 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         assert carriers == {
             "policy_dsl",
             "profiles",
+            # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
+            "root_defaults",
             "routes",
             "schema",
             # #1577. It reads `--config-dir` and skips what it cannot parse,
@@ -2286,3 +2288,107 @@ class TestTenantIdParity:
             encoding="utf-8")
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
+
+
+class TestRootDefaultsRouting:
+    """Check 10 (#2291): no `_routing*` key under the ROOT `defaults:`.
+
+    The shape is refused (owner ruling on #2291, option 1). Measured against
+    threshold-exporter before this check existed: a root `defaults:` holding
+    `_routing: {group_wait: "30s"}` beside numeric thresholds loads with no
+    error and `Defaults=map[]` — the whole block dropped — while this command
+    printed `Result: PASS`, rc 0.
+    """
+
+    _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
+    _ROUTING = "  _routing:\n    group_wait: \"30s\"\n"
+
+    @classmethod
+    def _tree(cls, tmp_path, defaults_body, *, name="_defaults.yaml"):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / name).write_text(defaults_body, encoding="utf-8")
+        (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
+        return d
+
+    def test_routing_mapping_under_root_defaults_fails(self, tmp_path):
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+                       + self._ROUTING)
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "`defaults._routing`" in detail, detail
+        assert "_routing_defaults" in detail, detail
+        # The consequence for a mapping is the whole block, not one key.
+        assert "drops ALL of it" in detail, detail
+
+    def test_control_without_routing_passes(self, tmp_path):
+        """Must-stay-green: the same tree minus the `_routing` key."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_top_level_routing_defaults_passes(self, tmp_path):
+        """The shape the FAIL points to must itself be green."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+                       "_routing_defaults:\n  group_wait: \"30s\"\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    @pytest.mark.parametrize("line, louder", [
+        ("  _routing: ~\n", False),
+        ("  _routing_enforced:\n    enabled: true\n", True),
+        ("  _routing_profile: team-a\n", True),
+    ])
+    def test_every_routing_prefixed_key_fails_whatever_its_value(
+            self, tmp_path, line, louder):
+        """The refusal is by key prefix; the value only picks the sentence.
+        A null decodes (exporter keeps the other thresholds), so it must not
+        claim the whole block is lost."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n" + line)
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert ("drops ALL of it" in " ".join(r["details"])) is louder, r
+
+    def test_subtree_defaults_are_out_of_scope(self, tmp_path):
+        """A subtree `_defaults.yaml` with `_routing` is the hierarchical
+        plane's shape (#1568, e.g. the mixed-mode golden fixture) — not
+        refused here, and not reported as a skipped flat read either."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        sub = d / "team"
+        sub.mkdir()
+        (sub / "_defaults.yaml").write_text(
+            "defaults:\n" + self._ROUTING, encoding="utf-8")
+        r = vc._run_check("root_defaults", vc.check_root_defaults, str(d),
+                          _config_dir=str(d))
+        assert r["status"] == vc.PASS, r
+        assert "skipped_nested_files" not in r, r
+
+    def test_carrier_is_found_in_any_casing(self, tmp_path):
+        """The exporter selects `_DEFAULTS.yml` too (`is_defaults_name`)."""
+        d = self._tree(tmp_path, "defaults:\n" + self._ROUTING,
+                       name="_Defaults.yml")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+
+    def test_other_defaults_documents_are_not_the_carrier(self, tmp_path):
+        """`_defaults-multidb.yaml` is not merged as the root defaults, so its
+        `defaults:` is not what the exporter decodes."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        (d / "_defaults-multidb.yaml").write_text(
+            "defaults:\n" + self._ROUTING, encoding="utf-8")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
+                                                  cli_argv):
+        """Wired into ``main()``: this exact tree printed PASS, rc 0."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+                       + self._ROUTING)
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] root_defaults" in out, out
+        assert "_routing_defaults" in out, out
