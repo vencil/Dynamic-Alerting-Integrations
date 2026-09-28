@@ -5,6 +5,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -696,8 +698,15 @@ func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
 
 // A tenant id or key that is not valid UTF-8 would reach JSON as U+FFFD, so
 // two distinct keys could come out as one; it is refused and named instead.
+//
+// NOT parallel, subtests included: these trees make the collector fail
+// NewConstMetric and log.Printf through the process-global logger, which
+// run() points at its caller's stderr buffer — under t.Parallel that is some
+// other test's buffer, written by two goroutines at once (-race). Serial, with
+// an idempotent reset so the lines go to the real stderr.
 func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
-	t.Parallel()
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.LstdFlags)
 	const sf = "state_filters:\n  maintenance:\n    reasons: []\n    default_state: disable\n"
 	for name, tc := range map[string]struct {
 		files map[string]string
@@ -749,7 +758,6 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 		}, `parse_failed[0]: "b\xfe.yaml"`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
 			// Several runs: where two strings are bad, the one named must be
 			// the first in key order every time, not whichever map
 			// iteration happens to reach first.
