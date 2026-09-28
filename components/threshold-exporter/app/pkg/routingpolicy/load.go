@@ -182,52 +182,51 @@ func normalizeTaggedBools(n *yaml.Node) {
 	}
 }
 
-// DecodePyYAML decodes n as yaml.v3 does, except that a scalar PyYAML's
-// safe_load reads as a boolean decodes to that boolean (#2325): a PLAIN
-// (unquoted, untagged) scalar in the YAML 1.1 set (`yes`, `On`, `OFF`, …), or
-// a `!!bool`-tagged one in construct_yaml_bool's set (`!!bool yEs`). A quoted
-// `"yes"` or `!!str yes` stays a string, as in PyYAML; a `!!bool` PyYAML
-// refuses (`!!bool y`) is an error. Use it where the Python generator's
-// reading of a boolean decides the outcome, so both sides see the same value.
+// DecodePyYAML decodes n as PyYAML's safe_load reads it (#2325), for where
+// the Python generator's reading of a value decides the outcome. It returns
+// an error exactly when safe_load refuses the value (`!!bool y`, `!!int abc`,
+// a plain `2001-13-40`) — the generator then drops the whole file. Otherwise
+// it returns what PyYAML builds: nil for None (`!!null x` included), the
+// bool for a bool (a plain `yes` / `On`, a `!!bool yEs`; a quoted `"yes"`
+// or `!!str yes` stays a string), and for anything else a non-bool value —
+// yaml.v3's decode where it has one, else the scalar's text. Pinned against
+// PyYAML by tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind
+// spot (the non-specific tag `!` on a quoted scalar) is in pyyaml.go.
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
 	}
-	if b, tagged, ok := taggedBool(n); tagged {
-		if !ok {
-			return nil, fmt.Errorf("!!bool %q is not a boolean PyYAML reads", n.Value)
+	if n.Kind == yaml.ScalarNode {
+		v, other, err := pyScalar(n)
+		if err != nil || !other {
+			return v, err
 		}
-		return b, nil
-	}
-	if n.Kind == yaml.ScalarNode && n.Style == 0 {
-		if b, ok := yaml11Bools[n.Value]; ok {
-			return b, nil
-		}
+	} else if err := pyCollection(n); err != nil {
+		return nil, err
 	}
 	var v any
-	err := n.Decode(&v)
-	return v, err
+	if n.Decode(&v) == nil && v != nil {
+		if _, isBool := v.(bool); !isBool {
+			return v, nil
+		}
+	}
+	if n.Kind == yaml.ScalarNode {
+		return n.Value, nil
+	}
+	return kindName(n), nil
 }
 
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
-// value leaves Value nil). A value DecodePyYAML cannot decode is kept as an
-// Undecodable, which is not a boolean: the field is unusable, but the rest of
-// the document still decodes.
+// value leaves Value nil). A value PyYAML refuses fails the decode, as it
+// fails the generator's read of the whole file. yaml.v3 never hands a
+// `!!null`-tagged node to an Unmarshaler, so `!!null x` (None in PyYAML)
+// still fails the enclosing decode.
 type PyYAMLValue struct{ Value any }
 
-// Undecodable is the PyYAMLValue of a value that could not be decoded.
-type Undecodable struct{ Err error }
-
-func (u Undecodable) String() string { return "undecodable: " + u.Err.Error() }
-
 // UnmarshalYAML implements yaml.Unmarshaler.
-func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) error {
-	v, err := DecodePyYAML(n)
-	if err != nil {
-		v = Undecodable{Err: err}
-	}
-	p.Value = v
-	return nil
+func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) (err error) {
+	p.Value, err = DecodePyYAML(n)
+	return err
 }
 
 func kindName(n *yaml.Node) string {
@@ -429,9 +428,15 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 		// `is True` and --strict reports any other non-null value. Booleans
 		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
 		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
-			v, _ := DecodePyYAML(e)
+			// A value PyYAML refuses is a problem too (fail-closed): the
+			// generator drops the whole file over it.
+			v, err := DecodePyYAML(e)
 			if b, ok := v.(bool); ok {
 				p.RequireCriticalEscalation = b
+			} else if err != nil {
+				bad(field+".constraints."+ConstraintRequireCriticalEscalation,
+					"domain policy %q: constraint '%s' cannot be read by the route generator (%v) — it refuses the whole file; set it to true or false (unquoted)",
+					name, ConstraintRequireCriticalEscalation, err)
 			} else {
 				bad(field+".constraints."+ConstraintRequireCriticalEscalation,
 					"domain policy %q: constraint '%s' must be a boolean, got %s %q — the constraint cannot be enforced; set it to true or false (unquoted)",

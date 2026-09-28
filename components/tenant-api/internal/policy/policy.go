@@ -41,13 +41,14 @@ type Constraints struct {
 	EnforceGroupBy         []string `yaml:"enforce_group_by"`
 	MaxRepeatInterval      string   `yaml:"max_repeat_interval"`
 	MinGroupWait           string   `yaml:"min_group_wait"`
-	// RequireCriticalEscalation is decoded loosely so that a non-boolean
-	// value (`"true"`, `1`, or an undecodable `!!bool y`) does not fail the
-	// whole file: only a boolean `true` turns the constraint on (#2325, the
-	// generator's `is True`), and any other non-null value is logged once per
-	// load and left off. The boolean is read PyYAML's way
-	// (routingpolicy.DecodePyYAML): a plain `yes` / `on` or a `!!bool yEs` is
-	// true and `no` / `off` false, as in the generator.
+	// RequireCriticalEscalation is read as the generator's PyYAML reads it
+	// (routingpolicy.DecodePyYAML, #2325): a plain `yes` / `on` or a
+	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
+	// the constraint on (the generator's `is True`); any other value PyYAML
+	// reads (`"true"`, `1`) is logged once per load and left off, and the
+	// rest of the file still applies. A value PyYAML refuses (`!!bool y`,
+	// `!!int abc`) fails the file, as the generator drops it: a hot reload
+	// keeps the last good policy and records the failure.
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 

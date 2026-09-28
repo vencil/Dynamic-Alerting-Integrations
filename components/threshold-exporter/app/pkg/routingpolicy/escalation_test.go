@@ -43,6 +43,10 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 		{"!!bool yEs", true, false},
 		{"!!bool 'no'", false, false},
 		{"!<tag:yaml.org,2002:bool> on", true, false},
+		// yaml.v3 reads these, PyYAML refuses them (the generator drops the
+		// file): a problem, never a silently skipped constraint.
+		{"!!int 0X1F", false, true},
+		{"2001-13-40", false, true},
 	}
 	for _, tc := range cases {
 		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " + tc.value + "\n"
@@ -64,26 +68,35 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 	}
 }
 
-// A `!!bool` PyYAML refuses (`!!bool y`) fails PyYAML's whole safe_load;
-// da-guard refuses the whole document too, and a PyYAMLValue field keeps a
-// non-boolean marker instead of failing the struct it sits in.
-func TestTaggedBoolPyYAMLRefuses(t *testing.T) {
+// A value PyYAML refuses (`!!bool y`) fails PyYAML's whole safe_load, and
+// the generator drops the file: da-guard refuses the whole document, and a
+// PyYAMLValue field fails the struct it sits in (tenant-api's parseConfig,
+// so a hot reload keeps the last good policy). One PyYAML reads but yaml.v3
+// cannot (`!!int 1:30`, `!!binary 1_000`) decodes, as a non-boolean.
+func TestPyYAMLValue_RefusedFailsTheDecode(t *testing.T) {
 	t.Parallel()
 	src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: !!bool y\n"
 	if _, _, err := ParseDomainPolicies([]byte(src)); err == nil {
 		t.Errorf("ParseDomainPolicies(!!bool y): want the document refused")
 	}
-	for _, v := range []string{"!!bool y", "!!bool 1", "!!int x"} {
-		var doc struct {
-			E PyYAMLValue `yaml:"e"`
-			S []string    `yaml:"s"`
+	type doc struct {
+		E PyYAMLValue `yaml:"e"`
+		S []string    `yaml:"s"`
+	}
+	for _, v := range []string{"!!bool y", "!!bool 1", "!!int abc", "!!int 0X1F"} {
+		var d doc
+		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &d); err == nil {
+			t.Errorf("%s: decoded %#v, want the decode to fail as PyYAML's does", v, d.E.Value)
 		}
-		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &doc); err != nil {
-			t.Errorf("%s: %v, want the other fields still decoded", v, err)
+	}
+	for v, want := range map[string]any{"!!int 1:30": "1:30", "!!binary 1_000": "1_000", "!!int 5": 5} {
+		var d doc
+		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &d); err != nil {
+			t.Errorf("%s: %v, want it decoded (PyYAML reads it)", v, err)
 			continue
 		}
-		if _, ok := doc.E.Value.(Undecodable); !ok || !reflect.DeepEqual(doc.S, []string{"webhook"}) {
-			t.Errorf("%s: got %#v / %v, want Undecodable and [webhook]", v, doc.E.Value, doc.S)
+		if !reflect.DeepEqual(d.E.Value, want) || !reflect.DeepEqual(d.S, []string{"webhook"}) {
+			t.Errorf("%s: got %#v / %v, want %#v and [webhook]", v, d.E.Value, d.S, want)
 		}
 	}
 }

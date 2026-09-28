@@ -1,7 +1,12 @@
 package policy
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -603,25 +608,91 @@ func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
 	}
 }
 
-// #2325: a require_critical_escalation value that cannot be decoded (a
-// `!!bool` PyYAML refuses) leaves that constraint off but must not fail the
-// file — every other constraint in it is still enforced.
-func TestParseConfig_UndecodableEscalationKeepsOtherConstraints(t *testing.T) {
+// #2325: hot reload of a require_critical_escalation value. One PyYAML
+// refuses (`!!bool y`, `!!int abc`) makes the route generator drop the whole
+// file, so it fails the reload here: the last good policy stays in effect and
+// the reload failure is recorded. One PyYAML reads but is not a boolean
+// (`!!int 5`) loads, with only that constraint off (and a WARN), as the
+// generator does.
+const escalationPolicyTmpl = "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
+	"      require_critical_escalation: %s\n      forbidden_receiver_types: [slack]\n"
+
+type reloadOutcomes struct {
+	mu  sync.Mutex
+	oks []bool
+}
+
+func (r *reloadOutcomes) RecordReload(_ string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.oks = append(r.oks, ok)
+}
+
+func (r *reloadOutcomes) last() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.oks) > 0 && r.oks[len(r.oks)-1]
+}
+
+func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
 	t.Parallel()
-	cfg, err := parseConfig([]byte("domain_policies:\n" +
-		"  fin:\n    tenants: [t1]\n    constraints:\n      forbidden_receiver_types: [webhook]\n" +
-		"      require_critical_escalation: !!bool y\n"))
-	if err != nil {
-		t.Fatalf("an undecodable value must not fail the whole file: %v", err)
+	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1"} {
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		m := NewManager(dir)
+		obs := &reloadOutcomes{}
+		m.SetReloadObserver(obs)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		if err := m.Reload(); err == nil {
+			t.Errorf("%s: Reload() = nil, want the error PyYAML's refusal is", v)
+		}
+		if obs.last() {
+			t.Errorf("%s: reload recorded as successful, want a failure", v)
+		}
+		pols := m.RoutingPolicies()
+		if len(pols) != 1 || !pols[0].RequireCriticalEscalation ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("%s: policies %+v, want the last good one (escalation on, slack forbidden)", v, pols)
+		}
 	}
-	m := NewForTest(cfg)
+}
+
+// Not parallel: it swaps the process-wide slog default to read the WARN.
+func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
+	var buf lockedBuffer
+	orig := slog.Default()
+	defer slog.SetDefault(orig)
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+	m := NewManager(dir)
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "!!int 5"))
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload(): %v, want a value PyYAML reads (int 5) to load", err)
+	}
 	pols := m.RoutingPolicies()
-	if len(pols) != 1 || pols[0].RequireCriticalEscalation {
-		t.Fatalf("policies %+v, want one with the escalation constraint off", pols)
+	if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+		!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+		t.Errorf("policies %+v, want escalation off and slack still forbidden", pols)
 	}
-	v := m.CheckTenantRouting("t1", map[string]any{"_routing": map[string]any{
-		"receiver": map[string]any{"type": "webhook", "url": "https://x.example/h"}}}, routingpolicy.Layers{})
-	if len(v) != 1 || v[0].Constraint != "forbidden_receiver_types" {
-		t.Errorf("forbidden_receiver_types must still be enforced: %+v", v)
+	if out := buf.String(); !strings.Contains(out, "require_critical_escalation is not a boolean") ||
+		!strings.Contains(out, "domain=fin") || !strings.Contains(out, "value=5") {
+		t.Errorf("log %q, want the non-boolean WARN for domain fin", out)
 	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
