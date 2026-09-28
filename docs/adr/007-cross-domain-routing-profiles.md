@@ -112,6 +112,12 @@ domain_policies:
 - `--strict` 模式：報錯終止
 - 預設模式：發出 WARNING 並標記
 
+**`require_critical_escalation` 判準**（#2244）：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty，這項檢查不保證每一則 critical 告警都會送到 PagerDuty。合規條件是租戶主 receiver 的 type 為 `pagerduty`，或者有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty` receiver；只換成別的 receiver type 或別的目標都不算升級。
+
+合規之後還有兩種情況只報 WARN，在兩種模式下都不影響 exit code：
+- **遮蔽**：路由順序是 overrides → routes → 主 receiver。排在升級目的地之前、又可能攔下 critical 的非 PagerDuty 子路由，每條報一則。override 一律算，因為它不能比對 severity；route 則是沒寫 `severity`、或寫的正是 `critical` 才算。
+- **部分涵蓋**：升級用的 `routes` 條目除了 `severity` 還比對了別的 label（例如 `alertname`）。WARN 會列出它涵蓋的 label，以及其餘 critical 告警的去處：後面第一條 `match` 恰為 `{severity: critical}` 的 route，沒有的話就是主 receiver。那個去處是 PagerDuty 時不報。
+
 ### 為何拒絕三層 Contact Profile 模型
 
 設計討論中曾提出的三層模型（Contact Profile → Routing Profile → Domain Policy）存在過度工程化的風險：
@@ -282,6 +288,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.10.0**（開發中）：`--strict` 接線至 CLI 與 CI——組譯期 domain-policy 違規由 WARN 轉 ERROR 並 blocking（`--validate --strict` exit 1，違規訊息含實際值 vs 域限制 + 修法提示）
 
 - **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
+- **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

@@ -23,6 +23,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 import yaml
@@ -1325,6 +1326,146 @@ def list_tenant_subroutes(
     return subroutes
 
 
+# ── ADR-007 `require_critical_escalation` (#2244) ──
+# Receiver types that count as escalation targets for severity="critical".
+# ADR-007's finance case asks for "critical → PagerDuty"; a different type,
+# or a different target of the same type, is not an escalation.
+ESCALATION_TYPES = frozenset({"pagerduty"})
+
+
+def _subroute_receiver_type(sub_rc: dict) -> str:
+    recv = sub_rc.get("receiver")
+    return recv.get("type", "") if isinstance(recv, dict) else ""
+
+
+class EscalationFindings(NamedTuple):
+    """Result of ``critical_escalation_findings`` for one tenant."""
+
+    # First escalation destination ("routes[<j>] (<match>)" or "the main
+    # receiver"); None ⇔ non-compliant.
+    target: str | None
+    # (ref, match, receiver_type) of each sub-route that can catch a
+    # critical alert ahead of ``target`` without escalating it.
+    shadows: list[tuple[str, str, str]]
+    # (covered, fallthrough) when ``target`` is a routes entry that matches
+    # more than ``severity: critical``: ``covered`` is its other matchers,
+    # ``fallthrough`` where the remaining critical alerts land (a non-
+    # escalation catch-all route, or the main receiver). None otherwise.
+    partial: tuple[str, str] | None = None
+
+
+def critical_escalation_findings(routing_config: dict) -> EscalationFindings:
+    """Judge one tenant's resolved routing against ``require_critical_escalation``.
+
+    Compliant ⇔ the main receiver type is in ``ESCALATION_TYPES``, or a
+    rendered ``routes[j]`` (same list as ``list_tenant_subroutes``) matches
+    ``severity: critical`` and sends to an ``ESCALATION_TYPES`` receiver.
+    When compliant:
+
+    * ``shadows`` lists each sub-route ahead of the first escalation target —
+      overrides, then routes, then the main receiver, first match wins — that
+      is not itself an escalation receiver and can catch a critical alert:
+      every override (it cannot match on severity), and every route whose
+      ``match`` has no ``severity`` key or ``severity: critical``.
+    * ``partial`` is set when the target is a routes entry whose ``match``
+      has keys besides ``severity``: the remaining critical alerts fall to
+      the first later
+      route whose ``match`` is exactly ``{severity: critical}``, else to the
+      main receiver — reported only when that is not an escalation receiver.
+
+    Call it only for a tenant with a main receiver.
+    """
+    subroutes = list_tenant_subroutes(routing_config)
+    raw_routes = routing_config.get("routes")
+    main_type = _subroute_receiver_type(routing_config)
+
+    def _route_match(ref: str) -> dict | None:
+        """The raw ``match`` of a ``routes[<i>]`` ref; None for an override."""
+        if not ref.startswith("routes["):
+            return None
+        return raw_routes[int(ref[len("routes["):-1])]["match"]
+
+    first = None
+    for pos, (ref, _match, sub_rc, _inh) in enumerate(subroutes):
+        match = _route_match(ref)
+        if (match is not None and match.get("severity") == "critical"
+                and _subroute_receiver_type(sub_rc) in ESCALATION_TYPES):
+            first = pos
+            break
+    if first is None:
+        if main_type not in ESCALATION_TYPES:
+            return EscalationFindings(None, [])
+        first = len(subroutes)
+        target = "the main receiver"
+    else:
+        target = f"{subroutes[first][0]} ({subroutes[first][1]})"
+
+    shadows = []
+    for ref, match_str, sub_rc, _inh in subroutes[:first]:
+        sub_type = _subroute_receiver_type(sub_rc)
+        if sub_type in ESCALATION_TYPES:
+            continue
+        match = _route_match(ref)
+        if match is None or match.get("severity") in (None, "critical"):
+            shadows.append((ref, match_str, sub_type))
+
+    partial = None
+    if first < len(subroutes):
+        target_match = _route_match(subroutes[first][0])
+        others = [f"{k}={v}" for k, v in target_match.items()
+                  if k != "severity"]
+        if others:
+            fallthrough = f"the main receiver (type '{main_type}')"
+            fall_type = main_type
+            for ref, match_str, sub_rc, _inh in subroutes[first + 1:]:
+                if _route_match(ref) == {"severity": "critical"}:
+                    fall_type = _subroute_receiver_type(sub_rc)
+                    fallthrough = (f"{ref} ({match_str}, receiver type "
+                                   f"'{fall_type}')")
+                    break
+            if fall_type not in ESCALATION_TYPES:
+                partial = (",".join(others), fallthrough)
+    return EscalationFindings(target, shadows, partial)
+
+
+def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
+                               tenant: str, routing_config: dict) -> None:
+    """Append the ``require_critical_escalation`` findings for one tenant.
+
+    Non-compliance goes through *fmt* (strict → blocking ERROR, else WARN).
+    A shadowing sub-route and a partial escalation are always a plain WARN —
+    they never block, and the text avoids the ``skipping`` word
+    ``_validate_mode`` fails on.
+    """
+    target, shadows, partial = critical_escalation_findings(routing_config)
+    escalation = sorted(ESCALATION_TYPES)
+    if target is None:
+        main_type = _subroute_receiver_type(routing_config)
+        messages.append(fmt(
+            f"domain_policy '{policy_name}', tenant '{tenant}': "
+            f"require_critical_escalation is set but severity=critical alerts "
+            f"do not reach a receiver of type {escalation} (main receiver "
+            f"type '{main_type}', and no rendered routes entry matches "
+            f"severity=critical with such a receiver)",
+            "add `routes: - match: {severity: critical}` with a pagerduty "
+            "receiver to the tenant's _routing or its routing profile, or "
+            "switch the main receiver.type to pagerduty"))
+        return
+    for ref, match, sub_type in shadows:
+        messages.append(
+            f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' {ref} "
+            f"({match}): receiver type '{sub_type}' is matched before the "
+            f"critical escalation target {target}, so severity=critical "
+            f"alerts it matches never reach a receiver of type {escalation}")
+    if partial is not None:
+        covered, fallthrough = partial
+        messages.append(
+            f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
+            f"{target}: the critical escalation only covers alerts with "
+            f"{covered}; other severity=critical alerts go to {fallthrough}, "
+            f"not a receiver of type {escalation}")
+
+
 def check_domain_policies(
     routing_configs: dict[str, dict],
     domain_policies: dict[str, dict],
@@ -1350,6 +1491,11 @@ def check_domain_policies(
             unchanged for backward compatibility — including the legacy
             quirks (a falsy parsed duration like "0s" or a multi-unit
             "1h30m" is silently skipped there).
+
+    ``require_critical_escalation: true`` (#2244) is judged by
+    ``critical_escalation_findings``; a sub-route that shadows the
+    escalation target, and an escalation route that covers only part of
+    the critical alerts, are a WARN in both modes and never block.
 
     Known limitation: a ``domain_policies:`` block in a wrongly named
     file, or an unparseable ``_domain_policy.yaml``, never reaches this
@@ -1425,6 +1571,19 @@ def check_domain_policies(
             policy_name, constraints, "enforce_group_by")
         max_repeat = constraints.get("max_repeat_interval")
         min_group_wait = constraints.get("min_group_wait")
+        # #2244: None / false mean "not constrained"; a non-bool value is
+        # fail-open like a non-list list constraint — strict surfaces it.
+        escalation = constraints.get("require_critical_escalation")
+        require_escalation = escalation is True
+        if (strict and escalation is not None
+                and not isinstance(escalation, bool)):
+            messages.append(_fmt(
+                f"domain_policy '{policy_name}': constraint "
+                f"'require_critical_escalation' must be a boolean, got "
+                f"{type(escalation).__name__} {escalation!r} — the "
+                f"constraint cannot be enforced",
+                "set 'require_critical_escalation' to true or false "
+                "(unquoted)"))
 
         # Strict: validate constraint-side durations once per policy —
         # an unparseable bound (e.g. "banana", "-1h") means the constraint
@@ -1455,6 +1614,10 @@ def check_domain_policies(
             # what it declares, plus what it inherits from the tenant's main
             # route (see list_tenant_subroutes()).
             tenant_rc = routing_configs[tenant]
+            if (require_escalation and isinstance(tenant_rc, dict)
+                    and tenant_rc.get("receiver")):
+                _check_critical_escalation(
+                    messages, _fmt, policy_name, tenant, tenant_rc)
             targets = [(f"tenant '{tenant}'", None, tenant_rc, frozenset())]
             targets.extend(
                 (f"tenant '{tenant}' {ref} ({match})", ref, sub_rc, inherited)
