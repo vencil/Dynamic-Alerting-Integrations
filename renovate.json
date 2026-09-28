@@ -105,10 +105,11 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "#1354 — the signing / SBOM chain in release.yaml is 'bump deliberately' (its own comment): every update waits for a Dependency Dashboard tick instead of riding the grouped Actions PR.",
+      "description": "#1354 — the signing / SBOM chain in release.yaml is 'bump deliberately' (its own comment): every update waits for a Dependency Dashboard tick instead of riding the grouped Actions PR. Its own groupName is load-bearing: without it these inherit `GitHub Actions` from the rule above, so an approved signing-chain bump would share one PR with unrelated action updates.",
       "matchManagers": ["github-actions"],
       "matchDepNames": ["sigstore/cosign-installer", "anchore/sbom-action"],
-      "dependencyDashboardApproval": true
+      "dependencyDashboardApproval": true,
+      "groupName": "release signing chain"
     },
     {
       "description": "#1354 — the Go builder image is NOT Renovate's: the Go SSOT is each module's go.mod, and tests/ops/test_go_toolchain_parity.py binds every `FROM golang:` to it. A one-sided Renovate bump would be red by construction.",

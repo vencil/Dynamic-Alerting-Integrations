@@ -388,6 +388,13 @@ def test_signing_chain_actions_wait_for_the_dashboard(dep):
     got = _resolve(_load_config(), manager="github-actions", dep=dep,
                    datasource="github-tags", dep_type="action", update="patch")
     assert got.get("dependencyDashboardApproval") is True, got
+    # Approval alone is not enough: without a group of its own the dep inherits
+    # the general `GitHub Actions` groupName and, once approved, lands in the same
+    # PR as every unrelated action bump (CodeRabbit on #2383).
+    assert got.get("groupName") == "release signing chain", got
+    assert got.get("groupName") != _resolve(
+        _load_config(), manager="github-actions", dep="actions/checkout",
+        datasource="github-tags", dep_type="action", update="patch").get("groupName"), got
 
 
 def test_dockerfile_manager_never_co_owns_a_custom_regex_ref():
