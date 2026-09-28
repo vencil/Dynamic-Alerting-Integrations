@@ -2455,7 +2455,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / routing / cardinality 三層）。
+Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / routing / cardinality 三層；routing 含 domain policy）。
 
 **用法**
 
@@ -2500,6 +2500,21 @@ da-tools guard <subcommand> [flags]
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
 | 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
+
+**Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
+
+routing 檢查的對象是租戶**解析後**的 routing，與 route generator（`generate-routes`）合併的三層相同：根目錄的 `_routing_defaults` → `_routing_profile` 參照的 routing profile → 租戶自己的 `_routing`，逐頂層鍵淺合併，最後把 `{{tenant}}` 換成租戶 id。`_routing_enforced` 不參與。平台檔只讀 `--config-dir` 根目錄（與 generator 一致），不看 `--scope`。主 receiver、`overrides`、ADR-007 `routes` 各條目的 receiver 都做相同的形狀檢查，並依 `_domain_policy.yaml` 判 receiver type：`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判，同一個 receiver 可同時違反兩條。
+
+| Finding kind | 嚴重度 | 觸發 |
+|---|---|---|
+| `invalid_route_entry` | error | `routes` 不是 list，或某條目 generator 會略過（非 mapping、有 `continue` / `match_re` 等不支援的鍵、`match` 缺或空、label 不合法、值不是非空字串）；Field 為 `routes` 或 `routes[i]` |
+| `domain_policy_violation` | error | 主 receiver／`overrides[i]`／`routes[i]` 的 type 違反 domain policy；訊息含 domain、constraint 與該值來自哪一層 |
+| `unknown_routing_profile` | warn | `_routing_profile` 指向沒有定義的 profile（只有空白也算） |
+| `domain_policy_unusable` | error | `_domain_policy.yaml` 的結構無法使用（例如 `tenants` 不是 list）；tenant 欄空白，只略過依賴它的檢查 |
+| `routing_profiles_unusable` | warn | `routing_profiles:` 不是 mapping；tenant 欄空白 |
+| `routing_defaults_routes_ignored` | error | `_routing_defaults` 帶了 `routes`（應放在 profile 或租戶）；兩端都在合併前丟掉，generator 的 `--validate` 同樣擋 |
+
+這些 finding 不會把檔案列進 exit 3；語法壞到 exporter 讀不了的平台檔仍只以 exit 3 點名一次。
 
 **`served-values`**
 

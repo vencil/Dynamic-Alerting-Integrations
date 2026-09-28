@@ -2469,7 +2469,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / routing / cardinality.
+Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / routing / cardinality (routing includes domain policies).
 
 **Usage**
 
@@ -2514,6 +2514,21 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 1 | guard found errors — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
 | 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
+
+**Routing checks ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280))**
+
+The routing checks look at each tenant's **resolved** routing, merged from the same three layers the route generator (`generate-routes`) uses: the root `_routing_defaults` → the routing profile named by `_routing_profile` → the tenant's own `_routing`, a shallow merge per top-level key, then `{{tenant}}` replaced with the tenant id. `_routing_enforced` takes no part. Platform files are read from the `--config-dir` root only (as the generator does), never from `--scope`. The main receiver, every `overrides` entry and every ADR-007 `routes` entry get the same shape checks, and their receiver types are judged against `_domain_policy.yaml`: `forbidden_receiver_types` and `allowed_receiver_types` are separate tests, so one receiver can break both.
+
+| Finding kind | Severity | Trigger |
+|---|---|---|
+| `invalid_route_entry` | error | `routes` is not a list, or an entry the generator skips (not a mapping, an unsupported key such as `continue` / `match_re`, a missing or empty `match`, an invalid label, a value that is not a non-empty string); Field is `routes` or `routes[i]` |
+| `domain_policy_violation` | error | the main receiver / `overrides[i]` / `routes[i]` type breaks a domain policy; the message names the domain, the constraint and the layer the value came from |
+| `unknown_routing_profile` | warn | `_routing_profile` names a profile nothing defines (whitespace-only counts) |
+| `domain_policy_unusable` | error | a `_domain_policy.yaml` structure that cannot be used (e.g. `tenants` is not a list); empty tenant, only the checks that depend on it are skipped |
+| `routing_profiles_unusable` | warn | `routing_profiles:` is not a mapping; empty tenant |
+| `routing_defaults_routes_ignored` | error | `_routing_defaults` carries `routes` (they belong in a profile or the tenant); both readers drop them before the merge, and the generator's `--validate` fails on it too |
+
+None of these puts a file on the exit-3 list; a platform file whose syntax the exporter cannot read is still named once, by exit 3.
 
 **`served-values`**
 
