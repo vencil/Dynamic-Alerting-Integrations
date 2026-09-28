@@ -11,6 +11,10 @@
 """
 from __future__ import annotations
 
+import re
+import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -257,7 +261,10 @@ class TestWorkflowContract:
         checked = 0
         for step in self._steps():
             run = step.get("run") or ""
-            if "git diff" not in run or "_defaults.yaml" not in run:
+            # 依**角色**選 step（呼叫 scope helper 的那一支），不依內文措辭：
+            # 先前的述詞是 `"_defaults.yaml" in run`，而 #2192 把那支 step 的
+            # 措辭改成「_ 開頭檔」之後它就可能命中不到，本斷言隨之空虛。
+            if "git diff" not in run or "guard_defaults_scopes.py" not in run:
                 continue
             checked += 1
             for line in self._code_lines(run):
@@ -266,7 +273,7 @@ class TestWorkflowContract:
                         f"git diff 不可用 `|| true` 吞掉失敗——那是本票的根因：{line}"
                     )
         assert checked == 1, (
-            f"預期恰有 1 個 step 對 _defaults.yaml 跑 git diff，實際 {checked} 個"
+            f"預期恰有 1 個呼叫 scope helper 的 step 跑 git diff，實際 {checked} 個"
             "——0 表示本斷言空虛通過"
         )
 
@@ -303,6 +310,223 @@ class TestWorkflowContract:
         assert "guard_defaults_scopes.py" in runs, (
             "scope 解析必須走 scripts/ops/guard_defaults_scopes.py（有單元測試釘住）"
         )
+
+
+def _gh_glob_regex(pattern: str) -> re.Pattern[str]:
+    """GitHub Actions `paths:` filter glob 的最小子集 → regex。
+
+    ⛔ 刻意**不用** `scripts/ops/paths_filter_glob.covers()`：它對 `[Dd]` 這種
+    字元類別設計上回 False（那支比對器只負責 dorny/paths-filter 的形狀），拿它來
+    判「會不會觸發」等於把每一條 `[Yy]` pattern 都判成不觸發。
+
+    語意（GitHub 文件 workflow syntax 的 filter pattern cheat sheet）：
+    `*` 不跨 `/`；`**` 跨目錄；`**/` 可配**零層**目錄（`**/README.md` 配到根目錄的
+    `README.md`）；`[...]` 字元類別照搬。其餘字元字面比對。
+
+    ⛔ `?` 與 `+` **不支援、遇到就 raise**。在 GitHub 的語意裡它們是**量詞**
+    （`?`＝前一個字元零或一次，`+`＝一次以上），不是 fnmatch 的「任一字元」；
+    照 fnmatch 翻譯會讓 `*.ya?ml` 這類 pattern 被默默比錯，而錯的方向正好是
+    「以為會觸發」。要用它們就先在這裡把量詞語意做對。
+    """
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i] in "?+":
+            raise ValueError(
+                f"GitHub paths 的 {pattern[i]!r} 是量詞，本比對器未實作："
+                f"{pattern!r}")
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "[":
+            end = pattern.index("]", i + 1)
+            out.append(pattern[i:end + 1])
+            i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _gh_paths_trigger(patterns: list[str], path: str) -> bool:
+    """依序套用，`!` 開頭為排除；最後一個命中者決定（GitHub 的規則）。"""
+    hit = False
+    for pat in patterns:
+        negate = pat.startswith("!")
+        if _gh_glob_regex(pat[1:] if negate else pat).match(path):
+            hit = not negate
+    return hit
+
+
+class TestGlobMatcherControls:
+    """比對器本身先過對照組，否則下面「會觸發／不觸發」的斷言沒有意義。"""
+
+    @pytest.mark.parametrize("pattern, path, expect", [
+        ("**/_[Dd]*.yaml", "conf.d/_defaults.yaml", True),
+        ("**/_[Dd]*.yaml", "conf.d/_Defaults.yaml", True),
+        ("**/_[Dd]*.yaml", "conf.d/_xefaults.yaml", False),
+        # `**/` 配零層：GitHub 文件的 `**/README.md` 配根目錄 `README.md`。
+        ("**/README.md", "README.md", True),
+        ("**/README.md", "a/b/README.md", True),
+        # `*` 不跨 `/`。
+        ("*.yaml", "conf.d/x.yaml", False),
+        ("*.yaml", "x.yaml", True),
+        ("**/_*.yaml", "conf.d/_arch/tenant.yaml", False),
+        ("a/**", "a/b/c.go", True),
+        ("a/**", "b/a/c.go", False),
+    ])
+    def test_matcher(self, pattern, path, expect):
+        assert bool(_gh_glob_regex(pattern).match(path)) is expect
+
+    @pytest.mark.parametrize("pattern", ["**/*.ya?ml", "**/_+.yaml"])
+    def test_quantifiers_are_refused_not_mistranslated(self, pattern):
+        """`?` / `+` 在 GitHub 是量詞；比對器必須明說不支援，不可默默當 fnmatch。"""
+        with pytest.raises(ValueError):
+            _gh_glob_regex(pattern)
+
+    def test_negation_is_last_match_wins(self):
+        pats = ["**/*.yaml", "!conf.d/skip.yaml"]
+        assert _gh_paths_trigger(pats, "conf.d/keep.yaml")
+        assert not _gh_paths_trigger(pats, "conf.d/skip.yaml")
+
+
+# ⛔ 字面值，不從 workflow 推導（見模組 docstring 的 #1283）。
+_PLATFORM_FILES = [
+    "conf.d/_platform.yaml",
+    "components/threshold-exporter/config/conf.d/_platform.yml",
+    "_PLATFORM.YAML",
+]
+_CONTROL_FILES = ["conf.d/_defaults.yaml", "conf.d/_profiles.yaml"]
+_NEG_FILES = ["conf.d/acme.yaml", "conf.d/_arch/acme.yaml"]
+
+
+class TestTriggerCoversEveryRootPlatformFile:
+    """#2192：da-guard 從**任何** root `_` 平台檔讀 `profiles:`
+    （`LoadRootPlatformProfiles`）與 `tenants:` overlay（`platform_overlay.go`），
+    所以只改 `_platform.yaml` 的 PR 也必須觸發這支 workflow。
+
+    `tests/ops/test_ci_path_filter_coverage.py` 只掃 dorny/paths-filter 的
+    workflow，這支用原生 `on.pull_request.paths`，不在它的視野裡。
+    """
+
+    @staticmethod
+    def _paths() -> list[str]:
+        paths = TestWorkflowContract._wf()[True]["pull_request"]["paths"]
+        assert paths, "workflow 沒有 paths: ——下面每條斷言都會空虛"
+        return paths
+
+    @pytest.mark.parametrize("path", _PLATFORM_FILES)
+    def test_platform_file_triggers(self, path):
+        assert _gh_paths_trigger(self._paths(), path), (
+            f"只改 {path} 的 PR 不會觸發 Dangling Defaults Guard——"
+            "da-guard 會讀它的 profiles: / tenants: overlay（#2192）"
+        )
+
+    @pytest.mark.parametrize("path", _CONTROL_FILES)
+    def test_control_defaults_and_profiles_still_trigger(self, path):
+        assert _gh_paths_trigger(self._paths(), path)
+
+    @pytest.mark.parametrize("path", _NEG_FILES)
+    def test_tenant_file_does_not_trigger(self, path):
+        """反向對照：放寬不可退化成「任何 YAML 都觸發」。"""
+        assert not _gh_paths_trigger(self._paths(), path)
+
+
+def _scope_pathspecs() -> list[str]:
+    """從 workflow 取出 scope step 餵給 `git diff` 的 pathspec（`--` 之後、`>` 之前）。"""
+    found = []
+    for step in TestWorkflowContract._steps():
+        run = step.get("run") or ""
+        if "guard_defaults_scopes.py" not in run:
+            continue
+        for line in TestWorkflowContract._code_lines(run):
+            if line.startswith("git diff") and "--name-only" in line:
+                argv = shlex.split(line)
+                tail = argv[argv.index("--") + 1:]
+                found.append(tail[:tail.index(">")] if ">" in tail else tail)
+    assert len(found) == 1, (
+        f"預期 scope step 恰有 1 條 `git diff --name-only`，實際 {len(found)} 條"
+        "——0 表示下面的斷言空虛通過")
+    assert found[0], "pathspec 為空：git diff 會列出所有檔案，本斷言失去意義"
+    return found[0]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-c", "core.quotePath=true", *args], cwd=cwd, check=True,
+        capture_output=True, timeout=60)
+    return proc.stdout.decode("utf-8", errors="surrogateescape")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+class TestScopeListingPlacesPlatformFiles:
+    """#2192：只改 `_platform.yaml` 時，targets 必須指到它所在的樹。
+
+    舊 pathspec 只列 `_defaults`，於是清單為空、走 zero-target 分支、只驗
+    自動偵測到的 `CONF_D`——改的若是 try-local 那棵，就驗到錯的樹。這裡用
+    **workflow 裡那一行實際的 pathspec** 在真 git repo 上跑 `git diff -z`，
+    再交給 `guard_defaults_scopes.resolve()`，量的是兩者接起來的結果。
+    """
+
+    @staticmethod
+    def _listing(tmp_path: Path, changed: str) -> list[str]:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q", ".")
+        _git(repo, "config", "user.email", "t@example.invalid")
+        _git(repo, "config", "user.name", "t")
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "base")
+        base = _git(repo, "rev-parse", "HEAD").strip()
+        target = repo / changed
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("profiles: {}\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pr")
+        out = _git(repo, "diff", "-z", "--name-only", f"{base}...HEAD", "--",
+                   *_scope_pathspecs())
+        return [p for p in out.split("\0") if p]
+
+    @pytest.mark.parametrize("changed, root", [
+        ("try-local/seed/conf.d/_platform.yaml", "try-local/seed/conf.d"),
+        ("components/threshold-exporter/config/conf.d/_platform.yml",
+         "components/threshold-exporter/config/conf.d"),
+        ("conf.d/_PLATFORM.YAML", "conf.d"),
+        ("try-local/seed/conf.d/_profiles.yaml", "try-local/seed/conf.d"),
+        ("try-local/seed/conf.d/_defaults.yaml", "try-local/seed/conf.d"),
+    ])
+    def test_platform_file_resolves_to_its_own_tree(self, tmp_path, changed,
+                                                    root):
+        listing = self._listing(tmp_path, changed)
+        assert listing == [changed], (
+            f"scope step 的 git diff 沒列出 {changed}（實得 {listing}）——"
+            "清單為空會走 zero-target，驗的是自動偵測的樹而不是這棵")
+        targets, unmanaged = mod.resolve(listing)
+        assert targets == [(root, root)]
+        assert unmanaged == []
+
+    @pytest.mark.parametrize("changed", _NEG_FILES)
+    def test_tenant_file_is_not_listed(self, tmp_path, changed):
+        """反向對照：pathspec 沒有退化成「全列」，也沒有讓 `*` 跨 `/`。"""
+        assert self._listing(tmp_path, changed) == []
+
+    @pytest.mark.parametrize("changed", _PLATFORM_FILES + _CONTROL_FILES
+                             + _NEG_FILES)
+    def test_listing_agrees_with_the_trigger(self, tmp_path, changed):
+        """觸發面與 scope 清單是同一個集合的兩種寫法，必須一致。
+
+        觸發了卻列不出來 = 驗錯樹；列得出來卻不觸發 = 根本不跑。
+        """
+        paths = TestWorkflowContract._wf()[True]["pull_request"]["paths"]
+        listed = bool(self._listing(tmp_path, changed))
+        assert listed is _gh_paths_trigger(paths, changed)
 
 
 class TestNonAsciiPathsAreNotSilentlyMisplaced:

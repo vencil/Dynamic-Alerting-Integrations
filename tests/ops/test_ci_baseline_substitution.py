@@ -2854,7 +2854,49 @@ def test_no_report_section_is_left_without_a_body(
             f"reads as 'no findings':\n{report}")
 
 
-_RESULT_CONTEXTS = ("steps.", "job.", "needs.", "env.",
+@needs_bash
+@pytest.mark.parametrize("targets_text", [
+    "unmanaged\tdocs/_config.yml\n",
+    "unmanaged\tdocs/_config.yml\nunmanaged\t_ROOT.yaml\n",
+], ids=["one-unmanaged", "two-unmanaged"])
+def test_unmanaged_rows_alone_still_run_the_whole_tree_smoke(
+        tmp_path, targets_text: str) -> None:
+    """#2192 review: an `unmanaged` row must not stand in for a da-guard run.
+
+    The trigger covers every `_` YAML, so a PR that changes guard source and
+    also adds `docs/_config.yml` yields a TSV holding only `unmanaged` rows.
+    Gating the whole-tree smoke on `[ -s "$TARGETS" ]` skipped it: da-guard
+    never ran, the report said only NOT CHECKED, and the verdict was 0 — a
+    green job that validated nothing, the #1219 shape. The smoke must run
+    whenever no `target` row did, and the unmanaged rows are still reported.
+    """
+    runner_temp, targets = _guard_fixture(tmp_path, targets_text)
+    step = _step(GUARD_DEFAULTS, _S_RUN_DA_GUARD)
+    script = _render(step.script, {
+        "runner.temp": str(runner_temp.as_posix()),
+        "steps.detect.outputs.conf_d": "tree-a",
+    })
+    proc = _run(step, script, tmp_path, {
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+        "TARGETS": str(targets.as_posix()),
+        "CONF_D": "tree-a",
+        "GITHUB_OUTPUT": str((tmp_path / "gh-output").as_posix()),
+    })
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    report = (runner_temp / "guard-report.md").read_text(encoding="utf-8")
+    # The stub writes this line only when invoked with --config-dir tree-a,
+    # so its presence is evidence da-guard actually ran over CONF_D.
+    assert "dangling default in tree-a" in report, (
+        f"only unmanaged rows, and da-guard was never invoked — the whole-tree "
+        f"smoke over CONF_D was skipped:\n{report}\n{proc.stdout}")
+    assert "(scope: `tree-a`)" in report, report
+    for line in targets_text.splitlines():
+        path = line.split("\t", 1)[1]
+        assert f"`{path}` — NOT CHECKED" in report, (
+            f"the unmanaged row for {path} is no longer reported:\n{report}")
+
+
+_RESULT_CONTEXTS =("steps.", "job.", "needs.", "env.",
                     "success(", "failure(", "cancelled(")
 
 # `x['y']` and `x.y` are the SAME expression in the Actions language — the
