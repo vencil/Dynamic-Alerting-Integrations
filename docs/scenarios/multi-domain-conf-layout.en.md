@@ -143,6 +143,17 @@ tenants:
 > own `_routing:` are **consumed by nothing** — use the remaining routing examples in
 > this document against a flat directory.
 >
+> 🗓️ **Hierarchical routing is decided; the implementation lands in a follow-up PR**
+> ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326), 2026-09-28):
+> the routing plane will follow the same directory hierarchy as the threshold plane —
+> `_routing_defaults` from each level's `_defaults.yaml` merged shallowly per top-level key
+> (deeper level wins; `null` follows ADR-017's existing per-field rules); `_routing_enforced` at the root
+> only; `_routing_profiles.yaml` and `_domain_policy.yaml` allowed in subdirectories and
+> scoped to their subtree; the same tenant id declared in more than one file is a blocking
+> error. Full semantics:
+> [ADR-017 "Amendment 2026-09-28"](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
+> ⛔ Until that PR merges, the previous paragraph is the actual behaviour.
+>
 > ✅ **`validate_config.py` was made recursive in
 > [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)** (conf.d family ticket
 > [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)) — it

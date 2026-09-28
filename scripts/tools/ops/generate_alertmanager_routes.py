@@ -146,6 +146,9 @@ from _grar_render import VALIDATE_AMTOOL_NOT_FOUND_NOTICE  # noqa: E402, F401
 # re-export and carries the F401 marker.
 from _grar_validate import blocking_generation_errors  # noqa: E402, F401
 from _grar_validate import is_receiver_name_collision  # noqa: E402
+# #2315: the duplicate-tenant refusal, shared with validate-config's
+# tenant_uniqueness row through `_lib_confd.tenant_declarations`.
+from _grar_validate import duplicate_tenant_errors  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -468,6 +471,26 @@ def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
     print("  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
           "verdict over the rest is a verdict over your conf.d. Repair the "
           "file (or remove it from conf.d) and re-run.", file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+def _refuse_duplicate_tenants(tree: TenantTree) -> None:
+    """#2315: one tenant id in two tenant files — refused in EVERY mode.
+
+    Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
+    the exporter rejects the WHOLE tree in this state, so no route set
+    generated from it describes anything that will run, and a ConfigMap
+    written or applied from it is the worst outcome. Before this the reader
+    merged the two blocks and exited 0 in every mode (render, --validate,
+    --output-configmap, with or without --strict).
+    """
+    dups = duplicate_tenant_errors(tree.duplicate_tenants)
+    if not dups:
+        return
+    print(f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
+          "nothing was written or applied:", file=sys.stderr)
+    for e in dups:
+        print(safe_label(e), file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
 
 
@@ -806,6 +829,7 @@ def main() -> None:
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
         tree.as_tuple()
     _refuse_unreadable_tenant_files(tree)
+    _refuse_duplicate_tenants(tree)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)

@@ -390,13 +390,29 @@ func BenchmarkFullDirLoad_1000(b *testing.B) {
 	}
 }
 
+// BenchmarkIncrementalLoad_1000_NoChange and ..._OneFileChanged are pinned
+// to Reread mode (#2344): fixture mtimes are set an hour into the future
+// before the first load, so TreeScanMtimeGuard never admits the stat-only
+// fast-path and every tick re-reads and re-hashes all 1000 files. Unpinned,
+// buildDirConfig's fresh b.TempDir() left files inside the 2s guard only
+// until the loop crossed that mark, so the reported mode depended on
+// -benchtime and ordering (main, standalone: NoChange 16107 allocs/op @1s,
+// 10659/10218 @3s — a mixture). The flat family's Warm path is
+// ..._NoChange_MtimeGuard; each mode now has exactly one bench.
+//
+// ⚠️ Same name, different path: the hierarchy family's
+// BenchmarkDiffAndReload_Hierarchical_*_NoChange is pinned to WARM (#2048,
+// config_hierarchy_bench_test.go). Flat ..._NoChange here is REREAD. Do not
+// read the two "NoChange" numbers as the same mode.
 func BenchmarkIncrementalLoad_1000_NoChange(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
+	setFixtureMtimes(b, dir, time.Now().Add(time.Hour))
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
 	}
+	requireRereadMode(b, mgr, dir)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := mgr.IncrementalLoad(); err != nil {
@@ -423,14 +439,36 @@ func BenchmarkIncrementalLoad_1000_NoChange_MtimeGuard(b *testing.B) {
 	}
 }
 
+// BenchmarkIncrementalLoad_1000_OneFileChanged: Reread mode, see the note
+// above ..._NoChange. The per-iteration os.WriteFile gives tenant-0500.yaml a
+// current mtime, not the pinned future one; that file is inside the guard
+// either way, and the other 999 stay pinned. The pre-loop probe checks both
+// halves: the tree is in Reread mode, and a rewrite is still detected.
 func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
+	setFixtureMtimes(b, dir, time.Now().Add(time.Hour))
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
 	}
 	targetFile := filepath.Join(dir, "tenant-0500.yaml")
+	requireRereadMode(b, mgr, dir)
+	mgr.mu.RLock()
+	before := mgr.lastHash
+	mgr.mu.RUnlock()
+	if err := os.WriteFile(targetFile, []byte("tenants:\n  tenant-0500:\n    mysql_connections: \"1\"\n"), 0600); err != nil {
+		b.Fatal(err)
+	}
+	if err := mgr.IncrementalLoad(); err != nil {
+		b.Fatal(err)
+	}
+	mgr.mu.RLock()
+	after := mgr.lastHash
+	mgr.mu.RUnlock()
+	if after == before {
+		b.Fatal("OneFileChanged probe: rewriting tenant-0500.yaml did not change the config hash")
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
@@ -439,6 +477,33 @@ func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 		if err := mgr.IncrementalLoad(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// requireRereadMode fails the bench unless a scan against mgr's retained
+// prior re-reads every file: the check that a Reread bench is not silently
+// measuring the fast-path (the mirror of benchScanDirTreeWarm's check).
+// ⚠️ It runs right after the fixture is written, so it would also pass on an
+// UNPINNED fixture (still inside the 2s guard at that moment): it catches a
+// fixture that is already warm, not a missing pin. The pin itself is shown
+// by allocs/op staying equal across -benchtime 1s and 3s.
+func requireRereadMode(b *testing.B, mgr *ConfigManager, dir string) {
+	b.Helper()
+	mgr.mu.RLock()
+	prior := mgr.flat.tree
+	mgr.mu.RUnlock()
+	probe, err := scanDirTree(dir, prior, newConfigMetrics(), nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	reused := 0
+	for _, f := range probe.Files {
+		if f.Reused {
+			reused++
+		}
+	}
+	if reused != 0 {
+		b.Fatalf("reread bench is not rereading: %d/%d files took the mtime fast-path (fixture mtimes not pinned into the future?)", reused, len(probe.Files))
 	}
 }
 
