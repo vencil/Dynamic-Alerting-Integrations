@@ -169,7 +169,7 @@ def main() -> int:
     try:
         # generous: pint lint is seconds, but a first-run docker image pull is slow.
         result = subprocess.run(cmd, cwd=REPO_ROOT, timeout=300,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         print("ERROR: pint timed out after 300s", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK

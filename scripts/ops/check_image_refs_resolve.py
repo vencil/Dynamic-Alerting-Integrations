@@ -394,7 +394,7 @@ def _resolver():
 def _resolve_once(cmd: list[str], timeout: int) -> tuple[bool, str]:
     """Run one resolver command; return (resolved, last-line-of-reason)."""
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return (False, f"timeout after {timeout}s")
     if proc.returncode == 0:

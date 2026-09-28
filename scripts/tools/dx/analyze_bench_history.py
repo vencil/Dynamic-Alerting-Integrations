@@ -2064,7 +2064,7 @@ def run_trend_watch(args) -> int:
                             ["gh", "label", "create", RECOVERING_LABEL, "--repo", REPO,
                              "--color", "C2E0C6", "--description",
                              "perf-trend: sustained cleared, creep remains", "--force"],
-                            capture_output=True, text=True, check=False, timeout=60,
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=60,
                         )
                         _gh_write(["issue", "edit", str(num), "--repo", REPO,
                                    "--add-label", RECOVERING_LABEL],
@@ -2088,7 +2088,7 @@ def run_trend_watch(args) -> int:
                         ["gh", "label", "create", PERF_TREND_LABEL, "--repo", REPO,
                          "--color", "FBCA04", "--description",
                          "Nightly bench trend regression (auto-filed)", "--force"],
-                        capture_output=True, text=True, check=False, timeout=60,
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=60,
                     )
                     _file_new_issue(body, args.assignee, len(findings))
             return EXIT_OK

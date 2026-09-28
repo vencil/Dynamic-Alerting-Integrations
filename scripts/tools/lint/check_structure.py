@@ -79,7 +79,7 @@ def _git_tracked(project_root: Path) -> list[str]:
     import subprocess
     result = subprocess.run(
         ["git", "ls-files"],
-        capture_output=True, text=True, cwd=project_root,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root,
         timeout=30,
     )
     if result.returncode != 0:

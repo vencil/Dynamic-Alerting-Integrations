@@ -127,7 +127,7 @@ def _run_dep_doctor(name: str, ws: str) -> int:
     probe = subprocess.run(
         ["docker", "exec", "-w", ws, name, "python3", "-c",
          _doctor_probe_src(sorted(packages))],
-        capture_output=True, text=True, check=False, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=120,
     )
     if probe.returncode == 0:
         subprocess.run(
@@ -180,7 +180,7 @@ def _docker_exists() -> bool:
 def _container_running(name: str) -> bool:
     r = subprocess.run(
         ["docker", "ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30,
     )
     return name in r.stdout.split()
 
@@ -188,7 +188,7 @@ def _container_running(name: str) -> bool:
 def _container_exists(name: str) -> bool:
     r = subprocess.run(
         ["docker", "ps", "-a", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30,
     )
     return name in r.stdout.split()
 
@@ -219,7 +219,7 @@ def cmd_up() -> int:
     if _container_running(name):
         print(f"{name}: already running")
         return 0
-    r = subprocess.run(["docker", "start", name], capture_output=True, text=True, timeout=60)
+    r = subprocess.run(["docker", "start", name], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     if r.returncode != 0:
         print(f"{name}: failed to start — {r.stderr.strip()}", file=sys.stderr)
         return r.returncode
@@ -288,7 +288,7 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
     sys.stdout.flush()
     rc_cat = subprocess.run(
         ["docker", "exec", name, "cat", out_path_in_container + ".rc"],
-        capture_output=True, text=True, check=False, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30,
     )
     try:
         return int(rc_cat.stdout.strip() or "0")

@@ -129,7 +129,7 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
     for s in sets:
         cmd += ["--set", s]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60)
     except subprocess.CalledProcessError as e:
         print(f"ERROR: helm template {chart_dir} failed:\n{e.stderr}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

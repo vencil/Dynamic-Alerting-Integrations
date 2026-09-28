@@ -105,6 +105,16 @@ def parse_coverage_output(text: str) -> List[FileCoverage]:
     return results
 
 
+def _utf8_child_env() -> Dict[str, str]:
+    """Environment for a Python child whose output is read as UTF-8.
+
+    The child writes its pipes in its own locale codec (cp950 on a zh-TW
+    Windows host) unless told otherwise, so decoding with encoding="utf-8"
+    alone is only half the contract (#1374).
+    """
+    return {**os.environ, "PYTHONIOENCODING": "utf-8"}
+
+
 def run_coverage(source_dirs: List[str], repo_root: Path) -> str:
     """Run pytest-cov and return the text output."""
     cov_sources = ",".join(source_dirs)
@@ -119,8 +129,9 @@ def run_coverage(source_dirs: List[str], repo_root: Path) -> str:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(repo_root),
+            env=_utf8_child_env(),
             timeout=300,
         )
         return result.stdout + result.stderr
@@ -141,8 +152,9 @@ def parse_coverage_file(coverage_path: Path, repo_root: Path) -> str:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(repo_root),
+            env=_utf8_child_env(),
             timeout=60,
         )
         return result.stdout

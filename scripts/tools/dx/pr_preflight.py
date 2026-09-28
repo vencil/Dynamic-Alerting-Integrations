@@ -839,7 +839,7 @@ def _git_dir(repo_root: Path) -> Path:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
-            cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
+            cwd=repo_root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return repo_root / ".git"
@@ -857,7 +857,7 @@ def _head_sha(repo_root: Path) -> Optional[str]:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
+            cwd=repo_root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         # ⛔ OSError 不是 FileNotFoundError：上面那段 docstring 說要吞掉「啟動失敗」，

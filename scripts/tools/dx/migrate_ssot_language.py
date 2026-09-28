@@ -343,7 +343,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
                 ["git", "mv", str(rel_s), str(rel_t)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=30,
             )
             if result.returncode != 0:

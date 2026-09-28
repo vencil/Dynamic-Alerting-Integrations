@@ -565,7 +565,7 @@ def resolve_diff_base_ref(env_var: str = "LINT_DIFF_BASE",
             base = default
     result = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=10,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(REPO_ROOT), timeout=10,
     )
     hint_branch = base.removeprefix("origin/")
     if result.returncode != 0:
@@ -582,7 +582,7 @@ def resolve_diff_base_ref(env_var: str = "LINT_DIFF_BASE",
         )
     mb = subprocess.run(
         ["git", "merge-base", base, "HEAD"],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=10,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(REPO_ROOT), timeout=10,
     )
     commit = mb.stdout.strip()
     if mb.returncode != 0 or not commit:

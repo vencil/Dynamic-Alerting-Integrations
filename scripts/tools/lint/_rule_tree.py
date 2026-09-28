@@ -460,7 +460,7 @@ def _expected_rule_files() -> frozenset:
     # the wrong side is still the wrong answer: the file DOES ship.
     out = subprocess.run(["git", "-C", _REPO_ROOT, "--icase-pathspecs",
                           "ls-files", "-z", *globs],
-                         capture_output=True, text=True, timeout=60,
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                          check=True).stdout
     files = frozenset(p for p in out.split("\0") if p)
     if not files:
@@ -491,7 +491,7 @@ def _tracked_yaml_paths():
     # case-insensitive suffix match above exists to prevent.
     out = subprocess.run(
         ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
-        capture_output=True, text=True, timeout=60, check=True).stdout
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=True).stdout
     paths = sorted(p for p in out.split("\0") if p
                    and p.lower().endswith((".yaml", ".yml"))
                    and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))

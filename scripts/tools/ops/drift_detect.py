@@ -367,7 +367,7 @@ def compute_crd_manifest(
         cmd.extend(["--context", context])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         if result.returncode != 0:
             print(f"ERROR: kubectl failed: {result.stderr}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
