@@ -9,7 +9,7 @@ public surface:
   - The parser-style helpers (read_source_versions, count_rule_packs,
     count_bilingual_pairs) — these define what the checks compare
     against, so a bug here cascades into every check_*
-  - The shared IO helpers (_scan_file, _cached_rglob,
+  - The shared IO helpers (_cached_rglob,
     _collect_scannable_files, _read_cached) — caching layer that
     every check_* relies on
   - Two representative check_* functions (check_da_tools_version,
@@ -72,6 +72,21 @@ def _clear_caches():
     mod._RGLOB_CACHE.clear()
 
 
+def _checks_called_by_main() -> set:
+    """Every `check_*` that `main()` calls, read from its AST.
+
+    Derived rather than listed: a hand-copied list is the thing that goes
+    stale when a check is added or retired (#1611).
+    """
+    import ast
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+    main = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    return {n.func.id for n in ast.walk(main)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id.startswith("check_")}
+
+
 def _unlisted_tool_subdirs(tools_dir: Path, listed) -> list:
     """Subdirectories that hold tools but are not in the counted scope.
 
@@ -126,41 +141,6 @@ class TestIssue:
         i = mod.Issue("c", "error", "f.md", 10, "中文 message")
         s = json.dumps(i.to_dict(), ensure_ascii=False)
         assert "中文 message" in s
-
-
-# ============================================================
-# _scan_file
-# ============================================================
-
-
-class TestScanFile:
-
-    def test_returns_empty_for_missing_file(self, tmp_path):
-        # Property: nonexistent path → empty list (not raise).
-        assert mod._scan_file(tmp_path / "nope.txt", r".*") == []
-
-    def test_finds_matches_with_line_numbers(self, tmp_path):
-        f = tmp_path / "x.txt"
-        _write(f, "no match\nfound here v1.2.3 yes\nplain\nv2.5.0 too\n")
-        result = mod._scan_file(f, r"v\d+\.\d+\.\d+")
-        # Two lines have version-like patterns.
-        assert len(result) == 2
-        # (line_num, stripped_line)
-        assert result[0][0] == 2
-        assert "v1.2.3" in result[0][1]
-        assert result[1][0] == 4
-        assert "v2.5.0" in result[1][1]
-
-    def test_no_matches_returns_empty(self, tmp_path):
-        f = tmp_path / "x.txt"
-        _write(f, "no version refs\nplain text\n")
-        assert mod._scan_file(f, r"v\d+\.\d+\.\d+") == []
-
-    def test_strips_line_whitespace(self, tmp_path):
-        f = tmp_path / "x.txt"
-        _write(f, "    indented v1.0.0    \n")
-        result = mod._scan_file(f, r"v\d+\.\d+\.\d+")
-        assert result[0][1] == "indented v1.0.0"
 
 
 # ============================================================
@@ -948,30 +928,15 @@ class TestPlatformVersionSourceIsLoadBearing:
 class TestPlatformVersionScanIsRecursive:
     """#1612 — `check_platform_version` walks `docs/**`; only a nested fixture can prove it.
 
-    Both halves of the check take their file list from
-    `_cached_rglob(DOCS_DIR, ...)`. Every other fixture in this module writes
-    at the top level of `tmp_path`, where `rglob` and `glob` return the same
-    list, so the module stayed fully green with `rglob` replaced by `glob`
-    (measured on #1612's base). In the real tree the two are not close:
-    `docs/` holds 45 `.md` at the top level and 267 recursively, and the JSX
-    tree the issue measured (the portal's JSX sources) is 68 files under
-    `rglob("*.jsx")` and 0 under `glob("*.jsx")` (the portal's JSX source
-    tree; the literal path is kept out of this docstring so verify_diff's
-    text-ref rule does not map this whole module onto portal changes) — all
-    of them in subdirectories. `DOCS_DIR` itself carries no `.jsx` on the current tree
-    (0 either way), so on the real tree the `.md` half is where the recursion
-    is load-bearing; the `.jsx` half is pinned here on a synthetic tree so it
-    cannot go the same way unnoticed.
+    Every other fixture in this module writes at the top level of `tmp_path`,
+    where `rglob` and `glob` return the same list, so the module stayed fully
+    green with `rglob` replaced by `glob` (measured on #1612's base). In the
+    real tree they are not close: most of `docs/`'s `.md` files are in
+    subdirectories.
 
-    ⚠️ #1484's "the JSX source tree is not where this check looks" error
-    belongs to `check_e2e_and_jsx_versions` and tests `jsx_dir.is_dir()`,
-    which stays True when a recursive scan turns into a flat one that finds
-    zero files — it does not fire on this defect. Measured on af12dce0 with
-    `_cached_rglob` swapped for a flat glob: the only other test that moves
-    is `TestTheHookFiresOnEverythingTheGateReads::
-    test_the_measurement_itself_is_not_empty` (#1610), which reports a
-    count drop without naming the scan; on #1612's base (774a6992) the whole
-    module stayed green.
+    ⚠️ #1611 retired the check's `docs/**/*.jsx` half: `docs/` holds no
+    `.jsx`, and the portal JSX tree is `check_e2e_and_jsx_versions`' job. So
+    this class now pins the `.md` half only.
     """
 
     WRONG = "---\ntitle: p\nversion: v2.7.0\n---\nbody\n"
@@ -979,13 +944,10 @@ class TestPlatformVersionScanIsRecursive:
 
     @classmethod
     def _nested(cls, tmp_path):
-        """docs/ with one nested .md, one nested .jsx, and a correct top-level control."""
+        """docs/ with one nested .md and a correct top-level control."""
         docs = tmp_path / "docs"
         (docs / "sub" / "deep").mkdir(parents=True)
-        (docs / "tools" / "sub").mkdir(parents=True)
         (docs / "sub" / "deep" / "page.md").write_text(cls.WRONG, encoding="utf-8")
-        (docs / "tools" / "sub" / "probe.jsx").write_text(
-            "---\ntitle: probe\nversion: v2.7.0\n---\nbody\n", encoding="utf-8")
         (docs / "top.md").write_text(cls.RIGHT, encoding="utf-8")
         return docs
 
@@ -994,27 +956,20 @@ class TestPlatformVersionScanIsRecursive:
         monkeypatch.setattr(mod, "REPO_ROOT", root)
         monkeypatch.setattr(mod, "DOCS_DIR", docs)
 
-    def test_the_jsx_probe_line_matches_the_pattern(self):
-        """The .jsx half is `re.match` per line; the probe must be a line it takes."""
-        m = re.match(mod.PLATFORM_VERSION_FRONTMATTER_PATTERN, "version: v2.7.0")
-        assert m and m.group(1) == "2.7.0"
-
-    def test_a_nested_md_and_a_nested_jsx_are_both_scanned(
-            self, tmp_path, monkeypatch):
+    def test_a_nested_md_is_scanned(self, tmp_path, monkeypatch):
         docs = self._nested(tmp_path)
         self._point(monkeypatch, tmp_path, docs)
 
         issues = mod.check_platform_version("2.9.0")
 
-        assert len(issues) == 2, [(i.file, i.message) for i in issues]
+        assert len(issues) == 1, [(i.file, i.message) for i in issues]
         assert {i.check for i in issues} == {"platform-version"}
         # `Issue.file` is OS-native; compare in POSIX form so the assertion
         # holds on a Windows host too.
         files = sorted(Path(i.file).as_posix() for i in issues)
         assert "sub/deep/page.md" in files[0], files
-        assert "tools/sub/probe.jsx" in files[1], files
         # The correct top-level control was read and produced nothing: the
-        # two issues are the nested drift, not "everything is red".
+        # issue is the nested drift, not "everything is red".
         assert not [i for i in issues if "top.md" in i.file], files
 
     def test_the_fixture_is_nested_where_it_matters(self, tmp_path):
@@ -1033,12 +988,10 @@ class TestPlatformVersionScanIsRecursive:
         """
         docs = self._nested(tmp_path)
         nested_md = [p for p in docs.rglob("*.md") if p.parent != docs]
-        nested_jsx = [p for p in docs.rglob("*.jsx") if p.parent != docs]
-        assert nested_md and nested_jsx, "the fixture lost its nesting"
+        assert nested_md, "the fixture lost its nesting"
         # A flat glob sees only the correct top-level control, so a flat
         # scan of this corpus reports nothing — the shape #1612 measured.
         assert [p.name for p in docs.glob("*.md")] == ["top.md"]
-        assert list(docs.glob("*.jsx")) == []
 
 
 # ============================================================
@@ -1963,41 +1916,6 @@ class TestToolCountReadsBothLanguages:
             "one language for good.\n"
             "alive: %s" % {k: sorted(v) for k, v in alive.items()})
 
-    def test_the_sibling_doc_file_count_repair_is_line_scoped_too(
-            self, tmp_path, monkeypatch):
-        """⛔ The class, not the cited instance.
-
-        `doc-file-count` shipped the same shape this change set fixed for
-        `tool-count`: a per-line check, a whole-file `re.sub` repair, and a
-        pattern whose `\\s*` matches a newline. Blind review measured it on
-        this branch — a true sentence about another directory rewritten to the
-        doc-map count and reported as fixed, plus a wrapped occurrence the
-        check can never report rewritten alongside it.
-
-        ⚠️ There is no scope anchor for `個文件`, so this pins only the
-        line-scoping half; the residual is disclosed in `_auto_fix`.
-        """
-        claude = tmp_path / "CLAUDE.md"
-        wrapped = "這批草稿共 4\n個文件，散落在兩個目錄。\n"
-        claude.write_text("完整文件對照表（7 個文件）。\n" + wrapped,
-                          encoding="utf-8")
-        doc_map = tmp_path / "docs" / "internal" / "doc-map.md"
-        doc_map.parent.mkdir(parents=True)
-        doc_map.write_text("|a|\n|-|\n" + "|r|\n" * 3, encoding="utf-8")
-        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
-        mod._CONTENT_CACHE.clear()
-
-        found = mod.check_doc_file_count_in_docs()
-        assert [i.line for i in found] == [1], (
-            "expected only the single-line occurrence to be reported: %s"
-            % [(i.line, i.message) for i in found])
-        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
-        text = claude.read_text(encoding="utf-8")
-        assert "（3 個文件）" in text, text
-        assert "共 4\n個文件" in text, (
-            "the repair reached a wrapped occurrence the check cannot see:\n%s"
-            % text)
-
     def test_the_checker_is_looser_than_the_writer_on_purpose(self):
         """⚠️ Pins an asymmetry blind review flagged, as intentional.
 
@@ -2046,14 +1964,7 @@ class TestFixDoesNotSwitchOffJson:
         monkeypatch.setattr(mod, "_auto_fix", lambda *a, **k: list(repaired))
         monkeypatch.setattr(mod, "check_e2e_and_jsx_versions",
                             lambda *a, **k: list(issues))
-        for name in ("check_bilingual_badge", "check_bilingual_number_consistency",
-                     "check_rule_pack_counts", "check_tool_count_in_docs",
-                     "check_doc_map_coverage",
-                     "check_tool_map_coverage", "check_adr_count_in_docs",
-                     "check_doc_file_count_in_docs", "check_scenario_count_in_docs",
-                     "check_image_tag_v_prefix", "check_mkdocs_extra_versions",
-                     "check_da_tools_version", "check_exporter_version",
-                     "check_release_tag_currency", "check_platform_version"):
+        for name in _checks_called_by_main() - {"check_e2e_and_jsx_versions"}:
             monkeypatch.setattr(mod, name, lambda *a, **k: [])
         monkeypatch.setattr(sys, "argv", ["validate_docs_versions", *argv])
         code = 0
@@ -2522,3 +2433,64 @@ class TestRulePackCountBadgesAndProse:
         issues = mod.check_rule_pack_counts(self.COUNTS)
         assert mod._auto_fix(issues, 0, self.COUNTS) == []
         assert page.read_text(encoding="utf-8") == "共 99 個 Rule Pack。\n"
+
+
+class TestEveryCheckStillReadsSomething:
+    """#1611 — a check whose subject set is empty looks exactly like a pass.
+
+    Three count checks (`adr-count`, `doc-file-count`, `scenario-count`) read
+    zero sentences on the shipped tree for months, because #1407 removed the
+    sentences from CLAUDE.md and nothing on the read side noticed. The write
+    side (`bump_docs`) already fails closed on a rule that matches nothing;
+    this is the read-side twin.
+
+    Method: hand each check an impossible expected value, so every subject it
+    reads becomes an Issue. Zero issues ⇒ zero subjects ⇒ a dead check.
+    ⚠️ No `>= N` floor — subject counts rise and fall with the docs.
+    """
+
+    NEVER = "0.0.0-never"
+
+    def _sentinel_calls(self, monkeypatch):
+        monkeypatch.setattr(mod, "_count_python_tools", lambda *a, **k: -1)
+        versions = {key: self.NEVER for _, key in mod.MKDOCS_EXTRA_CHECKS}
+        return {
+            "check_da_tools_version": lambda: mod.check_da_tools_version(self.NEVER),
+            "check_exporter_version": lambda: mod.check_exporter_version(self.NEVER),
+            "check_release_tag_currency":
+                lambda: mod.check_release_tag_currency(self.NEVER, self.NEVER),
+            "check_platform_version": lambda: mod.check_platform_version(self.NEVER),
+            "check_rule_pack_counts":
+                lambda: mod.check_rule_pack_counts({"pack_count": -1, "alert": -1}),
+            "check_bilingual_badge": lambda: mod.check_bilingual_badge(-1),
+            "check_tool_count_in_docs": mod.check_tool_count_in_docs,
+            "check_mkdocs_extra_versions":
+                lambda: mod.check_mkdocs_extra_versions(versions),
+            "check_e2e_and_jsx_versions":
+                lambda: mod.check_e2e_and_jsx_versions(self.NEVER),
+        }
+
+    # Checks with no expected value to replace. Healthy output for these IS
+    # zero findings, so the sentinel method cannot tell dead from clean.
+    NO_SENTINEL = {
+        "check_bilingual_number_consistency": "compares ZH with EN, no SSOT",
+        "check_doc_map_coverage": "set membership, not a count",
+        "check_tool_map_coverage": "set membership, not a count",
+        "check_image_tag_v_prefix": "flags a forbidden shape; none is healthy",
+    }
+
+    def test_every_check_main_calls_is_classified(self, monkeypatch):
+        """A new check must say which kind it is, or this goes red."""
+        called = _checks_called_by_main()
+        classified = set(self._sentinel_calls(monkeypatch)) | set(self.NO_SENTINEL)
+        assert called == classified, (
+            f"unclassified: {sorted(called - classified)}; "
+            f"no longer called by main(): {sorted(classified - called)}")
+
+    def test_every_sentinel_check_reads_at_least_one_subject(self, monkeypatch):
+        dead = [name for name, call in self._sentinel_calls(monkeypatch).items()
+                if not call()]
+        assert not dead, (
+            f"these checks read nothing on the shipped tree, so they cannot "
+            f"fail: {dead}. Point them at what they should read, or retire "
+            f"them (and their patterns) instead of leaving them silent.")

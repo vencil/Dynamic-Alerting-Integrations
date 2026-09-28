@@ -43,24 +43,8 @@ PORTAL_JSX_FRONTMATTER_ROOT = "tools/portal/src"
 # Extensions to scan for version references
 SCANNABLE_EXTENSIONS: Tuple[str, ...] = (".md", ".jsx", ".json")
 
-# Directories to scan (used by _collect_scannable_files)
-SCAN_DIRECTORIES = {
-    "docs": DOCS_DIR,
-    "root": REPO_ROOT,
-    "components": REPO_ROOT / "components",
-    "ci": [
-        REPO_ROOT / ".github",
-        REPO_ROOT / ".gitlab",
-    ],
-    "k8s": REPO_ROOT / "k8s",
-}
-
 # Root files to include in scans
 ROOT_FILES = ("README.md", "README.en.md", "CLAUDE.md", "mkdocs.yml")
-
-# E2E and JSX version checks: additional files to scan for version references
-E2E_PACKAGE_JSON = REPO_ROOT / "tests" / "e2e" / "package.json"
-JSX_VERSION_FILES = list((DOCS_DIR / "interactive" / "tools").glob("*.jsx")) if (DOCS_DIR / "interactive" / "tools").exists() else []
 
 # ============================================================================
 # Pattern definitions for each type of version/count check
@@ -160,21 +144,6 @@ TOOL_COUNT_SCOPE_ANCHOR = "`scripts/tools/{ops,dx,lint}`"
 TOOL_COUNT_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個\s*Python\s*工具", "Python tool count (zh)"),
     (r"(\d+)\s*Python\s*tools?\b", "Python tool count (en)"),
-]
-
-# ADR count pattern
-ADR_COUNT_PATTERNS: List[Tuple[str, str]] = [
-    (r"(\d+)\s*ADRs?\b", "ADR count"),
-]
-
-# Document file count pattern
-DOC_FILE_COUNT_PATTERNS: List[Tuple[str, str]] = [
-    (r"(\d+)\s*個文件", "doc file count (zh)"),
-]
-
-# Scenario count pattern
-SCENARIO_COUNT_PATTERNS: List[Tuple[str, str]] = [
-    (r"(\d+)\s*場景", "scenario count (zh)"),
 ]
 
 # Bilingual pair detection
@@ -407,15 +376,6 @@ TOOL_COUNT_CHECK_FILES = [
     REPO_ROOT / "README.en.md",
 ]
 
-# Files to check for ADR counts
-ADR_COUNT_CHECK_FILES = [
-    REPO_ROOT / "CLAUDE.md",
-    REPO_ROOT / "README.md",
-    REPO_ROOT / "README.en.md",
-    REPO_ROOT / "docs" / "adr" / "README.md",
-    REPO_ROOT / "docs" / "adr" / "README.en.md",
-]
-
 # Files to check for rule pack counts
 RULE_PACK_COUNT_CHECK_FILES = [
     REPO_ROOT / "README.md",
@@ -448,10 +408,6 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
             (r"(\d+)(\s*個\s*Python\s*工具)", "{value}\\2"),
             (r"(\d+)(\s*Python\s*tools?\b)", "{value}\\2"),
         ],
-    },
-    "doc-file-count": {
-        "pattern": r"(\d+)(\s*個文件)",
-        "replacement_template": "{value}\\2",
     },
     # `rule-pack-count` has no entry: it repairs with RULE_PACK_BADGE_PATTERNS.
 }
