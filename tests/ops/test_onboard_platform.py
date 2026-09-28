@@ -366,6 +366,18 @@ class TestAnalyzeAlertmanager:
             "receiver": "tenant-t1",
             "reason": "platform/continue route (likely enforced routing)"}]
 
+    def test_later_continue_route_is_not_the_tenant_default(self):
+        """A `continue: true` route AFTER the tenant route, with the same
+        matcher count, must not win the tie and become the default."""
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "tenant-t1"},
+                    {"matchers": ['tenant="t1"'],
+                     "receiver": "tenant-t1-override-0", "continue": True}],
+            receivers=self._RECEIVERS,
+        )
+        routings, _ = analyze_alertmanager(am)
+        assert routings["t1"]["receiver"]["url"] == "https://main.example.com"
+
 
 class TestCheckTimingGuardrails:
     """檢查時序機制的有效性。"""
