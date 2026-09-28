@@ -294,13 +294,15 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 
-選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)），同樣是 Alertmanager 載入不了就整份 reload 失敗的那幾種：
+選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：只擋 Alertmanager 會拒收、導致整份設定 reload 失敗的值，以 amtool 0.34.1 的判定為準。
 
-- `send_resolved`、email 的 `require_tls` 只接受 `true`／`false`；`"true"`、`maybe`、`1` 與空值都擋。
-- webhook 的 `http_config` 必須是 mapping；`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`bearer_token_file` 最多只能設一個（`bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設）。
-- `http_config.proxy_url` 必須是帶 host 的 `http://`、`https://`、`socks5://` 或 `socks5h://` URL（`receiverProxyUrl`）。這比 Alertmanager 嚴：它接受沒有 scheme 或 host 的值，但那樣的 proxy 用不了。
+- `send_resolved`、email 的 `require_tls`：接受 `true`／`false`、空值（視同沒設），以及 YAML 1.1 的布林字 `yes`／`no`／`on`／`off`（各有小寫、首字大寫、全大寫三種寫法），路由產生器一律寫成布林。`maybe`、`1`、`""` 擋。
+- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`bearer_token_file` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設，`bearer_token` 給數字也算有設（Alertmanager 當文字讀）。
+- `http_config.proxy_url`：只擋 Go `net/url` 解析不了的值（例如 `::x`、host 含空白、`%zz`、非法 port）。`proxy:3128`、`ftp://proxy`、`http://`、userinfo 含未編碼的 `@`、IPv6 zone（`[fe80::1%25eth0]`）都放行，因為 Alertmanager 也收。`proxy_from_environment: true` 不能與非空的 `proxy_url` 或 `no_proxy` 並用；`no_proxy` 需要 `proxy_url`；`proxy_connect_header` 需要非空的 `proxy_url` 或 `proxy_from_environment`。
 
-這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋）、da-guard 與 tenant-api 的 `PUT /api/v1/tenants/{id}`（400 `INVALID_BODY`，只判 body 自己寫的 receiver）三處一致。
+刻意比 Alertmanager 嚴的只有兩類：URL 欄位含空白（#2180）、PagerDuty 兩把 key 同設（#2137）；另外 `send_resolved: y`／`n` 也擋——Alertmanager 當布林讀，但路由產生器用的 PyYAML 當字串，兩邊會不一致。共享表 `receiver_presence_cases.json` 以 `strict` 欄逐列標出這些項目。
+
+這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋）、da-guard，以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。
 
 ### 訊息模板（Go Template）
 

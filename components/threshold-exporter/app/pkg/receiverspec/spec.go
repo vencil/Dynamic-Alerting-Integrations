@@ -38,9 +38,10 @@ import (
 //     of the schema `pattern` the property references).
 //   - StringLists:  Required fields the schema types as a list of non-empty
 //     strings (email `to`); a plain string is still taken.
-//   - Bools:        optional fields the schema types as boolean. When the key
-//     is present its value must be true or false — Alertmanager refuses the
-//     whole config over `send_resolved: maybe`.
+//   - Bools:        optional fields the schema types as a YAML boolean
+//     (definitions.yamlBool). A value must be a boolean, null (= unset) or
+//     one of YAML11BoolLiterals — Alertmanager refuses the whole config over
+//     `send_resolved: maybe`, and reads `yes` / `off` as booleans (#2295).
 //   - HTTPConfig:   the type accepts `http_config` (checkHTTPConfig).
 type Spec struct {
 	Required     []string
@@ -52,13 +53,12 @@ type Spec struct {
 }
 
 // Copies of the `pattern`s in tenant-config.schema.json
-// (definitions.receiverHttpUrl / receiverSmtpHostPort / receiverProxyUrl),
+// (definitions.receiverHttpUrl / receiverSmtpHostPort),
 // which hold the only authored copy and the reasoning; the Go binaries cannot
 // read the schema at run time. TestSpecs_MatchSchema fails on any difference.
 const (
 	HTTPURLPattern      = `^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>"-]|[^\x00-\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\[[0-9A-Fa-f:.]+\])(:[0-9]*)?(/([^\x00-\x20\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\?[^\x00-\x20\x7f#]*)?(#([^\x00-\x20\x7f%]|%[0-9A-Fa-f]{2})*)?$`
 	SMTPHostPortPattern = `^([^\x00-\x20\x7f:/?#@\[\]\\]+|\[[0-9A-Fa-f:.]+\]):[0-9]+$`
-	ProxyURLPattern     = `^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>"-]|[^\x00-\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\[[0-9A-Fa-f:.]+\])(:[0-9]*)?(/([^\x00-\x20\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\?[^\x00-\x20\x7f#]*)?(#([^\x00-\x20\x7f%]|%[0-9A-Fa-f]{2})*)?$`
 )
 
 var specs = map[string]Spec{
@@ -191,8 +191,7 @@ func Check(receiver any) []Problem {
 		}
 	}
 	for _, field := range spec.Bools {
-		v, present := m[field]
-		if _, isBool := v.(bool); present && !isBool {
+		if v, present := m[field]; present && !isYAMLBool(v) {
 			out = append(out, Problem{Kind: KindInvalid, Field: field, Message: fmt.Sprintf(
 				"receiver type %q field %q must be true or false, got %s", rtype, field, describe(v))})
 		}
@@ -206,7 +205,7 @@ func Check(receiver any) []Problem {
 // compiled holds every pattern, compiled once (MustCompile: a bad copy fails
 // at init, and TestSpecs_MatchSchema pins the copies to the schema).
 var compiled = func() map[string]*regexp.Regexp {
-	out := map[string]*regexp.Regexp{ProxyURLPattern: regexp.MustCompile(ProxyURLPattern)}
+	out := map[string]*regexp.Regexp{}
 	for _, spec := range specs {
 		for _, p := range spec.Patterns {
 			if _, ok := out[p]; !ok {
@@ -304,53 +303,65 @@ func exactlyOneProblem(rtype string, receiver map[string]any, group []string) (P
 	return Problem{Kind: KindConflicting, Field: set[len(set)-1], Message: msg}, true
 }
 
-// checkHTTPConfig checks the parts of `http_config` that make Alertmanager
-// refuse the whole config (#2295), by the schema's types:
+// checkHTTPConfig reports what in `http_config` makes Alertmanager refuse the
+// whole config (#2295). The rule is Alertmanager's own — prometheus/common
+// HTTPClientConfig / ProxyConfig as loaded by amtool 0.34.1 — with nothing
+// stricter, so every row of the shared case table that passes here loads:
 //
-//   - http_config itself must be a mapping (null included: the schema types
-//     it as an object; Alertmanager would take null as absent).
-//   - basic_auth / oauth2 / authorization must be mappings and
-//     bearer_token / bearer_token_file strings when present; "" counts as
-//     unset. At most one of HTTPConfigAuthFields may be set — an empty
-//     mapping counts as set, as it does for Alertmanager.
-//   - proxy_url must be a string matching ProxyURLPattern: an http, https,
-//     socks5 or socks5h URL with a host. Stricter than Alertmanager, which
-//     takes anything net/url parses (`foo`, `ftp://h`, `http://`); every
-//     string the pattern accepts also parses there.
+//   - http_config: null is unset; otherwise it must be a mapping.
+//   - basic_auth / oauth2 / authorization: null is unset; otherwise a
+//     mapping, which counts as set even when empty.
+//   - bearer_token / bearer_token_file: null and "" are unset; any other
+//     scalar (a number, a boolean) is set — Alertmanager reads it as text.
+//   - at most one of HTTPConfigAuthFields may be set.
+//   - proxy_url: null is unset; a string must parse as Go's net/url does
+//     (ProxyURLProblem); another scalar is taken as its text, which always
+//     parses.
+//   - proxy_from_environment is a YAML boolean; set together with a
+//     non-empty proxy_url or a no_proxy, Alertmanager refuses it. no_proxy
+//     needs a proxy_url key; proxy_connect_header needs a non-empty proxy_url
+//     or proxy_from_environment.
 //
 // Not modelled: the fields inside the auth mappings (oauth2 needs client_id
-// and token_url), tls_config, and the other proxy keys.
+// and token_url), tls_config, and any other key.
 func checkHTTPConfig(rtype string, v any) []Problem {
+	if v == nil {
+		return nil
+	}
 	hc, ok := v.(map[string]any)
-	if !ok || hc == nil {
+	if !ok {
 		return []Problem{{Kind: KindInvalid, Field: "http_config", Message: fmt.Sprintf(
 			"receiver type %q field \"http_config\" must be a mapping, got %s", rtype, describe(v))}}
 	}
 	var out []Problem
+	invalid := func(field, want string, val any) {
+		out = append(out, Problem{Kind: KindInvalid, Field: field, Message: fmt.Sprintf(
+			"receiver type %q field %q must be %s, got %s", rtype, field, want, describe(val))})
+	}
 	var set []string
 	for _, key := range HTTPConfigAuthFields {
 		val, present := hc[key]
-		if !present {
+		if !present || val == nil {
 			continue
 		}
 		field := "http_config." + key
 		if slices.Contains(httpConfigMapFields, key) {
-			if m, isMap := val.(map[string]any); !isMap || m == nil {
-				out = append(out, Problem{Kind: KindInvalid, Field: field, Message: fmt.Sprintf(
-					"receiver type %q field %q must be a mapping, got %s", rtype, field, describe(val))})
+			if _, isMap := val.(map[string]any); !isMap {
+				invalid(field, "a mapping", val)
 				continue
 			}
 			set = append(set, key)
 			continue
 		}
-		s, isString := val.(string)
-		if !isString {
-			out = append(out, Problem{Kind: KindInvalid, Field: field, Message: fmt.Sprintf(
-				"receiver type %q field %q must be a string, got %s", rtype, field, describe(val))})
-			continue
-		}
-		if s != "" {
+		switch x := val.(type) {
+		case string:
+			if x != "" {
+				set = append(set, key)
+			}
+		case bool, int, int64, uint64, float64:
 			set = append(set, key)
+		default:
+			invalid(field, "a string", val)
 		}
 	}
 	if len(set) > 1 {
@@ -358,19 +369,106 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 			"receiver type %q http_config sets %s; Alertmanager accepts at most one of %s",
 			rtype, quoteAll(set), quoteAll(HTTPConfigAuthFields))})
 	}
-	if val, present := hc["proxy_url"]; present {
-		s, isString := val.(string)
-		switch {
-		case !isString:
+
+	// Proxy settings, in ProxyConfig.Validate's terms: proxyKey = the key is
+	// given (Alertmanager's ProxyURL.URL != nil), proxyText = its text is
+	// non-empty.
+	proxy, proxyKey := hc["proxy_url"]
+	proxyKey = proxyKey && proxy != nil
+	proxyText := false
+	switch x := proxy.(type) {
+	case nil:
+	case string:
+		proxyText = x != ""
+		if p := ProxyURLProblem(x); p != "" {
 			out = append(out, Problem{Kind: KindInvalid, Field: "http_config.proxy_url", Message: fmt.Sprintf(
-				"receiver type %q field \"http_config.proxy_url\" must be a string, got %s", rtype, describe(val))})
-		case !compiled[ProxyURLPattern].MatchString(s):
-			out = append(out, Problem{Kind: KindInvalid, Field: "http_config.proxy_url", Message: fmt.Sprintf(
-				"receiver type %q field \"http_config.proxy_url\" value %q is not an http, https, socks5 or socks5h URL with a host (tenant-config.schema.json receiverProxyUrl)",
-				rtype, s)})
+				"receiver type %q field \"http_config.proxy_url\" value %q does not parse as a URL (%s)", rtype, x, p)})
+		}
+	case bool, int, int64, uint64, float64:
+		proxyText = true
+	default:
+		invalid("http_config.proxy_url", "a string", proxy)
+	}
+	fromEnv := false
+	if val, present := hc["proxy_from_environment"]; present {
+		if !isYAMLBool(val) {
+			invalid("http_config.proxy_from_environment", "true or false", val)
+		} else {
+			fromEnv = yamlBoolTrue(val)
 		}
 	}
+	noProxy := false
+	switch x := hc["no_proxy"].(type) {
+	case nil:
+	case string:
+		noProxy = x != ""
+	case bool, int, int64, uint64, float64:
+		noProxy = true
+	default:
+		invalid("http_config.no_proxy", "a string", x)
+	}
+	connectHeader := false
+	switch x := hc["proxy_connect_header"].(type) {
+	case nil:
+	case map[string]any:
+		connectHeader = len(x) > 0
+	default:
+		invalid("http_config.proxy_connect_header", "a mapping", x)
+	}
+	conflict := func(field, msg string) {
+		out = append(out, Problem{Kind: KindConflicting, Field: field, Message: fmt.Sprintf(
+			"receiver type %q http_config: %s", rtype, msg)})
+	}
+	switch {
+	case connectHeader && !fromEnv && !proxyText:
+		conflict("http_config.proxy_connect_header",
+			"proxy_connect_header needs a non-empty proxy_url or proxy_from_environment: true")
+	case fromEnv && proxyText:
+		conflict("http_config.proxy_url", "proxy_url must not be set together with proxy_from_environment: true")
+	case fromEnv && noProxy:
+		conflict("http_config.no_proxy", "no_proxy must not be set together with proxy_from_environment: true")
+	case noProxy && !proxyKey:
+		conflict("http_config.no_proxy", "no_proxy needs a proxy_url")
+	}
 	return out
+}
+
+// YAML11BoolLiterals are the plain scalars YAML 1.1 — PyYAML, the Python route
+// generator's parser, and Alertmanager's yaml.v2 — reads as booleans, mapped
+// to their value. yaml.v3 (the Go readers) reads only the true/false family
+// that way and hands the rest over as strings, so Check takes these strings
+// as booleans too; the route generator writes them out as true / false.
+// `y` / `n` are deliberately not here: yaml.v2 reads them as booleans but
+// PyYAML does not, so the platform refuses them (a documented strict item).
+// Pinned to the schema's definitions.yamlBool enum by TestSpecs_MatchSchema.
+var YAML11BoolLiterals = map[string]bool{
+	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
+	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
+	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
+}
+
+// isYAMLBool reports whether v is a value a YAML boolean field accepts:
+// null (unset), a boolean, or one of YAML11BoolLiterals.
+func isYAMLBool(v any) bool {
+	switch x := v.(type) {
+	case nil, bool:
+		return true
+	case string:
+		_, ok := YAML11BoolLiterals[x]
+		return ok
+	}
+	return false
+}
+
+// yamlBoolTrue is the value of a v isYAMLBool accepts (null is false).
+func yamlBoolTrue(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return YAML11BoolLiterals[x]
+	}
+	return false
 }
 
 func quoteAll(fields []string) string {

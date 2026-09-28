@@ -2,9 +2,11 @@ package handler
 
 // #2295: PUT /api/v1/tenants/{id} refuses a receiver the body writes that
 // Alertmanager could not load, with 400 INVALID_BODY and one violation per
-// problem, in both write modes and before anything is written. The contract
-// itself (pkg/receiverspec) is pinned to the schema and Alertmanager by the
-// shared receiver case table; these tests pin the handler around it.
+// problem, in both write modes and before anything is written; POST
+// /{id}/validate gives the same verdict (both run the Writer's body-only
+// pre-flight, gitops.putPreflight). The contract itself (pkg/receiverspec) is
+// pinned to the schema and Alertmanager by the shared receiver case table;
+// these tests pin the handlers around it.
 
 import (
 	"bytes"
@@ -64,13 +66,22 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 		{"legal webhook with send_resolved and one auth", webhookOK +
 			"        send_resolved: false\n        http_config:\n          bearer_token: t\n          proxy_url: http://proxy.example:3128\n", nil},
 		{"routing without a receiver of its own", "      group_wait: 30s\n", nil},
-		{"override relying on the main receiver", webhookOK + "      overrides:\n      - alertname: X\n        group_wait: 1m\n", nil},
+		// An override with no receiver of its own is NOT judged by this check
+		// (it only judges receivers the body writes). It is not a valid
+		// override either: the route generator skips it and da-guard reports
+		// it. This row pins only that tenant-api lets it through.
+		{"override without a receiver is not judged here", webhookOK + "      overrides:\n      - alertname: X\n        group_wait: 1m\n", nil},
 		{"unknown main type", "      receiver:\n        type: bogus\n",
 			[]string{"tenants.rs-t._routing.receiver.type"}},
 		{"webhook without url", "      receiver:\n        type: webhook\n",
 			[]string{"tenants.rs-t._routing.receiver.url"}},
 		{"scalar receiver", "      receiver: webhook\n",
 			[]string{"tenants.rs-t._routing.receiver"}},
+		{"send_resolved a YAML 1.1 word", webhookOK + "        send_resolved: yes\n", nil},
+		{"send_resolved and http_config null", webhookOK + "        send_resolved:\n        http_config:\n", nil},
+		{"proxy_url Alertmanager parses", webhookOK + "        http_config:\n          proxy_url: proxy.example:3128\n", nil},
+		{"send_resolved y (deliberately refused)", webhookOK + "        send_resolved: y\n",
+			[]string{"tenants.rs-t._routing.receiver.send_resolved"}},
 		{"send_resolved not a boolean", webhookOK + "        send_resolved: maybe\n",
 			[]string{"tenants.rs-t._routing.receiver.send_resolved"}},
 		{"email require_tls not a boolean", "      receiver:\n        type: email\n        to: [a@example.com]\n" +
@@ -127,4 +138,69 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestValidateTenant_AgreesWithPut: POST /{id}/validate and PUT /{id} give
+// the same verdict on the same body — valid ⇔ PUT 200, invalid ⇔ PUT 400 — in
+// both write modes, because both run the Writer's pre-flight (B3 of #2295).
+// Compared through the HTTP handlers, not the Writer, so a check added to
+// only one handler shows up here.
+func TestValidateTenant_AgreesWithPut(t *testing.T) {
+	bodies := map[string]string{
+		"legal":                     webhookOK,
+		"unknown type":              "      receiver:\n        type: bogus\n",
+		"missing url":               "      receiver:\n        type: webhook\n",
+		"send_resolved maybe":       webhookOK + "        send_resolved: maybe\n",
+		"send_resolved off":         webhookOK + "        send_resolved: off\n",
+		"two auth methods":          webhookOK + "        http_config:\n          bearer_token: t\n          basic_auth: {username: u}\n",
+		"proxy_url unparsable":      webhookOK + "        http_config:\n          proxy_url: '::x'\n",
+		"no_proxy without proxy":    webhookOK + "        http_config:\n          no_proxy: localhost\n",
+		"bad override receiver":     webhookOK + "      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n",
+		"bad routes receiver":       webhookOK + "      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty}\n",
+		"override without receiver": webhookOK + "      overrides:\n      - alertname: X\n",
+	}
+	for name, routing := range bodies {
+		for _, pr := range []bool{false, true} {
+			mode := "direct"
+			if pr {
+				mode = "pr"
+			}
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				valid, warnings := validateReceiverBody(t, routing, pr)
+				code, resp, _ := putReceiverBody(t, routing, pr)
+				switch {
+				case valid && code != http.StatusOK:
+					t.Errorf("validate says valid, PUT answers %d: %s", code, resp)
+				case !valid && code != http.StatusBadRequest:
+					t.Errorf("validate says invalid (%v), PUT answers %d: %s", warnings, code, resp)
+				}
+			})
+		}
+	}
+}
+
+// validateReceiverBody POSTs the same body putReceiverBody PUTs to
+// /{id}/validate, on the same kind of tree and write mode.
+func validateReceiverBody(t *testing.T, routing string, pr bool) (bool, []string) {
+	t.Helper()
+	const tenant = "rs-t"
+	dir := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n"})
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, WriteMode: WriteModeDirect}
+	if pr {
+		d.WriteMode = WriteModePR
+		d.PRClient = &mockPlatformClient{}
+		d.PRTracker = &mockPlatformTracker{}
+	}
+	body := "tenants:\n  " + tenant + ":\n    _routing:\n" + routing
+	req := newRequestWithChiParam("POST", "/api/v1/tenants/"+tenant+"/validate", "id", tenant, bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	ValidateTenant(d)(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("validate status = %d: %s", w.Code, w.Body.String())
+	}
+	var resp ValidateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return resp.Valid, resp.Warnings
 }

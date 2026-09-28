@@ -474,13 +474,13 @@
           "examples": ["https://webhook.example.com/alerts", "https://hooks.example.com/monitoring"]
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to send alert resolved notifications. Default: true.",
           "default": true
         },
         "http_config": {
-          "$ref": "#/definitions/httpConfig",
+          "$ref": "#/definitions/httpConfigOrNull",
           "title": "HTTP Configuration",
           "description": "Optional HTTP client settings (auth, TLS, proxy). See Alertmanager http_config docs."
         }
@@ -538,7 +538,7 @@
           "examples": ["password-here"]
         },
         "require_tls": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Require TLS",
           "description": "Require TLS for SMTP connection. Default: true.",
           "default": true
@@ -562,7 +562,7 @@
           }
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to send resolved notifications. Default: true.",
           "default": true
@@ -617,7 +617,7 @@
           "examples": [":rotating_light:"]
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to send resolved notifications. Default: true.",
           "default": true
@@ -655,7 +655,7 @@
           "description": "Custom body text for Teams card. Alertmanager template string."
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to send resolved notifications. Default: true.",
           "default": true
@@ -701,7 +701,7 @@
           "format": "uri"
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to send resolved notifications. Default: true.",
           "default": true
@@ -759,7 +759,7 @@
           "format": "uri"
         },
         "send_resolved": {
-          "type": "boolean",
+          "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
           "description": "Whether to resolve PagerDuty incidents on alert resolution. Default: true.",
           "default": true
@@ -789,7 +789,7 @@
       "description": "Optional HTTP client settings for webhook receiver (auth, TLS, proxy). See Alertmanager documentation.",
       "properties": {
         "basic_auth": {
-          "type": "object",
+          "type": ["object", "null"],
           "title": "Basic Authentication",
           "properties": {
             "username": {
@@ -801,32 +801,36 @@
           }
         },
         "bearer_token": {
-          "type": "string",
+          "type": ["string", "number", "boolean", "null"],
           "title": "Bearer Token",
-          "description": "HTTP Bearer token for authentication."
+          "description": "HTTP Bearer token for authentication. Alertmanager reads a number or boolean as its text."
         },
         "proxy_url": {
-          "type": "string",
+          "type": ["string", "number", "boolean", "null"],
           "title": "Proxy URL",
-          "description": "HTTP proxy URL: http, https, socks5 or socks5h, with a host.",
-          "allOf": [{ "$ref": "#/definitions/receiverProxyUrl" }],
-          "format": "uri"
+          "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here, so the route generator, da-guard and tenant-api check it (pkg/receiverspec ProxyURLProblem)."
         }
       },
       "not": {
         "required": ["basic_auth", "bearer_token"],
-        "properties": { "bearer_token": { "minLength": 1 } }
+        "properties": {
+          "basic_auth": { "type": "object" },
+          "bearer_token": { "type": ["string", "number", "boolean"], "minLength": 1 }
+        }
       },
-      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; an empty bearer_token counts as unset. The `not` covers the two auth keys listed here, additionalProperties: false the rest. The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
+      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; null and an empty bearer_token count as unset, any other bearer_token scalar as set. The `not` covers the two auth keys listed here, additionalProperties: false the rest (and every other http_config key: a known limitation, the schema is stricter than Alertmanager there). The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
       "additionalProperties": false
     },
-    "receiverProxyUrl": {
-      "type": "string",
-      "title": "Receiver http_config proxy URL format",
-      "description": "An http://, https://, socks5:// or socks5h:// URL with a host and no whitespace or control characters. Alertmanager rejects a proxy_url Go's net/url cannot parse and the whole Alertmanager config then fails to reload; this format is stricter (it also refuses a proxy with no scheme or host, which parses but cannot be used as a proxy).",
-      "$comment": "#2295: receiverHttpUrl with the scheme widened to the proxy schemes Go's HTTP transport uses; same portable syntax, `not` and Go-copy pin (pkg/receiverspec ProxyURLPattern, TestHTTPConfig_MatchSchema). Every string it matches is one Alertmanager's net/url parse accepts (receiver_presence_cases.json rows).",
-      "pattern": "^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>\"-]|[^\\x00-\\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^\\x00-\\x20\\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\\?[^\\x00-\\x20\\x7f#]*)?(#([^\\x00-\\x20\\x7f%]|%[0-9A-Fa-f]{2})*)?$",
-      "not": { "pattern": "\\n" }
+    "httpConfigOrNull": {
+      "title": "HTTP client configuration or null",
+      "description": "http_config: null counts as not given, as in Alertmanager.",
+      "anyOf": [{ "$ref": "#/definitions/httpConfig" }, { "type": "null" }]
+    },
+    "yamlBool": {
+      "title": "YAML boolean",
+      "description": "true / false, null (not given), or a YAML 1.1 boolean word (yes / no / on / off in three spellings each) that PyYAML and Alertmanager read as a boolean but a YAML 1.2 editor reads as a string. `y` / `n` are refused on purpose: Alertmanager reads them as booleans, the Python route generator does not.",
+      "$comment": "#2295: the enum is the one authored list; Python reads it from here at run time, the Go copy (pkg/receiverspec YAML11BoolLiterals) is pinned by TestSpecs_MatchSchema.",
+      "anyOf": [{ "type": ["boolean", "null"] }, { "enum": ["true", "True", "TRUE", "false", "False", "FALSE", "yes", "Yes", "YES", "no", "No", "NO", "on", "On", "ON", "off", "Off", "OFF"] }]
     },
     "routingOverride": {
       "type": "object",

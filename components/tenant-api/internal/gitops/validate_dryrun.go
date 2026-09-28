@@ -15,7 +15,8 @@ import (
 // (invalid YAML among them).
 //
 // It runs write()'s refusal sequence in the same order: guardTenantID → the
-// body-only pre-flight (validateBodyOnly) → the tenant file resolution
+// body-only pre-flight (putPreflight: validateBodyOnly, then the receivers the
+// body writes, #2295) → the tenant file resolution
 // (ambiguous tenant file, #2078 declared-elsewhere; here through
 // w.previewTenantFilePath, the lock-free twin of write()'s w.tenantFilePath)
 // → validate(configDir, …). write() runs the last two under its lock; the
@@ -49,7 +50,7 @@ func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []s
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, nil, err
 	}
-	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
+	if errs := dryRunPreflight(tenantID, yamlContent); len(errs) > 0 {
 		return errs, nil, nil
 	}
 	filePath, err := w.previewTenantFilePath(tenantID)
@@ -61,8 +62,8 @@ func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []s
 }
 
 // DryRunValidateBodyOnly is the PR-mode dry-run: exactly what WritePR's
-// pre-flight runs — guardTenantID, then validateBodyOnly — and nothing that
-// reads the tree.
+// pre-flight runs — guardTenantID, then putPreflight (validateBodyOnly and the
+// body's receivers) — and nothing that reads the tree.
 //
 // ⛔ DELIBERATELY WEAKER THAN DryRunValidate. The local tree in PR mode is only
 // synced at pod start and may lag the base (#1718); refusing on it would answer
@@ -75,7 +76,7 @@ func DryRunValidateBodyOnly(tenantID, yamlContent string) (errs []string, err er
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	return validateBodyOnly(tenantID, yamlContent), nil
+	return dryRunPreflight(tenantID, yamlContent), nil
 }
 
 // pathlessErrText is err's text without the file path a *fs.PathError carries:

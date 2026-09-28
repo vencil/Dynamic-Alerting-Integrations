@@ -35,11 +35,17 @@ field must be a string and match the schema `pattern` when there is one (URL
 and smarthost formats, written once as schema definitions and read by Python
 at run time); email `to` given as a list needs non-empty string items.
 
-Optional values (#2295) follow the schema too: a property typed boolean must be
-true/false when present, and http_config must be a mapping with at most one
-auth method (`HTTP_CONFIG_AUTH_FIELDS`) and a `proxy_url` matching
-`definitions.receiverProxyUrl`. Python reads both from the schema at run time;
-the table rows pin the Python auth-key list against the schema and Alertmanager.
+Optional values (#2295) are refused only where Alertmanager refuses them: a
+property referencing `definitions.yamlBool` must be a boolean, null or a YAML 1.1
+boolean word (the enum is read from the schema at run time), and http_config
+follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
+method (`HTTP_CONFIG_AUTH_FIELDS`), a `proxy_url` Go's net/url parses. The table
+rows pin both against the schema and Alertmanager. A row may carry its receiver
+as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and yaml.v3 on
+the Go side, which is where the two readers differ (plain `yes`). `schema_valid`
+records a row where the schema cannot judge like the pipeline (proxy_url parsing,
+http_config keys its additionalProperties refuses); `strict` names each row
+Alertmanager accepts but the platform refuses on purpose.
 
 It also pins the ACCEPTED field set (schema `properties` vs Python
 required + optional + metadata): the schema is `additionalProperties: false`,
@@ -56,6 +62,7 @@ import os
 
 import jsonschema
 import pytest
+import yaml
 
 from _lib_constants import RECEIVER_TYPES
 from _grar_merge import build_receiver_config
@@ -135,6 +142,13 @@ with open(_CASES, encoding="utf-8") as _fh:
     CASES = json.load(_fh)
 
 
+def _receiver(case: dict) -> dict:
+    """A row's receiver: JSON as is, or its `yaml` text read with PyYAML."""
+    if "yaml" in case:
+        return yaml.safe_load(case["yaml"])
+    return case["receiver"]
+
+
 def test_sources_are_read_not_empty():
     assert len(SCHEMA) >= 6
     assert set(SCHEMA) == set(PYTHON)
@@ -195,13 +209,30 @@ def test_shared_case_table_am_column():
     assert not bad, f"rows without a valid `am`: {bad}"
     loose = [c["name"] for c in CASES if c["am"] == "reject" and c["valid"]]
     assert not loose, f"Alertmanager rejects these but the table says valid: {loose}"
+    # #2295: the platform refuses only what Alertmanager refuses, except for
+    # deliberate items, each named by its row's `strict`.
+    unnamed = [c["name"] for c in CASES
+               if (not c["valid"] and c["am"] == "accept") != bool(c.get("strict"))]
+    assert not unnamed, f"strict refusals without a reason, or a reason on a non-strict row: {unnamed}"
+    assert any("yaml" in c for c in CASES), "no `yaml` rows: the YAML 1.1 words go untested"
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_shared_case_table_schema_and_python_agree(case):
     """Same rows as the Go guard's TestReceiverPresenceCases."""
-    doc = {"tenants": {"t1": {"_routing": {"receiver": case["receiver"]}}}}
+    receiver = _receiver(case)
+    doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
     schema_errors = [e.message for e in _VALIDATOR.iter_errors(doc)]
-    cfg, warnings = build_receiver_config(dict(case["receiver"]), "t1")
-    assert (not schema_errors) == case["valid"], f"schema: {schema_errors}"
+    cfg, warnings = build_receiver_config(dict(receiver), "t1")
+    assert (not schema_errors) == case.get("schema_valid", case["valid"]), f"schema: {schema_errors}"
     assert (cfg is not None) == case["valid"], f"python: {warnings}"
+
+
+def test_pipeline_writes_yaml_bool_words_as_booleans():
+    """#2295: a boolean word given as a string reaches Alertmanager as a boolean."""
+    cfg, _ = build_receiver_config(
+        {"type": "webhook", "url": "https://h.example/a", "send_resolved": "Off",
+         "http_config": {"proxy_from_environment": "yes"}}, "t1")
+    entry = cfg["webhook_configs"][0]
+    assert entry["send_resolved"] is False
+    assert entry["http_config"]["proxy_from_environment"] is True

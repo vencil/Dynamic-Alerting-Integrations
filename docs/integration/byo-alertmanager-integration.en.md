@@ -300,13 +300,15 @@ The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`
 
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 
-Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)), the ones that also make the whole Alertmanager reload fail:
+Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): only the values Alertmanager refuses, which make the whole reload fail, as amtool 0.34.1 judges them.
 
-- `send_resolved` and email `require_tls` take only `true` / `false`; `"true"`, `maybe`, `1` and an empty value are rejected.
-- webhook `http_config` must be a mapping, with at most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `bearer_token_file` set (`bearer_token: ""` counts as unset, `basic_auth: {}` as set).
-- `http_config.proxy_url` must be an `http://`, `https://`, `socks5://` or `socks5h://` URL with a host (`receiverProxyUrl`). This is stricter than Alertmanager, which also takes a value with no scheme or host that cannot work as a proxy.
+- `send_resolved` and email `require_tls` take `true` / `false`, an empty value (not given), and the YAML 1.1 boolean words `yes` / `no` / `on` / `off` (lowercase, capitalised or all caps); the route generator writes them as booleans. `maybe`, `1` and `""` are rejected.
+- webhook `http_config`: an empty value counts as not given; otherwise it must be a mapping. At most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `bearer_token_file` may be set: empty values and `bearer_token: ""` count as unset, `basic_auth: {}` as set, and a numeric `bearer_token` as set (Alertmanager reads it as text).
+- `http_config.proxy_url`: only values Go's `net/url` cannot parse are rejected (such as `::x`, a host with a space, `%zz`, a bad port). `proxy:3128`, `ftp://proxy`, `http://`, an unencoded `@` in the userinfo and an IPv6 zone (`[fe80::1%25eth0]`) pass, as Alertmanager takes them. `proxy_from_environment: true` cannot be combined with a non-empty `proxy_url` or with `no_proxy`; `no_proxy` needs `proxy_url`; `proxy_connect_header` needs a non-empty `proxy_url` or `proxy_from_environment`.
 
-`generate_alertmanager_routes` (also without amtool on PATH), da-guard and tenant-api `PUT /api/v1/tenants/{id}` (400 `INVALID_BODY`, judging only the receivers the body writes) apply the same rules.
+The platform is deliberately stricter than Alertmanager in two places only: whitespace in URL fields (#2180) and both PagerDuty keys set (#2137). `send_resolved: y` / `n` are refused as well: Alertmanager reads them as booleans, but PyYAML (the route generator's parser) reads them as strings. The shared table `receiver_presence_cases.json` marks each such row with a `strict` reason.
+
+`generate_alertmanager_routes` (also without amtool on PATH), da-guard, and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes.
 
 ### Message Templates (Go Template)
 

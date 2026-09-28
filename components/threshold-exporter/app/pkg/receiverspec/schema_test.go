@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestSpecs_MatchSchema pins specs to the receiver definitions in
@@ -80,8 +82,9 @@ func TestSpecs_MatchSchema(t *testing.T) {
 }
 
 // TestHTTPConfig_MatchSchema pins the http_config half (#2295) to
-// definitions.httpConfig: proxy_url's pattern is ProxyURLPattern, and every
-// auth key the schema's `not` forbids together is in HTTPConfigAuthFields.
+// definitions.httpConfig: every auth key the schema's `not` forbids together
+// is in HTTPConfigAuthFields, and proxy_url carries no pattern (Go's
+// net/url.Parse is not expressible as one; ProxyURLProblem holds the rule).
 // The auth keys the schema does not list as properties must be refused by
 // its additionalProperties: false — otherwise the schema would accept a
 // combination Go and Python refuse.
@@ -98,8 +101,8 @@ func TestHTTPConfig_MatchSchema(t *testing.T) {
 	if err := json.Unmarshal(defs["httpConfig"], &hc); err != nil {
 		t.Fatalf("definitions.httpConfig: %v", err)
 	}
-	if got := schemaPattern(t, defs, "httpConfig.proxy_url", hc.Properties["proxy_url"]); got != ProxyURLPattern {
-		t.Errorf("httpConfig.proxy_url pattern differs from ProxyURLPattern:\nschema %q\nGo     %q", got, ProxyURLPattern)
+	if got := schemaPattern(t, defs, "httpConfig.proxy_url", hc.Properties["proxy_url"]); got != "" {
+		t.Errorf("httpConfig.proxy_url carries pattern %q; the rule is ProxyURLProblem's, a pattern would diverge from it", got)
 	}
 	if len(hc.Not.Required) < 2 {
 		t.Fatalf("httpConfig.not.required should name the auth keys that cannot be set together, got %v", hc.Not.Required)
@@ -120,13 +123,43 @@ func TestHTTPConfig_MatchSchema(t *testing.T) {
 	}
 }
 
+// TestYAMLBool_MatchSchema pins YAML11BoolLiterals to the enum of
+// definitions.yamlBool, the one authored list (Python reads it at run time).
+func TestYAMLBool_MatchSchema(t *testing.T) {
+	var yb struct {
+		AnyOf []struct {
+			Type json.RawMessage `json:"type"`
+			Enum []string        `json:"enum"`
+		} `json:"anyOf"`
+	}
+	if err := json.Unmarshal(schemaDefinitions(t)["yamlBool"], &yb); err != nil || len(yb.AnyOf) != 2 {
+		t.Fatalf("definitions.yamlBool is not anyOf[{type}, {enum}]: %v", err)
+	}
+	enum := sortedCopy(yb.AnyOf[1].Enum)
+	var goList []string
+	for k := range YAML11BoolLiterals {
+		goList = append(goList, k)
+	}
+	if !reflect.DeepEqual(enum, sortedCopy(goList)) {
+		t.Errorf("yamlBool enum %v != YAML11BoolLiterals %v", enum, sortedCopy(goList))
+	}
+	var types []string
+	if json.Unmarshal(yb.AnyOf[0].Type, &types) != nil || !reflect.DeepEqual(types, []string{"boolean", "null"}) {
+		t.Errorf("yamlBool anyOf[0].type = %s, want [\"boolean\",\"null\"]", yb.AnyOf[0].Type)
+	}
+}
+
 // TestPresenceCases runs the shared case table
 // (testdata/receiver_presence_cases.json) through Check. The same rows are
 // asserted by the guard (internal/guard TestReceiverPresenceCases), pytest
 // (tests/shared/test_receiver_spec_parity.py) and Alertmanager itself
 // (tests/alertmanager-inhibit, the `am` column).
 func TestPresenceCases(t *testing.T) {
+	yamlRows := 0
 	for _, tc := range loadCases(t) {
+		if tc.YAML != "" {
+			yamlRows++
+		}
 		t.Run(tc.Name, func(t *testing.T) {
 			problems := Check(tc.Receiver)
 			if valid := len(problems) == 0; valid != tc.Valid {
@@ -134,14 +167,40 @@ func TestPresenceCases(t *testing.T) {
 			}
 		})
 	}
+	// #2295: the YAML-text rows are the only ones that exercise the Go
+	// reader (yaml.v3 hands `yes` over as a string); keep some.
+	if yamlRows == 0 {
+		t.Fatal("no `yaml` rows in the case table; the YAML 1.1 boolean words go untested")
+	}
+}
+
+// TestPresenceCases_StrictRowsAreNamed: a row Alertmanager accepts but the
+// platform refuses must say why ("strict"), and a row naming a reason must be
+// one. The platform only refuses what Alertmanager refuses, except for these
+// deliberate, documented items (#2295).
+func TestPresenceCases_StrictRowsAreNamed(t *testing.T) {
+	for _, tc := range loadCases(t) {
+		strictShape := !tc.Valid && tc.AM == "accept"
+		if strictShape != (tc.Strict != "") {
+			t.Errorf("%s: valid=%v am=%q strict=%q — a refusal Alertmanager does not make needs a `strict` reason, and only such a row may carry one",
+				tc.Name, tc.Valid, tc.AM, tc.Strict)
+		}
+	}
 }
 
 type presenceCase struct {
 	Name     string         `json:"name"`
 	Receiver map[string]any `json:"receiver"`
+	YAML     string         `json:"yaml"`
 	Valid    bool           `json:"valid"`
+	AM       string         `json:"am"`
+	Strict   string         `json:"strict"`
 }
 
+// loadCases reads the shared table. A row carries its receiver either as JSON
+// (`receiver`) or as YAML text (`yaml`, #2295), which is decoded here with
+// yaml.v3 — the reader da-guard and tenant-api use — so the row pins what Go
+// makes of plain `yes` / `y`, which JSON cannot express.
 func loadCases(t *testing.T) []presenceCase {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "receiver_presence_cases.json"))
@@ -151,6 +210,16 @@ func loadCases(t *testing.T) []presenceCase {
 	var cases []presenceCase
 	if err := json.Unmarshal(data, &cases); err != nil || len(cases) == 0 {
 		t.Fatalf("parse cases: %v (n=%d)", err, len(cases))
+	}
+	for i, c := range cases {
+		if (c.YAML == "") == (c.Receiver == nil) {
+			t.Fatalf("%s: a row carries exactly one of `receiver` and `yaml`", c.Name)
+		}
+		if c.YAML != "" {
+			if err := yaml.Unmarshal([]byte(c.YAML), &cases[i].Receiver); err != nil {
+				t.Fatalf("%s: yaml: %v", c.Name, err)
+			}
+		}
 	}
 	return cases
 }
@@ -352,19 +421,25 @@ func specsFromSchema(t *testing.T) map[string]Spec {
 			}
 			spec.ExactlyOneOf = [][]string{group}
 		}
-		// #2295: optional value shapes. Every property typed boolean is a
-		// Bools field; a property referencing httpConfig turns on HTTPConfig.
+		// #2295: optional value shapes. A property referencing yamlBool is a
+		// Bools field; http_config referencing httpConfigOrNull turns on
+		// HTTPConfig. A plain `type: boolean` would refuse `yes` and null,
+		// which Alertmanager takes, so it fails the test.
 		for f, prop := range def.Properties {
 			var typ string
 			if json.Unmarshal(prop["type"], &typ) == nil && typ == "boolean" {
-				spec.Bools = append(spec.Bools, f)
+				t.Errorf("definition %s.%s is `type: boolean`; reference #/definitions/yamlBool instead", name, f)
 			}
 			var ref string
 			if raw, ok := prop["$ref"]; ok && json.Unmarshal(raw, &ref) == nil {
-				if ref != "#/definitions/httpConfig" || f != "http_config" {
+				switch {
+				case ref == "#/definitions/yamlBool":
+					spec.Bools = append(spec.Bools, f)
+				case ref == "#/definitions/httpConfigOrNull" && f == "http_config":
+					spec.HTTPConfig = true
+				default:
 					t.Fatalf("definition %s.%s references %q, which this parity check does not model", name, f, ref)
 				}
-				spec.HTTPConfig = true
 			}
 		}
 		out[rtype] = spec

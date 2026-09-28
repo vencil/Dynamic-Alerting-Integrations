@@ -11,6 +11,14 @@ module github.com/vencil/dynamic-alerting/tests/alertmanager-inhibit
 
 go 1.26.8
 
+// #2295: parse URLs as the prom/alertmanager release binaries do. Go 1.26 made
+// net/url refuse a second colon in an http(s) host (`http://h:80:3128/`) by
+// default for modules declaring go >= 1.26, which this one does; the released
+// amtool 0.33.1 / 0.34.1 binaries accept it (measured with `amtool
+// check-config`). Without this the proxy_url rows of the shared receiver table
+// would be judged by this module's toolchain, not by Alertmanager.
+godebug urlstrictcolons=0
+
 require (
 	github.com/prometheus/alertmanager v0.33.1
 	gopkg.in/yaml.v3 v3.0.1

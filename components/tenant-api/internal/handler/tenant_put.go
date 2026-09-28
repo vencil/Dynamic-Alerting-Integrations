@@ -46,9 +46,12 @@ type PutTenantResponse struct {
 // v2.5.0 Phase C: Domain policy enforcement — writes that violate the
 // tenant's domain policy return 403 with details.
 //
-// #2295: the receivers the body writes in `_routing` are then checked against
-// the receiver contract (pkg/receiverspec); a receiver Alertmanager could not
-// load is a 400 INVALID_BODY with violations, in both write modes.
+// #2295: the receivers the body writes in `_routing` are checked against the
+// receiver contract (pkg/receiverspec) by the Writer's body-only pre-flight —
+// the one POST /{id}/validate runs too — so a receiver Alertmanager could not
+// load is a 400 INVALID_BODY with violations, in both write modes. It runs
+// inside the Writer, i.e. after the policy gate above: a receiver type the
+// tenant's domain may not use stays a 403 whatever its fields.
 //
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
@@ -130,16 +133,6 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			}
 		}
 
-		// #2295: the receivers the body writes must be ones Alertmanager can
-		// load and the route generator renders — 400 INVALID_BODY, nothing
-		// written, in both write modes. After the policy gate on purpose: a
-		// receiver type the tenant's domain may not use is a 403 whatever its
-		// fields, and fixing the fields first would not make the write pass.
-		if v := tenantReceiverViolations(tenantID, extractTenantBlock(body, tenantID)); len(v) > 0 {
-			WriteValidationErrors(rw, r, v)
-			return
-		}
-
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.prWritePath() {
 			// A base hash cannot mean anything here. PR mode writes on a
@@ -169,6 +162,9 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			notices, err = d.Writer.Write(r.Context(), tenantID, email, string(body))
 		}
 		if err != nil {
+			if writeReceiverShapeError(rw, r, err) {
+				return
+			}
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(rw, r)
 				return
@@ -304,6 +300,11 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the batch path).
 		if writeWriteFlowError(rw, r, err) {
+			return
+		}
+		// #2295: a receiver the body writes → 400 INVALID_BODY + violations,
+		// as on the direct path.
+		if writeReceiverShapeError(rw, r, err) {
 			return
 		}
 		// #795 F1: malformed body is a CLIENT error → 400 (matches the
@@ -459,3 +460,19 @@ func flattenMapDepth(prefix string, m map[string]interface{}, out map[string]str
 }
 
 // writePolicyViolation lives in errors.go (PR-9/11 unification).
+
+// writeReceiverShapeError answers a Writer pre-flight refusal over the body's
+// receivers (#2295) with the canonical 400 INVALID_BODY + violations, and
+// reports whether err was one.
+func writeReceiverShapeError(rw http.ResponseWriter, r *http.Request, err error) bool {
+	var rse *gitops.ReceiverShapeError
+	if !errors.As(err, &rse) {
+		return false
+	}
+	violations := make([]Violation, len(rse.Violations))
+	for i, v := range rse.Violations {
+		violations[i] = Violation{Field: v.Field, Reason: v.Reason}
+	}
+	WriteValidationErrors(rw, r, violations)
+	return true
+}

@@ -60,6 +60,17 @@ modules:
       receiver_optional_problem: "#2295 optional receiver values by the schema's boolean properties + httpConfig (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _http_config_problem: "#2295 http_config auth-count + proxy_url rule; table-covered by receiver_presence_cases.json via receiver_optional_problem"
       _type_name: "#2295 message helper (type name for a problem string); no law to property-test"
+      yaml_bool_literals: "#2295 schema reader (definitions.yamlBool enum, cached); pinned by tests/shared/test_receiver_spec_parity.py"
+      _is_yaml_bool: "#2295 membership in the schema's YAML 1.1 boolean words; table-covered by receiver_presence_cases.json (JSON and yaml rows)"
+      _yaml_bool_true: "#2295 value of a YAML boolean word; table-covered by the proxy_from_environment rows"
+      receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_writes_yaml_bool_words_as_booleans"
+      coerce_yaml_bool: "#2295 word → boolean at emission; covered by test_pipeline_writes_yaml_bool_words_as_booleans"
+      _go_url_parse_problem: "#2295 port of Go net/url.Parse (the oracle is Alertmanager, not a numeric/string law); table-covered by the proxy_url rows, whose AM column tests/alertmanager-inhibit asserts"
+      _go_scheme: "#2295 net/url.getScheme port; exercised through _go_url_parse_problem's table rows"
+      _go_host_problem: "#2295 net/url.parseHost port; exercised through _go_url_parse_problem's table rows"
+      _go_unescape: "#2295 net/url.unescape port; exercised through _go_url_parse_problem's table rows"
+      _valid_optional_port: "#2295 net/url.validOptionalPort port; exercised through _go_url_parse_problem's table rows"
+      _host_byte_needs_escape: "#2295 net/url.shouldEscape(encodeHost) port; exercised through _go_url_parse_problem's table rows"
 
   scripts/tools/_lib_io.py:
     covered:

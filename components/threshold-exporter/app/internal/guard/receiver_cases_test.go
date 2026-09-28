@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestReceiverPresenceCases runs the shared receiver case table
@@ -23,12 +25,19 @@ func TestReceiverPresenceCases(t *testing.T) {
 	var cases []struct {
 		Name     string         `json:"name"`
 		Receiver map[string]any `json:"receiver"`
+		YAML     string         `json:"yaml"`
 		Valid    bool           `json:"valid"`
 	}
 	if err := json.Unmarshal(data, &cases); err != nil || len(cases) == 0 {
 		t.Fatalf("parse cases: %v (n=%d)", err, len(cases))
 	}
 	for _, tc := range cases {
+		// #2295: a `yaml` row is decoded as da-guard decodes conf.d (yaml.v3).
+		if tc.YAML != "" {
+			if err := yaml.Unmarshal([]byte(tc.YAML), &tc.Receiver); err != nil {
+				t.Fatalf("%s: yaml: %v", tc.Name, err)
+			}
+		}
 		t.Run(tc.Name, func(t *testing.T) {
 			var errs []string
 			for _, f := range runWithRouting(t, "t1", map[string]any{"receiver": tc.Receiver}) {

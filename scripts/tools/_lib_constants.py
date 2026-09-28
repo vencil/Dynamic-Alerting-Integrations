@@ -92,8 +92,9 @@ PLATFORM_DEFAULTS: Final[dict[str, Any]] = {
 # tests/shared/test_receiver_spec_parity.py pins this dict to it (including the
 # accepted field set), and TestSpecs_MatchSchema pins the Go copy to it.
 # Optional values (#2295) are read from the schema at run time
-# (_lib_validation.receiver_optional_problem): a property typed boolean must be
-# true/false, and http_config follows HTTP_CONFIG_AUTH_FIELDS below.
+# (_lib_validation.receiver_optional_problem): a property referencing
+# definitions.yamlBool takes a boolean, null or a YAML 1.1 boolean word, and
+# http_config follows Alertmanager's rules (HTTP_CONFIG_AUTH_FIELDS below).
 RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     "webhook": {
         "am_key": "webhook_configs",
