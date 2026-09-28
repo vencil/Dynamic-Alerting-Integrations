@@ -81,6 +81,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 | 本機起整套 stack | [`try-local/README.md`](try-local/README.md) |
 | secret 洩漏處置（ASSUME COMPROMISE / ROTATE FIRST） | [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md) |
 | IaC lint baseline、Severity→Action、豁免列管 | [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md) |
+| 升級／對齊工具版本（Node、Python、trivy、helm、kubectl、kind、action…），本地與 CI 要同版 | [`toolchain-versions.md`](docs/internal/toolchain-versions.md)（SSOT 與消費端對照；守衛 `tests/shared/test_toolchain_pin_parity.py`） |
 | 哪些事機械強制、哪些要 AI 自覺、哪裡漏接 | [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md) |
 | 版本歷程、in-flight 工作 | 已發布：[`CHANGELOG.md`](CHANGELOG.md)；還沒發布：[`changelog.d/`](changelog.d/README.md) 片段 |
 
