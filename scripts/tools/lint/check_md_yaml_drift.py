@@ -568,11 +568,17 @@ class MdYamlDriftChecker:
         by_kind: Dict[str, int] = {}
         # #2164: platform-defaults.schema.json `$ref`s the tenant schema's
         # routing definitions; jsonschema does not fetch that file itself.
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT7
-        registry = Registry().with_resources(
-            (s["$id"], Resource.from_contents(s, default_specification=DRAFT7))
-            for s in (self.schema, self.platform_schema) if s.get("$id"))
+        # #2232: the SAME registry builder as check_confd_schema, which also
+        # proves every cross-file `$ref` resolves before any block is judged
+        # (unresolved used to be a traceback at rc 1, or silence when no block
+        # reached the `$ref`).
+        import check_confd_schema
+        try:
+            registry = check_confd_schema.checked_schema_registry(
+                self.schema, self.platform_schema)
+        except check_confd_schema.UnresolvableSchemaRef as e:
+            print(f"ERROR: docs/schemas: {e}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
 
         for rel_path, line_num, data in self.iter_config_units():
             schema, doc, kind = self._route(data)

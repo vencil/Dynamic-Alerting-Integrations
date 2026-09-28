@@ -1040,7 +1040,8 @@ repos:
         pass_filenames: false
         # Both SCHEMAS are inputs too: editing a schema can turn a documented
         # example red, and without them here that edit never runs this gate.
-        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
+        # check_confd_schema.py is imported for its registry builder (#2232).
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py)$
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Third sibling of the two above, and separate for the same reason: it

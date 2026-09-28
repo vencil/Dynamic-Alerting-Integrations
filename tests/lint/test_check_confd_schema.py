@@ -509,3 +509,70 @@ class TestCLI:
         """
         result = _run(_REAL_TRYLOCAL_CONFD, os.path.join(_REPO, "no", "such", "dir"))
         assert result.returncode == EXIT_CALLER_ERROR
+
+
+# --- #2232: platform-schema cross-file `$ref` must resolve up front ---------
+
+def _run_with_schema(config_dir: str, tenant_schema: str):
+    return subprocess.run(
+        [sys.executable, _SCRIPT, "--config-dir", config_dir, "--schema", tenant_schema],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+
+
+class TestUnresolvableCrossFileRef:
+    """A `--schema` whose `$id` the platform schema's `$ref` cannot reach is a
+    caller error (rc 2) naming the `$ref` — not a traceback at rc 1, and not a
+    silent rc 0 when no `_defaults*` file happens to walk into the `$ref`."""
+
+    _REF = "tenant-config.schema.json#/definitions/routingDefaults"
+    _ROUTING_DEFAULTS = ("_routing_defaults:\n  receiver:\n    type: webhook\n"
+                         "    url: \"https://a.example.com/h\"\n")
+    _TENANT = "tenants:\n  t1:\n    _severity_dedup: \"enable\"\n"
+
+    @pytest.fixture(params=["no-id", "other-id"])
+    def bad_schema(self, request, schema, tmp_path):
+        broken = dict(schema)
+        if request.param == "no-id":
+            broken.pop("$id")
+        else:
+            broken["$id"] = "https://example.invalid/schemas/tenant-config.schema.json"
+        path = tmp_path / "tenant.schema.json"
+        path.write_text(json.dumps(broken), encoding="utf-8")
+        return str(path)
+
+    def test_defaults_reaching_the_ref_exits_two_naming_it(self, confd, bad_schema):
+        _write(confd, "_defaults.yaml", self._ROUTING_DEFAULTS)
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run_with_schema(confd, bad_schema)
+        assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
+        assert "Traceback" not in result.stderr, result.stderr
+        assert self._REF in result.stderr, result.stderr
+
+    def test_tree_without_defaults_still_exits_two(self, confd, bad_schema):
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run_with_schema(confd, bad_schema)
+        assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
+        assert self._REF in result.stderr, result.stderr
+
+    def test_repo_schema_is_unchanged(self, confd):
+        _write(confd, "_defaults.yaml", self._ROUTING_DEFAULTS)
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run_with_schema(confd, _SCHEMA)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+        assert "OK: 2 tenant conf.d file(s)" in result.stdout
+
+    def test_checked_registry_resolves_every_repo_ref(self, schema, platform_schema):
+        from check_confd_schema import _cross_file_refs, checked_schema_registry
+        refs = [ref for _where, ref in _cross_file_refs(platform_schema)]
+        assert self._REF in refs, refs  # the walk sees the ref this guards
+        checked_schema_registry(schema, platform_schema)  # must not raise
+
+    def test_metaschema_ref_is_not_a_caller_error(self, schema):
+        """A `$ref` to a standard metaschema resolves at validation time (the
+        validator combines the metaschema registry in), so the up-front check
+        must resolve it too rather than exit 2."""
+        from check_confd_schema import checked_schema_registry
+        plat = {"$id": "https://example.invalid/p.json",
+                "properties": {"m": {"$ref": "http://json-schema.org/draft-07/schema#"}}}
+        checked_schema_registry(schema, plat)  # must not raise
