@@ -64,12 +64,12 @@ func ParseDefaultsFiles(defaults map[string]bool, src DefaultsSource, logger *lo
 	for dp := range defaults {
 		b, pd, rerr := src(dp)
 		if rerr != nil {
-			logger.Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
+			logger.Printf("WARN: parsedDefaults cache: read %q: %v", dp, rerr)
 			continue
 		}
 		parsed, perr := defaultsDictOf(b, pd)
 		if perr != nil {
-			logger.Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
+			logger.Printf("WARN: parsedDefaults cache: parse %q: %v", dp, perr)
 			continue
 		}
 		newParsedDefaults[dp] = parsed

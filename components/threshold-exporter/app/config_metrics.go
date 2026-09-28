@@ -55,6 +55,8 @@ package main
 //     the documented escape hatch for TestMain-free packages).
 
 import (
+	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -215,7 +217,15 @@ func (cm *configMetrics) IncParseFailure(fileBasename string) {
 	if cm == nil {
 		return
 	}
-	cm.parseFailures.WithLabelValues(fileBasename).Inc()
+	// A conf.d file name is data, and Linux allows any bytes in it; a label
+	// value that is not valid UTF-8 makes WithLabelValues panic (#2266). The
+	// sanitised name still counts the failure; U+FFFD marks the bad bytes.
+	c, err := cm.parseFailures.GetMetricWithLabelValues(strings.ToValidUTF8(fileBasename, "\uFFFD"))
+	if err != nil {
+		log.Printf("WARN: da_config_parse_failure_total not incremented for file %q: %v", fileBasename, err)
+		return
+	}
+	c.Inc()
 }
 
 // ObserveScanElapsed records one already-measured scan duration into

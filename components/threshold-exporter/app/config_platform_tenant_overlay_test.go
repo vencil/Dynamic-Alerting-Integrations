@@ -455,7 +455,7 @@ func TestNestedPlatformFileTenantsBlockIsNamed(t *testing.T) {
 		writeOverlayTree(t, dir, overlayTree(m, t, "c4-nested-platform-file-tenants-block"))
 		_, buf := newOverlayManager(t, dir)
 		assertLogLineWith(t, buf.String(), nestedAnchor,
-			"WARN:", filepath.Join("sub", "_defaults.yaml"), "tx, ty", "not read by any plane")
+			"WARN:", filepath.Join("sub", "_defaults.yaml"), `"tx", "ty"`, "not read by any plane")
 	})
 	// Control: a nested platform file with no `tenants:` block is silent.
 	t.Run("control-no-tenants-block", func(t *testing.T) {

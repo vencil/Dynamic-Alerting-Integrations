@@ -747,7 +747,8 @@ func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
 // parseTenantDecls judges one tenant file with the FULL decode
 // (ParseConfigFile, #1957) and returns its sorted tenant IDs — the keys of
 // the decoded Tenants — together with the decoded config, which the caller
-// hands to the flat plane through TreeScan.Partials.
+// hands to the flat plane through TreeScan.Partials. It calls it through
+// ParseTenantFile, which also rejects a non-UTF-8 tenant id (#2266).
 //
 // ⛔ THE FULL DECODE, NOT THE SHAPE THIS FUNCTION NEEDS. It used to decode
 // only `tenants:` into map[string]yaml.Node, which accepted files the flat
@@ -770,9 +771,9 @@ func (s *TreeScan) Locate(tenantID string) (absPath string, err error) {
 // without tenants (a commented-out placeholder, a file carrying only
 // profiles, is not an error).
 func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log.Logger) (ids []string, cfg ThresholdConfig, failed bool) {
-	cfg, perr := ParseConfigFile(data)
+	cfg, perr := ParseTenantFile(data)
 	if perr != nil {
-		logger.Printf("WARN: skip unparseable file %s: %v", absPath, perr)
+		logger.Printf("WARN: skip unparseable file %q: %v", absPath, perr)
 		if obs != nil {
 			// Basename, not full path, to cap label cardinality (A-8d).
 			obs.IncParseFailure(filepath.Base(absPath))

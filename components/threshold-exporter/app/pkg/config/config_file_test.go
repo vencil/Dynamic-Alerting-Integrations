@@ -124,6 +124,33 @@ func TestParseConfigFile_IsThePlainDecode(t *testing.T) {
 	}
 }
 
+// TestParseTenantFile_OnlyAddsTheUTF8Rejection pins the #2266 split: over the
+// corpus (all UTF-8 ids) the tenant-file decode IS the one decode, and a
+// non-UTF-8 tenant id is rejected by it — with nothing decoded, so a caller
+// that drops the error still sees no tenant — while ParseConfigFile, which a
+// `_` platform file is decoded with, still accepts those bytes.
+func TestParseTenantFile_OnlyAddsTheUTF8Rejection(t *testing.T) {
+	t.Parallel()
+	for name, body := range configFileCorpus {
+		want, wantErr := ParseConfigFile([]byte(body))
+		got, gotErr := ParseTenantFile([]byte(body))
+		if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: ParseTenantFile = (%#v, %v), ParseConfigFile = (%#v, %v)", name, got, gotErr, want, wantErr)
+		}
+	}
+	data := []byte("tenants:\n  !!binary dP8=:\n    cpu: \"80\"\n  tx:\n    cpu: \"80\"\n")
+	if cfg, err := ParseConfigFile(data); err != nil || len(cfg.Tenants) != 2 {
+		t.Errorf("ParseConfigFile = (%d tenants, %v), want both entries accepted", len(cfg.Tenants), err)
+	}
+	cfg, err := ParseTenantFile(data)
+	if err == nil || err.Error() != `tenant id "t\xff" is not valid UTF-8` {
+		t.Errorf("ParseTenantFile error = %v, want the non-UTF-8 tenant id rejection", err)
+	}
+	if !reflect.DeepEqual(cfg, ThresholdConfig{}) {
+		t.Errorf("a rejected tenant file decoded to %#v, want nothing", cfg)
+	}
+}
+
 func TestScanDirTree_JudgesEachFileByTheOneDecode(t *testing.T) {
 	t.Parallel()
 	for name, body := range configFileCorpus {
