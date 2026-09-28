@@ -20,6 +20,7 @@ every platform and never depends on a real amtool being installed.
 """
 from __future__ import annotations
 
+import importlib
 import subprocess
 
 import pytest
@@ -27,6 +28,22 @@ import pytest
 import _grar_render as render
 import generate_alertmanager_routes as gar
 import validate_config as vc
+
+
+@pytest.fixture(autouse=True)
+def _current_modules():
+    """Patch the module objects the code under test will import NOW.
+
+    validate_config imports generate_alertmanager_routes inside the function,
+    so it gets whatever sys.modules holds at call time. Other tests in the
+    same worker evict and re-import these modules (e.g. the flat-layout image
+    test), so the objects bound at this file's import can be stale: a
+    monkeypatch on them would never reach the code under test.
+    """
+    global render, gar, vc
+    render = importlib.import_module("_grar_render")
+    gar = importlib.import_module("generate_alertmanager_routes")
+    vc = importlib.import_module("validate_config")
 
 _WATCHDOG_RULE = {"source_matchers": ['severity="critical"'],
                   "target_matchers": ['alertname="Watchdog"'], "equal": []}
