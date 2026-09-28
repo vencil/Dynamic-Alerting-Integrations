@@ -582,4 +582,4 @@ to build `RoutingByTenant`.
 
 - [ADR-016: conf.d/ Directory Hierarchy + Mixed Mode](016-conf-d-directory-hierarchy-mixed-mode.en.md)
 - [Benchmark Report §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants) — dual-hash 1000-tenant measurements + SLO interpretation
-- [architecture-and-design.md §Design Concepts](../architecture-and-design.md#設計概念總覽)
+- [architecture-and-design.md §Design Concepts](../architecture-and-design.en.md#design-concepts-overview)

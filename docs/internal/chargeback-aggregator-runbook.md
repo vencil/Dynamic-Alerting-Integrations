@@ -8,7 +8,7 @@ lang: zh
 
 # Federation Chargeback Aggregator Runbook
 
-#539 Phase 2 / #552 consumer #2。Prometheus query log → Vector demux → VictoriaLogs `log_type=prometheus_query_log` stream → daily CronJob 算 per-tenant cost CSV。
+\#539 Phase 2 / #552 consumer #2。Prometheus query log → Vector demux → VictoriaLogs `log_type=prometheus_query_log` stream → daily CronJob 算 per-tenant cost CSV。
 
 > **架構脈絡**：本 runbook 接續 [`platform-log-aggregation-runbook.md`](platform-log-aggregation-runbook.md) Phase 1 之後。先把那邊的 victorialogs + vector 起好，本 runbook 的步驟才有意義。
 

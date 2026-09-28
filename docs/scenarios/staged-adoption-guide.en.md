@@ -191,7 +191,7 @@ git revert <commit-sha>
 #   - Maintenance windows → manually close (tenant API)
 ```
 
-**Rollback reversibility boundary** (same as [multi-system-migration-playbook §11](multi-system-migration-playbook.md#11-rollback-三層可逆界線) — **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**):
+**Rollback reversibility boundary** (same as [multi-system-migration-playbook §11](multi-system-migration-playbook.en.md#11-rollback-three-tier-reversibility-boundary) — **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**):
 
 | Layer | Reversibility |
 |---|---|
@@ -278,7 +278,7 @@ If a Rule Pack v2 upgrade **changes the alert name or label schema**, the custom
    - `_defaults.yaml`'s disable list — confirm the v2 alertname is on the list (or add it)
    - AM's silencer matchers — confirm the v2 label schema doesn't make existing matchers miss
    - **Missing either one = double-fire; both must be fixed before shipping v2**
-   - Concrete diagnostic commands: [troubleshooting-checklist §1.3.2](../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift--double-fire-alert-storm) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**)
+   - Concrete diagnostic commands: [troubleshooting-checklist §1.3.2](../integration/troubleshooting-checklist.en.md#132-silencer-mismatch-disablement-drift--double-fire-alert-storm) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**)
 3. For each `custom_*`: judge whether v2 absorbs it → if yes, run this guide's promotion flow
 4. For semantic changes in v2: either rewrite `custom_*` to align with v2's schema or leave it as-is (**and** synchronize the disable config)
 5. For v2 breaking changes: promotion is mandatory (forced upgrade)

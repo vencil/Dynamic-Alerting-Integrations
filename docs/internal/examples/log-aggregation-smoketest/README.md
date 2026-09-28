@@ -8,7 +8,7 @@ lang: zh
 
 # Log aggregation smoke-test fixtures
 
-#539 三 phase 各做 runtime smoke-test 時用的 fixture。**不**部署到生產 cluster。
+\#539 三 phase 各做 runtime smoke-test 時用的 fixture。**不**部署到生產 cluster。
 
 > 完整 runtime 驗證步驟見 [`docs/internal/platform-log-aggregation-runbook.md`](../../platform-log-aggregation-runbook.md) §6 + §7；本目錄只放 fixture 本體。
 
