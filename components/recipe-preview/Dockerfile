@@ -4,16 +4,20 @@
 # image bundles a SHA-pinned promtool because the firing/inactive verdict is
 # version-bound (§6 #5). Runs as non-root, serves POST /preview on :8082.
 #   try-local:  docker compose up recipe-preview
-FROM python:3.13.13-alpine3.22 AS builder
+FROM python:3.13.15-alpine3.23 AS builder
 
-# Alpine 3.22 CVE fixes (mirrors components/da-tools).
+# Alpine 3.23 CVE fixes (mirrors components/da-tools).
 RUN apk --no-cache upgrade
 
 # PyYAML — the eval core's only dependency beyond the stdlib.
+# ⛔ pip is then REMOVED from the venv (#1278, mirrors components/da-tools): every
+# pip release through 26.2.1 vendors setuptools 70.3.0 + msgpack 1.1.2 (CVE-2025-47273
+# / GHSA-6v7p-g79w-8964), so no pip upgrade clears them, and the service never
+# installs anything at runtime.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir PyYAML==6.0.3
+RUN pip install --no-cache-dir PyYAML==6.0.3 \
+ && python -m pip uninstall -y pip
 
 # promtool, SHA-256 pinned PER ARCH (§6 #5 + the #849/#851 supply-chain policy:
 # verify every downloaded release binary before use). PROM_VERSION + the amd64
@@ -23,9 +27,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # injects TARGETARCH (amd64 / arm64) per platform; pick the matching tarball +
 # its OWN pinned digest. busybox wget/sha256sum/tar (no apk add).
 ARG TARGETARCH
-ARG PROM_VERSION=3.14.0
-ARG PROM_SHA256_amd64=f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d
-ARG PROM_SHA256_arm64=077f3781ab7245dc04c9a3c9b78ba120fc8e41aa0dc97489b0af67247e50ba83
+ARG PROM_VERSION=3.15.0
+ARG PROM_SHA256_amd64=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
+ARG PROM_SHA256_arm64=f1f90ec08e849d494ca66c611470afc50192f0355f1a61c33f2cbde02d067823
 RUN set -eu; \
     case "${TARGETARCH}" in \
       amd64) PROM_SHA256="${PROM_SHA256_amd64}" ;; \
@@ -40,7 +44,7 @@ RUN set -eu; \
     /usr/local/bin/promtool --version
 
 # ── runtime ──────────────────────────────────────────────────────────────
-FROM python:3.13.13-alpine3.22
+FROM python:3.13.15-alpine3.23
 
 LABEL org.opencontainers.image.title="recipe-preview" \
       org.opencontainers.image.description="Would-fire preview service (#657) — POST /preview" \
@@ -55,7 +59,11 @@ LABEL org.opencontainers.image.title="recipe-preview" \
 ARG GIT_SHA=unknown
 ENV GIT_SHA=${GIT_SHA}
 
-RUN apk --no-cache upgrade
+# The base image's system pip + ensurepip's bundled wheel carry the same vendored
+# setuptools/msgpack as the venv's — removed for the same reason (#1278).
+RUN apk --no-cache upgrade \
+ && python -m pip uninstall -y pip \
+ && rm -rf /usr/local/lib/python3*/ensurepip/_bundled
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /usr/local/bin/promtool /usr/local/bin/promtool

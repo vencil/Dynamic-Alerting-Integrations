@@ -3,7 +3,7 @@
 #
 # Stdlib-only Python; no pip install needed. Alpine for minimal size.
 
-FROM python:3.13.13-alpine3.22
+FROM python:3.13.15-alpine3.23
 WORKDIR /app
 COPY driver.py /app/driver.py
 # rationale: one-shot benchmark driver — runs to completion inside the
