@@ -265,8 +265,18 @@ func canonicalView[V any](m map[string]V) map[string]V {
 // Component/Metric derived from the legacy key. Emitting the twin at the
 // resolve layer (not the collector) keeps the cardinality guard counting it,
 // and /simulate + GET /{id}/effective automatically consistent.
-func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row ResolvedThreshold) []ResolvedThreshold {
+//
+// canonicalKey is the row's BASE key (no `_critical` suffix, no `{labels}`):
+// it drives the twin, which is keyed on the base. sink (nil on every public
+// path) is told, for each row appended here, the tenant-config key the row
+// serves: servedKey, the whole canonical key the caller resolved (#2115). The
+// twin is reported under the same servedKey — it is that key's value served a
+// second time under the old metric name, not a key of its own.
+func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row ResolvedThreshold, sink rowSink, servedKey string) []ResolvedThreshold {
 	rows = append(rows, row)
+	if sink != nil {
+		sink(servedKey, row)
+	}
 	if legacyKey, ok := legacyKeyByCanonical[canonicalKey]; ok {
 		twin := row
 		twin.Component, twin.Metric = parseMetricKey(legacyKey)
@@ -275,6 +285,9 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 		// never survive a cardinality cut that its canonical row did not.
 		twin.legacyTwinOf = canonicalKey
 		rows = append(rows, twin)
+		if sink != nil {
+			sink(servedKey, twin)
+		}
 	}
 	return rows
 }

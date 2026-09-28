@@ -143,6 +143,8 @@ modules:
       GoBinaryDispatcher._msg: "Trivial bilingual selector; covered transitively by detect_cli_lang"
       GoBinaryDispatcher._recover_explicit_attempt: "Defensive helper for error messages; structurally simpler than _resolve_binary"
       GoBinaryDispatcher._print_binary_missing: "Side-effecting (prints to stderr); error-message templating"
+      GoBinaryDispatcher.binary_missing_message: "Error-message templating; asserted by the missing-binary tests of the shims and _lib_tenant_values"
+      GoBinaryDispatcher.resolve_binary: "The resolution step of _resolve_binary (covered), split out so _lib_tenant_values resolves da-guard the same way"
       GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
 
   # ── DX tools (doc/changelog/scaffold) ─────────────────────────────

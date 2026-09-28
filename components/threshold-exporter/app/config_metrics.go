@@ -59,12 +59,18 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/vencil/threshold-exporter/internal/scrape"
 )
 
 // configMetrics bundles the three Phase 4 metrics. A single-instance
 // singleton is allocated lazily on first MustRegister so tests can reset
 // state by re-instantiating via newConfigMetrics.
 type configMetrics struct {
+	// set is the same metrics as the fields below, owned by internal/scrape
+	// (#2115); the fields alias its members for the methods and tests here.
+	set *scrape.ConfigMetrics
+
 	scanDuration       prometheus.Histogram
 	reloadTriggers     *prometheus.CounterVec
 	defaultsNoop       prometheus.Counter
@@ -123,100 +129,25 @@ var (
 // newConfigMetrics builds a fresh set of metrics without registering them.
 // Callers must MustRegister on an isolated prometheus.Registry.
 func newConfigMetrics() *configMetrics {
+	s := scrape.NewConfigMetrics()
 	return &configMetrics{
-		scanDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "da_config_scan_duration_seconds",
-			Help: "Duration of one conf.d tree scan (v2.7.0, ADR-016). Observed once per conf.d tree scan (both planes, every watch tick and load).",
-			// Buckets tuned for 1000-tenant scans on ext4 (p50 ~20ms, p99
-			// ~150ms in the benchmark) plus slack for FUSE/NFS mounts.
-			// #2153: 10/30/60/120 appended — a cold scan of one file whose
-			// single mapping holds tens of thousands of keys was measured at
-			// 4.8s (33k keys) and 77s (130k keys), which the old 5s top-end
-			// folded into +Inf. Appending buckets leaves the value of every
-			// existing `le` series unchanged.
-			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 120},
-		}),
-		reloadTriggers: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "da_config_reload_trigger_total",
-			Help: "Count of hierarchical reloads, labeled by the change that triggered them (source, defaults, new, delete, forced).",
-		}, []string{"reason"}),
-		defaultsNoop: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "da_config_defaults_change_noop_total",
-			Help: "Count of _defaults.yaml changes that did NOT move any dependent tenant's merged_hash AND were not shadowed by a tenant override — i.e. cosmetic edits (comment-only, key reordering, or unrelated-key change). v2.8.0 Issue #61 narrowed the semantics; shadowed cases now go to da_config_defaults_shadowed_total. Pre-2.8.0 dashboards reading this counter for 'how often did the inheritance system block changes' should switch to da_config_defaults_shadowed_total.",
-		}),
-		parseFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "da_config_parse_failure_total",
-			Help: "Count of per-file YAML parse failures during hierarchical scan (v2.8.0 A-8d). Label 'file_basename' lets ops pin down which tenant or defaults file is broken. Alert: >5/h for any single basename = page ops.",
-		}, []string{"file_basename"}),
-		defaultsShadowed: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "da_config_defaults_shadowed_total",
-			Help: "Count of dependent tenants for whom a defaults change was effectively blocked because every changed key is overridden by that tenant's source YAML (v2.8.0 Issue #61, ADR-017 inheritance). Distinct from da_config_defaults_change_noop_total which counts cosmetic edits with no semantic key movement.",
-		}),
-		blastRadius: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "da_config_blast_radius_tenants_affected",
-			Help: "Distribution of tenants affected per diffAndReload tick, grouped by (reason, scope, effect) (v2.8.0 Issue #61, RFC). reason=source/defaults/new/delete; scope=global/domain/region/env/tenant/unknown (widest changed defaults level for reason=defaults; tenant for source/new/delete); effect=applied (merged_hash moved) / shadowed (defaults change blocked by tenant override) / cosmetic (no semantic key change). Alert on histogram_quantile(0.99, sum by (le)(rate(...{effect=\"applied\"}_bucket[5m]))) > 500 for high-impact change detection.",
-			// Buckets chosen to surface low-impact (1-5 affected) vs
-			// catastrophic-blast (5000+) reloads. 2500/10000 added per
-			// CHANGELOG sharding-decision: ≤2000 fine; 5000-10000 is the
-			// optimization tier; >10000 is sharding territory.
-			Buckets: []float64{1, 5, 25, 100, 500, 1000, 2500, 5000, 10000},
-		}, []string{"reason", "scope", "effect"}),
-		reloadDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "da_config_reload_duration_seconds",
-			Help: "End-to-end duration of diffAndReload (scan + per-tenant merge + blast-radius emit + fullDirLoad + atomic swap). Observed once per fired debounce window or once per synchronous fallback (debounceWindow=0). v2.8.0 B-3: feeds the empirical p99 used to validate the 300ms debounce floor and inform Phase 2 SLO sign-off.",
-			// Buckets cover synthetic 1000-tenant baseline (~200ms p50,
-			// ~500ms p99) + 5000-tenant tail (~1.1s) + headroom for
-			// degraded FUSE / NFS mounts. 30s top-end exists so a
-			// pathological reload does not silently saturate the last
-			// bucket — operators want to see the actual tail.
-			// #2153: 60/120/300/600 appended — one file declaring 2000-4000
-			// tenants was measured reloading in 30s-3m09s, all of which the
-			// old 30s top-end folded into +Inf. Appending buckets leaves the
-			// value of every existing `le` series unchanged.
-			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-		}),
-		debounceBatch: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "da_config_debounce_batch_size",
-			Help: "Number of triggerDebouncedReload calls collapsed into a single fired window (v2.8.0 B-3 debounce effectiveness). Observed once per fireDebounced; sample count == fire count. p50 == 1 means debounce never coalesces (window may be too short or fsnotify storms are absent); p99 climbing past ~50 signals an event-storm pathology worth investigating.",
-			// Bucket boundaries chosen to surface (a) the typical 1-2
-			// case (single-file edits), (b) the K8s symlink-rotation
-			// case (3-10 fsnotify events per ConfigMap update), and
-			// (c) git-sync batch case (10-200 files in one rsync
-			// burst — exactly the scenario B-7 stress-tests).
-			Buckets: []float64{1, 2, 5, 10, 25, 50, 100, 250, 500},
-		}),
-		lastScanComplete: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_last_scan_complete_unixtime_seconds",
-			Help: "Wall-clock unix seconds at the most recent successful conf.d tree scan completion (both planes; every watch tick and load). Set by the scanner; read by the e2e harness as anchor T1 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-scanner detection. 0 means scanner has not yet completed a successful scan.",
-		}),
-		lastReloadComplete: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_last_reload_complete_unixtime_seconds",
-			Help: "Wall-clock unix seconds at the most recent successful diffAndReload completion (post atomic-swap). Set by the reload pipeline; read by the e2e harness as anchor T2 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-reloader detection. 0 means reloader has not yet completed a successful reload.",
-		}),
-		freeOSMemory: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "da_config_free_os_memory_total",
-			Help: "Count of explicit runtime/debug.FreeOSMemory() calls issued after a reload cycle (#459). Stays 0 unless the -free-os-mem-after-reload lever is enabled. Each increment is one forced GC + return-to-OS; correlate with go_memstats_heap_released_bytes to confirm the lever is reclaiming idle heap under sustained reload pressure.",
-		}),
-		tenantMetricsOverLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "da_tenant_metrics_over_limit",
-			Help: "State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
-		}, []string{"tenant"}),
-		subtreeUndeliverableTenants: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_subtree_undeliverable_tenants",
-			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — one file decoded into different tenant sets by the two planes — is gone because both planes now judge a file with one decode. Known tenant-set exceptions that are NOT counted here: the incremental tenant-only reload keeping a broken file's last good tenants (#1980) and tenants declared in a _-prefixed file (#1982). SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
-		}),
-		maxTenantsPerFile: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_max_tenants_per_file",
-			Help: "Largest number of tenants declared under `tenants:` in any single config file of the committed config (#2153). A whole-tree maximum, not a per-file series. Load and reload time grow faster than linearly with this number, so a file declaring thousands of tenants is the shape to split into several files. A file that failed to parse is not counted. Re-Set on every config commit.",
-		}),
-		maxMappingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_max_mapping_keys",
-			Help: "Largest key count of any single mapping in one config file of the committed config (#2153): `defaults`, `state_filters`, `tenants`, one tenant's overrides, `profiles`, or one profile. The YAML decoder checks duplicate keys pairwise, so decoding a mapping costs time proportional to the square of its key count. Counted on the already-decoded config, so mappings the exporter does not decode into it (unknown keys, nested `_`-prefixed files, sections dropped by the file-placement rules) are not counted, nor is a file that failed to parse. Re-Set on every config commit.",
-		}),
-		initialLoadDuration: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "da_config_initial_load_duration_seconds",
-			Help: "Wall-clock seconds the startup config load took (#2153). Set once, when that load succeeds. The HTTP server (and so /metrics, /health and /ready) starts only after it, so a startup probe must allow at least this long. Reloads are measured by da_config_reload_duration_seconds instead.",
-		}),
+		set:                         s,
+		scanDuration:                s.ScanDuration,
+		reloadTriggers:              s.ReloadTriggers,
+		defaultsNoop:                s.DefaultsNoop,
+		parseFailures:               s.ParseFailures,
+		defaultsShadowed:            s.DefaultsShadowed,
+		blastRadius:                 s.BlastRadius,
+		reloadDuration:              s.ReloadDuration,
+		debounceBatch:               s.DebounceBatch,
+		lastScanComplete:            s.LastScanComplete,
+		lastReloadComplete:          s.LastReloadComplete,
+		freeOSMemory:                s.FreeOSMemory,
+		tenantMetricsOverLimit:      s.TenantMetricsOverLimit,
+		subtreeUndeliverableTenants: s.SubtreeUndeliverableTenants,
+		maxTenantsPerFile:           s.MaxTenantsPerFile,
+		maxMappingKeys:              s.MaxMappingKeys,
+		initialLoadDuration:         s.InitialLoadDuration,
 	}
 }
 
@@ -234,22 +165,9 @@ func getConfigMetrics() *configMetrics {
 // registerConfigMetrics installs all metrics on the given registry.
 // Called by MetricsHandler during /metrics wiring.
 func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
-	reg.MustRegister(m.scanDuration)
-	reg.MustRegister(m.reloadTriggers)
-	reg.MustRegister(m.defaultsNoop)
-	reg.MustRegister(m.parseFailures)
-	reg.MustRegister(m.defaultsShadowed)
-	reg.MustRegister(m.blastRadius)
-	reg.MustRegister(m.reloadDuration)
-	reg.MustRegister(m.debounceBatch)
-	reg.MustRegister(m.lastScanComplete)
-	reg.MustRegister(m.lastReloadComplete)
-	reg.MustRegister(m.freeOSMemory)
-	reg.MustRegister(m.tenantMetricsOverLimit)
-	reg.MustRegister(m.subtreeUndeliverableTenants)
-	reg.MustRegister(m.maxTenantsPerFile)
-	reg.MustRegister(m.maxMappingKeys)
-	reg.MustRegister(m.initialLoadDuration)
+	for _, x := range m.set.Collectors() {
+		reg.MustRegister(x)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -480,15 +398,12 @@ func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 //     (so a tenant that just dropped back below the cap is observably
 //     clamped to zero rather than carrying its old over-limit value).
 //
-// Safe to call from inside Collect because Prometheus client_golang
-// invokes each Collector's Collect serially per Gather, and the
-// GaugeVec is mutated only here. The order vs the GaugeVec's own
-// Collect within the same Gather: ThresholdCollector is registered
-// first (see collector.go MetricsHandler), so its Reset+Set runs before
-// the GaugeVec is asked to emit its current state.
+// Called from inside the collector's Collect; the GaugeVec is mutated only
+// here. ⚠️ Registration order does NOT order it against the GaugeVec's own
+// Collect: Registry.Gather collects the registered collectors concurrently,
+// so within one Gather the GaugeVec may emit before or after this Reset+Set
+// — i.e. a scrape can carry the previous scrape's magnitudes. Known and left
+// as is (#2115 moved this code without changing it).
 func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
-	cm.tenantMetricsOverLimit.Reset()
-	for tenant, magnitude := range perTenant {
-		cm.tenantMetricsOverLimit.WithLabelValues(tenant).Set(float64(magnitude))
-	}
+	cm.set.PublishTenantMetricsOverLimit(perTenant)
 }

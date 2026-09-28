@@ -111,6 +111,22 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 // loop correctly evicts vanished tenants and clears gauges for tenants
 // that have just dropped back below the limit.
 func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
+	return c.resolveAtWithStats(now, nil)
+}
+
+// rowSink is told, for a threshold row a resolve phase produces, the
+// canonical tenant-config key the row serves (#2115). nil on the public
+// resolve path, so the phases skip the reporting entirely.
+type rowSink func(key string, row ResolvedThreshold)
+
+// customAlertsKey is the reserved key every custom-alert row serves.
+const customAlertsKey = "_custom_alerts"
+
+// resolveAtWithStats is ResolveAtWithStats, and with a non-nil keyed it also
+// appends to *keyed every returned row paired with the key it serves, in the
+// returned order, after the cardinality cut (a truncated row is not there).
+// With keyed nil it is ResolveAtWithStats exactly.
+func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThreshold) ([]ResolvedThreshold, ResolveStats) {
 	var result []ResolvedThreshold
 
 	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
@@ -144,8 +160,26 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	// — it is per-config, not per-tenant, and this is the per-scrape path.
 	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
+	// With keyed, each tenant's rows are also collected as (key, row) PAIRS as
+	// the phases produce them; once the segment is final the pairs are what it
+	// is made of (see finishKeyedSegment), so a key cannot drift from its row.
+	//
+	// ⚠️ A pointer made only on the keyed path, not a local slice captured by
+	// a closure: a captured variable moves to the heap even when the closure
+	// is never built, which cost the public resolve one allocation per call
+	// (measured on BenchmarkResolveAt_1000Tenants_Mixed).
+	var pairs *segmentPairs
+	var collect rowSink
+	if keyed != nil {
+		pairs = &segmentPairs{}
+		collect = pairs.add
+	}
+
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
+		if pairs != nil {
+			pairs.pairs = pairs.pairs[:0]
+		}
 
 		canonOverrides, deprecatedCount := canonicalizeOverrides(overrides)
 		if deprecatedCount > 0 {
@@ -158,14 +192,14 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		// extraction appended in the original order; intra-segment order is
 		// otherwise governed by Go map iteration (non-deterministic, as before)
 		// and the cardinality sort below.
-		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now)...)
-		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now)...)
-		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now)...)
+		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect)...)
+		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now, collect)...)
 		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
 		// tenant supplied a value. Must stay inside this segment: the
 		// cardinality guard below measures result[startIdx:] exactly once, so a
 		// row appended after it escapes the cap silently.
-		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now)...)
+		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect)...)
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -177,6 +211,13 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		if len(caRows) > 0 || caErrs > 0 {
 			result = append(result, caRows...)
 			perTenantCustomAlertErrors[tenant] = caErrs
+			// Custom-alert rows do not pass through appendWithLegacyTwin; they
+			// enter the segment here, so they are reported here.
+			if collect != nil {
+				for _, r := range caRows {
+					collect(customAlertsKey, r)
+				}
+			}
 		}
 
 		// Cardinality guard: enforce per-tenant metric limit (v1.5.0)
@@ -203,13 +244,18 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 			// dropped version is the same on every scrape (stable disappearance
 			// → fires the over-limit gauge predictably, never flaps).
 			seg := result[startIdx:]
-			sort.SliceStable(seg, func(i, j int) bool {
-				return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
-			})
+			if pairs == nil || !pairs.sortInto(seg) {
+				sort.SliceStable(seg, func(i, j int) bool {
+					return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
+				})
+			}
 			log.Printf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
 			result = result[:startIdx+limit]
 		}
 		perTenantOverLimit[tenant] = overflow
+		if keyed != nil {
+			*keyed = pairs.finish(*keyed, result[startIdx:])
+		}
 
 		// ADR-031: keep the user_slo_objective gauge aligned with the
 		// truncated threshold rows. caObjs was collected BEFORE the
@@ -246,6 +292,89 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	}
 }
 
+// KeyedThreshold is one resolved threshold row paired with the canonical
+// tenant-config key it serves (#2115): the whole key (`X_critical`,
+// `X{label="v"}`), a #1231 legacy twin under the same key as the row it
+// shadows, and every custom-alert row under `_custom_alerts`.
+type KeyedThreshold struct {
+	Key string
+	ResolvedThreshold
+}
+
+// ResolveAtWithKeys is ResolveAtWithStats with every returned row paired with
+// the tenant-config key it serves. It exists for `da-guard served-values`
+// (#2115), which reports what /metrics serves per tenant key; the collector
+// does not use it and pays nothing for it.
+//
+// The rows are ResolveAtWithStats' rows (same rows, same cardinality cut; the
+// order across tenants is map order in both). err is non-nil only when the
+// resolver failed to name the key of a row it returned — never guessed at.
+func (c *ThresholdConfig) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
+	var keyed []KeyedThreshold
+	rows, stats := c.resolveAtWithStats(now, &keyed)
+	if err := checkKeyed(rows, keyed); err != nil {
+		return nil, stats, err
+	}
+	return keyed, stats, nil
+}
+
+// checkKeyed is ResolveAtWithKeys' guard, and it checks the COUNT only: one
+// pair per returned row. The rows themselves are the pairs' rows by
+// construction (segmentPairs rewrites the segment from them), so comparing
+// them row by row here could never fail; that the keyed rows are the public
+// resolve's rows is TestResolveAtWithKeys_SameRowsAndStatsAsPublicResolve's
+// job.
+func checkKeyed(rows []ResolvedThreshold, keyed []KeyedThreshold) error {
+	if len(keyed) != len(rows) {
+		return fmt.Errorf("the resolver named the key of %d rows but returned %d", len(keyed), len(rows))
+	}
+	return nil
+}
+
+// segmentPairs collects one tenant segment's rows with their keys, in the
+// order the phases append them to the segment.
+type segmentPairs struct{ pairs []KeyedThreshold }
+
+func (p *segmentPairs) add(key string, row ResolvedThreshold) {
+	p.pairs = append(p.pairs, KeyedThreshold{Key: key, ResolvedThreshold: row})
+}
+
+// sortInto is the truncation sort on the keyed path: the pairs are sorted by
+// the same stable truncationSortKey order the keyless path sorts seg by, and
+// seg is rewritten from them, so each row moves together with its key. false
+// (seg untouched) when the pairs do not cover the segment; the keyless sort
+// then runs and checkKeyed reports the gap.
+func (p *segmentPairs) sortInto(seg []ResolvedThreshold) bool {
+	if len(p.pairs) != len(seg) {
+		return false
+	}
+	sort.SliceStable(p.pairs, func(i, j int) bool {
+		return truncationSortKey(p.pairs[i].ResolvedThreshold) < truncationSortKey(p.pairs[j].ResolvedThreshold)
+	})
+	for i := range p.pairs {
+		seg[i] = p.pairs[i].ResolvedThreshold
+	}
+	return true
+}
+
+// finish appends the final segment's pairs to out: one per row kept after
+// the cut. When the pairs cover the segment the segment IS their rows (for an
+// uncut segment it is rewritten from them here), so row and key cannot come
+// apart; otherwise the pairs are appended as they are and checkKeyed rejects
+// the mismatch.
+func (p *segmentPairs) finish(out []KeyedThreshold, seg []ResolvedThreshold) []KeyedThreshold {
+	n := len(seg)
+	if len(p.pairs) < n {
+		return append(out, p.pairs...)
+	}
+	if len(p.pairs) == n {
+		for i := range p.pairs {
+			seg[i] = p.pairs[i].ResolvedThreshold
+		}
+	}
+	return append(out, p.pairs[:n]...)
+}
+
 // isThresholdExpired reports whether a time-boxed threshold override (PREVENT
 // #656) has passed its `expires:` instant. A malformed expires fails OPEN (the
 // override is kept; ValidateTenantKeys warns on it). Empty expires = a
@@ -279,7 +408,7 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // onto their canonical key), and every append goes through appendWithLegacyTwin
 // so alias targets dual-emit a legacy-identity row during the transition
 // window. disable still suppresses BOTH rows (no canonical row → no twin).
-func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for metricKey, defaultValue := range defaults {
 		// Skip _state_ / _silent_ / _severity_dedup / _routing keys — handled
@@ -324,7 +453,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 					Value:     v,
 					Severity:  severity,
 					Component: component,
-				})
+				}, sink, metricKey)
 				continue
 			}
 
@@ -339,7 +468,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			Value:     defaultValue,
 			Severity:  severity,
 			Component: component,
-		})
+		}, sink, metricKey)
 	}
 	return rows
 }
@@ -385,7 +514,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 // registry key has that shape (none is underscore-free, none is
 // `default_`-prefixed) and it needs the platform to author both halves, so
 // this is stated as a known limit rather than paid for with a per-key reparse.
-func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
 	if len(declared) == 0 {
 		return nil // steady state today: nothing declared, nothing to walk
 	}
@@ -483,7 +612,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			Value:     v,
 			Severity:  severity,
 			Component: component,
-		})
+		}, sink, metricKey)
 	}
 	return rows
 }
@@ -497,7 +626,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 // `mysql_cpu_critical` is already `mysql_threads_running_critical` here and
 // its base lookup hits the canonical defaults view; the emit goes through
 // appendWithLegacyTwin for the transition-window legacy critical row.
-func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
 		if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
@@ -530,7 +659,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 				Value:     v,
 				Severity:  "critical",
 				Component: component,
-			})
+			}, sink, key)
 		} else {
 			log.Printf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
 		}
@@ -552,7 +681,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // label set, closing the transition-window gap the base/_critical shapes
 // already covered (review F1: without this, upgrading a plain override to a
 // dimensional one made the legacy-identity series vanish mid-window).
-func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
 		if !strings.Contains(key, "{") {
@@ -602,7 +731,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 			Component:    component,
 			CustomLabels: customLabels,
 			RegexLabels:  regexLabels,
-		})
+		}, sink, key)
 	}
 	return rows
 }

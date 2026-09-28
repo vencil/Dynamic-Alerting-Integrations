@@ -2451,6 +2451,7 @@ da-tools guard <subcommand> [flags]
 | 子命令 | 說明 |
 |---|---|
 | `defaults-impact` | 對 conf.d/（或 `--scope` 子目錄）下所有租戶執行 deepMerge → guard checks，輸出 Markdown / JSON 報告 |
+| `served-values` | 以 JSON 印出 exporter `/metrics` 對每個租戶實際發出的值（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫 |
 
 **Binary 解析順序**
 
@@ -2483,6 +2484,15 @@ da-tools guard <subcommand> [flags]
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
 | 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
+**`served-values`**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
+| `--at <RFC3339>` | 現在 | 在這個時間點解析（排程視窗、`expires`、靜默 / 維護期限都以它為準） |
+
+值由 exporter 自己的載入與解析算出，這個子命令不另做判斷。輸出 JSON：`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）與 `tenants`；每個租戶有 `values`（`/metrics` 會發列的閾值 key 取 canonical 名與值，加上 reserved key 在 `--at` 當下由 exporter resolver 讀出的值）、`severities`（每個閾值 key 的 severity label）、`unserved`（租戶合併後設定中沒出現在 `values` 的 key，含被停用者，值取原文）與 `dropped`（exporter 建不出 series、`/metrics` 丟掉該列的 key，值為每個被丟列的原因）。哪些列會被收下，是把 exporter `/metrics` 的同一組 collector 放進私有 registry 跑一次 `Gather` 決定的。Exit code：0 成功；2 caller error、exporter 拒收整棵樹（例如同一租戶跨檔重複宣告），或 `Gather` 失敗（例如兩個 key 產生同一條 series；exporter 的 `/metrics` 此時整份回 500），stderr 帶出原因並盡量點名 key；3 有檔被整份跳過，JSON 照樣輸出並在 `parse_failed` 點名。輸出中任何字串不是合法 UTF-8 時也 exit 2（JSON 裝不下），即使 exporter 對這種 key 只是丟掉該列、`/metrics` 仍回 200。exit 2 以 production `/metrics` 同一組 collector 的 `Gather` 為準。判定以 UTF-8 協商的 scrape（Prometheus 3 預設）為準；若以 legacy 或 underscores escaping 抓取，`{a-b}` 與 `{a.b}` 這類 label 可能在文字輸出上重名。`dropped` 的 key 用 canonical 拼法，`unserved` 的 key 用原文拼法。
+
 **範例**
 
 ```bash
@@ -2496,6 +2506,9 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 # JSON 輸出供下游 PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
+
+# 每個租戶在 /metrics 上實際生效的值（指定時間點）
+da-tools guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
 ```
 
 **範圍簡化**：`da-guard` 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 `/simulate` endpoint。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
