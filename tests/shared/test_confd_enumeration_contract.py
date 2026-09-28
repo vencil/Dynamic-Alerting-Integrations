@@ -321,6 +321,9 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
         "packages — a repo-owned tree, never a tenant conf.d (#1755)",
     "lint/check_maintenance_symmetry.py":
         "iterdir over rule-packs/",
+    "lint/check_metric_dictionary.py":
+        "globs RULE_PACKS_DIR (rule-packs/) for the alert names and threshold "
+        "readers the dictionary contract checks (issue 1196)",
     "lint/check_orphan_lint.py":
         "globs .github/workflows",
     "lint/check_unpinned_deps.py":

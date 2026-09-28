@@ -4,6 +4,9 @@
 交叉驗證 metric-dictionary.yaml 與 Rule Pack YAML 的實際 metric 使用:
   1. 字典中存在但 Rule Pack 不使用的 stale entry
   2. Rule Pack 使用但字典未收錄的 undocumented metric
+  3. 契約（error，issue 1196）：`maps_to` 是租戶閾值 key，必須有 rule pack
+     告警讀它；`golden_rule` 必須是存在的告警；兩者都有值時，該告警必須讀
+     這個 key。migrate 把這兩個欄位原樣告訴使用者，錯了就是在教錯的設定。
 
 v2.4.0 新增：DX Tooling Backlog 候選項目。
 migrate_rule.py 依賴 metric-dictionary.yaml 做遷移映射，
@@ -31,6 +34,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
+import _threshold_alerts  # noqa: E402  (rule pack 讀者索引，issue 1196)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -183,6 +188,57 @@ def check_dictionary_coverage(
     return issues
 
 
+def rule_pack_alert_names() -> Set[str]:
+    """rule-packs/ 裡所有告警名。"""
+    names: Set[str] = set()
+    for path in sorted(RULE_PACKS_DIR.glob("*.yaml")):
+        names.update(re.findall(r"^\s*-\s*alert:\s*(\S+)",
+                                path.read_text(encoding="utf-8"), re.M))
+    return names
+
+
+def alerts_reading_key(key: str):
+    """讀 ``key`` 的告警，掃的是本 lint 的 RULE_PACKS_DIR（含經由 recording rule
+    間接讀，規則同 `_threshold_alerts.build_index`）。沒有 rule pack 時回 None。"""
+    packs = sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
+    if not packs:
+        return None
+    return _threshold_alerts.build_index(packs).get(key, ())
+
+
+def check_dictionary_contract(dict_data, alert_names, readers_of) -> List[Dict]:
+    """maps_to／golden_rule 的契約，違反一律是 error。"""
+    issues: List[Dict] = []
+    if not isinstance(dict_data, dict):
+        return issues
+    for metric, info in sorted(dict_data.items()):
+        if not isinstance(info, dict):
+            continue
+        key = info.get("maps_to")
+        golden = info.get("golden_rule")
+        readers = None
+        if key:
+            readers = readers_of(key)
+            if readers is None:
+                issues.append({"severity": "error", "check": "readers-unknown",
+                               "metric": metric,
+                               "message": f"'{metric}': 找不到 rule pack，無法判定 maps_to '{key}' 的讀者"})
+                continue
+            if not readers:
+                issues.append({"severity": "error", "check": "unread-key", "metric": metric,
+                               "message": (f"'{metric}' 的 maps_to '{key}' 沒有任何 rule pack 告警讀"
+                                           f"（照設等於設了不生效的 key）；固定判斷的黃金規則請寫 maps_to: null")})
+        if golden and golden not in alert_names:
+            issues.append({"severity": "error", "check": "missing-golden-rule", "metric": metric,
+                           "message": f"'{metric}' 的 golden_rule '{golden}' 不是 rule pack 裡存在的告警"})
+        elif golden and readers and golden not in readers:
+            issues.append({"severity": "error", "check": "golden-rule-ignores-key",
+                           "metric": metric,
+                           "message": (f"'{metric}' 的 golden_rule '{golden}' 不讀 maps_to '{key}'"
+                                       f"（讀它的是 {', '.join(readers)}）")})
+    return issues
+
+
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -207,6 +263,9 @@ def main():
         all_rp_metrics.update(metrics)
 
     issues = check_dictionary_coverage(dict_metrics, dict_rules, rule_pack_metrics)
+    issues += check_dictionary_contract(
+        yaml.safe_load(METRIC_DICT.read_text(encoding="utf-8")) or {},
+        rule_pack_alert_names(), alerts_reading_key)
 
     errors = [i for i in issues if i["severity"] == "error"]
     warnings = [i for i in issues if i["severity"] == "warning"]

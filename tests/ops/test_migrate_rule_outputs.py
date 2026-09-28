@@ -540,11 +540,20 @@ class TestRenderReport:
                                      "rule_pack": "infra",
                                      "note": "exact"})
         out = mr.render_report([r])
-        assert "📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值\n" in out
+        assert "📖 建議使用黃金標準 — 有 Metric Key 的，請用 scaffold_tenant.py 設定閾值\n" in out
         assert "  • Gold\n" in out
         assert "    → 黃金標準: g.yaml#cpu\n" in out
         assert "    → Metric Key: node_cpu\n" in out
         assert "    → Rule Pack: infra\n" in out
+
+    def test_use_golden_without_a_threshold_key(self):
+        """maps_to: null（固定條件的黃金規則）不能叫人去設閾值，也不能印 None（issue 1196）。"""
+        r = _make_result("Slow", status="perfect", triage_action="use_golden",
+                         dict_match={"golden_rule": "MariaDBHighSlowQueries",
+                                     "maps_to": None, "rule_pack": "mariadb", "note": "n"})
+        out = mr.render_report([r])
+        assert "None" not in out
+        assert "    → Metric Key: （無：黃金標準以固定條件判斷，沒有租戶閾值可設）\n" in out
 
     def test_unparseable_llm_prompt_section(self):
         r = _make_result("Bad", status="unparseable", llm_prompt="PROMPT")

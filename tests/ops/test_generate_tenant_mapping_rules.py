@@ -359,11 +359,33 @@ class TestLoadMetricsDictionary:
                   rule_pack: redis
             """))
         metrics = load_metrics_from_dictionary(path)
-        assert 'mysql_connections' in metrics
-        assert 'mysql_slow_queries' in metrics
-        assert 'redis_connections' in metrics
-        # Deduped: maps_to values are unique
-        assert len(metrics) == len(set(metrics))
+        # The recording rule selects the RAW series by instance (ADR-006:
+        # `oracle_sessions{instance=...}`), so the list is the dictionary's
+        # keys — the legacy exporter metric names. `maps_to` is a tenant
+        # threshold key (issue 1196); no exporter emits a series by that name.
+        assert metrics == ['mysql_slow_queries', 'mysql_threads_connected',
+                           'redis_connections']
+        assert 'mysql_connections' not in metrics
+
+    def test_entries_without_a_threshold_key_still_count(self, config_dir):
+        """`maps_to: null` (fixed-rule / state-based) used to crash `sorted()`."""
+        path = os.path.join(config_dir, 'metric-dictionary.yaml')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(textwrap.dedent("""                mysql_slave_status_slave_io_running:
+                  maps_to: null
+                  rule_pack: mariadb
+                mysql_threads_connected:
+                  maps_to: mysql_connections
+                  rule_pack: mariadb
+            """))
+        assert load_metrics_from_dictionary(path) == [
+            'mysql_slave_status_slave_io_running', 'mysql_threads_connected']
+
+    def test_the_real_dictionary_loads(self):
+        path = os.path.join(_REPO, 'scripts', 'tools', 'metric-dictionary.yaml')
+        metrics = load_metrics_from_dictionary(path)
+        assert 'mysql_global_status_threads_connected' in metrics
+        assert 'mysql_connections' not in metrics
 
     def test_empty_file(self, config_dir):
         path = os.path.join(config_dir, 'empty.yaml')

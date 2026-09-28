@@ -195,16 +195,19 @@ def collect_tenant_ids_from_config_dir(config_dir: str) -> set[str]:
 
 
 def load_metrics_from_dictionary(dict_path: str) -> list[str]:
-    """Load metric names from metric-dictionary.yaml (maps_to values = golden metric names)."""
+    """Load raw exporter metric names from metric-dictionary.yaml (its keys).
+
+    The generated rule selects the raw series by instance
+    (``oracle_sessions{instance=...}``, ADR-006), so the names must be ones an
+    exporter emits: the dictionary's keys. This used to collect the
+    ``maps_to`` values, which are tenant threshold keys (``mysql_connections``)
+    — no series carries that name, so every generated rule was empty — and a
+    ``maps_to: null`` entry crashed ``sorted()`` (issue 1196).
+    """
     data = load_yaml_file(dict_path)
     if not data or not isinstance(data, dict):
         return []
-    # Collect unique golden metric names (maps_to values)
-    metrics: set[str] = set()
-    for _raw_metric, info in data.items():
-        if isinstance(info, dict) and 'maps_to' in info:
-            metrics.add(info['maps_to'])
-    return sorted(metrics)
+    return sorted(str(raw) for raw, info in data.items() if isinstance(info, dict))
 
 
 # ---------------------------------------------------------------------------
