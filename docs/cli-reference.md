@@ -1750,6 +1750,8 @@ da-tools generate-routes --config-dir <path> [options]
 
 每個模式 stdout 都先印一行 `Config files: N read, M skipped (<檔名>)`（#1460）——N / M 來自結構化紀錄，不是 stderr 的 WARN 行；M > 0 且被跳過的是租戶檔時，這次執行不會再往下產出任何結果。
 
+**階層式 conf.d（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）**：讀整棵樹（與 exporter 同一套走訪規則：隱藏目錄略過、只有 README 的目錄不貢獻任何東西），任何深度的租戶都產生 route。語意見 [ADR-017 修訂 2026-09-28](adr/017-defaults-yaml-inheritance-dual-hash.md)：`_routing_defaults` 先取根目錄任一 `_` 檔，再依序取租戶路徑上每一層子目錄 defaults 載體（`_defaults.yaml`／`.yml`）頂層的 `_routing_defaults`，逐頂層鍵淺合併、深層勝出；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放子目錄，只作用於該子樹，各層 policy 疊加判定。以下情況**所有模式**回 2、什麼都不產出不寫入：子目錄任一檔有 `_routing_enforced`；子目錄層 `_routing_defaults` 的 `receiver` 或 `overrides` 寫成 null；同一個 routing profile 名稱定義在兩個檔（含根目錄 `.yaml` 與 `.yml` 並存）；同一個租戶 id 由兩個租戶檔宣告。子樹 policy 的 `tenants:` 點名子樹外的租戶：`--strict` 下為 ERROR（回 1）、否則 WARN，該條目不生效。子目錄平台檔的 `tenants:` 區塊照舊無人讀，只印 WARN。⚠️ v2.9.0 映像只讀頂層，子目錄的租戶沒有 route、結束碼 0 <!-- image-caveat: v2.9.0 -->
+
 **Fragment 模式** (`--output-configmap` 未指定)：
 YAML 片段，包含 route、receivers、inhibit_rules。
 
@@ -1775,7 +1777,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 |------|------|
 | `0` | 成功 |
 | `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——印 `FAIL:`，不再噴 traceback（#2260） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列的四種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2047,7 +2049,7 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 ##### Hierarchical conf.d
 
-**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。「略過了什麼」依讀取方式而定：讀租戶的平面讀取器略過的是子目錄裡的**所有**設定檔；只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。因此只要子目錄裡有 `_defaults.yaml`（標準 ADR-017 樹），Policy-as-Code 列即使沒有任何 `_policies` 也會是 WARN、具名該檔——「沒有 policies」這個答案是沒打開它就得出的。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS` <!-- image-caveat: v2.9.0 -->
+**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy 三列自 [#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326) 起與 exporter 一樣讀整棵樹（路由面的階層語意見上方 `generate-routes` 的「階層式 conf.d」）；conf.d 樹被路由面拒收時（例如子目錄有 `_routing_enforced`），schema 列 FAIL、以 `ERROR (routing tree):` 開頭點名。仍有**平面**讀取的是 Policy-as-Code 列找根目錄 `_defaults.yaml` 那一步，exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。因此只要子目錄裡有 `_defaults.yaml`（標準 ADR-017 樹），Policy-as-Code 列即使沒有任何 `_policies` 也會是 WARN、具名該檔——「沒有 policies」這個答案是沒打開它就得出的。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS` <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -2505,7 +2507,7 @@ da-tools guard <subcommand> [flags]
 
 **Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
 
-routing 檢查的對象是租戶**解析後**的 routing，與 route generator（`generate-routes`）合併的三層相同：根目錄的 `_routing_defaults` → `_routing_profile` 參照的 routing profile → 租戶自己的 `_routing`，逐頂層鍵淺合併，最後把 `{{tenant}}` 換成租戶 id。`_routing_enforced` 不參與。平台檔只讀 `--config-dir` 根目錄（與 generator 一致），不看 `--scope`。租戶那一層就是 generator 讀的來源（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)）：租戶檔自己的 `_routing` / `_routing_profile`，蓋在根目錄平台檔 `tenants.<id>` 同名鍵之上（租戶檔寫了該鍵就整個取代）；**不**讀合併後的有效設定，所以 defaults 區塊或 threshold profile 裡的 `_routing` 不會被當成租戶的 routing 來判，而是報 `routing_in_unread_location`。`--required-fields` 中 `_routing` 或 `_routing.` 開頭的欄位同樣對解析後的 routing 判定，其他欄位照舊讀有效設定。主 receiver、`overrides`、ADR-007 `routes` 各條目的 receiver 都做相同的形狀檢查，並依 `_domain_policy.yaml` 判 receiver type：`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判，同一個 receiver 可同時違反兩條。
+routing 檢查的對象是租戶**解析後**的 routing，與 route generator（`generate-routes`）合併的三層相同：根目錄的 `_routing_defaults` → `_routing_profile` 參照的 routing profile → 租戶自己的 `_routing`，逐頂層鍵淺合併，最後把 `{{tenant}}` 換成租戶 id。`_routing_enforced` 不參與。平台檔讀 `--config-dir` 整棵樹（與 generator 一致，[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：`_routing_defaults` 沿租戶的目錄鏈逐層淺合併、子目錄的 routing profile 與 domain policy 只作用於所在子樹；不看 `--scope`，所以子樹外的樹形錯誤在 scoped 執行也會報（generator 會拒收整棵樹）。租戶那一層就是 generator 讀的來源（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)）：租戶檔自己的 `_routing` / `_routing_profile`，蓋在根目錄平台檔 `tenants.<id>` 同名鍵之上（租戶檔寫了該鍵就整個取代）；**不**讀合併後的有效設定，所以 defaults 區塊或 threshold profile 裡的 `_routing` 不會被當成租戶的 routing 來判，而是報 `routing_in_unread_location`。`--required-fields` 中 `_routing` 或 `_routing.` 開頭的欄位同樣對解析後的 routing 判定，其他欄位照舊讀有效設定。主 receiver、`overrides`、ADR-007 `routes` 各條目的 receiver 都做相同的形狀檢查，並依 `_domain_policy.yaml` 判 receiver type：`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判，同一個 receiver 可同時違反兩條。
 
 | Finding kind | 嚴重度 | 觸發 |
 |---|---|---|
@@ -2515,7 +2517,13 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 | `domain_policy_unusable` | error | `_domain_policy.yaml` 的結構無法使用（例如 `tenants` 不是 list）；tenant 欄空白，只略過依賴它的檢查 |
 | `routing_profiles_unusable` | warn | `routing_profiles:` 不是 mapping；tenant 欄空白 |
 | `routing_defaults_routes_ignored` | error | `_routing_defaults` 帶了 `routes`（應放在 profile 或租戶）；兩端都在合併前丟掉，generator 的 `--validate` 同樣擋 |
-| `routing_in_unread_location` | error | `_routing` 或 `_routing_*` 寫在 generator 不讀的位置：任一層 `_defaults.yaml` 的 `defaults:` 區塊內、沒有 `defaults:` 包裝的 `_defaults.yaml` 頂層（根目錄頂層的 `_routing_defaults` / `_routing_enforced` 是合法寫法，不報）、根目錄平台檔 `profiles:` 的某個 profile 內。exporter 會把它併進有效設定，但不會產生任何 route。tenant 欄空白，Field 為 `<檔案>:<鍵路徑>`（例如 `_profiles.yaml:profiles.p1._routing`）；訊息指引改寫到根目錄的 `_routing_defaults`、`_routing_profiles.yaml` 或租戶自己的檔。⚠️ **根目錄** `_defaults.yaml` 的 `defaults:` 區塊帶 `_routing*` 時 exporter 會 decode 失敗、整份丟掉，這種寫法以 exit 3（`parse_failed`）呈現，不出本 finding；子目錄的 `defaults:` 區塊才會出本 finding。另外，`_routing: disable` 的租戶遇到 `--required-fields _routing*` 仍報 `missing_required`，訊息會註明是明示停用 |
+| `routing_in_unread_location` | error | `_routing` 或 `_routing_*` 寫在 generator 不讀的位置：任一層 `_defaults.yaml` 的 `defaults:` 區塊內、沒有 `defaults:` 包裝的 `_defaults.yaml` 頂層（根目錄頂層的 `_routing_defaults` / `_routing_enforced` 是合法寫法，不報）、根目錄平台檔 `profiles:` 的某個 profile 內。exporter 會把它併進有效設定，但不會產生任何 route。tenant 欄空白，Field 為 `<檔案>:<鍵路徑>`（例如 `_profiles.yaml:profiles.p1._routing`）；訊息指引改寫到根目錄的 `_routing_defaults`、`_routing_profiles.yaml` 或租戶自己的檔。⚠️ **根目錄** `_defaults.yaml` 的 `defaults:` 區塊帶 `_routing*` 時 exporter 會 decode 失敗、整份丟掉，這種寫法以 exit 3（`parse_failed`）呈現，不出本 finding；子目錄的 `defaults:` 區塊才會出本 finding。子目錄 `_defaults.yaml` 頂層的 `_routing_defaults` 自 #2326 起會被讀、不報。另外，`_routing: disable` 的租戶遇到 `--required-fields _routing*` 仍報 `missing_required`，訊息會註明是明示停用 |
+| `routing_enforced_below_root` | error | 子目錄的檔有 `_routing_enforced`（只在根目錄讀；#2326）。generator 拒收整棵樹（結束碼 2） |
+| `routing_defaults_null_below_root` | error | 子目錄層 `_routing_defaults` 的 `receiver` 或 `overrides` 寫成 null；generator 拒收（結束碼 2） |
+| `routing_profile_duplicate` | error | 同一個 routing profile 名稱定義在兩個檔（含根目錄 `.yaml` 與 `.yml`）；保留名稱順序上先出現的定義（根目錄優先），Field 點名後者；generator 拒收（結束碼 2） |
+| `domain_policy_out_of_scope` | error | 子目錄的 `_domain_policy.yaml` 點名了該子樹外的租戶；該條目不生效 |
+
+同一個租戶 id 由兩個租戶檔宣告時，exporter 的解析直接拒絕（`duplicate tenant ID`），da-guard 在任何檢查之前以結束碼 2 結束。
 
 這些 finding 不會把檔案列進 exit 3；語法壞到 exporter 讀不了的平台檔仍只以 exit 3 點名一次。
 

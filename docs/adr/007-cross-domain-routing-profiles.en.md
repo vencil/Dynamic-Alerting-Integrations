@@ -283,10 +283,13 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 ### Amendment 2026-09-28 (#2326): directory scope of profiles and policies
 
-**Status: decided, not implemented** (option P2 of
-[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); implementation
-in a follow-up PR). ⛔ Until it merges, `_routing_profiles.yaml` and `_domain_policy.yaml`
-are read from the conf.d **root only**; a copy in a subdirectory is not read.
+**Status: implemented** (option P2 of
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)): the route
+generator, `check_routing_profiles` and da-guard (`pkg/routingpolicy.LoadTree`) read
+`_routing_profiles.yaml` and `_domain_policy.yaml` at every level. A profile name defined twice
+is refused with the other blocking tree errors (generator exit 2; the first definition in
+root-first name order is kept and the later file is named). ⚠️ tenant-api serves tenant files
+at the root only; its write-time policy check still reads the root `_domain_policy.yaml` only.
 
 In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md)):
 
@@ -328,7 +331,7 @@ In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en
 - **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 - **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
 - **#2280**: da-guard and tenant-api judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge, shared through `pkg/routingpolicy` and pinned by a cross-language parity matrix); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; da-guard also checks `routes` entry shapes and `_routing_defaults.routes`; a tenant-api batch op is judged on routing only when its patch touches `_routing_profile` / `_routing`
-- **#2326** (decided 2026-09-28, not implemented): profiles and domain policies scoped to the subtree they sit in, profile names unique across the tree, policies judged additively — see "Amendment 2026-09-28" above
+- **#2326** (decided and implemented 2026-09-28): profiles and domain policies scoped to the subtree they sit in, profile names unique across the tree, policies judged additively — see "Amendment 2026-09-28" above
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate

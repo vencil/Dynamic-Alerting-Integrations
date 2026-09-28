@@ -133,9 +133,8 @@ tenants:
     # pg_replication_lag_seconds: inherited from L0 = 30
     # pg_locks_count: inherited from L1 = 100
     # _routing_defaults.group_wait: inherited by the routing layer chain = 60s
-    #   ⚠️ only once the 2026-09-28 amendment is implemented: today the route
-    #   generator does not see a tenant in a subdirectory at all (ADR-016)
-    #   ⛔ and NOT part of the effective config below — see the scope note that follows
+    #   (the 2026-09-28 amendment below, implemented in #2326)
+    #   ⛔ but NOT part of the effective config below — see the scope note that follows
 ```
 
 **Effective config computation**:
@@ -185,7 +184,7 @@ implementation).
    byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
    **measurement, not a roster**, and so are the three named keys: when any new `_`-prefixed key
    appears, apply the test above rather than reasoning backwards from these names.
-   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator is to WARN the same way once it reads the tree, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
+   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator, which reads the tree since #2326, WARNs the same way, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
 2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
 
@@ -237,7 +236,7 @@ implementation).
    | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
 
-   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator is to WARN the same way once it reads the tree, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
+   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator, which reads the tree since #2326, WARNs the same way, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
    ⚠️ **`compile_custom_alerts.py`'s output path does not follow `--config-dir`**
    (`out_path = repo / OUT_REL`, anchored on the repository). This used to continue "so
@@ -487,12 +486,16 @@ Implementation notes:
 
 ### Amendment 2026-09-28 (#2326): routing-plane layer chain across directory levels
 
-**Status: decided, not implemented.** Owner decision, option **P2** of
-[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); the
-implementation (Python route generator and Go `pkg/routingpolicy` in the same PR, with
-the parity matrix extended to a hierarchical tree) lands in a follow-up PR. ⛔ Until it
-merges, the routing plane reads the conf.d **root only** (ADR-016 §Support boundary), and
-nothing below describes current behaviour.
+**Status: implemented.** Owner decision, option **P2** of
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); implemented in
+one PR for the Python route generator (`_grar_parse` / `_grar_merge`, and the readers built on
+it) and Go `pkg/routingpolicy.LoadTree` (da-guard), with the parity matrix's `hier-*` trees
+pinning (a)–(e) on both sides. Where the text below leaves a choice open, the implementation
+took: the blocking conditions all exit **2** in every mode, (c)'s duplicate profile name
+included; the first definition of a duplicated name is kept (root files first, then the tree
+in name order) and the later file is named; a subtree policy entry naming an out-of-subtree
+tenant is dropped from that policy (not enforced) besides being reported. ⚠️ tenant-api lists
+tenant files at the root only, so it keeps reading the root half (`LoadRoot`).
 
 The routing plane gets its own chain along the same directories as the threshold chain.
 It stays **outside** `effective` / `merged_hash` — alternative D below still stands.

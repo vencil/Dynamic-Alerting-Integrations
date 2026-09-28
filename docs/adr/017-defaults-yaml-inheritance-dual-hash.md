@@ -129,9 +129,8 @@ tenants:
     # pg_replication_lag_seconds: 繼承 L0 = 30
     # pg_locks_count: 繼承 L1 = 100
     # _routing_defaults.group_wait: 由路由分層鏈繼承 = 60s
-    #   ⚠️ 要等 2026-09-28 修訂實作後才成立：目前路由生成器完全看不到
-    #   子目錄裡的租戶（ADR-016）
-    #   ⛔ 而且它不在下面那個 effective config 裡 —— 見緊接著的範圍註記
+    #   （下方 2026-09-28 修訂，#2326 已實作）
+    #   ⛔ 但它不在下面那個 effective config 裡 —— 見緊接著的範圍註記
 ```
 
 **Effective config 計算**：
@@ -169,7 +168,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    `_namespaces` / `_metadata` / `_routing_profile` 六個，`effective` 逐位元組不動、exporter
    零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**，那三個具名鍵也一樣：新增
    任何 `_` 前綴鍵時請用上面那條判準，不要用這些名字反推。
-   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器改讀整棵樹後也要發同樣的 WARN，下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器自 #2326 讀整棵樹，也發同樣的 WARN；下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
 2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。**
 
@@ -214,7 +213,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | `_custom_alerts` | `compile_custom_alerts.py --check` 的輸出（⚠️ 見下方警告） |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`，**diff 前後的完整輸出** |
 
-   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器改讀整棵樹後也要發同樣的 WARN，下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器自 #2326 讀整棵樹，也發同樣的 WARN；下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
    ⚠️ **`compile_custom_alerts.py` 的輸出路徑不跟著 `--config-dir` 走**（`out_path = repo / OUT_REL`，
    錨在 repo 上）。這句話原本接的是「所以拿它試跑別棵樹會覆蓋出貨檔」——**該後果自
@@ -436,11 +435,14 @@ elif any ancestor _defaults.yaml changed:
 
 ### Amendment 2026-09-28 (#2326)：路由面跨目錄層的分層鏈
 
-**狀態：已決定，尚未實作。** owner 裁決
+**狀態：已實作。** owner 裁決
 [#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326) 的選項 **P2**；
-實作（Python 路由生成器與 Go `pkg/routingpolicy` 同一支 PR，parity 矩陣新增階層樹）在後續
-PR 落地。⛔ 合併之前，路由面只讀 conf.d **根目錄**（ADR-016 §支援面邊界），下面描述的都
-不是現行行為。
+Python 路由生成器（`_grar_parse` / `_grar_merge` 及建在其上的讀取器）與 Go
+`pkg/routingpolicy.LoadTree`（da-guard）同一支 PR 落地，parity 矩陣的 `hier-*` 樹在兩邊釘住
+(a)–(e)。下文沒講死的地方，實作的選擇是：阻擋條件在所有模式一律 rc **2**（含 (c) 的 profile
+名稱重複）；重複名稱保留先出現的定義（先根目錄，再依名稱順序走樹），點名後出現的檔；子樹
+policy 點名子樹外租戶的條目，除了回報，也從該 policy 移除（不生效）。⚠️ tenant-api 只列
+根目錄的租戶檔，所以仍只讀根目錄那一半（`LoadRoot`）。
 
 路由面沿著與閾值鏈相同的目錄，另有一條自己的鏈。它仍然**不進** `effective` /
 `merged_hash`——下方替代方案 D 的否決維持不變。

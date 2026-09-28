@@ -133,19 +133,14 @@ tenants:
     # container_memory 未提 —— 繼承層級 2 的 85
 ```
 
-> ⛔ **階層布局目前只在閾值面成立。** 上面的繼承由 threshold-exporter 實作，實測有效；
-> 但**路由面的工具鏈只讀平面目錄**，看不見任何子目錄裡的租戶。實測同一份內容：
-> 平面 `conf.d/tenant-a.yaml` 會產出路由，階層 `conf.d/finance/us-east/prod/tenant-a.yaml`
-> 產出「No tenants found」零路由。因此在階層布局下，`_routing_defaults:` 與租戶本體的
-> `_routing:` **不會被任何元件消費**——本文其餘的路由範例請在平面目錄下使用。
->
-> 🗓️ **已決定改為階層，實作在後續 PR**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)，
-> 2026-09-28）：路由面將跟閾值面走同一套目錄階層——各層 `_defaults.yaml` 的
-> `_routing_defaults` 逐鍵淺合併（深層勝，`null` 沿用 ADR-017 既有的逐欄位規則）；`_routing_enforced`
-> 只認根目錄；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於
-> 所在子樹；同一個租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
+> ✅ **路由面也走同一套目錄階層**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：
+> `generate-routes` 與 da-guard 讀整棵樹，任何深度的租戶都有路由。各層 `_defaults.yaml`
+> **頂層**的 `_routing_defaults` 逐鍵淺合併（深層勝，`null` 沿用 ADR-017 既有的逐欄位規則；
+> 子目錄把 `receiver` / `overrides` 寫成 `null` 是阻擋錯誤）；`_routing_enforced` 只認根目錄；
+> `_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於所在子樹；同一個
+> 租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
 > [ADR-017「Amendment 2026-09-28」](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
-> ⛔ 在實作 PR 合併之前，上一段描述的仍是實際行為。
+> ⚠️ 寫在 `defaults:` 區塊**裡**的 `_routing*` 仍不會被讀。v2.9.0 映像的路由面只讀頂層 <!-- image-caveat: v2.9.0 -->
 >
 > ✅ **`validate_config.py` 已於 [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)
 > 改為遞迴**（conf.d 家族票 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）——它先前對階層目錄回報 `PASS / exit 0` 卻掃到 **0 個租戶**（不是擋下來，
