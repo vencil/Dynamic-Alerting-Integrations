@@ -111,7 +111,7 @@ if "%PY_CMD%"=="" (
 if "%PY_CMD%"=="" (
     if exist "%LOCALAPPDATA%\Python\bin\python.exe" set "PY_CMD=%LOCALAPPDATA%\Python\bin\python.exe"
 )
-REM If still unset, commit/commit-file will fail with a clear error below.
+REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
 REM --- Find Repo ---
@@ -279,12 +279,14 @@ if "%BR%"=="" (
     type "%OUT%"
     goto :done
 )
-"%GIT_CMD%" checkout -b "%BR%" >"%OUT%" 2>"%ERR%" && (
-    echo OK: created and switched to %BR%
-    goto :done
-)
-REM Branch may already exist -- try plain checkout
-"%GIT_CMD%" checkout "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+REM switch, not checkout: `checkout <name>` also takes a path and would
+REM discard that path's uncommitted changes (`branch .`).
+"%GIT_CMD%" show-ref --verify --quiet "refs/heads/%BR%" && goto :branch_switch
+"%GIT_CMD%" switch -c "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+echo OK: created and switched to %BR%
+goto :done
+:branch_switch
+"%GIT_CMD%" switch "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
 echo OK: switched to %BR%
 goto :done
 

@@ -837,3 +837,46 @@ def test_a_working_git_call_is_reported_as_success(tmp_path, name) -> None:
     assert "FAILED" not in out, f"`{name}` printed FAILED on success:\n{out}"
     effect = _SUBCOMMANDS[name][2]
     assert effect is None or effect(work), f"`{name}` returned 0 but its effect did not land:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_branch_never_treats_the_name_as_a_path(tmp_path) -> None:
+    """`branch .` is not a branch; a `checkout .` fallback discarded every change."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch", ops_files=("win_git_escape.bat",))
+    (work / "a.txt").write_text("uncommitted\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), "branch", "."],
+        cwd=work,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+    out = proc.stdout.decode("utf-8", "replace")
+    assert (work / "a.txt").read_text(encoding="utf-8") == "uncommitted\n", f"changes discarded:\n{out}"
+    assert proc.returncode != 0, f"`branch .` reported success:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_branch_reports_a_refused_switch_to_an_existing_branch(tmp_path) -> None:
+    """GIT_DIR injection stops at `show-ref`; this failure is past it."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch", ops_files=("win_git_escape.bat",))
+    _git(work, "checkout", "-q", "-b", "feat/exists")
+    (work / "a.txt").write_text("theirs\n", encoding="utf-8")
+    _git(work, "commit", "-q", "-am", "test: diverge")
+    _git(work, "checkout", "-q", "feat/escape-hatch")
+    (work / "a.txt").write_text("mine\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), "branch", "feat/exists"],
+        cwd=work,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+    out = proc.stdout.decode("utf-8", "replace")
+    assert _git_out(work, "branch", "--show-current") == "feat/escape-hatch", out
+    assert proc.returncode != 0, f"a refused switch reported success:\n{out}"
+    assert "FAILED" in out, out
