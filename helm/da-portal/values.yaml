@@ -45,13 +45,13 @@ oauth2Proxy:
   image:
     # renovate: datasource=docker depName=quay.io/oauth2-proxy/oauth2-proxy
     repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.3"
+    tag: "v7.15.4"
     # Pinned by digest (#902 L2) — same digest as tenant-api's oauth2-proxy; the
     # drift-guard requires both charts + the scan matrix to carry it identically.
     # ⛔ Digest is AUTHORITATIVE: `--set oauth2Proxy.image.tag=…` ALONE does NOT
     #    upgrade — k8s silently keeps running THIS digest. Also set/clear
     #    oauth2Proxy.image.digest. L3/Renovate will automate both.
-    digest: "sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561"
+    digest: "sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded"
     pullPolicy: IfNotPresent
   # Provider: github | google | oidc | gitlab
   provider: github

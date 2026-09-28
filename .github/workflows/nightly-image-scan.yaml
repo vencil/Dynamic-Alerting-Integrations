@@ -232,7 +232,7 @@ jobs:
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
-            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561"
+            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded"
           # docker.io, NOT quay.io: upstream released v0.14.0 on 2026-06-23 but never
           # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April
           # build. Staying on quay freezes x/net + prometheus lib at April versions.
@@ -249,7 +249,7 @@ jobs:
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
-            ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1"
+            ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b"
           # Replaced ghcr.io/jimmidyson/configmap-reload (#1243): its last release is
           # v0.15.0 / 2025-04-09 and two CVE issues (#188, #210) sat unanswered for
           # months while its 16 Go-stdlib findings accrued. prometheus-operator ships
@@ -258,7 +258,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.93.0@sha256:0ccb22ca9f3f6fd9f76ce95585d18bd2e363d421c534dde710be4bd13caa551d"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1@sha256:06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
