@@ -235,6 +235,8 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
+When `amtool` is on PATH, the `alertmanager.yml` inside the ConfigMap is validated with it automatically; a rejected config exits 1 and `-o` is not written. Without `amtool` a NOTICE says it was not validated (#2219).
+
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 
 When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap).

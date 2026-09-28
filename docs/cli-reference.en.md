@@ -1868,6 +1868,8 @@ YAML fragment containing route, receivers, inhibit_rules.
 **ConfigMap Mode** (`--output-configmap`):
 Complete Kubernetes ConfigMap YAML with global, route, receivers, inhibit_rules, ready for `kubectl apply`.
 
+**Alertmanager validation (#2219)**: when `amtool` is on PATH, `--output-configmap` and `--apply` run `amtool check-config` on the exact `alertmanager.yml` about to be written / applied, and a rejected config is neither written nor applied; without `amtool` a `NOTICE: ... was NOT validated by Alertmanager` line goes to stderr and nothing else changes. Fragment mode (not a complete config) and `--validate` are not validated this way.
+
 **Examples**
 
 ```bash
@@ -1918,8 +1920,8 @@ docker run --rm --kubeconfig=$HOME/.kube/config \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Config validation failed; **or conf.d holds a tenant file that could not be parsed / read** (bad YAML, not UTF-8, top level not a mapping, a directory named `x.yaml`) — refused in every mode, with or without `--strict`, and the file is named on stdout (#1460) |
-| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; **`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` used in a mode that never reads them** (the message names the flag and the mode and gives a remedy argparse accepts; #1650); the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them <!-- image-caveat: v2.9.0 --> |
+| `1` | Config validation failed; **or conf.d holds a tenant file that could not be parsed / read** (bad YAML, not UTF-8, top level not a mapping, a directory named `x.yaml`) — refused in every mode, with or without `--strict`, and the file is named on stdout (#1460); **or the `amtool` on PATH rejected the config `--output-configmap` / `--apply` was about to write / apply** — nothing written, nothing applied (#2219) |
+| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; **`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` used in a mode that never reads them** (the message names the flag and the mode and gives a remedy argparse accepts; #1650); the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617); `amtool` on PATH but not runnable, timed out, or failing without a rejection verdict; Alertmanager's `/-/reload` failing after `--apply` (before v2.10.0 a WARN at exit 0; #2219). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them <!-- image-caveat: v2.9.0 --> |
 
 ---
 

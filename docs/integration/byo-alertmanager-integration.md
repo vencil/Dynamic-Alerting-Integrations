@@ -191,6 +191,8 @@ git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 
 > **注意**：`--apply` 與 `--output-configmap` 互斥，不能同時使用。
 
+PATH 上有 `amtool` 時，兩種模式都會先用它驗證要寫出／套用的 `alertmanager.yml`，Alertmanager 拒收就結束碼 1、不寫檔也不 apply；沒有 `amtool` 會印 NOTICE 說明「未經 Alertmanager 驗證」。`--validate` 與 fragment 輸出不做這項驗證。`--apply` 的 reload 失敗是結束碼 2（#2219）。
+
 ### Step 6: Reload Alertmanager
 
 ```bash
