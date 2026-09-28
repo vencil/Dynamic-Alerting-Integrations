@@ -532,7 +532,7 @@ Four things must be understood up front, or you will form the wrong expectation:
 2. **Multiple matchers inside `match` are ANDed**, not ORed.
 3. Therefore **a single enforced route cannot express "all criticals" OR "all platform alerts"** — you must **pick one**:
    - Pick `alert_source="platform"` → all platform self-monitoring alerts are delivered; tenant criticals go through each tenant's own `_routing` (and not to the NOC).
-   - Pick `severity="critical"` → the NOC gets every tenant critical, but platform self-monitoring coverage is only **18 of 40** (18 critical, 20 warning, 2 info); the remaining 22 stay silent.
+   - Pick `severity="critical"` → the NOC gets every tenant critical, but platform self-monitoring coverage stops at the `severity: critical` ones; the `warning` and `info` ones stay silent.
 
    ⚠️ Do not try to work around this by hand-adding a second route to the base ConfigMap: `route.routes` is **replaced wholesale** on regeneration (`assemble_configmap`), so a hand-added route disappears at the next regen.
 
