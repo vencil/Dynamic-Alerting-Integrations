@@ -36,9 +36,12 @@ Makefile    text eol=lf
 # above silently strips CR on every git operation (stash/pop, checkout,
 # pull), breaking wrappers in scripts/ops/ for Windows MCP sessions.
 # See docs/internal/windows-mcp-playbook.md LL #55 + #56.
-*.bat   text eol=crlf
-*.cmd   text eol=crlf
-*.ps1   text eol=crlf
+# ⛔ Bracketed, not `*.bat`: attribute patterns are case-sensitive, and
+# Windows runs FOO.BAT exactly like foo.bat — a plain `*.bat` leaves the
+# upper-case spelling on the LF rule above (#2230).
+*.[bB][aA][tT]  text eol=crlf
+*.[cC][mM][dD]  text eol=crlf
+*.[pP][sS]1     text eol=crlf
 
 # Binary — 不做任何轉換
 *.png   binary

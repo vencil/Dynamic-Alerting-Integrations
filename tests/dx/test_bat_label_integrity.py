@@ -41,8 +41,11 @@ BAT_FILES = [
 # Windows-MCP start_process. These get the narrower ASCII/CRLF/BOM gate
 # (pitfall #45 + pitfall row #2) but not the goto/label + caller-pattern
 # checks that only apply to the two escape-hatch wrappers above.
+# ⛔ Not ``glob("*.bat")``: case-sensitive on POSIX, and cmd.exe runs
+# ``FOO.BAT`` exactly like ``foo.bat`` (#2230).
 ALL_OPS_BAT_FILES = sorted(
-    (REPO_ROOT / "scripts" / "ops").glob("*.bat")
+    p for p in (REPO_ROOT / "scripts" / "ops").iterdir()
+    if p.is_file() and p.name.lower().endswith(".bat")
 )
 
 LABEL_RE = re.compile(r"^:([A-Za-z_][A-Za-z0-9_]*)\s*$")
@@ -612,3 +615,73 @@ def test_the_shipped_guards_refuse_only_a_direct_main_push(tmp_path, branch, blo
     else:
         assert proc.returncode == 0, f"{branch} was refused:\n{out}"
         assert "dev-rules #12" not in out, f"the main guard fired on {branch}:\n{out}"
+
+
+# ---------------------------------------------------------------------------
+# #2230 — `.gitattributes` must put EVERY spelling of the Windows shell
+# extensions on CRLF.
+#
+# Attribute patterns are case-sensitive, so a plain `*.bat` left `FOO.BAT` on
+# the repo-wide LF rule: checked out LF, mis-parsed by cmd.exe, and — under
+# scripts/ops/ — contradicting the CRLF rule the tests above enforce.
+# `core.ignorecase=false` is pinned on every call: a Windows/macOS checkout
+# defaults it to true, which makes git match attributes case-insensitively
+# and would turn the control below green-for-the-wrong-reason there.
+
+_CRLF_SPELLINGS = [
+    "tools/x.bat", "tools/x.BAT", "scripts/ops/x.Bat",
+    "x.cmd", "x.CMD", "x.cMd",
+    "x.ps1", "x.PS1", "x.Ps1",
+]
+# Share a prefix or suffix with the rule but are not that extension.
+_LOOKALIKES = ["x.batx", "x.bat.sh", "x.xbat", "x.cmdline", "x.ps12", "x.ps"]
+
+
+def _eol_of(cwd: pathlib.Path, paths: list[str]) -> dict[str, str]:
+    """`eol` attribute per path; an unanswered path is an error, not a pass.
+
+    `-z`: the default output C-quotes non-ASCII paths and joins fields with
+    ": ", so a key would stop matching the path it answers for.
+    """
+    proc = subprocess.run(
+        ["git", "-c", "core.ignorecase=false", "check-attr", "-z", "eol", "--", *paths],
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, f"git check-attr failed (unmeasured):\n{proc.stderr}"
+    fields = proc.stdout.split("\0")[:-1]
+    assert len(fields) % 3 == 0, f"unexpected check-attr -z output: {proc.stdout!r}"
+    out: dict[str, str] = {}
+    for path, _attr, value in zip(fields[0::3], fields[1::3], fields[2::3]):
+        out[path] = value
+    assert set(out) == set(paths), (
+        f"git check-attr did not answer for every path (unmeasured): "
+        f"asked {sorted(paths)}, got {sorted(out)}")
+    return out
+
+
+def test_every_spelling_of_a_windows_script_is_crlf() -> None:
+    eol = _eol_of(REPO_ROOT, _CRLF_SPELLINGS)
+    wrong = {p: v for p, v in eol.items() if v != "crlf"}
+    assert not wrong, (
+        f".gitattributes leaves these Windows scripts off CRLF: {wrong}. "
+        "Spell the extension as a bracket class, e.g. `*.[bB][aA][tT]` (#2230).")
+
+
+def test_a_lookalike_extension_is_not_forced_to_crlf() -> None:
+    eol = _eol_of(REPO_ROOT, _LOOKALIKES)
+    wrong = {p: v for p, v in eol.items() if v == "crlf"}
+    assert not wrong, f".gitattributes over-matches: {wrong}"
+
+
+def test_the_plain_pattern_is_what_misses_the_upper_case(tmp_path: pathlib.Path) -> None:
+    """Paired control: the pre-#2230 spelling really does miss `FOO.BAT`.
+
+    Without it, the two tests above would also pass if `check-attr` matched
+    case-insensitively on this host — that is, if they measured nothing.
+    """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
+                   capture_output=True, timeout=60)
+    (tmp_path / ".gitattributes").write_text(
+        "* text=auto eol=lf\n*.bat text eol=crlf\n", encoding="utf-8", newline="\n")
+    eol = _eol_of(tmp_path, ["x.bat", "x.BAT"])
+    assert eol == {"x.bat": "crlf", "x.BAT": "lf"}, eol
