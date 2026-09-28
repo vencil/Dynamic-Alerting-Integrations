@@ -241,7 +241,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-Runs only on PRs. Generates Alertmanager config fragments and computes blast radius.
+Runs only on PRs. Generates Alertmanager config fragments and computes blast radius. ⚠️ The comment below saying the da-tools image bundles amtool does not hold for the v2.9.0 image: it does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # Generate Alertmanager routes/receivers/inhibit_rules
@@ -253,9 +253,11 @@ da-tools generate-routes --config-dir conf.d/ \
 # Validate in a separate run (--validate does not read --dry-run either — also
 # exit 2):
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ Neither call is checked by Alertmanager's own parser (a fragment is not a
-#    complete config); for that use --output-configmap, which validates
-#    automatically when amtool is on PATH (#2219).
+# ⚠️ What -o writes is a fragment (not a complete config) and is not checked
+#    by Alertmanager's own parser; --validate hands the config, assembled on
+#    the BUILT-IN default base (not yours), to amtool (#2260). To check your
+#    own base use --output-configmap --base-config (#2219). amtool ships in
+#    the image (#2294), so inside it both checks run by default.
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/
