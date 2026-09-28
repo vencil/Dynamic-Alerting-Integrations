@@ -104,12 +104,25 @@ class TestBuildReceiverConfig:
         assert config is None
         assert any("must be an object" in w for w in warnings)
 
-    def test_type_case_insensitive(self):
-        """type 欄位不區分大小寫。"""
-        receiver = {"type": "WEBHOOK", "url": "https://example.com"}
+    @pytest.mark.parametrize("rtype", ["WEBHOOK", "Webhook", " webhook", "webhook "])
+    def test_type_is_matched_exactly(self, rtype):
+        """type 欄位不做大小寫或前後空白正規化，與 schema `const` 及 Go guard 一致（#2180）。"""
+        receiver = {"type": rtype, "url": "https://example.com"}
         config, warnings = build_receiver_config(receiver, "db-a")
-        assert config is not None
-        assert "webhook_configs" in config
+        assert config is None
+        assert any("unknown receiver type" in w for w in warnings)
+
+    @pytest.mark.parametrize("receiver", [
+        {"type": "webhook", "url": "https://h.example/x\n"},
+        {"type": "email", "to": ["a@example.com"], "smarthost": "smtp:25\n",
+         "from": "alerts@example.com"},
+    ], ids=["url", "smarthost"])
+    def test_format_rejects_final_newline(self, receiver):
+        """值結尾帶換行時產生器必須擋下（#2180）：Python `re.search` 的 `$` 也會在結尾換行前成立，
+        所以格式檢查只靠 `re.fullmatch`；這一列不經 schema，單獨守住產生器那一方。"""
+        config, warnings = build_receiver_config(receiver, "t1")
+        assert config is None
+        assert any("is not in the format" in w for w in warnings)
 
     def test_optional_fields_included(self):
         """有提供的 optional 欄位會被包含在 AM config 中。"""

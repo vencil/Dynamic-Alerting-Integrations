@@ -461,6 +461,7 @@
           "minLength": 1,
           "title": "Webhook URL",
           "description": "HTTP endpoint to POST alerts to. Subject to webhook domain allowlist policy (if configured).",
+          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
           "format": "uri",
           "examples": ["https://webhook.example.com/alerts", "https://hooks.example.com/monitoring"]
         },
@@ -494,6 +495,7 @@
           "description": "List of email addresses to send alerts to.",
           "items": {
             "type": "string",
+            "minLength": 1,
             "format": "email"
           },
           "minItems": 1,
@@ -503,7 +505,8 @@
           "type": "string",
           "minLength": 1,
           "title": "SMTP Server",
-          "description": "SMTP server address in host:port format. Example: 'smtp.example.com:587'",
+          "description": "SMTP server address in host:port format (numeric port; an IPv6 host is bracketed, e.g. '[2001:db8::1]:25'). Example: 'smtp.example.com:587'",
+          "allOf": [{ "$ref": "#/definitions/receiverSmtpHostPort" }],
           "examples": ["smtp.example.com:587", "mail.company.com:25"]
         },
         "from": {
@@ -574,6 +577,7 @@
           "minLength": 1,
           "title": "Slack Webhook URL",
           "description": "Slack incoming webhook URL. Create at https://api.slack.com/messaging/webhooks",
+          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
           "format": "uri",
           "examples": ["https://hooks.slack.com/services/T/B/xxx"]
         },
@@ -628,6 +632,7 @@
           "minLength": 1,
           "title": "Teams Webhook URL",
           "description": "Microsoft Teams incoming webhook URL. Create at https://outlook.webhook.office.com",
+          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
           "format": "uri",
           "examples": ["https://outlook.webhook.office.com/webhookb2/XXX@XXX/xxx"]
         },
@@ -665,6 +670,7 @@
           "minLength": 1,
           "title": "Rocket.Chat Webhook URL",
           "description": "Rocket.Chat incoming webhook URL.",
+          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
           "format": "uri",
           "examples": ["https://chat.example.com/hooks/xxx"]
         },
@@ -752,6 +758,22 @@
         }
       },
       "additionalProperties": false
+    },
+    "receiverHttpUrl": {
+      "type": "string",
+      "title": "Receiver HTTP(S) URL format",
+      "description": "An http:// or https:// URL with a host and no whitespace or control characters. Alertmanager rejects a receiver URL without a scheme or host, or one with a leading space, and the whole Alertmanager config then fails to reload.",
+      "$comment": "#2180: the one authored copy of this pattern, derived from Alertmanager v0.33.1 config.Load (receiver_presence_cases.json rows are asserted against it), in syntax ECMA-262, Python re and Go RE2 read alike; `not` covers Python re.search letting `$` match before a final newline, and the Go guard's copy is pinned by TestReceiverTypeSpecs_MatchSchema.",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>\"-]|[^\\x00-\\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^\\x00-\\x20\\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\\?[^\\x00-\\x20\\x7f#]*)?(#([^\\x00-\\x20\\x7f%]|%[0-9A-Fa-f]{2})*)?$",
+      "not": { "pattern": "\\n" }
+    },
+    "receiverSmtpHostPort": {
+      "type": "string",
+      "title": "Receiver SMTP host:port format",
+      "description": "host:port with a numeric port; an IPv6 host is bracketed ([2001:db8::1]:25). Alertmanager rejects a smarthost without a port and the whole Alertmanager config then fails to reload.",
+      "$comment": "#2180: same derivation, portable syntax, `not` and Go-copy pin as receiverHttpUrl.",
+      "pattern": "^([^\\x00-\\x20\\x7f:/?#@\\[\\]\\\\]+|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$",
+      "not": { "pattern": "\\n" }
     },
     "httpConfig": {
       "type": "object",

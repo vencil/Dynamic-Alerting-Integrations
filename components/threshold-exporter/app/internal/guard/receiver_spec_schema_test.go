@@ -42,7 +42,10 @@ func TestReceiverTypeSpecs_MatchSchema(t *testing.T) {
 		t.Fatal("no receiver definitions read from the schema")
 	}
 	norm := func(s receiverTypeSpec) receiverTypeSpec {
-		out := receiverTypeSpec{Required: sortedCopy(s.Required)}
+		out := receiverTypeSpec{Required: sortedCopy(s.Required), StringLists: sortedCopy(s.StringLists)}
+		if len(s.Patterns) > 0 {
+			out.Patterns = s.Patterns
+		}
 		for _, g := range s.ExactlyOneOf {
 			out.ExactlyOneOf = append(out.ExactlyOneOf, sortedCopy(g))
 		}
@@ -97,6 +100,62 @@ func TestReceiverPresenceCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// schemaPattern returns the `pattern` a property carries, directly or
+// through `allOf: [{"$ref": "#/definitions/<name>"}]` (#2180: the URL and
+// smarthost patterns are written once, as definitions). Any other allOf
+// shape fails the test rather than reading as "no pattern".
+func schemaPattern(t *testing.T, defs map[string]json.RawMessage, where string, prop map[string]json.RawMessage) string {
+	t.Helper()
+	var pattern string
+	if raw, ok := prop["pattern"]; ok {
+		if json.Unmarshal(raw, &pattern) != nil {
+			t.Fatalf("%s: pattern is not a string", where)
+		}
+	}
+	raw, ok := prop["allOf"]
+	if !ok {
+		return pattern
+	}
+	var refs []map[string]string
+	if json.Unmarshal(raw, &refs) != nil {
+		t.Fatalf("%s: allOf is not a list of {\"$ref\": ...}", where)
+	}
+	for i, r := range refs {
+		const prefix = "#/definitions/"
+		if len(r) != 1 || !strings.HasPrefix(r["$ref"], prefix) {
+			t.Fatalf("%s: allOf[%d] is not a single local $ref: %v", where, i, r)
+		}
+		var target map[string]json.RawMessage
+		if json.Unmarshal(defs[strings.TrimPrefix(r["$ref"], prefix)], &target) != nil {
+			t.Fatalf("%s: allOf[%d] %s does not resolve", where, i, r["$ref"])
+		}
+		for k := range target {
+			switch k {
+			case "type", "title", "description", "$comment", "pattern":
+			case "not":
+				// Only the final-newline guard for Python re.search's `$`
+				// (#2180). RE2's `$` is end of text and the pattern's
+				// classes exclude control characters, so the Go copy needs
+				// no counterpart; any other `not` is unmodelled.
+				var not map[string]string
+				if json.Unmarshal(target[k], &not) != nil || len(not) != 1 || not["pattern"] != `\n` {
+					t.Fatalf("%s: %s `not` is not {\"pattern\": \"\\\\n\"}", where, r["$ref"])
+				}
+			default:
+				t.Fatalf("%s: %s uses %q, which this parity check does not model", where, r["$ref"], k)
+			}
+		}
+		var p string
+		if raw, ok := target["pattern"]; ok && json.Unmarshal(raw, &p) == nil && p != "" {
+			if pattern != "" {
+				t.Fatalf("%s: more than one pattern", where)
+			}
+			pattern = p
+		}
+	}
+	return pattern
 }
 
 func sortedCopy(in []string) []string {
@@ -181,8 +240,26 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 				continue
 			}
 			spec.Required = append(spec.Required, f)
-			if !rejectsEmpty(def.Properties[f]) {
+			prop := def.Properties[f]
+			if !rejectsEmpty(prop) {
 				t.Errorf("%s.%s is required but the schema accepts it empty or null (needs a single type with minLength/minItems >= 1); the guard and Python treat both as missing", name, f)
+			}
+			var typ string
+			_ = json.Unmarshal(prop["type"], &typ)
+			if typ == "array" {
+				// #2180: the list is joined into Alertmanager's `to`
+				// string, where [""] reads as no address.
+				var items map[string]json.RawMessage
+				if json.Unmarshal(prop["items"], &items) != nil || !rejectsEmpty(items) {
+					t.Errorf("%s.%s is a required array whose items accept \"\" or null (needs items: {type: string, minLength >= 1}); the guard and Python reject such items", name, f)
+				}
+				spec.StringLists = append(spec.StringLists, f)
+			}
+			if p := schemaPattern(t, schema.Definitions, name+"."+f, prop); p != "" {
+				if spec.Patterns == nil {
+					spec.Patterns = map[string]string{}
+				}
+				spec.Patterns[f] = p
 			}
 		}
 		if len(def.OneOf) > 0 {

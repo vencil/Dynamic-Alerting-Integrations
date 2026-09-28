@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     validate_and_clamp,
     receiver_exactly_one_problem,
+    receiver_required_problem,
     RECEIVER_TYPES,
 )
 
@@ -106,7 +107,9 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
         warnings.append(f"  WARN: {tenant}: missing required 'receiver.type', skipping")
         return None, warnings
 
-    rtype = rtype.strip().lower()
+    # Exact match, no case folding or trimming (#2180): the schema (`const`)
+    # and the Go guard both reject `Email` / ` email`, so normalising here
+    # made the generator the only one of the three to accept them.
     if rtype not in RECEIVER_TYPES:
         supported = ", ".join(sorted(RECEIVER_TYPES.keys()))
         warnings.append(f"  WARN: {tenant}: unknown receiver type '{rtype}' "
@@ -115,11 +118,11 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
 
     spec = RECEIVER_TYPES[rtype]
 
-    # Validate required fields
+    # Validate required fields: presence, type and format by the schema (#2180)
     for field in spec["required"]:
-        if field not in receiver_obj or not receiver_obj[field]:
-            warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' requires "
-                            f"'{field}', skipping")
+        problem = receiver_required_problem(rtype, receiver_obj, field)
+        if problem:
+            warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
             return None, warnings
     problem = receiver_exactly_one_problem(rtype, receiver_obj)
     if problem:

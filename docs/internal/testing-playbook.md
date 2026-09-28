@@ -286,7 +286,7 @@ tenants:
   db-a:
     mysql_connections: "70"
     _routing:
-      receiver: { type: "webhook", url: "..." }
+      receiver: { type: "webhook", url: "https://hooks.example.com/alerts" }
 ```
 
 <!-- md-yaml-drift: ignore — deliberate ❌ counter-example: the flat shape this section tells tools NOT to expect -->

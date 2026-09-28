@@ -95,6 +95,7 @@ REQUIRED_DATA_FILES: dict = {
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
     "_grar_validate.py": ("configmap-rules-platform.yaml",),
+    "_lib_validation.py": ("tenant-config.schema.json",),
     "_threshold_alerts.py": (
         "rule-pack-clickhouse.yaml",
         "rule-pack-db2.yaml",

@@ -54,6 +54,9 @@ modules:
     excluded:
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
+      receiver_required_problem: "#2180 required receiver fields by the schema's type + pattern (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
+      _find_tenant_schema: "#2180 file locator (I/O); same two-layout shape as _grar_validate._find_platform_rules_configmap, exercised by every receiver_required_problem call"
+      _receiver_field_schemas: "#2180 schema reader (I/O + cache); its output is pinned by tests/shared/test_receiver_spec_parity.py"
 
   scripts/tools/_lib_io.py:
     covered:
