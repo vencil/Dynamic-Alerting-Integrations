@@ -1,10 +1,13 @@
 name: Renovate
 
 # Self-hosted Renovate (#902 L3) — auto-bumps the third-party container image
-# tags + digests pinned in #902 L2 (renovate.json scopes Renovate to ONLY those
-# images via custom.regex managers). This closes the L1+L2 toil loop: a digest pin
-# freezes the image, so the nightly CVE scan can no longer auto-close on an upstream
-# tag-patch — Renovate re-resolves the digest (and bumps the tag) on a schedule.
+# tags + digests pinned in #902 L2 (via custom.regex managers). This closes the L1+L2
+# toil loop: a digest pin freezes the image, so the nightly CVE scan can no longer
+# auto-close on an upstream tag-patch — Renovate re-resolves the digest (and bumps
+# the tag) on a schedule. #1354 added the built-in github-actions / dockerfile /
+# devcontainer managers, one grouped PR each per run; the pins those would bump
+# one-sidedly (Go builder, runs-on, `with:` tool versions, devcontainer language
+# versions) are disabled in renovate.json — see docs/internal/toolchain-versions.md.
 #
 # WHY self-hosted (not the Mend-hosted Renovate App): this repo self-hosts / pins
 # its whole supply chain; a self-hosted run avoids granting an external SaaS app
@@ -13,8 +16,9 @@ name: Renovate
 #
 # ⛔ REQUIRES a RENOVATE_TOKEN secret — a fine-grained PAT with Contents +
 #    Pull requests + Workflows (read/write). Workflows is REQUIRED because Renovate
-#    edits the scan-matrix ref in nightly-image-scan.yaml (a `.github/workflows/`
-#    file) — GitHub rejects a token without workflow scope updating workflow files.
+#    edits the scan-matrix ref in nightly-image-scan.yaml and (#1354) the `uses:`
+#    refs of every workflow (`.github/workflows/` files) — GitHub rejects a token
+#    without workflow scope updating workflow files.
 #    A PAT (NOT the default GITHUB_TOKEN) is required so
 #    Renovate's PRs trigger the other workflows' CI — that is the drift-guard safety
 #    net that catches a deploy-ref/scan-matrix desync. Add it under
@@ -76,8 +80,8 @@ jobs:
       - name: Renovate
         # renovatebot/github-action ships ONLY full vMAJOR.MINOR.PATCH tags — there is no
         # floating @v46 major alias (unlike actions/checkout@v6), so a bare @v46 fails to
-        # resolve ("unable to find version v46"). Pin the full version. Renovate won't
-        # self-bump this (enabledManagers is images-only), so it's manually maintained.
+        # resolve ("unable to find version v46"). Pin the full version. Since #1354 the
+        # github-actions manager bumps it in the grouped "GitHub Actions" PR.
         uses: renovatebot/github-action@v46.3.5
         with:
           configurationFile: renovate.json

@@ -1454,8 +1454,9 @@ def test_python_scanner_actually_finds_something() -> None:
 # 'true' off a PR) — so the defect is not "never tested", it is "no pre-merge
 # signal, and main goes red for everyone instead of the PR going red for its
 # author". Which is exactly what a required check is for. (Such a bump is
-# hand-authored today — `renovate.json` sets `enabledManagers:
-# ["custom.regex"]` and its managers match only image refs.)
+# hand-authored today — `renovate.json`'s `enabledManagers` has no
+# pip_requirements manager: custom.regex plus github-actions / dockerfile /
+# devcontainer since #1354, none of which reads `requirements/**`.)
 #
 # Invariant enforced here: **every repo file a path-gated job EXECUTES or
 # INSTALLS FROM must TRIGGER the condition that gates that job.** Not "be
@@ -3432,7 +3433,7 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "docs/assets/template-data.json", "docs/schemas/tenant-config.schema.json",
     "rule-packs/threshold-registry.yaml", "rule-packs/ALERT-REFERENCE.md",
     "components/tenant-api/internal/rbac/testdata/wizard/**",
-    "helm/**",
+    "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # ⛔ Keyed by (FILTER, pattern), and note which filter each falls under —

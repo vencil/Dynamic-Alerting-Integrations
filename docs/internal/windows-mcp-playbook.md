@@ -122,7 +122,7 @@ cd /d C:\Users\vencs\vibe-k8s-lab
 
 這比嘗試修復 `bash -c "..."` 引號問題更快更可靠。
 
-**Windows 側例外**：若腳本是給 Windows MCP / Desktop Commander 呼叫的 `.bat` / `.ps1`，**不要寫到 `/tmp/` 或 sandbox-only 路徑**，而是放進 `scripts/ops/`（受 `check_ad_hoc_git_scripts` hook 把關）。臨時需求用既有 wrapper 的 `raw <args>` 逃生門；真的缺子命令就擴充 wrapper。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat--ps1-wrapper-時必讀)。
+**Windows 側例外**：若腳本是給 Windows MCP / Desktop Commander 呼叫的 `.bat` / `.ps1`，**不要寫到 `/tmp/` 或 sandbox-only 路徑**，而是放進 `scripts/ops/`（受 `check_ad_hoc_git_scripts` hook 把關）。臨時的 `gh` 需求用 `win_gh.bat raw <args>`；`win_git_escape.bat` **沒有** `raw`，缺子命令就擴充它。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat--ps1-wrapper-時必讀)。
 
 ## MCP Shell Pitfalls（編寫 .bat / .ps1 wrapper 時必讀）
 
@@ -401,7 +401,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 33 | MCP `start_process` 的 runtime ≠ 子行程真正執行時間 | `cmd.exe` 啟動 `git push` 後，MCP 可能在 ~1s 就 report「completed exit 0」，log 看起來被截在中間，但 git.exe 其實還在背景跑完。**不要信 MCP runtime**，一律用 side-effect 驗證：`git ls-remote origin HEAD` 比對遠端 SHA，或 `git fetch origin main` 看 refs 有沒有更新。詳見 [§修復層 C：Windows 原生 Git Fallback](#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) |
 | 34 | Windows `cmd` batch 少了 `PATHEXT` 就找不到 `git.exe` | MCP 繼承到的 `PATHEXT` 可能沒包含 `.EXE`。所有 batch 起手必寫：`set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"` |
 | 35 | cmd `(echo ... & echo ...)` parenthesized group 被 `%PATH%` 裡的 NVIDIA 閉括號拆掉 | `C:\Program Files (x86)\NVIDIA ...` 的 `)` 會提早結束 group，報 `此時候不應有 \NVIDIA`。**不要用 parenthesized group 包 echo**，改成獨立 `echo` 行 |
-| 36 | pre-commit 產生的 `.git/hooks/pre-push` 硬寫死 Linux python 路徑 | `INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3` 在 Windows 不存在 → fallback 去找 `pre-commit` on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 `INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe`（Git Bash 吃 POSIX 路徑），或 `pip install --force-reinstall pre-commit` 重建 entry point |
+| 36 | pre-commit 產生的 `.git/hooks/pre-commit` 硬寫死 Linux python 路徑 | 只影響 commit 階段：pre-push 自 #1689 起由 `install_prepush_hook.sh` 寫純 bash shim，不再有這個問題。`INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3` 在 Windows 不存在 → fallback 去找 `pre-commit` on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 `INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe`（Git Bash 吃 POSIX 路徑），或 `pip install --force-reinstall pre-commit` 重建 entry point |
 | 37 | `~/.ssh/` 無 private key 但 `credential.helper=manager` 有存 token | Windows 使用者常走 Git Credential Manager 不走 SSH。push 前臨時把 remote URL 切 HTTPS，讓 GCM 自動帶 stored token；push 完切回 SSH：`git remote set-url origin https://github.com/<o>/<r>.git; git push origin main; git remote set-url origin git@github.com:<o>/<r>.git` |
 | 38 | pre-commit 範圍模式 `--from-ref A --to-ref B` 的觸發 glob 只看範圍內改動檔案 | 要避免 hook 掃到整個 repo 的累積 drift（例如 `bilingual-structure-check` 對整個 repo 的 `.en.md`），把 trigger glob 會命中的檔案從 commit 範圍內拿掉就夠。例：把 `docs/internal/doc-map.en.md` 以 `git rm --cached` 移出 commit，hook 就 Skipped |
 | 39 | Windows clone 的 `rule-packs/` 和 `docs/CHANGELOG.md` 變成 ~13 byte 純文字檔 | Git 物化 symlink 為 target 字串。非 bug，是權限問題——Windows 10+ 預設不允許非 admin 建立 symlink。**解法**：開啟 Developer Mode（見 [§Windows Clone 初次設定](#windows-clone-初次設定--symlink-支援)）|
@@ -419,10 +419,10 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
 | 52 | Bash 工具傳 Windows 絕對路徑（`C:\...`）產生 FUSE phantom 檔案 | 當 Bash/Shell 工具接收到 `C:\Users\...\_bench.bat` 這類 Windows 絕對路徑作為**位置參數**，FUSE 層會把 `:` 翻成 U+F03A、`\` 翻成 U+F05C（PUA 區碼位），在 Linux 側建出路徑合法但在 Windows 側看到的是 `CUsersvencsvibe-k8s-lab_bench.bat` 這種「中間夾隱形字元」的殘檔。殘檔會被 `git status` 當 untracked 列出但 wildcard（如 `*vibe-k8s-lab*`）匹配不到，須用 regex 比對 `_bench_f1b\|_bench_poll\|_poll\.bat` 等片段。**正解**：(1) 任何跨 Windows 路徑的寫入操作用 Write 工具或 Windows MCP PowerShell，不要塞給 Bash 工具；(2) `.gitignore` 已加 `CUsersvencs*` + `/C:\*` 雙重防守（PR #v2.7.1-doc-hygiene）；(3) 清理用 Windows 側 `Remove-Item -LiteralPath` + regex match，非從 FUSE 側 `rm`（會 `Operation not permitted`） |
 | 53 | `win_async_exec.ps1` 派 `gh pr create --title "...(v2.9.0+)"` 時 title 尾段被 cmd /c 吞掉（misleading 成功誤判） | `win_async_exec.ps1` 內部走 `cmd.exe /c "<Command> > log 2>&1"`，cmd 的 parenthesis / operator parsing 會把 nested double-quote 中的 `(` / `+` 當成 grouping char / concat operator，導致 `--title` 參數尾段在 cmd 層被吞掉。**典型症狀**：log 只印出 `Creating PR: docs(governance): ... SSOT +` 後就截斷，PR 實際**建立成功**但 title 缺尾綴，operator 誤判失敗去重試，第二次才撞上 "a pull request already exists"，繞一大圈才察覺。**正解（§黃金法則的具體應用）**：把整段命令寫成獨立 `.ps1`，title 用 single-quoted variable 宣告後 `& gh ... --title $title --body-file _pr_body.md`，再以 `win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'` 派工，cmd /c 就只看到一個外層命令字串，不會吃到內層 `(` / `+`。**差異於 #48**：#48 是 Desktop Commander cmd 把 `--title "x y z"` 拆成空格切開的多參數；#53 是 win_async_exec 的 cmd /c 把完整引號內字元因 `(` / `+` 提早截斷。兩者配方不同，前者用 .bat 包裝，後者用 .ps1 包裝 |
-| 54 | Ad-hoc `_commit.ps1` / `_pr.bat` script proliferation — 每個 session 重寫一次 | PR #39 寫了 `_p39_commit.ps1`；PR #40 寫了 `_p40_commit.ps1`、`_p40_pr.bat`、`_p40_checks.bat`、`_p40_failog.bat`、`_p40_diag.bat`（五隻！）—— 全部 reinvent 既有 `scripts/ops/win_git_escape.bat` 的功能。**根因**：session agent 沒讀 playbook 就動手，每次撞到 FUSE/MCP 問題就寫 throw-away script，下次 session 看不到（被 `.gitignore _*.bat` 藏起來）又重寫一次。**長期解法**（v2.8.0, PR #41）：(1) `scripts/tools/lint/check_ad_hoc_git_scripts.py` 以 whitelist 模式阻擋 `scripts/ops/` / `scripts/tools/` / `tools/` 外的 `*.bat` / `*.ps1` / `*.cmd`；(2) `.gitignore` 不再藏 scratch script（adopt-or-delete 政策）；(3) 新 subcommand 直接擴充 `win_git_escape.bat` / `win_gh.bat`。**下次 session 要寫 `_foo.bat` 前**：先 `scripts/ops/win_gh.bat raw gh ...` 或 `scripts/ops/win_git_escape.bat raw git ...`；真的需要新 subcommand 就擴充 wrapper（whitelist hook 會強制如此）🛡️ |
+| 54 | Ad-hoc `_commit.ps1` / `_pr.bat` script proliferation — 每個 session 重寫一次 | PR #39 寫了 `_p39_commit.ps1`；PR #40 寫了 `_p40_commit.ps1`、`_p40_pr.bat`、`_p40_checks.bat`、`_p40_failog.bat`、`_p40_diag.bat`（五隻！）—— 全部 reinvent 既有 `scripts/ops/win_git_escape.bat` 的功能。**根因**：session agent 沒讀 playbook 就動手，每次撞到 FUSE/MCP 問題就寫 throw-away script，下次 session 看不到（被 `.gitignore _*.bat` 藏起來）又重寫一次。**長期解法**（v2.8.0, PR #41）：(1) `scripts/tools/lint/check_ad_hoc_git_scripts.py` 以 whitelist 模式阻擋 `scripts/ops/` / `scripts/tools/` / `tools/` 外的 `*.bat` / `*.ps1` / `*.cmd`；(2) `.gitignore` 不再藏 scratch script（adopt-or-delete 政策）；(3) 新 subcommand 直接擴充 `win_git_escape.bat` / `win_gh.bat`。**下次 session 要寫 `_foo.bat` 前**：`gh` 的臨時需求先用 `scripts/ops/win_gh.bat raw ...`；git 那支沒有 `raw`，需要新 subcommand 就擴充 wrapper（whitelist hook 會強制如此）🛡️ |
 | 55 | `.bat` wrapper 三要素（Short path + CRLF + ASCII）沒有全備 | PR #41 新增 `win_gh.bat` 初次執行時三次失敗：(1) 行尾 LF → cmd 報 `'REM' is not recognized`（每個 token 當 command 找）；(2) 忘 `set PATH=...Git\cmd...` → gh 報 `unable to find git executable in PATH`；(3) `"C:\Program Files\GitHub CLI\gh.exe"` 在 PowerShell 下被多層 quote 破壞，不管怎麼逃脫都失敗。**三個對策一次到位**：(a) 8.3 short path `C:\PROGRA~1\GITHUB~1\gh.exe`（避免任何 quote 問題）；(b) wrapper 開頭強制 `set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"`；(c) 檔案以 CRLF 儲存、全 ASCII（驗證：`Get-Content -Encoding Byte -TotalCount 200` 看到 `0D 0A`）。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat--ps1-wrapper-時必讀) |
 | 56 | Squash-merge base PR 造成下游 stacked PR 進入 `mergeStateStatus: DIRTY` → GH 靜默跳過 `pull_request` CI（零 workflow 觸發） | PR #41 堆在 PR #40 分支上推開；PR #40 以 **squash** merge 到 main，PR #40 原 commits (`f5ccb7d`, `84e6ab5`) 在 PR #41 分支還在，跟 main 的 squashed 版本 (`23c189c`) 在 GH server 比對時算「重複但不同 hash」→ 無法自動合成 merge-ref → `mergeStateStatus=DIRTY`。**關鍵副作用**：`on: pull_request` 的 workflow **完全不觸發**（`gh run list --branch <br>` 空，`gh pr checks` 回 `no checks reported`），很容易被誤判成「GH Actions 壞了」或「path filter 過濾掉」。**正解**：(1) 在 Windows 側 `git rebase origin/main`（squashed commits 會自動丟掉，重複 diff 被 cherry-pick 去重）→ `git push --force-with-lease`；(2) 若 squash diff 不完全對得上，手動 `git rebase -i origin/main` drop 掉重複 commits。**常伴陷阱**：同時確認 wrapper 的 `PATHEXT` 有設（#34）—— PR #41 首次 dogfood 時雖然 playbook template 寫了 `set PATHEXT=...` 但 `win_gh.bat` / `win_git_escape.bat` 實際程式碼忘設，撞到使用者 profile 的 `PATHEXT=.CPL` 直接讓 gh 回 `unable to find git executable in PATH`（雖然 PATH 有 Git\cmd）。Template ↔ actual code 之間會 drift，wrapper 起手式固定六行（`setlocal` / `PYTHONUTF8` / `chcp 65001` / `PATHEXT` / `PATH` / `GH_CMD` 或 `GIT_CMD`）缺一不可 🛡️ |
-| 57 | `pre-commit` 跑 `head-blob-hygiene` hook 長時間 0-output 疑似卡死 | **🟢 Resolved（v2.8.0, PR #164）**：實際有**兩個正交根因**，治哪個取決於症狀。<br><br>**根因 A — FUSE stale temp 累積（S#18, FUSE 側才會發生）**：`make fuse-reset` 串 Level 1+3 含 stale temp 清除；S#18 親手清掉 288 個 >60min stale 後 hook 從 17+ 分鐘恢復 6 秒。**recovery 路徑**：(a) `kill pre-commit` + `make fuse-locks` 確認 phantom；(b) `make commit-bypass-hh MSG=_msg.txt` 走窄 bypass；(c) Windows 側 `git fsck --no-reflog` 清 stale；(d) 復活後 `~/.cache/pre-commit/patch{TS}-{PID}` backup 可 `git apply` 還原 unstaged-stash 吃掉的檔（S#31）。<br><br>**根因 B — Popen pipe deadlock（PR #164 / S#74，NTFS / FUSE 都會發生）**：`_batch_cat_blobs` 用 single-thread write-then-read-loop pattern + `git cat-file --batch --buffer`。`--buffer` 讓 git 累積全部 stdout 到 stdin EOF 才一次 flush；total output > OS pipe buffer (~64KB on Windows) 時 git 阻塞在 stdout write，script 在另一個 path 的 body 裡 read，**單執行緒就無法 drain** → 經典 Popen pipe deadlock。1040 個 blob × 平均 ~2KB = ~2.18MB output，遠超 buffer threshold，**每次 commit 都會 hang**。**正解（PR #164 已落地）**：改用 `proc.communicate(input=request, timeout=60)`，內部用 thread 同時 drain stdin/stdout/stderr。fix 後 0.57s for 1040 blobs。`tests/lint/test_check_head_blob_hygiene.py` 含 deadlock regression（300 / 1000 file 場景），下次有人改回 write-then-read-loop 會被 CI 攔下。<br><br>**辨識**：症狀都是「hook stuck，0 output」。判斷哪個根因：(i) 平台是 NTFS / Cowork VM（無 FUSE）→ 100% 是根因 B；(ii) FUSE 側 + `make fuse-locks` 看到 phantom → 根因 A；(iii) FUSE 側但 fuse-locks 乾淨 → 可能是根因 B（PR #164 前 FUSE 側也會撞 Popen deadlock，只是 stale temp 案例壓過去）。<br><br>**Hang-localization milestones（PR #165）**：hook 現在主動印三個 observation point — `Reading N HEAD blob(s)...` (進入 batch read) → `✓ batch read complete: N loaded in Xs` (batch read 完) → `...scanned I/N` 每 100 個 (scan 進度，default mode) → 最後 summary。三層讓「hang 在哪」清楚可辨：(a) 看到 "Reading..." 但沒 "✓ batch read complete" → 還在 `_batch_cat_blobs` 內（根因 B class）；(b) batch read complete 但 scan 進度停 → scan_blob 對某個 path 卡住；(c) default mode > 60s 沒輸出 → 跑 `--verbose` 看 per-file 定位。`tests/lint/test_check_head_blob_hygiene.py::TestMainProgressMilestones` 鎖定這三條 milestones 不被誤刪 🛡️ |
+| 57 | `pre-commit` 跑 `head-blob-hygiene` hook 長時間 0-output 疑似卡死 | **🟢 Resolved（v2.8.0, PR #164）**：實際有**兩個正交根因**，治哪個取決於症狀。<br><br>**根因 A — FUSE stale temp 累積（S#18, FUSE 側才會發生）**：`make fuse-reset` 串 Level 1+3 含 stale temp 清除；S#18 親手清掉 288 個 >60min stale 後 hook 從 17+ 分鐘恢復 6 秒。**recovery 路徑**：(a) `kill pre-commit` + `make fuse-locks` 確認 phantom；(b) `make commit-bypass-hh MSG=_msg.txt` 走窄 bypass；(c) Windows 側 `git fsck --no-reflog` 清 stale；(d) 復活後 `~/.cache/pre-commit/patch{TS}-{PID}` backup 可 `git apply` 還原 unstaged-stash 吃掉的檔（S#31）。<br><br>**根因 B — Popen pipe deadlock（PR #164 / S#74，NTFS / FUSE 都會發生）**：`_batch_cat_blobs` 用 single-thread write-then-read-loop pattern + `git cat-file --batch --buffer`。`--buffer` 讓 git 累積全部 stdout 到 stdin EOF 才一次 flush；total output > OS pipe buffer (~64KB on Windows) 時 git 阻塞在 stdout write，script 在另一個 path 的 body 裡 read，**單執行緒就無法 drain** → 經典 Popen pipe deadlock。1040 個 blob × 平均 ~2KB = ~2.18MB output，遠超 buffer threshold，**每次 commit 都會 hang**。**正解（PR #164 已落地）**：改用 `proc.communicate(input=request, timeout=60)`，內部用 thread 同時 drain stdin/stdout/stderr。fix 後 0.57s for 1040 blobs。`tests/lint/test_check_head_blob_hygiene.py` 含 deadlock regression（300 / 1000 file 場景），下次有人改回 write-then-read-loop 會被 CI 攔下。<br><br>**辨識**：症狀都是「hook stuck，0 output」。判斷哪個根因：(i) Windows 原生 NTFS（不經 FUSE）→ 100% 是根因 B；(ii) FUSE 側 + `make fuse-locks` 看到 phantom → 根因 A；(iii) FUSE 側但 fuse-locks 乾淨 → 可能是根因 B（PR #164 前 FUSE 側也會撞 Popen deadlock，只是 stale temp 案例壓過去）。<br><br>**Hang-localization milestones（PR #165）**：hook 現在主動印三個 observation point — `Reading N HEAD blob(s)...` (進入 batch read) → `✓ batch read complete: N loaded in Xs` (batch read 完) → `...scanned I/N` 每 100 個 (scan 進度，default mode) → 最後 summary。三層讓「hang 在哪」清楚可辨：(a) 看到 "Reading..." 但沒 "✓ batch read complete" → 還在 `_batch_cat_blobs` 內（根因 B class）；(b) batch read complete 但 scan 進度停 → scan_blob 對某個 path 卡住；(c) default mode > 60s 沒輸出 → 跑 `--verbose` 看 per-file 定位。`tests/lint/test_check_head_blob_hygiene.py::TestMainProgressMilestones` 鎖定這三條 milestones 不被誤刪 🛡️ |
 | 58 | `make git-preflight` 把自身 bash 程序誤判為「活躍 git 程序」跳過清理 | preflight helper `scripts/session-guards/git_check_lock.sh` 用 `pgrep git` 偵測 active git 程序決定要不要清 `.git/*.lock`，卻把 Makefile 本身啟動的 bash subshell（其 argv 含 `git` 字串的 path）當成活 git，於是**永遠跳過清理**。**表現**：`make git-preflight` 回報「lock exists but git active → skip」但實際沒有 git 在跑，lock 永久存在。**修法**：過濾自身 PID + parent PID：`pgrep git \| grep -v -E "^($$\|$PPID)$"`；或改偵測 `.git/index.lock` 的 mtime（> 60s 無進度視為 stale）。歸檔於 `v2.8.0-planning.md` §12.4 #2，排入 A-12 子項 (v) 施工週。**手動繞道**：直接 `rm -f .git/*.lock` 或 Windows 側 `Remove-Item .git\*.lock -Force` |
 | 59 | `.git/HEAD` 被 null byte 填充至 57 bytes（正常 45）→ `git rev-parse HEAD` fatal | FUSE 寫 cache 在 context compaction 被 drop 時，部分檔案沒 flush 完整，`.git/HEAD` 尾巴殘 NUL bytes。正常內容 `ref: refs/heads/<branch>\n` 約 40-50 bytes；若檔案 ≥ 55 bytes 且尾端 hexdump 全是 `00 00 00`，基本是 FUSE cache loss（見 trap #9）。**診斷**：`wc -c .git/HEAD` + `hexdump -C .git/HEAD \| tail`。**修法**（不需 full fuse-reset）：`printf 'ref: refs/heads/<branch>\n' > .git/HEAD`（若在 FUSE 側失敗則走 Windows 側 `[IO.File]::WriteAllText("C:\...\.git\HEAD", "ref: refs/heads/<branch>`n", [Text.UTF8Encoding]::new($false))`）。**長期**：`scripts/ops/git_check_lock.sh` 加 HEAD 長度 + 首行格式 sanity check，異常即 report + auto-repair。歸檔於 §12.4 #4，排入 A-12 子項 (v) |
 | 60 | `generate_doc_map.py` / 類似 regen 工具執行途中遭 FUSE fsync 中斷 → HEAD corruption + 全檔假 "new file" | **✅ Codified（PR #56, v2.8.0）**：regen 工具走 `--safe` flag，`scripts/tools/dx/_atomic_write.py::atomic_write_text()` 寫 tmp → chmod → `os.replace` 原子搬檔；目標檔不再短暫以半寫狀態存在。`generate_doc_map.py --generate --safe` / `generate_tool_map.py --generate --safe` 已 opt-in 支援。**出事救援**：`make recover-index`（PR #44 plumbing 逃生門）或 `git reset HEAD -- .`。原 RCA + 手動 recovery SOP → [`archive/automation-origins/trap-60-fuse-fsync.md`](archive/automation-origins/trap-60-fuse-fsync.md) |
@@ -782,7 +782,7 @@ PR #39 寫了 1 個 `_p39_commit.ps1`。PR #40 寫了 5 個 `_p40_*.bat|.ps1`。
 | `scripts/ops/win_async_exec.ps1` | MCP 60s timeout 繞道（派工 + poll log） | `-Command "..." -LogFile _out.log` |
 | `scripts/ops/win_read_fresh.ps1` | FUSE dentry cache bypass | `-Path <src> -OutFile <dest>` |
 
-> **子命令缺失？擴充現有 wrapper，不要寫 sibling script。** `win_git_escape.bat` / `win_gh.bat` 都有 `raw <args>` 逃生門可以塞任意命令。真的需要新 subcommand 就開 PR 加進去，下次 session 才能重複使用。
+> **子命令缺失？擴充現有 wrapper，不要寫 sibling script。** 只有 `win_gh.bat` 有 `raw <args>` 逃生門；`win_git_escape.bat` 沒有，打錯或不存在的子命令會印 usage 並回 rc 1。需要新 subcommand 就開 PR 加進去，下次 session 才能重複使用。
 
 工作模式：
 
@@ -794,7 +794,7 @@ PR #39 寫了 1 個 `_p39_commit.ps1`。PR #40 寫了 5 個 `_p40_*.bat|.ps1`。
 | `gh pr create` / `gh run list` | `win_git_escape.ps1` → Windows 原生 gh | gh CLI 不在 Cowork VM 內 |
 | 預期 > 60s 的命令（`gh pr checks`、大型 `git push`、pre-push 全量 hook） | `win_async_exec.ps1` → fire-and-forget + poll log | 避開 MCP RPC 60s timeout（陷阱 #47） |
 | 剛被 Windows 側修改的檔案需 sandbox 側讀 | `win_read_fresh.ps1` → Win32 ReadAllBytes → 新 inode | 繞過 FUSE dentry cache（陷阱 #44） |
-| pre-commit 執行（手動跑） | 推薦走 `run_hooks_sandbox.sh`（sandbox），或 Windows 原生 Python + `python -m pre_commit` | sandbox 路徑無 FUSE stat 延遲、無 `.git/index` 風險 |
+| pre-commit 執行（手動跑） | 推薦走 `run_hooks_sandbox.sh`（sandbox），或 Windows 原生 Python + `python -m pre_commit` | `--files` 模式不走 stash，避開 `.git/index` 風險；檔案仍經 FUSE 讀取（陷阱 #57 根因 A） |
 
 兩端共用同一份工作樹，但 git 的檔案鎖、pre-commit 的 hook cache 都在 NTFS 上，不受 FUSE phantom lock 影響。
 
@@ -846,7 +846,7 @@ git push origin <branch>
 git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 
-**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑，修法見上方陷阱 #36。
+**hook 相容性**：pre-push 守衛自 #1689 起是純 bash，Windows 的 Git Bash 跑得動；會寫死 Linux python 路徑的是 commit 階段的 `.git/hooks/pre-commit`，見上方陷阱 #36。
 
 ### 修復層 C.1：Escape Helpers（MCP 60s timeout + FUSE cache bypass）
 
@@ -923,7 +923,7 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 ```
 
 為什麼 sandbox 側可行：
-1. **乾淨 ext4**，無 FUSE dentry cache / lock 陷阱
+1. hooks 需要的 Python 環境在這一側是完整的。⚠️ 這一側**不是**沒有 FUSE：它檢查的檔案就是掛載進來的 workspace（見 [§FUSE Phantom Lock 防治](#fuse-phantom-lock-防治)），stale 仍可能發生（陷阱 #57 根因 A）
 2. 用 `pre-commit run --files` 模式，**繞過 pre-commit 的 stash 邏輯**（避開 FUSE 側 `.git/index` 可能 corrupt 的問題，見規則 #2b）
 
 輸出格式（grep-friendly 最後一行）：
@@ -954,7 +954,7 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 
 | 層 | 執行位置 | --no-verify？ | 原因 |
 |----|---------|--------------|------|
-| Sandbox hook-gate | Cowork VM（ext4） | ❌ 不繞過 | 環境完整，hooks 真的有執行 |
+| Sandbox hook-gate | Cowork VM（workspace 經 FUSE 掛載） | ❌ 不繞過 | 環境完整，hooks 真的有執行 |
 | Windows commit | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 pre-commit 產的 hook |
 | Windows push | Windows（NTFS） | ⚠️ 逐格繞過三道中的兩道（#1487） | hook 真的被呼叫（守衛自 #1689 起是純 bash，Windows 跑得動），但 wrapper 設了 `MKDOCS_STRICT_BYPASS=1` / `GIT_PREFLIGHT_BYPASS=1`，那兩道讀到就自行退出 ⇒ 實際在判的是擋直推 main 那道，也是唯一沒有旗標的那道 |
 
@@ -964,48 +964,9 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 - Message 一律走檔案（`commit-file` 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）
 - Sandbox 側呼叫時自動 detect `cmd.exe`，不存在則印出可複製的 Windows 指令給 user 手動執行（那種情境下 hook-gate 仍會先跑，結果是 sandbox 驗過再手動收尾）
 
-### 修復層 D：Dev Container Push（Windows 側 hook spawn 不起來時）
-
-**適用情境**：push 必須帶著 hook 跑（本 repo 一律如此），而 Windows 原生 git 這條路上 hook 可能 spawn 不起來——`.git/hooks/pre-push` 若由 pre-commit 產生，第一行 `INSTALL_PYTHON` 是**容器內的絕對路徑**（陷阱 #36），Windows 上不存在，只能 fallback 去找 PATH 上的 `pre-commit`。與其賭那個 fallback，不如直接從容器推。
-
-| 面向 | Windows 原生 git（§修復層 C 主幹） | Dev Container push（本層） |
-|---|---|---|
-| pre-push hook spawn | ✗ 依賴 `INSTALL_PYTHON` fallback（陷阱 #36） | ✓ 那個路徑就在容器裡 |
-| pre-commit checks | ✗ 只能靠 sandbox 側先跑過（`make win-commit`） | ✓ 原地執行 |
-| 和 CI 的環境一致性 | 低（Windows + Git for Windows） | 高（ubuntu-latest 等價） |
-| credential helper | Git Credential Manager 自動處理 | 要手動注入 token（見下） |
-| MCP 呼叫路徑 | `cmd /c <batch>` → `git.exe` → 各種 PATH / DLL 陷阱 | `docker exec vibe-dev-container bash -c '...'` |
-
-**credential 注入**（不動 `git config`、不寫 token 進 remote URL）：
-
-```bash
-# 1. 先從 Windows 側把 gh token 落到容器可讀的檔案（必須在掛載目錄下）
-#    Windows cmd:
-#    "C:\Program Files\GitHub CLI\gh.exe" auth token > C:\Users\<USER>\vibe-k8s-lab\.dev_push_token
-#    ⚠️ gh auth 的 scope 必須含 workflow（gh auth refresh -s workflow）
-
-# 2. 容器內 push（TOKEN 只活在該次 git process 的 env，不寫檔不入 log）
-cd /workspaces/vibe-k8s-lab
-TOKEN=$(tr -d '\r\n' < .dev_push_token)
-git -c credential.helper='' \
-    -c credential.helper="!f() { echo username=x-access-token; echo password=$TOKEN; }; f" \
-    push origin <branch>
-
-# 3. 完成後立即刪掉 token 檔
-rm -f .dev_push_token
-```
-
-**注意事項**：
-
-- `credential.helper=''` 一定要排在前面：那一格是把既有 helper 清掉（否則 GCM / cache helper 會先問 username 就失敗），清掉之後才附加 script helper。順序反過來無效。
-- `tr -d '\r\n'` 是因為 Windows 的 `gh` 寫出的 token 可能帶 `\r\n`，留著會讓 `password=` 那行壞掉。
-- token 檔名一律以 `.dev_` 開頭（`.gitignore` 已有 `.dev_*`），push 完立刻 `rm`。
-- 走這條路徑後，`git push` 的 MCP runtime / exit code 仍然不可信，一樣用 §修復層 C 的 `git ls-remote origin HEAD` 比對 SHA 驗證。
-- `--dry-run` 下 pre-push hook 還是會跑（只是不發 pack），可以先 dry-run 驗 credential 與 hook 都 OK 再真推。
-
 ### 修復層 E：pre-push 守衛擋路時怎麼判
 
-⚠️ **先分清楚是哪一種**：本層處理「hook 跑起來了、然後擋住你」。「hook 根本 spawn 不起來」是上一節（§修復層 D）。
+本層處理「hook 跑起來了、然後擋住你」。
 
 #### 擋在 push 路徑上的是哪三道
 
