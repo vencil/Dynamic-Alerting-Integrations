@@ -228,6 +228,30 @@ class TestRenderCrFile:
             rc = render_cr_file(cr_path, Path(d))
             assert rc == EXIT_CALLER_ERROR
 
+    @pytest.mark.parametrize("text", [
+        pytest.param("- kind: ThresholdConfig\n", id="non-empty-list"),
+        pytest.param("just-a-string\n", id="scalar"),
+        pytest.param("42\n", id="int"),
+        pytest.param("null\n", id="null-document"),
+        pytest.param("[]\n", id="empty-list"),
+        pytest.param("kind: Foo\n", id="wrong-kind-control"),
+    ])
+    def test_non_threshold_config_top_level_is_caller_error(
+            self, text, tmp_path, caplog):
+        """#2371 (b)：頂層不是 mapping 的 CR 與 kind 不符走同一條 rc 2 路徑。
+
+        先前 `cr.get("kind")` 在 list／純量上丟 AttributeError，CLI 印
+        traceback、rc 1，破壞「rc 2 = caller error」的契約。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(text, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        rc = render_cr_file(cr_path, out_dir)
+        assert rc == EXIT_CALLER_ERROR
+        assert "is not a ThresholdConfig resource" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
 
 class TestSignalHandler:
     """_signal_handler() 測試。"""

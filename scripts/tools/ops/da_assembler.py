@@ -399,7 +399,7 @@ def render_cr_file(
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
 
-    if not cr or cr.get("kind") != "ThresholdConfig":
+    if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
         return EXIT_CALLER_ERROR
 
