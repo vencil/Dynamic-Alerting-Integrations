@@ -221,6 +221,22 @@ def test_open_pr_blocks_without_marker(tmp_path: Path):
     assert "make pr-preflight" in r.stderr
 
 
+def test_the_banner_names_what_make_runs_for_a_host_without_make(tmp_path: Path):
+    """#1920 — a Windows host has no `make`, so the banner also prints the
+    command behind it. The Makefile recipe is the source; the banner must
+    name the same script, or it sends people to a tool that moved."""
+    recipe = re.search(r"^pr-preflight:.*\n((?:\t.*\n)+)",
+                       (_REPO_ROOT / "Makefile").read_text(encoding="utf-8"), re.MULTILINE)
+    assert recipe, "Makefile has no pr-preflight recipe"
+    scripts = re.findall(r"python3?\s+(\S+\.py)", recipe.group(1))
+    assert len(scripts) == 1, f"expected one script in the recipe: {recipe.group(1)}"
+    sha = _init_git(tmp_path)
+    r = _run_gate(tmp_path, _refspec("feat/x", sha),
+                  path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"))
+    assert r.returncode == 1
+    assert f"python {scripts[0]}" in r.stderr, r.stderr
+
+
 def test_open_pr_with_marker_allows(tmp_path: Path):
     sha = _init_git(tmp_path)
     (tmp_path / ".git" / f".preflight-ok.{sha}").touch()

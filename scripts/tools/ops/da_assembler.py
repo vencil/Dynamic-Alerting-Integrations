@@ -40,7 +40,11 @@ from _lib_io import (  # noqa: E402  (#1789)
     exit_on_output_write_error,
     output_write,
 )
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216)
+from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
+    RawPlain,
+    dump_for_rewrite,
+    load_for_rewrite,
+)
 
 try:
     import yaml
@@ -83,29 +87,41 @@ def render_cr_to_yaml(cr: dict) -> str:
 
     The output format matches hand-written conf.d/<tenant>.yaml exactly.
 
-    Tenant ids must arrive as ``str`` (#2216): ``yaml.dump`` quotes a text
+    Tenant ids must arrive as ``str`` (#2216): the dump quotes a text
     key YAML would retype (``'010':``), so the exporter reads back the same
     id. A non-str key (``8``) is already a renamed tenant and cannot be
     recovered here — the reader is where it is kept (``render_cr_file``;
     the API path hands over JSON, whose keys are strings).
+
+    A VALUE read as :class:`RawPlain` (``render_cr_file``, #2331) is written
+    back plain, as the CR wrote it: ``010`` stays ``010``, ``12:30`` stays
+    ``12:30`` — the exporter reads the CR's value, not PyYAML's retyping of
+    it (``8``, ``750``). Any other value dumps as ``yaml.safe_dump`` would.
     """
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
 
     doc: Dict[str, Any] = {}
 
+    # Each block is written only when it is a non-empty MAPPING. ⛔ Not a
+    # truthiness test: a RawPlain scalar is text, so `defaults: 0` /
+    # `stateFilters: false` read as "0" / "false" are truthy, and writing
+    # them out makes the exporter skip the whole file (YamlFileError,
+    # ValueError). Read PyYAML-typed they were falsy and dropped; this keeps
+    # that — and drops any other non-mapping block the same way.
+
     # Tenants block (required)
     tenants = spec.get("tenants")
-    if tenants:
+    if isinstance(tenants, dict) and tenants:
         doc["tenants"] = tenants
 
     # Optional platform blocks
     defaults = spec.get("defaults")
-    if defaults:
+    if isinstance(defaults, dict) and defaults:
         doc["defaults"] = defaults
 
     state_filters = spec.get("stateFilters")
-    if state_filters:
+    if isinstance(state_filters, dict) and state_filters:
         doc["state_filters"] = state_filters
 
     header = (
@@ -114,7 +130,7 @@ def render_cr_to_yaml(cr: dict) -> str:
         f"# DO NOT EDIT — changes will be overwritten on next reconcile.\n"
     )
 
-    return header + yaml.dump(
+    return header + dump_for_rewrite(
         doc, default_flow_style=False, allow_unicode=True, sort_keys=False,
     )
 
@@ -381,6 +397,23 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
+def _keys_as_plain_text(obj: Any) -> Any:
+    """*obj* with every mapping key a plain ``str`` (values untouched).
+
+    ``load_for_rewrite`` reads an unquoted key as :class:`RawPlain`, which
+    would be dumped back unquoted (``010:``). A tenant id is written QUOTED
+    wherever YAML would retype it (``'010':``, #2216), so a reader that still
+    types keys reads the same id — and an unquoted and a quoted CR render
+    the same body. Only VALUES keep their plain spelling (#2331).
+    """
+    if isinstance(obj, dict):
+        return {(str(k) if isinstance(k, RawPlain) else k):
+                _keys_as_plain_text(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_keys_as_plain_text(v) for v in obj]
+    return obj
+
+
 def render_cr_file(
     cr_path: Path,
     config_dir: Path,
@@ -392,9 +425,17 @@ def render_cr_file(
     # #2114) — a `tenants:` key read as `010` → 8 was rendered as `8:`, a
     # tenant the CR never named. `render_cr_to_yaml` dumps the text back,
     # quoted wherever YAML would retype it. Not strict, as before (#2123).
+    #
+    # #2331 / #2372: VALUES as the CR wrote them too. A PyYAML-typed read
+    # retyped every unquoted scalar before it was dumped back: a threshold
+    # `010` rendered as `8`, `12:30` as `750` (its `:30` severity lost), a
+    # timestamp in Python's spelling — and `metadata.name: 010` named the
+    # output `8.yaml` (`yes` → `True.yaml`), which tenant-api cannot find.
+    # `load_for_rewrite` keeps a plain scalar's text (RawPlain, a `str`), so
+    # the file name, the log and the header name the CR as written.
     try:
         with open(cr_path, encoding="utf-8") as fh:
-            cr = load_exporter_keys(fh)
+            cr = _keys_as_plain_text(load_for_rewrite(fh))
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR

@@ -179,6 +179,10 @@ function useTenantData({ setApiNotification, t, q = '' }) {
           last_config_commit: '',
           tags: summary.tags || [],
           groups: summary.groups || [],
+          // #2068: a DEGRADED row (#1680) carries only id + config_error;
+          // the defaults above are then placeholders, not its metadata.
+          // Carried through so the card can say the file is unusable.
+          config_error: summary.config_error || '',
         };
       }
       const overflow = (typeof body.total_matched === 'number' && body.total_matched > items.length)

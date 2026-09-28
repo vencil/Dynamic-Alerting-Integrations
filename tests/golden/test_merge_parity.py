@@ -35,9 +35,10 @@ What the fixtures cover (NOT every ADR-017 clause; see "Known gaps" below):
 - canonical-json-escaping: a tenant string with `<` `>` `&` and CJK, so
                      the ensure_ascii=False (Python) and no-HTML-escape (Go)
                      clauses of the canonical JSON move merged_hash (#1550)
-- routing-null:      null on `_routing.group_*`. At the MERGE plane these
-                     are non-reserved sub-keys: an inherited value is
-                     retained, an uninherited null is dropped (#1550)
+- reserved-nested-null: null on non-reserved sub-keys of an inherited
+                     reserved key (`_x.*`): an inherited value is retained,
+                     an uninherited null is dropped (#1550; was `_routing`
+                     until #2417, which da-guard rejects in `defaults:`)
 - reserved-null-delete: a `_` key inherited from L0 and nulled in an L1
                      `_defaults.yaml` is deleted; a sibling `_` key survives
                      (#1550)
@@ -51,8 +52,8 @@ describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
 Known gaps (a mutation there leaves this oracle green):
 - ADR-017's `_routing` null opt-out is enforced by the route generator
   (_grar_merge.py over `_routing_defaults` + the tenant file's `_routing`),
-  which neither merge implementation runs. routing-null pins how the merge
-  plane REPRESENTS those nulls, not the route that is generated.
+  which neither merge implementation runs; no golden row exercises
+  `_routing` (#2417).
 - Go's EffectiveConfig leg compares Go canonicalJSON against Go
   canonicalJSON, so it is blind to a Go-side escaping change; the hash legs
   (MergedHash, ResolveEffective) are what catch that.

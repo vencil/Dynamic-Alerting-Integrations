@@ -11,6 +11,13 @@ bump updates both in one PR and the drift-guard stays green).
 A custom-manager regex that silently matches NOTHING is the classic failure mode; it
 would go unnoticed until an owner runs Renovate weeks later. Here it fails loud, in
 the normal Python Tests lane.
+
+#1354 added the built-in github-actions / dockerfile / devcontainer managers. The
+tests at the bottom pin their scope: one group per manager, no digest pinning,
+majors behind the Dependency Dashboard, and every pin whose other side is NOT a
+Renovate dep (Go builder, runs-on, `with:` tool versions, devcontainer language
+versions, the amtool COPY custom.regex already owns) disabled — a one-sided bump
+would turn a parity guard red in Renovate's own PR.
 """
 from __future__ import annotations
 
@@ -59,6 +66,11 @@ EXPECTED_DEPNAMES = {
     # test_busybox_is_matched_in_both_consumer_charts is the one that proves it.
     "busybox",
 }
+
+
+# #1354 option B: the built-in managers the owner approved, on top of custom.regex.
+BUILTIN_MANAGERS = ("github-actions", "dockerfile", "devcontainer")
+ENABLED_MANAGERS = ("custom.regex", *BUILTIN_MANAGERS)
 
 
 def _load_config() -> dict:
@@ -117,9 +129,11 @@ def _matrix_manager(cfg: dict) -> dict:
 
 def test_renovate_json_is_strict_json_and_well_formed():
     cfg = _load_config()
-    # Scope MUST stay images-only — a wider enabledManagers would let Renovate open
-    # broken tool-SHA / lang-dep PRs (#902 L3 Category B/C are deliberately out).
-    assert cfg["enabledManagers"] == ["custom.regex"]
+    # #1354: exactly these managers. docker-compose stays OFF (the tests/** compose
+    # images are held by bindings, not Renovate — see
+    # test_federation_e2e_mirrors_deploy_sot.py); gomod stays OFF (go.mod is the Go
+    # SSOT and lang-dep bumps are #902 L3 Category C, deliberately out).
+    assert sorted(cfg["enabledManagers"]) == sorted(ENABLED_MANAGERS)
     assert cfg.get("pinDigests") is True
     assert len(cfg["customManagers"]) == 3
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
@@ -247,3 +261,168 @@ def test_python_minor_bump_requires_dashboard_approval():
             "python digest-only refresh must stay automatic — only the version (minor) "
             "bump should wait for a Dependency Dashboard tick"
         )
+
+
+# ── #1354: built-in managers ────────────────────────────────────────────────
+#
+# The assertions below evaluate the packageRules the way Renovate does (every
+# `match*` of a rule must hold; later rules override earlier ones) for concrete
+# (manager, dep, updateType) cases, instead of grepping for the rule text: a rule
+# that is present but shadowed, mis-scoped or mis-spelled reads as "there" to a
+# grep and as "not applied" here. The emulator only models exact-string matchers;
+# a rule using anything else (glob, /regex/, `!` negation, another match* key)
+# FAILS the suite rather than being mis-evaluated. Cross-checked against
+# Renovate 44's own applyPackageRules when this was written (#1354).
+
+_EMULATED_MATCHERS = {
+    "matchManagers", "matchDatasources", "matchDepTypes",
+    "matchDepNames", "matchPackageNames", "matchUpdateTypes",
+}
+
+
+def _resolve(cfg: dict, *, manager: str, dep: str, datasource: str,
+             update: str, dep_type: str | None = None) -> dict:
+    facts = {
+        "matchManagers": manager, "matchDatasources": datasource,
+        "matchDepTypes": dep_type, "matchDepNames": dep,
+        "matchPackageNames": dep, "matchUpdateTypes": update,
+    }
+    out = {"enabled": True, "pinDigests": cfg.get("pinDigests", False)}
+    for rule in cfg.get("packageRules", []):
+        keys = {k for k in rule if k.startswith(("match", "exclude"))}
+        assert keys <= _EMULATED_MATCHERS, (
+            f"packageRule uses {sorted(keys - _EMULATED_MATCHERS)}, which this "
+            f"emulator does not model — extend _resolve() before relying on it: "
+            f"{rule.get('description', '')[:80]}")
+        for k in keys:
+            for v in rule[k]:
+                assert not (v.startswith(("/", "!")) or "*" in v), (
+                    f"{k} value {v!r} is a pattern; the emulator matches exact strings only")
+        if all(facts[k] in rule[k] for k in keys):
+            out.update({k: v for k, v in rule.items() if k not in keys and k != "description"})
+    return out
+
+
+# (manager, dep, datasource, depType, update) that must NEVER get a Renovate PR,
+# each because its counterpart is not a Renovate dep (a one-sided bump is red).
+_MUST_BE_DISABLED = [
+    # go.mod is the Go SSOT; test_go_toolchain_parity.py binds every builder to it.
+    ("dockerfile", "golang", "docker", "stage", "patch"),
+    ("dockerfile", "golang", "docker", "stage", "minor"),
+    # runs-on == dev container base image (test_toolchain_pin_parity.py, runner).
+    ("github-actions", "ubuntu", "github-runners", "github-runner", "major"),
+    ("devcontainer", "mcr.microsoft.com/devcontainers/base", "docker", "image", "major"),
+    ("devcontainer", "mcr.microsoft.com/devcontainers/base", "docker", "image", "minor"),
+    # `with:` tool versions, each bound to a devcontainer / Makefile / wrapper pin.
+    ("github-actions", "node", "github-releases", "uses-with", "major"),
+    ("github-actions", "python", "github-releases", "uses-with", "minor"),
+    ("github-actions", "helm", "github-releases", "uses-with", "minor"),
+    ("github-actions", "aquasecurity/trivy", "github-releases", "uses-with", "minor"),
+    ("github-actions", "sigstore/cosign", "github-releases", "uses-with", "patch"),
+    # language versions inside the dev container features, bound to CI / go.mod.
+    ("devcontainer", "node", "node-version", None, "major"),
+    ("devcontainer", "python", "python-version", None, "minor"),
+    ("devcontainer", "go", "golang-version", None, "patch"),
+]
+
+
+@pytest.mark.parametrize("manager,dep,datasource,dep_type,update", _MUST_BE_DISABLED)
+def test_ci_bound_pins_are_not_renovates(manager, dep, datasource, dep_type, update):
+    got = _resolve(_load_config(), manager=manager, dep=dep, datasource=datasource,
+                   dep_type=dep_type, update=update)
+    assert got["enabled"] is False, (
+        f"{manager} would open a PR for {dep} ({dep_type}, {update}); its other side "
+        f"is not a Renovate dep, so the bump is one-sided and a parity guard goes red.")
+
+
+@pytest.mark.parametrize("manager,dep,datasource,dep_type", [
+    ("github-actions", "aquasecurity/trivy-action", "github-tags", "action"),
+    ("dockerfile", "alpine", "docker", "final"),
+    ("devcontainer", "ghcr.io/devcontainers/features/go", "docker", "feature"),
+])
+def test_each_builtin_manager_is_one_group_without_digest_pinning(manager, dep, datasource, dep_type):
+    """One PR per manager (so every occurrence of a dep moves together — the
+    single-version-per-action guard), and no pin-to-digest/SHA side effect."""
+    cfg = _load_config()
+    got = _resolve(cfg, manager=manager, dep=dep, datasource=datasource,
+                   dep_type=dep_type, update="minor")
+    assert got["enabled"] is True, f"{manager}/{dep} is disabled"
+    assert got.get("groupName"), f"{manager}/{dep} has no groupName — one PR per dep"
+    assert got["pinDigests"] is False, (
+        f"{manager}/{dep} inherits the global pinDigests=true: Renovate would open a "
+        f"pin PR rewriting every ref to a digest/SHA (deliberately out of #1354).")
+    assert not got.get("dependencyDashboardApproval"), f"{manager}/{dep} minor is gated"
+
+
+def test_builtin_manager_groups_are_distinct_and_not_the_image_group():
+    cfg = _load_config()
+    samples = {
+        "github-actions": ("aquasecurity/trivy-action", "github-tags", "action"),
+        "dockerfile": ("alpine", "docker", "final"),
+        "devcontainer": ("ghcr.io/devcontainers/features/go", "docker", "feature"),
+    }
+    groups = {m: _resolve(cfg, manager=m, dep=d, datasource=ds, dep_type=t, update="patch").get("groupName")
+              for m, (d, ds, t) in samples.items()}
+    image_group = _resolve(cfg, manager="custom.regex", dep="grafana/grafana",
+                           datasource="docker", update="minor").get("groupName")
+    assert image_group, "the #902 image group vanished"
+    assert len(set(groups.values())) == len(groups) and image_group not in groups.values(), (
+        f"built-in managers must each have their own group, separate from the #902 "
+        f"image group {image_group!r}: {groups}")
+
+
+@pytest.mark.parametrize("manager,dep,datasource,dep_type", [
+    ("github-actions", "actions/checkout", "github-tags", "action"),
+    ("dockerfile", "alpine", "docker", "final"),
+    ("devcontainer", "ghcr.io/devcontainers/features/node", "docker", "feature"),
+])
+def test_builtin_manager_majors_wait_for_the_dashboard(manager, dep, datasource, dep_type):
+    got = _resolve(_load_config(), manager=manager, dep=dep, datasource=datasource,
+                   dep_type=dep_type, update="major")
+    assert got["enabled"] is True and got.get("dependencyDashboardApproval") is True, got
+
+
+@pytest.mark.parametrize("dep", ["sigstore/cosign-installer", "anchore/sbom-action"])
+def test_signing_chain_actions_wait_for_the_dashboard(dep):
+    """release.yaml: 'bump deliberately' — never ride the grouped Actions PR."""
+    got = _resolve(_load_config(), manager="github-actions", dep=dep,
+                   datasource="github-tags", dep_type="action", update="patch")
+    assert got.get("dependencyDashboardApproval") is True, got
+    # Approval alone is not enough: without a group of its own the dep inherits
+    # the general `GitHub Actions` groupName and, once approved, lands in the same
+    # PR as every unrelated action bump (CodeRabbit on #2383).
+    assert got.get("groupName") == "release signing chain", got
+    assert got.get("groupName") != _resolve(
+        _load_config(), manager="github-actions", dep="actions/checkout",
+        datasource="github-tags", dep_type="action", update="patch").get("groupName"), got
+
+
+def test_dockerfile_manager_never_co_owns_a_custom_regex_ref():
+    """The dockerfile manager also extracts `COPY --from=<image>` refs. Any Dockerfile
+    ref custom.regex already owns (today: the da-tools amtool COPY, #2294) must be
+    disabled for the dockerfile manager, or the same line has two owners in two
+    groups and the pair custom.regex keeps in ONE PR splits. Derived from what
+    custom.regex actually extracts, not from a list written here."""
+    cfg = _load_config()
+    owned = {d["depName"] for m in cfg["customManagers"] for d in _extract(m)
+             if Path(d["file"]).name.startswith("Dockerfile")}
+    assert "prom/alertmanager" in owned, (
+        f"expected custom.regex to own the da-tools amtool COPY; owned={sorted(owned)}")
+    co_owned = [dep for dep in sorted(owned)
+                if _resolve(cfg, manager="dockerfile", dep=dep, datasource="docker",
+                            dep_type="final", update="patch")["enabled"]]
+    assert not co_owned, f"dockerfile manager would also bump custom.regex refs: {co_owned}"
+
+
+def test_tests_tree_is_out_of_renovates_reach():
+    """tests/** images (the federation-e2e compose mirrors, the bench Dockerfiles)
+    are held by bindings (test_federation_e2e_mirrors_deploy_sot.py, _SCAN_EXEMPT),
+    not by Renovate. ignorePaths is spelled out here rather than inherited from
+    config:recommended so a preset change cannot silently widen the reach."""
+    cfg = _load_config()
+    assert "docker-compose" not in cfg["enabledManagers"]
+    ignored = set(cfg.get("ignorePaths", []))
+    assert {"**/tests/**", "**/test/**"} <= ignored, sorted(ignored)
+    anchors = [p for p in (REPO / "tests").rglob("*")
+               if p.name == "Dockerfile" or p.name.startswith("docker-compose")]
+    assert anchors, "no Dockerfile / compose under tests/ — re-derive what this guards"

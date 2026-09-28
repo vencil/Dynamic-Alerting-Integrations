@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-08-23
+updated_at: 2026-09-28
 ---
 # ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload
 
@@ -128,8 +128,10 @@ tenants:
                                   # 平台預設是 map[string]float64
     # pg_replication_lag_seconds: 繼承 L0 = 30
     # pg_locks_count: 繼承 L1 = 100
-    # _routing_defaults.group_wait: 由四層 routing 引擎繼承 = 60s
-    #   ⛔ 但它不在下面那個 effective config 裡 —— 見緊接著的範圍註記
+    # _routing_defaults.group_wait: 由路由分層鏈繼承 = 60s
+    #   ⚠️ 要等 2026-09-28 修訂實作後才成立：目前路由生成器完全看不到
+    #   子目錄裡的租戶（ADR-016）
+    #   ⛔ 而且它不在下面那個 effective config 裡 —— 見緊接著的範圍註記
 ```
 
 **Effective config 計算**：
@@ -160,14 +162,14 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    ——但那是「這個檔案允許哪些頂層鍵」的清單，不是「這個鍵放在這裡就會生效」的清單。**
    ⛔ **判準是「有沒有東西在頂層讀它」，不是前綴、也不是一份名單。** 目前查得到的平台層頂層
    消費端只有**三個具名鍵**：`_routing_defaults` 與 `_routing_enforced`（`_grar_parse.py` 只讀
-   頂層，且只認這兩個**字面名**——`^_routing` 前綴**不足以推論**，實測 `_routing` 與
+   頂層——指 YAML 文件的頂層，不是目錄樹的頂層，目錄層見下方「Amendment 2026-09-28」——且只認這兩個**字面名**——`^_routing` 前綴**不足以推論**，實測 `_routing` 與
    `_routing_profile` 在頂層無消費端），以及 `_custom_alerts`（`custom_alerts/loader.py` 只讀
    頂層）。⚠️ 其餘 `_` 前綴鍵真正被消費的位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**，
    寫在平級頂層是**靜默 no-op**（實測 `_silent_mode` / `_profile` / `_severity_dedup` /
    `_namespaces` / `_metadata` / `_routing_profile` 六個，`effective` 逐位元組不動、exporter
    零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**，那三個具名鍵也一樣：新增
    任何 `_` 前綴鍵時請用上面那條判準，不要用這些名字反推。
-   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 那個 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器改讀整棵樹後也要發同樣的 WARN，下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
 2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。**
 
@@ -184,7 +186,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 
    | 你縮排的鍵 | 那個專屬消費端的下場 |
    |:--|:--|
-   | `_routing_defaults`、`_routing_enforced`（以及任何 `^_routing` 前綴鍵） | 路由：`_grar_parse.py` **只讀頂層**（`if "_routing_defaults" in data`）⇒ 縮排後靜默失效。實測 `_routing_defaults`：沒有自己 `_routing` 的租戶**整條 route ＋ receiver 消失**（`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`，**RC=0、零 error、零 warning**）；實測 `_routing_enforced`：**平台強制的 NOC route ＋ `platform-enforced` receiver 整段消失**，同樣零訊號 |
+   | `_routing_defaults`、`_routing_enforced`（以及任何 `^_routing` 前綴鍵） | 路由：`_grar_parse.py` **只讀頂層**（`if "_routing_defaults" in data`；指文件頂層，不是目錄樹頂層，目錄層見下方「Amendment 2026-09-28」）⇒ 縮排後靜默失效。實測 `_routing_defaults`：沒有自己 `_routing` 的租戶**整條 route ＋ receiver 消失**（`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`，**RC=0、零 error、零 warning**）；實測 `_routing_enforced`：**平台強制的 NOC route ＋ `platform-enforced` receiver 整段消失**，同樣零訊號 |
    | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**。⛔ 但 `compile_custom_alerts.py --check`（`ci.yml` 與 pre-commit 都有）**會擋**——它是 drift check（docstring 逐字：`1  drift detected (--check)`），會 exit 1 並逐條列出消失的 rule。真正的靜默路徑是**縮排後順手重跑一次編譯**：閘門轉綠，損失只留在 pack 的 diff 裡。⛔ 載體的選法三邊一致（loader、exporter、`describe_tenant`；#1588 起不分大小寫、認 `.yml`，#1674 起每個目錄只讀一個）：同目錄同時有 `_defaults.yaml` 與 `_defaults.**yml**` 時，`.yml` 裡的 `_custom_alerts` **三邊都不讀**，只有 WARN——把清單寫進沒被選中的那個拼法，效果同樣是看到零 |
    | 多數鍵（診斷面） | `effective`：**靜默接受**成一個巢狀鍵，blast-radius 因此從「無變更」變成一份報告（實測 `max_metrics_per_tenant` / `_routing_defaults` 為 Tier B、`_custom_alerts` 為 Tier A）。⚠️ **診斷面會正向獎勵這個動作，而它同時讓租戶失去告警**。⛔ **但這不是保證**：`_metadata` 被 `deep_merge` 無條件跳過（`describe_tenant.py` 的 `if k == "_metadata": continue`），縮排後 `effective` **逐位元組不動**、blast-radius 逐字印出「No effective tenant config changes detected」——而 exporter 那側整份檔案已被丟棄。**診斷面的沉默不是無事的證據。** |
 
@@ -212,7 +214,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | `_custom_alerts` | `compile_custom_alerts.py --check` 的輸出（⚠️ 見下方警告） |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`，**diff 前後的完整輸出** |
 
-   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
+   ⚠️ 表中 `_silent_mode` 所在的 **`tenants:` 區塊**的語意是「平台對**既有**租戶的預設值」（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)）：同一個鍵由租戶檔逐鍵贏、與檔名無關（只指租戶檔對平台檔；多個平台檔之間仍依檔名排序、後者贏）；沒有任何租戶檔宣告的租戶會被剝除並 WARN（平台檔不得建立租戶）；子目錄裡平台檔的 `tenants:` 不被任何平面讀取（exporter 會 WARN；路由生成器改讀整棵樹後也要發同樣的 WARN，下方 2026-09-28 修訂不處理這個區塊）；`/effective`、da-guard、`describe_tenant` 與 `merged_hash` 同樣套用這一層，並以 `platform_overlay` 標出提供值的平台檔與鍵，`/simulate` 則不套用（請求不含平台檔；[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)）。
 
    ⚠️ **`compile_custom_alerts.py` 的輸出路徑不跟著 `--config-dir` 走**（`out_path = repo / OUT_REL`，
    錨在 repo 上）。這句話原本接的是「所以拿它試跑別棵樹會覆蓋出貨檔」——**該後果自
@@ -431,6 +433,70 @@ elif any ancestor _defaults.yaml changed:
   sub-struct）同 atomic-swap，存放每個 `_defaults.yaml` 的 normalized parsed dict（`map[string]any`），記憶體 ~1MB / 1000 tenants
 - 在 `populateHierarchyState` cold-start 時 eager-parse 全部 defaults；`diffAndReload` 時只重新 parse 有 hash 變動的檔案，未變動的沿用前值
 - 詳見 `components/threshold-exporter/app/config_defaults_diff.go` + Issue #61 RFC
+
+### Amendment 2026-09-28 (#2326)：路由面跨目錄層的分層鏈
+
+**狀態：已決定，尚未實作。** owner 裁決
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326) 的選項 **P2**；
+實作（Python 路由生成器與 Go `pkg/routingpolicy` 同一支 PR，parity 矩陣新增階層樹）在後續
+PR 落地。⛔ 合併之前，路由面只讀 conf.d **根目錄**（ADR-016 §支援面邊界），下面描述的都
+不是現行行為。
+
+路由面沿著與閾值鏈相同的目錄，另有一條自己的鏈。它仍然**不進** `effective` /
+`merged_hash`——下方替代方案 D 的否決維持不變。
+
+**載體。** 子目錄每一層的載體就是閾值鏈讀的那一份：`_defaults.yaml` / `_defaults.yml`，
+每個目錄一份，選法相同（#1674）。根目錄維持現行規則：`_routing_defaults` /
+`_routing_enforced` 從根目錄任何 `_` 前綴檔讀取。鍵的位置與今天根目錄一樣，在文件頂層
+（上方條 2 關於縮排進 `defaults:` 的警告照樣適用）。走訪器：Python
+`_lib_confd.list_config_tree()`；Go `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏
+目錄、回報目錄 symlink、只有 README 的目錄不貢獻任何東西）。
+
+**(a) 各層 `_routing_defaults`：頂層逐鍵淺合併。** 深層勝。顯式 `null` 沿用上方「Null 值」
+一節的既有規則，不另訂：四個欄位（`group_by` / `group_wait` / `group_interval` /
+`repeat_interval`）寫 `null` 即退出繼承、產出的 route 省略該欄位；`receiver` 與 `overrides`
+**不適用**——子目錄層的 `_routing_defaults` 把它們寫成 `null` 是**阻擋錯誤**（rc 2），否則
+整個子樹裡沒有自己 receiver 的租戶會一起失去 route、告警靜默落到 catch-all。
+接著是 routing profile，再來是租戶本體的 `_routing`（順序不變）：
+
+```
+rd(t)       = L0._routing_defaults ⊕ L1._routing_defaults ⊕ … ⊕ Ln._routing_defaults
+resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
+
+  a ⊕ b：對 b 的每個頂層鍵 k——
+           a[k] = b[k]   （整個值取代，不往下遞迴；null 也照存，
+                          由下游依上面的欄位規則省略或拒絕）
+```
+
+與現有的 profile / 租戶合併同一個形狀（`_grar_merge.py` 的 `merge_routing_with_defaults`、
+Go 的 `routingpolicy.Resolve`）。不採深合併的理由同替代方案 D 第 3 點：深合併表達不了這個
+語意，而且在 `receiver` 上會把不同 receiver type 的欄位混在一起（子樹把 `type` 從 `slack`
+改成 `pagerduty`，卻留著父層的 `api_url`）。
+
+**(b) `_routing_enforced`：只認根目錄。** 任何子目錄檔案裡出現即為**阻擋錯誤**（路由生成器
+rc 2）。延後：疊加式、以子樹為範圍的強制路由。觸發條件：有客戶或團隊明確需要只作用於某個
+子樹的 NOC 路由。
+
+**(c) Routing profiles。** `_routing_profiles.yaml` / `.yml` 可以放在子目錄，其中的 profile
+對該子樹裡的租戶可見。租戶解析 `_routing_profile: X` 時，找的是自己這一層或祖先層定義的
+profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個檔案即為錯誤——根目錄同時有
+`_routing_profiles.yaml` 與 `.yml` 且撞名也算（今天是依檔名順序後者靜默覆蓋，這是行為變更）。
+
+**(d) Domain policies。** `_domain_policy.yaml` / `.yml` 可以放在子目錄，只作用於所在子樹。
+子樹 policy 的 `tenants:` 點名子樹外的租戶是**錯誤**（`--strict` 下 ERROR，否則 WARN），
+訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條
+適用於它的 policy，所以子樹只能收緊。
+
+**(e) 租戶 id 重複。** 同一個租戶 id 在多個檔案宣告，在路由面同樣是**阻擋錯誤**（rc 2），
+對齊 Go 的 `DuplicateTenantError` 與 `validate_config.check_tenant_uniqueness`。
+
+**(f) 本次不處理。** 子目錄平台（`_`）檔的 `tenants:` 區塊維持不被任何平面讀取（上方條 1）；
+路由生成器比照 exporter 對它發 WARN。
+
+**取代 #2326 第 1 步止血。** 止血版是只要子目錄有設定檔，生成器就回 rc 2。整棵樹都讀之後，
+這本身不再是錯誤；阻擋條件改為：子目錄檔案裡出現 `_routing_enforced` → rc 2；租戶 id 重複
+→ rc 2；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
+（見 (a)）；以及上面 (c)、(d) 所列的錯誤。
 
 ## 考量的替代方案
 

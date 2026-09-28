@@ -100,6 +100,33 @@ type hierarchyState struct {
 	// above were computed with (#2117) — a tenant's `_profile` fills in keys
 	// on /metrics (ApplyProfiles), so it is part of what merged_hash hashes.
 	profiles *config.PlatformProfiles
+	// mergeRetry is the tenants whose merged_hash recompute failed to READ
+	// a file on a reload tick (#2100). Their mergedHashes entry is the
+	// last-known-good value, but hashes/graph/platform above already hold
+	// that tick's inputs — so detectChange compares equal on the next tick
+	// and no reload runs. tickOnce retries these tenants on every tick that
+	// detects no change (retryFailedMergedHashes), and classifyTenant does
+	// on a tick that does reload. nil = none.
+	//
+	// ⛔ Every writer builds a new map (copy-on-write) — the same for
+	// mergedHashes — because snapshotPriorState hands both out to readers
+	// that use them after m.mu is released.
+	mergeRetry map[string]struct{}
+	// gen counts installs of this state (reload, cold load, merged_hash
+	// retry). retryFailedMergedHashes installs only if it is unchanged since
+	// its snapshot, so a result computed from a superseded state is dropped.
+	//
+	// It is the SECOND guard, behind reloadMu: every reload holds reloadMu,
+	// and so does the retry, so under today's lock order the only install
+	// that can land between the retry's snapshot and its install is a
+	// direct Load (the cold path takes no reloadMu) — which production runs
+	// only at startup, before WatchLoop. No production path reaches it
+	// today. It stays because it is what keeps a retry from overwriting a
+	// newer state if an install ever runs outside reloadMu (a future caller
+	// of Load, or a change to the lock order). Pinned by
+	// TestReload_MergeRetry_ParkedAcrossDirectLoad, which calls Load
+	// directly; not exercised by any production-path test.
+	gen uint64
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
 	// subtree defaults chain supplies but that NO emitter can iterate
@@ -197,6 +224,16 @@ type ConfigManager struct {
 	// parallel test observes only its own manager's ticks. Set it before the
 	// tick; it is read on the reloading goroutine.
 	onReloadTenantParse func(absPath string)
+
+	// reloadMergeRead is a test seam, nil in production (#2100): the file
+	// read a reload tick's merged_hash recompute makes — the tenant file and
+	// every defaults-chain file (classifyAndCount → tenantFilesOnce.read).
+	// nil means os.ReadFile. It exists so a test can fail exactly the
+	// recompute's read while the tree scan (which carries an unmoved file by
+	// its mtime, unread) succeeds — the shape of a transient read failure.
+	// Per-manager, set before the tick, read on the reloading goroutine —
+	// same contract as onReloadTenantParse.
+	reloadMergeRead func(absPath string) ([]byte, error)
 
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
@@ -1682,6 +1719,13 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.hierarchy.tenantSources = tenants
 	m.hierarchy.hashes = scan.AbsHashes()
 	m.hierarchy.mergedHashes = newMergedHashes
+	// A cold load recomputes every tenant from this scan, so the previous
+	// state's retry set (#2100) no longer describes anything. A tenant the
+	// cold merge itself could not compute is absent from newMergedHashes
+	// and is NOT retried on an unchanged tree: it is recomputed on the
+	// next tick that reloads (classifyTenant finds no cached value).
+	m.hierarchy.mergeRetry = nil
+	m.hierarchy.gen++
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.hierarchy.platform = platform
@@ -1901,7 +1945,11 @@ func (m *ConfigManager) tickOnce() {
 			// ops tool that rapidly rewrites multiple files coalesces
 			// into a single reload.
 			m.triggerDebouncedReload(reason)
+			return
 		}
+		// #2100: nothing moved, so no reload will run — but a tenant whose
+		// merged_hash a previous reload could not read is still stale.
+		m.retryFailedMergedHashes()
 		return
 	}
 
