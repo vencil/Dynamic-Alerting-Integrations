@@ -212,7 +212,7 @@ def test_deprecate_rule_changes_only_the_deprecated_key(tmp_path, da_guard):
     before = _served(d, da_guard)
     p = subprocess.run([sys.executable, str(DEPRECATE), "mysql_slave_lag",
                         "--config-dir", str(d), "--execute"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     after_text = _read_tree(d)
     # Every file was rewritten (the precondition of this test meaning anything).
@@ -308,7 +308,7 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
     target = "t.yaml" if where == "tenant" else "_defaults.yaml"
     p = subprocess.run([sys.executable, str(DEPRECATE), "mysql_slave_lag",
                         "--config-dir", str(d), "--execute"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 1, p.stdout + p.stderr
     assert "無法讀取" in p.stdout + p.stderr, p.stdout + p.stderr
     assert (d / target).read_text(encoding="utf-8") == files[target]
@@ -349,7 +349,7 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(
         [str(REPO / "scripts" / "tools"), str(REPO / "scripts" / "tools" / "ops")])}
     p = subprocess.run([sys.executable, "-c", script, json.dumps(cm), layout],
-                       capture_output=True, text=True, timeout=60, env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
     got = json.loads(p.stdout.strip().splitlines()[-1])
     assert got["built"].startswith(
         "ConstructorError: could not determine a constructor"), (got, p.stderr)

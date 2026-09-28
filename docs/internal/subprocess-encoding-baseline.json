@@ -108,7 +108,7 @@
     "tests/ops/test_prepush_hook_wiring.py": 6,
     "tests/ops/test_renovate_config.py": 1,
     "tests/ops/test_routing_profile_routes.py": 10,
-    "tests/ops/test_tenant_id_as_text.py": 4,
+    "tests/ops/test_tenant_id_as_text.py": 2,
     "tests/ops/test_verify_download.py": 1,
     "tests/ops/test_wrapped_path_references.py": 2,
     "tests/rulepacks/test_vm_alert_parity.py": 2,
