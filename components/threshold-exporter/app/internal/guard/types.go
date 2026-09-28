@@ -138,6 +138,11 @@ const (
 	// `_routing_defaults` carrying `routes`, which the route generator drops
 	// with a blocking WARN (`--validate` fails) — so it blocks here too.
 	FindingRoutingDefaultsRoutesIgnored FindingKind = "routing_defaults_routes_ignored"
+	// FindingRoutingInUnreadLocation (error, TenantID ""; #2291): a
+	// `_routing` / `_routing_*` key where the route generator never reads
+	// it — a defaults block, the top level of an unwrapped defaults file,
+	// a threshold profile. Field is `<file>:<key path>`.
+	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
 )
 
 // Cardinality findings (PR-3; see cardinality.go).
@@ -253,6 +258,10 @@ type CheckInput struct {
 	// RequiredFields is the dotted-path list the schema validator
 	// asserts non-nil presence for in every tenant's effective
 	// config. Empty/nil disables the schema check.
+	//
+	// #2291: `_routing` and `_routing.<path>` are the exception — they are
+	// judged against RoutingByTenant (the resolved routing the route
+	// generator renders), not the effective config.
 	//
 	// PR-1 keeps this caller-supplied (no built-in schema). A future
 	// PR may add an optional `internal/schema/required.yaml` loader

@@ -13,7 +13,10 @@ What this half measures, per tree written to a tmp dir:
 * `rejected_routes` — the `routes` entries `route_entry_matchers` rejects;
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
-* `unknown_profile` — the `_routing_profile references unknown profile` WARN.
+* `unknown_profile` — the `_routing_profile references unknown profile` WARN;
+* `platform` — the generator's blocking `_routing_defaults.routes` WARN; the
+  Go-only `routing_in_unread_location` rows (#2291) are left out here, their
+  `targets` column pins that the generator renders nothing from those bytes.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
 disagree (see the matrix `_comment`).
@@ -41,7 +44,12 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 # that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "platform", "expect"}
-PLATFORM_KINDS = {"routing_defaults_routes_ignored"}
+PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location"}
+# #2291: routing where the generator never reads it. The Go side reports it;
+# the generator says nothing (it does not read those bytes), so this half
+# leaves the kind out of its platform comparison — the tree's `targets`
+# column is what pins "not rendered" here.
+GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "unknown_profile",
                "tenant_api", "python_differs"}
 TENANT_API_KEYS = {"put", "batch"}
@@ -172,7 +180,8 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # Platform-file findings: the table's rows, and no other.
     got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
                           for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m)
-    assert got_platform == sorted(tree["platform"]), (tree["name"], got_platform)
+    want_platform = sorted(r for r in tree["platform"] if r[0] not in GO_ONLY_PLATFORM_KINDS)
+    assert got_platform == want_platform, (tree["name"], got_platform)
 
     # Nothing the table does not name: every routed tenant and every policy
     # line belongs to a listed tenant, and the line count is the table's.

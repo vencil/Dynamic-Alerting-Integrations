@@ -11,6 +11,12 @@
 //     not modelled here;
 //   - the platform files that feed it (_grar_parse._parse_platform_config):
 //     only the conf.d ROOT is read, as the Python reader is flat;
+//   - the tenant layer (#2291, Layers.TenantBlock): the tenant file's
+//     `_routing` / `_routing_profile` over the root platform files'
+//     `tenants.<id>` entries (_lib_confd.overlay_platform_tenants) — never
+//     the exporter's effective config, whose defaults chain and threshold
+//     profile the generator does not read. Routing written there is
+//     reported by UnreadRouting;
 //   - the sub-routes a resolved routing renders (_grar_validate.
 //     list_tenant_subroutes + route_entry_matchers);
 //   - the receiver-type half of _grar_validate.check_domain_policies:

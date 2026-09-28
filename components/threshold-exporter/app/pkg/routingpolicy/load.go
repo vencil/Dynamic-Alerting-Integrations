@@ -21,6 +21,37 @@ type Layers struct {
 	// body is not a mapping: the name is KNOWN (a reference to it is not an
 	// unknown profile) but it contributes nothing, as in the Python reader.
 	Profiles map[string]map[string]any
+
+	// Overlay is, per tenant id, the `_routing` / `_routing_profile` keys of
+	// the root platform files' `tenants:` entries (#2291) — the platform's
+	// per-tenant layer the Python reader merges under the tenant's own file
+	// (_lib_confd.overlay_platform_tenants): a later file replaces a key an
+	// earlier one set. Tenant ids are the keys' source TEXT. nil = none.
+	// TenantBlock lays a tenant's own keys over it.
+	Overlay map[string]map[string]any
+}
+
+// routingBlockKeys are the tenant-block keys Resolve reads.
+var routingBlockKeys = [...]string{"_routing", "_routing_profile"}
+
+// TenantBlock returns the block Resolve reads for tenantID, as the route
+// generator builds it (#2291): the root platform overlay's `_routing` /
+// `_routing_profile`, each replaced WHOLE by the tenant file's own key when
+// the tenant file writes it (a null included — `dict.update`, so
+// `_routing: null` drops the platform's `_routing`). own is the tenant
+// file's block (may be nil). Nothing else is read: routing in the defaults
+// chain or in a threshold profile is never rendered, whatever the exporter
+// merges into the effective config.
+func (l Layers) TenantBlock(tenantID string, own map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range routingBlockKeys {
+		if v, ok := own[k]; ok {
+			out[k] = v
+		} else if v, ok := l.Overlay[tenantID][k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Problem kinds. Each names one platform-file structure the checks depend on
@@ -381,6 +412,7 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 				}
 			}
 		}
+		overlayFrom(top, &layers)
 		if isPolicy {
 			nodes, err := policyNodesFrom(top)
 			if err != nil {
@@ -396,6 +428,42 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 	pols, pprobs := buildPolicies(policyNodes, policyOrigin)
 	probs = append(probs, pprobs...)
 	return layers, pols, probs
+}
+
+// overlayFrom records the `_routing` / `_routing_profile` keys of one root
+// platform file's `tenants:` entries in layers.Overlay, over what earlier
+// files set. A `tenants:` that is not a mapping, or an entry body that is not
+// one, contributes nothing (the Python reader skips it too; the exporter
+// drops such a file whole, so da-guard has already named it).
+func overlayFrom(top *yaml.Node, layers *Layers) {
+	t := lookup(top, "tenants")
+	if t == nil || t.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(t.Content); i += 2 {
+		body := deref(t.Content[i+1])
+		if body == nil || body.Kind != yaml.MappingNode {
+			continue
+		}
+		tid := t.Content[i].Value
+		for _, k := range routingBlockKeys {
+			n := lookup(body, k)
+			if n == nil {
+				continue
+			}
+			var v any
+			if err := n.Decode(&v); err != nil {
+				continue
+			}
+			if layers.Overlay == nil {
+				layers.Overlay = map[string]map[string]any{}
+			}
+			if layers.Overlay[tid] == nil {
+				layers.Overlay[tid] = map[string]any{}
+			}
+			layers.Overlay[tid][k] = v
+		}
+	}
 }
 
 func trimUnusable(err error) string {

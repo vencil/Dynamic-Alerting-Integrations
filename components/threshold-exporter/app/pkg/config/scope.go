@@ -88,6 +88,22 @@ type ScopedTenants struct {
 	// file reads as "nothing in scope" (da-guard's vacuously-safe exit 0,
 	// before #2123).
 	ParseFailed []string
+
+	// DefaultsFiles is every defaults carrier a defaults chain reads (the
+	// per-directory selection, DefaultsCarriers().ByDir) that bears on the
+	// scope — at-or-below it, or in a directory above it — with the bytes
+	// the scan read, sorted by Name (#2291). da-guard checks them for
+	// routing keys the route generator never reads
+	// (routingpolicy.UnreadRouting). A file in ParseFailed is listed too;
+	// the caller skips it.
+	DefaultsFiles []DefaultsFile
+}
+
+// DefaultsFile is one defaults carrier of a scan: its root-relative slash
+// path and its bytes.
+type DefaultsFile struct {
+	Name string
+	Data []byte
 }
 
 // ScopeEffective resolves the effective config for every tenant
@@ -190,8 +206,9 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed}, nil
+		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -209,8 +226,9 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// time — O(files × tenants)); the defaults selection is computed once.
 	resolver := newEffectiveResolver(scan)
 	out := &ScopedTenants{
-		Tenants:     make([]*EffectiveConfig, 0, len(tenantIDs)),
-		ParseFailed: parseFailed,
+		Tenants:       make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed:   parseFailed,
+		DefaultsFiles: defaultsFiles,
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -271,6 +289,27 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of
+// each directory (the chain rule), kept when it bears on the scope and the
+// scan holds its bytes.
+func scopeDefaultsFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
+	var out []DefaultsFile
+	for _, abs := range scan.DefaultsCarriers().ByDir {
+		rel, err := filepath.Rel(scan.AbsRoot, abs)
+		if err != nil {
+			continue
+		}
+		key := filepath.ToSlash(rel)
+		f, ok := scan.Files[key]
+		if !ok || f.Data == nil || !bearsOnScope(key, scopeRel) {
+			continue
+		}
+		out = append(out, DefaultsFile{Name: key, Data: f.Data})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // bearsOnScope: key (a root-relative slash scan key) at-or-below scopeRel, or

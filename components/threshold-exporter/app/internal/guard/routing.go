@@ -75,6 +75,11 @@ package guard
 //     not use (domain_policy_unusable error / routing_profiles_unusable
 //     warn / routing_defaults_routes_ignored error, TenantID ""). Only the checks that need such a file are
 //     skipped; the run and its exit code are otherwise unchanged (#1654).
+//  9. Routing in an unread location (error, TenantID "", #2291): a
+//     `_routing` / `_routing_*` key in a defaults block or a threshold
+//     profile, which the generator never renders — the tenant layer
+//     cmd/da-guard resolves is the tenant file's plus the root platform
+//     overlay's, never the effective config.
 //
 // Why these and not more:
 //   - Field-by-field receiver validation against type-specific
@@ -267,7 +272,9 @@ func checkDomainPolicies(tenantID string, routing map[string]any, policies []rou
 // into findings with an empty TenantID. An unusable domain policy is an
 // error (a policy that is not enforced reads as a clean pass); an unusable
 // routing_profiles block is a warning, as in the Python reader; ignored
-// `_routing_defaults.routes` is an error, as the generator's --validate.
+// `_routing_defaults.routes` is an error, as the generator's --validate;
+// routing in a location the generator never reads is an error (#2291): the
+// author meant it to route, and nothing is rendered from it.
 func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 	var out []Finding
 	for _, p := range problems {
@@ -277,6 +284,8 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 			f.Severity, f.Kind = SeverityWarn, FindingRoutingProfilesUnusable
 		case routingpolicy.ProblemRoutingDefaultsRoutes:
 			f.Kind = FindingRoutingDefaultsRoutesIgnored
+		case routingpolicy.ProblemRoutingInUnreadLocation:
+			f.Kind = FindingRoutingInUnreadLocation
 		}
 		switch {
 		case p.File != "" && p.Field != "":
