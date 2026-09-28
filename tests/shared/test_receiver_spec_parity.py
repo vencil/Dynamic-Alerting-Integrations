@@ -39,8 +39,10 @@ Optional values (#2295) are refused only where Alertmanager refuses them: a
 property referencing `definitions.yamlBool` must be a boolean, null or a YAML 1.1
 boolean word (the enum is read from the schema at run time), and http_config
 follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
-method (`HTTP_CONFIG_AUTH_FIELDS`), a `proxy_url` Go's net/url parses. The table
-rows pin both against the schema and Alertmanager. A row may carry its receiver
+method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
+proxy_url parses as a URL is left to amtool (the generator's --validate gate);
+the Go side checks it itself, so those rows carry `python_differs` (the Python
+verdict and why), as tests/shared/routing_policy_parity_matrix.json does. A row may carry its receiver
 as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and yaml.v3 on
 the Go side, which is where the two readers differ (plain `yes`). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
@@ -225,7 +227,17 @@ def test_shared_case_table_schema_and_python_agree(case):
     schema_errors = [e.message for e in _VALIDATOR.iter_errors(doc)]
     cfg, warnings = build_receiver_config(dict(receiver), "t1")
     assert (not schema_errors) == case.get("schema_valid", case["valid"]), f"schema: {schema_errors}"
-    assert (cfg is not None) == case["valid"], f"python: {warnings}"
+    differs = case.get("python_differs")
+    python_valid = differs["valid"] if differs else case["valid"]
+    assert (cfg is not None) == python_valid, f"python: {warnings}"
+
+
+def test_python_differs_rows_say_why():
+    """#2295: a row where Python and Go part ways names the reason."""
+    bad = [c["name"] for c in CASES if "python_differs" in c
+           and (set(c["python_differs"]) != {"valid", "reason"} or not c["python_differs"]["reason"]
+                or c["python_differs"]["valid"] == c["valid"])]
+    assert not bad, f"python_differs must be {{valid, reason}} and differ from `valid`: {bad}"
 
 
 def test_pipeline_writes_yaml_bool_words_as_booleans():

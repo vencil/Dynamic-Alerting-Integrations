@@ -801,24 +801,24 @@
           }
         },
         "bearer_token": {
-          "type": ["string", "number", "boolean", "null"],
+          "type": ["string", "null"],
           "title": "Bearer Token",
-          "description": "HTTP Bearer token for authentication. Alertmanager reads a number or boolean as its text."
+          "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date."
         },
         "proxy_url": {
-          "type": ["string", "number", "boolean", "null"],
+          "type": ["string", "null"],
           "title": "Proxy URL",
-          "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here, so the route generator, da-guard and tenant-api check it (pkg/receiverspec ProxyURLProblem)."
+          "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here. da-guard and tenant-api check it (pkg/receiverspec ProxyURLProblem); the route generator leaves it to its amtool gate."
         }
       },
       "not": {
         "required": ["basic_auth", "bearer_token"],
         "properties": {
           "basic_auth": { "type": "object" },
-          "bearer_token": { "type": ["string", "number", "boolean"], "minLength": 1 }
+          "bearer_token": { "type": "string", "minLength": 1 }
         }
       },
-      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; null and an empty bearer_token count as unset, any other bearer_token scalar as set. The `not` covers the two auth keys listed here, additionalProperties: false the rest (and every other http_config key: a known limitation, the schema is stricter than Alertmanager there). The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
+      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; null and an empty bearer_token count as unset. The `not` covers the two auth keys listed here, additionalProperties: false the rest (and every other http_config key: a known limitation, the schema is stricter than Alertmanager there). The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
       "additionalProperties": false
     },
     "httpConfigOrNull": {

@@ -5,16 +5,17 @@ package gitops
 // The receivers a body writes in `_routing` are judged by pkg/receiverspec —
 // the Go copy of the receiver contract da-guard uses, pinned to
 // tenant-config.schema.json and, through the shared case table, to the Python
-// route generator and Alertmanager. It sits in the body-only pre-flight of
-// Write / WriteIfUnchanged / WritePR (putPreflight) and of both dry-runs, so
-// POST /tenants/{id}/validate and PUT /tenants/{id} give the same verdict on
-// the same body.
+// route generator and Alertmanager. PUT /tenants/{id} runs it (the handler
+// calls ReceiverPreflight, in both write modes) and so do both dry-runs
+// behind POST /tenants/{id}/validate (dryRunPreflight), so the two give the
+// same verdict on the same body.
 //
-// ⛔ NOT IN validateBodyOnly. That function also judges the MERGED document of
-// a batch op (readMergeBodyOnly), which carries the tenant's whole file: a
-// patch that only touches a threshold would then be refused over a receiver
-// already on disk. Batch is out of #2295's scope; putPreflight is the
-// whole-document writers' pre-flight only.
+// ⛔ NOT IN validateBodyOnly, AND NOT IN THE WRITER'S write(). Both also serve
+// writes that change only another part of the tenant file: a batch op's
+// MERGED document (readMergeBodyOnly) and the custom-alerts PUT (write() via
+// WriteIfUnchanged) carry the whole file, so a receiver already broken on disk
+// would refuse a write that never touched it. Only a body the author wrote in
+// full — PUT /tenants/{id} — is judged.
 
 import (
 	"fmt"
@@ -31,9 +32,9 @@ type ReceiverViolation struct {
 	Reason string
 }
 
-// ReceiverShapeError is the pre-flight refusal for receiver problems. It
-// unwraps to ErrValidation, so every caller that maps ErrValidation to 400
-// still does; the PUT handler reads Violations for its INVALID_BODY response.
+// ReceiverShapeError is ReceiverPreflight's refusal. It unwraps to
+// ErrValidation; the PUT handler reads Violations for its INVALID_BODY
+// response.
 type ReceiverShapeError struct {
 	Violations []ReceiverViolation
 }
@@ -53,19 +54,18 @@ func (e *ReceiverShapeError) lines() []string {
 	return out
 }
 
-// putPreflight is the body-only pre-flight of a whole-document write:
-// validateBodyOnly, then — once the body is well-formed — its receivers.
-func putPreflight(tenantID, yamlContent string) error {
-	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
-		return fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
-	}
+// ReceiverPreflight judges the receivers a PUT /tenants/{id} body writes. A
+// body the Writer's own pre-flight would refuse (bad YAML, a missing tenant
+// section) passes here, so the Writer answers it as before.
+func ReceiverPreflight(tenantID, yamlContent string) error {
 	if v := receiverViolations(tenantID, yamlContent); len(v) > 0 {
 		return &ReceiverShapeError{Violations: v}
 	}
 	return nil
 }
 
-// dryRunPreflight is putPreflight for the dry-runs, as their error strings.
+// dryRunPreflight is the dry-runs' pre-flight: the Writer's validateBodyOnly,
+// then — once the body is well-formed — what ReceiverPreflight judges.
 func dryRunPreflight(tenantID, yamlContent string) []string {
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return errs
@@ -88,7 +88,8 @@ func dryRunPreflight(tenantID, yamlContent string) []string {
 // skipped by the route generator and reported by da-guard (the override is
 // not routed to the main receiver). Shapes that are not a receiver's (a
 // non-map `_routing`, a routes entry that is not a mapping) are left to the
-// checks that own them.
+// checks that own them. Known limitation: nothing else in the tenant block
+// (other sections that end up in Alertmanager's config) is judged here.
 func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	var doc struct {
 		Tenants map[string]map[string]any `yaml:"tenants"`

@@ -24,6 +24,7 @@ package receiverspec
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -305,25 +306,27 @@ func exactlyOneProblem(rtype string, receiver map[string]any, group []string) (P
 
 // checkHTTPConfig reports what in `http_config` makes Alertmanager refuse the
 // whole config (#2295). The rule is Alertmanager's own — prometheus/common
-// HTTPClientConfig / ProxyConfig as loaded by amtool 0.34.1 — with nothing
-// stricter, so every row of the shared case table that passes here loads:
+// HTTPClientConfig / ProxyConfig as loaded by amtool 0.34.1 — and stricter only
+// where a row of the shared case table says so (`strict`):
 //
 //   - http_config: null is unset; otherwise it must be a mapping.
 //   - basic_auth / oauth2 / authorization: null is unset; otherwise a
 //     mapping, which counts as set even when empty.
-//   - bearer_token / bearer_token_file: null and "" are unset; any other
-//     scalar (a number, a boolean) is set — Alertmanager reads it as text.
+//   - bearer_token / bearer_token_file: null and "" are unset; otherwise a
+//     string. A number, boolean or date is refused (strict): Alertmanager
+//     would take its text, but PyYAML rewrites that text first ('0123' → 83).
 //   - at most one of HTTPConfigAuthFields may be set.
-//   - proxy_url: null is unset; a string must parse as Go's net/url does
-//     (ProxyURLProblem); another scalar is taken as its text, which always
-//     parses.
+//   - proxy_url: null is unset; otherwise a string (strict for the same
+//     reason) that Go's net/url parses the way Alertmanager's release binary
+//     does (ProxyURLProblem).
 //   - proxy_from_environment is a YAML boolean; set together with a
 //     non-empty proxy_url or a no_proxy, Alertmanager refuses it. no_proxy
 //     needs a proxy_url key; proxy_connect_header needs a non-empty proxy_url
 //     or proxy_from_environment.
 //
-// Not modelled: the fields inside the auth mappings (oauth2 needs client_id
-// and token_url), tls_config, and any other key.
+// Not modelled (known limitations): the fields inside the auth mappings
+// (oauth2 needs client_id and token_url), the value shapes inside
+// proxy_connect_header, tls_config, and any other key.
 func checkHTTPConfig(rtype string, v any) []Problem {
 	if v == nil {
 		return nil
@@ -353,15 +356,10 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 			set = append(set, key)
 			continue
 		}
-		switch x := val.(type) {
-		case string:
-			if x != "" {
-				set = append(set, key)
-			}
-		case bool, int, int64, uint64, float64:
-			set = append(set, key)
-		default:
+		if x, isString := val.(string); !isString {
 			invalid(field, "a string", val)
+		} else if x != "" {
+			set = append(set, key)
 		}
 	}
 	if len(set) > 1 {
@@ -384,8 +382,6 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 			out = append(out, Problem{Kind: KindInvalid, Field: "http_config.proxy_url", Message: fmt.Sprintf(
 				"receiver type %q field \"http_config.proxy_url\" value %q does not parse as a URL (%s)", rtype, x, p)})
 		}
-	case bool, int, int64, uint64, float64:
-		proxyText = true
 	default:
 		invalid("http_config.proxy_url", "a string", proxy)
 	}
@@ -497,4 +493,25 @@ func describe(v any) string {
 	default:
 		return fmt.Sprintf("%T", v)
 	}
+}
+
+// ProxyURLProblem returns why Alertmanager's release binary refuses s as a
+// proxy_url, or "" (#2295). Alertmanager decodes it with net/url.Parse. Go
+// 1.26 made that parser refuse a second colon in an http(s) host
+// (`http://h:80:3128/`) unless GODEBUG urlstrictcolons=0; the prom/alertmanager
+// binaries accept it (amtool 0.33.1 / 0.34.1, measured), while this module's
+// binaries run with the strict default. So a refusal of an http(s) URL is
+// checked once more under another scheme: net/url applies the strict colon
+// rule to http and https only, and nothing else in Parse reads the scheme.
+func ProxyURLProblem(s string) string {
+	_, err := url.Parse(s)
+	if err == nil {
+		return ""
+	}
+	if scheme, rest, ok := strings.Cut(s, ":"); ok && (strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "https")) {
+		if _, again := url.Parse("x" + scheme + ":" + rest); again == nil {
+			return ""
+		}
+	}
+	return err.Error()
 }

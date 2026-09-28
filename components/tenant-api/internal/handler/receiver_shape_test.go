@@ -3,8 +3,8 @@ package handler
 // #2295: PUT /api/v1/tenants/{id} refuses a receiver the body writes that
 // Alertmanager could not load, with 400 INVALID_BODY and one violation per
 // problem, in both write modes and before anything is written; POST
-// /{id}/validate gives the same verdict (both run the Writer's body-only
-// pre-flight, gitops.putPreflight). The contract itself (pkg/receiverspec) is
+// /{id}/validate gives the same verdict (both run gitops' receiver check:
+// ReceiverPreflight / the dry-runs). The contract itself (pkg/receiverspec) is
 // pinned to the schema and Alertmanager by the shared receiver case table;
 // these tests pin the handlers around it.
 
@@ -13,11 +13,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/rbac"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // putReceiverBody PUTs `_routing` (indented under the tenant) for tenant
@@ -142,7 +145,7 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 
 // TestValidateTenant_AgreesWithPut: POST /{id}/validate and PUT /{id} give
 // the same verdict on the same body — valid ⇔ PUT 200, invalid ⇔ PUT 400 — in
-// both write modes, because both run the Writer's pre-flight (B3 of #2295).
+// both write modes, because both run gitops' receiver check (B3 of #2295).
 // Compared through the HTTP handlers, not the Writer, so a check added to
 // only one handler shows up here.
 func TestValidateTenant_AgreesWithPut(t *testing.T) {
@@ -203,4 +206,35 @@ func validateReceiverBody(t *testing.T, routing string, pr bool) (bool, []string
 		t.Fatalf("unmarshal: %v", err)
 	}
 	return resp.Valid, resp.Warnings
+}
+
+// TestPutCustomAlerts_NotRefusedOverReceiverOnDisk (#2295 B-1): the receiver
+// check belongs to PUT /tenants/{id} only. A custom-alerts PUT writes the whole
+// file through the Writer too, but changes only `_custom_alerts`; a receiver
+// already broken on disk must not refuse it (the same reason batch is exempt).
+func TestPutCustomAlerts_NotRefusedOverReceiverOnDisk(t *testing.T) {
+	const tenant = "rs-ca"
+	onDisk := "tenants:\n  " + tenant + ":\n    mysql_connections: \"70\"\n" +
+		"    _routing:\n      receiver:\n        type: webhook\n        send_resolved: maybe\n"
+	dir := setupConfigDir(t, map[string]string{tenant + ".yaml": onDisk, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	rb := newRBACManager(t, "groups:\n  - name: ops\n    tenants: [\""+tenant+"\"]\n    permissions: [read, write]\n")
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: rb}
+
+	body := `{"base_hash":"` + cfg.ComputeSourceHash([]byte(onDisk)) +
+		`","custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
+	resp := putCustomAlerts(t, deps, tenant, body, "alice@example.com", []string{"ops"})
+	if resp.StatusCode != http.StatusOK {
+		b, _ := readBody(resp)
+		t.Fatalf("status = %d, want 200 (the broken receiver is on disk, not in this write); body: %s", resp.StatusCode, b)
+	}
+	out, _ := os.ReadFile(filepath.Join(dir, tenant+".yaml"))
+	if !strings.Contains(string(out), "queue_high") {
+		t.Errorf("custom alert not written:\n%s", out)
+	}
+	// Control: the same file as a PUT /tenants/{id} body is refused.
+	code, resp2, _ := putReceiverBody(t, "      receiver:\n        type: webhook\n        url: https://hook.example.com/a\n        send_resolved: maybe\n", false)
+	if code != http.StatusBadRequest {
+		t.Errorf("control: PUT of a body with that receiver = %d, want 400: %s", code, resp2)
+	}
 }

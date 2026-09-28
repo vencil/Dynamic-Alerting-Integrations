@@ -65,12 +65,6 @@ modules:
       _yaml_bool_true: "#2295 value of a YAML boolean word; table-covered by the proxy_from_environment rows"
       receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_writes_yaml_bool_words_as_booleans"
       coerce_yaml_bool: "#2295 word → boolean at emission; covered by test_pipeline_writes_yaml_bool_words_as_booleans"
-      _go_url_parse_problem: "#2295 port of Go net/url.Parse (the oracle is Alertmanager, not a numeric/string law); table-covered by the proxy_url rows, whose AM column tests/alertmanager-inhibit asserts"
-      _go_scheme: "#2295 net/url.getScheme port; exercised through _go_url_parse_problem's table rows"
-      _go_host_problem: "#2295 net/url.parseHost port; exercised through _go_url_parse_problem's table rows"
-      _go_unescape: "#2295 net/url.unescape port; exercised through _go_url_parse_problem's table rows"
-      _valid_optional_port: "#2295 net/url.validOptionalPort port; exercised through _go_url_parse_problem's table rows"
-      _host_byte_needs_escape: "#2295 net/url.shouldEscape(encodeHost) port; exercised through _go_url_parse_problem's table rows"
 
   scripts/tools/_lib_io.py:
     covered:

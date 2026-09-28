@@ -5,7 +5,6 @@ Import via _lib_python.py facade for backward compatibility.
 """
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import re
@@ -325,15 +324,18 @@ def _http_config_problem(value: Any) -> Optional[str]:
     """First problem of an ``http_config`` value, or ``None`` (#2295).
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
-    as amtool 0.34.1 loads them), nothing stricter; line-for-line the Go copy
-    (pkg/receiverspec checkHTTPConfig):
+    as amtool 0.34.1 loads them), stricter only where the shared case table
+    says ``strict``; the Go copy is pkg/receiverspec checkHTTPConfig:
 
     - null is unset; otherwise a mapping;
     - ``HTTP_CONFIG_AUTH_MAPPINGS`` keys: null is unset, else a mapping (set
       even when empty); the other ``HTTP_CONFIG_AUTH_FIELDS``: null and ``""``
-      are unset, any other scalar is set; at most one set;
-    - ``proxy_url``: null is unset; a string must parse as Go's net/url does
-      (``_go_url_parse_problem``); another scalar is its text, which parses;
+      are unset, else a string (a number or date is refused: PyYAML has
+      already rewritten its text, '0123' → 83); at most one set;
+    - ``proxy_url``: null and ``""`` are unset; else a string. Whether it
+      parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
+      generator's ``--validate`` hands the rendered config to amtool, which
+      runs it (the Go copy checks it itself, ProxyURLProblem);
     - ``proxy_from_environment`` is a YAML boolean; true together with a
       non-empty proxy_url or a no_proxy is refused; no_proxy needs a
       proxy_url key; proxy_connect_header needs a non-empty proxy_url or
@@ -353,7 +355,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
                 return (f"field 'http_config.{key}' must be a mapping, "
                         f"got {_type_name(item)}")
             set_keys.append(key)
-        elif not isinstance(item, _SCALAR_TEXT):
+        elif not isinstance(item, str):
             return (f"field 'http_config.{key}' must be a string, "
                     f"got {_type_name(item)}")
         elif item != "":
@@ -363,14 +365,9 @@ def _http_config_problem(value: Any) -> Optional[str]:
                 f"most one of {', '.join(HTTP_CONFIG_AUTH_FIELDS)}")
     proxy = value.get("proxy_url")
     proxy_key = proxy is not None
-    if proxy is not None and not isinstance(proxy, _SCALAR_TEXT):
+    if proxy is not None and not isinstance(proxy, str):
         return f"field 'http_config.proxy_url' must be a string, got {_type_name(proxy)}"
     proxy_text = proxy is not None and proxy != ""
-    if isinstance(proxy, str):
-        problem = _go_url_parse_problem(proxy)
-        if problem:
-            return (f"field 'http_config.proxy_url' value {proxy!r} does not parse "
-                    f"as a URL ({problem})")
     from_env = False
     if "proxy_from_environment" in value:
         pfe = value["proxy_from_environment"]
@@ -394,147 +391,6 @@ def _http_config_problem(value: Any) -> Optional[str]:
         return "http_config: no_proxy must not be set together with proxy_from_environment: true"
     if no_proxy and not proxy_key:
         return "http_config: no_proxy needs a proxy_url"
-    return None
-
-
-# --- Go net/url.Parse, as Alertmanager runs it (#2295) -----------------------
-# A line-for-line port of pkg/receiverspec/urlparse.go, itself a port of Go
-# 1.26 net/url.Parse with GODEBUG urlstrictcolons=0 (what amtool 0.34.1 does).
-# Only the refusals matter; the parsed URL is never built.
-_HOST_OK = frozenset("-_.~!$&'()*+,;=:[]<>\"")
-_USERINFO_OK = frozenset("-._:~!$&'()*+,;=%@")
-_HEX = frozenset("0123456789abcdefABCDEF")
-
-
-def _host_byte_needs_escape(c: int) -> bool:
-    ch = chr(c)
-    if ch.isascii() and ch.isalnum():
-        return False
-    return ch not in _HOST_OK
-
-
-def _go_unescape(s: bytes, mode: str) -> Optional[bytes]:
-    out = bytearray()
-    i = 0
-    while i < len(s):
-        c = s[i]
-        if c == 0x25:  # '%'
-            if i + 2 >= len(s) or chr(s[i + 1]) not in _HEX or chr(s[i + 2]) not in _HEX:
-                return None
-            v = int(s[i + 1:i + 3], 16)
-            if mode == "host" and int(chr(s[i + 1]), 16) < 8 and s[i:i + 3] != b"%25":
-                return None
-            if mode == "zone" and s[i:i + 3] != b"%25" and v != 0x20 and _host_byte_needs_escape(v):
-                return None
-            out.append(v)
-            i += 3
-            continue
-        if mode in ("host", "zone") and c < 0x80 and _host_byte_needs_escape(c):
-            return None
-        out.append(c)
-        i += 1
-    return bytes(out)
-
-
-def _valid_optional_port(port: bytes) -> bool:
-    return port == b"" or (port[:1] == b":" and all(0x30 <= b <= 0x39 for b in port[1:]))
-
-
-def _go_host_problem(host: bytes) -> Optional[str]:
-    opening = host.rfind(b"[")
-    if opening > 0:
-        return "invalid IP-literal"
-    if opening == 0:
-        closing = host.rfind(b"]")
-        if closing < 0:
-            return "missing ']' in host"
-        if not _valid_optional_port(host[closing + 1:]):
-            return "invalid port after host"
-        name = host[1:closing]
-        zi = name.find(b"%25")
-        if zi >= 0:
-            h, z = _go_unescape(name[:zi], "host"), _go_unescape(name[zi:], "zone")
-            if h is None or z is None:
-                return "invalid host"
-            unescaped = h + z
-        else:
-            unescaped = _go_unescape(name, "host")
-            if unescaped is None:
-                return "invalid host"
-        try:
-            addr = ipaddress.ip_address(unescaped.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return "invalid host"
-        if addr.version == 4:
-            return "invalid IP-literal"
-        return None
-    i = host.rfind(b":")
-    if i != -1 and not _valid_optional_port(host[i:]):
-        return "invalid port after host"
-    if _go_unescape(host, "host") is None:
-        return "invalid character or escape in host"
-    return None
-
-
-def _go_scheme(raw: bytes) -> tuple[bytes, bytes, bool]:
-    for i, c in enumerate(raw):
-        ch = chr(c)
-        if ch.isascii() and ch.isalpha():
-            continue
-        if "0" <= ch <= "9" or ch in "+-.":
-            if i == 0:
-                return b"", raw, False
-            continue
-        if ch == ":":
-            if i == 0:
-                return b"", b"", True
-            return raw[:i], raw[i + 1:], False
-        return b"", raw, False
-    return b"", raw, False
-
-
-def _go_url_parse_problem(text: str) -> Optional[str]:
-    """Why Go's net/url.Parse refuses ``text`` (Alertmanager's proxy_url), or None."""
-    raw_all = text.encode("utf-8")
-    raw, _, frag = raw_all.partition(b"#")
-    if any(b < 0x20 or b == 0x7F for b in raw):
-        return "invalid control character in URL"
-    if raw != b"*":
-        scheme, rest, bad = _go_scheme(raw)
-        if bad:
-            return "missing protocol scheme"
-        if rest.endswith(b"?") and rest.count(b"?") == 1:
-            rest = rest[:-1]
-        else:
-            rest = rest.partition(b"?")[0]
-        opaque = False
-        if not rest.startswith(b"/"):
-            if scheme:
-                opaque = True
-            elif b":" in rest.partition(b"/")[0]:
-                return "first path segment in URL cannot contain colon"
-        if not opaque:
-            if (scheme or not rest.startswith(b"///")) and rest.startswith(b"//"):
-                authority, slash, tail = rest[2:].partition(b"/")
-                rest = slash + tail
-                at = authority.rfind(b"@")
-                host = authority[at + 1:] if at >= 0 else authority
-                problem = _go_host_problem(host)
-                if problem:
-                    return problem
-                if at >= 0:
-                    userinfo = authority[:at].decode("utf-8")
-                    if any(not ((ch.isascii() and ch.isalnum()) or ch in _USERINFO_OK)
-                           for ch in userinfo):
-                        return "invalid userinfo"
-                    user, _, password = userinfo.partition(":")
-                    if (_go_unescape(user.encode(), "user") is None
-                            or _go_unescape(password.encode(), "user") is None):
-                        return "invalid URL escape in the userinfo"
-            if _go_unescape(rest, "path") is None:
-                return "invalid URL escape in the path"
-    if frag and _go_unescape(frag, "fragment") is None:
-        return "invalid URL escape in the fragment"
     return None
 
 

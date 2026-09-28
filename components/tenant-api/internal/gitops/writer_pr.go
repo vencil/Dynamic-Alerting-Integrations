@@ -117,9 +117,8 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// that is NOT tree-derived (the id itself), and Step 3b resolves the path
 	// against the base the write lands on. Keeping a second resolution here
 	// bought nothing and re-introduced the bug one line above its own fix.
-	// #2295: putPreflight also judges the receivers the body writes.
-	if err := putPreflight(tenantID, yamlContent); err != nil {
-		return nil, err
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 1b: load-shedding admission (TRK-320) before w.mu.

@@ -709,11 +709,8 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// What is left — is this body well-formed? — cannot go stale, and
 	// rejecting it here keeps a bad body from consuming the single-writer
 	// token. Step 3 is the authoritative run.
-	//
-	// #2295: putPreflight = validateBodyOnly + the receivers the body writes
-	// (receiver_shape.go), the same pre-flight WritePR and both dry-runs run.
-	if err := putPreflight(tenantID, yamlContent); err != nil {
-		return nil, err
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 2: load-shedding admission (TRK-320) before w.mu.
