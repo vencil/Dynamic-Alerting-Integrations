@@ -489,6 +489,14 @@ def test_contract_flags_each_inconsistency_as_error(entry, check):
     assert [(i["check"], i["severity"]) for i in issues] == [(check, "error")]
 
 
+def test_contract_skips_malformed_shapes_but_still_checks_the_rest():
+    """形狀錯的字典或條目交給結構檢查，契約檢查不崩；同一份裡其他條目照查。"""
+    assert _contract(["not", "a", "dict"]) == []
+    issues = _contract({"bad": "not-an-entry",
+                        "x": {"maps_to": "nobody_reads_me", "golden_rule": None}})
+    assert [(i["metric"], i["check"]) for i in issues] == [("x", "unread-key")]
+
+
 def test_the_real_dictionary_honours_the_contract():
     import yaml as _yaml
     data = _yaml.safe_load(mod.METRIC_DICT.read_text(encoding="utf-8"))
