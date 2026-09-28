@@ -292,6 +292,60 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 	return rows
 }
 
+// otherSpellings is every spelling of key's threshold other than key itself
+// — its canonical form and the legacy form of that canonical, across the
+// three shapes canonicalKeyFor handles. Empty for a key no alias touches
+// (every reserved `_` key, every key outside the table), which is the
+// allocation-free steady state.
+func otherSpellings(key string) []string {
+	canon, _ := canonicalKeyFor(key)
+	var out []string
+	if canon != key {
+		out = append(out, canon)
+	}
+	if legacy, ok := legacySpellingFor(canon); ok && legacy != key {
+		out = append(out, legacy)
+	}
+	return out
+}
+
+// overlayAcrossSpellings writes src over dst key by key, where "key" means
+// the THRESHOLD, not its spelling (#2368): a key src writes also removes
+// from dst every other spelling of the same threshold that src does not
+// write itself. It is the per-key "later layer wins" of every plane that
+// stacks a tenant's layers — the flat merge (mergePartialInto, the
+// fast-path reclaim), the walker (overlayTenant) and the tenant-api core
+// (supplyFor) — so a tenant file writing `mysql_cpu` beats a platform
+// `tenants:` entry writing `mysql_threads_running`.
+//
+// ⛔ WITHOUT THE REMOVAL THE EARLIER LAYER WON. Both spellings stayed in
+// dst, and resolve's canonical-wins dedup (canonicalView) then served
+// whichever layer happened to use the canonical spelling — measured on
+// /metrics: the platform's 70 over the tenant's own 90, the tenant's key
+// listed as unserved.
+//
+// ⚠️ A spelling src writes itself is never removed: when ONE layer carries
+// both spellings, the canonical-wins dedup inside that layer still decides,
+// as it always has (and ValidateTenantKeys says so). Removing it would make
+// the answer depend on map iteration order.
+func overlayAcrossSpellings[V any](dst, src map[string]V) {
+	for k, v := range src {
+		for _, s := range otherSpellings(k) {
+			if _, own := src[s]; !own {
+				delete(dst, s)
+			}
+		}
+		dst[k] = v
+	}
+}
+
+// OverlayAcrossSpellings is overlayAcrossSpellings for package main's
+// incremental reload (reclaimTenantFrom), which must stack a tenant's
+// declaring files exactly as mergePartialInto does.
+func OverlayAcrossSpellings(dst, src map[string]ScheduledValue) {
+	overlayAcrossSpellings(dst, src)
+}
+
 // hasAliasEquivalent reports whether overrides already contains key under ANY
 // spelling: the key itself, its canonical form, or the legacy form of that
 // canonical. The profile fill-in (profileFill, shared by ApplyProfiles and the

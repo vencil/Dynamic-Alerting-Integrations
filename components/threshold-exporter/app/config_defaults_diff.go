@@ -426,10 +426,12 @@ func classifyDefaultsNoOpEffect(
 	if !config.ProfileKeysSetBy(own, profileKeys) {
 		return "cosmetic"
 	}
-	for _, k := range overlayKeys {
-		if _, written := overrides[k]; !written {
-			return "cosmetic"
-		}
+	// A platform key is shadowed when the tenant file writes the threshold
+	// under ANY spelling (#2368: the tenant's `mysql_cpu` beats a platform
+	// `mysql_threads_running`). ProfileKeysSetBy is that question — the
+	// name is the profile path's, the predicate is the spelling-aware one.
+	if !config.ProfileKeysSetBy(overrides, overlayKeys) {
+		return "cosmetic"
 	}
 	return "shadowed"
 }

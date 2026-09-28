@@ -212,20 +212,22 @@ def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
         return tenant_raw, []
     combined: dict = {}
     owner: dict = {}
+    # Per THRESHOLD, not per spelling (#2368): a later layer writing either
+    # #1231 spelling drops the other spelling an earlier layer wrote.
     for i, (_fname, block) in enumerate(blocks):
-        for k, v in block.items():
-            combined[k] = v
+        _overlay_across_spellings(combined, block)
+        for k in block:
             owner[k] = i
-    for k, v in tenant_raw.items():
-        combined[k] = v
-        owner.pop(k, None)
-    by_file: dict[int, list[str]] = {}
+    _overlay_across_spellings(combined, tenant_raw)
+    owner = {k: i for k, i in owner.items() if k not in tenant_raw and k in combined}
+    by_file: dict[int, set[str]] = {}
     for k, i in owner.items():
         if k == "_metadata":
             continue
         if combined[k] is None and not (k.startswith("_") and k in (chain or {})):
             continue
-        by_file.setdefault(i, []).append(k)
+        # Attribution names the CANONICAL spelling (#2368), once.
+        by_file.setdefault(i, set()).add(_canonical_tenant_key(k)[0] if isinstance(k, str) else k)
     sources = [{"file": blocks[i][0], "keys": sorted(by_file[i])}
                for i in range(len(blocks)) if i in by_file]
     return combined, sources
@@ -289,6 +291,29 @@ def _legacy_spelling(key: str) -> "str | None":
     if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
         return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
     return None
+
+
+def _other_spellings(key: str) -> "list[str]":
+    """Go `otherSpellings`: every spelling of `key`'s threshold but `key`."""
+    if not isinstance(key, str):
+        return []  # a non-text YAML key names no aliased threshold
+    canon, _ = _canonical_tenant_key(key)
+    out = [canon] if canon != key else []
+    legacy = _legacy_spelling(canon)
+    if legacy is not None and legacy != key:
+        out.append(legacy)
+    return out
+
+
+def _overlay_across_spellings(dst: dict, src: dict) -> None:
+    """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per threshold —
+    a key `src` writes also drops from `dst` every other spelling of it that
+    `src` does not write itself."""
+    for k, v in src.items():
+        for s in _other_spellings(k):
+            if s not in src:
+                dst.pop(s, None)
+        dst[k] = v
 
 
 def _has_alias_equivalent(own: dict, key: str) -> bool:
