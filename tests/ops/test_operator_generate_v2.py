@@ -590,22 +590,14 @@ def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
 # ⚠️ SCOPE — the other axes are NOT covered here. Open tickets DO cover
 # parts of them (#1630, #1604), but neither is about THIS reader, so read
 # these notes rather than the ticket numbers:
-#   * Hidden names: dot-prefixed carriers DO reach the loop (this module
-#     imports `is_reserved_name` but not `is_hidden_name`) while the
-#     exporter skips them (`config_hierarchy.go:181,190`). ⚠️ But they
-#     cannot become tenants here, and the reason is structural rather than
-#     intentional: the id is the file STEM, `Path(".hidden.yaml").stem` is
-#     `".hidden"`, and `_TENANT_NAME_RE` requires `^[a-z0-9]`. The two ends
-#     therefore agree on the OUTCOME by way of different mechanisms, and
-#     the whole observable divergence is one extra `Skipping invalid tenant
-#     name` line on stderr. That makes `validate_tenant_name` load-bearing
-#     for this note, so the ceiling test below pins the dot case.
-#     ⚠️ Ticket-wise: #1630 IS the open Python-reader hidden-axis ticket,
-#     but its named subjects are `run_chaos_soak.trigger_reload` and
-#     `check_threshold_unit_sanity._iter_yaml_files` — the two places where
-#     the axis BITES; here it is inert for the reason above. #1589 is also
-#     open on the hidden axis, with the exporter's `pkg/config` enumerator
-#     as its subject rather than any Python reader.
+#   * Hidden names: closed by #2067 — the shared scan
+#     (`_lib_confd.tenant_carriers`) now drops dot-prefixed entries
+#     silently, as the exporter's walker does. Before, they reached the
+#     loop and were stopped only by `validate_tenant_name` (`".hidden"`
+#     fails `^[a-z0-9]`), at the price of a `Skipping invalid tenant name`
+#     warning about a file nothing reads. Pinned by the ceiling test below
+#     (both halves: not a tenant, not mentioned) and across tools by
+#     `tests/shared/test_confd_hidden_axis_across_tools.py`.
 #   * Recursion: this reader is flat (`config_dir.iterdir()`).
 #   * ⛔ RAW GLOBS are structurally invisible to a census keyed on literal
 #     suffix tuples, so the ones that read a conf.d are named rather than
@@ -734,11 +726,12 @@ class TestDiscoverTenantConfigsExtensionSpelling:
             change the RETURNED list at all. Blind review measured exactly
             that — before the silence assertion, this carrier could not
             testify under any single-point mutation.
-          * `.hidden.yaml` — hidden. It reaches the loop (see SCOPE above)
-            and is stopped only by `validate_tenant_name`, which nothing
-            else in this repo pins: blind review made that gate `return
-            True` and 429 tests stayed green. This is what keeps the SCOPE
-            note above true.
+          * `.hidden.yaml` — hidden. Dropped by the shared scan since
+            #2067; before, it reached the loop and was stopped only by
+            `validate_tenant_name`. ⛔ Like `_profiles`, the stderr half
+            is what makes the hidden filter provable here: with it gone,
+            `validate_tenant_name` still keeps `.hidden` out of the
+            RETURNED list, and the only witness is the warning.
 
         ⚠️ Here the tenant id comes from the file STEM, so a `.json` carrier
         needs no `tenants:` key to become a tenant — the opposite of the
@@ -773,6 +766,11 @@ class TestDiscoverTenantConfigsExtensionSpelling:
             f"drops these silently and so must this reader — this is the "
             f"only observable signal the `is_reserved_name` filter has. "
             f"stderr was {err!r}"
+        )
+        assert ".hidden" not in err, (
+            f"a hidden carrier was mentioned on stderr; the exporter never "
+            f"reads it, so warning about it reports a loss that did not "
+            f"happen (#2067). stderr was {err!r}"
         )
 
     def test_every_spelling_the_shared_set_names_is_discovered(self, tmp_path):
