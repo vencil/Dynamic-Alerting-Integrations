@@ -41,11 +41,13 @@ def write(path: Path, content: str) -> None:
 def _posix(p):
     """Normalise a captured relative path to forward slashes.
 
-    describe_tenant.py reports paths with the host separator, so a Windows-host
-    regeneration used to write `db\\mariadb\\prod\\tenant-x.yaml` into
-    golden.json and turn the Go parity test red on paths alone — a silent
+    describe_tenant.py used to report paths with the host separator, so a
+    Windows-host regeneration wrote `db\\mariadb\\prod\\tenant-x.yaml` into
+    golden.json and turned the Go parity test red on paths alone — a silent
     platform trap, since nothing about the merge semantics had changed. The Go
     side compares against `/`-joined paths, so `/` is the contract.
+    describe_tenant now emits `/` itself (#1550); this stays as a no-op
+    safety net for the golden file.
     """
     return p.replace("\\", "/") if isinstance(p, str) else p
 

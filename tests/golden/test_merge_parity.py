@@ -49,9 +49,6 @@ describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
 (pkg/config ResolveEffective, behind tenant-api `/effective`).
 
 Known gaps (a mutation there leaves this oracle green):
-- Windows host: test_merge_parity_python is skipped wholesale for a
-  cosmetic path-separator field, taking the three hash / config assertions
-  with it, and nothing floors how many cases must run (#1550 item 2).
 - ADR-017's `_routing` null opt-out is enforced by the route generator
   (_grar_merge.py over `_routing_defaults` + the tenant file's `_routing`),
   which neither merge implementation runs. routing-null pins how the merge
@@ -62,7 +59,11 @@ Known gaps (a mutation there leaves this oracle green):
 
 What IS guarded beyond the hashes: test_fixture_trees_have_no_orphans
 fails on any yaml under a fixture conf.d tree that golden.json does not
-declare (#1551), since describe_tenant's recursive scan would read it.
+declare (#1551), since describe_tenant's recursive scan would read it; and
+test_parity_runs_every_golden_case_on_every_platform fails if the parity
+test grows a skip mark or a golden case points at a missing fixture tree
+(#1550 item 2: it used to be skipped wholesale on Windows over a
+path-separator field, taking the hash assertions with it).
 
 Regenerate golden.json by running tests/golden/build_and_capture.py after
 intentional semantic changes.
@@ -128,14 +129,6 @@ def _run_describe(conf_d: Path, tenant_id: str) -> dict:
     return json.loads(result.stdout)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="describe_tenant emits OS-native path separators for "
-           "defaults_chain entries (`db\\_defaults.yaml` on Windows vs "
-           "`db/_defaults.yaml` in the golden). The defaults_chain "
-           "comparison only matches on POSIX. Fixing describe_tenant "
-           "to normalise to forward-slash is a separate behavior change.",
-)
 @pytest.mark.parametrize("golden", GOLDEN, ids=lambda g: f"{g['scenario']}/{g['tenant_id']}")
 def test_merge_parity_python(golden: dict):
     """Verify current describe_tenant output matches captured golden hashes.
@@ -171,6 +164,28 @@ def test_merge_parity_python(golden: dict):
         f"effective_config drift for {golden['scenario']}"
     assert result["defaults_chain"] == golden["defaults_chain"], \
         f"defaults_chain order drift for {golden['scenario']}"
+    # Same `/` contract as defaults_chain (#1550): both go through
+    # describe_tenant's _report_path.
+    assert result["source_file"] == golden["source_file"], \
+        f"source_file drift for {golden['scenario']}"
+
+
+def test_parity_runs_every_golden_case_on_every_platform():
+    """Floor for test_merge_parity_python (#1550 item 2).
+
+    It was once skipped wholesale on Windows over a path-separator field,
+    and the three hash / config assertions went with it while the run
+    stayed green. Fail if it grows any mark besides its parametrize (a
+    module-level `pytestmark` included), or if a golden case points at a
+    fixture tree that does not exist.
+    """
+    assert GOLDEN, "golden.json has no cases"
+    marks = [m.name for m in getattr(test_merge_parity_python, "pytestmark", [])]
+    assert marks == ["parametrize"], f"parity test must run everywhere; marks: {marks}"
+    assert "pytestmark" not in globals(), "a module-level pytestmark reaches the parity test"
+    missing = sorted({g["fixture_dir"] for g in GOLDEN
+                      if not _fixture_path(g["fixture_dir"]).is_dir()})
+    assert not missing, f"golden cases point at missing fixture trees: {missing}"
 
 
 def _fixture_tree_yaml() -> set[str]:
