@@ -1,0 +1,314 @@
+name: Bench Workload Record (PR-time, record-only)
+
+# issue #1471 候選 (a)：只改 benchmark 測試碼的 PR，在它發生的當下量一次，
+# 只記錄、不判定。（候選 (b) 夜跑 workload digest 已由 #1455／#1502 出貨，
+# 在 bench-record.yaml，與本檔無關。）
+#
+# ── 為什麼需要這支 ──────────────────────────────────────────────────────────
+# bench-gate-pr.yaml 的 `pull_request.paths` 與 bench-attrib-main.yaml 的
+# `push.paths` 都有 `!components/threshold-exporter/app/**/*_test.go`。那個排除
+# 是刻意的（改測試碼不該讓效能閘門對 PR 作者叫，見 bench-gate-pr.yaml 的 paths
+# 註解），代價是：只改 benchmark fixture 的 commit 兩邊都不跑，工作定義的改變
+# 第一次現形是在夜跑成對比值裡，那時它已經是一個與真退化同形的永久階梯
+# （實例：e9a7d92b 改名 map key，BenchmarkMergePartialConfigs_1000 三夜
+# +7~9%）。見 ADR-032 §工作定義漂移。
+#
+# 而「產品碼沒動、只有測試碼變了」這個情境**本身就是 W/R**：同一份實作、兩份
+# 測試碼。既有的 bench_gate_compare.sh 交錯量測直接量得出這次改動讓工作量變了
+# 多少，不需要 overlay、不需要第三棵樹（對照 bench-workload-effect.yaml 那支
+# 回溯工具）。
+#
+# ── 什麼時候量 ──────────────────────────────────────────────────────────────
+# `paths` 只能表達「diff 碰到其中任一檔」，表達不了「diff 只碰這些檔」，所以
+# 觸發後由 `Classify diff` 自行判斷，判斷依據一律現場讀、不在這裡複製：
+#   1. diff（merge-base...PR head）裡有任何檔案會觸發 bench-gate-pr.yaml
+#      （照它自己的 `pull_request.paths`、依序、含 `!` 排除）⇒ 跳過。
+#      那種 PR 本來就由 bench-gate-pr 量；它量到的是「產品碼＋測試碼」的
+#      合成效果，W/R 的前提（同一份實作）在那裡已不成立，再量一次沒有意義。
+#   2. diff 裡沒有任何工作定義閉包成員（SSOT：.github/bench-reference.yaml 的
+#      `workload_closure`）⇒ 跳過（例如只改了本檔）。
+#   3. 其餘 ⇒ 量。diff 裡其他不影響受測二進位的檔（docs、changelog.d、
+#      閉包外的 *_test.go）不取消量測，但會列在紀錄裡。
+# 跳過的原因一律寫進 step summary 與 artifact，「沒量」與「量了沒事」可區分。
+#
+# ── 只記錄、不判定 ──────────────────────────────────────────────────────────
+# bench_gate_compare.sh 的契約：得出結論（含 regression=true）一律 exit 0，
+# infra／形狀錯誤 exit 非 0。本 workflow 沿用：
+#   - 任何結論（變快、變慢、INCONCLUSIVE）都不讓 job 失敗，也不留言、不貼
+#     label、不開票——這裡的 `+N%` 是工作定義的效果，不是退化。
+#   - 腳本本身跑不起來（編譯失敗、benchstat 形狀漂移、SHA 不 resolve、
+#     閉包定義壞掉）讓 job 紅，不吞掉。
+#
+# ⛔ 各 step 刻意不帶 `if:`：條件（要不要量）寫在 shell 裡，由
+#    `Classify diff` 的 output 決定。Upload 在沒有檔案時靠
+#    `if-no-files-found: ignore` 無害地結束。
+#
+# ⛔ 本 workflow 不改既有閘門的任何行為：bench-gate-pr.yaml 與
+#    bench-attrib-main.yaml 的觸發條件、判定、回報都沒有動。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      # ⛔ 這份清單是 .github/bench-reference.yaml `workload_closure` 的字面
+      # 投影（`paths` 必須是字面值）。兩邊一致由
+      # tests/ops/test_bench_workload_record_trigger.py 釘住：漏一個 helper，
+      # 只改那個 helper 的 PR 就回到「沒人量」的原狀，而且沒有任何東西會紅。
+      # derived_glob（`find -name` 語意，含子目錄）：
+      - 'components/threshold-exporter/app/**/*bench_test.go'
+      # helpers（相對 app/）：
+      - 'components/threshold-exporter/app/config_test.go'
+      - 'components/threshold-exporter/app/config_debounce_test.go'
+      - 'components/threshold-exporter/app/config_metrics_test.go'
+      - 'components/threshold-exporter/app/watchloop_test.go'
+      # 自我路徑：改本檔的 PR 會跑一次 Classify（通常走「無閉包成員 ⇒ 跳過」），
+      # 至少證明分類機制與 checkout 能動。
+      - '.github/workflows/bench-workload-record.yaml'
+
+concurrency:
+  group: bench-workload-record-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# 只讀：不留言、不貼 label、不開票。fork PR 拿到的唯讀 token 因此也夠用。
+permissions:
+  contents: read
+
+jobs:
+  record:
+    name: Record workload-definition effect (never judges)
+    runs-on: ubuntu-latest
+    # 與 bench-gate-pr.yaml 的 bench job 同一組參數（ROUNDS=6、BENCHTIME=1s），
+    # 所以沿用它的 20 分鐘上限與理由（名目 ~8-10 分，約 2× 餘裕）。
+    timeout-minutes: 20
+    steps:
+      # persist-credentials: false —— 與 bench-gate-pr 同理由：本 job 會執行
+      # PR 的測試二進位（惡意 TestMain 即任意碼），且 bench worktree 共用這份
+      # checkout 的 .git，不該把 token 留在 .git/config。後續沒有任何 step
+      # 需要憑證。fetch-depth: 0：merge-base 與兩側 worktree 都要完整歷史。
+      - name: Checkout repo (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      # ⛔ 明示安裝，不靠 runner 映像的系統 python：Classify 要 `import yaml`，
+      # 而 bench-record.yaml 已把「沒有 setup-python 就 import yaml」標成要避免
+      # 的缺口。版本取自 requirements/ci-constraints.txt（repo 的 SSOT）。
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install PyYAML
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      # 決定要不要量。merge-base 的算法與 bench-gate-pr.yaml 的 preflight 相同
+      # （必須傳 PR head SHA，不能傳 HEAD——HEAD 是 refs/pull/N/merge 虛擬
+      # merge commit，它的 merge-base 就是 origin/<base> 本身）。
+      # ⛔ 分類器壞掉（讀不到閉包、bench-gate-pr 出現本分類器沒有建模的 glob
+      #    形狀）一律 exit 非 0 讓 job 紅，不預設成「量」或「跳過」。
+      - name: Classify diff
+        id: classify
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          mkdir -p "$out"
+          base_sha=$(git merge-base "$PR_HEAD_SHA" "origin/$BASE_REF")
+          if [ -z "$base_sha" ]; then
+            echo "::error::Could not compute merge-base between $PR_HEAD_SHA and origin/$BASE_REF"
+            exit 2
+          fi
+          git diff --name-only "$base_sha" "$PR_HEAD_SHA" > "$out/changed-files.txt"
+          {
+            echo "base_sha=$base_sha"
+            echo "head_sha=$PR_HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+          python3 - "$out/changed-files.txt" "$out/classification.txt" <<'PY'
+          import fnmatch
+          import os
+          import re
+          import sys
+
+          import yaml
+
+          changed_path, record_path = sys.argv[1], sys.argv[2]
+          with open(changed_path, encoding="utf-8") as fh:
+              changed = [line.strip() for line in fh if line.strip()]
+
+          APP = "components/threshold-exporter/app/"
+          with open(".github/bench-reference.yaml", encoding="utf-8") as fh:
+              closure = (yaml.safe_load(fh) or {}).get("workload_closure") or {}
+          glob, helpers = closure.get("derived_glob"), closure.get("helpers")
+          if (not isinstance(glob, str) or not glob.strip()
+                  or not isinstance(helpers, list) or not helpers
+                  or not all(isinstance(h, str) and h.strip() for h in helpers)):
+              sys.exit("::error::.github/bench-reference.yaml has no usable "
+                       "workload_closure (derived_glob + non-empty helpers) - "
+                       "cannot tell which files define the workload")
+
+          with open(".github/workflows/bench-gate-pr.yaml", encoding="utf-8") as fh:
+              gate = yaml.safe_load(fh)
+          on = gate.get("on", gate.get(True)) or {}
+          patterns = ((on.get("pull_request") or {}).get("paths")) or []
+          if not patterns:
+              sys.exit("::error::bench-gate-pr.yaml declares no pull_request.paths - "
+                       "cannot tell whether it measures this PR")
+
+          def to_regex(pattern):
+              # GitHub Actions paths globs, restricted to the shapes in use:
+              # `**/` (zero or more dirs), trailing `**`, `*` (no `/`), literals.
+              if re.search(r"[?\[\]{}+]", pattern):
+                  sys.exit(f"::error::bench-gate-pr.yaml path {pattern!r} uses a glob "
+                           "shape this classifier does not model - refusing to guess")
+              out, i = "", 0
+              while i < len(pattern):
+                  if pattern.startswith("**/", i):
+                      out, i = out + "(?:.*/)?", i + 3
+                  elif pattern.startswith("**", i):
+                      out, i = out + ".*", i + 2
+                  elif pattern[i] == "*":
+                      out, i = out + "[^/]*", i + 1
+                  else:
+                      out, i = out + re.escape(pattern[i]), i + 1
+              return re.compile(out + r"\Z")
+
+          rules = [(p.startswith("!"), to_regex(p[1:] if p.startswith("!") else p))
+                   for p in patterns]
+
+          def gate_runs_on(path):
+              # Order-sensitive, last match wins - GitHub's `paths` semantics.
+              hit = False
+              for negated, rx in rules:
+                  if rx.match(path):
+                      hit = not negated
+              return hit
+
+          def in_closure(path):
+              if not path.startswith(APP):
+                  return False
+              rel = path[len(APP):]
+              return rel in helpers or fnmatch.fnmatchcase(rel.rsplit("/", 1)[-1], glob)
+
+          gate_files = [f for f in changed if gate_runs_on(f)]
+          closure_files = [f for f in changed if in_closure(f)]
+          other_files = [f for f in changed if f not in gate_files and f not in closure_files]
+
+          if gate_files:
+              measure = "false"
+              reason = ("diff touches files that trigger bench-gate-pr.yaml (product code "
+                        "or bench harness) - that workflow measures this PR, and W/R "
+                        "(same implementation, different test code) no longer holds")
+          elif not closure_files:
+              measure = "false"
+              reason = ("diff touches no workload-closure file "
+                        "(.github/bench-reference.yaml workload_closure)")
+          else:
+              measure = "true"
+              reason = ("diff changes workload-closure files and nothing bench-gate-pr.yaml "
+                        "measures - recording the workload-definition effect")
+
+          def block(title, files):
+              return [f"{title} ({len(files)}):"] + [f"  {f}" for f in files]
+
+          lines = [f"measure={measure}", f"reason={reason}"]
+          lines += block("closure files", closure_files)
+          lines += block("bench-gate-pr files", gate_files)
+          lines += block("other files", other_files)
+          with open(record_path, "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"measure={measure}\n")
+          PY
+          {
+            echo "## Bench workload record — classification"
+            echo
+            echo "Base (merge-base): \`$base_sha\` · Head: \`$PR_HEAD_SHA\`"
+            echo
+            echo '```'
+            cat "$out/classification.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 量測。條件在 shell 裡（見檔頭 ⛔）。bench_gate_compare.sh 的 GITHUB_OUTPUT
+      # 刻意導到 artifact 目錄裡的檔案：本 job 不讓任何下游讀它的 verdict 做決定，
+      # 而同一個 step 內要讀回旗標寫 summary，檔案比 step output 直接。
+      - name: Record interleaved bench (never judges)
+        env:
+          MEASURE: ${{ steps.classify.outputs.measure }}
+          BASE_SHA: ${{ steps.classify.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.classify.outputs.head_sha }}
+          ROUNDS: "6"
+          BENCHTIME: "1s"
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          if [ "$MEASURE" != "true" ]; then
+            if [ "$MEASURE" != "false" ]; then
+              echo "::error::Classify diff produced no usable measure output (got '$MEASURE')"
+              exit 2
+            fi
+            echo "Skipped: see the classification above."
+            {
+              echo
+              echo "**Not measured** — reason in the classification block above. Nothing was benched, so no result exists for this PR."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          rc=0
+          BENCH_OUT_DIR="$out" GITHUB_OUTPUT="$out/step-outputs.txt" \
+            bash scripts/tools/ops/bench_gate_compare.sh || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo
+              echo "**Measurement failed (exit $rc)** — the harness could not produce a comparison. This is an infrastructure/script error, not a result; see the step log."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$rc"
+          fi
+
+          flag() { grep -m1 "^$1=" "$out/step-outputs.txt" | cut -d= -f2- || true; }
+          {
+            echo
+            echo "## Workload-definition effect (recorded, not judged)"
+            echo
+            echo "Interleaved \`base,head\` × ${ROUNDS} rounds @ ${BENCHTIME}, same harness as bench-gate-pr."
+            echo "Only test code differs between the two sides, so every delta below is the effect of this PR's"
+            echo "**workload-definition change** — not a regression. This job never fails on the numbers."
+            echo
+            echo "- detector flag \`regression\` (≥5% slower, p<0.01): \`$(flag regression)\`"
+            echo "- \`inconclusive\` (control canary / CPU check): \`$(flag inconclusive)\`"
+            echo
+            echo '```'
+            cat "$out/benchstat.txt"
+            echo '```'
+            echo
+            echo "Full raw samples are in the \`bench-workload-record-*\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload record
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-workload-record-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bench-out/
+          retention-days: 90
+          if-no-files-found: ignore

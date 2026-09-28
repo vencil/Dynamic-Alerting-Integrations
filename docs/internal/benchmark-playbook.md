@@ -307,6 +307,14 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 
 ℹ️ 另有一個只匹配「這支 workflow 自己」的 `pull_request` 觸發做 **self-test**（`bench-gate-pr.yaml` 同一 pattern）——因為 `workflow_dispatch` 的 workflow 必須先在 default branch 上才跑得動，沒有 self-test 的話第一次執行就會是正式判讀那一次。self-test 的參數刻意調到最小（1 支 bench／2 輪／100ms／不量 `M/W`），summary 會掛一條橫幅講明**那些比值不是量測結果**。
 
+### 只改 benchmark 測試碼的 PR：當下量一次（[#1471](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1471) 候選 (a)）
+
+上一節是**回溯**：階梯出現之後才用 overlay 去拆。`bench-gate-pr.yaml` 與 `bench-attrib-main.yaml` 都排除 `*_test.go`，所以只改 fixture 的 PR 原本沒人量。而「產品碼沒動、只有測試碼變」這個情境**本身就是 `W/R`**，`.github/workflows/bench-workload-record.yaml` 就在那一刻用既有的 `bench_gate_compare.sh`（merge-base vs PR head，參數同 `bench-gate-pr`）量它。
+
+- **觸發**：`pull_request.paths` 是 `workload_closure` 的字面投影，兩邊一致由 `tests/ops/test_bench_workload_record_trigger.py` 釘住。
+- **量不量由 `Classify diff` 現場判斷**：diff 裡有任何會觸發 `bench-gate-pr` 的檔（照它自己的 `paths` 求值）⇒ 跳過，那支 PR 由 `bench-gate-pr` 量；沒有閉包成員 ⇒ 跳過；其餘 ⇒ 量。跳過原因寫進 step summary 與 artifact。
+- ⛔ **只記錄、不判定**：不留言、不貼 label、不開票，數字再差 job 也不紅；只有量測腳本本身出錯（編譯失敗、benchstat 形狀漂移）才紅。這裡的 `+N%` 是工作定義的效果，不是退化。
+
 ### Nightly sustained-trend watchdog
 
 `bench-record.yaml` 的第二個 job `trend-watch`（nightly baseline 上傳後跑）用 `analyze_bench_history.py --trend-watch` 比對最近 N 晚，**只在「持續多晚」退化時自動開 `perf-trend` issue**（`--assignee` 預設 repo owner = email 通知;若 owner 是 GitHub **Org** 無法 assign,自動 fallback 成**不指派**、仍照常開 issue,靠 `perf-trend` label 訂閱通知),perf 回到 baseline 時**自動關閉**（closed loop）：
