@@ -27,7 +27,7 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 
 ## 1. What & Why
 
-- **Source（輸入）** — `tools/portal/src/interactive/tools/*.jsx`（44 個工具；`tools/portal/manifest.json` 為 build entry SSOT、`docs/assets/tool-registry.yaml` 為工具 metadata SSOT）+ `tools/portal/src/getting-started/wizard.jsx`
+- **Source（輸入）** — `tools/portal/src/interactive/tools/*.jsx`（`tools/portal/manifest.json` 為 build entry SSOT、`docs/assets/tool-registry.yaml` 為工具 metadata SSOT）+ `tools/portal/src/getting-started/wizard.jsx`
 - **Build** — `make portal-build` 跑 [esbuild](../../tools/portal/build.mjs)，把每個工具 bundle 成 ESM 檔輸出到 `docs/assets/dist/<tool>.js`，**committed 進 repo**（CI 有 drift gate 確保 source 與 dist 同步）。測試走 `make test-portal`（Vitest）
 - **Image（輸出）** — 一顆 nginx-alpine，COPY 進 Hub（`docs/interactive/`）+ 預先 build 的 `docs/assets/dist/` + 共享 assets + vendor；瀏覽器直接載入 ESM bundle，**runtime 不做 build / transpile**
 - **為什麼是「預先 build + 靜態服務」** — 1) 內網 / air-gapped 場景不能在 runtime 跑 npm；2) build 在 CI 一次完成、結果 committed，部署端零依賴；3) image 純靜態 → 不需 secret、不需 runtime config

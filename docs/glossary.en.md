@@ -231,4 +231,4 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 | [Architecture & Design] | Core architecture and design details |
 | [CLI Reference] | Complete da-tools command reference |
 | [API Reference] | threshold-exporter API endpoints |
-| [Alert Reference](rule-packs/ALERT-REFERENCE.en.md) | 96 alert meanings quick reference |
+| [Alert Reference](rule-packs/ALERT-REFERENCE.en.md) | Alert meanings quick reference |
