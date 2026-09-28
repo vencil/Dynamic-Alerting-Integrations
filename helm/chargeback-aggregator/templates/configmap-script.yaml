@@ -125,7 +125,7 @@ data:
     out_path = OUT_DIR / f"chargeback-{today}.csv"
 
     try:
-        with out_path.open("w", newline="") as f:
+        with out_path.open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["tenant_id", "samples_scanned", "exec_time_s", "queries", "window_hours", "generated_at"])
             # Python 3.13 deprecated utcnow() — use timezone-aware now.
