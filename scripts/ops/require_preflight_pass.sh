@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # require_preflight_pass.sh — pre-push gate: verify pr-preflight
-# (scripts/tools/dx/pr_preflight.py, `make pr-preflight`) ran against the
-# commits being PUSHED before allowing the push.
+# (scripts/tools/dx/pr_preflight.py, which `make pr-preflight` runs) ran
+# against the commits being PUSHED before allowing the push.
 #
 # Purpose:
 #   Prevent pushing pre-preflight commits that CI will likely reject. The
@@ -236,12 +236,22 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
 # re-read from wherever that shell stands.
 # ⛔ A `status` that fails is not "clean": unknown must not pick the tree.
-# The instruction must run in the shell reading it, and a Windows host's Git
-# Bash has no make (#1920): ask this shell, the one the push came from.
-if command -v make >/dev/null 2>&1; then
-    _preflight_cmd="make pr-preflight"
-else
-    _preflight_cmd="python scripts/tools/dx/pr_preflight.py"
+# The instruction must run where it is pasted (#1920). `make pr-preflight` is
+# only `python3 scripts/tools/dx/pr_preflight.py`, and neither make (Git Bash
+# on a Windows host) nor a working python3 (there, a Store stub that exits
+# non-zero) can be assumed: ask the PATH this hook inherited which interpreter
+# actually starts.
+_preflight_cmd=""
+for _py in python3 python; do
+    if "$_py" -c '' >/dev/null 2>&1; then
+        _preflight_cmd="$_py scripts/tools/dx/pr_preflight.py"
+        break
+    fi
+done
+_py_note=""
+if [ -z "$_preflight_cmd" ]; then
+    _preflight_cmd="python3 scripts/tools/dx/pr_preflight.py"
+    _py_note="║  (neither python3 nor python starts from this PATH — install one first)"
 fi
 _here=""
 if [ "$_missing_sha" = "$head_sha" ] \
@@ -290,12 +300,9 @@ cat >&2 <<EOF
 ║  different commit, running preflight where you stand writes
 ║  the marker for THAT commit and this push stays blocked.
 ║                                                              ║
-║  Run this before pushing:                                    ║
-${_checkout_hint}
-║  No \`make\` (Windows host)? Put this where the make call is:
-║      python scripts/tools/dx/pr_preflight.py
-║  (Linux / container: python3. On Windows, python3 is the
-║  Store stub.)
+║  Run this in bash (on Windows: Git Bash) before pushing:
+${_checkout_hint}${_py_note:+
+${_py_note}}
 ║                                                              ║
 ║  Emergency bypass (use sparingly):                           ║
 ║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║

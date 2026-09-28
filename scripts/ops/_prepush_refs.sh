@@ -220,8 +220,9 @@ on the push path at all:
     make pr-preflight          (its `Local hooks` row answers exactly that)
     make pr-preflight-quick    (same answer, without the --all-files run)
 
-    Without make (e.g. Git Bash on Windows), run the tool directly:
-    python scripts/tools/dx/pr_preflight.py [--skip-hooks]
+    Without make, run the tool itself (on Windows, python instead of python3):
+    python3 scripts/tools/dx/pr_preflight.py                 (full)
+    python3 scripts/tools/dx/pr_preflight.py --skip-hooks    (quick)
 
 PREPUSH_MSG
 }

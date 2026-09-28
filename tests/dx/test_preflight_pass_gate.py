@@ -218,13 +218,14 @@ def test_open_pr_blocks_without_marker(tmp_path: Path):
     )
     assert r.returncode == 1
     assert "Push blocked" in r.stderr
-    assert "make pr-preflight" in r.stderr
+    assert "scripts/tools/dx/pr_preflight.py" in r.stderr
 
 
 def test_the_banner_names_what_make_runs_for_a_host_without_make(tmp_path: Path):
-    """#1920 — a Windows host has no `make`, so the banner also prints the
-    command behind it. The Makefile recipe is the source; the banner must
-    name the same script, or it sends people to a tool that moved."""
+    """#1920 — a Windows host has no `make`, so the banner prints the command
+    behind it instead. The Makefile recipe is the source; the banner must
+    name the same script, or it sends people to a tool that moved. Which
+    interpreter it names is the next tests' business."""
     recipe = re.search(r"^pr-preflight:.*\n((?:\t.*\n)+)",
                        (_REPO_ROOT / "Makefile").read_text(encoding="utf-8"), re.MULTILINE)
     assert recipe, "Makefile has no pr-preflight recipe"
@@ -234,7 +235,7 @@ def test_the_banner_names_what_make_runs_for_a_host_without_make(tmp_path: Path)
     r = _run_gate(tmp_path, _refspec("feat/x", sha),
                   path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"))
     assert r.returncode == 1
-    assert f"python {scripts[0]}" in r.stderr, r.stderr
+    assert re.search(rf"\bpython3? {re.escape(scripts[0])}\)", r.stderr), r.stderr
 
 
 def test_open_pr_with_marker_allows(tmp_path: Path):
@@ -632,11 +633,13 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     assert r2.returncode == 1, f"control did not fire. stderr={r2.stderr}"
 
 
-_MAKE_CMD = "make pr-preflight"
+# What the banner prints where python3 starts (here, and on Linux/CI), and
+# where only `python` does (a Windows host, whose python3 is a Store stub).
+_PY3_CMD = "python3 scripts/tools/dx/pr_preflight.py"
 _PY_CMD = "python scripts/tools/dx/pr_preflight.py"
 
 
-def _follow_the_hint(stderr: str, cwd: Path, cmd: str = _MAKE_CMD) -> tuple[str, Path]:
+def _follow_the_hint(stderr: str, cwd: Path, cmd: str = _PY3_CMD) -> tuple[str, Path]:
     """Paste the banner's instruction into a shell standing in `cwd`, with
     `cmd` swapped for a probe; return (HEAD, directory) where the probe ran.
 
@@ -654,7 +657,7 @@ def _follow_the_hint(stderr: str, cwd: Path, cmd: str = _MAKE_CMD) -> tuple[str,
 
 
 def _paste_the_hint(stderr: str, cwd: Path, preflight: str,
-                    cmd: str = _MAKE_CMD) -> subprocess.CompletedProcess:
+                    cmd: str = _PY3_CMD) -> subprocess.CompletedProcess:
     """Run the banner's one instruction line with `cmd` replaced by
     `preflight`, then report where the shell ended; rc is the line's."""
     lines = [ln.strip() for ln in stderr.splitlines() if cmd in ln]
@@ -725,42 +728,68 @@ def test_pushing_a_clean_tree_at_the_pushed_commit_points_back_at_it(tmp_path: P
     assert (head, landed) == (sha, wt.resolve())
 
 
-def _path_without(scratch: Path, name: str) -> str:
-    """This PATH with `name` gone: every directory holding it (/bin and
+def _path_without(scratch: Path, *names: str) -> str:
+    """This PATH with `names` gone: every directory holding one (/bin and
     /usr/bin can be the same place) is swapped for a copy made of symlinks to
     everything else in it."""
-    assert shutil.which(name), f"{name} is not on PATH here, so hiding it proves nothing"
+    for name in names:
+        assert shutil.which(name), f"{name} is not on PATH here, so hiding it proves nothing"
     dirs = []
     for i, d in enumerate(os.environ["PATH"].split(os.pathsep)):
-        if (Path(d) / name).exists():
+        if any((Path(d) / name).exists() for name in names):
             copy = scratch / str(i)
             copy.mkdir(parents=True)
             for entry in Path(d).iterdir():
-                if entry.name != name:
+                if entry.name not in names:
                     (copy / entry.name).symlink_to(entry)
             d = str(copy)
         dirs.append(d)
     path = os.pathsep.join(dirs)
-    assert shutil.which(name, path=path) is None, f"{name} still reachable"
+    for name in names:
+        assert shutil.which(name, path=path) is None, f"{name} still reachable"
     return path
 
 
-def test_without_make_the_banner_names_a_command_this_shell_can_run(tmp_path: Path):
-    """#1920 — a Windows host's Git Bash has no make; the line must still run.
-
-    The tests above are the control: with make on PATH they find `make pr-preflight`.
-    """
-    wt, (sha,) = _held_worktree(tmp_path, "held-wt")
-    shim = _make_fake_gh(wt.parent / "bin-held-wt", state="OPEN")
-    path = _path_without(wt.parent / "no-make", "make")
+def _blocked_on(wt: Path, sha: str, path: str) -> subprocess.CompletedProcess:
+    shim = _make_fake_gh(wt.parent / f"bin-{wt.name}", state="OPEN")
     r = _run_gate(wt, _refspec("held", sha), env_extra={
         "GIT_PREFLIGHT_STRICT": "1", "PATH": f"{shim}{os.pathsep}{path}",
         "TMPDIR": str(wt.parent),
     })
     assert r.returncode == 1, f"stderr={r.stderr}"
-    assert _MAKE_CMD not in r.stderr, f"told a shell without make to run make:\n{r.stderr}"
+    return r
+
+
+@pytest.mark.parametrize("python3", ["missing", "store-stub"])
+@pytest.mark.parametrize("where", ["in-place", "throwaway"])
+def test_the_banner_names_the_python_that_starts(tmp_path: Path, python3: str, where: str):
+    """#1920 — Windows: no make, and python3 is a Store stub that exits 49.
+
+    Both banner paths (in place; a throwaway worktree for an older commit).
+    The tests above are the control: where python3 starts they find it.
+    """
+    wt, shas = _held_worktree(tmp_path, "held-wt", commits=2)
+    pushed = shas[-1] if where == "in-place" else shas[0]
+    if python3 == "missing":
+        path = _path_without(wt.parent / "no-python3", "python3")
+    else:
+        stub = wt.parent / "stub-bin"
+        stub.mkdir()
+        (stub / "python3").write_text("#!/bin/sh\nexit 49\n")
+        (stub / "python3").chmod(0o755)
+        path = f"{stub}{os.pathsep}{os.environ['PATH']}"
+    r = _blocked_on(wt, pushed, path)
+    assert _PY3_CMD not in r.stderr, f"named a python3 that does not start:\n{r.stderr}"
     head, landed = _follow_the_hint(r.stderr, tmp_path, cmd=_PY_CMD)
-    assert (head, landed) == (sha, wt.resolve())
+    assert head == pushed
+    assert (landed == wt.resolve()) == (where == "in-place"), landed
+
+
+def test_with_no_python_that_starts_the_banner_says_so(tmp_path: Path):
+    wt, (sha,) = _held_worktree(tmp_path, "held-wt")
+    r = _blocked_on(wt, sha, _path_without(wt.parent / "no-python", "python3", "python"))
+    assert _PY3_CMD in r.stderr, r.stderr
+    assert "neither python3 nor python starts" in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("shape", [
@@ -818,9 +847,9 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     listed = _git(repo, "worktree", "list", "--porcelain").stdout
     started = tmp_path / "preflight-started"
     lines = [ln.strip() for ln in _blocked(repo, shas[0], tmpdir=tmpdir).stderr.splitlines()
-             if "make pr-preflight" in ln]
+             if _PY3_CMD in ln]
     assert len(lines) == 1, lines
-    line = lines[0].replace("make pr-preflight", f": > {shlex.quote(str(started))}; sleep 30")
+    line = lines[0].replace(_PY3_CMD, f": > {shlex.quote(str(started))}; sleep 30")
 
     # A session of its own, so the signal reaches the whole group like a
     # terminal's Ctrl-C does. SIGINT back to default: a shell that starts with
