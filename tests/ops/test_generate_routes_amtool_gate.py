@@ -362,7 +362,9 @@ class TestAssemblyValueErrorIsAVerdict:
     def test_validate_mode(self, monkeypatch, capsys):
         def boom(*_a, **_k):
             raise ValueError("fake invariant #2260")
-        monkeypatch.setattr(gar, "assemble_configmap", boom)
+        # #2311: --validate assembles inside `_grar_render.evaluate_generated_config`
+        # (shared with validate-config), which resolves the name in its own module.
+        monkeypatch.setattr(render, "assemble_configmap", boom)
         with pytest.raises(SystemExit) as exc:
             gar._validate_mode(_ROUTES, _RECEIVERS, [], [])
         assert exc.value.code == 1
