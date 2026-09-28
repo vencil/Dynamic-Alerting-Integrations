@@ -734,6 +734,97 @@ def _one_check_doc(doc: object) -> str | None:
     return None
 
 
+# ── validate_config --json entry-key contract (#1653) ─────────────────────
+# The ONE definition of the contract documented in docs/cli-reference.md
+# (and .en.md), `#### validate-config` → "JSON output". The document is a list
+# of rows; every row carries the required keys, and may carry only keys from
+# the optional set (each with its own appearance condition, see the docs).
+# ⛔ Adding a key to `print_report` without adding it here (and to both doc
+# tables) is a contract change, and this is where it goes red.
+VALIDATE_CONFIG_REQUIRED_KEYS = frozenset(
+    {"check", "status", "details", "caller_error"})
+VALIDATE_CONFIG_OPTIONAL_KEYS = frozenset({
+    "unusable_files",           # yaml_syntax only, and only when non-empty
+    "skipped_unusable_files",   # rows that read --config-dir while a file was unreadable
+    "skipped_nested_files",     # rows whose flat reader skipped subdirectory files
+    "suggested_action",         # status != pass (always paired with docs_link)
+    "docs_link",
+})
+# Optional keys a recipe's fixture is BUILT to make appear. Without these, the
+# "extra ⊆ optional" half of the check is vacuous for every key no recipe ever
+# produces — a renamed `unusable_files` would simply never be seen.
+_VC_BROKEN_MUST_SEE = frozenset(
+    {"unusable_files", "skipped_unusable_files", "suggested_action", "docs_link"})
+_VC_NESTED_MUST_SEE = frozenset({"skipped_nested_files"})
+
+
+def _validate_config_doc(
+    must_see: frozenset[str] = frozenset(),
+    only_check: str | None = None,
+) -> Callable[[object], str | None]:
+    """A validate_config document honouring the documented entry-key contract.
+
+    ``must_see``: optional keys that must appear on at least one row (anti-
+    vacuity). ``only_check``: the document must be exactly one row with this
+    ``check`` and ``caller_error: true`` (the early-exit shape).
+    """
+    def check(doc: object) -> str | None:
+        if not isinstance(doc, list) or not doc:
+            return f"expected a non-empty JSON list of rows, got {doc!r:.100}"
+        seen: set[str] = set()
+        for i, entry in enumerate(doc):
+            if not isinstance(entry, dict):
+                return f"row {i} is not an object: {entry!r:.80}"
+            keys = set(entry)
+            missing = VALIDATE_CONFIG_REQUIRED_KEYS - keys
+            if missing:
+                return f"row {i} ({entry.get('check')!r}) lacks required key(s) {sorted(missing)}"
+            undeclared = keys - VALIDATE_CONFIG_REQUIRED_KEYS - VALIDATE_CONFIG_OPTIONAL_KEYS
+            if undeclared:
+                return (f"row {i} ({entry.get('check')!r}) carries undeclared key(s) "
+                        f"{sorted(undeclared)} — document them (docs/cli-reference "
+                        f"`validate-config`) and add them to VALIDATE_CONFIG_OPTIONAL_KEYS")
+            seen |= keys
+        unseen = must_see - seen
+        if unseen:
+            return (f"optional key(s) {sorted(unseen)} appeared on NO row, though this "
+                    f"recipe's input is built to produce them (renamed or dropped?)")
+        if only_check is not None:
+            got = [(e.get("check"), e.get("caller_error")) for e in doc]
+            if got != [(only_check, True)]:
+                return f"expected exactly one ({only_check!r}, caller_error=True) row, got {got}"
+        return None
+    return check
+
+
+def _confd_copy(tmp: Path, name: str) -> Path:
+    """A private copy of the seed conf.d, safe to break."""
+    d = tmp / name
+    shutil.copytree(SEED_CONF_D, d)
+    return d
+
+
+def _confd_with_broken_yaml(tmp: Path) -> str:
+    """Seed conf.d plus one unparseable file: drives `unusable_files` et al."""
+    d = _confd_copy(tmp, "confd_broken")
+    _write(d / "zz-broken.yaml", "tenants:\n  x: [\n")
+    return str(d)
+
+
+def _confd_with_nested_tenant(tmp: Path) -> str:
+    """Seed conf.d with one tenant file moved into a subdirectory.
+
+    The flat readers (schema / routes) skip it, which is what puts
+    `skipped_nested_files` on their rows. The file is picked, not named, so
+    no tenant id is spelled here.
+    """
+    d = _confd_copy(tmp, "confd_nested")
+    tenant = sorted(p for p in d.glob("*.yaml") if not p.name.startswith("_"))[0]
+    (d / "sub").mkdir()
+    tenant.rename(d / "sub" / tenant.name)
+    return str(d)
+
+
 R = Recipe
 RECIPES: list[Recipe] = [
     # ── alert_correlate ────────────────────────────────────────────────────
@@ -1113,11 +1204,26 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--generate-observed-map", "--json"], sandbox=True),
 
     # ── validate_config ────────────────────────────────────────────────────
+    # Every recipe also pins the entry-key contract (#1653); `broken-yaml` and
+    # `nested` exist so that the optional keys are actually PRODUCED somewhere.
     R("validate_config", "basic",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"]),
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
+      doc_check=_validate_config_doc()),
     R("validate_config", "full",
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
-                    "--rule-packs", str(RULE_PACKS), "--version-check", "--json"]),
+                    "--rule-packs", str(RULE_PACKS), "--version-check", "--json"],
+      doc_check=_validate_config_doc()),
+    R("validate_config", "broken-yaml",
+      lambda t, s: ["--config-dir", _confd_with_broken_yaml(t), "--json"],
+      doc_check=_validate_config_doc(must_see=_VC_BROKEN_MUST_SEE)),
+    R("validate_config", "nested",
+      lambda t, s: ["--config-dir", _confd_with_nested_tenant(t), "--json"],
+      doc_check=_validate_config_doc(must_see=_VC_NESTED_MUST_SEE)),
+    # Early exit before any check runs: used to leave stdout empty (#1653).
+    R("validate_config", "missing-config-dir",
+      lambda t, s: ["--config-dir", _out(t, "no-such-conf.d"), "--json"],
+      expect_caller_error=True,
+      doc_check=_validate_config_doc(only_check="config_dir")),
 
     # ── validate_all  (scripts/tools/ top level, #1772) ────────────────────
     # Two terminal paths a subprocess can reach without side effects. The
@@ -1157,6 +1263,21 @@ def test_top_level_is_in_the_population():
         "the top-level walk has been lost (#1772)")
     assert not any(n.startswith("_") for n in JSON_TOOLS), (
         "a _lib_*.py helper was enumerated; those are libraries, not CLIs")
+
+
+def test_validate_config_optional_keys_are_all_produced_somewhere():
+    """Anti-vacuity for the #1653 entry-key contract.
+
+    The doc_check only proves an extra key is *declared*; an optional key that
+    no recipe's input ever produces could be renamed with everything green. So
+    every declared optional key must be in some recipe's must-see set.
+    """
+    produced = _VC_BROKEN_MUST_SEE | _VC_NESTED_MUST_SEE
+    assert produced == VALIDATE_CONFIG_OPTIONAL_KEYS, (
+        f"optional key(s) no recipe is built to produce: "
+        f"{sorted(VALIDATE_CONFIG_OPTIONAL_KEYS - produced)}; "
+        f"must-see key(s) not declared optional: "
+        f"{sorted(produced - VALIDATE_CONFIG_OPTIONAL_KEYS)}")
 
 
 def test_recipe_table_covers_every_json_tool():
