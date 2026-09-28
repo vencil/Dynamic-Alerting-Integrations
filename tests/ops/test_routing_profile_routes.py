@@ -489,7 +489,7 @@ class TestExplainRouteShowsEffectiveSubRoutes:
 _AMTOOL = shutil.which("amtool")
 
 
-@pytest.mark.skipif(_AMTOOL is None, reason="amtool not on PATH")
+@pytest.mark.usefixtures("amtool_required")  # VIBE_REQUIRE_AMTOOL=1 → fail, not skip
 class TestAmtoolAcceptance:
 
     def test_configmap_passes_check_config_and_routes_critical(self, tmp_path):

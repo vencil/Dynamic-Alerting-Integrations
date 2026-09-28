@@ -809,13 +809,19 @@ def trace_alert_routing(
     def _warn(msg: str) -> None:
         print(f"  WARN: {safe_label(msg)}", file=sys.stderr)
 
+    hits, unknown = None, "the generator refuses this config"
+    root, receivers, conf_types = {}, {}, {}
     try:
         am_yml, root, receivers, conf_types = build_trace_tree(parsed, base_config)
-        hits, unknown = run_amtool_trace(am_yml, root, alert_labels, warn=_warn)
     except ValueError as exc:
         _warn(f"the generator refuses to assemble this config: {exc}")
-        root, receivers, conf_types = {}, {}, {}
-        hits, unknown = None, "the generator refuses this config"
+    except (KeyError, TypeError) as exc:
+        # assemble_configmap crashes rather than refuses on a malformed
+        # --base-config (a receiver without `name`, `receivers` not a list).
+        _warn("the generator cannot assemble this config (malformed "
+              f"--base-config?): {type(exc).__name__}: {exc}")
+    else:
+        hits, unknown = run_amtool_trace(am_yml, root, alert_labels, warn=_warn)
     main_prefix = f"tenant-{tenant}"
 
     def _is_enforced(hit: dict) -> bool:
@@ -910,8 +916,8 @@ def trace_alert_routing(
     # Step 4: Check inhibition (severity dedup)
     inhibited = False
     inhibit_reason = ""
-    dedup_config = parsed.get("dedup_tenants", {}).get(tenant)
-    if dedup_config and severity == "warning":
+    dedup_enabled = (parsed.get("dedup_configs") or {}).get(tenant) == "enable"
+    if dedup_enabled and severity == "warning":
         # If tenant has severity dedup enabled, warning alerts may be
         # inhibited when a critical alert is also firing
         inhibited = False  # can't know at config time; mark as "possible"

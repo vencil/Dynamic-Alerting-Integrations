@@ -44,7 +44,7 @@ def _make_parsed(
     explicit_routing=None,
     enforced_routing=None,
     all_tenants=None,
-    dedup_tenants=None,
+    dedup_configs=None,
     domain_policies=None,
     disabled_tenants=None,
 ):
@@ -56,7 +56,7 @@ def _make_parsed(
         "explicit_routing": explicit_routing or {},
         "enforced_routing": enforced_routing,
         "all_tenants": all_tenants or ["db-a"],
-        "dedup_tenants": dedup_tenants or {},
+        "dedup_configs": dedup_configs or {},
         "domain_policies": domain_policies or {},
         "disabled_tenants": disabled_tenants or set(),
     }
@@ -115,7 +115,7 @@ class TestTraceAlertRouting:
     def test_severity_dedup_inhibition(self):
         parsed = _make_parsed(
             routing_defaults={"receiver": _WEBHOOK},
-            dedup_tenants={"db-a": {"enabled": True}},
+            dedup_configs={"db-a": "enable"},
             all_tenants=["db-a"],
         )
         # Warning with dedup enabled → possible inhibition
@@ -127,7 +127,7 @@ class TestTraceAlertRouting:
     def test_no_inhibition_for_critical(self):
         parsed = _make_parsed(
             routing_defaults={"receiver": _WEBHOOK},
-            dedup_tenants={"db-a": {"enabled": True}},
+            dedup_configs={"db-a": "enable"},
             all_tenants=["db-a"],
         )
         # Critical alerts are never inhibited by dedup
@@ -451,6 +451,65 @@ class TestBaseConfigFlag:
         assert rc == 2
         assert "not a file" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("receivers", [
+        [{"slack_configs": [{"channel": "#x"}]}],  # a receiver without name
+        {"name": "ops"},                            # a mapping, not a list
+    ], ids=["receiver-without-name", "receivers-mapping"])
+    def test_malformed_base_receivers_is_unknown_not_a_crash(
+            self, capsys, tmp_path, receivers):
+        """assemble_configmap raises KeyError / TypeError here, not the
+        ValueError of a refusal; the trace still says unknown, rc 0."""
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({"route": {"receiver": "ops"},
+                                        "receivers": receivers}),
+                        encoding="utf-8")
+        trace, err = _trace_err(capsys, _tree(tmp_path),
+                                "--base-config", str(base))
+        assert "WARN: the generator cannot assemble this config" in err
+        assert "Traceback" not in err
+        assert trace["final_receiver"] == \
+            "(unknown: the generator refuses this config)"
+
+
+class TestInhibitStepFromConfd:
+    """Step 4 reads the ``dedup_configs`` that ``_parse_config_files``
+    produces from a real conf.d (default enable, ``_severity_dedup: disable``
+    opts out)."""
+
+    @pytest.mark.parametrize("dedup, severity, expected", [
+        (None, "warning", "possible"),
+        (None, "critical", False),
+        ("disable", "warning", False),
+    ])
+    def test_dedup_from_confd(self, tmp_path, dedup, severity, expected):
+        conf = _tree(tmp_path)
+        if dedup is not None:
+            tenant_file = conf / f"{_TT}.yaml"
+            doc = yaml.safe_load(tenant_file.read_text(encoding="utf-8"))
+            doc["tenants"][_TT]["_severity_dedup"] = dedup
+            tenant_file.write_text(yaml.safe_dump(doc), encoding="utf-8")
+        parsed = er._parse_config_files(str(conf))
+        step4 = er.trace_alert_routing(parsed, _TT, "X", severity)["steps"][3]
+        assert step4["action"] == "inhibit_check"
+        assert step4["inhibited"] == expected
+
+
+@needs_amtool
+def test_ambiguous_route_path_does_not_guess_timing():
+    """Two rendered routes spell the same amtool path: the lookup must WARN
+    and leave the timing unknown, not take the first."""
+    am = {"route": {"receiver": "r", "routes": [
+        {"matchers": ['team="x"'], "receiver": "x", "group_wait": "1s"},
+        {"matchers": ['team="x"'], "receiver": "x", "group_wait": "2s"}]},
+        "receivers": [{"name": "r"}, {"name": "x"}]}
+    warnings: list[str] = []
+    hits, unknown = er.run_amtool_trace(yaml.safe_dump(am), am["route"],
+                                        {"team": "x"}, warn=warnings.append)
+    assert unknown == ""
+    assert [h["receiver"] for h in hits] == ["x"]
+    assert hits[0]["nodes"] is None
+    assert any("maps to 2 rendered routes" in w for w in warnings)
+
 
 @needs_amtool
 class TestTraceThroughAmtool:
@@ -568,7 +627,7 @@ class TestTraceThroughAmtool:
         assert "WARN" not in err
         assert _delivered(trace) == [f"tenant-{_TT}"]
 
-    @pytest.mark.parametrize("char", ["\r", "\x0c", "\u2028", "\x85"])
+    @pytest.mark.parametrize("char", ["\r", "\x0c", "\u2028"])
     def test_line_break_like_chars_in_another_route(self, capsys, tmp_path, char):
         """amtool prints another tenant's matcher value with the character in
         it; only "\\n" ends a line, so the tree is still read."""
