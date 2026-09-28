@@ -41,7 +41,19 @@
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
     "platform row, field = the key path in that file. The generator itself reports nothing there,",
     "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
-    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first."
+    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
+    "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
+    "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
+    "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
+    "pagerduty receiver (main receiver not pagerduty, and no rendered routes entry matching severity: critical",
+    "sends to one) - the generator's strict ERROR, da-guard's critical_escalation_missing, tenant-api's 403;",
+    "'compliant' = they do, and leaks lists, in render order (overrides, routes, then 'receiver' = the main",
+    "receiver), every non-pagerduty destination that still receives some of them first (#2312: its match ∪",
+    "{severity: critical} ∪ {tenant: <id>} is not a superset of an earlier sub-route's match, and its match",
+    "names neither a non-critical severity nor another tenant) - the generator's WARN, da-guard's",
+    "critical_escalation_leak (Field <ref>.receiver.type), tenant-api's warnings. The value is the same for",
+    "every requiring domain that lists the tenant. No row's YAML readers disagree on it, so",
+    "python_differs does not carry it."
   ],
   "trees": [
     {
@@ -71,7 +83,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -108,7 +121,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -139,7 +153,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -176,7 +191,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -228,7 +244,11 @@
               "verdict": "ok"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
         },
         "t-dba": {
           "targets": [
@@ -260,7 +280,11 @@
               "verdict": "ok"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
         },
         "t-fin": {
           "targets": [
@@ -281,7 +305,11 @@
               "verdict": "policy_violation"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
         },
         "t-ovr": {
           "targets": [
@@ -321,7 +349,13 @@
               "verdict": "ok"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "overrides[0]"
+            ]
+          }
         },
         "t-livedbb": {
           "targets": [
@@ -348,7 +382,11 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
         }
       }
     },
@@ -387,7 +425,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-clear": {
           "targets": [
@@ -403,7 +442,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -428,7 +468,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-ghost-own": {
           "targets": [
@@ -444,7 +485,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-known": {
           "targets": [
@@ -466,7 +508,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -495,7 +538,8 @@
               "verdict": "policy_violation"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-on": {
           "targets": [
@@ -522,7 +566,8 @@
               "verdict": "ok"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -545,7 +590,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-matcher": {
           "targets": [
@@ -571,7 +617,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -610,7 +657,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-ops-only": {
           "targets": [
@@ -626,7 +674,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -669,7 +718,8 @@
               "verdict": "ok"
             }
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -709,7 +759,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-own": {
           "targets": [
@@ -725,7 +776,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -772,7 +824,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-routes-scalar": {
           "targets": [
@@ -790,7 +843,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -839,7 +893,8 @@
             "rejected_routes": [
               "routes[0]"
             ]
-          }
+          },
+          "escalation": null
         }
       }
     },
@@ -872,7 +927,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -906,7 +962,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -940,7 +997,8 @@
             "put": "403",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-forb-nonstr": {
           "targets": [
@@ -956,7 +1014,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -978,7 +1037,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -1007,7 +1067,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -1040,7 +1101,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -1077,7 +1139,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-ovl-own": {
           "targets": [
@@ -1093,7 +1156,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-ovl-ref": {
           "targets": [
@@ -1115,7 +1179,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         }
       }
     },
@@ -1151,7 +1216,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-mk-own": {
           "targets": [
@@ -1167,7 +1233,8 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
         },
         "t-mk-seq": {
           "targets": [
@@ -1189,7 +1256,343 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "require-critical-escalation",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  escalation:\n    description: '#2325 require_critical_escalation'\n    tenants:\n    - t-esc-profile\n    - t-int-override\n    - t-main-leak\n    - t-other-tenant\n    - t-ovr-shadow\n    - t-own-tenant\n    - t-s1\n    - t-s2\n    - t-skipped-esc\n    - t-subset\n    - t-violation\n    constraints:\n      require_critical_escalation: true\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  esc-ok:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T00/B00/x\n    group_by:\n    - tenant\n    - alertname\n    - severity\n    group_wait: 30s\n    repeat_interval: 1h\n    routes:\n    - match:\n        severity: critical\n      receiver:\n        type: pagerduty\n        service_key: critical-key\n  slack-only:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T00/B00/x\n    group_by:\n    - tenant\n    - alertname\n    - severity\n    group_wait: 30s\n    repeat_interval: 1h\n",
+        "t-s1.yaml": "tenants:\n  t-s1:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n          team: db\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      - match:\n          team: app\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n    cpu_usage_percent: '85'\n",
+        "t-s2.yaml": "tenants:\n  t-s2:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n          team: db\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      - match:\n          severity: critical\n          team: app\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n      - match:\n          severity: critical\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n    cpu_usage_percent: '85'\n",
+        "t-subset.yaml": "tenants:\n  t-subset:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n          team: db\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      - match:\n          team: db\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n    cpu_usage_percent: '85'\n",
+        "t-ovr-shadow.yaml": "tenants:\n  t-ovr-shadow:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: MariaDBDown\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n      - alertname: MariaDBDown\n        receiver:\n          type: email\n          to:\n          - dba@example.com\n          smarthost: smtp.example.com:587\n          from: am@example.com\n    cpu_usage_percent: '85'\n",
+        "t-own-tenant.yaml": "tenants:\n  t-own-tenant:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n          team: db\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      - match:\n          tenant: t-own-tenant\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n    cpu_usage_percent: '85'\n",
+        "t-other-tenant.yaml": "tenants:\n  t-other-tenant:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          tenant: t-somebody-else\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n    cpu_usage_percent: '85'\n",
+        "t-int-override.yaml": "tenants:\n  t-int-override:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: 123\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      - metric_group: 1.5\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n      routes:\n      - match:\n          alertname: '123'\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n      - match:\n          metric_group: '1.5'\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T00/B00/x\n    cpu_usage_percent: '85'\n",
+        "t-main-leak.yaml": "tenants:\n  t-main-leak:\n    _routing:\n      receiver:\n        type: webhook\n        url: https://hook.example.com/alerts\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n          alertname: Z\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n    cpu_usage_percent: '85'\n",
+        "t-violation.yaml": "tenants:\n  t-violation:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: email\n          to:\n          - dba@example.com\n          smarthost: smtp.example.com:587\n          from: am@example.com\n    cpu_usage_percent: '85'\n",
+        "t-skipped-esc.yaml": "tenants:\n  t-skipped-esc:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: pagerduty\n          service_key: critical-key\n        continue: true\n    cpu_usage_percent: '85'\n",
+        "t-esc-profile.yaml": "tenants:\n  t-esc-profile:\n    _routing_profile: esc-ok\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-esc-profile": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": {
+              "patch": {
+                "_routing_profile": "slack-only"
+              },
+              "verdict": "policy_violation"
+            }
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
+        },
+        "t-int-override": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[1]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[1]",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
+        },
+        "t-main-leak": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "receiver"
+            ]
+          }
+        },
+        "t-other-tenant": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
+        },
+        "t-ovr-shadow": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "slack"
+            },
+            {
+              "ref": "overrides[1]",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "overrides[0]"
+            ]
+          }
+        },
+        "t-own-tenant": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[1]",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "routes[1]"
+            ]
+          }
+        },
+        "t-s1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[1]",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "routes[1]"
+            ]
+          }
+        },
+        "t-s2": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[1]",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[2]",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": [
+              "routes[1]"
+            ]
+          }
+        },
+        "t-skipped-esc": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes[0]"
+          ],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-subset": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[1]",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
+        },
+        "t-violation": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
         }
       }
     }

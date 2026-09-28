@@ -1,7 +1,7 @@
 // Package routingpolicy resolves a tenant's routing the way the Python route
 // generator does and checks it against the ADR-007 domain policies (#2280).
 //
-// It is the Go copy of four pieces of scripts/tools/ops (the SSOT):
+// It is the Go copy of these pieces of scripts/tools/ops (the SSOT):
 //
 //   - resolution (_grar_parse._merge_tenant_routing +
 //     _grar_merge.merge_routing_with_defaults): `_routing_defaults` →
@@ -21,7 +21,11 @@
 //     list_tenant_subroutes + route_entry_matchers);
 //   - the receiver-type half of _grar_validate.check_domain_policies:
 //     `forbidden_receiver_types` and `allowed_receiver_types`, judged
-//     independently, so one receiver can break both.
+//     independently, so one receiver can break both;
+//   - `require_critical_escalation` (#2325, _grar_validate.
+//     critical_escalation_findings): whether severity=critical alerts reach
+//     a pagerduty receiver at all, and which non-pagerduty destinations
+//     still catch some of them first (JudgeCriticalEscalation).
 //
 // ⛔ The two languages are pinned to each other through
 // tests/shared/routing_policy_parity_matrix.json, never through each other's

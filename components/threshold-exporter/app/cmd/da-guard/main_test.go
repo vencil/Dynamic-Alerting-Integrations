@@ -851,16 +851,26 @@ func TestRun_ADR007_ExitOneComesFromDomainPolicy(t *testing.T) {
 		t.Fatalf("exit = %d, want %d", code, exitFindings)
 	}
 	perTenant := map[string]int{}
+	var noEscalation []string
 	for _, f := range findings {
 		if f.Kind == "missing_receiver_field" {
 			t.Errorf("profile routing not resolved: %+v", f)
 		}
-		if f.Severity == "error" && f.Kind != "domain_policy_violation" {
+		if f.Severity == "error" && f.Kind != "domain_policy_violation" && f.Kind != "critical_escalation_missing" {
 			t.Errorf("error that is not a policy violation: %+v", f)
 		}
 		if f.Kind == "domain_policy_violation" {
 			perTenant[f.TenantID]++
 		}
+		if f.Kind == "critical_escalation_missing" {
+			noEscalation = append(noEscalation, f.TenantID)
+		}
+	}
+	// #2325: the example policy also sets require_critical_escalation; the
+	// two tenants with no pagerduty path break it.
+	sort.Strings(noEscalation)
+	if !equalStrings(noEscalation, []string{"t-dba", "t-livedbb"}) {
+		t.Errorf("critical_escalation_missing tenants = %v, want [t-dba t-livedbb]", noEscalation)
 	}
 	// slack / webhook main receivers break both forbidden and allowed.
 	want := map[string]int{"t-sre": 2, "t-dba": 2, "t-ovr": 2, "t-livedbb": 2}

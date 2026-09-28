@@ -14,6 +14,10 @@ What this half measures, per tree written to a tmp dir:
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
+* `escalation` (#2325) — the `require_critical_escalation` lines
+  `check_domain_policies` (strict) put in `schema_warnings` (the non-compliance
+  ERROR, one WARN per leaking destination, in render order), for the domains
+  the generator's own reader (`_parse_config_files`) says require it;
 * `platform` — the generator's blocking `_routing_defaults.routes` WARN; the
   Go-only `routing_in_unread_location` rows (#2291) are left out here, their
   `targets` column pins that the generator renders nothing from those bytes.
@@ -34,7 +38,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
-from _grar_parse import load_tenant_tree  # noqa: E402
+from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json")
@@ -51,7 +55,9 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
 # column is what pins "not rendered" here.
 GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "unknown_profile",
-               "tenant_api", "python_differs"}
+               "tenant_api", "python_differs", "escalation"}
+ESCALATION_KEYS = {"verdict", "leaks"}
+ESCALATION_VERDICTS = {"compliant", "violation"}
 TENANT_API_KEYS = {"put", "batch"}
 BATCH_KEYS = {"patch", "verdict"}
 DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes"}
@@ -68,6 +74,16 @@ _DEFAULTS_ROUTES = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+): 'routes' is not supported here")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
+# #2325: the require_critical_escalation lines — the non-compliance line
+# (strict: ERROR), and one WARN per leaking destination (a sub-route by ref,
+# or the main receiver).
+_ESC_MISSING = re.compile(
+    r"domain_policy '(?P<domain>[^']*)', tenant '(?P<tenant>[^']*)': "
+    r"require_critical_escalation is set but")
+_ESC_LEAK = re.compile(
+    r"WARN: domain_policy '(?P<domain>[^']*)', tenant '(?P<tenant>[^']*)'"
+    r"(?: (?P<ref>(?:override|routes)\[\d+\]) \(.*?\): receiver type '[^']*' catches alerts"
+    r"|: severity=critical alerts that no sub-route catches go to the main receiver)")
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -77,7 +93,8 @@ def test_matrix_is_not_vacuous() -> None:
     # dropping one would narrow the pin silently.
     for required in ("i-routes-entry-unknown-receiver-type", "ii-routes-entry-forbidden-type",
                      "iii-override-unknown-receiver-type", "iv-override-forbidden-type",
-                     "adr007-five-tenants", "yaml11-bool-match-value"):
+                     "adr007-five-tenants", "yaml11-bool-match-value",
+                     "require-critical-escalation"):
         assert required in names, required
 
 
@@ -101,6 +118,10 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
                                          and batch["verdict"] in ("ok", "policy_violation")), where
             differs = want["python_differs"]
             assert differs is None or (set(differs) == DIFFERS_KEYS and differs["reason"]), where
+            esc = want["escalation"]
+            assert esc is None or (set(esc) == ESCALATION_KEYS
+                                   and esc["verdict"] in ESCALATION_VERDICTS
+                                   and (esc["verdict"] == "compliant" or esc["leaks"] == [])), where
 
 
 def _build(tree: dict, root: Path) -> None:
@@ -155,6 +176,43 @@ def _policy_rows(warnings: list[str]) -> list[tuple[str, str, str, str]]:
     return rows
 
 
+def _requiring_domains(policies: dict, tenant: str) -> list[str]:
+    """Domains (name order, with repeats) whose `require_critical_escalation`
+    is True and that list *tenant* — what check_domain_policies judges."""
+    out = []
+    for name, policy in sorted(policies.items()):
+        if not isinstance(policy, dict):
+            continue
+        constraints = policy.get("constraints")
+        tenants = policy.get("tenants")
+        if (isinstance(constraints, dict) and isinstance(tenants, list)
+                and constraints.get("require_critical_escalation") is True):
+            out.extend(name for t in tenants if t == tenant)
+    return out
+
+
+def _escalation(tenant: str, rc: dict | None, domains: list[str],
+                warnings: list[str]) -> dict | None:
+    """The `escalation` cell, read back from the generator's strict lines."""
+    lines: dict[str, dict] = {}
+    for line in warnings:
+        m = _ESC_MISSING.search(line)
+        if m and m["tenant"] == tenant:
+            lines.setdefault(m["domain"], {"verdict": "violation", "leaks": []})
+            continue
+        m = _ESC_LEAK.search(line)
+        if m and m["tenant"] == tenant:
+            ref = (m["ref"] or "receiver").replace("override[", "overrides[", 1)
+            lines.setdefault(m["domain"], {"verdict": "compliant", "leaks": []})["leaks"].append(ref)
+    if not domains or not isinstance(rc, dict) or not rc.get("receiver"):
+        assert not lines, (tenant, lines)  # judged only under a requiring domain
+        return None
+    assert set(lines) <= set(domains), (tenant, lines, domains)
+    cells = [lines.get(d, {"verdict": "compliant", "leaks": []}) for d in domains]
+    assert all(c == cells[0] for c in cells), (tenant, cells)
+    return cells[0]
+
+
 def _want(want: dict, key: str):
     differs = want["python_differs"]
     return differs[key] if differs is not None else want[key]
@@ -165,6 +223,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     _build(tree, tmp_path)
     got = load_tenant_tree(str(tmp_path), strict_policies=True)
     assert not got.tenant_file_errors, (tree["name"], got.tenant_file_errors)
+    policies = _parse_config_files(str(tmp_path))["domain_policies"]
 
     rows = _policy_rows(got.schema_warnings)
     unknown = {m["tenant"]: m["name"] for m in map(_UNKNOWN_PROFILE.search, got.schema_warnings) if m}
@@ -176,6 +235,8 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
+        esc = _escalation(tenant, rc, _requiring_domains(policies, tenant), got.schema_warnings)
+        assert esc == want["escalation"], (where, esc)
 
     # Platform-file findings: the table's rows, and no other.
     got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]

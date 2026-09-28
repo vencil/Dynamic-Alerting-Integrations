@@ -40,13 +40,20 @@ type parityDiffers struct {
 	RejectedRoutes []string        `json:"rejected_routes"`
 }
 
+// parityEscalation is the `escalation` cell (#2325).
+type parityEscalation struct {
+	Verdict string   `json:"verdict"` // "compliant" | "violation"
+	Leaks   []string `json:"leaks"`
+}
+
 type parityExpect struct {
-	Targets        *[]parityTarget  `json:"targets"`
-	Policy         [][3]string      `json:"policy"`
-	RejectedRoutes []string         `json:"rejected_routes"`
-	UnknownProfile *string          `json:"unknown_profile"`
-	TenantAPI      *parityTenantAPI `json:"tenant_api"`
-	PythonDiffers  *parityDiffers   `json:"python_differs"`
+	Targets        *[]parityTarget   `json:"targets"`
+	Policy         [][3]string       `json:"policy"`
+	RejectedRoutes []string          `json:"rejected_routes"`
+	UnknownProfile *string           `json:"unknown_profile"`
+	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
+	PythonDiffers  *parityDiffers    `json:"python_differs"`
+	Escalation     *parityEscalation `json:"escalation"`
 }
 
 type parityTree struct {
@@ -148,6 +155,34 @@ func gotPolicy(tenantID string, resolved map[string]any, ok bool, pols []Policy)
 	return out
 }
 
+// gotEscalation is the `escalation` cell: nil when no requiring domain
+// judges the tenant, else the one verdict every requiring domain reaches —
+// leak refs in the order JudgeCriticalEscalation lists them.
+func gotEscalation(t *testing.T, tenantID string, resolved map[string]any, ok bool, pols []Policy) *parityEscalation {
+	t.Helper()
+	if !ok {
+		return nil
+	}
+	var cells []parityEscalation
+	for _, f := range CheckCriticalEscalation(tenantID, resolved, pols) {
+		c := parityEscalation{Verdict: "violation", Leaks: []string{}}
+		if f.Verdict.Compliant() {
+			c.Verdict = "compliant"
+			for _, l := range f.Verdict.Leaks {
+				c.Leaks = append(c.Leaks, l.Ref)
+			}
+		}
+		cells = append(cells, c)
+	}
+	if len(cells) == 0 {
+		return nil
+	}
+	for _, c := range cells[1:] {
+		jsonEq(t, "escalation per domain", c, cells[0])
+	}
+	return &cells[0]
+}
+
 func sortRows(rows [][3]string) [][3]string {
 	out := append([][3]string{}, rows...)
 	sort.Slice(out, func(i, j int) bool {
@@ -209,6 +244,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
+					jsonEq(t, "escalation", gotEscalation(t, tenantID, resolved, ok, pols), want.Escalation)
 					if (unknown == nil) != (want.UnknownProfile == nil) ||
 						(unknown != nil && *unknown != *want.UnknownProfile) {
 						t.Errorf("unknown profile = %v, want %v", unknown, want.UnknownProfile)
@@ -239,7 +275,18 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	}
 	verdict := func(b map[string]any) bool { // true = refused
 		resolved, ok, _, _ := Resolve(tenantID, b, layers)
-		return ok && len(CheckReceiverTypes(tenantID, resolved, pols)) > 0
+		if !ok {
+			return false
+		}
+		if len(CheckReceiverTypes(tenantID, resolved, pols)) > 0 {
+			return true
+		}
+		for _, f := range CheckCriticalEscalation(tenantID, resolved, pols) { // #2325
+			if !f.Verdict.Compliant() {
+				return true
+			}
+		}
+		return false
 	}
 	put := "ok"
 	if verdict(block) {

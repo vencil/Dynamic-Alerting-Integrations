@@ -567,3 +567,38 @@ func TestCheckTenantRouting_ResolvedRoutingEveryReceiver(t *testing.T) {
 		t.Errorf("tenant in no policy: %+v", got)
 	}
 }
+
+// #2325: require_critical_escalation — non-compliance is a violation, a leak
+// an advisory; a non-boolean value neither fails the load nor turns it on.
+func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
+	t.Parallel()
+	cfg, err := parseConfig([]byte("domain_policies:\n" +
+		"  esc:\n    tenants: [t-esc]\n    constraints:\n      require_critical_escalation: true\n" +
+		"  quoted:\n    tenants: [t-esc]\n    constraints:\n      require_critical_escalation: \"true\"\n"))
+	if err != nil {
+		t.Fatalf("a non-boolean value must not fail the whole file: %v", err)
+	}
+	m := NewForTest(cfg)
+	for _, p := range m.RoutingPolicies() {
+		if p.RequireCriticalEscalation != (p.Domain == "esc") {
+			t.Errorf("%s: RequireCriticalEscalation = %v", p.Domain, p.RequireCriticalEscalation)
+		}
+	}
+	slack := map[string]any{"type": "slack", "api_url": "https://hooks.slack.com/x"}
+	pd := map[string]any{"type": "pagerduty", "service_key": "k"}
+
+	v, adv := m.JudgeTenantRouting("t-esc", map[string]any{"_routing": map[string]any{"receiver": slack}}, routingpolicy.Layers{})
+	if len(v) != 1 || v[0].Constraint != "require_critical_escalation" || v[0].Target != "receiver" || adv != nil {
+		t.Errorf("no escalation: violations %+v, advisories %v", v, adv)
+	}
+	v, adv = m.JudgeTenantRouting("t-esc", map[string]any{"_routing": map[string]any{
+		"receiver": slack,
+		"routes": []any{
+			map[string]any{"match": map[string]any{"team": "app"}, "receiver": slack},
+			map[string]any{"match": map[string]any{"severity": "critical"}, "receiver": pd},
+		}}}, routingpolicy.Layers{})
+	if len(v) != 0 || len(adv) != 1 || !strings.HasPrefix(adv[0], "tenant=t-esc: domain policy 'esc': routes[0] (team=app)") ||
+		!strings.Contains(adv[0], "severity=critical, team=app") {
+		t.Errorf("leak: violations %+v, advisories %v", v, adv)
+	}
+}

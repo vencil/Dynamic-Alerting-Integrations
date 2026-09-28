@@ -752,7 +752,7 @@ tenants:
     _routing_profile: team-sre-apac
 ```
 
-**Domain Policies**：在 `_domain_policy.yaml` 中定義業務域的合規約束（如金融域禁止 Slack 通知），在路由產生後驗證，不注入配置值。receiver type 約束在三處以同一套語意執行：產生器 `--validate --strict`、da-guard（CI / pre-commit）與 tenant-api 寫入（403）；三者都判合併後的 routing（含 profile 帶來的 `routes`），`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）。
+**Domain Policies**：在 `_domain_policy.yaml` 中定義業務域的合規約束（如金融域禁止 Slack 通知），在路由產生後驗證，不注入配置值。receiver type 約束在三處以同一套語意執行：產生器 `--validate --strict`、da-guard（CI / pre-commit）與 tenant-api 寫入（403）；三者都判合併後的 routing（含 profile 帶來的 `routes`），`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）。`require_critical_escalation` 也在這三處以同一判準執行；比 PagerDuty 先攔走部分 critical 告警的目的地只是警告（[#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)）。
 
 **四層合併流水線**：
 

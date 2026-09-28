@@ -333,6 +333,20 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 				}
 			}
 		}
+		// #2325: only a YAML boolean is a value; the Python check enforces
+		// `is True` and --strict reports any other non-null value.
+		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
+			var v any
+			if err := e.Decode(&v); err == nil {
+				if b, ok := v.(bool); ok {
+					p.RequireCriticalEscalation = b
+				} else {
+					bad(field+".constraints."+ConstraintRequireCriticalEscalation,
+						"domain policy %q: constraint '%s' must be a boolean, got %s %q — the constraint cannot be enforced; set it to true or false (unquoted)",
+						name, ConstraintRequireCriticalEscalation, kindName(e), e.Value)
+				}
+			}
+		}
 		pols = append(pols, p)
 	}
 	return pols, probs

@@ -225,6 +225,54 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 		}
 		out = append(out, checkOneTenantRouting(tenantID, routing)...)
 		out = append(out, checkDomainPolicies(tenantID, routing, input.DomainPolicies, input.RoutingProvenance[tenantID])...)
+		out = append(out, checkCriticalEscalation(tenantID, routing, input.DomainPolicies)...)
+	}
+	return out
+}
+
+// checkCriticalEscalation reports ADR-007 `require_critical_escalation`
+// (#2325, routingpolicy.CheckCriticalEscalation — the route generator's
+// judgement): per requiring domain, an error when severity=critical alerts
+// reach no pagerduty receiver, else a warning per non-pagerduty destination
+// that still catches some of them first.
+func checkCriticalEscalation(tenantID string, routing map[string]any, policies []routingpolicy.Policy) []Finding {
+	var out []Finding
+	escalation := strings.Join(routingpolicy.EscalationTypes, ", ")
+	for _, f := range routingpolicy.CheckCriticalEscalation(tenantID, routing, policies) {
+		if !f.Verdict.Compliant() {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     FindingCriticalEscalationMissing,
+				TenantID: tenantID,
+				Field:    "receiver.type",
+				Message: fmt.Sprintf("tenant %q: domain policy %q requires critical escalation, but severity=critical alerts "+
+					"reach no receiver of type %s (main receiver type %q, and no rendered routes entry matches "+
+					"severity=critical with such a receiver); add `routes: - match: {severity: critical}` with a "+
+					"pagerduty receiver to the tenant's _routing or its routing profile, or switch the main receiver.type to pagerduty",
+					tenantID, f.Domain, escalation, routingpolicy.ReceiverType(routing["receiver"])),
+			})
+			continue
+		}
+		for _, l := range f.Verdict.Leaks {
+			field, msg := l.Ref+".receiver.type", ""
+			if l.Ref == routingpolicy.MainReceiverRef {
+				field = "receiver.type"
+				msg = fmt.Sprintf("tenant %q (domain policy %q): severity=critical alerts that no sub-route catches go to "+
+					"the main receiver (type %q), not a receiver of type %s", tenantID, f.Domain, l.ReceiverType, escalation)
+			} else {
+				msg = fmt.Sprintf("tenant %q (domain policy %q): %s (%s) receiver type %q catches alerts with %s before "+
+					"any receiver of type %s does, so they never reach one",
+					tenantID, f.Domain, l.Ref, routingpolicy.FormatLabels(l.Match), l.ReceiverType,
+					routingpolicy.FormatLabels(l.Caught), escalation)
+			}
+			out = append(out, Finding{
+				Severity: SeverityWarn,
+				Kind:     FindingCriticalEscalationLeak,
+				TenantID: tenantID,
+				Field:    field,
+				Message:  msg,
+			})
+		}
 	}
 	return out
 }

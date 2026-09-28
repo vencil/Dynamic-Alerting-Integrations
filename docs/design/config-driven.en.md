@@ -773,7 +773,7 @@ tenants:
     _routing_profile: team-sre-apac
 ```
 
-**Domain Policies**: Define business domain compliance constraints in `_domain_policy.yaml` (e.g., financial domain forbids Slack notifications); validated after route generation, not injected into config values. Receiver-type constraints are enforced with one semantics in three places: the generator's `--validate --strict`, da-guard (CI / pre-commit) and tenant-api writes (403); all three judge the merged routing (including `routes` a profile brings), with `forbidden_receiver_types` and `allowed_receiver_types` judged separately ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)).
+**Domain Policies**: Define business domain compliance constraints in `_domain_policy.yaml` (e.g., financial domain forbids Slack notifications); validated after route generation, not injected into config values. Receiver-type constraints are enforced with one semantics in three places: the generator's `--validate --strict`, da-guard (CI / pre-commit) and tenant-api writes (403); all three judge the merged routing (including `routes` a profile brings), with `forbidden_receiver_types` and `allowed_receiver_types` judged separately ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)). `require_critical_escalation` runs in the same three places with the same criterion; a destination that still catches some critical alerts before PagerDuty is only a warning ([#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)).
 
 **Four-layer merge pipeline**:
 

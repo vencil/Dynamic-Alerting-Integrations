@@ -47,7 +47,8 @@ type BatchResult struct {
 	// written). Empty for every other failure and for a successful op.
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
-	// (#1231 deprecated-key alias notices from the direct WriteMerged path).
+	// (#1231 deprecated-key alias notices from the direct WriteMerged path,
+	// and the #2325 require_critical_escalation advisories).
 	// Error results never carry warnings — Message owns the failure text.
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -189,6 +190,9 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// order. WritePRBatch merges them all onto one base in that order, so a
 	// routing check must see them stacked (batchRoutingViolations).
 	included := map[string][]map[string]string{}
+	// advisories: the non-blocking #2325 domain-policy notes of the ops
+	// taken into the PR, returned with the batch-level warnings.
+	var advisories []string
 	for _, op := range req.Operations {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
@@ -204,7 +208,8 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			// here, not inside the merge closure, so one refused op is left out
 			// instead of aborting the whole PR.
 			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
-			violations = append(violations, batchRoutingViolations(d.ConfigDir, d.Policy, op.TenantID, included[op.TenantID], op.Patch)...)
+			routingViolations, adv := batchRoutingViolations(d.ConfigDir, d.Policy, op.TenantID, included[op.TenantID], op.Patch)
+			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
@@ -213,6 +218,8 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 				batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "policy violation: " + strings.Join(msgs, "; ")})
 				continue
 			}
+			// #2325: batch-level, like the notices (each names its tenant).
+			advisories = append(advisories, adv...)
 		}
 		// #1097: carry a merge closure, not pre-built content, so the
 		// authoritative partial merge runs under the writer lock against
@@ -263,7 +270,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 				Results:  batchResults,
 				Summary:  fmt.Sprintf("%d unchanged", len(batchOps)),
 				Message:  "No changes to apply; no PR/MR created.",
-				Warnings: warnings,
+				Warnings: append(warnings, advisories...),
 			})
 			return
 		}
@@ -308,7 +315,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		Results:  batchResults,
 		Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
-		Warnings: result.Notices,
+		Warnings: append(result.Notices, advisories...),
 	})
 }
 
@@ -327,11 +334,13 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 			results = append(results, res)
 			continue
 		}
+		var advisories []string
 		if policyMgr != nil {
 			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
 			// nil prior: each op is written before the next one is judged,
 			// and the next one reads the file back.
-			violations = append(violations, batchRoutingViolations(configDir, policyMgr, op.TenantID, nil, op.Patch)...)
+			routingViolations, adv := batchRoutingViolations(configDir, policyMgr, op.TenantID, nil, op.Patch)
+			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
@@ -340,8 +349,13 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 				results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "domain policy violation: " + strings.Join(msgs, "; ")})
 				continue
 			}
+			advisories = adv
 		}
 		result := applyPatch(ctx, w, configDir, op, email)
+		if result.Status == "ok" {
+			// #2325: non-blocking domain-policy notes ride on a successful op.
+			result.Warnings = append(result.Warnings, advisories...)
+		}
 		results = append(results, result)
 	}
 	return results

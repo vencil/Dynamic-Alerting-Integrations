@@ -6,6 +6,9 @@ import "sort"
 const (
 	ConstraintForbidden = "forbidden_receiver_types"
 	ConstraintAllowed   = "allowed_receiver_types"
+	// ConstraintRequireCriticalEscalation (#2325): severity=critical alerts
+	// must reach an EscalationTypes receiver (CheckCriticalEscalation).
+	ConstraintRequireCriticalEscalation = "require_critical_escalation"
 )
 
 // Policy is the receiver-type part of one domain policy.
@@ -20,6 +23,11 @@ type Policy struct {
 	// NO receiver type; AllowedReceiverTypes keeps the strings only, and
 	// would read that list as "unconstrained" on its own.
 	AllowedListNonEmpty bool
+	// RequireCriticalEscalation is `require_critical_escalation: true`
+	// (#2325). null / false / absent leave it off; any other value is not a
+	// boolean, is reported as a Problem, and leaves it off too (the Python
+	// check enforces only `is True`).
+	RequireCriticalEscalation bool
 }
 
 // Violation is one receiver type a domain policy rejects.

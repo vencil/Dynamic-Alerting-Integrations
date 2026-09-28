@@ -11,6 +11,9 @@ package handler
 //   - batch: the patch as one op through executeBatchOps (direct mode) over
 //     the whole tree — "policy_violation" = the op is refused for domain
 //     policy, "ok" = it is not.
+//   - escalation (#2325), on the same PUT: a `violation` cell is refused
+//     with constraint require_critical_escalation; an allowed PUT carries
+//     exactly the leak refs as warnings (checkEscalationCell).
 //
 // The Python generator and da-guard assert the other columns of the same
 // table; none of the readers reads another's source.
@@ -21,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -47,6 +51,10 @@ type tenantAPIParityTree struct {
 		UnknownProfile json.RawMessage      `json:"unknown_profile"`
 		TenantAPI      *tenantAPIParityCell `json:"tenant_api"`
 		PythonDiffers  json.RawMessage      `json:"python_differs"`
+		Escalation     *struct {
+			Verdict string   `json:"verdict"`
+			Leaks   []string `json:"leaks"`
+		} `json:"escalation"`
 	} `json:"expect"`
 }
 
@@ -72,6 +80,65 @@ func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
 		t.Fatal("matrix has no trees — a vacuous table passes nothing")
 	}
 	return m.Trees
+}
+
+// advisoryRef reads the destination ref back from one #2325 advisory.
+var advisoryRef = regexp.MustCompile(
+	`^tenant=(\S+): domain policy '[^']*': (?:((?:overrides|routes)\[\d+\]) \(|severity=critical alerts that no sub-route catches go to the main receiver)`)
+
+// checkEscalationCell: a `violation` PUT is refused naming
+// require_critical_escalation; an allowed PUT of a compliant tenant carries
+// one advisory per leak ref (as a set, repeated per requiring domain) and
+// no other; a tenant nothing judges carries none.
+func checkEscalationCell(t *testing.T, tenantID string, want *struct {
+	Verdict string   `json:"verdict"`
+	Leaks   []string `json:"leaks"`
+}, put, resp string) {
+	t.Helper()
+	if want != nil && want.Verdict == "violation" {
+		if put != "403" || !strings.Contains(resp, `"constraint":"require_critical_escalation"`) {
+			t.Errorf("escalation violation: PUT %s, body %s — want a require_critical_escalation POLICY_VIOLATION", put, resp)
+		}
+		return
+	}
+	if put != "ok" {
+		return // refused for another constraint: no warnings to read
+	}
+	var body PutTenantResponse
+	if err := json.Unmarshal([]byte(resp), &body); err != nil {
+		t.Fatalf("PUT body: %v (%s)", err, resp)
+	}
+	got := map[string]bool{}
+	for _, w := range body.Warnings {
+		m := advisoryRef.FindStringSubmatch(w)
+		if m == nil {
+			continue
+		}
+		if m[1] != tenantID {
+			t.Errorf("advisory names tenant %q, want %q: %s", m[1], tenantID, w)
+		}
+		ref := m[2]
+		if ref == "" {
+			ref = "receiver"
+		}
+		got[ref] = true
+	}
+	wantSet := map[string]bool{}
+	if want != nil {
+		for _, ref := range want.Leaks {
+			wantSet[ref] = true
+		}
+	}
+	if len(got) != len(wantSet) {
+		t.Errorf("escalation advisories name %v, table says leaks %v", got, wantSet)
+		return
+	}
+	for ref := range wantSet {
+		if !got[ref] {
+			t.Errorf("escalation advisories name %v, table says leaks %v", got, wantSet)
+			return
+		}
+	}
 }
 
 func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
@@ -114,6 +181,12 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 				default:
 					t.Fatalf("unknown put verdict %q", want.TenantAPI.Put)
 				}
+				// #2325: the escalation cell, where tenant-api reads the
+				// policy at all (`_domain_policy.yaml` only).
+				if _, reads := tree.Files["_domain_policy.yaml"]; !reads {
+					return
+				}
+				checkEscalationCell(t, tenantID, want.Escalation, want.TenantAPI.Put, resp)
 			})
 			if want.TenantAPI.Batch == nil {
 				continue
