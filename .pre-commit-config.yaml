@@ -1469,10 +1469,14 @@ repos:
         # schema JSON was added because
         # `test_precommit_filter_covers_every_input_this_gate_reads` derived it
         # and went red — the derivation reads path literals out of the module.
-        # `check_confd_schema.py` is added BY HAND:
-        # the gate reaches it by `import`, not by path, so that derivation is
-        # structurally blind to it and nothing here would have told us.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/_lib_(compat|exitcodes|validation)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json)$
+        # `check_confd_schema.py` was first added BY HAND, because the test
+        # then found imports only inside a fixed list of directories that did
+        # not include `scripts/tools/lint/` (#1413). The test now derives the
+        # gate's TRANSITIVE import closure from a real `--ci` run, which is how
+        # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
+        # onboard_platform / scaffold_tenant / check_confd_schema — joined this
+        # list: all seven were read by the gate and none fired it.
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule)\.py|scripts/tools/_lib_(compat|confd|constants|exitcodes|io|prometheus|python|validation|yaml_keys)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
