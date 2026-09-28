@@ -20,8 +20,9 @@ type scalarRow struct {
 
 // loadScalars reads testdata/pyyaml_plain_scalars.json: PyYAML SafeLoader's
 // resolved tag for each candidate written as the plain value of `v: `, or
-// "error" when PyYAML cannot compose it (tests/shared/
-// test_receiver_spec_parity.py generates and pins it, REGEN_PYYAML_SCALARS=1).
+// "error" when PyYAML cannot compose it
+// (tests/shared/test_receiver_spec_parity.py generates and pins it,
+// REGEN_PYYAML_SCALARS=1).
 func loadScalars(t *testing.T) []scalarRow {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "pyyaml_plain_scalars.json"))
