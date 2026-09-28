@@ -57,7 +57,7 @@ graph TD
 
     subgraph PL["Platform Layer"]
         TE["threshold-exporter ×2 HA<br/>conf.d/ 階層目錄 / Dual-Hash 熱重載<br/>(ADR-016/017, v2.7.0)"]
-        RP["Projected Volume<br/>16 Rule Packs"]
+        RP["Projected Volume<br/>Rule Packs"]
     end
 
     subgraph PE["Prometheus + Alertmanager"]
@@ -74,7 +74,7 @@ graph TD
     PROM --> AM
 ```
 
-16 個 Rule Pack 涵蓋 MySQL、PostgreSQL、Redis、Kafka 等 13 種技術棧，透過 Projected Volume 獨立部署（`optional: true`），未使用的規則包評估成本近乎零。詳見 [規則包目錄](rule-packs/README.md) · [Alert 速查](rule-packs/ALERT-REFERENCE.md)
+Rule Pack 涵蓋 MySQL、PostgreSQL、Redis、Kafka 等技術棧，每種一包，透過 Projected Volume 獨立部署（`optional: true`），未使用的規則包評估成本近乎零。詳見 [規則包目錄](rule-packs/README.md) · [Alert 速查](rule-packs/ALERT-REFERENCE.md)
 
 ---
 
@@ -123,7 +123,7 @@ graph TD
 | [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 224 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、手動 shell 腳本（`scenarios/`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
 | [`docs/`](docs/) | 公開文件與其中英雙語 pair，逐份對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
-| [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（16 個 rule-pack） | 參考 operator 模式的輸出樣板 |
+| [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（每個 rule-pack 一份） | 參考 operator 模式的輸出樣板 |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
 | [`docs/internal/`](docs/internal/) | 內部 playbook（testing / benchmark / windows-mcp / github-release）與 maps | 排錯、release、跑 benchmark |
 
@@ -205,7 +205,7 @@ make setup && make verify && make test-alert
 
 ### 規則引擎
 
-O(M) 複雜度（`group_left` 向量匹配）· 16 個 Rule Pack Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](docs/adr/001-severity-dedup-via-inhibit.md)）· Sentinel Alert 三態控制（[ADR-003](docs/adr/003-sentinel-alert-pattern.md)）
+O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](docs/adr/001-severity-dedup-via-inhibit.md)）· Sentinel Alert 三態控制（[ADR-003](docs/adr/003-sentinel-alert-pattern.md)）
 
 ### 租戶管理
 

@@ -56,7 +56,7 @@ volumes:
             items:
               - key: rules.yaml
                 path: jvm-rules.yaml
-        # ... rest follow the same pattern (16 rule packs total)
+        # ... the remaining rule packs follow the same pattern
 ```
 
 ## Rationale

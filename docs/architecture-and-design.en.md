@@ -32,7 +32,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 |------|---------|---------|
 | *Design deep-dives (spoke)* | | |
 | [Config-Driven Design](design/config-driven.en.md) | Three-state config, Directory Scanner, multi-tier severity, scheduled thresholds, routing, Tenant API, inheritance engine | Platform / SRE / Domain Expert |
-| [Rule Packs & Projected Volume](design/rule-packs.en.md) | 16 rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
+| [Rule Packs & Projected Volume](design/rule-packs.en.md) | Rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
 | [High Availability (HA)](design/high-availability.en.md) | 2-replica strategy, PDB, rolling update, SLA 99.9%+ | Platform / SRE |
 | [Runtime Canary Design](design/runtime-canary.en.md) | End-to-end liveness of the custom-alert compile pipeline, dead-man's-switch, two-layer bad-tenant isolation account (ADR-025 design-readiness) | Platform / SRE |
 | [Recipe Would-Fire Preview Design](design/recipe-would-fire-preview.en.md) | see whether a recipe fires in the same modal; compiler+promtool inverted-assert, facade host, synthetic input (#657 P1 design-readiness) | Platform / Domain Expert / SRE |
@@ -62,7 +62,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 16 Rule Packs"]
+        PM["Prometheus<br/>+ Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 
