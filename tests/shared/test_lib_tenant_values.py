@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -176,3 +177,47 @@ def test_env_var_name_is_the_dispatchers():
     import guard_dispatch
     assert guard_dispatch.DISPATCHER.env_var == "DA_GUARD_BINARY"
     assert os.path.basename(guard_dispatch.DISPATCHER.binary_name) == "da-guard"
+
+
+def test_threshold_values_are_floats(tmp_path, da_guard):
+    """契約是 float：JSON 的整數（`70`）也要轉成 float，不能以 int 交出去。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n    _custom_alerts:\n"
+                         "      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
+    v = got.values["mysql_connections"]
+    assert type(v) is float and v == 70.0
+    row = got.values["_custom_alerts"][0]
+    assert type(row["value"]) is float and row["value"] == 100.0
+
+
+def test_non_finite_thresholds_become_floats(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS + "  redis_memory: 70\n  container_cpu: 75\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n"
+                         "    container_cpu: \"-inf:critical\"\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"].values
+    assert isinstance(got["mysql_connections"], float) and math.isnan(got["mysql_connections"])
+    assert got["redis_memory"] == float("inf")
+    assert got["container_cpu"] == float("-inf")
+
+
+def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
+    """repo 規則：subprocess 一律帶 timeout；呼叫端給的值要原樣傳下去。"""
+    seen = {}
+    real_run = subprocess.run
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(tv.subprocess, "run", spy)
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+    tv.load_served_values(conf_d, binary=da_guard)
+    assert seen.get("timeout") == tv.DEFAULT_TIMEOUT
+    tv.load_served_values(conf_d, binary=da_guard, timeout=7)
+    assert seen.get("timeout") == 7

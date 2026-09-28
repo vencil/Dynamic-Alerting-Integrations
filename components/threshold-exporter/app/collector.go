@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net/http"
-	"sort"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -95,36 +94,9 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 // appended sorted; regex labels get the _re suffix for PromQL matching.
 func (c *ThresholdCollector) collectThresholds(ch chan<- prometheus.Metric, resolved []ResolvedThreshold) {
 	for _, t := range resolved {
-		labelNames := []string{"tenant", "metric", "component", "severity"}
-		labelValues := []string{t.Tenant, t.Metric, t.Component, t.Severity}
-
-		// Append custom labels in sorted order for deterministic output
-		if len(t.CustomLabels) > 0 {
-			keys := make([]string, 0, len(t.CustomLabels))
-			for k := range t.CustomLabels {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				labelNames = append(labelNames, k)
-				labelValues = append(labelValues, t.CustomLabels[k])
-			}
-		}
-
-		// Phase 11 B1: append regex labels with _re suffix for PromQL matching.
-		// Exporter outputs the regex pattern as a label value; recording rules
-		// use label_replace + =~ to match actual metrics at query time.
-		if len(t.RegexLabels) > 0 {
-			keys := make([]string, 0, len(t.RegexLabels))
-			for k := range t.RegexLabels {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				labelNames = append(labelNames, k+"_re")
-				labelValues = append(labelValues, t.RegexLabels[k])
-			}
-		}
+		// One label set, shared with da-guard served-values' duplicate-series
+		// check (#2115): config.ResolvedThreshold.SeriesLabels.
+		labelNames, labelValues := t.SeriesLabels()
 
 		desc := prometheus.NewDesc(
 			"user_threshold",

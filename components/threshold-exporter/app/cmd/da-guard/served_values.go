@@ -7,9 +7,9 @@ package main
 //
 // ⛔ NO SEMANTICS OF ITS OWN. Every value comes out of the exporter's own
 // functions over the exporter's own load: config.LoadDir (the tree the
-// collector serves), the resolver's keyed resolve (the user_threshold rows,
-// each with the tenant-config key it serves, reported by the resolver itself;
-// internal/servedrows) and the reserved-key resolvers the collector and the
+// collector serves), ThresholdConfig.ResolveAtWithKeys (the user_threshold
+// rows, each paired by the resolver itself with the tenant-config key it
+// serves) and the reserved-key resolvers the collector and the
 // routing tooling read. Nothing here decides which key a row belongs to.
 // TestServedValues_MatchesResolveAt is the guard that keeps it so.
 
@@ -21,13 +21,11 @@ import (
 	"io"
 	"log"
 	"math"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/vencil/threshold-exporter/internal/servedrows"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -79,7 +77,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fs.PrintDefaults()
-		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or the exporter rejects the tree (e.g. a tenant declared twice)\n"+
+		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
+			"     or two keys producing one user_threshold series (/metrics would fail whole)\n"+
 			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -257,43 +256,52 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 	return out, nil
 }
 
-// keyedResolve is the type pkg/config stores in servedrows.ResolveAt.
-type keyedResolve = func(*config.ThresholdConfig, time.Time, func(string, config.ResolvedThreshold)) []config.ResolvedThreshold
-
-// keyedRows resolves cfg once at `at` and groups the returned rows by tenant
-// and by the tenant-config key the resolver reported for each. The resolver
-// reports every returned row, in order; a row it did not report (or a report
-// that does not match the row returned in its place) is an error, never
-// guessed at.
+// keyedRows resolves cfg once at `at` with ResolveAtWithKeys and groups the
+// rows by tenant and by the tenant-config key the resolver paired each with.
+//
+// ⛔ A tree whose rows collide on one series is refused. The collector
+// exports every row as user_threshold with its SeriesLabels; two rows with
+// the same label set make Prometheus fail the whole scrape (HTTP 500), so
+// /metrics then serves nothing at all — reporting both values as served
+// would be false. The error names the two keys.
 func keyedRows(cfg *config.ThresholdConfig, at time.Time) (map[string]map[string][]config.ResolvedThreshold, error) {
-	resolve, ok := servedrows.ResolveAt.(keyedResolve)
-	if !ok {
-		return nil, fmt.Errorf("internal: servedrows.ResolveAt is %T, not the keyed resolve", servedrows.ResolveAt)
+	keyed, _, err := cfg.ResolveAtWithKeys(at)
+	if err != nil {
+		return nil, err
 	}
-	type report struct {
-		key string
-		row config.ResolvedThreshold
-	}
-	var reports []report
-	rows := resolve(cfg, at, func(key string, row config.ResolvedThreshold) {
-		reports = append(reports, report{key, row})
-	})
-	if len(reports) != len(rows) {
-		return nil, fmt.Errorf("the resolver named the key of %d rows but returned %d; "+
-			"served values cannot be attributed", len(reports), len(rows))
+	if err := duplicateSeries(keyed); err != nil {
+		return nil, err
 	}
 	out := map[string]map[string][]config.ResolvedThreshold{}
-	for i, r := range rows {
-		if !reflect.DeepEqual(reports[i].row, r) {
-			return nil, fmt.Errorf("the resolver's report %d (%s/%s key %q) is not the row it returned there (%s/%s)",
-				i, reports[i].row.Tenant, reports[i].row.Metric, reports[i].key, r.Tenant, r.Metric)
+	for _, k := range keyed {
+		if out[k.Tenant] == nil {
+			out[k.Tenant] = map[string][]config.ResolvedThreshold{}
 		}
-		if out[r.Tenant] == nil {
-			out[r.Tenant] = map[string][]config.ResolvedThreshold{}
-		}
-		out[r.Tenant][reports[i].key] = append(out[r.Tenant][reports[i].key], r)
+		out[k.Tenant][k.Key] = append(out[k.Tenant][k.Key], k.ResolvedThreshold)
 	}
 	return out, nil
+}
+
+// duplicateSeries reports the first two rows that the collector would export
+// as the same user_threshold series.
+func duplicateSeries(keyed []config.KeyedThreshold) error {
+	seen := make(map[string]string, len(keyed))
+	for _, k := range keyed {
+		names, values := k.SeriesLabels()
+		pairs := make([]string, len(names))
+		for i := range names {
+			pairs[i] = names[i] + "=" + strconv.Quote(values[i])
+		}
+		sort.Strings(pairs)
+		id := strings.Join(pairs, ",")
+		if first, dup := seen[id]; dup {
+			return fmt.Errorf("tenant %s: keys %q and %q both produce the series user_threshold{%s}; "+
+				"the exporter's /metrics fails the whole scrape on this tree (HTTP 500), so nothing is served",
+				k.Tenant, first, k.Key, id)
+		}
+		seen[id] = k.Key
+	}
+	return nil
 }
 
 // rowOrder is a stable sort key for rendering rows.

@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"log"
+	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -114,20 +116,19 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	return c.resolveAtWithStats(now, nil)
 }
 
-// rowSink is told, for a threshold row a resolve produces, the canonical
-// tenant-config key the row serves (#2115). Unexported on purpose: the public
-// resolvers pass nil, and da-guard served-values reaches the keyed resolve
-// through internal/servedrows (served_rows.go), not through the API.
+// rowSink is told, for a threshold row a resolve phase produces, the
+// canonical tenant-config key the row serves (#2115). nil on the public
+// resolve path, so the phases skip the reporting entirely.
 type rowSink func(key string, row ResolvedThreshold)
 
 // customAlertsKey is the reserved key every custom-alert row serves.
 const customAlertsKey = "_custom_alerts"
 
-// resolveAtWithStats is ResolveAtWithStats with an optional sink. With a nil
-// sink it is ResolveAtWithStats exactly. With one, the sink sees every row of
-// the RETURNED slice, in its order, after the cardinality cut — so a row the
-// cap truncates is never reported.
-func (c *ThresholdConfig) resolveAtWithStats(now time.Time, sink rowSink) ([]ResolvedThreshold, ResolveStats) {
+// resolveAtWithStats is ResolveAtWithStats, and with a non-nil keyed it also
+// appends to *keyed every returned row paired with the key it serves, in the
+// returned order, after the cardinality cut (a truncated row is not there).
+// With keyed nil it is ResolveAtWithStats exactly.
+func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThreshold) ([]ResolvedThreshold, ResolveStats) {
 	var result []ResolvedThreshold
 
 	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
@@ -161,25 +162,25 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, sink rowSink) ([]Res
 	// — it is per-config, not per-tenant, and this is the per-scrape path.
 	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
-	// With a sink, each tenant's keys are collected beside its segment and
-	// handed on only once the segment is final (sorted and cut). nil otherwise,
-	// so the phases below skip the reporting entirely.
+	// With keyed, each tenant's rows are also collected as (key, row) PAIRS as
+	// the phases produce them; once the segment is final the pairs are what it
+	// is made of (see finishKeyedSegment), so a key cannot drift from its row.
 	//
-	// ⚠️ A pointer made only on the sink path, not a local slice captured by a
-	// closure: a captured variable moves to the heap even when the closure is
-	// never built, which cost the public (nil-sink) resolve one allocation per
-	// call (measured on BenchmarkResolveAt_1000Tenants_Mixed).
-	var keys *segmentKeys
+	// ⚠️ A pointer made only on the keyed path, not a local slice captured by
+	// a closure: a captured variable moves to the heap even when the closure
+	// is never built, which cost the public resolve one allocation per call
+	// (measured on BenchmarkResolveAt_1000Tenants_Mixed).
+	var pairs *segmentPairs
 	var collect rowSink
-	if sink != nil {
-		keys = &segmentKeys{}
-		collect = keys.add
+	if keyed != nil {
+		pairs = &segmentPairs{}
+		collect = pairs.add
 	}
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
-		if keys != nil {
-			keys.keys = keys.keys[:0]
+		if pairs != nil {
+			pairs.pairs = pairs.pairs[:0]
 		}
 
 		canonOverrides, deprecatedCount := canonicalizeOverrides(overrides)
@@ -245,9 +246,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, sink rowSink) ([]Res
 			// dropped version is the same on every scrape (stable disappearance
 			// → fires the over-limit gauge predictably, never flaps).
 			seg := result[startIdx:]
-			if collect != nil {
-				sortSegmentWithKeys(seg, keys.keys)
-			} else {
+			if pairs == nil || !pairs.sortInto(seg) {
 				sort.SliceStable(seg, func(i, j int) bool {
 					return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
 				})
@@ -256,14 +255,8 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, sink rowSink) ([]Res
 			result = result[:startIdx+limit]
 		}
 		perTenantOverLimit[tenant] = overflow
-		if sink != nil {
-			// A row without a collected key is not reported: the caller's
-			// "one report per returned row" check then fails loudly.
-			for i, r := range result[startIdx:] {
-				if i < len(keys.keys) {
-					sink(keys.keys[i], r)
-				}
-			}
+		if keyed != nil {
+			*keyed = pairs.finish(*keyed, result[startIdx:])
 		}
 
 		// ADR-031: keep the user_slo_objective gauge aligned with the
@@ -301,37 +294,99 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, sink rowSink) ([]Res
 	}
 }
 
-// segmentKeys collects one tenant segment's served keys, in row order.
-type segmentKeys struct{ keys []string }
+// KeyedThreshold is one resolved threshold row paired with the canonical
+// tenant-config key it serves (#2115): the whole key (`X_critical`,
+// `X{label="v"}`), a #1231 legacy twin under the same key as the row it
+// shadows, and every custom-alert row under `_custom_alerts`.
+type KeyedThreshold struct {
+	Key string
+	ResolvedThreshold
+}
 
-func (k *segmentKeys) add(key string, _ ResolvedThreshold) { k.keys = append(k.keys, key) }
+// ResolveAtWithKeys is ResolveAtWithStats with every returned row paired with
+// the tenant-config key it serves. It exists for `da-guard served-values`
+// (#2115), which reports what /metrics serves per tenant key; the collector
+// does not use it and pays nothing for it.
+//
+// The rows are ResolveAtWithStats' rows (same rows, same cardinality cut; the
+// order across tenants is map order in both). err is non-nil only when the
+// resolver failed to name the key of a row it returned — never guessed at.
+func (c *ThresholdConfig) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
+	var keyed []KeyedThreshold
+	rows, stats := c.resolveAtWithStats(now, &keyed)
+	if err := checkKeyed(rows, keyed); err != nil {
+		return nil, stats, err
+	}
+	return keyed, stats, nil
+}
 
-// sortSegmentWithKeys is the truncation sort for a segment whose rows carry
-// collected keys (keys[i] belongs to seg[i]): the same stable order by
-// truncationSortKey, applied to both. A stable sort by one key over one input
-// order yields one permutation, so seg ends exactly as the keyless sort
-// leaves it.
-func sortSegmentWithKeys(seg []ResolvedThreshold, keys []string) {
-	if len(keys) != len(seg) {
-		// Misaligned: sort the rows as the keyless path does and leave the
-		// keys; the caller's count check reports the mismatch.
-		sort.SliceStable(seg, func(i, j int) bool {
-			return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
-		})
-		return
+// checkKeyed is ResolveAtWithKeys' guard: one pair per returned row, each
+// pair's row being the returned row in its place.
+func checkKeyed(rows []ResolvedThreshold, keyed []KeyedThreshold) error {
+	if len(keyed) != len(rows) {
+		return fmt.Errorf("the resolver named the key of %d rows but returned %d", len(keyed), len(rows))
 	}
-	idx := make([]int, len(seg))
-	for i := range idx {
-		idx[i] = i
+	for i := range rows {
+		if !sameRow(rows[i], keyed[i].ResolvedThreshold) {
+			return fmt.Errorf("keyed row %d (key %q, %s/%s) is not the row returned in its place (%s/%s)",
+				i, keyed[i].Key, keyed[i].Tenant, keyed[i].Metric, rows[i].Tenant, rows[i].Metric)
+		}
 	}
-	sort.SliceStable(idx, func(a, b int) bool {
-		return truncationSortKey(seg[idx[a]]) < truncationSortKey(seg[idx[b]])
+	return nil
+}
+
+// sameRow is row equality with Value compared by bits, so a NaN threshold
+// equals itself.
+func sameRow(a, b ResolvedThreshold) bool {
+	if math.Float64bits(a.Value) != math.Float64bits(b.Value) {
+		return false
+	}
+	a.Value, b.Value = 0, 0
+	return reflect.DeepEqual(a, b)
+}
+
+// segmentPairs collects one tenant segment's rows with their keys, in the
+// order the phases append them to the segment.
+type segmentPairs struct{ pairs []KeyedThreshold }
+
+func (p *segmentPairs) add(key string, row ResolvedThreshold) {
+	p.pairs = append(p.pairs, KeyedThreshold{Key: key, ResolvedThreshold: row})
+}
+
+// sortInto is the truncation sort on the keyed path: the pairs are sorted by
+// the same stable truncationSortKey order the keyless path sorts seg by, and
+// seg is rewritten from them, so each row moves together with its key. false
+// (seg untouched) when the pairs do not cover the segment; the keyless sort
+// then runs and checkKeyed reports the gap.
+func (p *segmentPairs) sortInto(seg []ResolvedThreshold) bool {
+	if len(p.pairs) != len(seg) {
+		return false
+	}
+	sort.SliceStable(p.pairs, func(i, j int) bool {
+		return truncationSortKey(p.pairs[i].ResolvedThreshold) < truncationSortKey(p.pairs[j].ResolvedThreshold)
 	})
-	rows := append([]ResolvedThreshold(nil), seg...)
-	ks := append([]string(nil), keys...)
-	for i, j := range idx {
-		seg[i], keys[i] = rows[j], ks[j]
+	for i := range p.pairs {
+		seg[i] = p.pairs[i].ResolvedThreshold
 	}
+	return true
+}
+
+// finish appends the final segment's pairs to out: one per row kept after
+// the cut. When the pairs cover the segment the segment IS their rows (for an
+// uncut segment it is rewritten from them here), so row and key cannot come
+// apart; otherwise the pairs are appended as they are and checkKeyed rejects
+// the mismatch.
+func (p *segmentPairs) finish(out []KeyedThreshold, seg []ResolvedThreshold) []KeyedThreshold {
+	n := len(seg)
+	if len(p.pairs) < n {
+		return append(out, p.pairs...)
+	}
+	if len(p.pairs) == n {
+		for i := range p.pairs {
+			seg[i] = p.pairs[i].ResolvedThreshold
+		}
+	}
+	return append(out, p.pairs[:n]...)
 }
 
 // isThresholdExpired reports whether a time-boxed threshold override (PREVENT

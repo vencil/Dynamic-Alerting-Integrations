@@ -509,3 +509,95 @@ func TestServedValues_ConsistencyTreeIsNotVacuous(t *testing.T) {
 		}
 	}
 }
+
+// --- trees /metrics cannot serve, and values JSON has no number for ---------
+
+func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
+	t.Parallel()
+	for name, tenant := range map[string]string{
+		// `X: "n:critical"` and `X_critical` both emit severity="critical" for X.
+		"severity suffix vs _critical": "    mysql_connections: \"70:critical\"\n    mysql_connections_critical: 95\n",
+		// A regex label `q` is exported as `q_re`.
+		"regex label vs exact _re label": "    redis_queue_length{q=~\"a\"}: 2\n    redis_queue_length{q_re=\"a\"}: 3\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, doc, _, stderr := served(t, map[string]string{
+				"_defaults.yaml": defaultsOnly + "max_metrics_per_tenant: 5\n",
+				"tenant-a.yaml":  "tenants:\n  tenant-a:\n" + tenant,
+			}, "")
+			if code != exitCallerErr {
+				t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
+			}
+			if !strings.Contains(stderr, "both produce the series user_threshold") || !strings.Contains(stderr, "HTTP 500") {
+				t.Errorf("stderr should name the collision: %q", stderr)
+			}
+		})
+	}
+	code, _, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: \"70:critical\"\n    mysql_connections_critical: 95\n",
+	}, "")
+	for _, key := range []string{`"mysql_connections"`, `"mysql_connections_critical"`} {
+		if code != exitCallerErr || !strings.Contains(stderr, key) {
+			t.Errorf("exit %d, stderr must name %s: %q", code, key, stderr)
+		}
+	}
+}
+
+func TestServedValues_NonFiniteThresholds(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n  container_cpu: 75\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n" +
+			"    container_cpu: \"-inf:critical\"\n",
+	}, "")
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["tenant-a"]
+	for key, want := range map[string]string{"mysql_connections": "NaN", "redis_memory": "+Inf", "container_cpu": "-Inf"} {
+		if got := tv.Values[key]; got != want {
+			t.Errorf("values[%q] = %#v, want %q", key, got, want)
+		}
+	}
+	if tv.Severities["container_cpu"] != "critical" {
+		t.Errorf("severities = %v", tv.Severities)
+	}
+}
+
+// --- unserved -----------------------------------------------------------------
+
+func TestServedValues_AliasSpellingServedIsNotUnserved(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_cpu: 44\n",
+	}, "")
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["tenant-a"]
+	wantValue(t, doc, "tenant-a", "mysql_threads_running", 44)
+	if len(tv.Unserved) != 0 {
+		t.Errorf("the tenant's old spelling is served under the canonical key, yet unserved = %v", tv.Unserved)
+	}
+}
+
+func TestServedValues_UnservedScheduleKeepsItsWindows(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  container_memory: 85\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    container_memory:\n      default: \"disable\"\n" +
+			"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"88\"\n" +
+			"    mysql_connections:\n      default: \"disable\"\n      expires: \"2027-01-01T00:00:00Z\"\n      reason: quiet\n",
+	}, "2026-07-01T12:00:00Z")
+	mustOK(t, code, stderr)
+	u := doc.Tenants["tenant-a"].Unserved
+	want := map[string]any{
+		"container_memory": map[string]any{
+			"default":   "disable",
+			"overrides": []any{map[string]any{"window": "01:00-09:00", "value": "88"}},
+		},
+		"mysql_connections": map[string]any{"default": "disable", "expires": "2027-01-01T00:00:00Z", "reason": "quiet"},
+	}
+	if !reflect.DeepEqual(u, want) {
+		t.Errorf("unserved = %#v\nwant %#v", u, want)
+	}
+}

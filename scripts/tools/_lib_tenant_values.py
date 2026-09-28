@@ -81,8 +81,17 @@ class ServedValuesError(RuntimeError):
         super().__init__(f"{message}: {detail}" if detail else message)
 
 
-def _finite_or_text(v: Any) -> Any:
-    return _NON_FINITE.get(v, v) if isinstance(v, str) else v
+def _threshold(v: Any) -> float:
+    """A threshold value from the JSON as a float: JSON's number (an int when
+    it has no fraction), or the text da-guard writes for a value JSON has no
+    number for."""
+    if isinstance(v, str):
+        if v not in _NON_FINITE:
+            raise ValueError(f"not a threshold value: {v!r}")
+        return _NON_FINITE[v]
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError(f"not a threshold value: {v!r}")
+    return float(v)
 
 
 def load_served_values(
@@ -135,9 +144,14 @@ def load_served_values(
     for tenant_id, tv in tenants.items():
         severities = dict(tv["severities"])
         values = dict(tv["values"])
-        for key in severities:
-            values[key] = _finite_or_text(values[key])
-        for row in values.get("_custom_alerts") or []:
-            row["value"] = _finite_or_text(row["value"])
+        try:
+            for key in severities:
+                values[key] = _threshold(values[key])
+            for row in values.get("_custom_alerts") or []:
+                row["value"] = _threshold(row["value"])
+        except (ValueError, KeyError, TypeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
+                proc.returncode, proc.stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]))
     return out
