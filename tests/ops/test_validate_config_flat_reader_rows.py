@@ -91,6 +91,17 @@ _CORPUS = [
     ("top-level-is-a-list", {}, {
         "db-a.yaml": "- not\n- a\n- mapping\n"},
      [], False),
+    # #2291: `_routing` under the ROOT `defaults:` — the root_defaults row.
+    # ⚠️ `move_top` stays False on purpose: moved into `prod/`, the same file
+    # becomes a SUBTREE `_defaults.yaml`, which that row deliberately does not
+    # judge (the hierarchical plane's shape, #1568). Both twins keep it at
+    # the root, so both must FAIL.
+    ("routing-under-root-defaults", {
+        "_defaults.yaml": (_DEFAULTS +
+                           "  _routing:\n"
+                           "    group_wait: \"30s\"\n")}, {
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"},
+     [], False),
     # #1652 blind review F1: the policies live ONLY in a nested carrier. The
     # root-carrier lookup finds a `_defaults.yaml` with no `_policies`, so
     # before the fix `policy_dsl` said "No _policies defined — skipped" /

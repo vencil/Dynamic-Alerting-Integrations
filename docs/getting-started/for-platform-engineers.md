@@ -198,6 +198,8 @@ _routing_defaults:
 
 `{{tenant}}` 佔位符自動展開為各 tenant 的名稱。Tenant YAML 的 `_routing` 可覆蓋此預設。
 
+⚠️ 不要把 `_routing` 寫進根目錄 `_defaults.yaml` 的 `defaults:` 底下：路由產生器不讀那裡，而 exporter 會因為解不開而丟掉整個 `defaults:` 區塊（所有平台閾值）。`da-tools validate-config` 的 `root_defaults` 列會擋下這個寫法（#2291）。
+
 ### 配置 Tenant Profile
 
 ```yaml
