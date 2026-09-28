@@ -3,8 +3,17 @@
 Build the golden fixture scenarios, run describe_tenant.py against each,
 capture expected source_hash + merged_hash, emit golden.json.
 
-Scenarios cover every deep_merge / inheritance semantic in ADR-017
-so the Go port can verify byte-for-byte parity.
+The scenarios exercise the deep_merge / inheritance rules listed in
+test_merge_parity.py's module docstring so the Go port can verify
+byte-for-byte parity. They do NOT cover every ADR-017 clause; the known
+gaps (reserved-key null deletion, `_routing` null opt-out, chain discovery,
+canonical-JSON escaping) are tracked in #1550.
+
+Exit status: 0 only when every scenario regenerated. If describe_tenant
+fails for a scenario, its entry is still written to golden.json (carrying
+only `error`, no hashes) so the breakage is visible there, but main()
+returns 1 and names the failed scenarios on stderr. A caller must not read
+a partial golden.json as a successful regeneration (#1551).
 """
 from __future__ import annotations
 
@@ -42,18 +51,17 @@ def _posix(p):
 def reset(scenario: str) -> Path:
     """Ensure scenario/conf.d/ exists. Does not delete existing files —
     FUSE mount on Cowork VM refuses unlink. write() will overwrite individual
-    files. ⚠️ Leftover files are NOT checked by anything: the parity test only
-    reads the paths golden.json names, and nothing here globs the tree. A stray
-    file a builder stopped writing stays on disk and IS still read by
-    describe_tenant's recursive scan, so it can change a fixture's merge result
-    while every assertion keeps passing. Measured: an orphan sub-directory
-    carrying its own `_defaults.yaml` and an extra tenant left the suite green.
-    A stray `_defaults.yml` is no longer the sharp version it was (Python used
-    to merge both spellings, Go kept one): since #1674 both sides read ONE
-    carrier per directory, pinned by the `carrier-selection` scenario below.
-    But a stray carrier in a directory that had none is still read by both,
-    and nothing here would notice. Prefer the clean-rebuild command below over
-    trusting this function.
+    files. ⚠️ So this function still leaves stale files behind: a file a
+    builder stopped writing stays on disk and IS still read by describe_tenant's
+    recursive scan, so it can change a fixture's merge result. Nothing in this
+    script notices. What catches it is
+    test_merge_parity.py::test_fixture_trees_have_no_orphans (#1551): it
+    enumerates every yaml under the fixtures' conf.d trees and fails on any
+    file that golden.json does not declare (source_file ∪ defaults_chain) and
+    its commented allow-list does not name. Before that test existed, an
+    orphan sub-directory carrying its own `_defaults.yaml` and an extra tenant
+    left the whole suite green. Run the parity tests after regenerating, and
+    prefer the clean-rebuild command below over trusting this function.
 
     For a clean rebuild, run this from Dev Container (NTFS side):
         docker exec -w /workspaces/vibe-k8s-lab/tests/golden vibe-dev-container \\
@@ -466,6 +474,14 @@ def main() -> int:
         else:
             print(f"  [OK]   {g['scenario']}/{g['tenant_id']}: "
                   f"src={g['source_hash']} merged={g['merged_hash']}")
+    failed = [f"{g['scenario']}/{g['tenant_id']}" for g in golden if "error" in g]
+    if failed:
+        # Non-zero is the contract (#1551): golden.json was still written, but
+        # the failed entries carry no hashes and will break both parity legs.
+        print(f"ERROR: {len(failed)} scenario(s) failed to regenerate: "
+              f"{', '.join(failed)}; golden.json is incomplete",
+              file=sys.stderr)
+        return 1
     return 0
 
 

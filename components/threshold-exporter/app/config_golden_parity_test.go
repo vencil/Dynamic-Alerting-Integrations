@@ -7,13 +7,16 @@ package main
 // against the same fixtures. Byte-for-byte hash equality is required;
 // any divergence is a §8.11.2 semantic trap and a ship blocker.
 //
-// Fixtures cover every deep_merge rule from ADR-017:
+// What the fixtures cover (NOT every ADR-017 clause; see "Known gaps"):
 //   flat              — no defaults chain
 //   l0-only           — root _defaults + tenant override (scalar)
 //   full-l0-l3        — 4-level inheritance, array replace, tenant override
 //   mixed-mode        — flat + hierarchical tenants in same conf.d
 //   array-replace     — arrays replaced (not concat)
-//   opt-out-null      — null deletes a reserved key, not a threshold key
+//   opt-out-null      — null on a NON-reserved key (a scalar and a nested
+//                       threshold key) does not delete it; the inherited
+//                       default survives. It does not exercise the "null
+//                       deletes a reserved `_` key" branch (gap below)
 //   opt-out-null-threshold — real flat-metric-key shape: null keeps the
 //                       inherited default, "disable" is the opt-out (#1339)
 //   null-body         — a tenant declared with a null body inherits every
@@ -27,6 +30,24 @@ package main
 //                       `.yaml`+`.yml` pair reads the `.yaml`, a subtree
 //                       `_DEFAULTS.YML` enters the chain (two tenants, in
 //                       the mixed-mode tree's `carrier/` subtree)
+//
+// Known gaps, measured and tracked in #1550 (a mutation there leaves this
+// oracle green):
+//   - Reserved-key deletion: no scenario's effective_config holds a
+//     `_`-prefixed key, so removing that branch goes unnoticed here; only
+//     single-language unit tests (TestDeepMerge_NullOnReservedKey_StillDeletes)
+//     pin it.
+//   - `_routing` null opt-out (group_by / group_wait / group_interval /
+//     repeat_interval): no fixture at all.
+//   - Chain discovery: the merged-hash and effective-config legs read the
+//     defaults chain out of golden.json; the one leg that walks the tree
+//     uses scanDirHierarchical, not pkg/config ResolveEffective (the chain
+//     builder behind tenant-api /effective).
+//   - Canonical-JSON escaping: the corpus has no non-ASCII and no < > &, so
+//     the no-HTML-escape and non-ASCII clauses are vacuously true.
+// Orphan files in the fixture trees are guarded on the Python side
+// (tests/golden/test_merge_parity.py::test_fixture_trees_have_no_orphans,
+// #1551).
 //
 // If this test is red and the Python side is green, the Go port has drifted.
 // Run `python3 tests/golden/build_and_capture.py` only when Python semantics
