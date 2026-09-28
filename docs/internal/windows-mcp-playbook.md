@@ -220,7 +220,7 @@ Get-Content $t -Raw
 > - 缺 `/s` 用 `/c` only：`waited=True, exit=0, len=0`（cmd 把 `.bat` 路徑的外層引號剝掉之後、又把內層引號當內容）
 > - 三個都加：`waited=True, exit=0, len=39`（正常）
 
-`scripts/ops/win_git_escape.bat` 和 `scripts/ops/win_gh.bat` 的檔頭都嵌入了這段模板作為 in-tree 單一來源，並由 `tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented` 強制要求 header 包含 `Process.Start` / `WaitForExit` / `CreateNoWindow` / `/s /c` 四個關鍵字 — 任何未來改動都會擋 CI。
+`scripts/ops/win_git_escape.bat` 和 `scripts/ops/win_gh.bat` 的檔頭都嵌入了這段模板，`tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented` 要求 header 含 `Process.Start` / `WaitForExit` / `CreateNoWindow` / `/s /c` 四個關鍵字。兩份差在一行：`win_git_escape.bat` 只在它所在的那棵樹裡執行（cwd 不在該樹就印 `FAILED` 回 1），所以它的樣板多了 `$psi.WorkingDirectory = "<tree>"`；`win_gh.bat` 看的是腳本自己的位置，不需要這行。
 
 ## 長時間操作 (>60s)
 

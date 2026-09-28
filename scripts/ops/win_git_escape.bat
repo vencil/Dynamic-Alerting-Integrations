@@ -115,9 +115,13 @@ REM If still unset, commit/commit-file/pr-preflight fail with a clear error belo
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
 REM --- Repo: the work tree this copy lives in (scripts\ops\..\..) ---
-pushd "%~dp0..\.."
-set "REPO_DIR=%CD%"
-popd
+REM Set only if pushd got there: a path cmd mangles (a `!` under delayed
+REM expansion) fails the pushd, and %CD% would then be the caller's tree.
+set "REPO_DIR="
+pushd "%~dp0..\.." && (
+    set "REPO_DIR=!CD!"
+    popd
+)
 
 REM --- Output files ---
 set "OUT=%TEMP%\vibe-git-out.txt"
@@ -127,10 +131,10 @@ REM --- Command dispatch ---
 set "CMD=%~1"
 if "%CMD%"=="" goto :usage
 
-REM --- An inherited GIT_DIR (a git hook sets it) would point every call below
-REM --- at that repo while the tree check below still passes. (An inherited
-REM --- GIT_WORK_TREE needs no clearing: the tree check refuses it.)
-set "GIT_DIR="
+REM --- Inherited repo-local variables (a git hook exports GIT_DIR and
+REM --- GIT_INDEX_FILE) would point the calls below at another repo or index,
+REM --- and some of them would also satisfy the tree check. Git lists them.
+for /f "delims=" %%v in ('"%GIT_CMD%" rev-parse --local-env-vars') do set "%%v="
 
 REM --- The caller must be inside the tree this copy lives in. Commands run in
 REM --- the caller's directory, so relative arguments (add's paths,
@@ -145,10 +149,6 @@ if /i not "%CWD_TOP%"=="%REPO_DIR%" (
     echo         Run it from inside that tree, or use the copy in the tree you mean.
     goto :done_err
 )
-
-REM --- Auto-clean a phantom index.lock: this tree's only. Locks that other
-REM --- trees or ref updates may be holding are listed by preflight, not deleted.
-for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path index.lock 2^>nul') do del /f /q "%%~fp" 2>nul
 
 if /i "%CMD%"=="status"      goto :do_status
 if /i "%CMD%"=="add"         goto :do_add
@@ -315,7 +315,8 @@ echo === Windows Git Preflight ===
 echo.
 echo [1/3] Checking for .git lock files...
 REM The common git dir holds refs and packed-refs and, under worktrees\, every
-REM linked tree's own locks. Listed, not deleted: git may still be using one.
+REM linked tree's own locks. Listed, never deleted: a lock left by a crashed
+REM (e.g. FUSE-side) git and one held by a running git look the same.
 for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-common-dir') do set "LOCK_DIR=%%~fp"
 dir /s /b "%LOCK_DIR%\*.lock" 2>nul
 if %ERRORLEVEL% NEQ 0 (

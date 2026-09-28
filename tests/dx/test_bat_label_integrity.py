@@ -828,13 +828,10 @@ _SUBCOMMANDS = {
 def _break_git(work: pathlib.Path) -> None:
     """`rev-parse --show-toplevel` still answers; the subcommands' own calls fail.
 
-    Each piece breaks a different subset (the index: status/add/diff/switch;
-    the dangling branch: log/tag/switch -c; packed-refs: `branch -a`), so all
-    three are needed. GIT_DIR can't be used: the wrapper clears it (#1919).
+    A corrupt index and an unreadable packed-refs; neither alone breaks every
+    subcommand. GIT_DIR can't be used: the wrapper clears it (#1919).
     """
-    branch = _git_out(work, "symbolic-ref", "--short", "HEAD")
     (work / ".git" / "index").write_bytes(b"not an index")
-    (work / ".git" / "refs" / "heads" / branch).write_text("1" * 40 + "\n", encoding="ascii")
     (work / ".git" / "packed-refs").write_text("not a packed-refs line\n", encoding="ascii")
 
 
@@ -938,9 +935,9 @@ def test_branch_reports_a_refused_switch_to_an_existing_branch(tmp_path) -> None
 # #1919 — which tree the wrapper acts on, and which locks it touches.
 #
 # The wrapper refuses to run outside the tree its copy lives in, and runs in
-# the caller's directory, so relative arguments keep git's meaning. In a linked
-# worktree `.git` is a file and the locks live elsewhere: it deletes only its
-# own tree's index.lock and lists every other lock without touching it.
+# the caller's directory, so relative arguments keep git's meaning. It deletes
+# no lock; preflight lists every one, wherever git keeps it (in a linked
+# worktree `.git` is a file and the locks live under the common git dir).
 # ---------------------------------------------------------------------------
 
 
@@ -1063,36 +1060,79 @@ def test_a_copy_outside_any_repo_says_why(tmp_path) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
-@pytest.mark.parametrize("layout", ["main", "linked"])
-def test_only_this_trees_index_lock_is_cleaned(tmp_path, layout) -> None:
-    """Other locks may belong to a git process still running: leave them."""
+def test_an_inherited_work_tree_cannot_satisfy_the_tree_check(tmp_path) -> None:
+    """GIT_WORK_TREE naming the wrapper's tree, cwd in another repo: git would take
+    that repo's git dir while `--show-toplevel` answers with the wrapper's tree."""
     trees = _main_and_worktree(tmp_path)
-    tree, other = trees[layout], trees["linked" if layout == "main" else "main"]
-    own = _git_path(tree, "index.lock")
-    kept = [_git_path(other, "index.lock"), _git_path(tree, "refs/heads") / "feat" / "held.lock"]
-    for lock in (own, *kept):
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        lock.write_text("", encoding="utf-8")
-    proc = _bat(tree, tmp_path, "status")
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True, capture_output=True, timeout=60)
+    _git(other, "commit", "-q", "--allow-empty", "-m", "test: other")
+    proc = _bat(trees["linked"], tmp_path, "tag", "t-wt", cwd=other,
+                env_extra={"GIT_WORK_TREE": str(trees["linked"])})
     out = proc.stdout.decode("utf-8", "replace")
-    assert proc.returncode == 0, out
-    assert not own.exists(), f"this tree's index.lock survived in {layout}:\n{out}"
-    assert [str(p) for p in kept if not p.exists()] == [], f"deleted a lock that isn't this tree's:\n{out}"
+    assert proc.returncode != 0, out
+    assert _git_out(other, "tag", "--list") == "", f"the tag landed in the caller's repo:\n{out}"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
-@pytest.mark.parametrize("layout", ["main", "linked"])
-def test_preflight_lists_every_lock_git_may_be_holding(tmp_path, layout) -> None:
+def test_an_inherited_index_file_does_not_redirect_the_wrapper(tmp_path) -> None:
+    """A pre-commit hook exports GIT_INDEX_FILE: staging must land in this tree's index."""
     trees = _main_and_worktree(tmp_path)
-    tree = trees[layout]
+    tree = trees["linked"]
+    (tree / "new.txt").write_text("new\n", encoding="utf-8")
+    foreign = _git_path(trees["main"], "index")
+    before = foreign.read_bytes()
+    proc = _bat(tree, tmp_path, "add", "new.txt", env_extra={"GIT_INDEX_FILE": str(foreign)})
+    assert proc.returncode == 0, proc.stdout
+    assert _git_out(tree, "diff", "--cached", "--name-only") == "new.txt"
+    assert foreign.read_bytes() == before, "staged into the index GIT_INDEX_FILE named"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_a_tree_path_with_a_bang_fails_closed(tmp_path) -> None:
+    """Delayed expansion eats `!`: the tree check must still refuse, not fall open."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
+    bang = tmp_path / "b!x"
+    subprocess.run(["git", "init", "-q", str(bang)], check=True, capture_output=True, timeout=60)
+    (bang / "scripts" / "ops").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", bang / "scripts" / "ops")
+    proc = _bat(bang, tmp_path, "tag", "t-bang", cwd=work)
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, out
+    assert _git_out(work, "tag", "--list") == "", f"the tag landed in the caller's tree:\n{out}"
+
+
+def _plant_locks(trees: dict[str, pathlib.Path], layout: str) -> list[pathlib.Path]:
+    tree, other = trees[layout], trees["linked" if layout == "main" else "main"]
     locks = [
-        _git_path(tree, "HEAD.lock"),                          # this tree's own git dir
+        _git_path(tree, "index.lock"),                         # this tree's own git dir
+        _git_path(tree, "HEAD.lock"),
+        _git_path(other, "index.lock"),                        # the other tree's
         _git_path(tree, "refs/heads") / "feat" / "held.lock",  # common dir, nested
         _git_path(tree, "packed-refs.lock"),                   # common dir
     ]
     for lock in locks:
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text("", encoding="utf-8")
-    out = _bat(tree, tmp_path, "preflight").stdout.decode("utf-8", "replace")
-    assert [p.name for p in locks if p.name not in out] == [], f"preflight missed a lock in {layout}:\n{out}"
-    assert [str(p) for p in locks if not p.exists()] == [], "preflight deleted a lock"
+    return locks
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+@pytest.mark.parametrize("sub", ["status", "preflight"])
+def test_no_lock_is_ever_deleted(tmp_path, layout, sub) -> None:
+    """A lock a crashed git left and one a running git holds look the same."""
+    trees = _main_and_worktree(tmp_path)
+    locks = _plant_locks(trees, layout)
+    out = _bat(trees[layout], tmp_path, sub).stdout.decode("utf-8", "replace")
+    assert [str(p) for p in locks if not p.exists()] == [], f"`{sub}` deleted a lock:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_preflight_lists_every_lock_git_may_be_holding(tmp_path, layout) -> None:
+    trees = _main_and_worktree(tmp_path)
+    locks = _plant_locks(trees, layout)
+    out = _bat(trees[layout], tmp_path, "preflight").stdout.decode("utf-8", "replace")
+    missed = [str(p) for p in locks if str(p).lower() not in out.lower()]
+    assert missed == [], f"preflight missed locks in {layout}:\n{out}"
