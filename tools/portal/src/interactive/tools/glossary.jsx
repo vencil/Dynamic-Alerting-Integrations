@@ -39,7 +39,7 @@ const GLOSSARY = [
   { term: 'Cardinality Guard', category: 'Architecture', def: 'Per-tenant limit of 500 metrics. If exceeded, excess metrics are truncated and an ERROR is logged. Prevents metric explosion from misconfigured tenants.', related: ['Threshold', 'threshold-exporter'] },
   { term: 'Hot-Reload', category: 'Architecture', def: 'threshold-exporter watches config files and automatically reloads when SHA-256 hash changes. Zero-downtime config updates — no restart needed.', related: ['threshold-exporter', 'Directory Scanner'] },
   { term: 'Recurring Maintenance', category: 'Operations', def: 'Cron-based maintenance windows that automatically create Alertmanager silences. Configured in _state_maintenance.recurring[] with cron expression and duration.', related: ['Maintenance Mode', 'CronJob'] },
-  { term: 'da-tools', category: 'Tooling', def: 'The CLI toolkit for Dynamic Alerting. 50 commands covering scaffolding, validation, migration, diagnostics, benchmarking, and more. Available as Docker image or direct install.', related: ['scaffold', 'validate-config', 'diagnose'], tryLink: '../assets/jsx-loader.html?component=../cli-playground.jsx' },
+  { term: 'da-tools', category: 'Tooling', def: 'The CLI toolkit for Dynamic Alerting. Its commands cover scaffolding, validation, migration, diagnostics, benchmarking, and more. Available as Docker image or direct install.', related: ['scaffold', 'validate-config', 'diagnose'], tryLink: '../assets/jsx-loader.html?component=../cli-playground.jsx' },
 ];
 
 const CATEGORIES = [...new Set(GLOSSARY.map(g => g.category))];
