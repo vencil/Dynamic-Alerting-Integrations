@@ -52,21 +52,14 @@ sentence being rewritten exits 0.
   - Classifying a directory as library code by its `__init__.py` is this
     repo's own convention, not a proof. A package directory that really
     does hold tools passes in silence.
-  - `_lib` is the naming convention for shared modules, and the counted
-    subdirectories hold helper modules that do not carry it — they are
-    counted as tools today. ⛔ The repo holds the opposite opinion in
-    machine-readable form: `scripts/tools/dx/verify_diff_rules.yaml`
-    matches `scripts/tools/*/_*.py` and justifies it as 「子目錄共用
-    helper」. Neither side knows about the other; reconciling them moves
-    the published number, so it is tracked separately rather than decided
-    here.
+  - #1541 settled the boundary: a name starting with `_` is a helper,
+    not a tool — `_lib*` at the repo root, and the `_grar_*`,
+    `_version_patterns` style helpers inside the subdirectories alike.
+    That is the same line `verify_diff_rules.yaml` (「子目錄共用 helper」)
+    and `tests/shared/test_tool_exit_codes.py` already drew.
 
 ## Other corpora (this module is not their definition)
 
-  - `tests/shared/test_tool_exit_codes.py` draws its corpus with
-    `startswith("_")` as the boundary, so it is smaller than
-    `count_scope`. Nothing explains why the published count draws the line
-    at `_lib` instead.
   - `scripts/tools/lint/check_build_completeness.py` declares its own
     subdirectory tuple for a different question (which directories hold
     shipped sibling modules).
@@ -78,40 +71,42 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# The naming convention for a module shared between tools rather than run
-# as one. `generate_tool_map` lists these in its own section, so the two
-# halves of the partition have to come from the same string.
-SHARED_LIB_PREFIX = "_lib"
-
-# Filename prefixes that mark a file as something other than a tool.
-# ⚠️ `__pycache__` is inert, and NOT for the reason once written here.
-# An earlier comment claimed it was kept "in case a caller hands this a
-# recursive listing" — measured on `5cff2359`, that is false too:
-# `rglob("*.py")` with and without the member both give 224 (the equality
-# is the point; the absolute number moves with the tree, and on
-# `2ca04d14` the same pair reads 225/225), because the prefix is matched
-# against `path.name` and `__pycache__/` holds `.pyc`, which the suffix
-# test already rejects. The only input it can ever reject is a file
-# literally named `__pycache__*.py`. Kept because removing it would be a
-# behaviour change in that one pathological case for no gain — but do not
-# read it as a second check on anything real.
-# ⚠️ `_lib` does no work inside `count_scope` either: measured on
-# `5cff2359`, the raw `*.py` glob of `ops`/`dx`/`lint` is 63/52/105 and the
-# counted result is the same 63/52/105. The prefixes only bite at the repo
-# root — 11 of 12 files there on `5cff2359`, 12 of 13 once this module was
-# added. Emptying this tuple leaves the published number untouched, which
-# is why the tests for it use a synthetic tree.
-TOOL_SKIP_PREFIXES: Tuple[str, ...] = (
-    SHARED_LIB_PREFIX, "__init__", "__pycache__")
+# A file whose name starts with this is a helper, not a tool (#1541). It
+# also covers `__init__.py` and `__pycache__`.
+HELPER_PREFIX = "_"
 
 # The subdirectories both scopes cover, in the order the tool map lists them.
 COUNT_SUBDIRS: Tuple[str, ...] = ("ops", "dx", "lint")
 
 
 def is_tool_file(path: Path) -> bool:
-    """Whether one path is a Python tool rather than library/bytecode."""
-    return path.suffix == ".py" and not any(
-        path.name.startswith(prefix) for prefix in TOOL_SKIP_PREFIXES)
+    """Whether one path is a Python tool rather than a helper module.
+
+    ⚠️ Suffix compared case-insensitively (#1541): Windows' `glob("*.py")`
+    hands back `B.PY`, Linux's does not, so a case-sensitive test made the
+    same tree count differently per platform.
+    """
+    return (path.suffix.lower() == ".py"
+            and not path.name.startswith(HELPER_PREFIX))
+
+
+def _child_dir(root: Path, name: str) -> Optional[Path]:
+    """`root/name`, matched case-insensitively; None if absent.
+
+    `Path.is_dir()` follows the filesystem, so `OPS/` satisfied "ops" on
+    Windows and not on Linux — two published numbers for one tree (#1541).
+    """
+    for child in root.iterdir():
+        if child.is_dir() and child.name.lower() == name.lower():
+            return child
+    return None
+
+
+def _py_files(directory: Path) -> List[Path]:
+    """Tool files directly in *directory*, sorted by name. Not `glob("*.py")`:
+    that is case-sensitive on Linux only."""
+    return sorted((f for f in directory.iterdir()
+                   if f.is_file() and is_tool_file(f)), key=lambda f: f.name)
 
 
 def scan(tools_root: Path, *,
@@ -133,15 +128,15 @@ def scan(tools_root: Path, *,
     the failure mode this whole module exists to remove. Order is kept.
     """
     found: List[Tuple[Optional[str], Path]] = []
+    if not tools_root.is_dir():
+        return found
     for subdir in dict.fromkeys(COUNT_SUBDIRS):
-        directory = tools_root / subdir
-        if not directory.is_dir():
+        directory = _child_dir(tools_root, subdir)
+        if directory is None:
             continue
-        found.extend((subdir, f) for f in sorted(directory.glob("*.py"))
-                     if is_tool_file(f))
+        found.extend((subdir, f) for f in _py_files(directory))
     if include_root:
-        found.extend((None, f) for f in sorted(tools_root.glob("*.py"))
-                     if is_tool_file(f))
+        found.extend((None, f) for f in _py_files(tools_root))
     return found
 
 
@@ -153,6 +148,32 @@ def count_scope(tools_root: Path) -> List[Tuple[Optional[str], Path]]:
 def tool_map_scope(tools_root: Path) -> List[Tuple[Optional[str], Path]]:
     """The tools docs/internal/tool-map.md inventories: the above + root."""
     return scan(tools_root, include_root=True)
+
+
+def is_helper_file(path: Path) -> bool:
+    """The other half of the partition: a `_`-prefixed module, not a dunder.
+
+    `generate_tool_map` lists these in its shared-helper section, so a file
+    in scope is always exactly one of tool or helper and never neither.
+    """
+    return (path.suffix.lower() == ".py"
+            and path.name.startswith(HELPER_PREFIX)
+            and not path.name.startswith("__"))
+
+
+def helper_scope(tools_root: Path) -> List[Tuple[Optional[str], Path]]:
+    """Helper modules in the same directories `tool_map_scope` walks."""
+    found: List[Tuple[Optional[str], Path]] = []
+    if not tools_root.is_dir():
+        return found
+    dirs = [(None, tools_root)] + [
+        (sub, d) for sub in dict.fromkeys(COUNT_SUBDIRS)
+        for d in [_child_dir(tools_root, sub)] if d is not None]
+    for subdir, directory in dirs:
+        found.extend((subdir, f) for f in sorted(
+            (f for f in directory.iterdir()
+             if f.is_file() and is_helper_file(f)), key=lambda f: f.name))
+    return found
 
 
 def count_by_subdir(tools_root: Path) -> Dict[str, int]:

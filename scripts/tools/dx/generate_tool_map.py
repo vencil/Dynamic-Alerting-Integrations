@@ -25,7 +25,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
 )
-from _lib_toolcount import SHARED_LIB_PREFIX, tool_map_scope  # noqa: E402
+from _lib_toolcount import helper_scope, tool_map_scope  # noqa: E402
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
     require_platform_version,
@@ -195,6 +195,11 @@ def gather_tools() -> dict:
     return categorized
 
 
+def _rel(subdir, path: Path) -> str:
+    """`name` at the tools root, `subdir/name` below it."""
+    return path.name if subdir is None else f"{subdir}/{path.name}"
+
+
 def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
     """Generate tool-map.md content."""
     headers = CATEGORY_HEADERS[lang]
@@ -264,31 +269,26 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
 
         lines.append("")
 
-    # Shared libraries footer — the other half of the same partition the
-    # tool tables use, so the prefix comes from the shared module rather
-    # than being spelled a second time here (#1511).
-    # ⚠️ Root only, deliberately unchanged: a `_lib*` module placed in
-    # `ops/`, `dx/` or `lint/` is skipped by the tool scan AND missed
-    # here, so it appears nowhere in this file. Widening the glob would
-    # add rows to a shipped document, so it is tracked separately.
-    shared_libs = sorted(
-        f for f in TOOLS_ROOT.glob(f"{SHARED_LIB_PREFIX}*.py") if f.is_file()
-    )
+    # Shared helpers — the other half of the partition the tool tables use
+    # (`_lib_toolcount.helper_scope`), so every `.py` in scope lands in
+    # exactly one of the two. #1541 moved the subdirectory `_*.py` helpers
+    # here from the tool tables.
+    shared_libs = [(sub, f) for sub, f in helper_scope(TOOLS_ROOT)]
 
     if lang == "en":
         lines.append("## Shared Libraries")
         lines.append("")
-        for lib in shared_libs:
+        for sub, lib in shared_libs:
             desc = extract_tool_description(lib) or "Shared across Python tools"
-            lines.append(f"- `scripts/tools/{lib.name}`: {desc}")
+            lines.append(f"- `scripts/tools/{_rel(sub, lib)}`: {desc}")
         lines.append("- `scripts/_lib.sh`: Shared across shell "
                      "scenario/benchmark scripts")
     else:
         lines.append("## 共用函式庫")
         lines.append("")
-        for lib in shared_libs:
+        for sub, lib in shared_libs:
             desc = extract_tool_description(lib) or "Python 工具間共用"
-            lines.append(f"- `scripts/tools/{lib.name}`：{desc}")
+            lines.append(f"- `scripts/tools/{_rel(sub, lib)}`：{desc}")
         lines.append("- `scripts/_lib.sh`：Shell scenario/benchmark 共用")
     lines.append("")
 

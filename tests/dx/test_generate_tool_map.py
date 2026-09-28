@@ -229,42 +229,30 @@ class TestConstants:
             "a private scanner here is how the #1511 divergence started. "
             "Globals it does reach: %s" % sorted(reached))
         assert not hasattr(gtm, "SKIP_PREFIXES"), (
-            "a module-level SKIP_PREFIXES is back; the prefixes live in "
-            "_lib_toolcount.TOOL_SKIP_PREFIXES so both halves of the "
+            "a module-level SKIP_PREFIXES is back; the boundary lives in "
+            "_lib_toolcount.HELPER_PREFIX so both halves of the "
             "partition come from one string")
 
-    def test_the_shared_library_footer_follows_the_shared_prefix(
-            self, tmp_path, monkeypatch):
-        """⛔ Control for the other half of the same partition.
+    def test_the_helper_footer_lists_helper_scope(self, tmp_path, monkeypatch):
+        """⛔ The other half of the tool tables' partition (#1541).
 
-        The tool tables skip `_lib*` and this document's shared-library
-        section lists them, so the two must read one string. Measured
-        before this control existed: reverting the footer to its own
-        literal `"_lib*.py"` left every test green — the collapse had no
-        guard at all, which is how a second spelling comes back. With
-        this control, that same edit fails, naming it.
-
-        ⚠️ Known bypass, measured: writing a second module-level
-        `SHARED_LIB_PREFIX = "_lib"` here satisfies it, because the
-        monkeypatch below proves only that the footer reads a module
-        global — not where that global came from.
+        Root `_lib*` AND subdirectory `_*.py` helpers are listed, with their
+        subdirectory; tools are not. Before #1541 the footer globbed the root
+        only, so moving a subdirectory helper out of the tool tables would
+        have dropped it from this document entirely.
         """
         tools = tmp_path / "tools"
-        tools.mkdir()
-        for name in ("_lib_old.py", "_zzlib_new.py", "realtool.py"):
-            (tools / name).write_text(
-                '"""%s — stub."""\n' % name, encoding="utf-8", newline="\n")
+        (tools / "ops").mkdir(parents=True)
+        for rel in ("_lib_root.py", "ops/_part.py", "ops/realtool.py"):
+            (tools / rel).write_text(
+                '"""%s — stub."""\n' % rel, encoding="utf-8", newline="\n")
         monkeypatch.setattr(gtm, "TOOLS_ROOT", tools)
-        monkeypatch.setattr(gtm, "SHARED_LIB_PREFIX", "_zzlib")
 
         rendered = gtm.generate_tool_map({c: [] for c in gtm.CATEGORY_ORDER})
 
-        assert "_zzlib_new.py" in rendered, (
-            "the shared-library footer ignored SHARED_LIB_PREFIX, so this "
-            "module spells the prefix a second time — the partition is "
-            "back to two definitions")
-        assert "_lib_old.py" not in rendered, (
-            "the footer still lists the old prefix after it moved")
+        assert "`scripts/tools/_lib_root.py`" in rendered, rendered
+        assert "`scripts/tools/ops/_part.py`" in rendered, rendered
+        assert "realtool.py" not in rendered, rendered
 
 
 # ---------------------------------------------------------------------------

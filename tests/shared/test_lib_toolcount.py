@@ -6,13 +6,14 @@ gate that CHECKS the "N 個 Python 工具" number, the writer that puts it
 into README.md / README.en.md, and the generator that writes
 docs/internal/tool-map.md. The writer skipped no filename prefixes at
 all, so the three agreed only because `ops/`, `dx/` and `lint/` happen to
-hold no `_lib*` or `__init__.py`.
+hold no `_lib*` or `__init__.py`. #1541 then moved the boundary from
+`_lib` to `_`: every `_`-prefixed module is a helper, not a tool.
 
 Every assertion that touches a filesystem runs against a SYNTHETIC tree,
 not the repo's own. On the repo tree the interesting shapes are absent,
 so a real-tree test cannot tell a working predicate from a stub: measured
-on `5cff2359`, emptying `TOOL_SKIP_PREFIXES` leaves the published count
-at 220. The tree built by `_build_tree` contains one of every shape the
+on `5cff2359` (then a `_lib` boundary), emptying the skip list left the
+published count at 220. The tree built by `_build_tree` contains one of every shape the
 predicate has to judge.
 
 ⚠️ `TestThePredicate` is the exception and says so: it feeds bare
@@ -50,6 +51,7 @@ _TREE = (
     "dx/custom/loader.py",    # library inside that package
     "lint/delta.py",          # tool
     "lint/_lib_helper.py",    # skipped: shared library
+    "ops/_grar_part.py",      # skipped: helper without `_lib` (#1541)
     "validate_all.py",        # repo-root tool: tool-map scope only
     "_lib_shared.py",         # skipped at the root too
 )
@@ -91,32 +93,21 @@ class TestThePredicate:
                 "%s must NOT be judged a tool; the predicate has drifted "
                 "towards accepting everything" % name)
 
-    def test_underscore_helpers_without_the_lib_prefix_are_still_counted(self):
-        """⛔ This pins a CONSEQUENCE nobody has decided to accept.
+    def test_underscore_helpers_are_not_tools(self):
+        """#1541: the boundary is `_`, not `_lib`. `verify_diff_rules.yaml`
+        already calls these 「子目錄共用 helper」; now the published count
+        agrees. Narrowing or widening this moves README's number."""
+        for name in ("_grar_parse.py", "_registry_lib.py",
+                     "_version_patterns.py"):
+            assert not tc.is_tool_file(Path(name)), name
+            assert tc.is_helper_file(Path(name)), name
+        assert not tc.is_helper_file(Path("__init__.py"))
 
-        `_lib` is the convention for a shared module, and the counted
-        subdirectories hold helper modules that do not carry it, so the
-        published number includes them. `verify_diff_rules.yaml` matches
-        the same files as 「子目錄共用 helper」 — the repo holds both
-        opinions at once.
-
-        ⚠️ Read on before "fixing" this: narrowing the predicate here
-        LOWERS the number in README.md and README.en.md, so it is a
-        decision about the published sentence, not a cleanup. Change this
-        test together with that sentence and the tracking ticket, or not
-        at all. Deleting the assertions to go green removes the only
-        place the trade-off is written down.
-
-        ⚠️ This asserts on a filename, not on the tree — it stays true
-        even if every such file is renamed. The live count is measured in
-        `TestTheTwoScopes`.
-        """
-        assert tc.is_tool_file(Path("_grar_parse.py")), (
-            "the predicate stopped counting non-`_lib` helper modules; "
-            "if that is intended, README's count changes with it")
-        assert tc.is_tool_file(Path("_registry_lib.py")), (
-            "the predicate stopped counting non-`_lib` helper modules; "
-            "if that is intended, README's count changes with it")
+    def test_the_suffix_is_case_insensitive(self):
+        """#1541: Windows' glob hands back `B.PY`; it must count the same
+        on every platform."""
+        assert tc.is_tool_file(Path("B.PY"))
+        assert tc.is_helper_file(Path("_h.Py"))
 
 
 class TestTheTwoScopes:
@@ -134,7 +125,7 @@ class TestTheTwoScopes:
             "failure worth reading")
 
     def test_the_skipping_is_doing_work_on_this_tree(self, tmp_path):
-        """Must-fire control: an empty `TOOL_SKIP_PREFIXES` must be visible.
+        """Must-fire control: an inert `HELPER_PREFIX` must be visible.
 
         Without this the expectations above would also hold for a tree
         with nothing to skip, and they would prove nothing.
@@ -374,3 +365,30 @@ class TestAllThreeConsumers:
 
         _write_map(tc.tool_map_scope(tools))
         assert checker.check_tool_map_coverage() == []
+
+
+class TestPlatformIndependence:
+    """#1541: the same tree must give the same count on Linux and Windows."""
+
+    def test_directory_and_suffix_case_do_not_change_the_count(self, tmp_path):
+        tools = tmp_path / "tools"
+        (tools / "OPS").mkdir(parents=True)
+        (tools / "OPS" / "Tool.PY").write_text(_STUB, encoding="utf-8")
+        (tools / "OPS" / "_helper.py").write_text(_STUB, encoding="utf-8")
+        assert tc.count_by_subdir(tools)["ops"] == 1
+        assert [p.name for _s, p in tc.helper_scope(tools)] == ["_helper.py"]
+
+
+class TestThePartitionIsComplete:
+    def test_every_py_in_scope_is_a_tool_or_a_helper_never_both(self, tmp_path):
+        """`generate_tool_map` lists tools in tables and helpers in a
+        footer; a file in neither would vanish from the map."""
+        tools = _build_tree(tmp_path)
+        tools_ = {p for _s, p in tc.tool_map_scope(tools)}
+        helpers = {p for _s, p in tc.helper_scope(tools)}
+        assert not tools_ & helpers
+        flat = [p for d in [tools] + [tools / s for s in tc.COUNT_SUBDIRS]
+                if d.is_dir() for p in d.glob("*.py")
+                if not p.name.startswith("__")]
+        assert set(flat) == tools_ | helpers, sorted(
+            p.name for p in set(flat) - tools_ - helpers)

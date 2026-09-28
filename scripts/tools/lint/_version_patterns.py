@@ -369,9 +369,15 @@ DOC_MAP_SKIP_NAME_PATTERNS = (
 # File collections for various checks
 # ============================================================================
 
-# Files to check for tool counts
+# Files to check for tool counts.
+#
+# ⛔ Rule (#1640): a Python-tool count is written ONLY in a sentence that
+# carries TOOL_COUNT_SCOPE_ANCHOR — today the repo-map row of these two
+# READMEs, which `bump_docs --sync-counts` writes. A count without the
+# anchor has no scope to be checked against, so don't write one; the
+# checker does not look for it. CLAUDE.md left this list when its count
+# sentence was removed (#1407).
 TOOL_COUNT_CHECK_FILES = [
-    REPO_ROOT / "CLAUDE.md",
     REPO_ROOT / "README.md",
     REPO_ROOT / "README.en.md",
 ]
