@@ -1210,7 +1210,8 @@ class TestYamlTypedScalarParity:
     """#2371: a value PyYAML reads as `date` / `datetime` / `bytes` (an
     unquoted `2026-12-31`, a `!!binary`) used to end every mode with a
     TypeError traceback while the exporter served the tree. The hash and the
-    output now render them as the exporter's canonical JSON does.
+    output now render them as the exporter's canonical JSON does; timestamps
+    are decided at read time by yaml.v3's layouts, not PyYAML's.
 
     The Go column is the oracle, measured with pkg/config
     `CanonicalJSON(ComputeEffectiveConfig(t1.yaml, "t1", [_defaults.yaml]))`
@@ -1294,25 +1295,69 @@ class TestYamlTypedScalarParity:
          '{"_x":{"v":"\ufffd"},"mysql_connections":50}'),
     ]
 
-    # Shapes the hook cannot align: PyYAML has already discarded the source
-    # text Go's rendering depends on (describe_tenant.py, the #2371 block).
-    DIVERGENT = [
-        ("datetime-naive-space", "_x:\n  at: 2026-12-31 10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-naive-space-fraction", "_x:\n  at: 2026-12-31 10:20:30.5\n", None,
+    # Timestamps where yaml.v3's rules and PyYAML's disagree. The reader
+    # (`_GoKeyLoader`) decides them from the source text by yaml.v3's four
+    # layouts, so each is Go's answer, not PyYAML's (review F3).
+    ALIGNED = ALIGNED + [
+        ("datetime-space-no-zone", "_silent_mode:\n  expires: 2026-12-31 23:59:59\n", None,
+         '{"_silent_mode":{"expires":"2026-12-31T23:59:59Z"},"mysql_connections":50}'),
+        ("datetime-space-fraction", "_x:\n  at: 2026-12-31 10:20:30.5\n", None,
          '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
+        ("datetime-two-spaces", "_x:\n  at: 2026-12-31  10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-space-in-defaults", "mysql_connections: 60\n",
+         "defaults:\n  _x:\n    at: 2026-12-31 10:20:30\n",
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":60}'),
         ("datetime-naive-t-trailing-zeros", "_x:\n  at: 2026-12-31T10:20:30.500\n", None,
          '{"_x":{"at":"2026-12-31T10:20:30.500"},"mysql_connections":50}'),
         ("datetime-naive-lower-t", "_x:\n  at: 2026-12-31t10:20:30\n", None,
          '{"_x":{"at":"2026-12-31t10:20:30"},"mysql_connections":50}'),
         ("datetime-space-before-zone", "_x:\n  at: 2026-12-31 10:20:30 +08:00\n", None,
          '{"_x":{"at":"2026-12-31 10:20:30 +08:00"},"mysql_connections":50}'),
+        ("datetime-space-then-z", "_x:\n  at: 2026-12-31 10:20:30Z\n", None,
+         '{"_x":{"at":"2026-12-31 10:20:30Z"},"mysql_connections":50}'),
         ("datetime-hour-only-zone", "_x:\n  at: 2026-12-31T10:20:30+08\n", None,
          '{"_x":{"at":"2026-12-31T10:20:30+08"},"mysql_connections":50}'),
         ("datetime-fraction-9", "_x:\n  at: 2026-12-31T10:20:30.123456789Z\n", None,
          '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
+        ("datetime-fraction-10", "_x:\n  at: 2026-12-31T10:20:30.1234567891Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
+        ("datetime-comma-fraction", "_x:\n  at: 2026-12-31T10:20:30,5Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
+        ("datetime-hour-24", "_x:\n  at: 2026-12-31T24:00:00Z\n", None,
+         '{"_x":{"at":"2026-12-31T24:00:00Z"},"mysql_connections":50}'),
+        ("datetime-second-60", "_x:\n  at: 2026-12-31 23:59:60\n", None,
+         '{"_x":{"at":"2026-12-31 23:59:60"},"mysql_connections":50}'),
+        ("datetime-tagged-space", "_x:\n  at: !!timestamp 2026-12-31 10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-quoted", '_x:\n  at: "2026-12-31 23:59:59"\n', None,
+         '{"_x":{"at":"2026-12-31 23:59:59"},"mysql_connections":50}'),
         ("date-one-digit-fields", "_x:\n  at: 2026-1-2\n", None,
          '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":50}'),
+        ("date-one-digit-in-defaults", "mysql_connections: 60\n",
+         "defaults:\n  _x:\n    at: 2026-1-2\n",
+         '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":60}'),
+        ("date-in-list-go-only-layouts", "_x:\n  - 2026-12-31 23:59:59\n  - 2026-1-2\n", None,
+         '{"_x":["2026-12-31T23:59:59Z","2026-01-02T00:00:00Z"],"mysql_connections":50}'),
+        # PyYAML raised ValueError on these and dropped the whole tenant file.
+        ("date-month-13", "_x:\n  at: 2026-13-01\n", None,
+         '{"_x":{"at":"2026-13-01"},"mysql_connections":50}'),
+        ("date-feb-30", "_x:\n  at: 2026-02-30\n", None,
+         '{"_x":{"at":"2026-02-30"},"mysql_connections":50}'),
+    ]
+
+    # What the reader still cannot align. `None` = yaml.v3 refuses the file.
+    DIVERGENT = [
+        # An explicit tag PyYAML's own resolver would also have inferred leaves
+        # no trace once composed: read as the plain `2026-1-2`, i.e. a time.
+        ("explicit-str-on-a-go-only-timestamp", "_x:\n  at: !!str 2026-1-2\n", None,
+         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
+        # yaml.v3: "cannot decode !!str `…` as a !!timestamp"; here, the text.
+        ("explicit-timestamp-go-cannot-parse", "_x:\n  at: !!timestamp 2026-12-31T10:20:30\n", None, None),
+        # A parser difference, not a typing one (#2123): PyYAML's scanner
+        # refuses the tab and the file is skipped; yaml.v3 keeps the text.
+        ("tab-between-date-and-time", "_x:\n  at: 2026-12-31\t10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31\\t10:20:30"},"mysql_connections":50}'),
     ]
 
     def _python_canonical(self, tmp_path, body, defaults):
@@ -1330,10 +1375,15 @@ class TestYamlTypedScalarParity:
     @pytest.mark.parametrize(
         "body,defaults,go_json",
         [pytest.param(*c[1:], marks=pytest.mark.xfail(
-            strict=True, reason="#2371: PyYAML drops the source text Go renders from"))
+            strict=True, reason="#2371: explicit tag lost at compose time, or a "
+                                "PyYAML/yaml.v3 parser difference — see DIVERGENT"))
          for c in DIVERGENT],
         ids=[c[0] for c in DIVERGENT])
     def test_known_divergence_from_go(self, tmp_path, body, defaults, go_json):
+        if go_json is None:  # yaml.v3 refuses the file: no tenant t1 at all
+            with pytest.raises(KeyError):
+                self._python_canonical(tmp_path, body, defaults)
+            return
         got_json, _ = self._python_canonical(tmp_path, body, defaults)
         assert got_json == go_json
 
@@ -1419,6 +1469,11 @@ class TestYamlMappingKeyParity:
         ("1000000.0", "1e+06"), ("123456.0", "123456"), ("123456789.0", "1.23456789e+08"),
         ("0.0001", "0.0001"), ("1e-4", "0.0001"), ("0.00001", "1e-05"), ("-1.5e-7", "-1.5e-07"),
         (".inf", "+Inf"), ("-.Inf", "-Inf"), ("+.INF", "+Inf"), (".nan", "NaN"),
+        # yaml.v3's `.` hint runs ParseFloat on the text as written, so an
+        # underscore must pass underscoreOK (review F2); the digit hint strips
+        # them first (`1__0` above is 10).
+        (".5_0", "0.5"), (".5e1_0", "5e+09"), (".5E+3", "500"), (".5e400", ".5e400"),
+        ("._5", "._5"), (".5_", ".5_"), (".5__0", ".5__0"), (".5e_1", ".5e_1"), ("._", "._"),
         ("true", "true"), ("True", "true"), ("TRUE", "true"), ("false", "false"),
         ("yes", "yes"), ("on", "on"), ("no", "no"), ("off", "off"), ("y", "y"),
         ("12:30", "12:30"), ("1:30:00", "1:30:00"),
@@ -1499,6 +1554,26 @@ class TestYamlMappingKeyParity:
         out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
         effective = (out["t1"] if "--all" in mode else out)["effective_config"]
         assert list(effective["_x"]) == [dt._go_plain_key(key)]
+
+    @pytest.mark.parametrize("fmt", ["json", "yaml"])
+    def test_all_keeps_tenant_ids_as_source_text(self, tmp_path, fmt):
+        """Review F1: `--all` is keyed by TENANT ID, which the exporter keys by
+        source text (#2114). Respelled as `%v`, tenants `010` and `8` both
+        became "8" and one silently replaced the other."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+        (conf_d / "a.yaml").write_text("tenants:\n  010:\n    mysql_connections: 10\n", encoding="utf-8")
+        (conf_d / "b.yaml").write_text("tenants:\n  8:\n    mysql_connections: 8\n", encoding="utf-8")
+        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--format", fmt, "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        out = yaml.safe_load(res.stdout) if fmt == "yaml" else json.loads(res.stdout)
+        assert set(out) == {"010", "8"}, out
+        assert out["010"]["tenant_id"] == "010"
+        assert out["010"]["effective_config"] == {"mysql_connections": 10}
+        assert out["8"]["tenant_id"] == "8"
+        assert out["8"]["effective_config"] == {"mysql_connections": 8}
 
     def test_a_surrogate_escape_is_a_file_that_does_not_parse(self, tmp_path):
         """yaml.v3 refuses `"\\udfff"` (invalid Unicode escape); PyYAML built

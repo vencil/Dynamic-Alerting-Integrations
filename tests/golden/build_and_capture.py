@@ -500,7 +500,8 @@ def s_yaml_date():
 # ⛔ An INVALID UTF-8 byte cannot be a golden row: golden.json stores
 # effective_config as JSON text, which cannot hold that byte, so the Go
 # EffectiveConfig / ResolveEffective legs would compare the exporter's
-# `�` escape with a real U+FFFD and go red on a correct pair. That
+# six-character escape (backslash, `ufffd`) with a real U+FFFD and go red
+# on a correct pair. That
 # shape's Go rendering is pinned in tests/dx/test_describe_tenant.py.
 def s_yaml_binary():
     d = reset("mixed-mode") / "yaml-binary"

@@ -157,29 +157,30 @@ def _file_hash(path: Path) -> str:
 # writes them as below. merged_hash must match the exporter's byte for byte,
 # so this is the exporter's rendering, not a nicer one.
 #
-#   date                   -> "YYYY-MM-DDT00:00:00Z"   (time.Time at UTC midnight)
-#   datetime with a zone   -> RFC 3339: fraction without trailing zeros, "Z"
-#                             for a zero offset, else "+hh:mm"
-#   naive datetime         -> the same without a zone suffix
-#   bytes                  -> UTF-8 decoded; each byte that is not part of a
-#                             valid sequence becomes the six characters
-#                             `�` in the JSON text (encoding/json's
-#                             escape), NOT a raw U+FFFD
+#   timestamp  -> decided at READ time, not here: `_GoKeyLoader` applies
+#                 yaml.v3's four layouts to the source text and yields the
+#                 text encoding/json writes for that time.Time (RFC 3339,
+#                 nanoseconds, "Z" for UTC) — or the source text itself where
+#                 yaml.v3 reads no time. PyYAML's own timestamp rules differ
+#                 both ways (a naive `T` value, a space before the zone, a
+#                 9-digit fraction, `2026-1-2`, `2026-12-31 23:59:59`), so
+#                 its datetime objects cannot be rendered into Go's answer.
+#   date / datetime objects from any other reader -> as time.Time JSON:
+#                 "YYYY-MM-DDT00:00:00Z", or RFC 3339 with the offset
+#   bytes      -> UTF-8 decoded; each byte that is not part of a valid
+#                 sequence becomes encoding/json's six-character escape
+#                 (backslash, then `ufffd`) in the JSON text, NOT a raw U+FFFD
 #
-# ⛔ Shapes where the hook CANNOT agree with Go, because PyYAML has already
-# discarded the source text it would need (tests/dx/test_describe_tenant.py
-# TestYamlTypedScalarParity pins each as a strict xfail):
-#   - a naive datetime: yaml.v3 reads `2026-12-31 10:20:30` (space) as UTC
-#     time ("…Z") but `2026-12-31T10:20:30` (`T`, no zone) as a plain
-#     string; PyYAML makes both the same naive datetime. The hook renders the
-#     `T` spelling, so the space spelling differs.
-#   - a naive `T` value whose fraction has trailing zeros, or a lower-case
-#     `t` without a zone: yaml.v3 keeps those as the source string.
-#   - `2026-12-31 10:20:30 +08:00` (space before the zone) and a bare-hour
-#     zone `+08`: a string to yaml.v3, a zoned datetime to PyYAML.
-#   - more than 6 fractional digits: PyYAML truncates to microseconds.
-#   - `2026-1-2` (one-digit month/day): a date to yaml.v3, a string to
-#     PyYAML — no crash, and nothing for a hook to see.
+# ⛔ Timestamp values the reader still cannot align (tests/dx/
+# test_describe_tenant.py TestYamlTypedScalarParity, strict xfails):
+#   - an explicit `!!timestamp` yaml.v3 cannot parse (`!!timestamp
+#     2026-12-31T10:20:30`): yaml.v3 refuses the FILE; here it is the text.
+#   - an explicit `!!str` on a text PyYAML itself reads as a string but
+#     yaml.v3 as a time (`!!str 2026-1-2`): indistinguishable from the plain
+#     scalar once composed, so it is rendered as the time.
+#   - a tab between date and time: PyYAML's scanner refuses the file
+#     (`found character '\t'`), yaml.v3 keeps the text. A parser difference
+#     (#2123), not a typing one.
 #
 # Mapping KEYS are a separate path (json's `default` is never called for a
 # key): see `_GoKey` below.
@@ -343,6 +344,28 @@ def _go_parse_int(text: str) -> "int | None":
     return None
 
 
+def _go_underscore_ok(text: str) -> bool:
+    """strconv's underscoreOK: an `_` only between digits (or between a base
+    prefix and a digit)."""
+    if text[:1] in ("+", "-"):
+        text = text[1:]
+    saw, start, hexa = "^", 0, False
+    if len(text) >= 2 and text[0] == "0" and text[1].lower() in "box":
+        saw, start, hexa = "0", 2, text[1].lower() == "x"
+    for ch in text[start:]:
+        if "0" <= ch <= "9" or (hexa and ch.lower() in "abcdef"):
+            saw = "0"
+        elif ch == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
 def _go_float_v(value: float) -> str:
     """fmt's `%v` of a float64: strconv 'g' at the shortest precision, which
     switches to an exponent below 1e-4 and from 1e+06 up (`%e` with at least
@@ -369,14 +392,35 @@ def _go_float_v(value: float) -> str:
     return f"{sign}{digs[:point]}.{digs[point:]}"
 
 
-def _go_time_string(year, month, day, hour=0, minute=0, second=0,
-                    frac: str = "", zone: str = "Z") -> "str | None":
-    """time.Time.String() of a yaml.v3 timestamp; None if time.Parse would
-    refuse it (out-of-range field), so the key stays a string there too."""
+def _go_parse_timestamp(text: str) -> "tuple | None":
+    """yaml.v3's parseTimestamp: `(y, mo, d, h, mi, s, frac, zone)` for a
+    text one of its four layouts accepts, else None — including a field
+    time.Parse refuses as out of range (month 13, Feb 30, hour 24), which
+    leaves the scalar a plain string there. `frac` is at most 9 digits with
+    trailing zeros dropped; `zone` is "Z" for UTC (also `±00:00`: time.Local
+    is UTC in the shipped image) or "±hh:mm"."""
+    m = _GO_TS_ZONED.match(text) or _GO_TS_SPACE.match(text)
+    if m:
+        fields = [int(g) for g in m.groups()[:6]]
+        frac = (m.group(7) or "")[:9].rstrip("0")
+        zone = m.group(8) if m.re is _GO_TS_ZONED else "Z"
+    else:
+        m = _GO_TS_DATE.match(text)
+        if not m:
+            return None
+        fields, frac, zone = [int(g) for g in m.groups()] + [0, 0, 0], "", "Z"
     try:
-        datetime.datetime(year, month, day, hour, minute, second)
+        datetime.datetime(*fields)
     except ValueError:
         return None
+    if zone in ("+00:00", "-00:00"):
+        zone = "Z"
+    return (*fields, frac, zone)
+
+
+def _go_time_string(year, month, day, hour=0, minute=0, second=0,
+                    frac: str = "", zone: str = "Z") -> str:
+    """time.Time.String() — how `%v` spells a time.Time map key."""
     text = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
     frac = frac[:9].rstrip("0")
     if frac:
@@ -387,19 +431,16 @@ def _go_time_string(year, month, day, hour=0, minute=0, second=0,
     return f"{text} {offset} {offset}"
 
 
+def _go_time_json(year, month, day, hour, minute, second, frac, zone) -> str:
+    """time.Time.MarshalJSON's text (RFC 3339, nanosecond precision) — how
+    pkg/config's canonical JSON writes a time.Time VALUE."""
+    text = f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}"
+    return text + (f".{frac}" if frac else "") + zone
+
+
 def _go_timestamp_key(text: str) -> "str | None":
-    m = _GO_TS_ZONED.match(text)
-    if m:
-        y, mo, d, h, mi, s = (int(g) for g in m.groups()[:6])
-        return _go_time_string(y, mo, d, h, mi, s, m.group(7) or "", m.group(8))
-    m = _GO_TS_SPACE.match(text)
-    if m:
-        y, mo, d, h, mi, s = (int(g) for g in m.groups()[:6])
-        return _go_time_string(y, mo, d, h, mi, s, m.group(7) or "")
-    m = _GO_TS_DATE.match(text)
-    if m:
-        return _go_time_string(*(int(g) for g in m.groups()))
-    return None
+    parsed = _go_parse_timestamp(text)
+    return _go_time_string(*parsed) if parsed else None
 
 
 def _go_plain_key(text: str, timestamps: bool = True) -> str:
@@ -423,7 +464,14 @@ def _go_plain_key(text: str, timestamps: bool = True) -> str:
         if stamp is not None:
             return stamp
     plain = text.replace("_", "")
-    if plain[:1] != ".":
+    if text[0] == ".":
+        # yaml.v3's `.` hint: strconv.ParseFloat on the text AS WRITTEN —
+        # underscores are not stripped first, so they must pass Go's
+        # underscoreOK (between digits only): `.5_0` is 0.5, `._5`, `.5_`,
+        # `.5__0` and `.5e_1` stay strings.
+        if not (_go_underscore_ok(text) and _GO_YAML_FLOAT.match(plain)):
+            return text
+    else:
         number = _go_parse_int(plain)
         if number is not None:
             return str(number)
@@ -470,10 +518,38 @@ def _reject_surrogates(text: Any, node: Any) -> Any:
 
 class _GoKeyLoader(StrictExporterKeyLoader):
     """The #2114 / #2123 reader (text keys, strict), with every scalar key a
-    `_GoKey` carrying the exporter's spelling."""
+    `_GoKey` carrying the exporter's spelling, and every timestamp VALUE
+    decided by yaml.v3's rules instead of PyYAML's (`_construct_timestamp`)."""
 
     def construct_scalar(self, node):  # noqa: D102 — see _reject_surrogates
         return _reject_surrogates(super().construct_scalar(node), node)
+
+    def _construct_timestamp(self, node):
+        """A scalar PyYAML tags `!!timestamp`. yaml.v3 decides on its own
+        four layouts, which are not PyYAML's: where it reads a time, the
+        value is the text pkg/config's canonical JSON writes for that
+        time.Time (so `2026-12-31 23:59:59` is "2026-12-31T23:59:59Z", a
+        9-digit fraction keeps all 9); where it does not (`…T10:20:30` with
+        no zone, a tab or a space before the zone, `+08`, month 13 — the last
+        of which PyYAML raised ValueError on and dropped the whole file), the
+        value is the source text, as yaml.v3 keeps it."""
+        text = self.construct_scalar(node)
+        parsed = _go_parse_timestamp(text)
+        return _go_time_json(*parsed) if parsed else text
+
+    def _construct_str(self, node):
+        """A scalar PyYAML reads as a string that yaml.v3 reads as a time —
+        `2026-1-2`, `…T10:20:30,5Z`, two spaces before the time. Only for a
+        plain scalar PyYAML would itself have tagged `!!str`: a quoted one
+        stays text in both."""
+        text = self.construct_scalar(node)
+        if (isinstance(node, yaml.ScalarNode) and node.style is None
+                and text[:4].isdigit()
+                and self.resolve(yaml.ScalarNode, text, (True, False)) == _YAML_STR_TAG):
+            parsed = _go_parse_timestamp(text)
+            if parsed:
+                return _go_time_json(*parsed)
+        return text
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
         mapping = super().construct_mapping(node, deep=deep)
@@ -482,6 +558,10 @@ class _GoKeyLoader(StrictExporterKeyLoader):
             _reject_surrogates(key_node.value, key_node)
         return {(_GoKey(k, _go_key_spelling(self, nodes[k])) if k in nodes else k): v
                 for k, v in mapping.items()}
+
+
+_GoKeyLoader.add_constructor(_YAML_TIMESTAMP_TAG, _GoKeyLoader._construct_timestamp)
+_GoKeyLoader.add_constructor(_YAML_STR_TAG, _GoKeyLoader._construct_str)
 
 
 def _go_typed_key(key: Any) -> Any:
@@ -1467,7 +1547,11 @@ def main() -> None:
                 duplicated += 1
                 continue
             info = scanner.source_info(tid)
-            result[tid] = info
+            # ⛔ A plain str, not the `_GoKey`: this key is a TENANT ID, which
+            # the exporter keys by source text (#2114) — `_go_keys` must not
+            # respell it, or tenants `010` and `8` both become "8" and one
+            # silently overwrites the other (#2371 review F1).
+            result[str.__str__(tid)] = info
         out = _output(result)
         if args.output:
             with output_write(args.output, flag="-o/--output"):
