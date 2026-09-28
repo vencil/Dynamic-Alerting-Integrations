@@ -1344,6 +1344,64 @@ class TestYamlTypedScalarParity:
          '{"_x":{"at":"2026-13-01"},"mysql_connections":50}'),
         ("date-feb-30", "_x:\n  at: 2026-02-30\n", None,
          '{"_x":{"at":"2026-02-30"},"mysql_connections":50}'),
+        # time.Parse's zone bounds: an hour above 24 or a minute above 60 is
+        # a parse error (the text stays); within them the offset is
+        # hours*60 + minutes, re-spelled — `+08:60` IS +09:00 (review 2 F1).
+        ("zone-minute-60-carries", "_x:\n  at: 2026-12-31T10:20:30+08:60\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+09:00"},"mysql_connections":50}'),
+        ("zone-minute-60-carries-negative", "_x:\n  at: 2026-12-31T10:20:30-00:60\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30-01:00"},"mysql_connections":50}'),
+        ("zone-23-59", "_x:\n  at: 2026-12-31T10:20:30+23:59\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+23:59"},"mysql_connections":50}'),
+        ("zone-hour-99-stays-text", "_x:\n  at: 2026-12-31T10:20:30.500+99:00\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.500+99:00"},"mysql_connections":50}'),
+        ("zone-hour-25-stays-text", "_x:\n  at: 2026-12-31T10:20:30+25:00\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+25:00"},"mysql_connections":50}'),
+        ("zone-minute-61-stays-text", "_x:\n  at: 2026-12-31T10:20:30+08:61\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+08:61"},"mysql_connections":50}'),
+        # Year 0 is a (leap) year to time.Parse; `datetime` cannot hold it
+        # (review 2 F3).
+        ("year-0", "_x:\n  at: 0000-01-01\n", None,
+         '{"_x":{"at":"0000-01-01T00:00:00Z"},"mysql_connections":50}'),
+        ("year-0-leap-day", "_x:\n  at: 0000-02-29\n", None,
+         '{"_x":{"at":"0000-02-29T00:00:00Z"},"mysql_connections":50}'),
+        ("year-0-space-clock", "_x:\n  at: 0000-12-31 10:20:30\n", None,
+         '{"_x":{"at":"0000-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("year-0-in-defaults", "mysql_connections: 60\n", "defaults:\n  _x:\n    at: 0000-01-01\n",
+         '{"_x":{"at":"0000-01-01T00:00:00Z"},"mysql_connections":60}'),
+        ("year-1-not-leap", "_x:\n  at: 0001-02-29\n", None,
+         '{"_x":{"at":"0001-02-29"},"mysql_connections":50}'),
+        ("year-2100-not-leap", "_x:\n  at: 2100-02-29\n", None,
+         '{"_x":{"at":"2100-02-29"},"mysql_connections":50}'),
+        # Only a PLAIN scalar is ever a time: quoted and block ones are text
+        # to yaml.v3 (review 2 F4 — `_construct_str`'s style guard, and the
+        # `|` block's trailing newline, which `$` used to let through).
+        ("quoted-go-only-layout", "_x:\n  at: '2026-1-2'\n", None,
+         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
+        ("block-strip-go-only-layout", "_x:\n  at: |-\n    2026-1-2\n", None,
+         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
+        ("block-keep-go-only-layout", "_x:\n  at: |\n    2026-1-2\n", None,
+         '{"_x":{"at":"2026-1-2\\n"},"mysql_connections":50}'),
+        ("block-keep-date", "_x:\n  at: |\n    2026-12-31\n", None,
+         '{"_x":{"at":"2026-12-31\\n"},"mysql_connections":50}'),
+        ("tagged-block-strip-date", "_x:\n  at: !!timestamp |-\n    2026-12-31\n", None,
+         '{"_x":{"at":"2026-12-31T00:00:00Z"},"mysql_connections":50}'),
+    ]
+
+    # The exporter has no merged_hash for these, so neither does this tool:
+    # the file takes the existing "does not parse" path (no tenant t1).
+    GO_REFUSES = [
+        # yaml.v3 refuses the FILE: "cannot decode !!str `foo` as a !!timestamp"
+        # (review 2 F2).
+        ("explicit-timestamp-word", "_x:\n  at: !!timestamp foo\n"),
+        ("explicit-timestamp-empty", "_x:\n  at: !!timestamp\n"),
+        ("explicit-timestamp-quoted-empty", '_x:\n  at: !!timestamp ""\n'),
+        ("explicit-timestamp-block-keep", "_x:\n  at: !!timestamp |\n    2026-12-31\n"),
+        # time.Parse accepts a 24h+ offset, time.Time.MarshalJSON does not:
+        # pkg/config's CanonicalJSON fails (review 2 F1).
+        ("zone-24-00", "_x:\n  at: 2026-12-31T10:20:30+24:00\n"),
+        ("zone-minus-23-60", "_x:\n  at: 2026-12-31T10:20:30-23:60\n"),
+        ("zone-24-01", "_x:\n  at: 2026-12-31T10:20:30+24:01\n"),
     ]
 
     # What the reader still cannot align. `None` = yaml.v3 refuses the file.
@@ -1352,8 +1410,11 @@ class TestYamlTypedScalarParity:
         # no trace once composed: read as the plain `2026-1-2`, i.e. a time.
         ("explicit-str-on-a-go-only-timestamp", "_x:\n  at: !!str 2026-1-2\n", None,
          '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
-        # yaml.v3: "cannot decode !!str `…` as a !!timestamp"; here, the text.
+        # yaml.v3: "cannot decode !!str `…` as a !!timestamp". PyYAML would
+        # tag these texts `!!timestamp` unasked, so the explicit tag leaves no
+        # trace and the text is kept (`!!timestamp foo` IS refused: GO_REFUSES).
         ("explicit-timestamp-go-cannot-parse", "_x:\n  at: !!timestamp 2026-12-31T10:20:30\n", None, None),
+        ("explicit-timestamp-month-13", "_x:\n  at: !!timestamp 2026-13-01\n", None, None),
         # A parser difference, not a typing one (#2123): PyYAML's scanner
         # refuses the tab and the file is skipped; yaml.v3 keeps the text.
         ("tab-between-date-and-time", "_x:\n  at: 2026-12-31\t10:20:30\n", None,
@@ -1386,6 +1447,19 @@ class TestYamlTypedScalarParity:
             return
         got_json, _ = self._python_canonical(tmp_path, body, defaults)
         assert got_json == go_json
+
+    @pytest.mark.parametrize("body", [c[1] for c in GO_REFUSES], ids=[c[0] for c in GO_REFUSES])
+    def test_what_go_cannot_hash_is_not_described(self, tmp_path, body):
+        conf_d = self._tree(tmp_path, body)
+        (conf_d / "t2.yaml").write_text("tenants:\n  t2: {}\n", encoding="utf-8")
+        with pytest.raises(KeyError):
+            dt.ConfDScanner(conf_d).effective_config("t1")
+        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        assert "Traceback" not in res.stderr
+        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
+        assert set(json.loads(res.stdout)) == {"t2"}
 
     def test_the_go_merged_hash_of_an_unquoted_date(self, tmp_path):
         """The merged_hash Go computes for the issue's own shape, via the CLI."""
@@ -1454,6 +1528,14 @@ class TestYamlMappingKeyParity:
         ("2026-12-31  10:20:30", "2026-12-31 10:20:30 +0000 UTC"),
         ("2026-12-31T10:20:30", "2026-12-31T10:20:30"),
         ("2026-12-31T24:00:00Z", "2026-12-31T24:00:00Z"),
+        # Zone bounds and minute carry, as for values (review 2 F1); a key
+        # is spelled by String(), which a 24h offset does not trouble.
+        ("2026-12-31T10:20:30+08:60", "2026-12-31 10:20:30 +0900 +0900"),
+        ("2026-12-31T10:20:30+99:00", "2026-12-31T10:20:30+99:00"),
+        ("2026-12-31T10:20:30+08:61", "2026-12-31T10:20:30+08:61"),
+        ("2026-12-31T10:20:30+24:00", "2026-12-31 10:20:30 +2400 +2400"),
+        ("0000-01-01", "0000-01-01 00:00:00 +0000 UTC"),
+        ("0001-02-29", "0001-02-29"),
         ("1", "1"), ("010", "8"), ("0777", "511"), ("08", "8"), ("0888", "888"),
         ("0x1F", "31"), ("-0x1F", "-31"), ("+0x1F", "31"), ("0x_1F", "31"), ("0x", "0x"),
         ("0o17", "15"), ("0b101", "5"), ("0b", "0b"), ("1_000", "1000"), ("1__0", "10"),

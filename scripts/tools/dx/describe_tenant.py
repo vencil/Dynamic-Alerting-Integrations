@@ -173,8 +173,11 @@ def _file_hash(path: Path) -> str:
 #
 # ⛔ Timestamp values the reader still cannot align (tests/dx/
 # test_describe_tenant.py TestYamlTypedScalarParity, strict xfails):
-#   - an explicit `!!timestamp` yaml.v3 cannot parse (`!!timestamp
-#     2026-12-31T10:20:30`): yaml.v3 refuses the FILE; here it is the text.
+#   - an explicit `!!timestamp` yaml.v3 cannot parse, on a text PyYAML
+#     would have tagged `!!timestamp` anyway (`!!timestamp
+#     2026-12-31T10:20:30`, `!!timestamp 2026-13-01`): yaml.v3 refuses the
+#     FILE; here the tag is invisible and it is the text. (`!!timestamp foo`
+#     and other visibly explicit ones ARE refused — `_construct_timestamp`.)
 #   - an explicit `!!str` on a text PyYAML itself reads as a string but
 #     yaml.v3 as a time (`!!str 2026-1-2`): indistinguishable from the plain
 #     scalar once composed, so it is rendered as the time.
@@ -315,12 +318,20 @@ _GO_YAML_FLOAT = re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+
 # yaml.v3 `allowedTimestampFormats`, as time.Parse reads them: 1-2 digit
 # month / day / hour / minute / second, any number of fraction digits, a run
 # of spaces where the layout has one.
+# ⛔ Used with `fullmatch` only, and `[0-9]` not `\d`: `$` would accept a
+# trailing "\n" (a `|` block scalar's `2026-12-31\n`, which yaml.v3 keeps as
+# text) and `\d` would accept non-ASCII digits time.Parse does not.
 _GO_TS_ZONED = re.compile(
-    r"^(\d{4})-(\d{1,2})-(\d{1,2})[Tt](\d{1,2}):(\d{1,2}):(\d{1,2})(?:[.,](\d+))?"
-    r"(Z|[+-]\d{2}:\d{2})$")
+    r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})[Tt]([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})"
+    r"(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}:[0-9]{2})")
 _GO_TS_SPACE = re.compile(
-    r"^(\d{4})-(\d{1,2})-(\d{1,2}) +(\d{1,2}):(\d{1,2}):(\d{1,2})(?:[.,](\d+))?$")
-_GO_TS_DATE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+    r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) +([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})"
+    r"(?:[.,]([0-9]+))?")
+_GO_TS_DATE = re.compile(r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})")
+# time.Parse's own zone bounds (`Z07:00`): an hour above 24 or a minute
+# above 60 is a parse error, so yaml.v3 keeps the text; within them the
+# offset is hours*60 + minutes, so `+08:60` IS +09:00.
+_GO_ZONE_MAX_HOUR, _GO_ZONE_MAX_MINUTE = 24, 60
 
 
 def _go_parse_int(text: str) -> "int | None":
@@ -395,27 +406,41 @@ def _go_float_v(value: float) -> str:
 def _go_parse_timestamp(text: str) -> "tuple | None":
     """yaml.v3's parseTimestamp: `(y, mo, d, h, mi, s, frac, zone)` for a
     text one of its four layouts accepts, else None — including a field
-    time.Parse refuses as out of range (month 13, Feb 30, hour 24), which
-    leaves the scalar a plain string there. `frac` is at most 9 digits with
-    trailing zeros dropped; `zone` is "Z" for UTC (also `±00:00`: time.Local
-    is UTC in the shipped image) or "±hh:mm"."""
-    m = _GO_TS_ZONED.match(text) or _GO_TS_SPACE.match(text)
+    time.Parse refuses as out of range (month 13, Feb 30, hour 24, a zone
+    hour above 24 or minute above 60), which leaves the scalar a plain
+    string there. `frac` is at most 9 digits with trailing zeros dropped;
+    `zone` is "Z" for a zero offset (time.Local is UTC in the shipped image)
+    or the offset re-spelled "±HH:MM" — `+08:60` is "+09:00", as Go
+    computes it; HH may be 24 or more (see `_GO_ZONE_MAX_HOUR`)."""
+    m = _GO_TS_ZONED.fullmatch(text) or _GO_TS_SPACE.fullmatch(text)
     if m:
         fields = [int(g) for g in m.groups()[:6]]
         frac = (m.group(7) or "")[:9].rstrip("0")
         zone = m.group(8) if m.re is _GO_TS_ZONED else "Z"
     else:
-        m = _GO_TS_DATE.match(text)
+        m = _GO_TS_DATE.fullmatch(text)
         if not m:
             return None
         fields, frac, zone = [int(g) for g in m.groups()] + [0, 0, 0], "", "Z"
-    try:
-        datetime.datetime(*fields)
-    except ValueError:
+    if not _go_valid_clock(*fields):
         return None
-    if zone in ("+00:00", "-00:00"):
-        zone = "Z"
+    if zone != "Z":
+        hours, minutes = int(zone[1:3]), int(zone[4:6])
+        if hours > _GO_ZONE_MAX_HOUR or minutes > _GO_ZONE_MAX_MINUTE:
+            return None
+        total = hours * 60 + minutes
+        zone = "Z" if not total else f"{zone[0]}{total // 60:02d}:{total % 60:02d}"
     return (*fields, frac, zone)
+
+
+def _go_valid_clock(year, month, day, hour, minute, second) -> bool:
+    """time.Parse's range checks, on the proleptic Gregorian calendar Go
+    uses — year 0 included (a leap year), which `datetime` cannot hold."""
+    if not 1 <= month <= 12 or hour > 23 or minute > 59 or second > 59:
+        return False
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[month - 1]
+    return 1 <= day <= days
 
 
 def _go_time_string(year, month, day, hour=0, minute=0, second=0,
@@ -500,6 +525,18 @@ def _go_key_spelling(loader: Any, node: Any) -> str:
     return _go_plain_key(text)
 
 
+def _go_time_value(parsed: tuple, text: str, node: Any) -> str:
+    """A time VALUE yaml.v3 parsed, as the exporter's canonical JSON writes
+    it — refused (see `_GoKeyLoader._construct_timestamp`) when its zone
+    offset is 24h or more, which time.Time.MarshalJSON cannot encode."""
+    zone = parsed[-1]
+    if zone != "Z" and int(zone[1:3]) >= 24:
+        raise yaml.constructor.ConstructorError(
+            None, None, f"timestamp {text!r}: zone offset of 24h or more, which the "
+            "exporter cannot encode (time.Time.MarshalJSON)", node.start_mark)
+    return _go_time_json(*parsed)
+
+
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
@@ -532,10 +569,31 @@ class _GoKeyLoader(StrictExporterKeyLoader):
         9-digit fraction keeps all 9); where it does not (`…T10:20:30` with
         no zone, a tab or a space before the zone, `+08`, month 13 — the last
         of which PyYAML raised ValueError on and dropped the whole file), the
-        value is the source text, as yaml.v3 keeps it."""
+        value is the source text, as yaml.v3 keeps it.
+
+        Two shapes are refused, taking the file down this tool's existing
+        "does not parse" path:
+          - an EXPLICIT `!!timestamp` yaml.v3 cannot parse (`!!timestamp
+            foo`, an empty one, a quoted or block one): yaml.v3 refuses the
+            file ("cannot decode !!str `foo` as a !!timestamp"). Explicit is
+            knowable only where PyYAML would not have inferred the tag from
+            the plain text; `!!timestamp 2026-13-01` looks implicit and stays
+            text (a known divergence).
+          - a zone offset of 24h or more (`+24:00`, `-23:60`): time.Parse
+            accepts it, but time.Time.MarshalJSON refuses it, so the
+            exporter cannot compute this tenant's merged_hash at all. Not
+            describing the file is the nearest this tool gets to that; a
+            made-up rendering would be a hash the exporter never has."""
         text = self.construct_scalar(node)
         parsed = _go_parse_timestamp(text)
-        return _go_time_json(*parsed) if parsed else text
+        if parsed is None:
+            explicit = (node.style is not None or self.resolve(
+                yaml.ScalarNode, text, (True, False)) != _YAML_TIMESTAMP_TAG)
+            if explicit:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"cannot decode {text!r} as a !!timestamp", node.start_mark)
+            return text
+        return _go_time_value(parsed, text, node)
 
     def _construct_str(self, node):
         """A scalar PyYAML reads as a string that yaml.v3 reads as a time —
@@ -544,11 +602,10 @@ class _GoKeyLoader(StrictExporterKeyLoader):
         stays text in both."""
         text = self.construct_scalar(node)
         if (isinstance(node, yaml.ScalarNode) and node.style is None
-                and text[:4].isdigit()
                 and self.resolve(yaml.ScalarNode, text, (True, False)) == _YAML_STR_TAG):
             parsed = _go_parse_timestamp(text)
             if parsed:
-                return _go_time_json(*parsed)
+                return _go_time_value(parsed, text, node)
         return text
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
