@@ -83,7 +83,7 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 
 
 def _repo_root() -> Path:
@@ -116,17 +116,27 @@ def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
     `alpha.yml` and `Alpha.YAML` → {} — the same answer as a tree with no
     tenant, i.e. a `.yml` tenant whose K8s target was removed passed this
     gate with rc=0 while the exporter kept emitting tenant_expected_exporter
-    for it. Hidden (`.`-prefixed) entries are NOT skipped here, exactly as
-    before — that is a separate axis (#1630) with its own measurement.
+    for it.
+
+    #2360 (hidden axis): `.`-prefixed entries are skipped like the exporter's
+    walker does — a hidden FILE (`.ghost.yaml`) and anything under a hidden
+    DIRECTORY (`.snap/s.yaml`). Before, both were declared tenants here
+    while the exporter never emitted a series for them. Only path parts
+    BELOW `config_dir` are judged, so a conf.d root that is itself
+    dot-named is still read (the exporter reads the dir it is handed).
     """
     out: Dict[str, str] = {}
     for path in sorted(p for p in config_dir.rglob("*")
                        if has_yaml_extension(p.name)):
+        rel_parts = path.relative_to(config_dir).parts
+        # Skip hidden files and anything under a hidden directory (#2360).
+        if any(is_hidden_name(part) for part in rel_parts):
+            continue
         # Skip _-prefixed config files (e.g. _defaults.yaml, _routing_profiles.yaml).
         if path.name.startswith("_"):
             continue
         # Skip the examples/ dev-template subtree (not part of a real deployment).
-        if "examples" in path.relative_to(config_dir).parts:
+        if "examples" in rel_parts:
             continue
         data = _load_yaml(path)
         tenants = data.get("tenants")

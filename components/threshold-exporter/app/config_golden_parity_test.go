@@ -33,9 +33,10 @@ package main
 //   canonical-json-escaping — a tenant string with < > & and CJK: the
 //                       no-HTML-escape and non-ASCII clauses of the canonical
 //                       JSON move merged_hash (#1550)
-//   routing-null      — null on `_routing.group_*`; at the merge plane those
-//                       are non-reserved sub-keys, so an inherited value is
-//                       retained and an uninherited null dropped (#1550)
+//   reserved-nested-null — null on non-reserved sub-keys of an inherited
+//                       reserved key (`_x.*`): an inherited value is retained
+//                       and an uninherited null dropped (#1550; was
+//                       `_routing` until #2417)
 //   reserved-null-delete — a `_` key inherited from L0 and nulled in an L1
 //                       _defaults.yaml is deleted; a sibling `_` key survives
 //                       (#1550)
@@ -49,7 +50,7 @@ package main
 // Known gaps (a mutation there leaves this oracle green):
 //   - ADR-017's `_routing` null opt-out is enforced by the Python route
 //     generator (_grar_merge.py), which neither merge implementation runs;
-//     routing-null pins how the merge plane represents those nulls only.
+//     no golden row exercises `_routing` (#2417).
 //   - EffectiveConfig compares Go canonicalJSON with Go canonicalJSON, so it
 //     is blind to a Go-side escaping change; MergedHash / ResolveEffective
 //     catch that.
