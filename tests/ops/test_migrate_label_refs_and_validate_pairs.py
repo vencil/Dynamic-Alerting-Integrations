@@ -254,3 +254,13 @@ def test_golden_entries_get_no_pair(tmp_path, capsys):
     assert not labels & set(golden)
     err = capsys.readouterr().err
     assert "黃金標準" in err and "old_query" not in err
+
+
+def test_non_mapping_entries_are_skipped(tmp_path):
+    """手改壞的項（值不是 mapping）跳過，不讓整個檔載入失敗。"""
+    p = tmp_path / "prefix-mapping.yaml"
+    p.write_text(yaml.safe_dump({
+        "custom_bad": "not-a-mapping",
+        "custom_x": {"original_metric": "x", "old_query": "max by(tenant) (x)",
+                     "new_query": "tenant:custom_x:max"}}), encoding="utf-8")
+    assert [q["label"] for q in vm.load_mapping_pairs(str(p))] == ["custom_x"]
