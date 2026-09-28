@@ -8,7 +8,7 @@ lang: zh
 
 # Platform Log Aggregation Runbook
 
-#539 Phase 1。federation-gateway 把 audit log 用 JSON 寫到 stdout
+\#539 Phase 1。federation-gateway 把 audit log 用 JSON 寫到 stdout
 （ADR-020 IV-2f）；本 pipeline 把它搬進中央 log store，讓「過去 6h 這
 顆 token 碰過什麼」這種 incident query 有得問。
 
@@ -256,7 +256,7 @@ size ≈ (audit_RPS × 1 KB × retention_seconds × 1.3 overhead) / compression_
 VictoriaLogs 平均壓縮比 ~10x，所以實務上 130GB raw ≈ 13GB on disk。
 保守起見 `size = 30 GiB` 給 30d。
 
-#552 chargeback query log 進來時（consumer #2）流量會翻倍以上，
+\#552 chargeback query log 進來時（consumer #2）流量會翻倍以上，
 那時要重新估。
 
 ## 6. Phase 2 — chargeback（#552 consumer #2）

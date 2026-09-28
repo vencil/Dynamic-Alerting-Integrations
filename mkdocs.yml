@@ -49,14 +49,17 @@ not_in_nav: |
 # the mismatches visible and greppable by
 # scripts/tools/lint/mkdocs_strict_check.sh.
 #
-# Detection only, on purpose. The site's heading ids come from
-# Python-Markdown's default (ASCII-only) `toc` slugify, which both collapses
-# whitespace runs and strips CJK outright — `9. 維度標籤 — 多 DB 類型支援`
-# becomes `#9-db`, and a pure-CJK heading becomes `#_1`. github.com's slugger
-# does neither. The two renderers genuinely disagree, so these warnings are
-# real findings against the *site*, not noise. Reconciling them means swapping
-# `toc.slugify` for a GFM-compatible one — staged separately as B3. Do NOT
-# lower this back to `info` to make the count go away.
+# The site's heading ids use github.com's rule (B3, #1375): the
+# `scripts/mkdocs/gfm_slugify.py` hook points `toc.slugify` at the same
+# `_gfm_slug` that check_doc_links.py enforces, so a link that works on GitHub
+# works on the site. A warning here is therefore a real broken link (or a
+# case the two renderers still disagree on), not slugifier noise. Do NOT lower
+# this back to `info` to make the count go away.
+#
+# The few entries left in scripts/tools/lint/mkdocs-anchor-debt.txt are one
+# shape: a ZH-only internal page linking `../benchmarks.md#<ZH anchor>`. It is
+# correct on GitHub and on the ZH site; only the EN site's fallback copy of that
+# page gets its link re-pointed at `benchmarks.en.md`, whose headings differ.
 validation:
   nav:
     # mkdocs defaults this to `info`, i.e. swallowed by the build log — which is
@@ -132,6 +135,7 @@ theme:
 # (replaces docs/rule-packs -> ../rule-packs; see the hook docstring).
 hooks:
   - scripts/mkdocs/rule_packs_bridge.py
+  - scripts/mkdocs/gfm_slugify.py
 
 plugins:
   - search:

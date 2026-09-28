@@ -178,7 +178,7 @@ done
 ### 5.3 Audit prerequisite pattern
 
 **有條件可降級的 CVE 必須先驗證 config，再決定是否 bump**。Q2 2026 範例：
-- #98 grafana：bump 前先確認 `configmap-grafana.yaml` 沒 PostgreSQL data source → pgx CRITICAL 降為 dead-code
+- \#98 grafana：bump 前先確認 `configmap-grafana.yaml` 沒 PostgreSQL data source → pgx CRITICAL 降為 dead-code
 - 把驗證寫進 issue acceptance criteria，PR body 引用驗證結果
 
 ---

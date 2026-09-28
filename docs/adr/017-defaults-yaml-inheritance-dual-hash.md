@@ -267,7 +267,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552) 的主題。
 
 2. **`_custom_alerts` 由 ADR-024 的 UNION 解析器在 unwrap 之後注入**（`describe_tenant.py`，
-   #772），**即使有 `defaults:` 包裝也會進 `effective`**；Go 沒有這條注入路徑。實測同一份輸入：
+   \#772），**即使有 `defaults:` 包裝也會進 `effective`**；Go 沒有這條注入路徑。實測同一份輸入：
    Python 得 `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`、Go 只得 `{cpu_usage}`
    ⇒ **兩實作的 `effective` 不同集，`merged_hash` 因此不等** ⇒
    [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)。

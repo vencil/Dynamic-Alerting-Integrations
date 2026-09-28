@@ -151,3 +151,9 @@ docs/internal/cli-contract-baseline.yaml
 # either loses rows (drift, rc=1) or a sentinel (rc=2).
 docs/adr/README.en.md
 docs/adr/README.md
+
+# mkdocs anchor-debt ledger: written by `mkdocs_strict_check.sh
+# --write-baseline`, never by sed. #1375 switched the site to GitHub's slug rule
+# and took it 207 → 3 lines. Damage is caught independently: a truncated ledger
+# drops entries, and the check reports them as NEW anchor problems (rc=1).
+scripts/tools/lint/mkdocs-anchor-debt.txt

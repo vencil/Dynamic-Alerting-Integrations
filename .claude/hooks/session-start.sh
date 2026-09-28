@@ -110,7 +110,7 @@ fi
 # the mkdocs trio that `make lint-docs-mkdocs` and the mkdocs-strict pre-push
 # hook need.
 CI_PKGS="croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser \
-hypothesis pathspec jsonschema check-jsonschema pre-commit"
+hypothesis pathspec jsonschema check-jsonschema pre-commit markdown"
 DOCS_PKGS="mkdocs-material mkdocs-static-i18n pymdown-extensions"
 
 # ⛔ PyYAML is installed SEPARATELY and it is the only one that gets

@@ -58,6 +58,9 @@ promql-parser==0.10.0
 croniter==6.2.4
 pathspec==1.1.1
 pyyaml==6.0.3
+# Python-Markdown: tests/lint/test_mkdocs_gfm_slugify.py renders headings with
+# the mkdocs hook's toc settings (#1375). Same version mkdocs pulls in.
+markdown==3.10.3
 
 # --- hook + docs toolchain (drift breaks lint / strict docs build) -------
 pre-commit==4.6.0
