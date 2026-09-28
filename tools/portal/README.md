@@ -53,7 +53,7 @@ docs/interactive/index.html  # portal hub page — STAYS in docs/ (it's a real d
 
 - **Zero dev-server complexity**：`python -m http.server` 已經夠用，不需要 Vite dev server overhead
 - **Deterministic output paths**：`docs/assets/dist/<entry>.js`，CI 重現性
-- **One file**：`build.mjs` 單一檔案、可全部讀懂
+- **One file**：整個 build 流程都在 `build.mjs` 這一支裡，讀完即可掌握
 - **Fast cold builds**：本機完整重建 < 1s
 
 ## 為什麼 Vitest（不是 Jest / RTL only）
