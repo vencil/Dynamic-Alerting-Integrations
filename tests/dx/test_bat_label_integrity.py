@@ -37,16 +37,25 @@ BAT_FILES = [
     REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat",
     REPO_ROOT / "scripts" / "ops" / "win_gh.bat",
 ]
-# All .bat under scripts/ops/ that can be invoked by Desktop Commander /
+# All .bat under scripts/ops/ (any depth) that can be invoked by Desktop Commander /
 # Windows-MCP start_process. These get the narrower ASCII/CRLF/BOM gate
 # (pitfall #45 + pitfall row #2) but not the goto/label + caller-pattern
 # checks that only apply to the two escape-hatch wrappers above.
 # ⛔ Not ``glob("*.bat")``: case-sensitive on POSIX, and cmd.exe runs
-# ``FOO.BAT`` exactly like ``foo.bat`` (#2230).
-ALL_OPS_BAT_FILES = sorted(
-    p for p in (REPO_ROOT / "scripts" / "ops").iterdir()
-    if p.is_file() and p.name.lower().endswith(".bat")
-)
+# ``FOO.BAT`` exactly like ``foo.bat`` (#2230). Any depth, not the top level
+# only: pre-commit ``files:`` (what CI runs) reaches subdirectories (#2240).
+# ⛔ The filesystem, not ``tests/_tree.repo_files()``: ``git ls-files
+# --exclude-standard`` drops a gitignored .bat that start_process can still
+# run. The walk stays inside scripts/ops/, so the worktree copies that rule
+# guards against are never visited.
+
+
+def _ops_bat_files(root: pathlib.Path) -> list[pathlib.Path]:
+    return sorted(p for p in (root / "scripts" / "ops").rglob("*")
+                  if p.is_file() and p.name.lower().endswith(".bat"))
+
+
+ALL_OPS_BAT_FILES = _ops_bat_files(REPO_ROOT)
 
 LABEL_RE = re.compile(r"^:([A-Za-z_][A-Za-z0-9_]*)\s*$")
 # cmd.exe label dispatch — match `goto :name` (optionally with extra tokens
@@ -685,3 +694,28 @@ def test_the_plain_pattern_is_what_misses_the_upper_case(tmp_path: pathlib.Path)
         "* text=auto eol=lf\n*.bat text eol=crlf\n", encoding="utf-8", newline="\n")
     eol = _eol_of(tmp_path, ["x.bat", "x.BAT"])
     assert eol == {"x.bat": "crlf", "x.BAT": "lf"}, eol
+
+
+# ---------------------------------------------------------------------------
+# #2240 — the pytest layer covers scripts/ops/ at any depth, like CI does.
+
+def test_ops_bat_files_reaches_subdirectories(tmp_path: pathlib.Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
+                   capture_output=True, timeout=60)
+    ops = tmp_path / "scripts" / "ops"
+    ignored = ops / "sub" / "ignored.bat"
+    (tmp_path / ".gitignore").write_text("ignored.bat\n", encoding="utf-8")
+    inside = [ops / "x.bat", ops / "sub" / "y.BAT", ops / "a" / "b" / "z.Bat", ignored]
+    outside = [tmp_path / "scripts" / "opsx" / "x.bat",
+               tmp_path / "other" / "scripts" / "ops" / "x.bat",
+               tmp_path / "scripts" / "x.bat", ops / "sub" / "x.batx"]
+    for p in inside + outside:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"@echo off\r\n")
+    assert _ops_bat_files(tmp_path) == sorted(inside)
+
+
+def test_ops_bat_files_sees_the_real_wrappers() -> None:
+    """Tripwire: an empty ALL_OPS_BAT_FILES would skip the three gates above."""
+    missing = [p for p in BAT_FILES if p not in ALL_OPS_BAT_FILES]
+    assert not missing, f"ALL_OPS_BAT_FILES lost {missing}"
