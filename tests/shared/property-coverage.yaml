@@ -67,6 +67,8 @@ modules:
     excluded:
       load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file_exporter_keys; composite contract is exercised by integration tests (text tenant ids: tests/ops/test_tenant_id_as_text.py, #2114)"
       load_yaml_file_exporter_keys: "load_yaml_file's I/O + error contract over _lib_yaml_keys' loader (#2114); the key rule is table-pinned against the exporter's decode in tests/shared/test_tenant_id_yaml_spelling_parity.py (22 spellings, Go half asserts the same table), not a value computation this function owns"
+      load_yaml_file_for_rewrite: "load_yaml_file_exporter_keys' I/O + error contract over _lib_yaml_keys.RewriteLoader (#2220); the no-retype property is pinned end to end against the exporter's served values in tests/ops/test_rewrite_preserves_plain_scalars.py, not a value computation this function owns"
+      strict_load_for_rewrite: "strict_safe_load driver with StrictRewriteLoader (#2220); pinned end to end against the exporter's served values in tests/ops/test_rewrite_preserves_plain_scalars.py"
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
       write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"
       write_onboard_hints: "Thin wrapper over write_json_secure"

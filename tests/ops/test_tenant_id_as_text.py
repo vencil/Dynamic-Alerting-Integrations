@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +27,7 @@ TOOLS = REPO_ROOT / "scripts" / "tools"
 
 import _grar_parse  # noqa: E402
 import _lib_io  # noqa: E402
+import _lib_tenant_values  # noqa: E402
 import _lib_yaml_keys  # noqa: E402
 import check_routing_profiles as crp  # noqa: E402
 import da_assembler  # noqa: E402
@@ -263,7 +266,8 @@ def test_tenant_uniqueness_agrees_with_yaml_syntax_about_one_file(tmp_path):
 # and dumped that back: an unquoted `010:` went to disk as `8:`, `yes:` as
 # `true:`, `0x1F:` as `31:` — the tenant silently renamed. Three trees:
 # UNQ (unquoted spellings PyYAML retypes), QUOTED (the same ids quoted: one
-# id each to the exporter, so they must come out identical to UNQ), CTRL
+# id each to the exporter, so they must come out as the same ids as UNQ —
+# since #2220 each keeps its own quoting, so not the same bytes), CTRL
 # (`acme`, which no typing touches: its output must stay byte-for-byte what
 # main wrote, so a regression in the writer itself still shows here).
 # `~` / `null` are left out: the exporter drops a null key (matrix row
@@ -301,6 +305,41 @@ def _as_text(path: Path):
         io.StringIO(path.read_text(encoding="utf-8")))
 
 
+def _as_text_profiles(path: Path):
+    """`_as_text`, plus a `_profile:` VALUE read as its source text — as the
+    exporter reads it (`ScheduledValue` keeps the text, #2216)."""
+    return _lib_yaml_keys.load_exporter_keys(
+        io.StringIO(path.read_text(encoding="utf-8")),
+        raw_text_scalars=("_profile",))
+
+
+@pytest.fixture(scope="module")
+def da_guard(tmp_path_factory):
+    """da-guard built from this checkout, or None when `go` is missing (the
+    test then skips its exporter half; VIBE_REQUIRE_GO=1 fails instead)."""
+    if shutil.which("go") is None:
+        assert os.environ.get("VIBE_REQUIRE_GO") != "1", \
+            "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
+        return None
+    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
+    env = {**os.environ}
+    env.setdefault("GOTOOLCHAIN", "auto")
+    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
+                    "./cmd/da-guard"],
+                   cwd=REPO_ROOT / "components" / "threshold-exporter" / "app",
+                   env=env, check=True, timeout=600)
+    return str(out)
+
+
+def _served(conf_d: Path, da_guard):
+    """{tenant: values} as /metrics serves them (`da-guard served-values`)."""
+    if da_guard is None:
+        pytest.skip("go not on PATH: the exporter half of this test needs "
+                    "da-guard (set VIBE_REQUIRE_GO=1 to fail instead)")
+    return {t: v.values for t, v in _lib_tenant_values.load_served_values(
+        conf_d, binary=da_guard).items()}
+
+
 def _deprecate_tree(root: Path, keys) -> Path:
     body = "".join(f"  {k}:\n{_DEPRECATE_BODY}" for k in keys)
     return _tree(root, {"t.yaml": _DEPRECATE_HEADER + "tenants:\n" + body})
@@ -323,13 +362,28 @@ def test_deprecate_rule_writes_back_the_tenant_ids_as_read(tmp_path, keys):
     assert (d / "t.yaml").read_text(encoding="utf-8").startswith(_DEPRECATE_HEADER)
 
 
-def test_deprecate_rule_unq_and_quoted_write_the_same_bytes(tmp_path):
-    """One id to the exporter, so one output — whichever way it was spelled."""
+def test_deprecate_rule_unq_and_quoted_write_the_same_ids(tmp_path, da_guard):
+    """One id to the exporter, so one result — whichever way it was spelled.
+
+    #2220: this pinned the same BYTES, which held only because the write
+    quoted every id YAML would retype (`010:` → `'010':`) — the same dump
+    that retyped every plain VALUE (`010` → 8). The write now keeps each
+    scalar as written, so the two files differ in quoting and nothing else;
+    the invariant is unchanged and is asserted where it lives: the ids (and
+    values) the exporter reads — by the raw-text reader, and by da-guard."""
     unq = _deprecate_tree(tmp_path / "unq", _UNQ)
     quo = _deprecate_tree(tmp_path / "quoted", _QUOTED)
     _deprecate(unq)
     _deprecate(quo)
-    assert (unq / "t.yaml").read_bytes() == (quo / "t.yaml").read_bytes()
+    assert _as_text(unq / "t.yaml") == _as_text(quo / "t.yaml")
+    unq_text = (unq / "t.yaml").read_text(encoding="utf-8")
+    quo_text = (quo / "t.yaml").read_text(encoding="utf-8")
+    for t in _UNQ:      # each file keeps its own spelling of the id
+        assert f"\n  {t}:\n" in unq_text, unq_text
+        assert f"\n  '{t}':\n" in quo_text, quo_text
+    served = _served(unq, da_guard)
+    assert sorted(served) == sorted(_UNQ), served
+    assert served == _served(quo, da_guard)
 
 
 def test_deprecate_rule_ctrl_output_is_what_main_wrote(tmp_path):
@@ -375,11 +429,18 @@ def test_deprecate_rule_keeps_the_defaults_carriers_block_keys(tmp_path):
                    "tenants": {"010": {"container_cpu": 60}}}, got
 
 
-def test_deprecate_rule_keeps_a_profile_reference_bound(tmp_path):
+def test_deprecate_rule_keeps_a_profile_reference_bound(tmp_path, da_guard):
     """#2216 blind review: with the profile KEY kept as `'010'` but the
     tenant's `_profile: 010` VALUE still typed, the write left
     `_profile: 8` — a reference to no profile (main renamed both to 8, and
-    they happened to meet). The exporter reads both as the text `010`."""
+    they happened to meet). The exporter reads both as the text `010`.
+
+    #2220: both are now written back as written (`010:`, `_profile: 010`,
+    plain) where the write used to quote them. The oracle moved with that:
+    `describe_tenant` reads `_profile` with PyYAML typing (plain `010` → 8,
+    #2297), so it cannot tell a bound plain reference from a broken one. The
+    raw-text reader and the exporter's served value (`container_cpu` from
+    profile `010`, 55 — the default is 80) can, and pin the same binding."""
     d = _tree(tmp_path, {
         "_defaults.yaml": ("defaults:\n  mysql_connections: 70\n"
                            "  container_cpu: 80\n"
@@ -390,16 +451,10 @@ def test_deprecate_rule_keeps_a_profile_reference_bound(tmp_path):
                                             execute=True)
     assert _deprecate(d), "the tenant file was not rewritten"
     platform = _as_text(d / "_defaults.yaml")
-    tenant = _as_text(d / "t.yaml")
+    tenant = _as_text_profiles(d / "t.yaml")
     assert list(platform["profiles"]) == ["010"], platform
     assert tenant == {"tenants": {"acme": {"_profile": "010"}}}, tenant
-    p = subprocess.run(
-        [sys.executable, str(TOOLS / "dx" / "describe_tenant.py"), "acme",
-         "--conf-d", str(d)],
-        capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    eff = json.loads(p.stdout)["effective_config"]
-    assert eff["container_cpu"] == "55", eff
+    assert _served(d, da_guard)["acme"]["container_cpu"] == 55.0
 
 
 def _cr(name: str, tenants_yaml: str) -> str:
@@ -530,7 +585,14 @@ def test_patch_config_keeps_a_profile_outside_tenants_typed():
     got = _lib_yaml_keys.load_exporter_keys(io.StringIO(written))
     assert got["defaults"] == {"connections": 100, "mem": 80, "_profile": 8}, written
     assert all(isinstance(v, (int, float)) for v in got["defaults"].values()), written
-    assert got["tenants"] == {"acme": {"_profile": "010", "connections": "3"}}, written
+    # #2220: the tenant's `_profile: 010` is now written back plain, as it
+    # was read (the write used to quote it), so this reads it the way the
+    # exporter does — the scalar's text — instead of with PyYAML's typing,
+    # which says 8 for the plain spelling. Same invariant: the reference is
+    # still "010" while the `defaults:` one above stays a number.
+    tenants = _lib_yaml_keys.load_exporter_keys(
+        io.StringIO(written), raw_text_scalars=("_profile",))["tenants"]
+    assert tenants == {"acme": {"_profile": "010", "connections": "3"}}, written
 
 
 def test_patch_config_refuses_a_write_that_changes_the_declared_tenants(monkeypatch):
@@ -538,17 +600,23 @@ def test_patch_config_refuses_a_write_that_changes_the_declared_tenants(monkeypa
     before #2237), `010:` is written as `8:` beside a new `010:` — the key
     would declare {8, 010} where it declared {010}. Refused, nothing sent."""
     import yaml
-    monkeypatch.setattr(pc, "strict_load_exporter_keys",
+    # #2220: the rewrite reads through `strict_load_for_rewrite` now (was
+    # `strict_load_exporter_keys`); the typed stand-in is unchanged.
+    monkeypatch.setattr(pc, "strict_load_for_rewrite",
                         lambda text, **_kw: yaml.safe_load(text))
     cm = _pc_cm("multi-file", "  010:\n" + _PC_BLOCK)
     with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
         pc.build_patch(cm, "multi-file", "010", "connections", "3")
 
 
-def test_patch_config_keeps_a_profile_reference_bound(tmp_path):
+def test_patch_config_keeps_a_profile_reference_bound(tmp_path, da_guard):
     """`_profile: 010` names profile `010:`. With only the KEY read as text
     the rewrite still wrote `_profile: 8` — the binding silently broken at
-    rc 0 (#2237 step 0). Same shape as the deprecate_rule test above."""
+    rc 0 (#2237 step 0). Same shape as the deprecate_rule test above,
+    including its #2220 change of oracle: `_profile: 010` is written back
+    plain, which `describe_tenant` types to 8 (#2297); the raw-text reader
+    and da-guard's served `container_cpu` (55 from profile `010`, not the
+    default 80) pin the binding instead."""
     defaults = ("defaults:\n  connections: 100\n  container_cpu: 80\n"
                 'profiles:\n  010:\n    container_cpu: "55"\n')
     cm = {"data": {"_defaults.yaml": defaults,
@@ -556,16 +624,10 @@ def test_patch_config_keeps_a_profile_reference_bound(tmp_path):
                               "    connections: '1'\n")}}
     patch = pc.build_patch(cm, "multi-file", "acme", "connections", "3")
     written = patch["data"]["t.yaml"]
-    assert _pc_tenants(written) == {
-        "acme": {"_profile": "010", "connections": "3"}}, written
     d = _tree(tmp_path, {"_defaults.yaml": defaults, "t.yaml": written})
-    p = subprocess.run(
-        [sys.executable, str(TOOLS / "dx" / "describe_tenant.py"), "acme",
-         "--conf-d", str(d)],
-        capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    eff = json.loads(p.stdout)["effective_config"]
-    assert eff["container_cpu"] == "55", eff
+    assert _as_text_profiles(d / "t.yaml")["tenants"] == {
+        "acme": {"_profile": "010", "connections": "3"}}, written
+    assert _served(d, da_guard)["acme"]["container_cpu"] == 55.0
 
 
 def _render_as_text(data, pod=None):

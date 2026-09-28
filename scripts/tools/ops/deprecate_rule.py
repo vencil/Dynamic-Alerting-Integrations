@@ -55,7 +55,13 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 # `_profile` is the one VALUE that names such a key (a profile name): kept as
 # source text too, or `_profile: 010` is written as `8` next to a profile
 # still named `'010'`. Every other value keeps its PyYAML type.
+# #2220: the two steps that WRITE a file back (Step 1 carriers, Step 2 tenant
+# files) read through `load_yaml_file_for_rewrite` instead, where every plain
+# value is its source text, and dump with `dump_for_rewrite` — so a value the
+# step did not delete is written as it was (`010` stays `010`, not `8`).
 from _lib_python import load_yaml_file_exporter_keys  # noqa: E402
+from _lib_io import load_yaml_file_for_rewrite  # noqa: E402
+from _lib_yaml_keys import RawPlain, dump_for_rewrite  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import duplicate_in_mapping  # noqa: E402  (#2123 shared check)
@@ -72,11 +78,18 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
 )
 
 
-def _read_yaml(path):
-    """`(data, error)`: 讀不到／解析失敗／頂層不是 mapping 時 `error` 是一句話。"""
+def _read_yaml(path, *, for_rewrite=False):
+    """`(data, error)`: 讀不到／解析失敗／頂層不是 mapping 時 `error` 是一句話。
+
+    `for_rewrite=True`（#2220）: 未加引號的純量讀成原文（`RawPlain`），給會
+    寫回檔案的 Step 1／Step 2 用；其餘讀取維持 PyYAML 型別。
+    """
     try:
-        data = load_yaml_file_exporter_keys(path, default={},
-                                            raw_text_scalars=("_profile",))
+        if for_rewrite:
+            data = load_yaml_file_for_rewrite(path, default={})
+        else:
+            data = load_yaml_file_exporter_keys(path, default={},
+                                                raw_text_scalars=("_profile",))
     except (OSError, yaml.YAMLError) as e:
         return None, str(e).splitlines()[0] if str(e) else e.__class__.__name__
     if data is None:
@@ -92,13 +105,31 @@ def load_yaml_file(path):
     return data
 
 
+def _load_for_rewrite(path):
+    """`load_yaml_file`，但未加引號的純量保留原文（#2220）；寫回路徑專用。"""
+    data, _err = _read_yaml(path, for_rewrite=True)
+    return data
+
+
+def _type_name(value):
+    """`type(value).__name__`；`RawPlain` 報 PyYAML 讀它時的型別，訊息與 #2220 前一致。"""
+    if isinstance(value, RawPlain):
+        try:
+            value = yaml.safe_load(str(value))
+        except yaml.YAMLError:
+            return "str"
+    return type(value).__name__
+
+
 def save_yaml_file(path, data, header_comment=""):
     """安全寫入 YAML 檔案。"""
     content = ""
     if header_comment:
         content += header_comment
-    content += yaml.safe_dump(data, default_flow_style=False,
-                              allow_unicode=True, sort_keys=False)
+    # #2220: `RawPlain` values go back plain, as written; everything else is
+    # dumped exactly as `yaml.safe_dump` would.
+    content += dump_for_rewrite(data, default_flow_style=False,
+                                allow_unicode=True, sort_keys=False)
     # #1641: an existing conf.d file (derived, not an output flag) that cannot
     # be written is rc 2, not rc 1.
     write_text_or_die(path, content)
@@ -736,7 +767,7 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False):
     if not Path(defaults_path).exists():
         return False, f"{name} 不存在", []
 
-    data = load_yaml_file(defaults_path)
+    data = _load_for_rewrite(defaults_path)
     if data is None:
         return False, f"無法讀取 {name}", []
 
@@ -745,7 +776,7 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False):
     if defaults is None:
         defaults = {}
     if not isinstance(defaults, dict):
-        return False, (f"defaults 不是 mapping（{type(defaults).__name__}），"
+        return False, (f"defaults 不是 mapping（{_type_name(defaults)}），"
                        f"本工具不改寫，請先修檔"), []
 
     pattern_keys = metric_pattern_keys(metric_key)
@@ -813,7 +844,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
                 or filename in skip):
             continue
 
-        data = load_yaml_file(path)     # 讀不了的檔 `scan_for_metric` 已具名
+        data = _load_for_rewrite(path)  # 讀不了的檔 `scan_for_metric` 已具名
         if data is None:
             continue
 
