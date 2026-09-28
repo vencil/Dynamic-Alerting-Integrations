@@ -2008,6 +2008,24 @@ da-tools validate-config --config-dir <path> [options]
 
 驗證結果摘要（通過/失敗列表）。
 
+**JSON 輸出（`--json`）**：stdout 恰好一份 JSON 文件，頂層是**陣列**，每個元素是報表的一列（一項檢查）。列的鍵分兩種——必有鍵每列都在；可選鍵只在下表條件成立時出現，**條件不成立時鍵整個不存在**（不是空陣列或 `null`），所以消費端讀可選鍵要用 `.get()` / `// empty`，不要直接索引。
+
+| 鍵 | 必有／可選 | 型別 | 出現條件與意思 |
+|----|-----------|------|----------------|
+| `check` | 必有 | string | 檢查名（`yaml_syntax`、`schema`、`routes`……，以實際印出的列為準） |
+| `status` | 必有 | string | `pass` / `warn` / `fail`（小寫） |
+| `details` | 必有 | string[] | 該列的明細行，可為空陣列 |
+| `caller_error` | 必有 | bool | 這個 FAIL 源自呼叫端（路徑、環境、前置工具）而非設定本身；結束碼 `2` 依它判定（見下方結束碼表） |
+| `unusable_files` | 可選 | string[] | **只在 `yaml_syntax` 列**、且有讀不到的檔時出現：該列點名的檔 |
+| `skipped_unusable_files` | 可選 | string[] | 有檔讀不到時，出現在**其餘會讀 `--config-dir` 的列**：這一列的答案不含這些檔。不讀設定樹的列（例如 `versions`、`custom_rules`）不會有 |
+| `skipped_nested_files` | 可選 | string[] | 該列的平面讀取器實際略過了子目錄裡的檔時出現（見下方 [Hierarchical conf.d](#hierarchical-confd)） |
+| `suggested_action` | 可選 | string | `status` 不是 `pass` 時出現：建議的下一步 |
+| `docs_link` | 可選 | string | 與 `suggested_action` 成對出現：說明頁 URL |
+
+⚠️ 「哪些檔讀不到」要讀兩個鍵：`yaml_syntax` 列在 `unusable_files`、其餘各列在 `skipped_unusable_files`；健康的樹上兩者都不存在。鍵集合由 `tests/shared/test_json_stdout_contract.py` 守住——多出未列在上表的鍵會讓測試紅（#1653）。
+
+`--config-dir` 不是目錄時，`--json` 下 stdout 仍是同形狀的文件：只有一列 `check: "config_dir"`、`status: "fail"`、`caller_error: true`，結束碼 `2`，stderr 照舊印 `ERROR: config-dir not found: …`。⚠️ v2.9.0 映像在這條路徑 stdout 是空的 <!-- image-caveat: v2.9.0 -->
+
 **範例**
 
 ```bash

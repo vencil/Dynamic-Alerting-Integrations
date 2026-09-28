@@ -1302,6 +1302,14 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "twice.",
         "docs/scenarios/multi-domain-conf-layout.md",
     ),
+    # #1653: not a check — the one row `main()` emits under --json when
+    # --config-dir is not a directory and no check could run at all.
+    "config_dir": (
+        "Point --config-dir at an existing directory (the conf.d/ tree that "
+        "holds your tenant YAML files). No check ran, so this is the only "
+        "row in the report.",
+        "docs/cli-reference.md#validate-config",
+    ),
 }
 
 
@@ -1753,6 +1761,18 @@ def main() -> None:
     if not os.path.isdir(args.config_dir):
         print(f"ERROR: config-dir not found: {args.config_dir}",
               file=sys.stderr)
+        # #1653: under --json this path used to leave stdout EMPTY, so a
+        # `validate-config --json | jq` consumer got a parse error instead of
+        # a report. It now emits the same document shape as every other run —
+        # a list of rows — holding one caller-error row, and still exits 2.
+        # ⚠️ Routed through print_report, not hand-built, so the row carries
+        # exactly the entry keys the documented contract allows
+        # (docs/cli-reference.md, `#### validate-config`).
+        if args.json:
+            print_report([_make_result(
+                "config_dir", FAIL,
+                [f"config-dir not found: {args.config_dir}"],
+                caller_error=True)], as_json=True)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports

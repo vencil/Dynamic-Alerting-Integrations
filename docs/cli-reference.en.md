@@ -2020,6 +2020,24 @@ da-tools validate-config --config-dir <path> [options]
 
 Validation result summary (pass/fail list).
 
+**JSON output (`--json`)**: stdout is exactly one JSON document whose top level is an **array**; each element is one row of the report (one check). Required keys are on every row; an optional key appears only when its condition below holds, and **when it does not, the key is absent** (not an empty array or `null`) — read optional keys with `.get()` / `// empty`, never by direct indexing.
+
+| Key | Required / optional | Type | When it appears, and what it means |
+|-----|---------------------|------|------------------------------------|
+| `check` | required | string | Check name (`yaml_syntax`, `schema`, `routes` …; the rows actually printed are authoritative) |
+| `status` | required | string | `pass` / `warn` / `fail` (lower case) |
+| `details` | required | string[] | The row's detail lines; may be empty |
+| `caller_error` | required | bool | This FAIL comes from the caller (paths, environment, a prerequisite tool), not the config itself; exit code `2` is derived from it (see the exit-code table below) |
+| `unusable_files` | optional | string[] | **Only on the `yaml_syntax` row**, and only when some file could not be read: the files that row names |
+| `skipped_unusable_files` | optional | string[] | When some file could not be read, on **every other row that reads `--config-dir`**: this row's answer excludes these files. Rows that do not read the config tree (e.g. `versions`, `custom_rules`) do not get it |
+| `skipped_nested_files` | optional | string[] | When the row's flat reader actually skipped files in subdirectories (see [Hierarchical conf.d](#hierarchical-confd) below) |
+| `suggested_action` | optional | string | When `status` is not `pass`: the suggested next step |
+| `docs_link` | optional | string | Always paired with `suggested_action`: URL of the relevant page |
+
+⚠️ "Which files could not be read" lives under two keys: `unusable_files` on the `yaml_syntax` row, `skipped_unusable_files` on the other rows; on a healthy tree neither exists. The key set is pinned by `tests/shared/test_json_stdout_contract.py` — a key not listed above turns it red (#1653).
+
+When `--config-dir` is not a directory, stdout under `--json` is still a document of the same shape: a single row with `check: "config_dir"`, `status: "fail"`, `caller_error: true`; exit code `2`, and stderr still prints `ERROR: config-dir not found: …`. ⚠️ On the v2.9.0 image this path leaves stdout empty <!-- image-caveat: v2.9.0 -->
+
 **Examples**
 
 ```bash
