@@ -514,8 +514,9 @@ jobs:
       - name: Install amtool / promtool / yq
         # jq + curl already on ubuntu-latest. Pin versions explicitly so
         # CI catches doc breakage on tool upgrade, not silently passes.
-        # PROMTOOL_VERSION is its own pin (not the rule-pack gate's); its
-        # MAJOR must match the Prometheus image in
+        # PROMTOOL_VERSION is its own pin (not the rule-pack gate's), kept at
+        # the same version as ci.yml's rule-pack promtool so one repo does not
+        # carry two promtool behaviours (#1337); its MAJOR must match the Prometheus image in
         # k8s/03-monitoring/deployment-prometheus.yaml — a 2.x promtool
         # accepts functions 3.x removed (#1949). Enforced by
         # tests/ops/test_docs_ci_promtool_major.py. Each download is checked
@@ -525,10 +526,10 @@ jobs:
           set -euo pipefail
           AMTOOL_VERSION=0.33.1
           AMTOOL_SHA256=93d802cba6a8d27239d747ce117df7648d326ab67394e32247540b030e9842ba
-          PROMTOOL_VERSION=3.13.2
-          PROMTOOL_SHA256=0e8c4d46101bd025ea8265e377d2caabc57f488fc1be1c367f37db69ea41be6f
-          YQ_VERSION=4.40.5
-          YQ_SHA256=0d6aaf1cf44a8d18fbc7ed0ef14f735a8df8d2e314c4cc0f0242d35c0a440c95
+          PROMTOOL_VERSION=3.14.0
+          PROMTOOL_SHA256=f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d
+          YQ_VERSION=4.53.6
+          YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 
           DL=$(mktemp -d)
           curl -fsSL -o "$DL/amtool.tar.gz" \

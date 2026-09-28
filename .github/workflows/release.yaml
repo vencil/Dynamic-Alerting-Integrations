@@ -117,6 +117,10 @@ jobs:
       # --- Helm chart (before scan so Trivy failure doesn't block distribution) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       - name: Package Helm chart
         run: |
@@ -150,8 +154,12 @@ jobs:
       # SBOM, cross-compiled archives, the GitHub Release itself), and there a red
       # Trivy really does stop those from happening.
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1
@@ -272,8 +280,12 @@ jobs:
         run: bash scripts/ops/verify_release_digest.sh da-tools
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1
@@ -563,6 +575,10 @@ jobs:
       # already published.
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       - name: Package Helm chart
         run: |
@@ -586,8 +602,12 @@ jobs:
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1
@@ -708,6 +728,10 @@ jobs:
       # --- Helm chart (before scan so a Trivy failure doesn't block distribution) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       - name: Package Helm chart
         run: |
@@ -732,8 +756,12 @@ jobs:
 
       # --- Security scan (post-push, hard gate — same stance as sibling jobs) ---
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1
@@ -814,6 +842,10 @@ jobs:
       # --- Helm chart ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       - name: Package Helm chart
         run: |
@@ -838,8 +870,12 @@ jobs:
 
       # --- Security scan ---
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1

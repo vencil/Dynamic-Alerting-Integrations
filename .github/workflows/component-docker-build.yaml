@@ -204,8 +204,12 @@ jobs:
       # Informational (exit-code 0, see header). Same severity/ignore-unfixed
       # contract as release.yaml so PR-time output matches release-time output.
       - name: Trivy CVE scan (informational)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: local-pr-test/${{ matrix.name }}:pr
           format: table
           exit-code: 0

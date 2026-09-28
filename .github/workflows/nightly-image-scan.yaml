@@ -169,8 +169,12 @@ jobs:
       # = only actionable/fixable) but exit-code 0 — we CAPTURE findings here and let
       # the report job decide on alerting. JSON output for machine aggregation.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: local-scan/${{ matrix.name }}:nightly
           format: json
           output: trivy-${{ matrix.name }}.json
@@ -292,8 +296,12 @@ jobs:
       # as the scan job (CRITICAL,HIGH + ignore-unfixed, exit-code 0 — capture,
       # don't gate; the report job decides on alerting).
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ matrix.ref }}
           format: json
           output: trivy-${{ matrix.name }}.json
@@ -424,8 +432,12 @@ jobs:
       # exists is recipe-preview's bundled promtool, which has nothing to do with
       # these.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # Trivy binary pinned (the action's own default moves with every
+          # action bump). Same version as Makefile TRIVY_VERSION and
+          # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
+          version: v0.74.0
           image-ref: ${{ matrix.ref }}
           format: json
           output: trivy-${{ matrix.name }}.json
