@@ -67,7 +67,7 @@
 | `/ready` | GET | Readiness probe（config 載入完成才回 200，否則 503） |
 | `/api/v1/config` | GET | Resolved config + 租戶清單（debug；支援 `?at=<RFC3339>` 模擬未來時間點） |
 | `/api/v1/config/identity` | GET | 目前服務的那一版設定的 `config_hash` 與這一版位元組無法 parse 的檔案 `parse_failed`——**給機器讀的契約**（`schema: 1`；patch-config 寫後驗收用），欄位見 [API Reference §5](../../docs/api/README.md) |
-| `/api/v1/tenants/simulate` | POST | Ephemeral 合併預覽——帶 base64 的 tenant YAML + defaults chain，回傳 `merged_hash` + 完整 inheritance 預覽。**不寫 disk、不改 manager 狀態** |
+| `/api/v1/tenants/simulate` | POST | Ephemeral 合併預覽——帶 base64 的 tenant YAML + defaults chain，回傳 `merged_hash` + 完整 inheritance 預覽。**不寫 disk、不改 manager 狀態**。exporter 載入時會整份丟棄的 payload（租戶檔、或 chain 根層 L0 `_defaults.yaml` 過不了 exporter 自己的完整解析，例如 `defaults` 值是字串）回 **400**，`{error}` 點名是 `tenant_yaml` 還是 `defaults_chain_yaml[0]`（[#1981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1981)），錯誤最多列 10 條再附總數；租戶檔或 L0 會被整份丟棄時，即使 `tenant_id` 不在檔內也優先回 400 而非 404。L1 以下的 chain 檔值的型別寬鬆，與 exporter 相同；但 L1 以下出現 YAML 語法錯誤時 simulate 仍回 400（exporter 只丟該層），追蹤於 [#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296) |
 
 ### 3.2 旗標 / 環境變數
 
@@ -316,6 +316,8 @@ curl -s http://localhost:8080/api/v1/config                      # resolved view
 curl -s -XPOST http://localhost:8080/api/v1/tenants/simulate \
   -H 'Content-Type: application/json' -d @simulate-payload.json   # 合併預覽
 ```
+
+`/simulate` 回 400 而 `{error}` 寫著 `the exporter would skip this …` 時，代表同一份內容 commit 進 conf.d 也不會生效（exporter 會把整份檔記進 `parse_failed`）——修正點名的那份檔再重試。
 
 ---
 

@@ -48,6 +48,10 @@ import (
 	"fmt"
 	"path"
 	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SimRoot is the synthetic root the simulator places its in-memory
@@ -101,6 +105,9 @@ var ErrSimulateTenantNotFound = errors.New("tenant id not present in tenant_yaml
 //   - SimulateRequest.TenantID empty                → fmt error
 //   - len(TenantYAML) == 0                          → fmt error
 //   - YAML parse failure (any defaults or tenant)   → fmt error
+//   - tenant_yaml, or the chain's ROOT entry (L0), that the exporter's own
+//     decode rejects                                → fmt error (#1981;
+//     see rejectWhatTheExporterSkips)
 //   - TenantID not in tenant_yaml `tenants:` block  → ErrSimulateTenantNotFound
 //
 // On success the returned Config is freshly allocated and owned by
@@ -139,6 +146,10 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 	}
 	tenantPath := path.Join(tenantDir, "tenant.yaml")
 	files[tenantPath] = req.TenantYAML
+
+	if err := rejectWhatTheExporterSkips(req); err != nil {
+		return nil, err
+	}
 
 	src := NewInMemoryConfigSource(files)
 	tenants, _, _, graph, err := ScanFromConfigSource(src, SimRoot)
@@ -197,4 +208,109 @@ func simulateProfiles(chain []string, files map[string][]byte) *PlatformProfiles
 		return nil
 	}
 	return newPlatformProfiles([]profileSourceFile{{key: "_defaults.yaml", data: files[root]}})
+}
+
+// rejectWhatTheExporterSkips refuses a request whose tenant file, or whose
+// chain ROOT entry (L0), the exporter would drop on load (#1981): a dry run
+// must fail where the real path fails, or it answers "fine" for a commit
+// that never takes effect.
+//
+//   - tenant_yaml is judged with ParseTenantFile — the walker's decode of a
+//     tenant file (parseTenantDecls). A file it rejects declares no tenant on
+//     any plane: the exporter skips it whole (WARN, parse_failure).
+//   - L0 is judged with ParseConfigFile — the decode the flat plane gives the
+//     ROOT `_defaults.yaml` (parsePartialConfig for a `_` file). A file it
+//     rejects is dropped whole on /metrics, the keys that WERE valid included
+//     (ERROR, parse_failure, LoadDir's parseFailed).
+//
+// L0 is DefaultsChainYAML[0] by construction: SimulateEffective places it at
+// SimRoot/_defaults.yaml, the only chain entry at the scan root — the same
+// convention simulateProfiles relies on. The request carries no paths, so
+// the root-first order IS the level.
+//
+// ⛔ L1 AND BELOW ARE NOT JUDGED HERE, ON PURPOSE. The exporter never decodes
+// a nested `_defaults.yaml` into ThresholdConfig: the flat plane only
+// syntax-probes it (reportUnparseableNestedPlatformFile) and the subtree
+// plane reads it through ParseChainDefaults into `any` — so `"70"` there
+// takes effect, and even `abc` is not a load failure. Judging those levels
+// with ParseConfigFile would make simulate stricter than the real path. A
+// syntax error in any level still fails, in the merge (ParseChainDefaults).
+//
+// ⚠️ /effective (ResolveEffective) still reads L0 through ParseChainDefaults
+// only, so for an L0 this rejects, /simulate answers 400 while /effective
+// renders the lenient merge — a known, temporary disagreement tracked in
+// #2296.
+//
+// The error names the rejected input by its request field, since the
+// request carries bytes, not file names.
+//
+// ⚠️ PRECEDENCE OVER 404. This runs before the tenant lookup, so a request
+// whose tenant file (or L0) the exporter would drop is a 400 even when
+// tenant_id is also absent from the file — the file is the first thing
+// wrong with it, and a 404 would send the caller hunting for a typo in an
+// id that no fix of the id can make resolve.
+//
+// ⛔ THE MESSAGE IS CAPPED (capDecodeError). yaml.v3 reports one line per
+// type error, so a large payload of wrong-typed values turned into a
+// multi-megabyte {error} (measured: 716 KB in → 3.26 MB of message out).
+func rejectWhatTheExporterSkips(req SimulateRequest) error {
+	if _, err := ParseTenantFile(req.TenantYAML); err != nil {
+		return fmt.Errorf("simulate: tenant_yaml: the exporter would skip this tenant file: %s", capDecodeError(err))
+	}
+	if len(req.DefaultsChainYAML) > 0 {
+		if _, err := ParseConfigFile(req.DefaultsChainYAML[0]); err != nil {
+			return fmt.Errorf("simulate: defaults_chain_yaml[0] (L0, root _defaults.yaml): the exporter would skip this defaults file, dropping every key in it: %s", capDecodeError(err))
+		}
+	}
+	return nil
+}
+
+// simulateErrorLines / simulateErrorBytes bound a decode error's rendering
+// in a /simulate 400 (#1981).
+const (
+	simulateErrorLines = 10
+	simulateErrorBytes = 4096
+)
+
+// capDecodeError renders err with at most simulateErrorLines of yaml.v3's
+// per-error lines, followed by "… and M more errors (N total)" when some
+// were cut, and never more than simulateErrorBytes before that suffix. The
+// count is the decoder's own (yaml.TypeError.Errors) when err is one, else
+// the lines of err's message.
+func capDecodeError(err error) string {
+	var lines []string
+	head := ""
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		head = "yaml: unmarshal errors:"
+		lines = te.Errors
+	} else {
+		lines = strings.Split(err.Error(), "\n")
+	}
+	total := len(lines)
+	if total > simulateErrorLines {
+		lines = lines[:simulateErrorLines]
+	}
+	var b strings.Builder
+	b.WriteString(head)
+	for i, l := range lines {
+		if head != "" {
+			b.WriteString("\n  ")
+		} else if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(l)
+	}
+	out := b.String()
+	if len(out) > simulateErrorBytes {
+		out = out[:simulateErrorBytes]
+		for !utf8.ValidString(out) { // never split a rune
+			out = out[:len(out)-1]
+		}
+		out += " …"
+	}
+	if total > len(lines) {
+		out += fmt.Sprintf("\n  … and %d more errors (%d total)", total-len(lines), total)
+	}
+	return out
 }

@@ -320,9 +320,15 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// of the wrong shape) is dropped there but still registers its
 		// tenants here. Deliberately left out of #1957: here a parse error
 		// is a hard error (the simulate caller gets a 400), so switching
-		// decodes changes which payloads simulate refuses — a behaviour
-		// decision of its own, not a side effect of unifying the walker —
-		// tracked in #1981.
+		// decodes changes which payloads simulate refuses.
+		//
+		// #1981 made that decision in the CALLER, not here: SimulateEffective
+		// judges its one tenant file with ParseTenantFile before scanning
+		// (rejectWhatTheExporterSkips), so no file this decode would admit
+		// and the walker would drop reaches this loop from /simulate. This
+		// loop stays lightweight because it also scans whole corpora
+		// (BenchmarkScanFromConfigSource_1000_InMemory is on the release
+		// bench gate) where a full decode per file buys simulate nothing.
 		var doc struct {
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
