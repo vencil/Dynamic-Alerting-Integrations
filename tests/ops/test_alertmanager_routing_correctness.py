@@ -356,8 +356,9 @@ class TestEnforcedRoutingGuardrails:
     Synthetic tree（_inject_custom_alert_isolation 注入後）：
       routes[0..3]  Watchdog / custom（含 demo children）/ probe / sentinel
       routes[4]     platform-enforced（severity="critical"，continue:true）
-      routes[5]     tenant-demo-blue-override-0（alertname 專屬 override）
-      routes[6..]   tenant="demo-*" 主 route
+      routes[5..]   tenant="demo-*" 主 route；demo-blue 的 routes 底下掛
+                    tenant-demo-blue-override-0（alertname 專屬 override，
+                    #2252 起為子路由，繼承主 route 的 timing / group_by）
     """
 
     def test_critical_dual_delivers_to_noc_and_tenant(self, enforced_etc):
@@ -399,10 +400,11 @@ class TestEnforcedRoutingGuardrails:
         }, "platform-enforced")
 
     def test_override_route_wins_over_tenant_main_route(self, enforced_etc):
-        """分支：per-rule override sub-route（v1.8.0，插在 tenant 主 route 前）。
+        """分支：per-rule override sub-route（v1.8.0；#2252 起為 tenant 主
+        route 的子路由）。
 
         override 指定的 alertname 必須改道到 override receiver，而非租戶
-        主 channel；順序若倒轉（主 route 先 match），本案例變紅。
+        主 channel；子路由若沒被走到（例如掛錯層、matcher 打錯），本案例變紅。
         """
         tenant = _DEMO_TENANTS[0]
         _assert_routed(enforced_etc, {

@@ -1306,7 +1306,7 @@ class TestGenerateRoutes:
         assert any("not in allowed_domains" in w for w in warnings)
 
     def test_routing_overrides(self):
-        """Per-rule routing overrides 插入在 tenant 主 route 之前。"""
+        """Per-rule routing overrides 是 tenant 主 route 的子路由（#2252）。"""
         configs = {
             "db-a": {
                 **make_routing_config(url="https://default.example.com"),
@@ -1317,8 +1317,9 @@ class TestGenerateRoutes:
             }
         }
         routes, receivers, warnings = generate_routes(configs)
-        assert len(routes) == 2
-        assert "db-a-override-0" in routes[0]["receiver"]
+        assert len(routes) == 1
+        assert routes[0]["receiver"] == "tenant-db-a"
+        assert routes[0]["routes"][0]["receiver"] == "tenant-db-a-override-0"
 
     def test_timing_params_applied(self):
         """Timing parameters 正確套用到 route。"""
@@ -1406,18 +1407,17 @@ class TestExpandRoutingOverrides:
         ]}
         sub, recv, warns = expand_routing_overrides("db-a", routing)
         assert len(sub) == 1
-        assert any('metric_group="cpu_metrics"' in m for m in sub[0]["matchers"])
+        assert sub[0]["matchers"] == ['metric_group="cpu_metrics"']
 
     def test_alertname_override_matchers(self):
-        """alertname override 產生 tenant + alertname matcher。"""
+        """alertname override 只產生自己的 alertname matcher；tenant matcher
+        只在父節點（tenant 主 route，#2252）。"""
         routing = {"receiver": make_receiver(), "overrides": [
             make_override("alertname", "DiskFull")
         ]}
         sub, recv, warns = expand_routing_overrides("db-a", routing)
         assert len(sub) == 1
-        matchers = sub[0]["matchers"]
-        assert any('tenant="db-a"' in m for m in matchers)
-        assert any('alertname="DiskFull"' in m for m in matchers)
+        assert sub[0]["matchers"] == ['alertname="DiskFull"']
 
     def test_group_by_applied(self):
         """override 含 group_by 正確套用。"""
@@ -1647,6 +1647,146 @@ class TestBuildTenantRoutes:
         routes, receivers, warnings = _build_tenant_routes(configs)
         assert len(routes) == 1
         assert routes[0]["receiver"] == "tenant-db-a"
+
+
+# ============================================================
+# #2252: override 是 tenant 主路由的子路由（巢狀）
+# ============================================================
+class TestOverrideRoutesNestUnderTenantRoute:
+    """override 子路由掛在 tenant 主路由的 ``routes`` 底下。
+
+    Alertmanager 的子路由從父節點的 RouteOpts 起算（dispatch/route.go
+    ``newRoute``），所以 override 沒寫的 timing / group_by 繼承 tenant 主路由；
+    若與主路由同層（#2252 之前），繼承的是 root。租戶範圍只由父節點的
+    ``tenant="<id>"`` matcher 決定：子路由不重複它，父節點一定帶它。
+    """
+
+    _T = "demo-nest"
+    _MAIN = {"type": "webhook", "url": "https://hooks.example.com/main"}
+
+    @classmethod
+    def _cfg(cls, *overrides, **main):
+        cfg = {"receiver": cls._MAIN, **main}
+        if overrides:
+            cfg["overrides"] = list(overrides)
+        return {cls._T: cfg}
+
+    @staticmethod
+    def _ov(**kw):
+        kw.setdefault("receiver", {"type": "webhook",
+                                   "url": "https://hooks.example.com/ov"})
+        return kw
+
+    def test_overrides_are_children_of_the_tenant_route(self):
+        routes, receivers, warnings = generate_routes(self._cfg(
+            self._ov(alertname="DiskFull"),
+            self._ov(metric_group="cpu_metrics")))
+        assert warnings == []
+        assert len(routes) == 1, routes
+        parent = routes[0]
+        assert parent["matchers"] == [f'tenant="{self._T}"']
+        assert parent["receiver"] == f"tenant-{self._T}"
+        assert parent["routes"] == [
+            {"matchers": ['alertname="DiskFull"'],
+             "receiver": f"tenant-{self._T}-override-0"},
+            {"matchers": ['metric_group="cpu_metrics"'],
+             "receiver": f"tenant-{self._T}-override-1"},
+        ]
+        assert sorted(r["name"] for r in receivers) == [
+            f"tenant-{self._T}", f"tenant-{self._T}-override-0",
+            f"tenant-{self._T}-override-1"]
+
+    def test_no_top_level_route_targets_an_override_receiver(self):
+        """反證同層：頂層不得出現任何 override receiver 的 route。"""
+        routes, _, _ = generate_routes({
+            **self._cfg(self._ov(alertname="A")),
+            "demo-other": {"receiver": self._MAIN,
+                           "overrides": [self._ov(metric_group="g")]},
+        })
+        assert [r["receiver"] for r in routes] == [
+            "tenant-demo-nest", "tenant-demo-other"]
+        assert all("-override-" not in r["receiver"] for r in routes)
+
+    def test_child_leaves_undeclared_timing_to_the_tenant_route(self):
+        """tenant repeat_interval=30m、override 沒寫 timing → 子路由不帶
+        timing / group_by 鍵（由 AM 從 tenant 主路由繼承 30m），父節點帶 30m。"""
+        routes, _, _ = generate_routes(self._cfg(
+            self._ov(alertname="A"),
+            repeat_interval="30m", group_wait="45s", group_by=["alertname"]))
+        parent = routes[0]
+        assert parent["repeat_interval"] == "30m"
+        child = parent["routes"][0]
+        assert set(child) == {"matchers", "receiver"}, child
+
+    def test_child_keeps_its_own_declared_timing(self):
+        routes, _, _ = generate_routes(self._cfg(
+            self._ov(alertname="A", repeat_interval="10m",
+                     group_by=["alertname", "instance"]),
+            repeat_interval="30m"))
+        child = routes[0]["routes"][0]
+        assert child["repeat_interval"] == "10m"
+        assert child["group_by"] == ["alertname", "instance"]
+        assert "tenant" not in "".join(child["matchers"])
+
+    def test_override_order_is_preserved_first_match_wins(self):
+        """AM 在子路由間取第一個命中者；list 順序必須照 overrides 原順序。"""
+        routes, _, _ = generate_routes(self._cfg(
+            self._ov(alertname="Dup"), self._ov(alertname="Dup")))
+        assert [c["receiver"] for c in routes[0]["routes"]] == [
+            f"tenant-{self._T}-override-0", f"tenant-{self._T}-override-1"]
+
+    def test_tenant_without_overrides_has_no_routes_key(self):
+        """沒有 override 的 tenant 維持原形狀（不產生空的 routes）。"""
+        routes, _, _ = generate_routes(self._cfg(repeat_interval="30m"))
+        assert "routes" not in routes[0]
+
+    def test_all_overrides_skipped_leaves_no_routes_key(self):
+        routes, _, warnings = generate_routes(self._cfg(
+            {"alertname": "NoReceiver"}))
+        assert any("missing 'receiver'" in w for w in warnings)
+        assert "routes" not in routes[0]
+
+    def test_enforced_routes_stay_top_level_ahead_of_tenant_routes(self):
+        """_routing_enforced（continue: true）位置與語意不受巢狀影響。"""
+        enforced = {"receiver": {"type": "webhook",
+                                 "url": "https://noc.example.com/x"},
+                    "match": ['severity="critical"']}
+        routes, _, _ = generate_routes(
+            self._cfg(self._ov(alertname="A")), enforced_routing=enforced)
+        assert [r["receiver"] for r in routes] == [
+            "platform-enforced", f"tenant-{self._T}"]
+        assert routes[0]["continue"] is True
+        assert "continue" not in routes[1]
+        assert "continue" not in routes[1]["routes"][0]
+
+    def test_per_tenant_enforced_route_is_not_nested(self):
+        enforced = {"receiver": {"type": "webhook",
+                                 "url": "https://noc.example.com/{{tenant}}"}}
+        routes, _, _ = generate_routes(
+            self._cfg(self._ov(alertname="A")), enforced_routing=enforced)
+        assert [r["receiver"] for r in routes] == [
+            f"platform-enforced-{self._T}", f"tenant-{self._T}"]
+        assert "routes" not in routes[0]
+
+    def test_assembled_configmap_keeps_the_nesting(self):
+        """組完整 ConfigMap 後巢狀仍在，custom 子樹照樣拿到 tenant child。"""
+        from generate_alertmanager_routes import (
+            assemble_configmap, load_base_config)
+        routes, receivers, _ = generate_routes(self._cfg(
+            self._ov(alertname="A")))
+        cm = yaml.safe_load(assemble_configmap(
+            load_base_config(None), routes, receivers, []))
+        am = yaml.safe_load(cm["data"]["alertmanager.yml"])
+        top = am["route"]["routes"]
+        tenant_routes = [r for r in top
+                         if r.get("receiver") == f"tenant-{self._T}"]
+        assert len(tenant_routes) == 1
+        assert tenant_routes[0]["routes"][0]["receiver"] == \
+            f"tenant-{self._T}-override-0"
+        custom = [r for r in top if 'component="custom"' in r["matchers"]][0]
+        assert custom["routes"] == [{"matchers": [f'tenant="{self._T}"'],
+                                     "receiver": f"tenant-{self._T}"}]
+        assert all("-override-" not in r.get("receiver", "") for r in top)
 
 
 # ============================================================
@@ -2442,9 +2582,9 @@ class TestDomainPolicyStrictMessages:
 class TestDomainPolicyOverrideSubroutes:
     """每條會產出 AM receiver 的 override 子路由，受與主路由相同的約束。
 
-    子路由沒宣告的 timing / group_by 在 AM 裡繼承的是 ROOT route（產生器把
-    override 放在 tenant 主路由旁、同層於 route.routes），不是 tenant 主路由，
-    所以檢查只看子路由自己宣告的值，不從主路由回填。
+    #2252：產生器把 override 放成 tenant 主路由的子路由，子路由沒宣告的
+    timing / group_by 在 AM 裡繼承 tenant 主路由的值，所以檢查用「子路由自己
+    宣告的值，沒宣告就用主路由的值」——也就是它實際生效的值。
     """
 
     _PD = {"type": "pagerduty", "service_key": "k"}
@@ -2511,20 +2651,56 @@ class TestDomainPolicyOverrideSubroutes:
         assert "override[0] (alertname=A): group_wait '5s' below minimum" \
             in msgs[0]
 
-    def test_override_without_timing_is_not_backfilled_from_main(self):
-        """沒帶 timing 的 override 不沿用主路由的值（AM 繼承的是 root）。
-
-        主路由 24h 違規 → 只報主路由一條；override 不因主路由的值被點名。
-        """
+    def test_override_without_timing_is_backfilled_from_main(self):
+        """沒帶 timing 的 override 用主路由的值檢查（#2252：AM 繼承的是
+        tenant 主路由）。主路由違規 → 主路由與該 override 各報一條，override
+        那條標明值是繼承來的、修法指向主路由或 override 自己的值。"""
         routing = self._routing({"alertname": "A", "receiver": self._PD},
                                 repeat_interval="24h", group_wait="5s")
+        policy = self._policy(max_repeat_interval="1h", min_group_wait="30s")
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 4, msgs
+        sub = [m for m in msgs if "override[0]" in m]
+        assert sub == [
+            "  ERROR: domain_policy 'finance', tenant 'tenant-fin' "
+            "override[0] (alertname=A): repeat_interval '24h' (inherited "
+            "from the tenant's main route) exceeds max '1h' — fix: lower the "
+            "tenant's (which override[0] inherits) or override[0]'s own "
+            "repeat_interval to '1h' or less, or raise the policy's "
+            "max_repeat_interval",
+            "  ERROR: domain_policy 'finance', tenant 'tenant-fin' "
+            "override[0] (alertname=A): group_wait '5s' (inherited from the "
+            "tenant's main route) below minimum '30s' — fix: raise the "
+            "tenant's (which override[0] inherits) or override[0]'s own "
+            "group_wait to '30s' or more, or lower the policy's "
+            "min_group_wait",
+        ]
+        # 非 strict：同樣兩條子路由 WARN（無修法提示）
+        lenient = check_domain_policies(routing, policy)
+        assert len(lenient) == 4, lenient
+        assert sum("override[0]" in m and "(inherited from the tenant's "
+                   "main route)" in m for m in lenient) == 2
+
+    def test_override_own_timing_is_not_replaced_by_main(self):
+        """override 自己宣告的值優先，不被主路由的值蓋過（反方向）。"""
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD, "repeat_interval": "30m",
+             "group_wait": "1m"},
+            repeat_interval="24h", group_wait="5s")
         policy = self._policy(max_repeat_interval="1h", min_group_wait="30s")
         msgs = check_domain_policies(routing, policy, strict=True)
         assert len(msgs) == 2, msgs
         assert not any("override" in m for m in msgs), msgs
 
+    def test_main_without_value_leaves_override_unconstrained(self):
+        """主路由與 override 都沒寫 → 兩者都繼承 root，沒有可檢查的值。"""
+        routing = self._routing({"alertname": "A", "receiver": self._PD})
+        policy = self._policy(max_repeat_interval="1h", min_group_wait="30s")
+        assert check_domain_policies(routing, policy, strict=True) == []
+
     def test_override_group_by_follows_main_route_semantics(self):
-        """enforce_group_by：與主路由同判定——宣告缺 label 或未宣告都算缺。"""
+        """enforce_group_by：override 宣告缺 label → 點名 override；沒宣告 →
+        繼承主路由的 group_by（#2252），主路由合規則 override 也合規。"""
         routing = self._routing(
             {"alertname": "A", "receiver": self._PD,
              "group_by": ["alertname"]},
@@ -2532,11 +2708,37 @@ class TestDomainPolicyOverrideSubroutes:
             group_by=["tenant", "alertname"])
         policy = self._policy(enforce_group_by=["tenant", "alertname"])
         msgs = check_domain_policies(routing, policy, strict=True)
+        assert msgs == [
+            "  ERROR: domain_policy 'finance', tenant 'tenant-fin' "
+            "override[0] (alertname=A): group_by missing required labels: "
+            "['tenant'] — fix: add ['tenant'] to override[0]'s group_by "
+            "(policy requires ['alertname', 'tenant'])"]
+
+    def test_override_inherits_noncompliant_main_group_by(self):
+        """主路由 group_by 缺 label → 沒宣告 group_by 的 override 也缺，並標明
+        繼承來源。"""
+        routing = self._routing({"metric_group": "disk",
+                                 "receiver": self._PD},
+                                group_by=["alertname"])
+        policy = self._policy(enforce_group_by=["tenant", "alertname"])
+        msgs = check_domain_policies(routing, policy, strict=True)
         assert len(msgs) == 2, msgs
-        assert "override[0] (alertname=A): group_by missing required " \
-               "labels: ['tenant']" in msgs[0]
-        assert "override[1] (alertname=B): group_by missing required " \
-               "labels: ['alertname', 'tenant']" in msgs[1]
+        assert ("override[0] (metric_group=disk): group_by (inherited from "
+                "the tenant's main route) missing required labels: "
+                "['tenant']") in msgs[1]
+        assert "add ['tenant'] to the tenant's (which override[0] " \
+               "inherits) or override[0]'s own group_by" in msgs[1]
+
+    def test_malformed_own_group_by_is_not_papered_over(self):
+        """override 寫了非 list 的 group_by（產生器會丟掉它）→ strict 仍點名
+        它自己，不以主路由的合規值掩蓋。"""
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD, "group_by": "tenant"},
+            group_by=["tenant", "alertname"])
+        policy = self._policy(enforce_group_by=["tenant"])
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 1, msgs
+        assert "override[0] (alertname=A): group_by must be a list" in msgs[0]
 
     def test_compliant_overrides_produce_no_messages(self):
         routing = self._routing(

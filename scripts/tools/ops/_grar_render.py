@@ -82,11 +82,13 @@ def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
     #1092 0-pre: a route qualifies as a main tenant route only when BOTH hold —
     it carries a matcher that is exactly ``tenant="<t>"`` (literal value, no
     regex), AND its receiver is the string ``tenant-<t>``. The receiver equality
-    is load-bearing: ``platform-enforced-<t>`` and ``tenant-<t>-override-<idx>``
-    routes ALSO carry a tenant matcher, and promoting either would be wrong —
-    the enforced route would funnel custom alerts into the platform NOC (the
-    exact leak the isolation subtree exists to prevent), and an override route
-    only applies to a specific alertname/metric_group outside this subtree.
+    is load-bearing: ``platform-enforced-<t>`` routes ALSO carry a tenant
+    matcher, and promoting one would funnel custom alerts into the platform NOC
+    (the exact leak the isolation subtree exists to prevent). Per-rule
+    ``tenant-<t>-override-<idx>`` routes are children of the main tenant route
+    since #2252 (only its top-level ``routes`` are scanned here, and they carry
+    no tenant matcher); an override only applies to a specific
+    alertname/metric_group outside this subtree.
 
     Returns sorted, de-duplicated tenant names.
     """

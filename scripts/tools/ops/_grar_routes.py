@@ -67,13 +67,21 @@ def _validate_override_matcher(override: dict, idx: int, tenant: str) -> tuple[b
 
 
 def _build_override_matchers(override: dict, tenant: str, has_alertname: bool) -> list[str]:
-    """Build matcher list based on override type (alertname or metric_group)."""
+    """Build matcher list based on override type (alertname or metric_group).
+
+    #2252: the list carries ONLY the override's own matcher. The override
+    route is rendered as a CHILD of the tenant's main route, and the
+    ``tenant="<id>"`` matcher lives on that parent alone — Alertmanager only
+    descends into a child after the parent matched, so the tenant scope is
+    enforced by the tree, not repeated here. ``tenant`` stays in the
+    signature for the facade re-export contract; it is not used.
+    """
+    del tenant  # scope comes from the parent route (#2252)
     if has_alertname:
         alertname = override["alertname"]
-        return [f'tenant="{tenant}"', f'alertname="{alertname}"']
-    else:
-        metric_group = override["metric_group"]
-        return [f'tenant="{tenant}"', f'metric_group="{metric_group}"']
+        return [f'alertname="{alertname}"']
+    metric_group = override["metric_group"]
+    return [f'metric_group="{metric_group}"']
 
 
 def _process_override_receiver(override: dict, idx: int, tenant: str,
@@ -133,7 +141,16 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
     """Expand per-rule routing overrides into sub-routes.
 
     v1.8.0: Supports per-alertname or per-metric_group receiver overrides.
-    Each override generates a sub-route that matches before the main tenant route.
+    #2252: each override becomes a CHILD route of the tenant's main route
+    (``_build_tenant_routes`` nests them under ``routes:``), matched in list
+    order before the parent's own receiver applies. A child carries only its
+    own matcher + receiver + whatever timing / ``group_by`` it declares;
+    everything it leaves out is inherited from the tenant's main route by
+    Alertmanager (``dispatch/route.go`` ``NewRoute`` copies the parent's
+    ``RouteOpts`` before applying the child's own). ⚠ ``mute_time_intervals``
+    / ``active_time_intervals`` are NOT inherited that way (AM overwrites
+    them per node) — if this generator ever emits them, write them on every
+    level.
 
     Args:
         tenant: tenant name for error messages and matchers.
@@ -142,7 +159,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
 
     Returns:
         (sub_routes, override_receivers, warnings) where:
-        - sub_routes: list of Alertmanager route dicts (prepended before main tenant route)
+        - sub_routes: list of Alertmanager child-route dicts (nested under the
+          tenant's main route as its ``routes``; no ``tenant`` matcher)
         - override_receivers: list of receiver dicts to append to receivers list
         - warnings: list of warning/error strings
     """
@@ -365,8 +383,9 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
       1. Validate receiver config (required, must have type)
       2. Build Alertmanager receiver config (webhook, email, slack, etc.)
       3. Apply domain policy constraints if allowed_domains is provided
-      4. Expand per-rule routing overrides and insert before main tenant route
-      5. Build tenant route with matchers, receiver name, timing, and group_by
+      4. Expand per-rule routing overrides
+      5. Build tenant route with matchers, receiver name, timing, and group_by,
+         carrying the override routes as its children (#2252)
 
     Args:
         routing_configs: {tenant_name: routing_config_dict} resolved from defaults and overrides
@@ -374,7 +393,9 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
-        - routes: tenant route dicts with per-rule overrides injected first
+        - routes: one top-level route per tenant; per-rule overrides are its
+          ``routes`` children, so an override's undeclared timing / group_by
+          is inherited from the tenant route, not from the root (#2252)
         - receivers: tenant receiver dicts built from routing_configs
         - warnings: validation warnings (domain policy, missing receiver, etc.)
     """
@@ -405,11 +426,12 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             if any("not in allowed_domains" in w for w in domain_warnings):
                 continue
 
-        # v1.8.0: 展開 per-rule routing overrides（插入在 tenant 主 route 之前）
+        # v1.8.0: 展開 per-rule routing overrides。#2252：它們是 tenant 主 route
+        # 的子路由（見下方 routes 欄位），不是與主 route 同層的兄弟——同層時
+        # override 沒寫的 timing / group_by 會繼承 root，而不是 tenant。
         override_sub_routes, override_receivers, override_warnings = \
             expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains)
         warnings.extend(override_warnings)
-        routes.extend(override_sub_routes)
         receivers.extend(override_receivers)
 
         # Receiver name 由 tenant 推導
@@ -430,6 +452,11 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         timing, timing_warnings = _apply_timing_params(cfg, tenant)
         warnings.extend(timing_warnings)
         route.update(timing)
+
+        # #2252：tenant="<id>" matcher 只在這個父節點；子路由只帶自己的
+        # alertname / metric_group matcher，AM 只有父節點命中才會往下比對。
+        if override_sub_routes:
+            route["routes"] = override_sub_routes
 
         routes.append(route)
 

@@ -410,6 +410,8 @@ flowchart TD
 
 ⚠️ 一個告警可能同時命中 `alertname` 那條與 `metric_group` 那條（它的名字對上、所屬群組也對上），這時排在前面的那條生效。**要讓某個 alertname 壓過它所屬的 metric_group，就把它寫在前面。**
 
+這些子路由掛在租戶主 route 底下：override 沒寫的 `group_wait` / `group_interval` / `repeat_interval` / `group_by` 沿用租戶 `_routing` 的值，不是 root route 的值。
+
 ---
 
 ## 8. Platform Enforced Routing
