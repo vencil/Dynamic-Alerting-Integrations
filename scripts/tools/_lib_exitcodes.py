@@ -4,8 +4,16 @@ Single source of truth for the 0/1/2 exit-code convention shared by the
 Python tool suite and the Go binaries (da-guard / da-parser / da-batchpr).
 Before #452 the convention lived in three divergent ad-hoc spots
 (_lib_godispatch._EXIT_CALLER_ERROR, diag_pr_ci.EXIT_*, trufflehog_to_sarif
-.EXIT_*); this module unifies the base contract so call sites and the
-test gate (tests/shared/test_tool_exit_codes.py) don't drift.
+.EXIT_*); this module unifies the base contract so call sites share one
+set of constants.
+
+What is tested, and what is not: tests/shared/test_tool_exit_codes.py pins
+these constants to 0/1/2 and checks that every tool exits 2 on an
+unrecognised flag — the one trigger below that argparse provides for free.
+The other EXIT_CALLER_ERROR triggers (missing path, invalid value,
+unreachable Prometheus / API, malformed input, IO failure) are NOT checked
+by that gate; each tool's own tests carry them, where they exist. See that
+file's Scope block and #1642.
 
 Go equivalent (stable contract, mirrored here):
   components/threshold-exporter/app/cmd/da-guard/main.go  (// Exit codes ...)
