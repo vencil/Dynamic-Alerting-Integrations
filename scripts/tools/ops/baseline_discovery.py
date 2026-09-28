@@ -71,33 +71,103 @@ from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#17
 query_prometheus = query_prometheus_instant
 
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
+# `config_key`：建議值要寫進哪個租戶 key。先前一律拼成 `mysql_<名稱>`，其中
+# mysql_memory／mysql_disk_io／mysql_slow_queries 沒有任何 rule pack 讀，
+# mysql_cpu 在別名視窗內變成 mysql_threads_running（issue 1196）。
+# cpu／memory 對到 container_cpu／container_memory，而那兩個 key 在 rule pack
+# 裡比的是「佔 limit 的 %」，所以查詢用的是 rule-pack-kubernetes.yaml
+# `tenant:container_{cpu,memory}_percent:by_container` 的分子分母原文（只把
+# namespace 換成這個租戶），取租戶內最弱的容器。仍然是原始 cAdvisor／
+# kube-state-metrics 指標，不讀 recording rule——Day 0 的邊界不變（#719）。
+# tests/ops/test_baseline_discovery.py 把這兩段與 rule pack 逐字比對。
 DEFAULT_METRICS = {
     "connections": {
         "query": 'mysql_global_status_threads_connected{{tenant="{tenant}"}}',
         "unit": "connections",
         "description": "MariaDB active connections",
+        "config_key": "mysql_connections",
     },
     "cpu": {
-        "query": 'rate(container_cpu_usage_seconds_total{{namespace="{tenant}",container="mariadb"}}[5m]) * 100',
-        "unit": "%",
-        "description": "Container CPU usage rate",
+        "query": ('max((sum by(namespace, pod, container) ('
+                  'rate(container_cpu_usage_seconds_total{{namespace="{tenant}", '
+                  'container!="", container!="POD"}}[5m])) / '
+                  'sum by(namespace, pod, container) ('
+                  'kube_pod_container_resource_limits{{resource="cpu", '
+                  'namespace="{tenant}"}})) * 100)'),
+        "unit": "% of limit",
+        "description": "Container CPU % of limit (weakest container)",
+        "config_key": "container_cpu",
+        "bounded": True,
     },
     "slow_queries": {
         "query": 'rate(mysql_global_status_slow_queries{{tenant="{tenant}"}}[5m]) * 60',
         "unit": "queries/min",
         "description": "Slow queries per minute",
+        "config_key": None,
+        "no_key_reason": ("MariaDBHighSlowQueries compares against a fixed value, "
+                          "not a tenant threshold"),
     },
     "memory": {
-        "query": 'container_memory_working_set_bytes{{namespace="{tenant}",container="mariadb"}} / 1024 / 1024',
-        "unit": "MiB",
-        "description": "Container memory working set",
+        "query": ('max((sum by(namespace, pod, container) ('
+                  'container_memory_working_set_bytes{{namespace="{tenant}", '
+                  'container!="", container!="POD"}}) / '
+                  'sum by(namespace, pod, container) ('
+                  'kube_pod_container_resource_limits{{resource="memory", '
+                  'namespace="{tenant}"}})) * 100)'),
+        "unit": "% of limit",
+        "description": "Container memory % of limit (weakest container)",
+        "config_key": "container_memory",
+        "bounded": True,
     },
     "disk_io": {
-        "query": 'rate(container_fs_reads_bytes_total{{namespace="{tenant}",container="mariadb"}}[5m]) / 1024',
+        "query": ('sum(rate(container_fs_reads_bytes_total{{namespace="{tenant}", '
+                  'container!="", container!="POD"}}[5m])) / 1024'),
         "unit": "KiB/s",
         "description": "Disk read throughput",
+        "config_key": None,
+        "no_key_reason": "no rule pack alert reads a disk read-throughput threshold",
     },
 }
+
+
+# 「佔 limit 的 %」有上界：到 100 就 OOMKill（memory）或被 CFS 節流（CPU）。
+# 這類門檻由「多接近上限才危險」決定，是平台層的固定值（kubernetes-mixin、
+# Datadog 的做法；我們的預設在 scaffold）。舊公式 p95×1.2／p99×1.5 在
+# p99 ≥ 66.7 時給出 >100 的門檻，永遠不會響（issue 1196）。所以這兩項不算
+# 門檻，只拿觀測值對照平台預設：預設夠用就說夠用；平時用量已頂到預設，
+# 就建議調高 limit（讓 p99 落在預設的 LIMIT_TARGET_SHARE），而不是把門檻往上推。
+LIMIT_TARGET_SHARE = 0.9
+NO_LIMIT_NOTE = ("沒有設 limit 的容器量不到（查的是用量 ÷ kube_pod_container_resource_limits，"
+                 "需要 kube-state-metrics）。rule pack 對沒設 CPU limit 的容器改用佔節點的比例，"
+                 "baseline 不涵蓋；memory 沒設 limit 時 rule pack 也不告警。")
+
+
+def platform_default(key):
+    """平台對 ``key`` 的預設值，取自 scaffold_tenant.RULE_PACKS（registry 由它生成；
+    映像與 repo 佈局都有這支）。讀不到回 None。"""
+    try:
+        import scaffold_tenant
+    except ImportError:
+        return None
+    for pack in scaffold_tenant.RULE_PACKS.values():
+        entry = (pack.get("defaults") or {}).get(key)
+        if isinstance(entry, dict) and "value" in entry:
+            return entry["value"]
+    return None
+
+
+def percent_verdict(stats, key):
+    """對照平台預設的判定：(一行摘要, 是否需要調 limit, limit 倍數或 None)。"""
+    default = platform_default(key)
+    if default is None:
+        return f"{key} 的平台預設讀不到，無法對照", False, None
+    p99 = stats["p99"]
+    if p99 < default:
+        return (f"{key} 平台預設 {default}% 可用（p99 = {p99:.2f}%），不需覆寫", False, None)
+    factor = p99 / (default * LIMIT_TARGET_SHARE)
+    return (f"{key} 平台預設 {default}% 太緊：平時 p99 = {p99:.2f}% 已達預設，照預設會常響。"
+            f"請先調高 limit（約 ×{factor:.2f}，讓 p99 落在預設的 "
+            f"{int(LIMIT_TARGET_SHARE * 100)}%），不要把門檻往上推", True, factor)
 
 
 def extract_scalar(results):
@@ -281,7 +351,10 @@ def main():
         print(f"  Unit: {info['unit']}")
 
         if stats["count"] == 0:
-            print(f"  ⚠️  無有效資料\n")
+            print(f"  ⚠️  無有效資料")
+            if info.get("bounded"):
+                print(f"  {NO_LIMIT_NOTE}")
+            print()
             continue
 
         print(f"  Samples: {stats['count']}")
@@ -290,9 +363,12 @@ def main():
         print(f"  Percentiles: p50={stats['p50']:.2f}  p90={stats['p90']:.2f}  "
               f"p95={stats['p95']:.2f}  p99={stats['p99']:.2f}")
 
-        if suggestion["warning"] is not None:
+        if info.get("bounded") and stats["count"] >= 10:
+            print(f"  💡 {percent_verdict(stats, info['config_key'])[0]}")
+        elif suggestion["warning"] is not None:
+            no_key = "" if info.get("config_key") else "；沒有租戶閾值 key，僅供參考"
             print(f"  💡 建議 warning: {suggestion['warning']}  "
-                  f"critical: {suggestion['critical']}  ({suggestion['note']})")
+                  f"critical: {suggestion['critical']}  ({suggestion['note']}{no_key})")
         else:
             print(f"  💡 {suggestion['note']}")
         print()
@@ -346,6 +422,11 @@ def main():
     for key, info in metrics.items():
         stats = all_stats[key]
         suggestion = suggest_threshold(stats, key)
+        if info.get("bounded"):
+            verdict = (percent_verdict(stats, info["config_key"])[0]
+                       if stats["count"] >= 10 else
+                       (NO_LIMIT_NOTE if stats["count"] == 0 else suggestion["note"]))
+            suggestion = {"warning": None, "critical": None, "note": verdict}
         writer.writerow([
             key, info["unit"], stats["count"],
             stats["min"], stats["max"], stats["avg"],
@@ -373,11 +454,22 @@ def main():
     print("   走 GitOps 的話請直接把下面的值寫進你 repo 的 conf.d/<tenant>.yaml，"
           "再 commit。\n")
 
-    for key in metrics:
+    for key, info in metrics.items():
         suggestion = suggest_threshold(all_stats[key], key)
+        if info.get("bounded"):
+            if all_stats[key]["count"] >= 10:
+                print(f"  # {key}: {percent_verdict(all_stats[key], info['config_key'])[0]}")
+                print()
+            continue
         if suggestion["warning"] is not None:
-            config_key = f"mysql_{key}" if not key.startswith("container_") else key
+            config_key = info["config_key"]
             print(f"  # {key}: warning={suggestion['warning']}")
+            if config_key is None:
+                # issue 1196: no tenant key reads this measurement, so a
+                # patch-config line would set a key that changes nothing.
+                print(f"  #   no tenant threshold key for this one: {info['no_key_reason']}")
+                print()
+                continue
             print(f"  da-tools patch-config {args.tenant} {config_key} {suggestion['warning']}")
             if suggestion["critical"] is not None:
                 print(f"  da-tools patch-config {args.tenant} {config_key}_critical {suggestion['critical']}")

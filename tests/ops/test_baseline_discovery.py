@@ -529,8 +529,12 @@ class TestReportOutput:
         assert "無有效資料" in out
 
     def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path, cli_argv):
-        """報告包含 patch 建議指令。"""
-        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
+        """報告包含 patch 建議指令。
+
+        用 connections：cpu／memory 是佔 limit 的 %，改為對照平台預設、不印
+        patch-config（issue 1196）。
+        """
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "connections", "-o", str(tmp_path / "out"))
 
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "70.0"]}], None
@@ -547,3 +551,139 @@ class TestReportOutput:
         assert "da-tools patch-config" in out
         assert "patch_config.py" not in out, (
             "the repo-relative form is unreachable for this output's reader")
+
+
+# ── 建議的 key 必須有 rule pack 讀它，單位也要對（issue 1196）──────
+#
+# 先前把每個觀測指標硬拼成 `mysql_<名稱>`：mysql_memory／mysql_disk_io／
+# mysql_slow_queries 沒有任何 rule pack 讀；mysql_cpu 在別名視窗內變成
+# mysql_threads_running，等於把容器 CPU% 寫成 threads_running 的閾值。
+# 而 rule pack 的 container_cpu／container_memory 是「佔 limit 的 %」，
+# 查詢的單位必須跟著一致（先前 cpu 是單核 %、memory 是 MiB）。
+
+import re as _re  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+import _threshold_alerts  # noqa: E402
+
+_REPO = _Path(__file__).resolve().parents[2]
+
+
+def test_every_suggested_key_has_a_rule_pack_reader():
+    keyed = {k: v["config_key"] for k, v in baseline_discovery.DEFAULT_METRICS.items()
+             if v.get("config_key")}
+    assert keyed == {"connections": "mysql_connections", "cpu": "container_cpu",
+                     "memory": "container_memory"}
+    for metric, key in keyed.items():
+        assert _threshold_alerts.alerts_for_key(key), (metric, key)
+
+
+def test_a_measurement_without_a_key_says_why():
+    for metric, info in baseline_discovery.DEFAULT_METRICS.items():
+        if not info.get("config_key"):
+            assert len(info.get("no_key_reason", "")) > 20, metric
+
+
+def _rule_ratio(record):
+    text = (_REPO / "rule-packs" / "rule-pack-kubernetes.yaml").read_text(encoding="utf-8")
+    body = text.split(f"- record: {record}", 1)[1]
+    # 分子內有一層 rate(...)，分母沒有巢狀括號。
+    m = _re.search(r"(sum by\(namespace, pod, container\) \(\s*(?:[^()]|\([^()]*\))*?\)"
+                   r"\s*/\s*sum by\(namespace, pod, container\) \(\s*[^()]*?\))", body)
+    assert m, record
+    return " ".join(m.group(1).split()).replace('namespace=~"db-.+"', 'namespace="{tenant}"')
+
+
+@pytest.mark.parametrize("metric,record", [
+    ("cpu", "tenant:container_cpu_percent:by_container"),
+    ("memory", "tenant:container_memory_percent:by_container"),
+])
+def test_percent_query_is_the_rule_packs_own_ratio(metric, record):
+    """baseline 查原始指標（#719 的 Day 0 邊界），但分子分母與告警比的量逐字相同。"""
+    # 空白不算差異（PromQL 不在意），其餘逐字比對。
+    query = "".join(baseline_discovery.DEFAULT_METRICS[metric]["query"].split())
+    query = query.replace("{{", "{").replace("}}", "}")
+    assert "".join(_rule_ratio(record).split()) in query
+    assert baseline_discovery.DEFAULT_METRICS[metric]["unit"] == "% of limit"
+
+
+def _run_report(monkeypatch, tmp_path, cli_argv, capsys, values):
+    """values: metric -> 固定的觀測值（查詢依 DEFAULT_METRICS 的 query 對回 metric）。"""
+    cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090",
+             "--duration", "24", "--interval", "2", "-o", str(tmp_path / "out"))
+    by_query = {info["query"].format(tenant="db-a"): values.get(m)
+                for m, info in baseline_discovery.DEFAULT_METRICS.items()}
+
+    def fake(url, expr):
+        v = by_query.get(expr)
+        return ([], None) if v is None else ([{"metric": {}, "value": [0, str(v)]}], None)
+    monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
+    monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+    baseline_discovery.main()
+    return capsys.readouterr().out
+
+
+def test_report_prints_only_keys_a_rule_pack_reads(capsys, monkeypatch, tmp_path, cli_argv):
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys,
+                      {"connections": 50, "cpu": 50, "memory": 50,
+                       "slow_queries": 1, "disk_io": 100})
+    keys = set(_re.findall(r"da-tools patch-config db-a (\S+) ", out))
+    assert keys == {"mysql_connections", "mysql_connections_critical"}
+    for gone in ("mysql_cpu", "mysql_memory", "mysql_disk_io", "mysql_slow_queries"):
+        assert gone not in out
+    assert "# slow_queries:" in out and "# disk_io:" in out
+    assert out.count("沒有租戶閾值 key，僅供參考") == 2
+
+
+# ── 佔 limit 的 %：對照平台預設，不乘係數（issue 1196，owner 裁決）──
+#
+# 有上界的百分比，門檻由「多接近上限才危險」決定，是平台層的固定值
+# （kubernetes-mixin、Datadog 的做法；scaffold 預設 container_cpu 80／
+# container_memory 85）。舊公式 p95×1.2／p99×1.5 在 p99 ≥ 66.7 時就給出
+# >100 的門檻，永遠不會響。基準線改用來判斷「預設對這個租戶是否太緊」。
+
+def test_platform_default_comes_from_scaffold():
+    import scaffold_tenant
+    for key in ("container_cpu", "container_memory"):
+        assert (baseline_discovery.platform_default(key)
+                == scaffold_tenant.RULE_PACKS["kubernetes"]["defaults"][key]["value"])
+
+
+@pytest.mark.parametrize("observed", [40, 70, 92])
+def test_percent_of_limit_never_prints_a_threshold(capsys, monkeypatch, tmp_path, cli_argv,
+                                                   observed):
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys,
+                      {"cpu": observed, "memory": observed})
+    assert "patch-config db-a container_" not in out
+    for num in _re.findall(r"建議 warning: ([\d.]+)", out):
+        assert float(num) < 100, out
+
+
+def test_below_default_says_the_default_fits(capsys, monkeypatch, tmp_path, cli_argv):
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"memory": 50})
+    default = baseline_discovery.platform_default("container_memory")
+    assert f"container_memory 平台預設 {default}%" in out and "不需覆寫" in out
+
+
+def test_at_default_says_raise_the_limit(capsys, monkeypatch, tmp_path, cli_argv):
+    default = baseline_discovery.platform_default("container_memory")
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"memory": default + 5})
+    assert "調高 limit" in out
+    factor = (default + 5) / (default * 0.9)
+    assert f"{factor:.2f}" in out
+
+
+def test_no_percent_data_explains_limits(capsys, monkeypatch, tmp_path, cli_argv):
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"connections": 10})
+    assert out.count("沒有設 limit") == 2
+
+
+def test_unreadable_default_says_so_instead_of_judging(monkeypatch):
+    """讀不到平台預設時不下判定：沒有對照值就不能說「夠用」或「太緊」。"""
+    stats = {"p99": 99.0}
+    monkeypatch.setitem(sys.modules, "scaffold_tenant", None)  # import 失敗
+    assert baseline_discovery.platform_default("container_memory") is None
+    assert baseline_discovery.percent_verdict(stats, "container_memory") == (
+        "container_memory 的平台預設讀不到，無法對照", False, None)
+    monkeypatch.undo()
+    assert baseline_discovery.platform_default("no_such_key") is None

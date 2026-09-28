@@ -399,6 +399,18 @@ da-tools baseline --tenant <name> [options]
 
 The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
+Metrics observed and the tenant key each suggestion goes to:
+
+| Metric | Unit | Suggested key |
+|--------|------|---------------|
+| `connections` | connections | `mysql_connections` |
+| `cpu` | % of limit (the tenant's highest container) | Compared with the `container_cpu` platform default; no threshold value (see below) |
+| `memory` | % of limit (the tenant's highest container) | Compared with the `container_memory` platform default; no threshold value (see below) |
+| `slow_queries` | per minute | No tenant key: `MariaDBHighSlowQueries` compares against a fixed value |
+| `disk_io` | KiB/s | No tenant key: no rule pack alert reads this measurement |
+
+`cpu` / `memory` divide cAdvisor usage by the kube-state-metrics limit directly, the same arithmetic as the rule pack's `tenant:container_{cpu,memory}_percent:by_container`, so kube-state-metrics is required. A container without a limit gives no value (for CPU the rule pack falls back to node share there; baseline does not). `cpu` / `memory` are bounded (100% means OOMKill or throttling), so they are not given a p95×1.2 / p99×1.5 threshold: once p99 passes about 67% that formula yields a >100 threshold that can never fire. Instead they are compared with the platform default (read from scaffold; today `container_cpu` 80, `container_memory` 85). If p99 is below the default, the report says the default fits and needs no override. If p99 has reached the default, it says the default would fire routinely and the limit should be raised first, with the limit multiplier that would put p99 at 90% of the default. Other metrics print suggestions as `patch-config <tenant> <key> <value>`; a measurement with no tenant key prints only the observed value and the reason. ⚠️ The v2.9.0 image still has the old behavior: `cpu` is % of one core, `memory` is MiB, and every suggestion is spelled `mysql_<metric>`. No alert reads `mysql_memory` / `mysql_disk_io` / `mysql_slow_queries`, and `mysql_cpu` is really the threads_running threshold (later renamed `mysql_threads_running`). Do not copy its patch-config lines on v2.9.0.
+
 **Examples**
 
 ```bash
