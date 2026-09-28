@@ -127,7 +127,7 @@ _routing_defaults:
 #
 # ⛔ 兩者無法用同一條 enforced route 同時表達：`_routing_enforced` 只產生
 # **一條** route，且 `match` 陣列內的多個 matcher 是 **AND** 不是 OR。要二選一：
-#   * `alert_source="platform"` → 平台自監控全部收到，租戶 critical 走各租戶自己的 `_routing`
+#   * `alert_source="platform"` → 除 `Watchdog` 外的平台自監控全部收到，租戶 critical 走各租戶自己的 `_routing`
 #   * `severity="critical"`     → 租戶 critical 全收，但平台自監控只涵蓋
 #                                 `severity: critical` 的那些，warning 與 info 收不到
 #

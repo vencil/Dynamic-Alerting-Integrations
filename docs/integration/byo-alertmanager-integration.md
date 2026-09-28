@@ -527,7 +527,7 @@ _routing_enforced:
 1. **`_routing_enforced` 只產生「一條」route**（模式 A）。
 2. **`match` 陣列內的多個 matcher 是 AND**，不是 OR。
 3. 因此**無法用一條 enforced route 同時表達「所有 critical」OR「所有平台告警」**——這兩個需求要**二選一**：
-   - 選 `alert_source="platform"` → 平台自監控全部收到；租戶的 critical 走各租戶自己的 `_routing`（不進 NOC）。
+   - 選 `alert_source="platform"` → 除 `Watchdog` 外的平台自監控全部收到；租戶的 critical 走各租戶自己的 `_routing`（不進 NOC）。
    - 選 `severity="critical"` → NOC 收到所有租戶 critical，但平台自監控只涵蓋 `severity: critical` 的那些，`warning` 與 `info` 的仍然靜默。
 
    ⚠️ 不要試圖「手動在 base ConfigMap 再加一條 route」繞過：重新產生設定時 `route.routes` 是**整段 REPLACE**（`assemble_configmap`），手加的 route 會在下一次 regen 消失。
