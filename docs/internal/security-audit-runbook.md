@@ -295,7 +295,7 @@ P 分級：
 
 ### 8.2 Commit + push 路徑
 
-⛔ **不要直接 `git commit` + `git push`** — Windows pre-commit 會卡 `head-blob-hygiene`（FUSE phantom lock）。
+⛔ **不要在 FUSE 掛載側直接 `git commit` + `git push`** — 會撞 `.git/index` 損毀／phantom lock，所以 commit 走 Windows 原生 git（原因見 `scripts/ops/run_hooks_sandbox.sh` 檔頭）。
 
 ⛔ **不要用 `--no-verify`** — 它讓 commit 時的本地 hook 全部跳過。
 
@@ -303,8 +303,8 @@ P 分級：
 
 ```bash
 # Step 1 — Sandbox hook gate（dev container 跑 pre-commit）
-SKIP=head-blob-hygiene PRECOMMIT_LOG=_sandbox_hooks_<n>.log \
-  bash scripts/ops/run_hooks_sandbox.sh <files...>
+PRECOMMIT_LOG=_sandbox_hooks_<n>.log \
+  bash scripts/ops/run_hooks_sandbox.sh <files...> 2>&1
 # 期望輸出：HOOKS STATUS=PASS FILES=<n> DURATION=<s>s
 
 # Step 2 — Windows native commit
@@ -317,7 +317,7 @@ scripts/ops/win_git_escape.bat commit-file _msg.txt
 scripts/ops/win_git_escape.bat push origin <branch>
 ```
 
-`SKIP=head-blob-hygiene` 是必加，否則 Windows native pre-commit 在掃 940+ HEAD blob 時卡死（FUSE 慢 + dentry cache）。CI 端 Linux native 跑得起來，所以本地 skip 不影響品質閘門。
+`2>&1` 是必加：PASS 行走 stdout，FAIL 行走 stderr。`head-blob-hygiene` 不必 skip——它原本的卡死是 Popen pipe deadlock，已修（[`windows-mcp-playbook.md`](windows-mcp-playbook.md) 陷阱 #57）；若在 FUSE 側仍卡住，照該陷阱的 recovery 路徑處理。
 
 ### 8.3 CHANGELOG entry 樣板
 

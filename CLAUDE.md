@@ -20,7 +20,7 @@ lang: zh
 
 ## ⛔ 起手式：先確認閘門在不在
 
-⛔ **不要假設 hook 跑過了。** 在**多 repo 的 web session** 裡，Claude Code 的 project root 是本 repo 的**上層**，於是它讀 `/home/user/.claude/settings.json`，本 repo 的 `.claude/settings.json` **整份不載入**——連同全部 PreToolUse／Stop guard（清單在 [`hook-vs-skill-coverage.md` §2](docs/internal/hook-vs-skill-coverage.md)）與 `permissions` 區塊（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。
+⛔ **不要假設 hook 跑過了。** 在**啟動時沒掛 repo、事後才 `add_repo` 進來的 web session** 裡（單 repo session 實測會正常載入；掛多個 repo 的未量），Claude Code 的 project root 是本 repo 的**上層**，於是它讀 `/home/user/.claude/settings.json`，本 repo 的 `.claude/settings.json` **整份不載入**——連同全部 PreToolUse／Stop guard（清單在 [`hook-vs-skill-coverage.md` §2](docs/internal/hook-vs-skill-coverage.md)）與 `permissions` 區塊（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。
 
 第一件事是量它，不是信它：
 

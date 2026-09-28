@@ -37,9 +37,12 @@
 #   1   At least one hook failed (see log for details)
 #   2   Invalid arguments or environment
 #
-# Output (grep-friendly, last line):
-#   HOOKS STATUS=PASS FILES=<n> DURATION=<s>s
-#   HOOKS STATUS=FAIL FILES=<n> DURATION=<s>s LOG=<path>
+# Output (grep-friendly, last line). ⚠️ PASS goes to stdout, every FAIL to
+# stderr — capture both (2>&1) or a FAIL is invisible:
+#   stdout, rc 0:  HOOKS STATUS=PASS FILES=<n> DURATION=<s>s
+#   stderr, rc 1:  HOOKS STATUS=FAIL FILES=<n> DURATION=<s>s LOG=<path>
+#   stderr, rc 2:  HOOKS STATUS=FAIL FILES=0 DURATION=0s REASON=<why>
+#                  (no LOG=: pre-commit never ran)
 
 set -euo pipefail
 

@@ -24,11 +24,15 @@ import { ComponentHealth } from './platform-health/components/ComponentHealth.js
 import { TenantOverview } from './platform-health/components/TenantOverview.jsx';
 import { RulePackDistribution } from './platform-health/components/RulePackDistribution.jsx';
 import { ReloadTimeline } from './platform-health/components/ReloadTimeline.jsx';
+import { PLATFORM_HEALTH_DATA } from './platform-health/fixtures/platform-data.js';
 
 const t = window.__t || ((zh, en) => en);
 
 /* ── Main Dashboard ── */
 export default function PlatformHealth() {
+  const tenantCount = PLATFORM_HEALTH_DATA.tenants.length;
+  const packCount = PLATFORM_HEALTH_DATA.prometheus.rulePacksActive;
+  const ruleCount = PLATFORM_HEALTH_DATA.prometheus.rulesLoaded;
   return (
     <div className="max-w-5xl mx-auto">
       <div className="mb-6">
@@ -55,8 +59,10 @@ export default function PlatformHealth() {
             {t('平台運行正常', 'Platform Operational')}
           </span>
           <span className="text-xs text-[color:var(--da-color-muted)] ml-auto">
-            {t('所有元件健康 · 5 Tenant · 16 Rule Pack · 301 Rules',
-               'All components healthy · 5 Tenants · 16 Rule Packs · 301 Rules')}
+            {/* Derived from the same fixture the panels below render, so the
+                banner cannot drift from them (it used to hand-type 16 / 301). */}
+            {t(`所有元件健康 · ${tenantCount} Tenant · ${packCount} Rule Pack · ${ruleCount} Rules`,
+               `All components healthy · ${tenantCount} Tenants · ${packCount} Rule Packs · ${ruleCount} Rules`)}
           </span>
         </div>
       </div>
