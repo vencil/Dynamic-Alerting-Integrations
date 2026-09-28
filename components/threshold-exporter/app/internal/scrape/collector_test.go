@@ -65,3 +65,41 @@ func TestCollector_MaintenanceExpiryFollowsHooksNow(t *testing.T) {
 		t.Errorf("at %s (after expires): %d maintenance_expired events, want 1", after, n)
 	}
 }
+
+// Hooks.Observe gets, once per scrape, the readings the scrape emitted from
+// (#2374): served-values reads the reserved keys from it instead of calling
+// the resolvers a second time.
+func TestCollector_ObserveOncePerScrape(t *testing.T) {
+	t.Parallel()
+	cfg := &config.ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]config.ScheduledValue{
+			"tenant-a": {
+				"_metadata":       {Default: "owner: team-a\nregion: r1\n"},
+				"_severity_dedup": {Default: "disable"},
+				"_silent_mode":    {Default: "warning"},
+			},
+			"tenant-b": {},
+		},
+	}
+	var got []Reserved
+	c := NewCollectorWithHooks(staticSource{cfg}, Hooks{Observe: func(r Reserved) { got = append(got, r) }})
+	reg := prometheus.NewRegistry()
+	Register(reg, c, NewConfigMetrics())
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Observe called %d times, want 1", len(got))
+	}
+	r := got[0]
+	if len(r.Metadata) != 2 || r.Metadata[0].Tenant != "tenant-a" || r.Metadata[0].Region != "r1" {
+		t.Errorf("Metadata = %+v", r.Metadata)
+	}
+	if len(r.SeverityDedup) != 1 || r.SeverityDedup[0].Tenant != "tenant-b" {
+		t.Errorf("SeverityDedup = %+v, want only tenant-b (tenant-a disabled it)", r.SeverityDedup)
+	}
+	if len(r.Ops.Silences) != 1 || r.Ops.Silences[0].Tenant != "tenant-a" || r.Ops.Silences[0].TargetSeverity != "warning" {
+		t.Errorf("Ops.Silences = %+v", r.Ops.Silences)
+	}
+}
