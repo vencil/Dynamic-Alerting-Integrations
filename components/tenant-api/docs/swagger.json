@@ -787,7 +787,7 @@
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
                 "produces": [
                     "application/json"
                 ],
@@ -987,7 +987,7 @@
         },
         "/api/v1/tenants/{id}": {
             "get": {
-                "description": "Returns the raw YAML and resolved thresholds for a single tenant.",
+                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds and custom_alerts are empty and no validation fields are set.",
                 "produces": [
                     "application/json"
                 ],
@@ -2959,6 +2959,14 @@
         "internal_handler.TenantDetail": {
             "type": "object",
             "properties": {
+                "config_error": {
+                    "description": "ConfigError is set when the tenant's file cannot be loaded as a tenant\nconfig (#2373) — the same reason GET /api/v1/tenants reports on the\ntenant's row: malformed_yaml (not parseable as YAML) or invalid_config\n(parses as YAML but cannot be loaded as a tenant config — wrong shape,\nerrors only a typed decode detects, or a declared tenant id that is not\nvalid UTF-8). threshold-exporter skips such a file whole, so nothing is\nderived from it: raw_yaml and source_hash are returned (so the file can\nbe opened and fixed), resolved_thresholds and custom_alerts are empty,\nand validation_warnings / validation_notices are absent. Absent on a\nusable file.",
+                    "type": "string",
+                    "enum": [
+                        "malformed_yaml",
+                        "invalid_config"
+                    ]
+                },
                 "custom_alerts": {
                     "description": "CustomAlerts is the tenant's `_custom_alerts` recipes as structured\nJSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so\nthe client never parses YAML — the backend owns the round-trip on both\nread and write. Empty slice when the tenant has none.",
                     "type": "array",
@@ -3010,7 +3018,7 @@
                     ]
                 },
                 "config_error": {
-                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, or errors the YAML library only detects on a typed decode, such\nas duplicate keys). The first three come from confd.FileProblem;\ninvalid_config is decided by this handler.",
+                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
                     "type": "string",
                     "enum": [
                         "unreadable",

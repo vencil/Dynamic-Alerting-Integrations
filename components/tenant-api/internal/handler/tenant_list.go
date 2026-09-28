@@ -37,9 +37,10 @@ type TenantSummary struct {
 	// permission error), not_regular_file (e.g. a symlink to a directory),
 	// malformed_yaml (not parseable as YAML), invalid_config (parses as YAML
 	// at the syntax level but cannot be loaded as a tenant config — wrong
-	// shape, or errors the YAML library only detects on a typed decode, such
-	// as duplicate keys). The first three come from confd.FileProblem;
-	// invalid_config is decided by this handler.
+	// shape, errors the YAML library only detects on a typed decode, such
+	// as duplicate keys, or a declared tenant id that is not valid UTF-8,
+	// which threshold-exporter rejects the whole file for). The first three
+	// come from confd.FileProblem; invalid_config is decided by this handler.
 	ConfigError string `json:"config_error,omitempty" enums:"unreadable,not_regular_file,malformed_yaml,invalid_config"`
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
@@ -67,7 +68,8 @@ type TenantSummary struct {
 // @Description config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.
 // @Description A tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`
 // @Description (unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be
-// @Description loaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).
+// @Description loaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared
+// @Description tenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).
 // @Description Its environment/domain are unknown, so the
 // @Description row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
 // @Tags        tenants
@@ -142,7 +144,29 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 // holding a list instead of a map) AND errors the YAML library only detects
 // on a typed decode, such as a duplicate mapping key (`tenants:` twice).
 // Same stability contract as the confd.FileProblem values.
+//
+// #2373: the typed decode is cfg.ParseTenantFile — the exact verdict
+// threshold-exporter gives a tenant file — so it also covers a file that
+// declares a tenant id that is not valid UTF-8 (#2266), which the exporter,
+// /effective and da-guard reject WHOLE. A plain yaml.Unmarshal (the
+// ParseConfigFile judgement) accepted it, so the list showed the file's other
+// tenants as healthy although nothing serves them.
 const configErrorInvalidConfig = "invalid_config"
+
+// tenantConfigError is the config_error for a tenant file's bytes that were
+// read successfully: malformed_yaml, invalid_config, or "" when the file is a
+// usable tenant config. GET /tenants/{id} uses it; loadAllTenants reaches the
+// same verdict through confd.ReadTenantFile + cfg.ParseTenantFile (one parse
+// fewer per file on the snapshot rebuild).
+func tenantConfigError(data []byte) string {
+	if p := confd.YAMLProblem(data); p != confd.ProblemNone {
+		return string(p)
+	}
+	if _, err := cfg.ParseTenantFile(data); err != nil {
+		return configErrorInvalidConfig
+	}
+	return ""
+}
 
 // loadAllTenants scans configDir for tenant config files and extracts tenant
 // summaries.
@@ -191,8 +215,8 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 			continue
 		}
 
-		var partial cfg.ThresholdConfig
-		if err := yaml.Unmarshal(data, &partial); err != nil {
+		partial, err := cfg.ParseTenantFile(data)
+		if err != nil {
 			summaries = append(summaries, TenantSummary{ID: tenantID, ConfigError: configErrorInvalidConfig})
 			continue
 		}
