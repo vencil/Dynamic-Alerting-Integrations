@@ -8,6 +8,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/vencil/threshold-exporter/internal/thresholdmetric"
 )
 
 // ThresholdCollector implements prometheus.Collector.
@@ -90,31 +92,12 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // collectThresholds emits the user_threshold gauge for every resolved
-// threshold (Scenario A numeric + Phase 2B dimensional). Custom labels are
-// appended sorted; regex labels get the _re suffix for PromQL matching.
+// threshold (Scenario A numeric + Phase 2B dimensional). The series are built
+// by internal/thresholdmetric, the one copy of that code: `da-guard
+// served-values` runs it too, to report exactly what this scrape serves
+// (#2115).
 func (c *ThresholdCollector) collectThresholds(ch chan<- prometheus.Metric, resolved []ResolvedThreshold) {
-	for _, t := range resolved {
-		// One label set, shared with da-guard served-values' duplicate-series
-		// check (#2115): config.ResolvedThreshold.SeriesLabels.
-		labelNames, labelValues := t.SeriesLabels()
-
-		desc := prometheus.NewDesc(
-			"user_threshold",
-			// ⚠️ The three states hold for keys the platform gives a default;
-			// a declared key (optional_overrides) has none, so it is
-			// custom-or-silent — saying otherwise here would be the same
-			// untrue claim #1321 removed from the tenant-facing files.
-			"User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)",
-			labelNames,
-			nil,
-		)
-		m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, t.Value, labelValues...)
-		if err != nil {
-			log.Printf("WARN: failed to create user_threshold metric for tenant=%s metric=%s: %v", t.Tenant, t.Metric, err)
-			continue
-		}
-		ch <- m
-	}
+	thresholdmetric.Emit(ch, resolved, nil)
 }
 
 // collectCustomAlertErrors emits da_custom_alert_parse_errors (#741 S3a,

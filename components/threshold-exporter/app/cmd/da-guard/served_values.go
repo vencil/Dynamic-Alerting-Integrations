@@ -9,7 +9,9 @@ package main
 // functions over the exporter's own load: config.LoadDir (the tree the
 // collector serves), ThresholdConfig.ResolveAtWithKeys (the user_threshold
 // rows, each paired by the resolver itself with the tenant-config key it
-// serves) and the reserved-key resolvers the collector and the
+// serves), the collector's own series code run through a private
+// prometheus.Registry (which of those rows /metrics really carries —
+// internal/thresholdmetric) and the reserved-key resolvers the collector and the
 // routing tooling read. Nothing here decides which key a row belongs to.
 // TestServedValues_MatchesResolveAt is the guard that keeps it so.
 
@@ -26,6 +28,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/vencil/threshold-exporter/internal/thresholdmetric"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -58,6 +64,11 @@ type servedTenantValues struct {
 	// (switched off, or served by nothing), keyed as the merged config spells
 	// them, value as written.
 	Unserved map[string]any `json:"unserved"`
+	// Dropped: keys the resolver produced a row for but whose series the
+	// exporter cannot build (client_golang rejects the label set), so
+	// /metrics drops the row. Canonical key → the rejection of each dropped
+	// row. Such a key is in Values only if another of its rows was kept.
+	Dropped map[string][]string `json:"dropped"`
 }
 
 type servedValuesFlags struct {
@@ -173,7 +184,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 		stateOn[sf.Tenant][sf.FilterName] = true
 	}
 
-	ownedBy, err := keyedRows(cfg, at)
+	ownedBy, droppedBy, err := keyedRows(cfg, at)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +195,10 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 			Values:     map[string]any{},
 			Severities: map[string]string{},
 			Unserved:   map[string]any{},
+			Dropped:    map[string][]string{},
+		}
+		for name, errs := range droppedBy[tenant] {
+			tv.Dropped[name] = errs
 		}
 
 		for name, rows := range ownedBy[tenant] {
@@ -256,52 +271,113 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 	return out, nil
 }
 
-// keyedRows resolves cfg once at `at` with ResolveAtWithKeys and groups the
-// rows by tenant and by the tenant-config key the resolver paired each with.
+// keyedRows resolves cfg once at `at` with ResolveAtWithKeys, runs the rows
+// through the collector's own series code on a private registry, and groups
+// the rows /metrics keeps by tenant and key. Rows the collector drops are
+// returned apart, with client_golang's reason.
 //
-// ⛔ A tree whose rows collide on one series is refused. The collector
-// exports every row as user_threshold with its SeriesLabels; two rows with
-// the same label set make Prometheus fail the whole scrape (HTTP 500), so
-// /metrics then serves nothing at all — reporting both values as served
-// would be false. The error names the two keys.
-func keyedRows(cfg *config.ThresholdConfig, at time.Time) (map[string]map[string][]config.ResolvedThreshold, error) {
+// ⛔ /metrics decides, not this file. Which label sets client_golang accepts,
+// and which rows collide as one series, is asked of client_golang itself
+// (NewConstMetric via thresholdmetric.Emit, then Registry.Gather) rather
+// than re-derived here. A Gather error means the exporter's scrape fails as a
+// whole (HTTP 500) and nothing is served, so it is an error here too, with
+// client_golang's text.
+func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
+	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string, err error,
+) {
 	keyed, _, err := cfg.ResolveAtWithKeys(at)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := duplicateSeries(keyed); err != nil {
-		return nil, err
+	sc := &servedCollector{rows: make([]config.ResolvedThreshold, len(keyed))}
+	for i, k := range keyed {
+		sc.rows[i] = k.ResolvedThreshold
 	}
-	out := map[string]map[string][]config.ResolvedThreshold{}
-	for _, k := range keyed {
-		if out[k.Tenant] == nil {
-			out[k.Tenant] = map[string][]config.ResolvedThreshold{}
+	sc.results = make([]emitResult, len(keyed))
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(sc); err != nil {
+		return nil, nil, fmt.Errorf("internal: register the series check: %w", err)
+	}
+	if _, gerr := reg.Gather(); gerr != nil {
+		return nil, nil, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
+			"as a whole (HTTP 500) and nothing is served%s: %v", sc.sameSeriesKeys(keyed), gerr)
+	}
+
+	served = map[string]map[string][]config.ResolvedThreshold{}
+	dropped = map[string]map[string][]string{}
+	for i, k := range keyed {
+		switch r := sc.results[i]; {
+		case !r.reported:
+			return nil, nil, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
+		case r.err != nil:
+			if dropped[k.Tenant] == nil {
+				dropped[k.Tenant] = map[string][]string{}
+			}
+			dropped[k.Tenant][k.Key] = append(dropped[k.Tenant][k.Key], r.err.Error())
+		default:
+			if served[k.Tenant] == nil {
+				served[k.Tenant] = map[string][]config.ResolvedThreshold{}
+			}
+			served[k.Tenant][k.Key] = append(served[k.Tenant][k.Key], k.ResolvedThreshold)
 		}
-		out[k.Tenant][k.Key] = append(out[k.Tenant][k.Key], k.ResolvedThreshold)
 	}
-	return out, nil
+	return served, dropped, nil
 }
 
-// duplicateSeries reports the first two rows that the collector would export
-// as the same user_threshold series.
-func duplicateSeries(keyed []config.KeyedThreshold) error {
-	seen := make(map[string]string, len(keyed))
-	for _, k := range keyed {
-		names, values := k.SeriesLabels()
-		pairs := make([]string, len(names))
-		for i := range names {
-			pairs[i] = names[i] + "=" + strconv.Quote(values[i])
+// emitResult is the collector's verdict on one row.
+type emitResult struct {
+	reported bool
+	metric   prometheus.Metric
+	err      error
+}
+
+// servedCollector is an unchecked prometheus.Collector (empty Describe, as
+// the exporter's ThresholdCollector) that emits user_threshold for rows with
+// the exporter's code and records the verdict on each row.
+type servedCollector struct {
+	rows    []config.ResolvedThreshold
+	results []emitResult
+}
+
+func (s *servedCollector) Describe(chan<- *prometheus.Desc) {}
+
+func (s *servedCollector) Collect(ch chan<- prometheus.Metric) {
+	thresholdmetric.Emit(ch, s.rows, func(i int, m prometheus.Metric, err error) {
+		s.results[i] = emitResult{reported: true, metric: m, err: err}
+	})
+}
+
+// sameSeriesKeys names, for the Gather error message only, the keys of rows
+// whose built metrics carry the same label set. Gather has already decided
+// the tree fails; this just points at the config keys behind it.
+func (s *servedCollector) sameSeriesKeys(keyed []config.KeyedThreshold) string {
+	seen := map[string]string{}
+	var named []string
+	for i, r := range s.results {
+		if r.metric == nil {
+			continue
+		}
+		var pb dto.Metric
+		if r.metric.Write(&pb) != nil {
+			continue
+		}
+		var pairs []string
+		for _, lp := range pb.GetLabel() {
+			pairs = append(pairs, lp.GetName()+"="+strconv.Quote(lp.GetValue()))
 		}
 		sort.Strings(pairs)
-		id := strings.Join(pairs, ",")
+		id := keyed[i].Tenant + "\x00" + strings.Join(pairs, ",")
 		if first, dup := seen[id]; dup {
-			return fmt.Errorf("tenant %s: keys %q and %q both produce the series user_threshold{%s}; "+
-				"the exporter's /metrics fails the whole scrape on this tree (HTTP 500), so nothing is served",
-				k.Tenant, first, k.Key, id)
+			named = append(named, fmt.Sprintf("tenant %s: keys %q and %q give one series user_threshold{%s}",
+				keyed[i].Tenant, first, keyed[i].Key, strings.Join(pairs, ",")))
+			continue
 		}
-		seen[id] = k.Key
+		seen[id] = keyed[i].Key
 	}
-	return nil
+	if len(named) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(named, "; ") + ")"
 }
 
 // rowOrder is a stable sort key for rendering rows.

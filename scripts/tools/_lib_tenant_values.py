@@ -12,6 +12,8 @@ subcommand and parses its JSON; it decides nothing about the values itself.
 * `severities` — the severity label of each threshold key in `values`.
 * `unserved` — keys the tenant's merged config carries with no entry in
   `values` (switched off included), value as written.
+* `dropped` — keys whose row /metrics drops because the exporter cannot build
+  its series; key → the reason for each dropped row.
 
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
@@ -65,6 +67,7 @@ class TenantValues(NamedTuple):
     values: dict[str, Any]
     severities: dict[str, str]
     unserved: dict[str, Any]
+    dropped: dict[str, list[str]]
 
 
 class DaGuardNotFoundError(FileNotFoundError):
@@ -153,5 +156,6 @@ def load_served_values(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
                 proc.returncode, proc.stderr) from e
-        out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]))
+        out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
+                                     {k: list(v) for k, v in tv["dropped"].items()})
     return out

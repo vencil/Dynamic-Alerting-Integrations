@@ -2491,7 +2491,7 @@ da-tools guard <subcommand> [flags]
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 | `--at <RFC3339>` | 現在 | 在這個時間點解析（排程視窗、`expires`、靜默 / 維護期限都以它為準） |
 
-值由 exporter 自己的載入與解析算出，這個子命令不另做判斷。輸出 JSON：`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）與 `tenants`；每個租戶有 `values`（`/metrics` 會發列的閾值 key 取 canonical 名與值，加上 reserved key 在 `--at` 當下由 exporter resolver 讀出的值）、`severities`（每個閾值 key 的 severity label）與 `unserved`（租戶合併後設定中沒出現在 `values` 的 key，含被停用者，值取原文）。Exit code：0 成功；2 caller error、exporter 拒收整棵樹（例如同一租戶跨檔重複宣告），或兩個 key 產生同一條 `user_threshold` series（exporter 的 `/metrics` 會因此整份失敗），stderr 寫明原因並點名 key；3 有檔被整份跳過，JSON 照樣輸出並在 `parse_failed` 點名。
+值由 exporter 自己的載入與解析算出，這個子命令不另做判斷。輸出 JSON：`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）與 `tenants`；每個租戶有 `values`（`/metrics` 會發列的閾值 key 取 canonical 名與值，加上 reserved key 在 `--at` 當下由 exporter resolver 讀出的值）、`severities`（每個閾值 key 的 severity label）、`unserved`（租戶合併後設定中沒出現在 `values` 的 key，含被停用者，值取原文）與 `dropped`（exporter 建不出 series、`/metrics` 丟掉該列的 key，值為每個被丟列的原因）。哪些列會被收下，是把 exporter 自己產生 `user_threshold` 的程式放進私有 registry 跑一次 `Gather` 決定的。Exit code：0 成功；2 caller error、exporter 拒收整棵樹（例如同一租戶跨檔重複宣告），或 `Gather` 失敗（例如兩個 key 產生同一條 series；exporter 的 `/metrics` 此時整份回 500），stderr 帶出原因並盡量點名 key；3 有檔被整份跳過，JSON 照樣輸出並在 `parse_failed` 點名。
 
 **範例**
 

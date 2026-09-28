@@ -22,9 +22,10 @@ type servedOut struct {
 	At          string   `json:"at"`
 	ParseFailed []string `json:"parse_failed"`
 	Tenants     map[string]struct {
-		Values     map[string]any    `json:"values"`
-		Severities map[string]string `json:"severities"`
-		Unserved   map[string]any    `json:"unserved"`
+		Values     map[string]any      `json:"values"`
+		Severities map[string]string   `json:"severities"`
+		Unserved   map[string]any      `json:"unserved"`
+		Dropped    map[string][]string `json:"dropped"`
 	} `json:"tenants"`
 }
 
@@ -529,7 +530,7 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 			if code != exitCallerErr {
 				t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
 			}
-			if !strings.Contains(stderr, "both produce the series user_threshold") || !strings.Contains(stderr, "HTTP 500") {
+			if !strings.Contains(stderr, "was collected before with the same name and label values") || !strings.Contains(stderr, "HTTP 500") {
 				t.Errorf("stderr should name the collision: %q", stderr)
 			}
 		})
@@ -599,5 +600,95 @@ func TestServedValues_UnservedScheduleKeepsItsWindows(t *testing.T) {
 	}
 	if !reflect.DeepEqual(u, want) {
 		t.Errorf("unserved = %#v\nwant %#v", u, want)
+	}
+}
+
+// --- rows the exporter's collector drops, and collisions only Gather sees ------
+
+func servedTree(t *testing.T, tenant string) (int, servedOut, string) {
+	t.Helper()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n" + tenant,
+	}, "")
+	return code, doc, stderr
+}
+
+// A label client_golang rejects makes the collector drop the row (WARN, not a
+// failed scrape): /metrics serves the rest, so the key is dropped, never a
+// value.
+func TestServedValues_RowsTheCollectorDrops(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		tenant string
+		keys   []string
+	}{
+		"label named like a fixed one": {
+			"    mysql_connections{tenant=\"x\"}: 5\n    mysql_connections{severity=\"y\"}: 6\n",
+			[]string{`mysql_connections{tenant="x"}`, `mysql_connections{severity="y"}`}},
+		// `__` is reserved for Prometheus-internal labels.
+		"reserved label name": {
+			"    mysql_connections{__x=\"x\"}: 5\n",
+			[]string{`mysql_connections{__x="x"}`}},
+		"one row with q_re twice": {
+			"    redis_queue_length{q_re=\"a\", q=~\"b\"}: 5\n",
+			[]string{`redis_queue_length{q_re="a", q=~"b"}`}},
+		// Both rows are dropped, so their would-be collision never reaches
+		// Gather: /metrics serves 200 and so must this.
+		"two dropped rows that would collide": {
+			"    mysql_connections{tenant=\"x\"}: 5\n    mysql_connections{ tenant = \"x\" }: 6\n",
+			[]string{`mysql_connections{tenant="x"}`, `mysql_connections{ tenant = "x" }`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, doc, stderr := servedTree(t, tc.tenant)
+			mustOK(t, code, stderr)
+			tv := doc.Tenants["tenant-a"]
+			for _, key := range tc.keys {
+				if _, ok := tv.Values[key]; ok {
+					t.Errorf("dropped %q is in values: %v", key, tv.Values)
+				}
+				if _, ok := tv.Unserved[key]; !ok {
+					t.Errorf("dropped %q is not in unserved: %v", key, tv.Unserved)
+				}
+				if len(tv.Dropped[key]) == 0 {
+					t.Errorf("dropped %q is not in dropped: %v", key, tv.Dropped)
+				}
+			}
+			wantValue(t, doc, "tenant-a", "mysql_connections", 80) // the base row is still served
+		})
+	}
+}
+
+// Label order is not identity: `{a_re="x", z="y"}` and `{a=~"x", z="y"}` are
+// one series to Prometheus, whatever order the labels were written in.
+func TestServedValues_SameSeriesInAnotherLabelOrder_ExitsTwo(t *testing.T) {
+	t.Parallel()
+	code, doc, stderr := servedTree(t, "    redis_queue_length{a_re=\"x\", z=\"y\"}: 1\n    redis_queue_length{a=~\"x\", z=\"y\"}: 2\n")
+	if code != exitCallerErr {
+		t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
+	}
+}
+
+// Same label VALUES under different label NAMES are two series.
+func TestServedValues_SameValuesOtherLabelNames_Serves(t *testing.T) {
+	t.Parallel()
+	code, doc, stderr := servedTree(t, "    redis_queue_length{q=\"a\"}: 1\n    redis_queue_length{r=\"a\"}: 2\n")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", `redis_queue_length{q="a"}`, 1)
+	wantValue(t, doc, "tenant-a", `redis_queue_length{r="a"}`, 2)
+}
+
+func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": defaultsOnly,
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+	})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", filepath.Join(tmp, "conf.d"))
+	mustOK(t, code, stderr)
+	if !strings.Contains(stdout, `"dropped": {}`) {
+		t.Errorf("dropped must be {} when nothing is dropped:\n%s", stdout)
 	}
 }

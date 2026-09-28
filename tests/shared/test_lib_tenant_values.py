@@ -221,3 +221,17 @@ def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
     assert seen.get("timeout") == tv.DEFAULT_TIMEOUT
     tv.load_served_values(conf_d, binary=da_guard, timeout=7)
     assert seen.get("timeout") == 7
+
+
+def test_dropped_rows_are_reported_apart(tmp_path, da_guard):
+    """exporter 建不出 series 的列（例如 `__` 開頭的 label）不在 values，列在 dropped。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__x=\"x\"}: 5\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
+    key = 'mysql_connections{__x="x"}'
+    assert key not in got.values
+    assert got.unserved[key] == "5"
+    assert got.dropped[key] and "not a valid label name" in got.dropped[key][0]
+    assert got.values["mysql_connections"] == 80.0

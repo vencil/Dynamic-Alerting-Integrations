@@ -246,31 +246,6 @@ func TestCheckKeyed_RejectsAMissingPair(t *testing.T) {
 	}
 }
 
-func TestCheckKeyed_RejectsAPairForAnotherRow(t *testing.T) {
-	t.Parallel()
-	rows := sampleRows()
-	swapped := []ResolvedThreshold{rows[1], rows[0]}
-	err := checkKeyed(rows, pairUp(swapped, "redis_memory", "mysql_connections"))
-	if err == nil || !strings.Contains(err.Error(), "is not the row returned in its place") {
-		t.Fatalf("err = %v, want the row mismatch", err)
-	}
-	// Value alone differs: still a different row.
-	other := sampleRows()
-	other[1].Value = 56
-	if err := checkKeyed(rows, pairUp(other, "mysql_connections", "redis_memory")); err == nil {
-		t.Fatal("a pair whose value differs was accepted")
-	}
-}
-
-func TestCheckKeyed_NaNRowEqualsItself(t *testing.T) {
-	t.Parallel()
-	rows := sampleRows()
-	rows[0].Value = math.NaN()
-	if err := checkKeyed(rows, pairUp(rows, "mysql_connections", "redis_memory")); err != nil {
-		t.Fatalf("a NaN threshold made its own row unequal: %v", err)
-	}
-}
-
 func TestResolveAtWithKeys_NaNThreshold(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{

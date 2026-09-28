@@ -3,8 +3,6 @@ package config
 import (
 	"fmt"
 	"log"
-	"math"
-	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -320,29 +318,17 @@ func (c *ThresholdConfig) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, Re
 	return keyed, stats, nil
 }
 
-// checkKeyed is ResolveAtWithKeys' guard: one pair per returned row, each
-// pair's row being the returned row in its place.
+// checkKeyed is ResolveAtWithKeys' guard, and it checks the COUNT only: one
+// pair per returned row. The rows themselves are the pairs' rows by
+// construction (segmentPairs rewrites the segment from them), so comparing
+// them row by row here could never fail; that the keyed rows are the public
+// resolve's rows is TestResolveAtWithKeys_SameRowsAndStatsAsPublicResolve's
+// job.
 func checkKeyed(rows []ResolvedThreshold, keyed []KeyedThreshold) error {
 	if len(keyed) != len(rows) {
 		return fmt.Errorf("the resolver named the key of %d rows but returned %d", len(keyed), len(rows))
 	}
-	for i := range rows {
-		if !sameRow(rows[i], keyed[i].ResolvedThreshold) {
-			return fmt.Errorf("keyed row %d (key %q, %s/%s) is not the row returned in its place (%s/%s)",
-				i, keyed[i].Key, keyed[i].Tenant, keyed[i].Metric, rows[i].Tenant, rows[i].Metric)
-		}
-	}
 	return nil
-}
-
-// sameRow is row equality with Value compared by bits, so a NaN threshold
-// equals itself.
-func sameRow(a, b ResolvedThreshold) bool {
-	if math.Float64bits(a.Value) != math.Float64bits(b.Value) {
-		return false
-	}
-	a.Value, b.Value = 0, 0
-	return reflect.DeepEqual(a, b)
 }
 
 // segmentPairs collects one tenant segment's rows with their keys, in the
