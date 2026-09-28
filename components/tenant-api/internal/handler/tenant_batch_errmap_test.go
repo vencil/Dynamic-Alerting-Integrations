@@ -37,7 +37,8 @@ func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	t.Parallel()
 	// On-disk file unparseable → the merge fails and must NOT fall back to an
 	// overwrite. Since #2373 (review F1) the merge refuses it as a file
-	// threshold-exporter rejects: code CONFLICT, config_error in the message.
+	// threshold-exporter rejects: code TENANT_CONFIG_NOT_LOADABLE, config_error in
+	// the message.
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "{{not yaml",
 	})
@@ -49,8 +50,8 @@ func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	if res.Status != "error" {
 		t.Fatalf("status = %q, want error for an unparseable on-disk file", res.Status)
 	}
-	if res.TenantID != "db-a" || res.Code != CodeConflict || !strings.Contains(res.Message, "config_error: malformed_yaml") {
-		t.Errorf("result = %+v, want tenant db-a, code %s, message naming config_error: malformed_yaml", res, CodeConflict)
+	if res.TenantID != "db-a" || res.Code != "TENANT_CONFIG_NOT_LOADABLE" || !strings.Contains(res.Message, "config_error: malformed_yaml") {
+		t.Errorf("result = %+v, want tenant db-a, code TENANT_CONFIG_NOT_LOADABLE, message naming config_error: malformed_yaml", res)
 	}
 	// The corrupt file must be untouched (no overwrite fallback).
 	got, err := os.ReadFile(filepath.Join(configDir, "db-a.yaml"))

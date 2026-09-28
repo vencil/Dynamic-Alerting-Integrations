@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -175,34 +176,49 @@ func tenantConfigError(data []byte) string {
 // content — it answers such a file with config_error and without the derived
 // fields — so a client editing from GET (the portal's custom-alerts modal
 // reads the missing list as []) would write its partial view back over the
-// real one. The whole-file PUT /tenants/{id} is the repair path and does not
-// go through here.
-type tenantFileNotLoadableError struct{ Reason string }
-
-func (e *tenantFileNotLoadableError) Error() string {
-	return fmt.Sprintf("the tenant config file cannot be loaded as a tenant config (config_error: %s) "+
-		"and threshold-exporter skips it; a partial update is refused - repair the file with a "+
-		"whole-file PUT /api/v1/tenants/{id} first", e.Reason)
+// real one. The whole-file PUT /tenants/{id} does not go through here.
+//
+// ⚠️ The message does not promise an API repair path: the whole-file PUT
+// replaces a file whose only problem is a non-UTF-8 tenant id, but a file
+// with a YAML syntax error, a non-mapping `tenants:` or duplicate keys is
+// refused by that PUT too (its end-of-life guard reads the current file), so
+// today it can only be fixed in git.
+type tenantFileNotLoadableError struct {
+	TenantID string
+	Reason   string
 }
 
+func (e *tenantFileNotLoadableError) Error() string {
+	return fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s), "+
+		"so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first "+
+		"(a whole-file PUT /api/v1/tenants/{id} can replace a file whose only problem is a non-UTF-8 tenant id; "+
+		"a file with a YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git)",
+		e.TenantID, e.Reason)
+}
+
+// Unwrap lets package gitops recognise the refusal (errors.Is) without
+// importing this package: WritePRBatch's pre-flight tolerates it.
+func (e *tenantFileNotLoadableError) Unwrap() error { return gitops.ErrMergeBaseNotLoadable }
+
 // checkPartialWriteBase returns a *tenantFileNotLoadableError when existing —
-// the tenant file a partial write would merge into — is not a usable tenant
-// config. Empty bytes (no file yet) are not refused: that is a new tenant.
-func checkPartialWriteBase(existing []byte) error {
+// tenantID's file that a partial write would merge into — is not a usable
+// tenant config. Empty bytes (no file yet) are not refused: that is a new
+// tenant.
+func checkPartialWriteBase(tenantID string, existing []byte) error {
 	if reason := tenantConfigError(existing); reason != "" {
-		return &tenantFileNotLoadableError{Reason: reason}
+		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
 	}
 	return nil
 }
 
-// writeTenantFileNotLoadable answers a refused partial write: 409 CONFLICT
-// (the request is fine; the server-side file is in a state it cannot be
-// applied to), with config_error so the client can say why.
+// writeTenantFileNotLoadable answers a refused partial write: 409 with its own
+// code (not CONFLICT: a refresh-and-retry cannot succeed), naming the tenant
+// and the config_error.
 func writeTenantFileNotLoadable(w http.ResponseWriter, r *http.Request, e *tenantFileNotLoadableError) {
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: e.Error(),
-		Code:  CodeConflict,
-		Extra: map[string]any{"config_error": e.Reason},
+		Code:  CodeTenantConfigNotLoadable,
+		Extra: map[string]any{"tenant_id": e.TenantID, "config_error": e.Reason},
 	})
 }
 

@@ -59,8 +59,8 @@ type TenantDetail struct {
 	// be opened and fixed), and resolved_thresholds, custom_alerts,
 	// validation_warnings and validation_notices are ABSENT — not empty,
 	// which would read as "none". Partial writes (PUT .../custom-alerts, the
-	// batch patches) refuse such a file with 409; a whole-file PUT repairs
-	// it. Absent on a usable file.
+	// batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
+	// the tenant file itself is repaired. Absent on a usable file.
 	ConfigError string `json:"config_error,omitempty" enums:"malformed_yaml,invalid_config"`
 }
 
@@ -81,7 +81,9 @@ type tenantDetailNotLoadable struct {
 // @Description When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
 // @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
-// @Description the file's content is not vouched for). Partial writes refuse such a file with 409 until a whole-file PUT repairs it.
+// @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
+// @Description tenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a
+// @Description YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"

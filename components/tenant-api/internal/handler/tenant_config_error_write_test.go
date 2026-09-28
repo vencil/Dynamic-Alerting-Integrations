@@ -29,6 +29,12 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
+// wantNotLoadableCode is the error code of the refusal (#2373 review round 3,
+// F4): its own code, not CONFLICT — CONFLICT means "your base_hash is stale,
+// refresh and retry", which is not what happened here. A literal, not the
+// handler constant, so a rename of the wire value fails here.
+const wantNotLoadableCode = "TENANT_CONFIG_NOT_LOADABLE"
+
 const rejExistingAlert = `    _custom_alerts:
       - recipe: threshold
         name: existing_x
@@ -112,8 +118,15 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			if resp.StatusCode != http.StatusConflict {
 				t.Errorf("status = %d, want 409; body: %s", resp.StatusCode, rb)
 			}
-			if !strings.Contains(rb, `"code":"`+CodeConflict+`"`) {
-				t.Errorf("body lacks code %s: %s", CodeConflict, rb)
+			var env map[string]any
+			if err := json.Unmarshal([]byte(rb), &env); err != nil {
+				t.Fatalf("unmarshal %s: %v", rb, err)
+			}
+			if env["code"] != wantNotLoadableCode || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
+				t.Errorf("envelope = %v, want code %s, tenant_id db-a, config_error %s", env, wantNotLoadableCode, c.reason)
+			}
+			if msg, _ := env["error"].(string); !strings.Contains(msg, "db-a") {
+				t.Errorf("error message does not name the tenant: %q", msg)
 			}
 			if after != before {
 				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -141,8 +154,8 @@ func TestApplyPatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if res.Status != "error" || res.Code != CodeConflict {
-				t.Errorf("result = %+v, want status error, code %s", res, CodeConflict)
+			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "db-a") {
+				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, wantNotLoadableCode)
 			}
 			if after != before {
 				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -187,8 +200,8 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if res.Status != "error" || res.Code != CodeConflict {
-				t.Errorf("result = %+v, want status error, code %s", res, CodeConflict)
+			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "db-a") {
+				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, wantNotLoadableCode)
 			}
 			if after := mustRead(t, path); after != before {
 				t.Errorf("file changed:\n%s", after)
@@ -197,22 +210,16 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 	}
 }
 
-func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
-	c := rejFiles[0]
-	dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "_defaults.yaml": caDefaults})
-	initGitRepo(t, dir)
-	if out, err := exec.Command("git", "-C", dir, "branch", "-M", "main").CombinedOutput(); err != nil {
-		t.Fatalf("git branch -M main: %v\n%s", err, out)
-	}
-	path := filepath.Join(dir, "db-a.yaml")
-	before := mustRead(t, path)
-
+// prBatchRun runs a PR-mode BatchTenants over dir; created reports whether
+// the mock forge was asked to open a PR.
+func prBatchRun(t *testing.T, dir, body string) (*httptest.ResponseRecorder, bool) {
+	t.Helper()
 	rbacMgr := adminRBAC(t)
-	prCreated := false
+	created := false
 	mockClient := &mockPlatformClient{
 		providerName: "github",
 		createPRFunc: func(title, body, head string, labels []string) (*platform.PRInfo, error) {
-			prCreated = true
+			created = true
 			return &platform.PRInfo{Number: 7, WebURL: "https://example/pr/7", State: "open"}, nil
 		},
 	}
@@ -220,25 +227,96 @@ func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
 		Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rbacMgr,
 		WriteMode: WriteModePR, PRClient: mockClient, PRTracker: &mockPlatformTracker{},
 	})
-	req := httptest.NewRequest("POST", "/api/v1/tenants/batch",
-		bytes.NewBufferString(`{"operations":[{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}}]}`))
+	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
 	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	return w, created
+}
 
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"code":"`+CodeConflict+`"`) {
-		t.Errorf("status = %d, want 409 %s; body: %s", w.Code, CodeConflict, w.Body.String())
+const rejHealthyB = "tenants:\n  db-b:\n    mysql_connections: \"70\"\n"
+
+const rejTwoOps = `{"operations":[{"tenant_id":"db-b","patch":{"_silent_mode":"warning"}},{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}}]}`
+
+// A multi-op PR batch: db-b is healthy, db-a is not. The whole PR is refused
+// and the answer names db-a (F3), under its own code (F4).
+func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
+	for _, c := range rejFiles[:2] {
+		t.Run(c.name, func(t *testing.T) {
+			dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			runGit(t, dir, "branch", "-M", "main")
+			beforeA, beforeB := mustRead(t, filepath.Join(dir, "db-a.yaml")), mustRead(t, filepath.Join(dir, "db-b.yaml"))
+
+			w, created := prBatchRun(t, dir, rejTwoOps)
+			var env map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &env)
+			if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
+				t.Errorf("status = %d, envelope = %v; want 409, code %s, tenant_id db-a, config_error %s",
+					w.Code, env, wantNotLoadableCode, c.reason)
+			}
+			if created {
+				t.Error("a PR was created for a file the exporter rejects")
+			}
+			branches, _ := exec.Command("git", "-C", dir, "branch", "--format=%(refname:short)").Output()
+			if strings.Contains(string(branches), "tenant-api/batch/") {
+				t.Errorf("batch branch left behind:\n%s", branches)
+			}
+			if mustRead(t, filepath.Join(dir, "db-a.yaml")) != beforeA || mustRead(t, filepath.Join(dir, "db-b.yaml")) != beforeB {
+				t.Error("a tenant file changed")
+			}
+		})
 	}
-	if prCreated {
-		t.Error("a PR was created for a file the exporter rejects")
-	}
-	branches, _ := exec.Command("git", "-C", dir, "branch", "--format=%(refname:short)").Output()
-	if strings.Contains(string(branches), "tenant-api/batch/") {
-		t.Errorf("batch branch left behind:\n%s", branches)
-	}
-	if after := mustRead(t, path); after != before {
-		t.Errorf("file changed:\n%s", after)
+}
+
+// F2: the PR batch branches from the FRESH origin base, so the pre-flight —
+// which reads the local tree before checkout — must not refuse a tenant file
+// on the strength of that tree. Local copy broken, origin repaired → the PR
+// is opened. Origin still broken → the authoritative post-checkout pass
+// refuses it.
+func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
+	const repaired = "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
+	for _, c := range rejFiles[:2] {
+		for _, originRepaired := range []bool{true, false} {
+			name := c.name + "/origin_broken"
+			if originRepaired {
+				name = c.name + "/origin_repaired"
+			}
+			t.Run(name, func(t *testing.T) {
+				dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "_defaults.yaml": caDefaults})
+				initGitRepo(t, dir)
+				runGit(t, dir, "branch", "-M", "main")
+				bare := t.TempDir()
+				runGit(t, bare, "init", "--bare", "-b", "main")
+				runGit(t, dir, "remote", "add", "origin", bare)
+				runGit(t, dir, "push", "origin", "main")
+				if originRepaired {
+					other := t.TempDir()
+					if out, err := exec.Command("git", "clone", bare, other).CombinedOutput(); err != nil {
+						t.Fatalf("clone: %v\n%s", err, out)
+					}
+					if err := os.WriteFile(filepath.Join(other, "db-a.yaml"), []byte(repaired), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					runGit(t, other, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-am", "repair")
+					runGit(t, other, "push", "origin", "main")
+				}
+
+				w, created := prBatchRun(t, dir, `{"operations":[{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}}]}`)
+				if originRepaired {
+					if w.Code != http.StatusOK || !created {
+						t.Errorf("status = %d, PR created = %v; want 200 and a PR; body: %s", w.Code, created, w.Body.String())
+					}
+					return
+				}
+				var env map[string]any
+				_ = json.Unmarshal(w.Body.Bytes(), &env)
+				if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || created {
+					t.Errorf("status = %d, PR created = %v; want 409 %s; body: %s", w.Code, created, wantNotLoadableCode, w.Body.String())
+				}
+			})
+		}
 	}
 }

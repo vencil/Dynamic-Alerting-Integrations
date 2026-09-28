@@ -42,8 +42,9 @@ type BatchResult struct {
 	Message  string `json:"message,omitempty"`
 	// Code is a machine-readable error code for a FAILED op, set only for the
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
-	// (the per-op form of the 409 that PUT and the PR-mode batch return) and
-	// INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
+	// (the per-op form of the 409 that PUT and the PR-mode batch return),
+	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
+	// config, #2373; nothing written) and INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
 	// written). Empty for every other failure and for a successful op.
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
@@ -84,7 +85,7 @@ type BatchResponse struct {
 // @Summary     Batch tenant operations
 // @Description Apply patch operations to multiple tenants in one call.
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
-// @Description is not applied: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
+// @Description is not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -93,7 +94,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code CONFLICT, with config_error; repair it with a whole-file PUT first); nothing written. Direct mode reports these per op in results[].code instead."
+// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
@@ -394,9 +395,9 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 			slog.Error("batch op refused: conf.d scan failed", "tenant", op.TenantID, "error", err)
 			msg, code = msgTenantTreeScan, CodeInternal
 		case errors.As(err, &notLoadable):
-			// #2373 review F1: nothing written; the file must be repaired
-			// with a whole-file PUT first.
-			msg, code = notLoadable.Error(), CodeConflict
+			// #2373 review F1: nothing written; the tenant file must be
+			// repaired first.
+			msg, code = notLoadable.Error(), CodeTenantConfigNotLoadable
 		}
 		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg, Code: code}
 	}
@@ -432,7 +433,7 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (
 	// would land in a file no plane serves, and "succeeded" would read as
 	// applied. This runs inside the merge closure, so it judges the base the
 	// writer actually merges into (under the lock, on the fresh base).
-	if err := checkPartialWriteBase(existing); err != nil {
+	if err := checkPartialWriteBase(tenantID, existing); err != nil {
 		return "", err
 	}
 

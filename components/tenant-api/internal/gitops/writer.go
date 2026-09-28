@@ -778,6 +778,14 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 // between the read and the write.
 type MergeFunc func(existing []byte) (string, error)
 
+// ErrMergeBaseNotLoadable is what a MergeFunc's error wraps (errors.Is) when it
+// refuses the EXISTING file as its base because the file cannot be loaded as
+// a tenant config (#2373). It is a verdict on the file's content, so like
+// confd.ErrAmbiguousTenantFile it is only a verdict on the tree it was read
+// from: WritePRBatch's pre-flight reads the local tree before checkout and
+// tolerates it (see there); the post-checkout pass decides.
+var ErrMergeBaseNotLoadable = errors.New("merge base cannot be loaded as a tenant config")
+
 // tenantFilePath is the writer-side answer to "which file does this tenant's
 // config live in" (#1673). It returns the tenant's EXISTING file whatever its
 // spelling, and DefaultTenantFileName only for a tenant that has none — so a

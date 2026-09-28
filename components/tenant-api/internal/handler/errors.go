@@ -99,6 +99,15 @@ const (
 	// two files makes the exporter reject the whole config, so nothing is
 	// written. Also carried per op on a direct-mode batch (BatchResult.Code).
 	CodeTenantDeclaredElsewhere = "TENANT_DECLARED_ELSEWHERE"
+	// CodeTenantConfigNotLoadable marks a 409 from a PARTIAL write
+	// (PUT …/custom-alerts, the PR-mode tenant batch) into a tenant file that
+	// cannot be loaded as a tenant config — config_error malformed_yaml or
+	// invalid_config, the file threshold-exporter skips whole (#2373). The
+	// envelope carries tenant_id and config_error. Distinct from CONFLICT,
+	// which tells the client to refresh and retry: a retry cannot succeed
+	// until the tenant file itself is repaired. Also carried per op on a
+	// direct-mode batch (BatchResult.Code).
+	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
 )
 
 // msgTenantDeclaredElsewhere is the FIXED client-facing text for

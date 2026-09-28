@@ -466,8 +466,9 @@ definitions:
         description: |-
           Code is a machine-readable error code for a FAILED op, set only for the
           failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
-          (the per-op form of the 409 that PUT and the PR-mode batch return) and
-          INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
+          (the per-op form of the 409 that PUT and the PR-mode batch return),
+          TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
+          config, #2373; nothing written) and INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
           written). Empty for every other failure and for a successful op.
         type: string
       message:
@@ -915,8 +916,8 @@ definitions:
           be opened and fixed), and resolved_thresholds, custom_alerts,
           validation_warnings and validation_notices are ABSENT — not empty,
           which would read as "none". Partial writes (PUT .../custom-alerts, the
-          batch patches) refuse such a file with 409; a whole-file PUT repairs
-          it. Absent on a usable file.
+          batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
+          the tenant file itself is repaired. Absent on a usable file.
         enum:
         - malformed_yaml
         - invalid_config
@@ -1615,7 +1616,7 @@ paths:
       description: |-
         Apply a patch to all tenants in a group.
         A member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
-        is not patched: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
+        is not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
       parameters:
       - description: Group ID
         in: path
@@ -1730,7 +1731,9 @@ paths:
         When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
         source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
         skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
-        the file's content is not vouched for). Partial writes refuse such a file with 409 until a whole-file PUT repairs it.
+        the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
+        tenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a
+        YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.
       parameters:
       - description: Tenant ID
         in: path
@@ -1872,8 +1875,10 @@ paths:
         `_custom_alerts` (comment-preserving AST edit), validates
         (S5 Go validator), and commits. Optimistic concurrency via
         base_hash (409 on drift). Empty array deletes the key.
-        409 CONFLICT with `config_error` when the tenant's file cannot be loaded as a tenant config
-        (malformed_yaml | invalid_config, as on GET): repair it with a whole-file PUT /api/v1/tenants/{id} first.
+        409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
+        tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A whole-file
+        PUT can replace one whose only problem is a non-UTF-8 tenant id; a YAML syntax error, a non-mapping tenants:
+        or duplicate keys currently has to be fixed in git.
       parameters:
       - description: Tenant ID
         in: path
@@ -2164,7 +2169,7 @@ paths:
       description: |-
         Apply patch operations to multiple tenants in one call.
         Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
-        is not applied: its result carries status error and code CONFLICT; repair it with a whole-file PUT /api/v1/tenants/{id}.
+        is not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
       parameters:
       - description: Batch operations
         in: body
@@ -2195,9 +2200,9 @@ paths:
         "409":
           description: 'PR write-back mode: a tenant in the batch is already declared
             by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config
-            file cannot be loaded as a tenant config (code CONFLICT, with config_error;
-            repair it with a whole-file PUT first); nothing written. Direct mode reports
-            these per op in results[].code instead.'
+            file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE,
+            with tenant_id and config_error; repair the tenant file itself first);
+            nothing written. Direct mode reports these per op in results[].code instead.'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
