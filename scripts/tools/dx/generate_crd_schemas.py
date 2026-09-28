@@ -43,7 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -60,11 +60,39 @@ except ImportError:
 # ⛔ YAML 1.1 keeps a `=` value tag, and prometheus-operator's AlertmanagerConfig
 # CRD contains a literal `- =`. Without this constructor `safe_load` raises
 # "could not determine a constructor for the tag 'tag:yaml.org,2002:value'" on
-# the ONE source that matters most here. Registering it on SafeLoader keeps the
-# safe loader (no arbitrary object construction) while treating `=` as a scalar.
-yaml.SafeLoader.add_constructor(
+# the ONE source that matters most here. Subclassing SafeLoader keeps the safe
+# loader (no arbitrary object construction) while treating `=` as a scalar.
+#
+# ⛔ Register it on a PRIVATE subclass, never on `yaml.SafeLoader` itself (#2335):
+# `add_constructor` on the base class runs at import and mutates the process-wide
+# loader, so every SafeLoader-derived reader in the same process (exporter-key
+# loader, strict loader, plain `safe_load`) starts accepting `=` — but only if
+# this module happened to be imported first. Only the upstream CRD read uses it;
+# `SOURCES.yaml` is our own file and has no reason to carry `=`.
+class _CRDLoader(yaml.SafeLoader):
+    """SafeLoader that also constructs YAML 1.1 `!!value` (`=`) as a plain str."""
+
+
+_CRDLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
+
+
+def _load_crd_docs(text: str) -> Iterator[Any]:
+    """``yaml.load_all(text, Loader=_CRDLoader)``, spelled the long way.
+
+    Same reason as ``_lib_io._strict_loader_class``: bandit B506 flags any
+    SafeLoader SUBCLASS passed as ``Loader=``, so the loader is driven by hand.
+    Safety is pinned by behaviour instead —
+    ``tests/dx/test_generate_crd_schemas.py`` feeds this reader a real
+    ``!!python/object/apply`` payload and requires it to be refused.
+    """
+    loader = _CRDLoader(text)
+    try:
+        while loader.check_data():
+            yield loader.get_data()
+    finally:
+        loader.dispose()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CRD_DIR = REPO_ROOT / "docs" / "schemas" / "crd"
@@ -108,7 +136,7 @@ def _schemas_from(raw: bytes, wanted: List[Dict]) -> Tuple[Dict[Tuple[str, str, 
     """Pull the requested (group, kind, version) openAPIV3Schemas out of one CRD file."""
     want = {(w["group"], w["kind"], w["version"]) for w in wanted}
     found: Dict[Tuple[str, str, str], dict] = {}
-    for doc in yaml.safe_load_all(raw.decode("utf-8")):
+    for doc in _load_crd_docs(raw.decode("utf-8")):
         if not isinstance(doc, dict) or doc.get("kind") != "CustomResourceDefinition":
             continue
         group = doc["spec"]["group"]

@@ -1,0 +1,10 @@
+tenants:
+  tenant-nested:
+    _x:
+      added:
+        type: "webhook"
+        url: "https://hooks.example.com/alerts"
+      inherited_list: ~
+      inherited_str: ~
+      never_set_a: ~
+      never_set_b: ~

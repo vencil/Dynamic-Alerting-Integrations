@@ -155,9 +155,21 @@ func ReadTenantFile(dir, name string) (data []byte, problem FileProblem) {
 	if err != nil {
 		return nil, ProblemUnreadable
 	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, ProblemMalformedYAML
+	if p := YAMLProblem(data); p != ProblemNone {
+		return nil, p
 	}
 	return data, ProblemNone
+}
+
+// YAMLProblem is ReadTenantFile's verdict on bytes a caller has already read
+// by other means (GET /tenants/{id} resolves and reads the file itself):
+// ProblemMalformedYAML when they do not parse as YAML at all, else
+// ProblemNone. The same syntax-only judgement ReadTenantFile applies, so the
+// list and the single-tenant read name the same reason (#2373).
+func YAMLProblem(data []byte) FileProblem {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return ProblemMalformedYAML
+	}
+	return ProblemNone
 }

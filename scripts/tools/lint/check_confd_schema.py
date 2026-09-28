@@ -276,8 +276,15 @@ def _explain(exc, validator) -> str:
 
 
 def _iter_yaml_files(config_dir: str) -> list[str]:
+    """Every YAML carrier the exporter would read under *config_dir*.
+
+    #2360: `.`-prefixed names are skipped like the exporter's walker does —
+    hidden FILES and hidden DIRECTORIES (pruned in place, so nothing under
+    `.snap/` is opened: a broken file there must not make this exit 2).
+    """
     out: list[str] = []
-    for root, _dirs, files in os.walk(config_dir):
+    for root, dirs, files in os.walk(config_dir):
+        dirs[:] = [d for d in dirs if not is_hidden_name(d)]
         for fn in files:
             if has_yaml_extension(fn) and not is_hidden_name(fn):
                 out.append(os.path.join(root, fn))

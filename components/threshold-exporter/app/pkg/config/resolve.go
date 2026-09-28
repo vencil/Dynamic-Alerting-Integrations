@@ -459,8 +459,11 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 				continue
 			}
 
-			// Unknown value — log warning, use default
+			// Unknown value — log warning, use default. #2377: the `:severity`
+			// suffix belongs to the discarded value, so it is dropped too —
+			// "7O:critical" resolves exactly like the bare "7O".
 			log.Printf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
+			severity = "warning"
 		}
 
 		// State 2: use default
