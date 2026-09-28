@@ -215,6 +215,27 @@ def test_verify_fails_when_target_got_wrong_value():
     assert err and "k1" in err
 
 
+# #2231: a key written twice — not the one being edited — makes a file the
+# exporter drops whole. Last-wins parsing read old and new as the same
+# mapping and passed the gate; it must take the "did not parse" refusal.
+_DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
+                  '    k2: "30"\n')
+
+
+def test_verify_refuses_a_duplicate_key_elsewhere_in_the_tenant():
+    new = _DUP_OTHER_KEY.replace('k1: "10"', 'k1: "15"')
+    err = tg.verify_only_changed(_DUP_OTHER_KEY, new, "tenant-a", {"k1": '"15"'})
+    assert err and "did not parse" in err and "duplicate key" in err
+
+
+def test_open_pr_never_puts_a_file_with_a_duplicate_key(monkeypatch):
+    calls = _patch_http(monkeypatch, get_raw=_DUP_OTHER_KEY)
+    out = tg.open_governance_pr(_plan(tenant="tenant-a", key="k1", new='"15"'), _args())
+    assert out.status == "error"
+    assert "verify failed" in out.message
+    assert calls["put_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # 5. open_governance_pr — tenant-api wiring with a fake HTTP layer
 # ---------------------------------------------------------------------------

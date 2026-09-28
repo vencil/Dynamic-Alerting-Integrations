@@ -47,6 +47,7 @@ from _lib_python import (  # noqa: E402
     write_text_or_die,
     iter_yaml_files,
 )
+from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = YAML error)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -180,7 +181,10 @@ def collect_tenant_ids_from_config_dir(config_dir: str) -> set[str]:
     """Collect all tenant IDs from tenant YAML files in config-dir."""
     tenant_ids: set[str] = set()
     for filename, filepath in iter_yaml_files(config_dir, skip_reserved=True):
-        data = load_yaml_file(filepath)
+        # Strict (#2231): a tenant file holding a key twice is one the
+        # exporter drops whole — rc 2 via exit_on_yaml_file_error, like bad
+        # syntax, instead of validating against the ids PyYAML kept.
+        data = load_yaml_file_strict(filepath)
         if not data or not isinstance(data, dict):
             continue
         # Wrapper format: {tenants: {name: ...}}
