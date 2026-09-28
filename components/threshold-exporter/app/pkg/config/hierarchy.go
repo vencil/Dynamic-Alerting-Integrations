@@ -506,11 +506,12 @@ func dropShadowedSpellings(m map[string]any) map[string]any {
 // so the base value is still the fallback.
 func mergeOverSpellings(base, over map[string]any) map[string]any {
 	var drop []string
+	var buf [2]string
 	for k, v := range over {
 		if v == nil {
 			continue
 		}
-		for _, s := range otherSpellings(k) {
+		for _, s := range otherSpellings(k, &buf) {
 			if _, in := base[s]; in {
 				drop = append(drop, s)
 			}

@@ -292,21 +292,66 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 	return rows
 }
 
+// aliasBases is every base key on either side of the alias table (legacy
+// and canonical), for touchesAlias' one-lookup reject.
+var aliasBases = func() map[string]struct{} {
+	m := make(map[string]struct{}, 2*len(deprecatedKeyAliases))
+	for legacy, canon := range deprecatedKeyAliases {
+		m[legacy] = struct{}{}
+		m[canon] = struct{}{}
+	}
+	return m
+}()
+
+// touchesAlias reports whether key could have another spelling: its base —
+// the part before `{` (dimensional), else the key without a `_critical`
+// suffix — is on either side of the alias table. It is exactly the union of
+// the shapes canonicalKeyFor and legacySpellingFor recognise, so a false
+// answer means otherSpellings is empty; it exists because the per-tenant
+// merge asks this for every key and almost every key is not aliased
+// (#2420 bench gate: MergePartialConfigs_1000 was +29% time without it).
+func touchesAlias(key string) bool {
+	if i := strings.IndexByte(key, '{'); i > 0 {
+		_, ok := aliasBases[key[:i]]
+		return ok
+	}
+	if _, ok := aliasBases[key]; ok {
+		return true
+	}
+	if base, found := strings.CutSuffix(key, criticalSuffix); found {
+		_, ok := aliasBases[base]
+		return ok
+	}
+	return false
+}
+
 // otherSpellings is every spelling of key's threshold other than key itself
 // — its canonical form and the legacy form of that canonical, across the
 // three shapes canonicalKeyFor handles. Empty for a key no alias touches
-// (every reserved `_` key, every key outside the table), which is the
-// allocation-free steady state.
-func otherSpellings(key string) []string {
+// (every reserved `_` key, every key outside the table).
+//
+// The result is a slice of *buf, which the caller declares on its stack
+// (`var buf [2]string`): a key has at most two other spellings, and
+// returning a fresh slice cost one heap allocation per aliased key on the
+// per-tenant merge path — measured on #2420's bench gate as +1000
+// allocs/op on MergePartialConfigs_1000 (every bench tenant writes the
+// canonical `mysql_threads_running`). Callers only range over the result,
+// so buf stays on the stack.
+func otherSpellings(key string, buf *[2]string) []string {
+	if !touchesAlias(key) {
+		return buf[:0]
+	}
 	canon, _ := canonicalKeyFor(key)
-	var out []string
+	n := 0
 	if canon != key {
-		out = append(out, canon)
+		buf[n] = canon
+		n++
 	}
 	if legacy, ok := legacySpellingFor(canon); ok && legacy != key {
-		out = append(out, legacy)
+		buf[n] = legacy
+		n++
 	}
-	return out
+	return buf[:n]
 }
 
 // overlayAcrossSpellings writes src over dst key by key, where "key" means
@@ -329,8 +374,18 @@ func otherSpellings(key string) []string {
 // as it always has (and ValidateTenantKeys says so). Removing it would make
 // the answer depend on map iteration order.
 func overlayAcrossSpellings[V any](dst, src map[string]V) {
+	if len(dst) == 0 {
+		// Nothing earlier to displace — the common case on the per-tenant
+		// merge (a tenant declared by its own file alone), kept to a plain
+		// copy (#2420 bench gate).
+		for k, v := range src {
+			dst[k] = v
+		}
+		return
+	}
+	var buf [2]string
 	for k, v := range src {
-		for _, s := range otherSpellings(k) {
+		for _, s := range otherSpellings(k, &buf) {
 			if _, own := src[s]; !own {
 				delete(dst, s)
 			}
@@ -355,8 +410,9 @@ func OverlayAcrossSpellings(dst, src map[string]ScheduledValue) {
 // answers that — so neither key is judged.
 func WithoutDoubleSpelledThresholds(m map[string]any) map[string]any {
 	var drop []string
+	var buf [2]string
 	for k := range m {
-		for _, s := range otherSpellings(k) {
+		for _, s := range otherSpellings(k, &buf) {
 			if _, both := m[s]; both {
 				drop = append(drop, k)
 				break

@@ -160,6 +160,51 @@ func TestOverlayAcrossSpellingsKeepsOneLayersOwnPair(t *testing.T) {
 	}
 }
 
+// TestTouchesAliasIsExactlyTheAliasShapes: touchesAlias (otherSpellings'
+// fast reject, #2420 bench gate) says "no" only for keys the full lookup
+// finds no other spelling for, and "yes" for every shape it does — so the
+// reject never changes an answer.
+func TestTouchesAliasIsExactlyTheAliasShapes(t *testing.T) {
+	t.Parallel()
+	slow := func(key string) []string {
+		canon, _ := canonicalKeyFor(key)
+		var out []string
+		if canon != key {
+			out = append(out, canon)
+		}
+		if legacy, ok := legacySpellingFor(canon); ok && legacy != key {
+			out = append(out, legacy)
+		}
+		return out
+	}
+	var keys []string
+	for legacy, canon := range deprecatedKeyAliases {
+		for _, base := range []string{legacy, canon} {
+			keys = append(keys, base, base+"_critical", base+`{version="v2"}`, base+"{}",
+				base+"_util", base+"_critical_x", base+`_critical{a="b"}`, "x"+base, base+"_")
+		}
+	}
+	keys = append(keys, "", "_routing", "_critical", "{a}", "mysql_connections", "pg_connections_critical",
+		`redis_x{a="b"}`, "_state_x_critical", "_silent_x{a}")
+	for _, k := range keys {
+		var buf [2]string
+		fast := otherSpellings(k, &buf)
+		want := slow(k)
+		if len(fast) != len(want) {
+			t.Errorf("otherSpellings(%q) = %q, full lookup %q", k, fast, want)
+			continue
+		}
+		for i := range want {
+			if fast[i] != want[i] {
+				t.Errorf("otherSpellings(%q) = %q, full lookup %q", k, fast, want)
+			}
+		}
+		if (len(want) > 0) != touchesAlias(k) {
+			t.Errorf("touchesAlias(%q) = %v, but the full lookup finds %q", k, touchesAlias(k), want)
+		}
+	}
+}
+
 func mysqlRows(rows []string) []string {
 	var out []string
 	for _, r := range rows {

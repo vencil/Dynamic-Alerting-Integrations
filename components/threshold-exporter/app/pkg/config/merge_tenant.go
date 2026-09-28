@@ -631,7 +631,8 @@ func (r rootPlatform) supplyFor(tenant string, own map[string]ScheduledValue) []
 			if owner == nil {
 				owner = make(map[string]int)
 			}
-			for _, s := range otherSpellings(k) {
+			var buf [2]string
+			for _, s := range otherSpellings(k, &buf) {
 				if _, same := entry[s]; !same {
 					delete(owner, s)
 				}

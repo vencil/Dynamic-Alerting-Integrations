@@ -254,6 +254,7 @@ func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[st
 		}
 		overlayAcrossSpellings(out, pb.Block) // overlayTenant's layering (#2368)
 	}
+	var buf [2]string
 	for k := range out {
 		// The tenant's mapping replaces the platform value under ANY
 		// spelling of the threshold (#2368), as it does in overlayTenant.
@@ -268,7 +269,11 @@ func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[st
 		// a leaf dropped from the tenant's mapping falls back to the chain
 		// (/metrics: the mapping still wins over the platform) — and a
 		// consumer reading MergedDefaults per threshold would need it.
-		for _, s := range append([]string{k}, otherSpellings(k)...) {
+		if _, tenantMap := tenantRaw[k].(map[string]any); tenantMap {
+			delete(out, k)
+			continue
+		}
+		for _, s := range otherSpellings(k, &buf) {
 			if _, tenantMap := tenantRaw[s].(map[string]any); tenantMap {
 				delete(out, k)
 				break
