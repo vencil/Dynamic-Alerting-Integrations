@@ -17,6 +17,8 @@ from _lib_constants import (
     _DURATION_MULTIPLIERS,
     _DURATION_RE,
     GUARDRAILS,
+    HTTP_CONFIG_AUTH_FIELDS,
+    HTTP_CONFIG_AUTH_MAPPINGS,
     PLATFORM_DEFAULTS,
     RECEIVER_TYPES,
 )
@@ -135,13 +137,13 @@ def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
     """State of an exactly-one group field, by the schema's type rule (#2137).
 
     Cases:
-    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
     ``FIELD_NOT_STRING`` is an error,
     stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
     fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
     rule for non-strings is right for all of them.
 
-    Same rule as the Go guard (internal/guard/routing.go exactlyOneFinding).
+    Same rule as the Go copy (pkg/receiverspec exactlyOneProblem).
     """
     value = receiver.get(field)
     if value is None or value == "":
@@ -232,7 +234,8 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
         defs = json.load(f)["definitions"]
 
     def resolve(prop: dict[str, Any]) -> dict[str, Any]:
-        out = {"type": prop.get("type"), "pattern": prop.get("pattern")}
+        out = {"type": prop.get("type"), "pattern": prop.get("pattern"),
+               "ref": prop.get("$ref")}
         for sub in prop.get("allOf", []):
             ref = sub["$ref"]
             if not ref.startswith("#/definitions/"):
@@ -247,8 +250,108 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
         d = defs[branch["$ref"][len("#/definitions/"):]]
         table[d["properties"]["type"]["const"]] = {
             f: resolve(p) for f, p in d["properties"].items() if f != "type"}
+    global _HTTP_CONFIG_FIELD_SCHEMAS
+    _HTTP_CONFIG_FIELD_SCHEMAS = {
+        f: resolve(p) for f, p in defs["httpConfig"]["properties"].items()}
     _RECEIVER_FIELD_SCHEMAS = table
     return table
+
+
+_HTTP_CONFIG_REF = "#/definitions/httpConfig"
+_HTTP_CONFIG_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {}
+
+
+def _type_name(value: Any) -> str:
+    """YAML-ish name of a decoded value's type, for messages."""
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return f"string {value!r}"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "mapping"
+    return type(value).__name__
+
+
+def _http_config_problem(value: Any) -> Optional[str]:
+    """First problem of an ``http_config`` value, or ``None`` (#2295).
+
+    Same rule as the Go copy (pkg/receiverspec checkHTTPConfig): a mapping;
+    ``HTTP_CONFIG_AUTH_MAPPINGS`` keys are mappings and the other
+    ``HTTP_CONFIG_AUTH_FIELDS`` strings when present, ``""`` counting as
+    unset and an empty mapping as set; at most one auth key set; and
+    ``proxy_url`` a string matching the schema's ``receiverProxyUrl``
+    pattern, read from the schema like the URL patterns.
+    """
+    if not isinstance(value, dict):
+        return f"field 'http_config' must be a mapping, got {_type_name(value)}"
+    set_keys = []
+    for key in HTTP_CONFIG_AUTH_FIELDS:
+        if key not in value:
+            continue
+        item = value[key]
+        if key in HTTP_CONFIG_AUTH_MAPPINGS:
+            if not isinstance(item, dict):
+                return (f"field 'http_config.{key}' must be a mapping, "
+                        f"got {_type_name(item)}")
+            set_keys.append(key)
+        elif not isinstance(item, str):
+            return (f"field 'http_config.{key}' must be a string, "
+                    f"got {_type_name(item)}")
+        elif item:
+            set_keys.append(key)
+    if len(set_keys) > 1:
+        return (f"http_config sets {', '.join(set_keys)}; Alertmanager accepts at "
+                f"most one of {', '.join(HTTP_CONFIG_AUTH_FIELDS)}")
+    if "proxy_url" in value:
+        proxy = value["proxy_url"]
+        if not isinstance(proxy, str):
+            return (f"field 'http_config.proxy_url' must be a string, "
+                    f"got {_type_name(proxy)}")
+        _receiver_field_schemas()
+        pattern = _HTTP_CONFIG_FIELD_SCHEMAS.get("proxy_url", {}).get("pattern")
+        if not pattern:
+            raise RuntimeError("tenant-config.schema.json httpConfig.proxy_url has no "
+                               "pattern; http_config cannot be checked")
+        if re.fullmatch(pattern, proxy) is None:
+            return (f"field 'http_config.proxy_url' value {proxy!r} is not an http, "
+                    "https, socks5 or socks5h URL with a host")
+    return None
+
+
+def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
+    """Check the optional values Alertmanager cannot load (#2295).
+
+    Read from tenant-config.schema.json like the required-field formats:
+
+    - every property of the type typed ``boolean`` (``send_resolved``,
+      email ``require_tls``) must be ``true`` / ``false`` when the key is
+      present — null included, as in the schema; ``send_resolved: maybe``
+      makes Alertmanager refuse the whole config;
+    - the property referencing ``httpConfig`` (webhook ``http_config``)
+      follows ``_http_config_problem``.
+
+    Returns the first problem (callers prefix tenant / receiver context), or
+    ``None``. Same rule as the Go copy (pkg/receiverspec Check); cases in
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
+    """
+    fields = _receiver_field_schemas().get(rtype, {})
+    for field, prop in fields.items():
+        if prop.get("type") == "boolean" and field in receiver:
+            if not isinstance(receiver[field], bool):
+                return (f"field '{field}' must be true or false, "
+                        f"got {_type_name(receiver[field])}")
+    for field, prop in fields.items():
+        if prop.get("ref") == _HTTP_CONFIG_REF and field in receiver:
+            problem = _http_config_problem(receiver[field])
+            if problem:
+                return problem
+    return None
 
 
 def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) -> Optional[str]:
@@ -267,9 +370,9 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
       string (the schema alone rejects that form).
 
     Returns the problem (callers prefix tenant / receiver context), or
-    ``None``. Same rule as the Go guard (internal/guard/routing.go
-    requiredFieldFinding); cases in
-    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json.
+    ``None``. Same rule as the Go copy (pkg/receiverspec
+    requiredProblem); cases in
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
     state = receiver_field_state(receiver, field)
     if state == FIELD_UNSET:

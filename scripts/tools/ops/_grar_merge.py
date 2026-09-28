@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     validate_and_clamp,
     receiver_exactly_one_problem,
+    receiver_optional_problem,
     receiver_required_problem,
     RECEIVER_TYPES,
 )
@@ -125,6 +126,13 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
             warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
             return None, warnings
     problem = receiver_exactly_one_problem(rtype, receiver_obj)
+    if problem:
+        warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+        return None, warnings
+    # #2295: optional values Alertmanager cannot load (non-boolean
+    # send_resolved / require_tls, a malformed http_config) — without this the
+    # receiver is written out and only amtool, when it is on PATH, stops it.
+    problem = receiver_optional_problem(rtype, receiver_obj)
     if problem:
         warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
         return None, warnings

@@ -213,6 +213,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
 | `PutGroupRequest.filters` / `PutViewRequest.filters` 項目數 | ≤ 20 entries（view 另外 required、至少 1 個）。transform 跑在寫入鎖內，且結果寫進 `_groups.yaml` / `_views.yaml` ⇒ 劣化是永久的 |
 | `Filters` map values | ≤ 1024 chars per value |
+| `PUT /tenants/{id}` body 自己寫的 receiver（`_routing.receiver`、`overrides[].receiver`、`routes[].receiver`） | receiver 契約（`threshold-exporter/app/pkg/receiverspec`，與 da-guard 共用；[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：已知 type、必填欄位與格式、PagerDuty 恰好一把 key、`send_resolved`／`require_tls` 為布林、`http_config` 最多一種 auth 且 `proxy_url` 合法。`field` 形如 `tenants.<id>._routing.receiver.url`。在 domain policy 之後判（policy 違規仍是 403）；繼承來的 receiver 不判 |
 
 **Failure response shape**：
 

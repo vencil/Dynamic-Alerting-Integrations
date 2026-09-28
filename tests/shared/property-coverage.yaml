@@ -57,6 +57,9 @@ modules:
       receiver_required_problem: "#2180 required receiver fields by the schema's type + pattern (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _find_tenant_schema: "#2180 file locator (I/O); same two-layout shape as _grar_validate._find_platform_rules_configmap, exercised by every receiver_required_problem call"
       _receiver_field_schemas: "#2180 schema reader (I/O + cache); its output is pinned by tests/shared/test_receiver_spec_parity.py"
+      receiver_optional_problem: "#2295 optional receiver values by the schema's boolean properties + httpConfig (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
+      _http_config_problem: "#2295 http_config auth-count + proxy_url rule; table-covered by receiver_presence_cases.json via receiver_optional_problem"
+      _type_name: "#2295 message helper (type name for a problem string); no law to property-test"
 
   scripts/tools/_lib_io.py:
     covered:

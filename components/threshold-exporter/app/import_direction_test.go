@@ -40,6 +40,7 @@ var logicPackages = []string{
 	"internal/guard",
 	"internal/parser",
 	"pkg/routingpolicy", // #2280: shared with tenant-api and da-guard
+	"pkg/receiverspec",  // #2295: the receiver contract, shared with tenant-api and da-guard
 }
 
 const netHTTPImportPath = "net/http"

@@ -5,7 +5,7 @@
  * a pagerduty receiver with neither (or both) of service_key / routing_key,
  * has its whole route WARN-and-skipped by the generator/guard. The contract
  * is read from tenant-config.schema.json, to which the Python RECEIVER_TYPES
- * and the Go receiverTypeSpecs are each pinned by their own parity test; see
+ * and the Go pkg/receiverspec specs are each pinned by their own parity test; see
  * the helper.
  */
 import { describe, it, expect } from 'vitest';

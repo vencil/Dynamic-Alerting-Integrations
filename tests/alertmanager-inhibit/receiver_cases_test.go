@@ -2,9 +2,10 @@ package aminhibit
 
 // Alertmanager's verdict on the shared receiver case table (#2180).
 //
-// components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
-// is read by the Go guard (TestReceiverPresenceCases) and by pytest
-// (tests/shared/test_receiver_spec_parity.py), which both assert each
+// components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
+// is read by pkg/receiverspec (TestPresenceCases), the Go guard
+// (TestReceiverPresenceCases) and pytest
+// (tests/shared/test_receiver_spec_parity.py), which all assert each
 // row's `valid` — the verdict the schema, the Python route generator and
 // the guard must agree on. Its `am` column records what Alertmanager
 // itself does with the receiver the pipeline would hand it. This file is
@@ -95,7 +96,7 @@ func amReceiverBody(t *testing.T, receiver map[string]any) (string, map[string]a
 }
 
 func TestReceiverCaseTable_AlertmanagerVerdict(t *testing.T) {
-	data, err := os.ReadFile(repoRoot("components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json"))
+	data, err := os.ReadFile(repoRoot("components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json"))
 	if err != nil {
 		t.Fatalf("read case table: %v", err)
 	}

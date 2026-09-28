@@ -713,7 +713,7 @@
       "type": "object",
       "title": "PagerDuty Receiver",
       "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents. Set exactly one of service_key (Events API v1) or routing_key (Events API v2) — not both, not neither; an empty or null value counts as not set.",
-      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field branches `{required: [k], properties: {k: {type: string, minLength: 1}}}` (both set matches both branches and fails oneOf; neither matches none). Empty and null count as unset, matching Alertmanager (its config is a Go struct: \"\" and a YAML null — e.g. `service_key:` rendered empty by envsubst — both decode to the zero value = not given) and the Python / Go checks. Hence the key properties allow null, and each branch needs BOTH `type: string` (minLength does not apply to null, so without it a null key would satisfy the branch) and `minLength: 1`. Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. The Go guard (internal/guard/routing.go receiverTypeSpecs ExactlyOneOf) and Python RECEIVER_TYPES (exactly_one_of) read this same shape; their parity tests fail on any other presence keyword here.",
+      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field branches `{required: [k], properties: {k: {type: string, minLength: 1}}}` (both set matches both branches and fails oneOf; neither matches none). Empty and null count as unset, matching Alertmanager (its config is a Go struct: \"\" and a YAML null — e.g. `service_key:` rendered empty by envsubst — both decode to the zero value = not given) and the Python / Go checks. Hence the key properties allow null, and each branch needs BOTH `type: string` (minLength does not apply to null, so without it a null key would satisfy the branch) and `minLength: 1`. Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. The Go copy (pkg/receiverspec specs ExactlyOneOf, used by da-guard and tenant-api) and Python RECEIVER_TYPES (exactly_one_of) read this same shape; their parity tests fail on any other presence keyword here.",
       "required": ["type"],
       "oneOf": [
         { "required": ["service_key"], "properties": { "service_key": { "type": "string", "minLength": 1 } } },
@@ -771,7 +771,7 @@
       "type": "string",
       "title": "Receiver HTTP(S) URL format",
       "description": "An http:// or https:// URL with a host and no whitespace or control characters. Alertmanager rejects a receiver URL without a scheme or host, or one with a leading space, and the whole Alertmanager config then fails to reload.",
-      "$comment": "#2180: the one authored copy of this pattern, derived from Alertmanager v0.33.1 config.Load (receiver_presence_cases.json rows are asserted against it), in syntax ECMA-262, Python re and Go RE2 read alike; `not` covers Python re.search letting `$` match before a final newline, and the Go guard's copy is pinned by TestReceiverTypeSpecs_MatchSchema.",
+      "$comment": "#2180: the one authored copy of this pattern, derived from Alertmanager v0.33.1 config.Load (receiver_presence_cases.json rows are asserted against it), in syntax ECMA-262, Python re and Go RE2 read alike; `not` covers Python re.search letting `$` match before a final newline, and the Go copy (pkg/receiverspec) is pinned by TestSpecs_MatchSchema.",
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>\"-]|[^\\x00-\\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^\\x00-\\x20\\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\\?[^\\x00-\\x20\\x7f#]*)?(#([^\\x00-\\x20\\x7f%]|%[0-9A-Fa-f]{2})*)?$",
       "not": { "pattern": "\\n" }
     },
@@ -808,11 +808,25 @@
         "proxy_url": {
           "type": "string",
           "title": "Proxy URL",
-          "description": "HTTP proxy URL.",
+          "description": "HTTP proxy URL: http, https, socks5 or socks5h, with a host.",
+          "allOf": [{ "$ref": "#/definitions/receiverProxyUrl" }],
           "format": "uri"
         }
       },
+      "not": {
+        "required": ["basic_auth", "bearer_token"],
+        "properties": { "bearer_token": { "minLength": 1 } }
+      },
+      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; an empty bearer_token counts as unset. The `not` covers the two auth keys listed here, additionalProperties: false the rest. The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
       "additionalProperties": false
+    },
+    "receiverProxyUrl": {
+      "type": "string",
+      "title": "Receiver http_config proxy URL format",
+      "description": "An http://, https://, socks5:// or socks5h:// URL with a host and no whitespace or control characters. Alertmanager rejects a proxy_url Go's net/url cannot parse and the whole Alertmanager config then fails to reload; this format is stricter (it also refuses a proxy with no scheme or host, which parses but cannot be used as a proxy).",
+      "$comment": "#2295: receiverHttpUrl with the scheme widened to the proxy schemes Go's HTTP transport uses; same portable syntax, `not` and Go-copy pin (pkg/receiverspec ProxyURLPattern, TestHTTPConfig_MatchSchema). Every string it matches is one Alertmanager's net/url parse accepts (receiver_presence_cases.json rows).",
+      "pattern": "^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>\"-]|[^\\x00-\\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^\\x00-\\x20\\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\\?[^\\x00-\\x20\\x7f#]*)?(#([^\\x00-\\x20\\x7f%]|%[0-9A-Fa-f]{2})*)?$",
+      "not": { "pattern": "\\n" }
     },
     "routingOverride": {
       "type": "object",

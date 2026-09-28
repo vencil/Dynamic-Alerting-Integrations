@@ -7,12 +7,13 @@ need EXACTLY ONE field set — is declared in:
     whose branches each require one non-empty field)
   - Python:      scripts/tools/_lib_constants.py RECEIVER_TYPES
                  (`required` + `exactly_one_of`)
-  - Go guard:    components/threshold-exporter/app/internal/guard/routing.go
-                 receiverTypeSpecs (Required + ExactlyOneOf)
+  - Go:          components/threshold-exporter/app/pkg/receiverspec/spec.go
+                 specs (Required + ExactlyOneOf), used by da-guard, tenant-api
+                 and pkg/config
 
 The schema is the hub. This test pins the Python copy to it; the Go copy is
-pinned to it by TestReceiverTypeSpecs_MatchSchema in the same package as
-receiverTypeSpecs. Each side reads the schema as JSON and its own copy as a
+pinned to it by TestSpecs_MatchSchema / TestHTTPConfig_MatchSchema in
+pkg/receiverspec. Each side reads the schema as JSON and its own copy as a
 value, so no copy is parsed out of another language's source text.
 
 Emptiness is part of the contract. Python and Go treat "" and null as unset,
@@ -23,8 +24,9 @@ every required field and every exactly-one branch — otherwise an empty or
 null key would count as "given" in the schema only, and
 {service_key: "" | null, routing_key: "r"} would match both branches.
 
-Shared case table (also read by the Go guard's TestReceiverPresenceCases):
-components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+Shared case table (also read by pkg/receiverspec TestPresenceCases and the Go
+guard's TestReceiverPresenceCases):
+components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
 Its `am` column is Alertmanager's own verdict, asserted by
 tests/alertmanager-inhibit/receiver_cases_test.go with config.Load (#2180).
 
@@ -32,6 +34,12 @@ Value shapes of required fields (#2180) follow the schema's type: a string
 field must be a string and match the schema `pattern` when there is one (URL
 and smarthost formats, written once as schema definitions and read by Python
 at run time); email `to` given as a list needs non-empty string items.
+
+Optional values (#2295) follow the schema too: a property typed boolean must be
+true/false when present, and http_config must be a mapping with at most one
+auth method (`HTTP_CONFIG_AUTH_FIELDS`) and a `proxy_url` matching
+`definitions.receiverProxyUrl`. Python reads both from the schema at run time;
+the table rows pin the Python auth-key list against the schema and Alertmanager.
 
 It also pins the ACCEPTED field set (schema `properties` vs Python
 required + optional + metadata): the schema is `additionalProperties: false`,
@@ -54,8 +62,8 @@ from _grar_merge import build_receiver_config
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas", "tenant-config.schema.json")
-_CASES = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "internal",
-                      "guard", "testdata", "receiver_presence_cases.json")
+_CASES = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pkg",
+                      "receiverspec", "testdata", "receiver_presence_cases.json")
 
 _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired")
 

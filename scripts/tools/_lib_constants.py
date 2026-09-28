@@ -86,10 +86,14 @@ PLATFORM_DEFAULTS: Final[dict[str, Any]] = {
 # accepts" (required + optional) still sees them.
 #
 # The presence contract (required + exactly_one_of) is shared with
-# docs/schemas/tenant-config.schema.json and the Go guard
-# (internal/guard/routing.go receiverTypeSpecs). The schema is the hub:
+# docs/schemas/tenant-config.schema.json and the Go copy
+# (components/threshold-exporter/app/pkg/receiverspec, used by da-guard,
+# tenant-api and pkg/config). The schema is the hub:
 # tests/shared/test_receiver_spec_parity.py pins this dict to it (including the
-# accepted field set), and a Go test pins receiverTypeSpecs to it.
+# accepted field set), and TestSpecs_MatchSchema pins the Go copy to it.
+# Optional values (#2295) are read from the schema at run time
+# (_lib_validation.receiver_optional_problem): a property typed boolean must be
+# true/false, and http_config follows HTTP_CONFIG_AUTH_FIELDS below.
 RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     "webhook": {
         "am_key": "webhook_configs",
@@ -135,6 +139,18 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
                       "client", "client_url", "send_resolved"],
     },
 }
+
+# http_config keys Alertmanager accepts at most ONE of (#2295):
+# prometheus/common HTTPClientConfig.Validate refuses every pair, and the whole
+# config then fails to reload. basic_auth / oauth2 / authorization are mappings
+# (an empty mapping counts as set); bearer_token / bearer_token_file are strings
+# ("" counts as unset). Same list as the Go HTTPConfigAuthFields
+# (pkg/receiverspec); rows of receiver_presence_cases.json pin both.
+HTTP_CONFIG_AUTH_FIELDS: Final[tuple[str, ...]] = (
+    "basic_auth", "oauth2", "authorization", "bearer_token", "bearer_token_file",
+)
+HTTP_CONFIG_AUTH_MAPPINGS: Final[frozenset[str]] = frozenset(
+    {"basic_auth", "oauth2", "authorization"})
 
 # ============================================================
 # Webhook Domain Allowlist (SSRF prevention)

@@ -213,6 +213,7 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
 | `PutGroupRequest.filters` / `PutViewRequest.filters` entry count | ≤ 20 entries (a view additionally requires at least 1). The transform runs inside the write lock and its result lands in `_groups.yaml` / `_views.yaml`, so the slowdown is permanent |
 | `Filters` map values | ≤ 1024 chars per value |
+| Receivers a `PUT /tenants/{id}` body writes itself (`_routing.receiver`, `overrides[].receiver`, `routes[].receiver`) | The receiver contract (`threshold-exporter/app/pkg/receiverspec`, shared with da-guard; [#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): a known type, required fields and their formats, exactly one PagerDuty key, boolean `send_resolved` / `require_tls`, at most one auth method in `http_config` and a valid `proxy_url`. `field` reads like `tenants.<id>._routing.receiver.url`. Judged after the domain policy (a policy violation is still a 403); inherited receivers are not judged |
 
 **Failure response shape**:
 

@@ -1,4 +1,4 @@
-package guard
+package receiverspec
 
 import (
 	"encoding/json"
@@ -6,22 +6,25 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// TestReceiverTypeSpecs_MatchSchema pins receiverTypeSpecs to the
-// receiver definitions in docs/schemas/tenant-config.schema.json — the
-// hub the Python RECEIVER_TYPES is pinned to as well
-// (tests/shared/test_receiver_spec_parity.py). Both sides read the
-// schema as JSON, so neither parses another language's source.
+// TestSpecs_MatchSchema pins specs to the receiver definitions in
+// docs/schemas/tenant-config.schema.json — the hub the Python
+// RECEIVER_TYPES is pinned to as well
+// (tests/shared/test_receiver_spec_parity.py). Both sides read the schema
+// as JSON, so neither parses another language's source.
 //
-// The schema's presence contract per receiver definition is read as:
+// The schema's contract per receiver definition is read as:
 //   - `required` minus "type"                          → Required
 //   - `oneOf` whose every branch is
 //     {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}},
 //     read as one ExactlyOneOf group
+//   - properties typed `boolean`                       → Bools (#2295)
+//   - a property `$ref`-ing #/definitions/httpConfig   → HTTPConfig (#2295)
 //
 // Emptiness is part of the contract (cases:
 // testdata/receiver_presence_cases.json): "" and null are unset, as in
@@ -36,13 +39,18 @@ import (
 // Any other presence-shaping keyword on a receiver definition, or any
 // other branch shape, fails the test instead of being skipped: an
 // unmodelled constraint must not read as "no constraint".
-func TestReceiverTypeSpecs_MatchSchema(t *testing.T) {
-	fromSchema := receiverSpecsFromSchema(t)
+func TestSpecs_MatchSchema(t *testing.T) {
+	fromSchema := specsFromSchema(t)
 	if len(fromSchema) == 0 {
 		t.Fatal("no receiver definitions read from the schema")
 	}
-	norm := func(s receiverTypeSpec) receiverTypeSpec {
-		out := receiverTypeSpec{Required: sortedCopy(s.Required), StringLists: sortedCopy(s.StringLists)}
+	norm := func(s Spec) Spec {
+		out := Spec{
+			Required:    sortedCopy(s.Required),
+			StringLists: sortedCopy(s.StringLists),
+			Bools:       sortedCopy(s.Bools),
+			HTTPConfig:  s.HTTPConfig,
+		}
 		if len(s.Patterns) > 0 {
 			out.Patterns = s.Patterns
 		}
@@ -55,51 +63,96 @@ func TestReceiverTypeSpecs_MatchSchema(t *testing.T) {
 		return out
 	}
 	for rtype, want := range fromSchema {
-		got, ok := receiverTypeSpecs[rtype]
+		got, ok := specs[rtype]
 		if !ok {
-			t.Errorf("schema defines receiver type %q; receiverTypeSpecs does not", rtype)
+			t.Errorf("schema defines receiver type %q; specs does not", rtype)
 			continue
 		}
 		if !reflect.DeepEqual(norm(got), norm(want)) {
 			t.Errorf("receiver type %q: Go %+v, schema %+v", rtype, norm(got), norm(want))
 		}
 	}
-	for rtype := range receiverTypeSpecs {
+	for rtype := range specs {
 		if _, ok := fromSchema[rtype]; !ok {
-			t.Errorf("receiverTypeSpecs has type %q; the schema does not", rtype)
+			t.Errorf("specs has type %q; the schema does not", rtype)
 		}
 	}
 }
 
-// TestReceiverPresenceCases runs the shared case table
-// (testdata/receiver_presence_cases.json) through the guard; the table
-// is shared with tests/shared/test_receiver_spec_parity.py.
-func TestReceiverPresenceCases(t *testing.T) {
+// TestHTTPConfig_MatchSchema pins the http_config half (#2295) to
+// definitions.httpConfig: proxy_url's pattern is ProxyURLPattern, and every
+// auth key the schema's `not` forbids together is in HTTPConfigAuthFields.
+// The auth keys the schema does not list as properties must be refused by
+// its additionalProperties: false — otherwise the schema would accept a
+// combination Go and Python refuse.
+func TestHTTPConfig_MatchSchema(t *testing.T) {
+	defs := schemaDefinitions(t)
+	var hc struct {
+		Properties           map[string]map[string]json.RawMessage `json:"properties"`
+		AdditionalProperties *bool                                 `json:"additionalProperties"`
+		Not                  struct {
+			Required   []string                              `json:"required"`
+			Properties map[string]map[string]json.RawMessage `json:"properties"`
+		} `json:"not"`
+	}
+	if err := json.Unmarshal(defs["httpConfig"], &hc); err != nil {
+		t.Fatalf("definitions.httpConfig: %v", err)
+	}
+	if got := schemaPattern(t, defs, "httpConfig.proxy_url", hc.Properties["proxy_url"]); got != ProxyURLPattern {
+		t.Errorf("httpConfig.proxy_url pattern differs from ProxyURLPattern:\nschema %q\nGo     %q", got, ProxyURLPattern)
+	}
+	if len(hc.Not.Required) < 2 {
+		t.Fatalf("httpConfig.not.required should name the auth keys that cannot be set together, got %v", hc.Not.Required)
+	}
+	for _, k := range hc.Not.Required {
+		if !slices.Contains(HTTPConfigAuthFields, k) {
+			t.Errorf("schema forbids %q together with the other auth keys; HTTPConfigAuthFields lacks it", k)
+		}
+	}
+	for _, k := range HTTPConfigAuthFields {
+		_, listed := hc.Properties[k]
+		if !listed && (hc.AdditionalProperties == nil || *hc.AdditionalProperties) {
+			t.Errorf("auth key %q is not a httpConfig property and additionalProperties is not false", k)
+		}
+		if listed && !slices.Contains(hc.Not.Required, k) {
+			t.Errorf("auth key %q is a httpConfig property the schema's `not` does not cover", k)
+		}
+	}
+}
+
+// TestPresenceCases runs the shared case table
+// (testdata/receiver_presence_cases.json) through Check. The same rows are
+// asserted by the guard (internal/guard TestReceiverPresenceCases), pytest
+// (tests/shared/test_receiver_spec_parity.py) and Alertmanager itself
+// (tests/alertmanager-inhibit, the `am` column).
+func TestPresenceCases(t *testing.T) {
+	for _, tc := range loadCases(t) {
+		t.Run(tc.Name, func(t *testing.T) {
+			problems := Check(tc.Receiver)
+			if valid := len(problems) == 0; valid != tc.Valid {
+				t.Errorf("Check valid=%v, table says %v: %+v", valid, tc.Valid, problems)
+			}
+		})
+	}
+}
+
+type presenceCase struct {
+	Name     string         `json:"name"`
+	Receiver map[string]any `json:"receiver"`
+	Valid    bool           `json:"valid"`
+}
+
+func loadCases(t *testing.T) []presenceCase {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "receiver_presence_cases.json"))
 	if err != nil {
 		t.Fatalf("read cases: %v", err)
 	}
-	var cases []struct {
-		Name     string         `json:"name"`
-		Receiver map[string]any `json:"receiver"`
-		Valid    bool           `json:"valid"`
-	}
+	var cases []presenceCase
 	if err := json.Unmarshal(data, &cases); err != nil || len(cases) == 0 {
 		t.Fatalf("parse cases: %v (n=%d)", err, len(cases))
 	}
-	for _, tc := range cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			var errs []string
-			for _, f := range runWithRouting(t, "t1", map[string]any{"receiver": tc.Receiver}) {
-				if f.Severity == SeverityError {
-					errs = append(errs, f.Message)
-				}
-			}
-			if valid := len(errs) == 0; valid != tc.Valid {
-				t.Errorf("guard valid=%v, table says %v: %s", valid, tc.Valid, strings.Join(errs, "; "))
-			}
-		})
-	}
+	return cases
 }
 
 // schemaPattern returns the `pattern` a property carries, directly or
@@ -183,10 +236,11 @@ func rejectsEmpty(prop map[string]json.RawMessage) bool {
 	return kw != "" && ok && json.Unmarshal(raw, &n) == nil && n >= 1
 }
 
-func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
+// schemaDefinitions reads definitions of docs/schemas/tenant-config.schema.json.
+func schemaDefinitions(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
-	// internal/guard → internal → app → threshold-exporter → components → repo root
+	// pkg/receiverspec → pkg → app → threshold-exporter → components → repo root
 	root := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "..")
 	data, err := os.ReadFile(filepath.Join(root, "docs", "schemas", "tenant-config.schema.json"))
 	if err != nil {
@@ -198,6 +252,12 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
+	return schema.Definitions
+}
+
+func specsFromSchema(t *testing.T) map[string]Spec {
+	t.Helper()
+	schema := struct{ Definitions map[string]json.RawMessage }{schemaDefinitions(t)}
 	var union struct {
 		OneOf []struct {
 			Ref string `json:"$ref"`
@@ -206,7 +266,7 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 	if err := json.Unmarshal(schema.Definitions["receiver"], &union); err != nil || len(union.OneOf) == 0 {
 		t.Fatalf("definitions.receiver.oneOf not readable (err=%v)", err)
 	}
-	out := map[string]receiverTypeSpec{}
+	out := map[string]Spec{}
 	for _, branch := range union.OneOf {
 		const prefix = "#/definitions/"
 		if !strings.HasPrefix(branch.Ref, prefix) {
@@ -234,7 +294,7 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 		if err := json.Unmarshal(def.Properties["type"]["const"], &rtype); err != nil || rtype == "" {
 			t.Fatalf("definition %s has no properties.type.const", name)
 		}
-		var spec receiverTypeSpec
+		var spec Spec
 		for _, f := range def.Required {
 			if f == "type" {
 				continue
@@ -291,6 +351,21 @@ func receiverSpecsFromSchema(t *testing.T) map[string]receiverTypeSpec {
 				group = append(group, req[0])
 			}
 			spec.ExactlyOneOf = [][]string{group}
+		}
+		// #2295: optional value shapes. Every property typed boolean is a
+		// Bools field; a property referencing httpConfig turns on HTTPConfig.
+		for f, prop := range def.Properties {
+			var typ string
+			if json.Unmarshal(prop["type"], &typ) == nil && typ == "boolean" {
+				spec.Bools = append(spec.Bools, f)
+			}
+			var ref string
+			if raw, ok := prop["$ref"]; ok && json.Unmarshal(raw, &ref) == nil {
+				if ref != "#/definitions/httpConfig" || f != "http_config" {
+					t.Fatalf("definition %s.%s references %q, which this parity check does not model", name, f, ref)
+				}
+				spec.HTTPConfig = true
+			}
 		}
 		out[rtype] = spec
 	}

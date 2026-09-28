@@ -36,7 +36,8 @@ func routingPolicyTree() map[string]string {
 			"  team-page:\n    receiver: {type: pagerduty, service_key: page-key}\n" +
 			"    routes:\n    - match: {severity: critical}\n" +
 			"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/esc'}\n" +
-			"  domain-ok:\n    receiver: {type: pagerduty, service_key: ok-key}\n",
+			"  domain-ok:\n    receiver: {type: pagerduty, service_key: ok-key}\n" +
+			"  inherit-bad:\n    receiver: {type: webhook}\n",
 	}
 }
 
@@ -70,24 +71,28 @@ func TestPutTenant_ResolvedRoutingPolicy(t *testing.T) {
 		target             string // the violation's target on 403
 	}{
 		// Step-0 cases i–iv (#2280): routes / overrides, unknown vs forbidden type.
-		// The receiver SHAPE (an unknown type) is not the policy gate's (#2295).
+		// The receiver SHAPE (an unknown type) is not the policy gate's: it is
+		// the #2295 receiver check's, a 400 naming the receiver's type field.
 		{"i routes entry, unknown type", "tenant-x",
 			pdReceiver + "      routes:\n      - match: {severity: critical}\n        receiver: {type: bogus, url: 'https://x.example/hook'}\n",
-			http.StatusOK, ""},
+			http.StatusBadRequest, "tenants.tenant-x._routing.routes[0].receiver.type"},
 		{"ii routes entry, forbidden type", "tenant-x",
 			pdReceiver + "      routes:\n      - match: {severity: critical}\n        receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
 			http.StatusForbidden, "routes[0]"},
 		{"iii override, unknown type", "tenant-x",
 			pdReceiver + "      overrides:\n      - alertname: HighCPU\n        receiver: {type: bogus, url: 'https://x.example/hook'}\n",
-			http.StatusOK, ""},
+			http.StatusBadRequest, "tenants.tenant-x._routing.overrides[0].receiver.type"},
 		{"iv override, forbidden type", "tenant-x",
 			pdReceiver + "      overrides:\n      - alertname: HighCPU\n        receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
 			http.StatusForbidden, "overrides[0]"},
 		{"profile main receiver forbidden", "t-sre", "", http.StatusForbidden, "receiver"},
 		{"profile route forbidden", "t-page", "", http.StatusForbidden, "routes[0]"},
 		{"compliant profile", "t-ok", "", http.StatusOK, ""},
+		// #2295: only receivers the body writes are shape-checked; one the
+		// tenant inherits from a profile is da-guard's to judge.
+		{"inherited malformed profile receiver", "t-inh", "", http.StatusOK, ""},
 	}
-	profileOf := map[string]string{"t-sre": "team-chat", "t-page": "team-page", "t-ok": "domain-ok"}
+	profileOf := map[string]string{"t-sre": "team-chat", "t-page": "team-page", "t-ok": "domain-ok", "t-inh": "inherit-bad"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := "tenants:\n  " + tc.tenant + ":\n    cpu_usage_percent: '85'\n"
@@ -101,7 +106,7 @@ func TestPutTenant_ResolvedRoutingPolicy(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body: %s", code, tc.want, resp)
 			}
 			_, statErr := os.Stat(filepath.Join(configDir, tc.tenant+".yaml"))
-			if tc.want != http.StatusForbidden {
+			if tc.want == http.StatusOK {
 				if statErr != nil {
 					t.Errorf("allowed PUT did not land on disk: %v", statErr)
 				}
@@ -109,6 +114,16 @@ func TestPutTenant_ResolvedRoutingPolicy(t *testing.T) {
 			}
 			if !os.IsNotExist(statErr) {
 				t.Errorf("refused PUT left %s.yaml on disk (err=%v)", tc.tenant, statErr)
+			}
+			if tc.want == http.StatusBadRequest {
+				var bad ErrorResponse
+				if err := json.Unmarshal([]byte(resp), &bad); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if bad.Code != CodeInvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != tc.target {
+					t.Errorf("response = %+v, want one %s violation on %s", bad, CodeInvalidBody, tc.target)
+				}
+				return
 			}
 			var env struct {
 				Code       string             `json:"code"`

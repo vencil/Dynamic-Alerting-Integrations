@@ -329,16 +329,6 @@ type RoutingConfig struct {
 	RepeatInterval string                 // optional, guardrail 1m–72h
 }
 
-// validReceiverTypes lists supported receiver types (must match Python RECEIVER_TYPES).
-var validReceiverTypes = map[string]bool{
-	"webhook":    true,
-	"email":      true,
-	"slack":      true,
-	"teams":      true,
-	"rocketchat": true,
-	"pagerduty":  true,
-}
-
 // Timing guardrail bounds for routing config.
 var routingGuardrails = map[string][2]time.Duration{
 	"group_wait":      {5 * time.Second, 5 * time.Minute},

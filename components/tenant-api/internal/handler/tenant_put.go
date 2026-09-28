@@ -46,6 +46,10 @@ type PutTenantResponse struct {
 // v2.5.0 Phase C: Domain policy enforcement — writes that violate the
 // tenant's domain policy return 403 with details.
 //
+// #2295: the receivers the body writes in `_routing` are then checked against
+// the receiver contract (pkg/receiverspec); a receiver Alertmanager could not
+// load is a 400 INVALID_BODY with violations, in both write modes.
+//
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
 // Supports both GitHub PRs and GitLab MRs via platform.Client interface.
@@ -60,7 +64,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse
+// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written)"
 // @Failure     403   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)"
 // @Failure     500   {object} ErrorResponse
@@ -124,6 +128,16 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				writePolicyViolation(rw, r, violations)
 				return
 			}
+		}
+
+		// #2295: the receivers the body writes must be ones Alertmanager can
+		// load and the route generator renders — 400 INVALID_BODY, nothing
+		// written, in both write modes. After the policy gate on purpose: a
+		// receiver type the tenant's domain may not use is a 403 whatever its
+		// fields, and fixing the fields first would not make the write pass.
+		if v := tenantReceiverViolations(tenantID, extractTenantBlock(body, tenantID)); len(v) > 0 {
+			WriteValidationErrors(rw, r, v)
+			return
 		}
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab

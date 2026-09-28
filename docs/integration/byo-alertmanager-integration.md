@@ -294,6 +294,14 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 
+選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)），同樣是 Alertmanager 載入不了就整份 reload 失敗的那幾種：
+
+- `send_resolved`、email 的 `require_tls` 只接受 `true`／`false`；`"true"`、`maybe`、`1` 與空值都擋。
+- webhook 的 `http_config` 必須是 mapping；`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`bearer_token_file` 最多只能設一個（`bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設）。
+- `http_config.proxy_url` 必須是帶 host 的 `http://`、`https://`、`socks5://` 或 `socks5h://` URL（`receiverProxyUrl`）。這比 Alertmanager 嚴：它接受沒有 scheme 或 host 的值，但那樣的 proxy 用不了。
+
+這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋）、da-guard 與 tenant-api 的 `PUT /api/v1/tenants/{id}`（400 `INVALID_BODY`，只判 body 自己寫的 receiver）三處一致。
+
 ### 訊息模板（Go Template）
 
 Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go template 語法。以 Slack 為例：

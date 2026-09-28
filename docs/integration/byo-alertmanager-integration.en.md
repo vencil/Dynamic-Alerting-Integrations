@@ -300,6 +300,14 @@ The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`
 
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 
+Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)), the ones that also make the whole Alertmanager reload fail:
+
+- `send_resolved` and email `require_tls` take only `true` / `false`; `"true"`, `maybe`, `1` and an empty value are rejected.
+- webhook `http_config` must be a mapping, with at most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `bearer_token_file` set (`bearer_token: ""` counts as unset, `basic_auth: {}` as set).
+- `http_config.proxy_url` must be an `http://`, `https://`, `socks5://` or `socks5h://` URL with a host (`receiverProxyUrl`). This is stricter than Alertmanager, which also takes a value with no scheme or host that cannot work as a proxy.
+
+`generate_alertmanager_routes` (also without amtool on PATH), da-guard and tenant-api `PUT /api/v1/tenants/{id}` (400 `INVALID_BODY`, judging only the receivers the body writes) apply the same rules.
+
 ### Message Templates (Go Template)
 
 Slack, Teams, and Email `title` / `text` / `html` fields support Alertmanager Go template syntax. Slack example:
