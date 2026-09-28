@@ -17,7 +17,7 @@ lang: zh
 >
 > **告警接了自動化動作（webhook）？** 遷移期間的重送／重放／雙跑對**動作層**是 double-execution 風險——先讀 [Actionable 之後 §4–§5](alerting-best-practices.md)（冪等閘與不可逆動作防線）。
 >
-> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 <cmd>`），以下範例用簡寫 `da-tools <cmd>`。
+> **提示：** 以下範例用簡寫 `da-tools <cmd>`，照抄前先依 [CLI Reference 的 Docker 使用模式](cli-reference.md#docker-使用模式) 定義同名函式，並在 repo 根目錄執行。
 
 > **受眾**：租戶技術窗口、Platform Engineer / DevOps / SRE、Domain Expert（DBA）
 

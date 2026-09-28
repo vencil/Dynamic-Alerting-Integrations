@@ -340,7 +340,7 @@ JSON 格式統一報告，包含所有租戶的檢查結果摘要。`unchecked` 
 
 ```bash
 da-tools batch-diagnose --workers 10
-da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
+da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 ```
 
 **結束碼**
@@ -400,7 +400,7 @@ da-tools baseline --tenant <name> [options]
 **範例**
 
 ```bash
-da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
+da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 ```
 
 **結束碼**
@@ -1231,7 +1231,7 @@ da-tools gitops-check <subcommand> [options]
 da-tools gitops-check repo --url git@github.com:example/configs.git
 
 # 驗證本地配置結構
-da-tools gitops-check local --dir /data/config/conf.d
+da-tools gitops-check local --dir conf.d
 
 # 檢查 sidecar 部署
 da-tools gitops-check sidecar --namespace monitoring --json
@@ -1323,15 +1323,15 @@ da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
 
 ```bash
 # 從 git 抽兩個版本比對
-git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
-git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > v1.yaml
+git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > v2.yaml
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml
 
 # CI gate：breaking 偵測到擋 merge
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --ci
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml --ci
 
 # 自動化讀取
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml --json
 ```
 
 **Exit codes**
@@ -2416,7 +2416,7 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 |------|------|--------|
 | `--config-dir` | conf.d/ 目錄路徑（必填） | - |
 | `--opa-url` | OPA REST API 端點 | - |
-| `--opa-binary` | 本地 OPA 二進位檔路徑 | `opa` |
+| `--opa-binary` | 本地 OPA 二進位檔路徑（da-tools 映像不含 `opa`，容器內請用 `--opa-url`） | `opa` |
 | `--policy-path` | .rego 策略檔路徑 | - |
 | `--dry-run` | 僅顯示 input JSON，不呼叫 OPA | - |
 | `--json` | JSON 格式輸出 | - |
@@ -2426,9 +2426,6 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 ```bash
 # 透過 OPA REST API 評估
 da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
-
-# 使用本地 OPA 二進位檔
-da-tools opa-evaluate --config-dir conf.d/ --opa-binary /usr/local/bin/opa --policy-path policies/
 
 # Dry-run：僅顯示 OPA input JSON
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
