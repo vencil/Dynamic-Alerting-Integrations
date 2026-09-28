@@ -107,6 +107,7 @@ from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
     duplicate_declarations,
+    tenant_declarations,
     is_dir_symlink,
     is_reserved_name,
     is_defaults_name,
@@ -176,9 +177,8 @@ from _lib_python import (  # noqa: E402
 from _lib_io import (  # noqa: E402
     load_yaml_file_strict, strict_safe_load,
 )
-# #1577 / #2114: the ONE exporter-key loader (`_lib_yaml_keys`, moved out of
-# this module), composed with the strict reading above in `_lib_io`.
-from _lib_io import strict_load_exporter_keys  # noqa: E402
+# #1577 / #2114: the exporter-key loader is driven from
+# `_lib_confd.tenant_declarations` since #2315, not from this module.
 
 # ============================================================
 # Check results
@@ -1240,34 +1240,9 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
     check does not change that and cannot: it runs before the tree is
     deployed, and its job is to stop the state being committed at all.
     """
-    root = Path(config_dir)
-    declared: dict[str, set[str]] = {}
-    unreadable: list[str] = []
-
-    for path in iter_config_files(root):
-        if is_reserved_name(path.name):
-            continue
-        try:
-            label = path.relative_to(root).as_posix()
-        except ValueError:
-            label = path.name
-        try:
-            with open(path, encoding="utf-8") as fh:
-                # #2114: tenant ids are the key's raw TEXT, as the exporter
-                # keys them — see `_lib_yaml_keys` for the measured table.
-                # #2123: a key repeated in one mapping (by that same
-                # identity) makes the file unreadable here, as in Go.
-                data = strict_load_exporter_keys(fh)
-        except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
-            unreadable.append(label)
-            continue
-        if not isinstance(data, dict):
-            continue
-        tenants = data.get("tenants")
-        if not isinstance(tenants, dict):
-            continue
-        for tenant_id in tenants:
-            declared.setdefault(tenant_id, set()).add(label)
+    # #2315: the scan itself is `_lib_confd.tenant_declarations`, shared with
+    # the routing generator's duplicate refusal — one definition of "declares".
+    declared, unreadable = tenant_declarations(config_dir)
 
     # #2049: the predicate is shared with describe_tenant — one answer to
     # "which tenants does more than one carrier declare".

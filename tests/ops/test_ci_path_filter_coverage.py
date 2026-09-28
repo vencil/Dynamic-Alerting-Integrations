@@ -2234,6 +2234,11 @@ TRACED_INDIRECT_INPUTS = {
     ("validate.yaml", "validate", "components/da-tools/app/VERSION"),
     ("validate.yaml", "validate", "components/threshold-exporter/README.md"),
     ("validate.yaml", "validate", ".github/workflows/config-diff.yaml"),
+    # validate-config's generator step routes the try-local seed as a second
+    # `--config-dir` (#2315). A DIRECTORY argument — the blind spot
+    # `_job_step_files` documents — so no scanner here derives it; one tracked
+    # tenant file stands for the `try-local/seed/conf.d/**` entry.
+    ("validate.yaml", "validate", "try-local/seed/conf.d/db-demo.yaml"),
 }
 
 
