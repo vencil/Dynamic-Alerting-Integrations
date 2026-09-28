@@ -11,6 +11,7 @@ contract — and 38/38 blocks "failed" while nothing was actually validated.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -305,4 +306,42 @@ def test_unparseable_block_is_left_to_the_fence_check(tmp_path: Path) -> None:
     mislabelled directory tree fail the schema gate for an unrelated reason."""
     body = "```yaml\nconf.d/\n├── a.yaml\n```\n"
     r = _run(_mkrepo(tmp_path, "tree.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def _break_tenant_schema_id(root: Path) -> None:
+    """#2232: the platform schema's cross-file `$ref` resolves by the tenant
+    schema's `$id`; without it the `$ref` is unresolvable."""
+    path = root / "docs" / "schemas" / "tenant-config.schema.json"
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    schema.pop("$id")
+    path.write_text(json.dumps(schema), encoding="utf-8")
+
+
+_ROUTING_DEFAULTS_BLOCK = ("```yaml\n_routing_defaults:\n  receiver:\n    type: webhook\n"
+                           "    url: \"https://a.example.com/h\"\n```\n")
+_UNRESOLVED_REF = "tenant-config.schema.json#/definitions/routingDefaults"
+
+
+def test_unresolvable_cross_file_ref_is_caller_error(tmp_path: Path) -> None:
+    """#2232: used to be a traceback at rc 1."""
+    root = _mkrepo(tmp_path, "rd.md", _ROUTING_DEFAULTS_BLOCK)
+    _break_tenant_schema_id(root)
+    r = _run(root)
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert _UNRESOLVED_REF in r.stderr, r.stderr
+
+
+def test_unresolvable_ref_fails_even_when_no_block_reaches_it(tmp_path: Path) -> None:
+    """#2232: used to pass at rc 0 — no block walked into the `$ref`."""
+    root = _mkrepo(tmp_path, "t.md", "```yaml\ntenants:\n  t1:\n    _severity_dedup: \"enable\"\n```\n")
+    _break_tenant_schema_id(root)
+    r = _run(root)
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert _UNRESOLVED_REF in r.stderr, r.stderr
+
+
+def test_routing_defaults_block_passes_with_repo_schemas(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "rd.md", _ROUTING_DEFAULTS_BLOCK))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr

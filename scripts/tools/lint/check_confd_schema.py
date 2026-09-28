@@ -24,7 +24,8 @@ SCOPE:
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
   1  >=1 schema violation (user fixes the YAML or the schema)
-  2  bad invocation / unreadable schema / jsonschema missing / malformed YAML
+  2  bad invocation / unreadable schema / jsonschema missing / malformed YAML /
+     a platform-schema cross-file `$ref` the given --schema cannot resolve (#2232)
 
 Usage:
   python3 check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
@@ -113,6 +114,58 @@ def schema_registry(*schemas: dict):
     return Registry().with_resources(
         (s["$id"], Resource.from_contents(s, default_specification=DRAFT7))
         for s in schemas if isinstance(s, dict) and s.get("$id"))
+
+
+class UnresolvableSchemaRef(Exception):
+    """A cross-file `$ref` in the platform schema that the registry built from
+    the given schemas cannot resolve (#2232) — a caller error (rc 2): the
+    tenant schema handed in has no `$id`, or a different one."""
+
+
+def _cross_file_refs(node, path: str = "") -> list[tuple[str, str]]:
+    """`(json-pointer, $ref)` for every `$ref` in *node* that points OUTSIDE
+    its own document (anything not starting with `#`), recursively."""
+    out: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and not ref.startswith("#"):
+            out.append((path or "/", ref))
+        for key, child in node.items():
+            out.extend(_cross_file_refs(child, f"{path}/{key}"))
+    elif isinstance(node, list):
+        for idx, child in enumerate(node):
+            out.extend(_cross_file_refs(child, f"{path}/{idx}"))
+    return out
+
+
+def checked_schema_registry(schema: dict, platform_schema: dict):
+    """`schema_registry(schema, platform_schema)`, after proving every
+    cross-file `$ref` in *platform_schema* resolves through it (#2232).
+
+    ⛔ Checked up front, not left to validation: jsonschema only follows a
+    `$ref` when an instance reaches it, so a tree without `_defaults*` (or
+    whose `_defaults` omits `_routing_defaults`) never touched the registry
+    and a broken `--schema` passed at rc 0; one that did reach it crashed
+    with a traceback at rc 1. Raises `UnresolvableSchemaRef` naming the
+    `$ref` and where it sits.
+    """
+    from jsonschema_specifications import REGISTRY as SPECIFICATIONS
+    from referencing.exceptions import Unresolvable
+    registry = schema_registry(schema, platform_schema)
+    # Looked up with the standard metaschemas combined in, as jsonschema's
+    # validation does — a `$ref` to e.g. the draft-07 metaschema resolves
+    # there and must not be a caller error here.
+    resolver = SPECIFICATIONS.combine(registry).resolver(
+        base_uri=platform_schema.get("$id", ""))
+    for where, ref in _cross_file_refs(platform_schema):
+        try:
+            resolver.lookup(ref)
+        except Unresolvable as exc:
+            raise UnresolvableSchemaRef(
+                f"cannot resolve $ref {ref!r} at {where} in the platform schema "
+                f"({type(exc).__name__}); the tenant schema must carry the "
+                f"`$id` that $ref resolves to (see docs/schemas/README.md)") from exc
+    return registry
 
 
 def default_registry():
@@ -346,6 +399,17 @@ def main() -> int:
     except ImportError:
         print("ERROR: jsonschema not installed — `pip install jsonschema` "
               "(pre-commit injects it via additional_dependencies).", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
+    # #2232: resolve the platform schema's cross-file `$ref`s BEFORE scanning,
+    # so a --schema they cannot reach is rc 2 whether or not any file walks
+    # into them.
+    try:
+        checked_schema_registry(schema, platform_schema)
+    except UnresolvableSchemaRef as exc:
+        print(f"ERROR: platform schema {safe_label(args.platform_schema)} with "
+              f"--schema {safe_label(args.schema)}: {safe_label(exc)}",
+              file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     # Aggregate across every --config-dir so ONE gate can cover several shipped

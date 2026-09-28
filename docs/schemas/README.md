@@ -244,7 +244,7 @@ python3 scripts/tools/lint/check_confd_schema.py --config-dir conf.d
 
 這支閘門（以及 `validate-config` 的 `yaml_quoting` 列）另外檢查一件編輯器看不到的事：schema 標為字串（含 enum）的欄位，值**未加引號**、而 PyYAML 把它讀成布林／數字／null（`channel: yes` → `True`，但 exporter 與 Alertmanager 讀到的是字串 `"yes"`），就報錯並指出檔案、行號與欄位路徑——解法是加引號。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定，哪些欄位是字串由這兩份 schema 決定，沒有另外維護的詞表或欄位表（[#2164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2164)）。
 
-⚠️ `platform-defaults.schema.json` 的 `_routing_defaults`／`_routing_enforced` 以 `$ref` 引用 `tenant-config.schema.json` 的定義，所以用 jsonschema 驗證它時必須同時載入這份檔（`check_confd_schema.schema_registry()`）；只載入 platform schema 會得到 `Unresolvable` 錯誤，而不是靜默放行。
+⚠️ `platform-defaults.schema.json` 的 `_routing_defaults`／`_routing_enforced` 以 `$ref` 引用 `tenant-config.schema.json` 的定義，所以用 jsonschema 驗證它時必須同時載入這份檔（`check_confd_schema.schema_registry()`）；只載入 platform schema 會得到 `Unresolvable` 錯誤，而不是靜默放行。外部驗證器單獨載入它時，相對 `$ref` 會依 `$id` 解析成抓不到的 GitHub URL——在 repo 根目錄以 `check-jsonschema --schemafile docs/schemas/platform-defaults.schema.json --base-uri file://$PWD/docs/schemas/platform-defaults.schema.json <file>` 改從本機同目錄解析；編輯器請沿用 `.devcontainer/devcontainer.json` 的 `yaml.schemas` 本機路徑綁定，不要用 URL modeline 綁 platform schema（[#2232](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2232)）。
 
 （別用 yamllint 做這件事：yamllint 1.38.0 的 CLI 沒有 `--schema` 參數，傳入會以 rc 2 結束。）
 
