@@ -197,17 +197,35 @@ def test_the_corpus_exercises_every_row(tmp_path, cli_argv, capsys):
 
 
 def test_the_skipped_file_is_named_in_json(tmp_path, cli_argv, capsys):
-    """The skipped path reaches --json, not only stderr."""
-    case = _CORPUS[1]  # receiver-not-an-object
+    """The skipped path reaches --json, not only stderr.
+
+    #2326: the routing rows (schema / routes / policy) read the whole tree
+    now, so the flat reader left to exercise is `policy_dsl`'s root-carrier
+    lookup — the corpus entry whose `_policies` live in `prod/_defaults.yaml`.
+    """
+    case = next(c for c in _CORPUS if c[0] == "dsl-policy-in-nested-defaults")
     _flat, (rc, hier) = _twins(case, tmp_path, cli_argv, capsys)
     flagged = {n: r for n, r in hier.items() if r.get("skipped_nested_files")}
     assert flagged, hier
     for n, r in flagged.items():
-        assert r["skipped_nested_files"] == ["prod/db-a.yaml"], (n, r)
-        assert any("prod/db-a.yaml" in d for d in r["details"]), (n, r)
+        assert r["skipped_nested_files"] == ["prod/_defaults.yaml"], (n, r)
+        assert any("prod/_defaults.yaml" in d for d in r["details"]), (n, r)
         assert r["status"] != vc.PASS, (n, r)
     # ⚠️ Documented contract: WARN is exit 0; the signal is in Result/--json.
     assert rc == 0, rc
+
+
+def test_the_routing_rows_read_a_nested_tenant(tmp_path, cli_argv, capsys):
+    """#2326: a nested tenant's problem is FOUND by the routing rows, not
+    merely admitted as skipped — the hierarchical twin FAILs where the flat
+    twin does, and names no skipped file."""
+    case = next(c for c in _CORPUS if c[0] == "receiver-not-an-object")
+    (_frc, flat), (_hrc, hier) = _twins(case, tmp_path, cli_argv, capsys)
+    for n in ("schema", "routes"):
+        if n not in flat:
+            continue
+        assert flat[n]["status"] == hier[n]["status"], (n, flat[n], hier[n])
+        assert not hier[n].get("skipped_nested_files"), (n, hier[n])
 
 
 def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
@@ -227,9 +245,8 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
 
     ``check_policy`` with a policy holding no allowlist and
     ``check_policy_dsl`` with no policies both return before loading tenants;
-    on a tree whose only nested file is a TENANT they must stay PASS, while
-    ``check_routes`` on the same tree (which does load tenants flat) must
-    not. ⚠️ Not "on any hierarchical tree": ``check_policy_dsl`` locates the
+    on a tree whose only nested file is a TENANT they must stay PASS, and
+    so does ``check_routes`` since #2326 (it reads the tree). ⚠️ Not "on any hierarchical tree": ``check_policy_dsl`` locates the
     root ``_defaults.yaml`` first, so a nested ``_defaults.yaml`` makes it
     WARN — see ``test_a_nested_defaults_carrier_is_what_the_lookup_reports``.
     """
@@ -243,8 +260,11 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     routes = vc._run_check("routes", vc.check_routes, d, None, _config_dir=d)
     assert policy["status"] == vc.PASS, policy
     assert dsl["status"] == vc.PASS, dsl
-    assert routes["status"] == vc.WARN, routes
-    assert routes["skipped_nested_files"] == ["prod/db-a.yaml"], routes
+    # #2326: `check_routes` reads the tree, so it has nothing to admit — it
+    # routes the nested tenant (before, it was the flat row that WARNed).
+    assert routes["status"] == vc.PASS, routes
+    assert "skipped_nested_files" not in routes, routes
+    assert routes["details"] == ["1 routes, 1 receivers, 1 inhibit_rules"], routes
 
 
 def test_a_nested_tenant_alone_does_not_flag_a_root_carrier_lookup(tmp_path):
@@ -285,7 +305,10 @@ def test_the_flat_reader_hint_points_at_its_own_docs(tmp_path, cli_argv,
     """The advice and the page it links must be about the same thing: a row
     downgraded for skipping files links the hierarchical-tree section, not
     its check's generic page."""
-    d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, "prod")
+    # #2326: a nested `_defaults.yaml` — what the one remaining flat lookup
+    # (`policy_dsl`'s root carrier) skips; a nested tenant no longer is.
+    d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS},
+              {"db-a.yaml": _GOOD_TENANT}, "prod", move_top=True)
     _rc, rows = _run(d, [], tmp_path, cli_argv, capsys)
     flagged = [r for r in rows.values() if r.get("skipped_nested_files")
                and r["suggested_action"] == vc.FLAT_READER_HINT]

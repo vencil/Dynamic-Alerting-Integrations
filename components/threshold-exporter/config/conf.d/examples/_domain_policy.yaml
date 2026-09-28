@@ -7,12 +7,18 @@
 #
 # Domain policies are checked AFTER the four-layer merge:
 #   _routing_defaults → routing_profiles[ref] → tenant _routing → domain_policies(validate)
+#
+# This file sits in the examples/ SUBDIRECTORY, so it applies to the tenants of
+# this subtree only (#2326, ADR-007 amendment 2026-09-28): naming a tenant that
+# lives outside examples/ is an ERROR under --strict (the entry is not
+# enforced), and the conf.d root's own policies still apply here on top
+# (policies at different levels are judged additively).
 
 domain_policies:
   # Finance domain: strict compliance — no Slack, must use PagerDuty/email
   finance:
     description: "Finance domain compliance requirements"
-    tenants: [db-a, db-b]
+    tenants: [redis-prod, mongo-prod]
     constraints:
       allowed_receiver_types: [pagerduty, email, opsgenie]
       forbidden_receiver_types: [slack, webhook]
@@ -23,13 +29,13 @@ domain_policies:
       #   path to PagerDuty — the main receiver is pagerduty, or a `routes` entry
       #   with match {severity: critical} sends to pagerduty (ADR-007; a
       #   non-PagerDuty destination that still gets critical alerts is WARN
-      #   only). Left commented:
-      #   db-a / db-b have neither, so enabling it here would fail --strict.
+      #   only). Both tenants route through the `domain-finance-tier1`
+      #   profile (main receiver pagerduty), so enabling it holds today.
 
   # E-commerce domain: standard SLA
   ecommerce:
     description: "E-commerce domain standards"
-    tenants: [db-c, db-d]
+    tenants: [es-prod]
     constraints:
       allowed_receiver_types: [slack, pagerduty, email, webhook]
       max_repeat_interval: 12h
@@ -37,7 +43,7 @@ domain_policies:
   # SLA Gold tier: fast response
   # sla-gold:
   #   description: "SLA Gold tier — 15min response"
-  #   tenants: [db-a, db-e]
+  #   tenants: [redis-prod]
   #   constraints:
   #     max_repeat_interval: 15m
   #     min_group_wait: 10s

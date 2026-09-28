@@ -40,9 +40,10 @@ Checks:
                     key there — the route generator reads routing only from
                     top-level `_routing_defaults` (#2291)
 
-Hierarchical trees: several rows (today schema, routes, policy and
-policy_dsl) get their tenants from a reader that is FLAT — it reads only the
-top level of --config-dir — while threshold-exporter reads the whole tree.
+Hierarchical trees: a row may get its input from a reader that is FLAT — it
+reads only the top level of --config-dir — while threshold-exporter reads the
+whole tree (today policy_dsl's root-carrier lookup; schema, routes and policy
+read the whole tree since #2326, the routing plane's hierarchy).
 When such a row runs on a tree that has config files in subdirectories, it
 does not report PASS: a PASS becomes WARN, and every status gains a detail
 line naming how many files that reader skipped and which (the first few;
@@ -1843,7 +1844,8 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
                      config_dir: str | None) -> dict[str, object]:
     """Stop a row whose verdict came from a FLAT reader passing as complete.
 
-    #1652 / #1911: `schema`, `routes`, `policy` and `policy_dsl` get their
+    #1652 / #1911 (until #2326 made the routing rows read the tree, only
+    `policy_dsl`'s lookup is left): `schema`, `routes`, `policy` and `policy_dsl` got their
     tenants from readers that read only the top level of the tree, while the
     exporter reads it recursively. On a tree whose tenants live in `prod/`
     those rows reported ``[PASS] routes  0 routes, 0 receivers`` and

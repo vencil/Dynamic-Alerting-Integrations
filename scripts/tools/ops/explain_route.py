@@ -39,7 +39,17 @@ from generate_alertmanager_routes import (  # noqa: E402
     _parse_config_files,
     merge_routing_with_defaults,
 )
-from _grar_validate import _matcher_matches_labels  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    ROUTING_TREE_ERROR_PREFIX,
+    _matcher_matches_labels,
+)
+from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+# #2326: the layer chain across conf.d directory levels — the generator's own.
+from _grar_merge import (  # noqa: E402
+    ROOT_LEVEL,
+    resolve_routing_defaults,
+    visible_routing_profiles,
+)
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
@@ -106,18 +116,25 @@ def explain_tenant_routing(
     Each layer is {name, source, config}.
     """
     layers: list[dict] = []
+    # #2326: a tenant below the conf.d root inherits `_routing_defaults` from
+    # every directory level on its way down and sees the profiles of those
+    # levels — the generator's own resolution (_grar_merge).
+    level = parsed.get("tenant_dirs", {}).get(tenant, ROOT_LEVEL)
 
     # Layer 1: routing defaults
-    routing_defaults = parsed.get("routing_defaults", {})
+    routing_defaults = resolve_routing_defaults(parsed, level)
     layers.append({
         "name": "Layer 1: _routing_defaults",
-        "source": "_defaults.yaml / _routing_defaults key",
+        "source": ("_defaults.yaml / _routing_defaults key"
+                   if level == ROOT_LEVEL else
+                   f"_routing_defaults of the conf.d root, then each "
+                   f"_defaults.yaml down to {level}/"),
         "config": dict(routing_defaults) if routing_defaults else {},
     })
 
     # Layer 2: routing profile
     profile_refs = parsed.get("tenant_profile_refs", {})
-    profiles = parsed.get("routing_profiles", {})
+    profiles = visible_routing_profiles(parsed, level)
     profile_ref = profile_refs.get(tenant)
     profile_cfg = {}
     if profile_ref and profile_ref in profiles:
@@ -683,6 +700,12 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
+    # #2326: a tree the generator refuses outright (rc 2) is still explained
+    # here — this is a diagnostic — but never without saying so first.
+    for kind, _f, _fld, msg in parsed.get("routing_tree_problems", []):
+        if kind in BLOCKING_TREE_KINDS:
+            print(f"  {ROUTING_TREE_ERROR_PREFIX} {safe_label(msg)} — "
+                  f"generate-routes refuses this tree", file=sys.stderr)
 
     # --trace mode: simulate alert routing path
     if args.trace:

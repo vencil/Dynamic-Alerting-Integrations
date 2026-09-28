@@ -70,6 +70,70 @@ def _contains_tenant_placeholder(obj: object) -> bool:
     return False
 
 
+# ── #2326: the routing layer chain across conf.d directory levels ──────
+# ADR-017 "Amendment 2026-09-28": `_routing_defaults` comes from the root
+# (any root `_` file) and then from the defaults carrier of every directory on
+# the tenant's path, each level a SHALLOW merge per top-level key, deeper
+# wins; routing profiles are visible to the tenants at their own level or
+# below. `level` is a directory relative to the conf.d root, POSIX-spelled,
+# "." for the root itself. Go twin: `routingpolicy.Tree.LayersFor`.
+ROOT_LEVEL = "."
+
+
+def chain_levels(level: str) -> list[str]:
+    """The directory levels BELOW the root on the way to *level*, root-first.
+
+    `"a/b"` → `["a", "a/b"]`; the root (`"."` or `""`) → `[]`.
+    """
+    if level in (ROOT_LEVEL, ""):
+        return []
+    parts = level.split("/")
+    return ["/".join(parts[: i + 1]) for i in range(len(parts))]
+
+
+def level_contains(level: str, other: str) -> bool:
+    """True when directory *other* is *level* itself or lies below it."""
+    if level in (ROOT_LEVEL, ""):
+        return True
+    return other == level or other.startswith(level + "/")
+
+
+def resolve_routing_defaults(parsed: dict, level: str,
+                             root_defaults: object = None) -> dict:
+    """`_routing_defaults` as a tenant in directory *level* sees it.
+
+    The root's value first (*root_defaults*, else ``parsed["routing_defaults"]``),
+    then every subdirectory level's on the way down, each top-level key
+    replacing the one above it WHOLE — a null included (it is stored; the
+    field rules downstream omit or refuse it). A level whose value is not a
+    mapping contributes nothing (its reader already said so).
+    """
+    root = parsed.get("routing_defaults") if root_defaults is None else root_defaults
+    base = dict(root) if root else {}
+    levels = parsed.get("routing_defaults_levels") or {}
+    for d in chain_levels(level):
+        rd = levels.get(d)
+        if isinstance(rd, dict):
+            base.update(rd)
+    return base
+
+
+def visible_routing_profiles(parsed: dict, level: str) -> dict:
+    """The routing profiles a tenant in directory *level* can reference:
+    those defined at the root, at *level*, or at any level in between.
+
+    A parsed dict built without the per-directory index (a hand-built one in
+    a test) falls back to the flat ``routing_profiles`` map.
+    """
+    by_dir = parsed.get("routing_profiles_by_dir")
+    if by_dir is None:
+        return parsed.get("routing_profiles", {})
+    out: dict = {}
+    for d in [ROOT_LEVEL, *chain_levels(level)]:
+        out.update(by_dir.get(d, {}))
+    return out
+
+
 def merge_routing_with_defaults(defaults: dict, tenant_routing: dict | None, tenant_name: str) -> dict:
     """Merge _routing_defaults with tenant _routing.
 

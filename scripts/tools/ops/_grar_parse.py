@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -31,25 +31,32 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_load_exporter_keys  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
+    duplicate_declarations,
     is_defaults_name,
-    iter_config_files,
+    is_reserved_name,
+    list_config_tree,
     overlay_platform_tenants,
     readable_carriers,
     select_defaults_carrier,
-    unusable_config_paths,
     unusable_reason,
     warn_multi_carrier,
-    warn_nested,
 )
 
 from _grar_merge import (  # noqa: E402
+    ROOT_LEVEL,
     _substitute_tenant,
+    chain_levels,
+    level_contains,
     merge_routing_with_defaults,
+    resolve_routing_defaults,
+    visible_routing_profiles,
 )
 from _grar_validate import (  # noqa: E402
     POLICY_ERROR_PREFIX,
+    ROUTING_TREE_ERROR_PREFIX,
     _validate_profile_refs,
     check_domain_policies,
+    check_policy_scope,
     validate_tenant_keys,
 )
 
@@ -104,13 +111,10 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     ⚠️ Two more readers disagree with this one, both measured, neither
     closed here:
 
-    * **Nested files.** ``check_yaml_syntax`` walks ``conf.d/`` recursively
-      and this loop is flat by design (ADR-016 hierarchy is reported by
-      ``warn_nested``), so ``conf.d/team-a/beta.yaml`` with a list at its top
-      level is ``validate-config`` rc=1 and ``generate-routes --validate
-      --strict`` rc=0 ``OK: all configs valid``. Same class as the row above,
-      one directory deeper — tracked with the enumeration mismatch, not
-      fixed here, because the fix is in the shared enumerator.
+    * **Nested files** — closed by #2326: this loop walks the tree now, so
+      ``conf.d/team-a/beta.yaml`` with a list at its top level is booked here
+      too (it used to be ``validate-config`` rc=1 against
+      ``generate-routes --validate --strict`` rc=0).
     * **The write plane.** ``tenant-api``'s ``internal/policy`` unmarshals a
       null ``domain_policies:`` to a nil map, replaces it with an empty one
       and returns no error, so ``CheckWrite`` permits every write for the
@@ -133,7 +137,9 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     sends the reader of any other one hunting for a syntax error in a file
     whose syntax is fine.
     """
-    if fname in _POLICY_FILENAMES:
+    # #2326: `fname` is the path relative to the conf.d root (a policy file
+    # may sit in a subdirectory), so the NAME is what decides the kind.
+    if os.path.basename(fname) in _POLICY_FILENAMES:
         detail = f"{fname}: {reason} — fix: {remedy}"
         # setdefault, matching the sibling below: this helper is also
         # reachable from _parse_platform_config, which tests call with a
@@ -171,7 +177,7 @@ def _drop_unreadable_file(fname: str, reason: str, remedy: str, result: dict,
     skipped file) but NOT in ``tenant_file_errors``.
     """
     result.setdefault("files_skipped", []).append((fname, reason))
-    if fname not in _POLICY_FILENAMES:
+    if os.path.basename(fname) not in _POLICY_FILENAMES:
         result.setdefault("tenant_file_errors", []).append(
             (fname, f"{reason} — fix: {remedy}".replace("\n", " ")))
     _drop_unusable_policy(fname, reason, remedy, result, warning=warning)
@@ -294,13 +300,158 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             print(f"  WARN: _routing_enforced in {_f} ignored "
                   "(only allowed in _ prefixed files)", file=sys.stderr)
 
+    _parse_profiles_and_policies(data, fname, ROOT_LEVEL, result)
+
+
+def _tree_problem(result: dict, kind: str, fname: str, field: str,
+                  message: str) -> None:
+    """Record one #2326 routing-tree finding: ``(kind, file, field, message)``.
+
+    ``kind`` is the Go twin's ``routingpolicy.Problem*`` value, so the parity
+    matrix compares one spelling. setdefault: tests call the parse helpers
+    with hand-built result dicts.
+    """
+    result.setdefault("routing_tree_problems", []).append(
+        (kind, fname, field, message))
+
+
+# #2326 kinds that make the whole tree unusable for the routing plane: the
+# generator exits EXIT_CALLER_ERROR on any of them, in every mode, before
+# anything is rendered. The subtree-policy finding
+# (`domain_policy_out_of_scope`) is not here — it is ERROR under --strict and
+# WARN otherwise, like every other domain-policy finding (ADR-007 (d)).
+BLOCKING_TREE_KINDS = frozenset({
+    "routing_enforced_below_root",
+    "routing_defaults_null_below_root",
+    "routing_profile_duplicate",
+    "duplicate_tenant",
+})
+
+
+def _record_profiles(fname: str, level: str, profiles: dict,
+                     result: dict) -> None:
+    """Add one file's routing profiles at directory *level* (#2326 (c)).
+
+    A profile NAME is unique across the whole tree: a second definition —
+    another directory, or `.yml` beside `.yaml` in the same one — is a
+    blocking finding and does NOT replace the first (before #2326 the later
+    root file silently won).
+    """
+    origin = result.setdefault("routing_profile_origin", {})
+    by_dir = result.setdefault("routing_profiles_by_dir", {})
+    flat = result.setdefault("routing_profiles", {})
+    for name, cfg in profiles.items():
+        first = origin.get(name)
+        if first is not None:
+            _tree_problem(
+                result, "routing_profile_duplicate", fname,
+                f"routing_profiles.{name}",
+                f"routing profile '{name}' is defined in both {first} and "
+                f"{fname} — a profile name must be unique across the whole "
+                f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
+                f"remove one of them")
+            continue
+        origin[name] = fname
+        by_dir.setdefault(level, {})[name] = cfg
+        flat[name] = cfg
+
+
+def _parse_nested_config(data: dict, fname: str, level: str,
+                         is_level_carrier: bool, result: dict) -> None:
+    """The routing-plane keys of one file BELOW the conf.d root (#2326).
+
+    ADR-017 "Amendment 2026-09-28":
+
+    * (a) `_routing_defaults` is read from the directory's defaults CARRIER
+      only (the one `_defaults.yaml` / `.yml` the threshold chain reads), at
+      the top level of the document, and joins the chain of the tenants at
+      and below that directory. `receiver` / `overrides` written as null
+      there is blocking: every tenant below without its own would lose it.
+    * (b) `_routing_enforced` in ANY file below the root is blocking.
+    * (c), (d) profiles and policies: `_parse_profiles_and_policies`.
+    * the carrier's `defaults:` widens the key universe of the tenants below
+      it (validate_tenant_keys), as the root carrier's does for every tenant.
+    """
+    _f = safe_label(fname)
+
+    if "_routing_enforced" in data:
+        _tree_problem(
+            result, "routing_enforced_below_root", fname, "_routing_enforced",
+            f"{fname}: _routing_enforced is read only at the conf.d root — a "
+            f"NOC route scoped to one subtree is not supported (ADR-017 "
+            f"amendment 2026-09-28 (b)); move it to a root platform file or "
+            f"delete it")
+
+    if "_routing_defaults" in data:
+        rd = data["_routing_defaults"]
+        if not is_level_carrier:
+            print(f"  WARN: _routing_defaults in {_f} ignored (below the "
+                  "conf.d root only the directory's defaults carrier, "
+                  "_defaults.yaml / _defaults.yml, is read)", file=sys.stderr)
+        elif rd is None:
+            pass   # an empty key: this level contributes nothing
+        elif not isinstance(rd, dict):
+            print(f"  WARN: _routing_defaults in {_f} must be a mapping, got "
+                  f"{type(rd).__name__} — this level contributes nothing",
+                  file=sys.stderr)
+        else:
+            # #2245, as at the root: `routes` never belong to the defaults.
+            if "routes" in rd:
+                rd = {k: v for k, v in rd.items() if k != "routes"}
+                result.setdefault("routing_defaults_errors", []).append(
+                    f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                    "supported here (define it in a routing profile or the "
+                    "tenant's _routing), skipping")
+            for key in ("receiver", "overrides"):
+                if key in rd and rd[key] is None:
+                    _tree_problem(
+                        result, "routing_defaults_null_below_root", fname,
+                        f"_routing_defaults.{key}",
+                        f"{fname}: _routing_defaults.{key} is null — below "
+                        f"the conf.d root that takes the {key} away from "
+                        f"every tenant under {level}/ that does not set its "
+                        f"own, and their alerts fall silently to the "
+                        f"catch-all (ADR-017 amendment 2026-09-28 (a)); set "
+                        f"a value or remove the key")
+            result.setdefault("routing_defaults_levels", {})[level] = rd
+
+    if isinstance(data.get("defaults"), dict):
+        if is_level_carrier:
+            result.setdefault("defaults_keys_by_dir", {})[level] = set(
+                data["defaults"].keys())
+        elif data["defaults"]:
+            print(f"  WARN: defaults in {_f} ignored (not a defaults carrier; "
+                  "only _defaults.yaml / _defaults.yml is)", file=sys.stderr)
+
+    _parse_profiles_and_policies(data, fname, level, result)
+
+
+def _parse_profiles_and_policies(data: dict, fname: str, level: str,
+                                 result: dict) -> None:
+    """`routing_profiles` / `domain_policies` of one file at directory *level*.
+
+    Same file-name rules at every level (ADR-007): profiles only from
+    `_routing_profiles.yaml` / `.yml`, policies only from
+    `_domain_policy.yaml` / `.yml`. Below the root they are scoped to the
+    subtree they sit in (#2326 (c), (d)).
+    """
+    _f = safe_label(fname)
+    base = os.path.basename(fname)
+
     # v2.1.0 ADR-007: Extract routing_profiles (only from _routing_profiles.yaml)
     if "routing_profiles" in data:
-        rp_fname = os.path.basename(fname)
-        if rp_fname in ("_routing_profiles.yaml", "_routing_profiles.yml"):
+        if base in ("_routing_profiles.yaml", "_routing_profiles.yml"):
             profiles = data["routing_profiles"]
-            if isinstance(profiles, dict):
-                result["routing_profiles"].update(profiles)
+            if isinstance(profiles, dict) and level == ROOT_LEVEL:
+                _record_profiles(fname, level, profiles, result)
+            elif isinstance(profiles, dict):
+                # Recorded after every root file (`_parse_config_files`):
+                # which definition of a duplicated name is "first" must not
+                # depend on whether a directory's name sorts before `_` —
+                # root files first, then the tree in name order, as Go's
+                # `routingpolicy.LoadTree` reads them.
+                result.setdefault("_nested_profile_defs", []).append(
+                    (fname, level, profiles))
             else:
                 print(f"  WARN: routing_profiles in {_f} must be a dict, ignoring",
                       file=sys.stderr)
@@ -310,11 +461,19 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
 
     # v2.1.0 ADR-007: Extract domain_policies (only from _domain_policy.yaml)
     if "domain_policies" in data:
-        dp_fname = os.path.basename(fname)
-        if dp_fname in _POLICY_FILENAMES:
+        dp_fname = fname
+        if base in _POLICY_FILENAMES:
             policies = data["domain_policies"]
-            if isinstance(policies, dict):
+            if isinstance(policies, dict) and level == ROOT_LEVEL:
                 result["domain_policies"].update(policies)
+            elif isinstance(policies, dict):
+                # #2326 (d): scoped to the subtree, judged apart from the
+                # root's (additively) in load_tenant_tree.
+                result.setdefault("domain_policies_by_dir", {}).setdefault(
+                    level, {}).update(policies)
+                origin = result.setdefault("domain_policy_origin", {})
+                for name in policies:
+                    origin[(level, name)] = fname
             else:
                 # #1448: the file decodes, parses, and is a mapping — and
                 # every domain policy still ends up on the floor. Same
@@ -415,29 +574,47 @@ def _parse_config_files(config_dir: str) -> dict:
         "files_read": 0,
         "files_skipped": [],
         "tenant_file_errors": [],
+        # #2326: the routing plane across directory levels. `tenant_dirs` is
+        # each tenant's directory relative to the root ("." = the root);
+        # `routing_defaults_levels` / `routing_profiles_by_dir` /
+        # `domain_policies_by_dir` hold what each level contributes (the root's
+        # `_routing_defaults` and policies stay in the keys above);
+        # `routing_tree_problems` is (kind, file, field, message) per finding.
+        "tenant_dirs": {},
+        "routing_defaults_levels": {},
+        "routing_profiles_by_dir": {},
+        "routing_profile_origin": {},
+        "domain_policies_by_dir": {},
+        "domain_policy_origin": {},
+        "defaults_keys_by_dir": {},
+        "routing_tree_problems": [],
     }
 
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #1911: this reader is FLAT while threshold-exporter walks the same
-    # tree recursively (ADR-016/017). Routing for a hierarchical conf.d is
-    # not implemented — but it used to fail SILENTLY ("No tenants found",
-    # zero routes), which reads like "this config needs no routing" rather
-    # than "this tool cannot see your tenants". Say which files are skipped.
-    warn_nested(config_dir, tool="routing generator")
+    # #2326 (ADR-016/017 "Amendment 2026-09-28"): this reader walks the WHOLE
+    # tree, with the walker every other reader of the threshold plane uses
+    # (`list_config_tree`: hidden directories pruned, directory symlinks
+    # reported). Until #2326 it was flat — a tenant in a subdirectory got no
+    # route at rc 0 while threshold-exporter served its thresholds. ONE walk
+    # answers both "what to read" and "what could not be read".
+    listing = list_config_tree(config_dir)
 
     # #1469: name the config-named things that are not readable files (a
     # DIRECTORY called `beta.yaml`, a broken symlink, an unreadable file)
     # BEFORE the read loop, because the loop below no longer meets them —
-    # `iter_config_files` drops them, as it should. Dropping them silently
+    # the walk drops them from `files`, as it should. Dropping them silently
     # would have been one signal fewer than this reader gave before the
     # enumerators were unified, so the record is kept, through the same
     # `_drop_unusable_policy` bookkeeping every other dropped file uses.
-    unusable = unusable_config_paths(config_dir, recursive=False)
+    # Since #2326 that includes a directory the walk could not enter and a
+    # directory symlink it does not follow: every tenant under either is
+    # absent from this run, which is the #1460 refusal's own shape.
+    unusable = listing.unusable
 
-    # ⛔ THE ROOT ITSELF, before anything else. `unusable_config_paths` reports
+    # ⛔ THE ROOT ITSELF, before anything else. `list_config_tree` reports
     # a conf.d root it could not list (a `chmod 111` directory: traversable,
     # not readable) by returning the root — which means this reader saw ZERO
     # files, not "no tenants are configured".
@@ -466,35 +643,47 @@ def _parse_config_files(config_dir: str) -> dict:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    def _rel(p: Path) -> str:
+        # Root-relative POSIX path: a root file keeps its bare name, so every
+        # message about a flat tree reads exactly as it did before #2326.
+        return p.relative_to(root_path).as_posix()
+
     for bad in unusable:
+        rel = _rel(bad)
         _drop_unreadable_file(
-            bad.name, unusable_reason(bad),
-            f"remove {bad.name} or replace it with a readable YAML file",
+            rel, unusable_reason(bad),
+            f"remove {rel} or replace it with a readable YAML file",
             result)
 
     # #1469: ONE predicate for "what is a config file", shared with
-    # `check_yaml_syntax`. `recursive=False` is load-bearing — this reader
-    # is flat BY DESIGN (the ADR-016 hierarchy is reported by `warn_nested`
-    # above, not routed), and recursing here would silently change which
-    # tenants generate-routes emits routes for.
-    # #1674: ONE root carrier, chosen by the rule every exporter plane reads
-    # (`select_defaults_carrier`, over the carriers that can be read). Any
-    # other carrier spelling is ignored WHOLE, as the exporter's flat plane
-    # ignores it, and named once.
-    # #1982: every tenant entry of every root file, in read order, applied
-    # AFTER the loop — see `_apply_tenant_entries`.
+    # `check_yaml_syntax` — the walker's own list.
+    # #1674: ONE carrier per directory, chosen by the rule every exporter
+    # plane reads (`select_defaults_carrier`, over the carriers that can be
+    # read). Any other carrier spelling is ignored WHOLE, as the exporter
+    # ignores it, and named once per directory.
+    # #1982: every tenant entry of every file, in read order, applied AFTER
+    # the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
-    listed = list(iter_config_files(config_dir, recursive=False))
-    readable, _unreadable = readable_carriers(
-        p for p in listed if is_defaults_name(p.name))
-    root_carrier = select_defaults_carrier(readable)
-    warn_multi_carrier(config_dir, readable)
+    listed = listing.files
+    carriers_by_dir: dict[Path, list[Path]] = {}
+    for p in listed:
+        if is_defaults_name(p.name):
+            carriers_by_dir.setdefault(p.parent, []).append(p)
+    selected: dict[Path, "Path | None"] = {}
+    readable_set: set[Path] = set()
+    for d, carriers in carriers_by_dir.items():
+        readable, _unreadable = readable_carriers(carriers)
+        readable_set.update(readable)
+        selected[d] = select_defaults_carrier(readable)
+        warn_multi_carrier(d, readable)
     for path_p in listed:
-        fname = path_p.name
+        fname = _rel(path_p)
+        level = PurePosixPath(fname).parent.as_posix()
         path = str(path_p)
-        if is_defaults_name(fname) and (
-                root_carrier is None or fname != root_carrier.name):
-            if path_p in readable:
+        chosen = selected.get(path_p.parent)
+        if is_defaults_name(path_p.name) and (
+                chosen is None or path_p.name != chosen.name):
+            if path_p in readable_set:
                 continue   # the unselected spelling: named above, not read
             # unreadable: fall through, the read below books it as skipped
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
@@ -591,9 +780,26 @@ def _parse_config_files(config_dir: str) -> dict:
         if not data:
             continue
 
-        _parse_platform_config(data, fname, result)
+        if level == ROOT_LEVEL:
+            _parse_platform_config(data, fname, result)
+        else:
+            _parse_nested_config(
+                data, fname, level,
+                chosen is not None and path_p.name == chosen.name, result)
 
         if "tenants" not in data:
+            continue
+
+        # #2326 (f): the `tenants:` block of a platform file BELOW the root is
+        # read by no plane (ADR-017 item 1); threshold-exporter WARNs about
+        # it, and so does this reader now that it opens the file.
+        if level != ROOT_LEVEL and is_reserved_name(path_p.name):
+            if data.get("tenants"):
+                print(f"  WARN: {safe_label(fname)}: 'tenants:' block ignored "
+                      f"— a platform file below the conf.d root supplies no "
+                      f"per-tenant values on any plane (only root platform "
+                      f"files do); set the keys in the tenant's own file",
+                      file=sys.stderr)
             continue
 
         # `is None`, not the get() default: `tenants:` with every entry
@@ -659,6 +865,8 @@ def _parse_config_files(config_dir: str) -> dict:
                 continue
             tenant_entries.append((fname, tenant, overrides))
 
+    for nested_def in result.pop("_nested_profile_defs", []):
+        _record_profiles(*nested_def, result)
     _apply_tenant_entries(config_dir, tenant_entries, result)
     return result
 
@@ -689,6 +897,29 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
               f"ignored — no tenant file declares tenant "
               f"'{safe_label(str(tenant))}'; a platform file can only provide "
               f"defaults for a tenant that already exists", file=sys.stderr)
+    # #2326: where each tenant lives (its tenant file's directory, relative to
+    # the root) decides which routing layers and domain policies reach it —
+    # and one tenant id declared by two tenant files is blocking (e): the
+    # exporter rejects such a tree (DuplicateTenantError), and the per-file
+    # merge above would otherwise route a blend of both blocks. The second
+    # file in walk order is the one named, as `DuplicateTenantError.PathB`.
+    declared: dict = {}
+    for fname, tenant, _o in entries:
+        if not is_reserved_name(os.path.basename(fname)):
+            declared.setdefault(tenant, []).append(fname)
+    dirs = result.setdefault("tenant_dirs", {})
+    for tenant, files in declared.items():
+        dirs.setdefault(tenant, PurePosixPath(files[0]).parent.as_posix())
+    for tenant, files in sorted(duplicate_declarations(declared).items(),
+                                key=lambda kv: str(kv[0])):
+        first, second = declared[tenant][0], declared[tenant][1]
+        _tree_problem(
+            result, "duplicate_tenant", second, f"tenants.{tenant}",
+            f"duplicate tenant id '{tenant}': declared in both {first} and "
+            f"{second} — threshold-exporter rejects a tree that declares one "
+            f"tenant in two files (DuplicateTenantError), and routes built "
+            f"from a blend of both would match neither; keep the tenant in "
+            f"one file ({', '.join(files)})")
     # First-appearance order, as the per-file loop produced it.
     for tenant in dict.fromkeys(t for _f, t, _o in entries):
         if tenant not in merged:
@@ -705,10 +936,16 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
       3. tenant _routing → per-tenant overrides
       4. _routing_enforced → NOC immutable override (applied later in generate_routes)
 
+    #2326: layer 1 is a CHAIN — the root's `_routing_defaults` (the
+    *routing_defaults* argument), then each subdirectory level's on the way
+    to the tenant's directory, shallow per top-level key, deeper wins — and
+    layer 2 resolves against the profiles visible from that directory
+    (`resolve_routing_defaults` / `visible_routing_profiles` in _grar_merge).
+
     Returns routing_configs dict {tenant: merged_routing}.
     """
-    profiles = parsed.get("routing_profiles", {})
     profile_refs = parsed.get("tenant_profile_refs", {})
+    tenant_dirs = parsed.get("tenant_dirs", {})
 
     routing_configs = {}
     seen_tenants = set()
@@ -716,9 +953,12 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
         if tenant in parsed["disabled_tenants"] or tenant in seen_tenants:
             continue
         seen_tenants.add(tenant)
+        level = tenant_dirs.get(tenant, ROOT_LEVEL)
 
-        # Layer 1: Start with routing defaults
-        base = dict(routing_defaults) if routing_defaults else {}
+        # Layer 1: Start with routing defaults (root, then each level down)
+        base = resolve_routing_defaults(parsed, level,
+                                        routing_defaults or {})
+        profiles = visible_routing_profiles(parsed, level)
 
         # Layer 2: Merge routing profile (if referenced)
         if tenant in profile_refs:
@@ -767,6 +1007,17 @@ class TenantTree:
     files_read: int = 0
     files_skipped: list[tuple[str, str]] = field(default_factory=list)
     tenant_file_errors: list[tuple[str, str]] = field(default_factory=list)
+    # #2326: every routing-tree finding, ``(kind, file, field, message)`` —
+    # the blocking kinds (`BLOCKING_TREE_KINDS`, see ``routing_tree_errors``)
+    # and the subtree-policy finding (d). ``file`` is root-relative.
+    routing_tree_problems: list[tuple[str, str, str, str]] = field(
+        default_factory=list)
+
+    @property
+    def routing_tree_errors(self) -> list[tuple[str, str, str, str]]:
+        """The #2326 findings that refuse the whole tree (rc 2, every mode)."""
+        return [p for p in self.routing_tree_problems
+                if p[0] in BLOCKING_TREE_KINDS]
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -833,11 +1084,25 @@ def load_tenant_tree(
     routing_configs = _merge_tenant_routing(
         parsed, parsed["routing_defaults"])
 
-    # Schema validation: check tenant keys against defaults
-    schema_warnings = []
+    tenant_dirs = parsed.get("tenant_dirs", {})
+    # #2326: the blocking routing-tree findings come FIRST in the stream, so a
+    # reader of --validate / validate-config sees why the tree is refused
+    # before the findings that follow from it.
+    schema_warnings = [
+        f"  {ROUTING_TREE_ERROR_PREFIX} {msg}"
+        for kind, _f, _fld, msg in parsed.get("routing_tree_problems", [])
+        if kind in BLOCKING_TREE_KINDS]
+
+    # Schema validation: check tenant keys against defaults. #2326: a tenant
+    # below the root also sees the `defaults:` keys of every carrier on its
+    # directory chain — the keys the exporter merges into it.
+    by_dir_keys = parsed.get("defaults_keys_by_dir", {})
     for tenant, keys in sorted(parsed["tenant_keys"].items()):
+        universe = set(parsed["defaults_keys"])
+        for d in chain_levels(tenant_dirs.get(tenant, ROOT_LEVEL)):
+            universe |= by_dir_keys.get(d, set())
         schema_warnings.extend(
-            validate_tenant_keys(tenant, keys, parsed["defaults_keys"],
+            validate_tenant_keys(tenant, keys, universe,
                                  parsed["optional_override_keys"]))
 
     # v2.1.0 ADR-007: Validate profile references
@@ -855,6 +1120,31 @@ def load_tenant_tree(
         schema_warnings.extend(
             check_domain_policies(routing_configs, parsed["domain_policies"],
                                   strict=strict_policies))
+    # #2326 (d): a policy file below the root applies to the tenants of its
+    # own subtree only, judged ADDITIVELY with the root's and every other
+    # level's — each level is its own check_domain_policies call over the
+    # tenants it reaches, so a tenant meets every policy above it and a
+    # subtree can only tighten. An entry naming a tenant outside the subtree
+    # is its own finding (ERROR under --strict, WARN otherwise).
+    tree_problems = list(parsed.get("routing_tree_problems", []))
+    origin = parsed.get("domain_policy_origin", {})
+    for level, policies in sorted(parsed.get("domain_policies_by_dir",
+                                             {}).items()):
+        files = sorted({origin[(lv, n)] for (lv, n) in origin if lv == level})
+        source = " / ".join(files) or f"{level}/"
+        msgs, rows = check_policy_scope(level, policies, tenant_dirs,
+                                        source=source, strict=strict_policies)
+        schema_warnings.extend(msgs)
+        for domain, tenant in rows:
+            tree_problems.append((
+                "domain_policy_out_of_scope", origin.get((level, domain), source),
+                f"domain_policies.{domain}.tenants",
+                f"domain policy '{domain}' names tenant '{tenant}' outside "
+                f"{level}/"))
+        reachable = {t: rc for t, rc in routing_configs.items()
+                     if level_contains(level, tenant_dirs.get(t, ROOT_LEVEL))}
+        schema_warnings.extend(
+            check_domain_policies(reachable, policies, strict=strict_policies))
 
     # ADR-007 --strict fail-open closures: an unparseable _domain_policy.yaml
     # or a domain_policies block in a wrongly named file makes every policy
@@ -879,4 +1169,5 @@ def load_tenant_tree(
         parsed["enforced_routing"], parsed["metadata_configs"],
         files_read=parsed.get("files_read", 0),
         files_skipped=list(parsed.get("files_skipped", [])),
-        tenant_file_errors=list(parsed.get("tenant_file_errors", [])))
+        tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
+        routing_tree_problems=tree_problems)
