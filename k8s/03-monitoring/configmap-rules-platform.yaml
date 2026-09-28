@@ -5,9 +5,9 @@
 #
 # ⚠️ DELIVERY DISCRIMINATOR — every alert here EXCEPT `Watchdog` carries the
 # static label `alert_source: platform`. Platform alerts have almost no tenant to
-# route them by (37 of the 40 carry no `tenant` label at all), so without a
+# route them by (all but the three below carry no `tenant` label at all), so without a
 # positive discriminator an operator wiring `_routing_enforced` can only select
-# them by `severity="critical"` — which reaches 18 of 40. `alert_source="platform"`
+# them by `severity="critical"` — which reaches only the critical ones. `alert_source="platform"`
 # is the matcher the operator guide tells them to use; see
 # docs/integration/byo-alertmanager-integration.md §11. Enforced by
 # tests/ops/test_generate_routes_orchestration.py::TestPlatformAlertSourceContract
