@@ -1,14 +1,25 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["custom.regex"],
+  "enabledManagers": ["custom.regex", "github-actions", "dockerfile", "devcontainer"],
   "pinDigests": true,
   "semanticCommits": "enabled",
   "semanticCommitType": "chore",
   "semanticCommitScope": null,
   "dependencyDashboard": true,
   "dependencyDashboardTitle": "Renovate Dashboard — #902 L3 third-party image digests",
-  "prConcurrentLimit": 3,
+  "prConcurrentLimit": 4,
+  "prHourlyLimit": 4,
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/examples/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**"
+  ],
   "customManagers": [
     {
       "customType": "regex",
@@ -49,7 +60,8 @@
   ],
   "packageRules": [
     {
-      "description": "#902 L3 — group all non-major third-party image updates (incl. digest-only refreshes) into ONE PR for low review noise. The self-hosted workflow's weekly cron sets the cadence; a manual workflow_dispatch (incl. dry-run) runs on demand.",
+      "description": "#902 L3 — group all non-major third-party image updates (incl. digest-only refreshes) into ONE PR for low review noise. The self-hosted workflow's weekly cron sets the cadence; a manual workflow_dispatch (incl. dry-run) runs on demand. #1354: scoped to custom.regex so the Dockerfile / dev-container docker deps (also datasource=docker) do NOT fall into this group — each built-in manager has its own group below.",
+      "matchManagers": ["custom.regex"],
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
       "groupName": "third-party container images"
@@ -65,6 +77,75 @@
       "matchDepNames": ["python"],
       "matchUpdateTypes": ["minor"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "#1354 — ONE weekly PR per built-in manager. Grouping is what keeps tests/shared/test_toolchain_pin_parity.py::test_each_action_is_used_at_a_single_version green: every `uses:` of an action moves in the same branch, never half the workflows.",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "#1354 — ONE weekly PR for the Dockerfile base images (first-party component images). tests/** is out of reach via ignorePaths, so the bench fixtures and the federation-e2e compose stay on their own bindings.",
+      "matchManagers": ["dockerfile"],
+      "groupName": "Dockerfile base images"
+    },
+    {
+      "description": "#1354 — ONE weekly PR for the dev container feature references (ghcr.io/devcontainers/features/*:<major>). The tool versions INSIDE those features are disabled below: they are bound to CI.",
+      "matchManagers": ["devcontainer"],
+      "groupName": "dev container features"
+    },
+    {
+      "description": "#1354 — no digest/SHA pinning from the built-in managers in this change: pinDigests=true (global, for the #902 images) would otherwise open a pin PR rewriting every `uses:` to a commit SHA and every Dockerfile FROM to @sha256. That is a separate, deliberate decision (see docs/internal/toolchain-versions.md), not a side effect of turning managers on.",
+      "matchManagers": ["github-actions", "dockerfile", "devcontainer"],
+      "pinDigests": false
+    },
+    {
+      "description": "#1354 — majors from the built-in managers (a new action major, a new feature major, a new base-image major) wait for a Dependency Dashboard tick, same policy as the #902 images.",
+      "matchManagers": ["github-actions", "dockerfile", "devcontainer"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "#1354 — the signing / SBOM chain in release.yaml is 'bump deliberately' (its own comment): every update waits for a Dependency Dashboard tick instead of riding the grouped Actions PR. Its own groupName is load-bearing: without it these inherit `GitHub Actions` from the rule above, so an approved signing-chain bump would share one PR with unrelated action updates.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["sigstore/cosign-installer", "anchore/sbom-action"],
+      "dependencyDashboardApproval": true,
+      "groupName": "release signing chain"
+    },
+    {
+      "description": "#1354 — the Go builder image is NOT Renovate's: the Go SSOT is each module's go.mod, and tests/ops/test_go_toolchain_parity.py binds every `FROM golang:` to it. A one-sided Renovate bump would be red by construction.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["golang"],
+      "enabled": false
+    },
+    {
+      "description": "#1354 — `runs-on:` (depType github-runner) is bound to the dev container base image by test_toolchain_pin_parity.py; neither side may move alone. Disabled on both managers (see the devcontainer image rule).",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["github-runner"],
+      "enabled": false
+    },
+    {
+      "description": "#1354 — `with:` tool versions (depType uses-with: setup-node node-version, setup-python python-version, setup-go go-version, setup-helm version, trivy-action version, cosign-installer cosign-release, ...) are each bound to a devcontainer / Makefile / wrapper pin by test_toolchain_pin_parity.py, test_go_toolchain_parity.py or the release chain. The other side is not a Renovate dep, so a bump here is one-sided and red. Upgrade them by hand per docs/internal/toolchain-versions.md.",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["uses-with"],
+      "enabled": false
+    },
+    {
+      "description": "#1354 — the dev container base image tag is the CI runner OS (ubuntu-24.04 on both sides, test_toolchain_pin_parity.py); it moves together with every `runs-on:`, by hand.",
+      "matchManagers": ["devcontainer"],
+      "matchDepTypes": ["image"],
+      "enabled": false
+    },
+    {
+      "description": "#1354 — the language versions the devcontainer manager reads out of the node / go / python features are bound to CI (node-version, python-version) and to go.mod (go). One-sided bumps are red; hand-maintained.",
+      "matchManagers": ["devcontainer"],
+      "matchDatasources": ["node-version", "golang-version", "python-version", "ruby-version"],
+      "enabled": false
+    },
+    {
+      "description": "#1354 — the dockerfile manager also extracts `COPY --from=prom/alertmanager:<tag>@sha256:...` in the da-tools Dockerfile. custom.regex already owns that ref and moves it in the SAME PR as the deployed Alertmanager (#2294, test_da_tools_amtool_pin_parity.py); a second owner in another group would split the pair.",
+      "matchManagers": ["dockerfile"],
+      "matchDepNames": ["prom/alertmanager"],
+      "enabled": false
     }
   ]
 }

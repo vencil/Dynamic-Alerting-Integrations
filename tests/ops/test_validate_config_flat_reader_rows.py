@@ -210,7 +210,8 @@ def test_the_skipped_file_is_named_in_json(tmp_path, cli_argv, capsys):
     assert rc == 0, rc
 
 
-def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys):
+def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
+                                         amtool_accepts):
     """Negative control: no spurious WARN on a tree every reader can see."""
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, None)
     rc, rows = _run(d, ["--policy", "{policy}"], tmp_path, cli_argv, capsys)

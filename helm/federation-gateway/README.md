@@ -228,7 +228,7 @@ from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 > upgrade the chart, or the gateway pods will not start.** The mtail *version* is
 > unchanged; the *build* is not: mtail is now compiled from its pinned upstream
 > commit with a current Go toolchain instead of upstream's 2024 prebuilt binary,
-> and the runtime base moved to Alpine 3.23.5. Measured on the built image, that
+> and the runtime base moved to Alpine 3.23.6. Measured on the built image, that
 > takes it from **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned
 > by mtail's own `go.mod`).
 >
@@ -241,11 +241,10 @@ from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 > You no longer need to remember to scan it by hand: the image is a matrix entry
 > in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
 > `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
-> `release.yaml`'s tag-time Trivy scan never sees it. ⚠️ That matters less than it
-> sounds: that scan runs POST-PUSH and is the last step in four of the five
-> release jobs, so for those it only reddens the Actions run — the image (and for
-> the exporter the chart) is already published. Those three are its whole *CVE*
-> coverage; its *build* is
+> `release.yaml`'s tag-time Trivy scan never sees it — and that scan is the one
+> gate that actually withholds a release (it runs before anything is published,
+> #1278). Those three are its whole *CVE* coverage, none of them blocking; its
+> *build* is
 > additionally exercised by the `federation-e2e` CI job, which builds this image
 > from source on every run and scrapes the metrics it produces.
 

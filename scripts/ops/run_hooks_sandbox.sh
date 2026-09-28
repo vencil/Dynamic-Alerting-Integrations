@@ -12,8 +12,10 @@
 #   before the commit reaches git.exe.
 #
 # Why sandbox-side:
-#   1. Cowork VM has a clean native ext4 filesystem — no FUSE cache
-#      staleness or dentry-lock traps.
+#   1. This side has the Python environment the hooks expect.
+#      ⚠️ It is NOT free of FUSE: the files it checks are the mounted
+#      workspace (NTFS -> VirtioFS -> Cowork VM), so stale reads can still
+#      happen (windows-mcp-playbook trap #57, cause A).
 #   2. `pre-commit run --files <list>` bypasses pre-commit's stash logic,
 #      which would otherwise trip on FUSE-side `.git/index` corruption.
 #
