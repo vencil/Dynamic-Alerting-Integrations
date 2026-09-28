@@ -62,11 +62,13 @@ def extract_go_keys(go_source_path):
         # Production-source only: a `_test.go` or a mock/testdata/vendor copy that
         # (re)declares `var validReservedKeys` must never become the authoritative
         # source — otherwise the schema would get synced to a dummy test key.
+        # Segments are matched relative to go_dir: a Go tree checked out
+        # under e.g. .../vendor/ must not have every file excluded (#1810).
         _excluded_dirs = {"vendor", "testdata", "mocks"}
         config_file = next(
             (p for p in sorted(go_dir.rglob("*.go"))
              if not p.name.endswith("_test.go")
-             and not _excluded_dirs & set(p.parts)
+             and not _excluded_dirs & set(p.relative_to(go_dir).parts)
              and "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
             None,
         )

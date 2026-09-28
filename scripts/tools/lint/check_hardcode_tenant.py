@@ -40,6 +40,10 @@ Auto-stage FATAL on any finding. Codebase audit at scaffold time
 strict-from-day-1 (per PR #169 / PR #170 pattern). If a legitimate
 case appears, suppress with the per-line ignore marker.
 
+Exit codes: 0 clean (or findings without ``--ci``), 1 findings under
+``--ci``, 2 when the default scan (no path arguments) matched 0 files —
+a pass that checked nothing is not a pass (#1810).
+
 Per-line ignore: ``<!-- hardcode-tenant: ignore -->`` on the offending
 line OR up to 3 lines above (multi-line rationale comments).
 
@@ -63,7 +67,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -202,14 +206,25 @@ def scan_source(path: Path, source: str) -> list[HardcodeTenantFinding]:
     return findings
 
 
-def _is_excluded_path(path: Path) -> bool:
+def _is_excluded_path(path: Path, root: Path | None = None) -> bool:
     """True if the path looks like a test / fixture / example file.
 
     Match by directory segment (so ``examples/foo.py`` and
     ``components/foo/examples/bar.py`` both count) plus filename
     prefix / infix patterns.
+
+    Directory segments are matched on the path RELATIVE to ``root``
+    (the scan root) when given. Matching the absolute path lets the
+    checkout location decide: a repo cloned under ``.../examples/repo/``
+    had every file excluded and the lint passed after scanning nothing
+    (#1810).
     """
     parts = path.parts
+    if root is not None:
+        try:
+            parts = path.relative_to(root).parts
+        except ValueError:
+            pass
     if any(seg in _PATH_SKIP_DIR_SEGMENTS for seg in parts):
         return True
     name = path.name
@@ -220,18 +235,36 @@ def _is_excluded_path(path: Path) -> bool:
     return False
 
 
+def _scan_root_for(candidate: Path) -> Path:
+    """Root that an explicit path argument's skip segments are relative to.
+
+    PROJECT_ROOT when the argument lives inside the repo (so
+    ``scripts/tools/tests/x.py`` stays excluded); otherwise the argument
+    itself (directory) or its parent (file), so where an out-of-repo
+    argument happens to live never decides exclusion.
+    """
+    try:
+        candidate.relative_to(PROJECT_ROOT)
+        return PROJECT_ROOT
+    except ValueError:
+        return candidate if candidate.is_dir() else candidate.parent
+
+
 def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
     """Resolve --paths args or fall back to default scan."""
     if args.paths:
         out: list[Path] = []
         for p in args.paths:
             candidate = Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p
+            root = _scan_root_for(candidate)
+            found: list[Path] = []
             if candidate.is_file():
-                out.append(candidate)
+                found.append(candidate)
             elif candidate.is_dir():
                 for ext in _DEFAULT_SCAN_EXTS:
-                    out.extend(candidate.rglob(f"*{ext}"))
-        return [p for p in out if not _is_excluded_path(p)]
+                    found.extend(candidate.rglob(f"*{ext}"))
+            out.extend(f for f in found if not _is_excluded_path(f, root))
+        return out
 
     out = []
     for root in _DEFAULT_SCAN_ROOTS:
@@ -240,7 +273,7 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
             continue
         for ext in _DEFAULT_SCAN_EXTS:
             out.extend(root_path.rglob(f"*{ext}"))
-    return sorted(p for p in out if not _is_excluded_path(p))
+    return sorted(p for p in out if not _is_excluded_path(p, PROJECT_ROOT))
 
 
 def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
@@ -276,6 +309,16 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = _resolve_target_paths(args)
     if not paths:
+        if not args.paths:
+            # The default scan found nothing, so a pass would be vacuous:
+            # wrong PROJECT_ROOT, every file excluded, or an empty checkout.
+            print(
+                f"✗ default scan matched 0 files under {PROJECT_ROOT} "
+                f"(roots: {', '.join(_DEFAULT_SCAN_ROOTS)}); "
+                "refusing to report a pass that checked nothing",
+                file=sys.stderr,
+            )
+            return EXIT_CALLER_ERROR
         if args.ci:
             print("✓ no files matched scan target")
         return EXIT_OK

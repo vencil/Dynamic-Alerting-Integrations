@@ -239,6 +239,69 @@ class TestMain:
 
 
 # ---------------------------------------------------------------------------
+# Checkout location must not decide exclusion; empty default scan is rc 2
+# (#1810)
+# ---------------------------------------------------------------------------
+_DIRTY_GO = 'package x\nvar q = `rate(m{tenant="db-a"}[5m])`\n'
+
+
+class TestScanRootRelative:
+    @pytest.mark.timeout(15)
+    @pytest.mark.parametrize(
+        "root_parts",
+        [("examples", "repo"), ("plain",)],
+        ids=["under-examples", "plain"],
+    )
+    def test_default_scan_catches_violation_regardless_of_checkout_path(
+        self, tmp_path, monkeypatch, capsys, root_parts
+    ):
+        root = tmp_path.joinpath(*root_parts)
+        dirty = root / "components" / "foo" / "q.go"
+        dirty.parent.mkdir(parents=True)
+        dirty.write_text(_DIRTY_GO, encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+
+        rc = lint.main(["--ci"])
+
+        assert rc == 1
+        assert "db-a" in capsys.readouterr().err
+
+    @pytest.mark.timeout(15)
+    def test_skip_segment_inside_scan_root_still_excluded(
+        self, tmp_path, monkeypatch
+    ):
+        root = tmp_path / "examples" / "repo"
+        kept = root / "components" / "foo" / "q.go"
+        skipped = root / "components" / "foo" / "examples" / "q.go"
+        for f in (kept, skipped):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("package x\n", encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+
+        import argparse
+
+        got = lint._resolve_target_paths(argparse.Namespace(paths=[]))
+
+        assert got == [kept]
+
+    @pytest.mark.timeout(15)
+    def test_empty_default_scan_exits_2(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(lint, "PROJECT_ROOT", tmp_path / "empty")
+
+        rc = lint.main(["--ci"])
+
+        assert rc == 2
+        assert "matched 0 files" in capsys.readouterr().err
+
+    @pytest.mark.timeout(15)
+    def test_explicit_args_matching_nothing_stay_exit_0(self, tmp_path, capsys):
+        only_test = tmp_path / "foo_test.go"
+        only_test.write_text(_DIRTY_GO, encoding="utf-8")
+
+        assert lint.main(["--ci", str(only_test)]) == 0
+
+
+# ---------------------------------------------------------------------------
 # Live dogfood — actual repo must pass
 # ---------------------------------------------------------------------------
 class TestLiveRepo:
