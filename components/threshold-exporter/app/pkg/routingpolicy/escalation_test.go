@@ -23,9 +23,19 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 		{`"true"`, false, true},
 		{"1", false, true},
 		{"[true]", false, true},
-		// yaml.v3 reads `yes` as a string; PyYAML (YAML 1.1) reads it as
-		// True — a reader difference, reported here instead of guessed.
-		{"yes", false, true},
+		// PyYAML (YAML 1.1) reads these plain scalars as booleans, and so
+		// does DecodePyYAML; yaml.v3 alone would read them as strings.
+		{"yes", true, false},
+		{"On", true, false},
+		{"OFF", false, false},
+		{"no", false, false},
+		// Quoted or !!str-tagged stays a string in PyYAML too.
+		{`"yes"`, false, true},
+		{"'on'", false, true},
+		{"!!str yes", false, true},
+		// Not in PyYAML's set: a string.
+		{"yEs", false, true},
+		{"y", false, true},
 	}
 	for _, tc := range cases {
 		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " + tc.value + "\n"

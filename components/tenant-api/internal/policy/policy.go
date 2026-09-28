@@ -41,11 +41,13 @@ type Constraints struct {
 	EnforceGroupBy         []string `yaml:"enforce_group_by"`
 	MaxRepeatInterval      string   `yaml:"max_repeat_interval"`
 	MinGroupWait           string   `yaml:"min_group_wait"`
-	// RequireCriticalEscalation is decoded as `any` so that a non-boolean
-	// value (`"true"`, `1`) does not fail the whole file: only a YAML `true`
-	// turns the constraint on (#2325, the generator's `is True`), and any
-	// other non-null value is logged once per load and left off.
-	RequireCriticalEscalation any `yaml:"require_critical_escalation"`
+	// RequireCriticalEscalation is decoded loosely so that a non-boolean
+	// value (`"true"`, `1`) does not fail the whole file: only a boolean
+	// `true` turns the constraint on (#2325, the generator's `is True`), and
+	// any other non-null value is logged once per load and left off. The
+	// boolean is read PyYAML's way (routingpolicy.DecodePyYAML): a plain
+	// `yes` / `on` is true and `no` / `off` false, as in the generator.
+	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 
 // DomainPolicy defines a single domain's compliance constraints.
@@ -109,7 +111,7 @@ func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 		cfg.DomainPolicies = make(map[string]DomainPolicy)
 	}
 	for _, name := range sortedDomains(&cfg) {
-		v := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation
+		v := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation.Value
 		if _, isBool := v.(bool); v != nil && !isBool {
 			slog.Warn("policy: require_critical_escalation is not a boolean; the constraint is not enforced",
 				"domain", name, "value", fmt.Sprint(v))
@@ -160,8 +162,8 @@ func (m *Manager) RoutingPolicies() []routingpolicy.Policy {
 			ForbiddenReceiverTypes: dp.Constraints.ForbiddenReceiverTypes,
 			AllowedReceiverTypes:   dp.Constraints.AllowedReceiverTypes,
 			AllowedListNonEmpty:    len(dp.Constraints.AllowedReceiverTypes) > 0,
-			// #2325: only a YAML `true` (parseConfig logs anything else).
-			RequireCriticalEscalation: dp.Constraints.RequireCriticalEscalation == true,
+			// #2325: only a boolean true (parseConfig logs anything else).
+			RequireCriticalEscalation: dp.Constraints.RequireCriticalEscalation.Value == true,
 		})
 	}
 	return out

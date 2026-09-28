@@ -121,7 +121,7 @@ domain_policies:
 
 主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或特定 `component` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。這項檢查不看 custom 子樹（#2342）。
 
-Go 兩個平面也執行同一個約束，判準相同（#2325，`pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄與產生器對齊）：da-guard 把不合規報成 `critical_escalation_missing`（error）、把上述 WARN 報成 `critical_escalation_leak`（warn）；tenant-api 對不合規的 PUT／batch 回 403 `POLICY_VIOLATION`，洩漏只附在成功回應的 `warnings`，不擋寫入。tenant-api 只在寫入某個 tenant 時判定，改 routing profile 或 domain policy 檔本身不會重判既有 tenant。
+Go 兩個平面也執行同一個約束，判準相同（#2325，`pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄與產生器對齊）：da-guard 把不合規報成 `critical_escalation_missing`（error）、把上述 WARN 報成 `critical_escalation_leak`（warn）；tenant-api 拒絕不合規的 PUT（403 `POLICY_VIOLATION`）與 batch op（該筆 `status: error`），洩漏只附在成功回應的 `warnings`，不擋寫入。tenant-api 只在寫入某個 tenant 時判定，改 routing profile 或 domain policy 檔本身不會重判既有 tenant。
 
 ### 為何拒絕三層 Contact Profile 模型
 

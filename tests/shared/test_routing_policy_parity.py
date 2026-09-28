@@ -18,7 +18,9 @@ What this half measures, per tree written to a tmp dir:
   `check_domain_policies` (strict) put in `schema_warnings` (the non-compliance
   ERROR, one WARN per leaking destination, in render order), for the domains
   the generator's own reader (`_parse_config_files`) says require it;
-* `platform` — the generator's blocking `_routing_defaults.routes` WARN; the
+* `platform` — the generator's blocking `_routing_defaults.routes` WARN and
+  its strict non-boolean `require_critical_escalation` line (#2325,
+  `domain_policy_unusable`, kind and field only: the line names no file); the
   Go-only `routing_in_unread_location` rows (#2291) are left out here, their
   `targets` column pins that the generator renders nothing from those bytes.
 
@@ -48,7 +50,8 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 # that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "platform", "expect"}
-PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location"}
+PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
+                  "domain_policy_unusable"}
 # #2291: routing where the generator never reads it. The Go side reports it;
 # the generator says nothing (it does not read those bytes), so this half
 # leaves the kind out of its platform comparison — the tree's `targets`
@@ -72,6 +75,11 @@ _POLICY_LINE = re.compile(
 # The blocking WARN _grar_parse records when it drops `_routing_defaults.routes`.
 _DEFAULTS_ROUTES = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+): 'routes' is not supported here")
+# #2325: the strict line for a `require_critical_escalation` that is not a
+# boolean (as PyYAML reads it). It names no file, so its platform row is
+# compared on kind and field only.
+_ESC_NOT_BOOL = re.compile(
+    r"domain_policy '(?P<domain>[^']*)': constraint 'require_critical_escalation' must be a boolean")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line
@@ -241,8 +249,14 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # Platform-file findings: the table's rows, and no other.
     got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
                           for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m)
-    want_platform = sorted(r for r in tree["platform"] if r[0] not in GO_ONLY_PLATFORM_KINDS)
+    want_platform = sorted(r for r in tree["platform"]
+                           if r[0] not in GO_ONLY_PLATFORM_KINDS and r[0] != "domain_policy_unusable")
     assert got_platform == want_platform, (tree["name"], got_platform)
+    got_unusable = sorted(
+        f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
+        for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m)
+    want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
+    assert got_unusable == want_unusable, (tree["name"], got_unusable)
 
     # Nothing the table does not name: every routed tenant and every policy
     # line belongs to a listed tenant, and the line count is the table's.

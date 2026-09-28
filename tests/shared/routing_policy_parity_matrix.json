@@ -53,7 +53,12 @@
     "names neither a non-critical severity nor another tenant) - the generator's WARN, da-guard's",
     "critical_escalation_leak (Field <ref>.receiver.type), tenant-api's warnings. The value is the same for",
     "every requiring domain that lists the tenant. No row's YAML readers disagree on it, so",
-    "python_differs does not carry it."
+    "python_differs does not carry it.",
+    "require_critical_escalation is read as PyYAML reads it (#2325): a PLAIN yes/Yes/YES/on/On/ON is true and",
+    "no/No/NO/off/Off/OFF false in every reader (yaml.v3 alone reads them as strings); a quoted \"yes\" stays a",
+    "string, so the constraint is off and the value is a platform row: domain_policy_unusable, field",
+    "domain_policies.<domain>.constraints.require_critical_escalation (the generator's --strict non-boolean",
+    "line, which names no file; the Python half compares kind and field only)."
   ],
   "trees": [
     {
@@ -1593,6 +1598,118 @@
             "verdict": "violation",
             "leaks": []
           }
+        }
+      }
+    },
+    {
+      "name": "require-critical-escalation-yaml11-bool",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  plain-yes:\n    tenants:\n    - t-yes\n    constraints:\n      require_critical_escalation: yes\n  plain-on:\n    tenants:\n    - t-on\n    constraints:\n      require_critical_escalation: On\n  plain-no:\n    tenants:\n    - t-no\n    constraints:\n      require_critical_escalation: no\n  plain-off:\n    tenants:\n    - t-off\n    constraints:\n      require_critical_escalation: OFF\n  quoted-yes:\n    tenants:\n    - t-quoted\n    constraints:\n      require_critical_escalation: \"yes\"\n",
+        "t-yes.yaml": "tenants:\n  t-yes:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-on.yaml": "tenants:\n  t-on:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-no.yaml": "tenants:\n  t-no:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-off.yaml": "tenants:\n  t-off:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-quoted.yaml": "tenants:\n  t-quoted:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.quoted-yes.constraints.require_critical_escalation"
+        ]
+      ],
+      "expect": {
+        "t-yes": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-on": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-no": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-off": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-quoted": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
         }
       }
     }

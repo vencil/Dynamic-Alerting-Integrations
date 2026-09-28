@@ -24,7 +24,8 @@ type Policy struct {
 	// would read that list as "unconstrained" on its own.
 	AllowedListNonEmpty bool
 	// RequireCriticalEscalation is `require_critical_escalation: true`
-	// (#2325). null / false / absent leave it off; any other value is not a
+	// (#2325), booleans read as PyYAML reads them (DecodePyYAML: a plain
+	// `yes` / `on` is true). null / false / absent leave it off; any other value is not a
 	// boolean, is reported as a Problem, and leaves it off too (the Python
 	// check enforces only `is True`).
 	RequireCriticalEscalation bool

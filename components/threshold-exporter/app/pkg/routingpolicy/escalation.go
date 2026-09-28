@@ -201,7 +201,10 @@ func FormatLabels(labels map[string]string) string {
 // PyStr is Python's str() over a decoded YAML scalar, for the override
 // matcher value the generator formats into the route (`alertname: 123` →
 // "123", `true` → "True", `1.0` → "1.0"). Lists and mappings get Python's
-// repr, mapping keys in name order (the decoder keeps no order).
+// repr, mapping keys in name order (the decoder keeps no order). Not
+// covered: a timestamp — yaml.v3 decodes `2024-01-01` to a time.Time that
+// falls through to fmt.Sprint ("2024-01-01 00:00:00 +0000 UTC"), where
+// Python's str() of the date gives "2024-01-01".
 func PyStr(v any) string {
 	switch t := v.(type) {
 	case string:

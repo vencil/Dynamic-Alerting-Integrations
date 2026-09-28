@@ -138,6 +138,51 @@ func isNull(n *yaml.Node) bool {
 	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
 }
 
+// yaml11Bools is PyYAML's YAML 1.1 boolean set for a PLAIN scalar
+// (Resolver's tag:yaml.org,2002:bool regexp; measured with PyYAML 6.0.3:
+// `yEs`, `y`, `n` stay strings). yaml.v3 resolves only true/false (YAML 1.2
+// core) and reads the rest as strings.
+var yaml11Bools = map[string]bool{
+	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
+	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
+	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
+}
+
+// DecodePyYAML decodes n as yaml.v3 does, except that a scalar PyYAML's
+// safe_load reads as a boolean decodes to that boolean (#2325): a PLAIN
+// (unquoted, untagged) scalar in the YAML 1.1 set (`yes`, `On`, `OFF`, …).
+// A quoted `"yes"` or `!!str yes` stays a string, as in PyYAML. (An explicit
+// `!!bool yes` is not handled: yaml.v3 refuses it, and the whole document
+// with it, before any field is read.) Use it where the Python generator's
+// reading of a boolean decides the outcome, so both sides see the same value.
+func DecodePyYAML(n *yaml.Node) (any, error) {
+	if n = deref(n); n == nil {
+		return nil, nil
+	}
+	if n.Kind == yaml.ScalarNode && n.Style == 0 {
+		if b, ok := yaml11Bools[n.Value]; ok {
+			return b, nil
+		}
+	}
+	var v any
+	err := n.Decode(&v)
+	return v, err
+}
+
+// PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
+// value leaves Value nil).
+type PyYAMLValue struct{ Value any }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) error {
+	v, err := DecodePyYAML(n)
+	if err != nil {
+		return err
+	}
+	p.Value = v
+	return nil
+}
+
 func kindName(n *yaml.Node) string {
 	switch n.Kind {
 	case yaml.MappingNode:
@@ -334,10 +379,10 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			}
 		}
 		// #2325: only a YAML boolean is a value; the Python check enforces
-		// `is True` and --strict reports any other non-null value.
+		// `is True` and --strict reports any other non-null value. Booleans
+		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
 		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
-			var v any
-			if err := e.Decode(&v); err == nil {
+			if v, err := DecodePyYAML(e); err == nil {
 				if b, ok := v.(bool); ok {
 					p.RequireCriticalEscalation = b
 				} else {
