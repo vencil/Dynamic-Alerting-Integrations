@@ -173,6 +173,34 @@ jobs:
           load: true
           tags: local-pr-test/${{ matrix.name }}:pr
 
+      # issue 1444: the GitLab blast-radius job `da-tools init` generates runs
+      # git INSIDE this image, as the image's nonroot user, against a checkout
+      # the runner made as a different user. Both halves are measured here on
+      # the real image rather than assumed: git refuses such a checkout
+      # ("dubious ownership", rc 128), and the safe.directory setting the
+      # generated job exports through the environment is what lets it read it.
+      # The probe repo belongs to this runner's user, which is not the image's.
+      - name: da-tools image reads a checkout it does not own (issue 1444)
+        if: matrix.name == 'da-tools'
+        run: |
+          probe="$RUNNER_TEMP/git-probe"
+          git init -q "$probe"
+          git -C "$probe" -c user.email=ci@example.invalid -c user.name=ci \
+            commit -q --allow-empty -m probe
+          chmod -R a+rX "$probe"
+          img="local-pr-test/da-tools:pr"
+          set +e
+          docker run --rm -v "$probe:/w:ro" -w /w --entrypoint git "$img" rev-parse HEAD
+          rc=$?
+          set -e
+          if [ "$rc" -ne 128 ]; then
+            echo "::error::expected git in the image to refuse a checkout owned by another user (rc 128, dubious ownership), got rc=$rc. rc 127 means git is missing from the image. Any other value means the premise behind the generated job's safe.directory export changed; re-measure it."
+            exit 1
+          fi
+          docker run --rm -v "$probe:/w:ro" -w /w \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/w \
+            --entrypoint git "$img" rev-parse HEAD
+
       # Informational (exit-code 0, see header). Same severity/ignore-unfixed
       # contract as release.yaml so PR-time output matches release-time output.
       - name: Trivy CVE scan (informational)

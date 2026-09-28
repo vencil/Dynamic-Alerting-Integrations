@@ -24,7 +24,13 @@ LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Security: upgrade all packages for CVE fixes ───────────────────
-RUN apk --no-cache upgrade
+# ── git: the GitLab pipeline `da-tools init` generates runs its blast-radius
+# job INSIDE this image and reads the merge request's base commit with git
+# (issue 1444). Installing it at job time is not an option: the image runs as
+# nonroot, so `apk add` there fails. Unpinned on purpose, like every other
+# `apk add` in this repo (docs/internal/iac-lint-baseline.md, DL3018 rows).
+RUN apk --no-cache upgrade && \
+    apk add --no-cache git
 
 # ── Copy venv from builder ─────────────────────────────────────────
 COPY --from=builder /opt/venv /opt/venv

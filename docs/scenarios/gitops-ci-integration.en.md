@@ -154,18 +154,35 @@ safe, and otherwise the end-state example above for you to fit to your own
 document. The one thing it will not do is hand you paste-ready text for a file
 it has not inspected.
 
-#### The GitLab leg has no blast-radius step
+#### The GitLab leg's blast radius
 
-The GitHub artifact has a third stage (config-diff computes the blast radius and
-posts it as a PR comment). This one deliberately does not, and the reason is the
-image rather than your repository: GitLab runs `script:` **inside**
-`$DA_TOOLS_IMAGE`, and that image carries no `git`, so the baseline
-(`git archive <base>`) cannot be taken on this platform at all. A baseline that
-cannot be read does not look like "no changes" — it looks like "every tenant is
-new". Rather than ship a report nobody should trust, we ship none: a missing
-check is visible, a confidently wrong one is not. Tracked in
-[#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358); the plan to
-restore it is [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444).
+The GitLab artifact has a blast-radius step too (the `blast-radius` job in the
+`generate` stage), with three differences from the GitHub one:
+
+- **It runs in merge request pipelines only**, against the merge request's
+  base commit (`CI_MERGE_REQUEST_DIFF_BASE_SHA`). The job sets
+  `GIT_DEPTH: "0"`: a new GitLab project clones only 20 commits by default,
+  which leaves the base commit out of any longer merge request. When the base
+  commit is not in the clone, or `conf.d` is a submodule or symlink at the
+  base, the job fails with an `ERROR:` line instead of comparing against an
+  empty directory; only a base with no `conf.d` at all counts as a first
+  import, where every tenant is reported as added.
+- **The report is not posted as a merge request comment** (that needs a token
+  with write access). It is printed to the job log and uploaded as an
+  artifact, linked from the merge request page as "blast radius"
+  (`artifacts:expose_as`). A failed job uploads no report, so any report you
+  can see was computed by that merge request's pipeline.
+- **It runs `git` inside `$DA_TOOLS_IMAGE`.** da-tools images carry git from
+  issue 1444 on; v2.9.0 and earlier do not, and the GitLab pipeline that
+  `da-tools init` generates from those images has no such step. If
+  `DA_TOOLS_IMAGE` is still pinned to an image without git, the job fails on
+  its first line with an `ERROR:` line saying the image has no git; pin a
+  newer version in `DA_TOOLS_IMAGE`.
+
+⚠️ config-diff compares tenant files only and skips files whose names start
+with `_`, so a merge request that changes only `conf.d/_defaults.yaml` gets
+"No changes detected" — that file affects every tenant that does not override
+it, so review it by hand. The GitHub artifact behaves the same way.
 
 ## 2. Three-Stage CI/CD Pipeline
 
@@ -191,10 +208,10 @@ graph LR
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
 
-> ℹ️ The diagram shows the **GitHub Actions** artifact. **The GitLab artifact has
-> no Stage 2** — its image carries no `git`, so the comparison baseline cannot be
-> taken (see "The GitLab leg has no blast-radius step" in §1). It has two stages:
-> Validate and Apply.
+> ℹ️ The diagram shows the **GitHub Actions** artifact. The GitLab artifact has
+> the same three stages, but Stage 2 runs in merge request pipelines only and its
+> report is an artifact rather than a comment (see "The GitLab leg's blast
+> radius" in §1).
 
 ### 2.2 Stage 1: Validate
 
