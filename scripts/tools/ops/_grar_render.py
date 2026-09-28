@@ -301,6 +301,46 @@ def load_base_config(path: str | None) -> dict:
     return data
 
 
+def _platform_placeholder_receiver_names() -> frozenset[str]:
+    """The name-only receivers ``_inject_custom_alert_isolation`` adds only if
+    absent — a base that defines them richer (watchdog-heartbeat's url_file)
+    is the intended shape, not a shadow. Derived from the builders, so a fifth
+    placeholder cannot be forgotten here."""
+    names = set()
+    for _routes, recvs in (_build_watchdog_route(), _build_custom_alert_routes([]),
+                           _build_synthetic_probe_route(),
+                           _build_sentinel_sinkhole_route()):
+        names.update(r["name"] for r in recvs)
+    return frozenset(names)
+
+
+def assert_base_does_not_shadow_generated(base_receivers: list | None,
+                                          generated: list[dict] | None) -> None:
+    """Fail-closed guard (#2279): raise ValueError when a base-config receiver
+    has the name of a receiver this run generates from conf.d.
+
+    ``assemble_configmap`` keeps the base receiver and drops the generated one
+    of the same name, so the conf.d definition would vanish without a word.
+    ⛔ The ``--apply`` path (``_merge_routes_receivers_inhibits``) is NOT
+    guarded: there the same-named receiver in the cluster is the previous
+    run's output, and replacing it is the point (owner decision on #2279).
+    """
+    placeholders = _platform_placeholder_receiver_names()
+    generated_names = {r.get("name") for r in (generated or [])
+                       if isinstance(r, dict)} - placeholders
+    shadowed = sorted({r.get("name") for r in (base_receivers or [])
+                       if isinstance(r, dict)} & generated_names)
+    if not shadowed:
+        return
+    raise ValueError(
+        "ERROR: the base config defines receiver(s) with the same name as "
+        f"receiver(s) generated from conf.d: {', '.join(map(repr, shadowed))}. "
+        "The base definition would win and the conf.d one would be silently "
+        "dropped, so alerts would go to the base's endpoint. Remove or rename "
+        "them in the base config (receivers generated from conf.d do not "
+        "belong in it).")
+
+
 def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                        namespace: str = "monitoring", configmap_name: str = "alertmanager-config",
                        strict: bool = False) -> str:
@@ -328,6 +368,13 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
         Complete Kubernetes ConfigMap YAML string (apiVersion, kind, metadata, data.alertmanager.yml).
     """
     merged = dict(base)
+
+    # #2279: a base receiver named like a generated one would WIN the
+    # de-duplicating merge below, silently dropping the conf.d definition
+    # (measured: alerts went to the base's stale endpoint, rc 0, amtool
+    # accepted). Checked on what the generator produced, BEFORE the platform
+    # placeholders are injected — those are "add only if absent" by design.
+    assert_base_does_not_shadow_generated(merged.get("receivers", []), receivers)
 
     # S7/S8 (#741): ensure the Custom Alerts isolation route + firehose receiver
     # are present and FIRST, regardless of what generate_routes produced.
@@ -435,7 +482,8 @@ AMTOOL_NOT_FOUND_NOTICE = (
 
 
 
-def amtool_gate(am_yml: str, *, what: str, refusing: str) -> int | None:
+def amtool_gate(am_yml: str, *, what: str, refusing: str,
+                not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> int | None:
     """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
     will load. Returns ``None`` to go on, or the exit code to stop with.
 
@@ -451,7 +499,9 @@ def amtool_gate(am_yml: str, *, what: str, refusing: str) -> int | None:
 
     *what* names the text for the operator; *refusing* is what the caller will
     NOT do because of a failure ("write -o …", "apply …"). Everything goes to
-    stderr: in some modes stdout IS the generated config.
+    stderr: in some modes stdout IS the generated config. *not_found_notice*
+    lets a caller whose text is not the one it ships say so when amtool is
+    absent (#2260: ``--validate`` checks an assembly on the built-in base).
 
     ⛔ The temp file is written with ``newline=""`` so amtool reads the same
     characters the caller holds; universal-newline translation would hand it
@@ -459,7 +509,7 @@ def amtool_gate(am_yml: str, *, what: str, refusing: str) -> int | None:
     """
     amtool = shutil.which("amtool")
     if amtool is None:
-        print(AMTOOL_NOT_FOUND_NOTICE, file=sys.stderr)
+        print(not_found_notice, file=sys.stderr)
         return None
     with tempfile.TemporaryDirectory(prefix="grar-amtool-") as tmp:
         path = Path(tmp) / "alertmanager.yml"

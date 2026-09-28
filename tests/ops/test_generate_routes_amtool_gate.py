@@ -17,7 +17,10 @@ The contract pinned here:
   config was NOT validated — never silent;
 * fragment (render) mode   → always a NOTICE: a fragment has no root receiver,
   so amtool cannot check it at all;
-* --apply reload failure   → rc 2.
+* --apply reload failure   → rc 2;
+* --validate (#2260)       → the same verdicts, on the config assembled on the
+  BUILT-IN base; without amtool a NOTICE naming that base, rc unchanged; an
+  invariant ``assemble_configmap`` refuses is FAIL rc 1, not a traceback.
 
 The CLI-level tests use a fake `amtool` shell stub on PATH. ⚠️ An
 extensionless shell stub is not executable on Windows (see the cluster-axis
@@ -27,6 +30,7 @@ the in-process tests cover the same decisions on every platform.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -285,3 +289,138 @@ class TestApplyGate:
         """Without this, the row above passes for a tool that always exits 2."""
         _fake_cluster(monkeypatch, amtool_rc=0, curl_rc=0)
         assert self._run_apply_mode() == 0
+
+
+# ── #2260: --validate goes through the same gate ────────────────────
+# Before this, --validate printed OK at rc 0 for a tree that --output-configmap
+# then refused (`http://[1]/`). It now assembles the config on the BUILT-IN
+# base (`--validate --base-config` stays rc 2, #1616) and hands it to
+# `amtool_gate` before printing OK — same verdicts as the write paths.
+_VALIDATE_NOT_VALIDATED = gar.VALIDATE_AMTOOL_NOT_FOUND_NOTICE
+
+
+@_POSIX_ONLY
+class TestValidateGate:
+
+    def test_rejected_is_exit_1_and_never_says_ok(self, tenant_dir, tmp_path):
+        bin_dir, seen = _install_amtool(tmp_path, 1, "FAILED: fake-rejection-2260")
+        r = _gar(["--config-dir", str(tenant_dir), "--validate"], str(bin_dir))
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 1, err
+        assert b"OK: all configs valid" not in r.stdout
+        assert "fake-rejection-2260" in err, err
+        assert seen.is_file(), "amtool was never called — the rc 1 came from elsewhere"
+
+    def test_amtool_saw_a_complete_config_on_the_builtin_base(self, tenant_dir, tmp_path):
+        """A complete config (root receiver from the built-in base) — not a
+        fragment, which amtool refuses for that alone."""
+        bin_dir, seen = _install_amtool(tmp_path, 0, "SUCCESS")
+        r = _gar(["--config-dir", str(tenant_dir), "--validate"], str(bin_dir))
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 0, err
+        assert b"OK: all configs valid" in r.stdout
+        assert "accepted by Alertmanager's parser" in err, err
+        am = yaml.safe_load(seen.read_text(encoding="utf-8"))
+        assert am["route"]["receiver"] == render._DEFAULT_BASE_CONFIG["route"]["receiver"]
+        assert "tenant-t1" in [x["name"] for x in am["receivers"]]
+
+    @pytest.mark.parametrize("rc,message", [(127, "not really amtool"),
+                                            (2, "panic: runtime error")],
+                             ids=["unrunnable", "crash"])
+    def test_amtool_own_failure_is_exit_2(self, tenant_dir, tmp_path, rc, message):
+        """No verdict on the config → environment (2), never a rejection."""
+        bin_dir, _seen = _install_amtool(tmp_path, rc, message)
+        r = _gar(["--config-dir", str(tenant_dir), "--validate"], str(bin_dir))
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 2, err
+        assert b"OK: all configs valid" not in r.stdout
+        assert "could not validate" in err, err
+
+    def test_no_amtool_keeps_rc_0_and_says_builtin_base(self, tenant_dir, tmp_path):
+        r = _gar(["--config-dir", str(tenant_dir), "--validate"],
+                 _empty_path(tmp_path))
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 0, err
+        assert b"OK: all configs valid" in r.stdout
+        assert _VALIDATE_NOT_VALIDATED in err, err
+        assert "built-in default base" in _VALIDATE_NOT_VALIDATED
+
+    def test_validate_with_base_config_is_still_a_caller_error(self, tenant_dir, tmp_path):
+        """#1616: --validate never reads --base-config; #2260 does not change that."""
+        base = tmp_path / "base.yml"
+        base.write_text("route:\n  receiver: default\nreceivers:\n  - name: default\n",
+                        encoding="utf-8")
+        r = _gar(["--config-dir", str(tenant_dir), "--validate",
+                  "--base-config", str(base)], _empty_path(tmp_path))
+        assert r.returncode == 2, r.stderr.decode("utf-8", "replace")
+
+
+class TestAssemblyValueErrorIsAVerdict:
+    """An invariant `assemble_configmap` refuses (ValueError) is a CONFIG
+    verdict: FAIL at rc 1, not a traceback."""
+
+    def test_validate_mode(self, monkeypatch, capsys):
+        def boom(*_a, **_k):
+            raise ValueError("fake invariant #2260")
+        monkeypatch.setattr(gar, "assemble_configmap", boom)
+        with pytest.raises(SystemExit) as exc:
+            gar._validate_mode(_ROUTES, _RECEIVERS, [], [])
+        assert exc.value.code == 1
+        cap = capsys.readouterr()
+        assert "FAIL:" in cap.err and "fake invariant #2260" in cap.err, cap.err
+        assert "OK: all configs valid" not in cap.out
+
+    @_POSIX_ONLY
+    def test_output_configmap_with_a_base_that_breaks_an_invariant(self, tenant_dir, tmp_path):
+        """A base whose Silent-Mode inhibit could mute a platform alert (the
+        try-local shape): measured as a traceback at rc 1 before."""
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({
+            "route": {"receiver": "default"},
+            "receivers": [{"name": "default"}],
+            "inhibit_rules": [{
+                "source_matchers": ['alertname = "TenantSilentWarning"', 'tenant =~ ".+"'],
+                "target_matchers": ['severity = "warning"', 'tenant =~ ".+"'],
+                "equal": ["tenant"]}],
+        }), encoding="utf-8")
+        out = tmp_path / "cm.yaml"
+        r = _gar(["--config-dir", str(tenant_dir), "--output-configmap",
+                  "--base-config", str(base), "-o", str(out)], _empty_path(tmp_path))
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 1, err
+        assert "Traceback" not in err, err
+        assert "FAIL:" in err and "invariant violated" in err, err
+        assert not out.exists()
+
+
+# ── the real amtool, when one is on PATH (skipped otherwise) ────────
+_REAL_AMTOOL = shutil.which("amtool")
+_REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.skipif(_REAL_AMTOOL is None,
+                    reason="amtool not on PATH — the real-parser rows need it")
+class TestValidateWithRealAmtool:
+
+    def _run(self, conf_dir):
+        return _gar(["--config-dir", str(conf_dir), "--validate"],
+                    os.environ.get("PATH", ""))
+
+    def test_url_alertmanager_refuses_is_exit_1(self, tmp_path):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "t1.yaml").write_text(
+            make_tenant_yaml("t1", routing={"receiver": {
+                "type": "webhook", "url": "http://[1]/"}}),
+            encoding="utf-8")
+        r = self._run(d)
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 1, err
+        assert "FAILED:" in err and "http://[1]/" in err, err
+        assert b"OK: all configs valid" not in r.stdout
+
+    def test_repo_conf_d_is_accepted(self):
+        r = self._run(_REPO / "components" / "threshold-exporter" / "config" / "conf.d")
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 0, err
+        assert "accepted by Alertmanager's parser" in err, err

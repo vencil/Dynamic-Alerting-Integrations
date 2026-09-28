@@ -1018,6 +1018,69 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
 # _grar_* source can emit this prefix into the validate warning stream.
 POLICY_ERROR_PREFIX = "ERROR:"
 
+# ── #2279: two generated receivers with one name (blocking in EVERY mode) ──
+# Alertmanager refuses a config whose receivers repeat a name, and the tenant
+# id has no character set that would make the generated names collision-free
+# (`tenant-<t>` for t = `a-route-0` is `tenant-a-route-0`, the name of tenant
+# `a`'s routes[0] receiver). ⛔ Deliberately NOT `POLICY_ERROR_PREFIX`: that
+# prefix means "an ADR-007 domain-policy finding escalated by --strict", and a
+# duplicate name is neither — it blocks with or without --strict. And not a
+# `WARN … skipping` line either: nothing was skipped, both receivers are still
+# in the list, so wording it as a skip would describe a run that did not happen.
+RECEIVER_NAME_COLLISION_PREFIX = "ERROR (duplicate receiver name):"
+
+
+def is_receiver_name_collision(line: str) -> bool:
+    """True for a #2279 duplicate-receiver-name line in the warning stream."""
+    return line.lstrip().startswith(RECEIVER_NAME_COLLISION_PREFIX)
+
+
+def blocking_generation_errors(warnings: list[str]) -> list[str]:
+    """The lines of a generation warning stream that make ``--validate`` fail.
+
+    ⛔ The ONE predicate for "this generation result is unusable", shared by
+    ``generate_alertmanager_routes._validate_mode`` and validate-config's
+    ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
+    drifting apart (validate-config showed a WARN row at exit 0 while
+    ``--validate`` failed); a new blocking category added to one copy only
+    reopens exactly that. Two categories today:
+
+    * ``WARN … skipping`` — a config entry was dropped as unusable;
+    * a duplicate generated receiver name (#2279).
+
+    ADR-007 ``--strict`` policy errors are NOT in here: they are blocking only
+    under ``--strict`` and each caller already selects them by
+    ``POLICY_ERROR_PREFIX``.
+    """
+    return [w for w in warnings
+            if ("WARN" in w and "skipping" in w)
+            or is_receiver_name_collision(w)]
+
+
+def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
+    """One blocking line per receiver name that more than one source generates.
+
+    *labelled* is ``[(receiver_name, source), ...]`` in generation order;
+    *source* names where the receiver came from, e.g. ``tenant 'a' routes[0]``.
+    Every source of a repeated name is named, so the operator sees both sides
+    without having to reverse-engineer them from the name — the name is the
+    one thing that is ambiguous here.
+    """
+    by_name: dict[str, list[str]] = {}
+    for name, source in labelled:
+        by_name.setdefault(name, []).append(source)
+    lines = []
+    for name, sources in by_name.items():
+        if len(sources) < 2:
+            continue
+        lines.append(
+            f"  {RECEIVER_NAME_COLLISION_PREFIX} receiver '{name}' is generated "
+            f"by {' and by '.join(sources)}. Alertmanager refuses a config "
+            "whose receivers repeat a name (and a merge that de-duplicates by "
+            "name would silently keep only one of them). Rename one of the "
+            "tenants, or remove one of the entries.")
+    return lines
+
 # ── #1231: deprecated tenant-config key aliases ──
 # Python mirror of the Go alias boundary (threshold-exporter
 # pkg/config/aliases.go `deprecatedKeyAliases`): during the 2-release
