@@ -11,11 +11,14 @@ Usage:
     explain_route.py --config-dir conf.d
     explain_route.py --config-dir conf.d --tenant db-a
     explain_route.py --config-dir conf.d --show-profile-expansion
+    explain_route.py --config-dir conf.d --tenant <tenant> --trace \\
+        --alertname <name> --label metric_group=<group>
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -312,6 +315,48 @@ def format_profile_expansion(expansion: dict, *, lang: str = "en") -> str:
 # Alert route tracing (v2.1.0)
 # ---------------------------------------------------------------------------
 
+# Labels the trace itself sets, each from its own dedicated input (#2264).
+# An extra label with one of these keys would silently replace that input,
+# so it is refused instead — the value maps to the flag that sets it.
+RESERVED_TRACE_LABELS = {
+    "alertname": "--alertname",
+    "severity": "--severity",
+    "tenant": "--tenant",
+}
+
+# Prometheus label-name syntax.
+_LABEL_NAME_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+
+def parse_label_args(raw: list[str] | None) -> dict[str, str]:
+    """Parse repeated ``--label KEY=VALUE`` into a dict (#2264).
+
+    Split on the FIRST ``=`` — the value may contain ``=`` and may be empty.
+    Raises ValueError (message for the caller, values already escaped) on a
+    missing ``=``, a key that is not a valid label name, a key the trace sets
+    through its own flag, or a key given twice.
+    """
+    labels: dict[str, str] = {}
+    for item in raw or []:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(
+                f"--label {safe_label(item)}: expected KEY=VALUE")
+        # fullmatch: `$` with .match() would accept a trailing "\n".
+        if not _LABEL_NAME_RE.fullmatch(key):
+            raise ValueError(
+                f"--label {safe_label(item)}: invalid label name "
+                f"'{safe_label(key)}' (must match [a-zA-Z_][a-zA-Z0-9_]*)")
+        if key in RESERVED_TRACE_LABELS:
+            raise ValueError(
+                f"--label {safe_label(item)}: '{key}' is set by "
+                f"{RESERVED_TRACE_LABELS[key]}; use that flag instead")
+        if key in labels:
+            raise ValueError(f"--label: '{safe_label(key)}' given more than once")
+        labels[key] = value
+    return labels
+
+
 def trace_alert_routing(
     parsed: dict,
     tenant: str,
@@ -327,10 +372,20 @@ def trace_alert_routing(
       3. Whether any inhibit rules would suppress it
       4. Timing parameters applied
 
+    ``extra_labels`` adds labels to the alert (e.g. ``metric_group`` for an
+    ``overrides`` entry, or a ``routes`` match key). A key the trace sets
+    itself (``alertname`` / ``severity`` / ``tenant``) raises ValueError
+    rather than silently replacing the dedicated argument (#2264).
+
     Returns dict with keys:
-        tenant, alertname, severity, steps, final_receiver,
+        tenant, alertname, severity, labels, steps, final_receiver,
         inhibited, inhibit_reason, timing
     """
+    reserved = sorted(set(extra_labels or {}) & set(RESERVED_TRACE_LABELS))
+    if reserved:
+        raise ValueError(
+            f"extra_labels must not set {reserved}: pass them as the "
+            f"dedicated arguments instead")
     steps: list[dict] = []
 
     # Step 1: Resolve tenant routing config (4-layer merge)
@@ -578,6 +633,13 @@ _HELP = {
         "zh": "Alert 嚴重度（預設 warning）",
         "en": "Alert severity (default: warning)",
     },
+    "label": {
+        "zh": "追蹤用的額外 alert label，格式 KEY=VALUE（可多次指定；"
+              "只在 --trace 下讀取；alertname/severity/tenant 請用各自的旗標）",
+        "en": "Extra alert label for the trace, as KEY=VALUE (repeatable; "
+              "read only with --trace; set alertname/severity/tenant with "
+              "their own flags)",
+    },
 }
 
 
@@ -600,9 +662,20 @@ def main(argv: list[str] | None = None) -> int:
                         help=_h("alertname"))
     parser.add_argument("--severity", default="warning",
                         help=_h("severity"))
+    parser.add_argument("--label", action="append", dest="labels",
+                        metavar="KEY=VALUE", help=_h("label"))
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
+
+    # #2264: --label only feeds the trace; outside it the flag would be
+    # silently ignored, so refuse it (argparse caller error → rc 2).
+    if args.labels and not args.trace:
+        parser.error("--label is read only with --trace")
+    try:
+        extra_labels = parse_label_args(args.labels)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {safe_label(args.config_dir)}",
@@ -623,7 +696,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  WARN: tenant '{safe_label(t)}' not found", file=sys.stderr)
                 continue
             trace = trace_alert_routing(
-                parsed, t, args.alertname, args.severity)
+                parsed, t, args.alertname, args.severity,
+                extra_labels=extra_labels)
             traces.append(trace)
         if args.json:
             print(format_json_report(traces))

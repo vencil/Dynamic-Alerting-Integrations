@@ -2895,6 +2895,7 @@ Routing merge pipeline debugger — shows the four-layer routing merge expansion
 
 ```bash
 da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--json]
 ```
 
 **Parameters**
@@ -2904,7 +2905,13 @@ da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-
 | `--config-dir` | Config directory path | (required) |
 | `--tenant` | Show only specified tenant(s) (repeatable) | (all) |
 | `--show-profile-expansion` | Show all routing profile expansions and references | `false` |
+| `--trace` | Trace mode: simulate one alert's routing path (requires `--tenant`) | `false` |
+| `--alertname` | Alert name to trace (with `--trace`) | `GenericAlert` |
+| `--severity` | Alert severity to trace (with `--trace`) | `warning` |
+| `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
 | `--json` | Output in JSON format | `false` |
+
+The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group` or a `routes` `match` key can only be supplied through `--label`, otherwise the trace always lands on the main receiver. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).
 
 **Examples**
 
@@ -2920,6 +2927,9 @@ da-tools explain-route --config-dir conf.d/ --show-profile-expansion
 
 # JSON output (for pipeline integration)
 da-tools explain-route --config-dir conf.d/ --json
+
+# Trace which receiver an alert carrying metric_group lands on (pass an overrides metric_group or a routes match key via --label)
+da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alertname HighConnectionCount --label metric_group=connections
 ```
 
 ---
