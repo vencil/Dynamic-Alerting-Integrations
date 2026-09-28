@@ -92,6 +92,13 @@ jobs:
           filters: |
             validate:
               - "components/threshold-exporter/config/**"
+              # #2315: the try-local seed is the second conf.d validate-config
+              # routes (the two generator steps below loop over both). Without
+              # it here a seed-only PR skips the required check, and a routing
+              # defect in the showcase tree reaches main unvalidated — da-guard
+              # does not catch it either: guard-defaults-impact fires only on a
+              # `_`-prefixed platform file, never on a tenant file.
+              - "try-local/seed/conf.d/**"
               - "components/threshold-exporter/app/**"
               # tenant-api: branch-protection on `main` requires this
               # workflow's jobs (today: Go Lint, Validate Tenant Config &
@@ -496,13 +503,23 @@ jobs:
       # --strict (ADR-007): domain-policy violations are BLOCKING here —
       # without it check_domain_policies() only ever emitted WARN and a
       # violating config sailed through this required check.
+      # ⛔ THIS is the routing gate for TENANT files (#2315): da-guard
+      # (guard-defaults-impact.yml) runs only when a `_`-prefixed platform
+      # file changes. Both shipped conf.d trees are gated — the dev tree and
+      # the try-local seed (its tenants carry `_routing` so this is not a
+      # zero-route pass). A tenant id declared in two files fails here too.
       - name: Validate alertmanager routes
         run: |
-          python scripts/tools/ops/generate_alertmanager_routes.py \
-            --config-dir components/threshold-exporter/config/conf.d/ \
-            --validate \
-            --strict \
-            --policy .github/custom-rule-policy.yaml
+          for confd in components/threshold-exporter/config/conf.d/ \
+                       try-local/seed/conf.d/; do
+            echo "::group::generate-routes --validate --strict: $confd"
+            python scripts/tools/ops/generate_alertmanager_routes.py \
+              --config-dir "$confd" \
+              --validate \
+              --strict \
+              --policy .github/custom-rule-policy.yaml
+            echo "::endgroup::"
+          done
 
       # Render the GitOps ConfigMap and validate it with Alertmanager's OWN
       # parser (amtool). The --validate step above only checks the assembled

@@ -30,3 +30,17 @@ tenants:
       environment: "production"
       domain: "ecommerce"
       db_type: "mariadb"
+    # Minimal tenant routing (#2315), so this seed is also a routing fixture:
+    # validate.yaml runs `generate_alertmanager_routes.py --validate --strict
+    # --policy .github/custom-rule-policy.yaml` over this tree, and without a
+    # `_routing` block that gate would check zero routes here.
+    # ⚠️ The try-local Alertmanager does NOT load generated routes — it runs
+    # the static try-local/alertmanager.yml (receiver 'null', nothing sent),
+    # so this URL is never dialled. It is an RFC 2606 `example.com` host on
+    # purpose: that CI gate's policy allowlist is `*.example.com` + the named
+    # SaaS hosts, and an in-stack address (`http://alertmanager:9093/`) is
+    # refused by it as "not in allowed_domains".
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/try-local/db-demo"
