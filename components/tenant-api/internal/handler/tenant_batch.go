@@ -195,7 +195,13 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			continue
 		}
 		if d.Policy != nil {
-			if violations := d.Policy.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+			// #2280: an op that sets `_routing_profile` / `_routing` is judged
+			// on the routing it produces; see batchRoutingViolations. Checked
+			// here, not inside the merge closure, so one refused op is left out
+			// instead of aborting the whole PR.
+			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
+			violations = append(violations, batchRoutingViolations(d.ConfigDir, d.Policy, op.TenantID, op.Patch)...)
+			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
 					msgs[i] = v.Message
@@ -317,7 +323,9 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 			continue
 		}
 		if policyMgr != nil {
-			if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
+			violations = append(violations, batchRoutingViolations(configDir, policyMgr, op.TenantID, op.Patch)...)
+			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
 					msgs[i] = v.Message

@@ -1,10 +1,12 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 const sampleDomainPolicyYAML = `domain_policies:
@@ -200,7 +202,10 @@ func TestCheckWrite_TenantNotInPolicy(t *testing.T) {
 
 func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
 	t.Parallel()
-	// Policy should also check the nested "_routing.receiver.type" patch format
+	// #2280: the nested `_routing.receiver.type` key is no longer CheckWrite's
+	// — a PUT body's routing goes through CheckTenantRouting, which judges
+	// the resolved routing (every receiver) instead of one flattened key.
+	// CheckWrite must stay silent on it so a PUT is not reported twice.
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
@@ -213,13 +218,13 @@ func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
 		},
 	})
 
-	patch := map[string]string{
-		"_routing.receiver.type": "slack",
+	if v := m.CheckWrite("db-a", map[string]string{"_routing.receiver.type": "slack"}); len(v) != 0 {
+		t.Fatalf("CheckWrite must not judge the nested key any more, got %+v", v)
 	}
-
-	violations := m.CheckWrite("db-a", patch)
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 violation for nested format, got %d", len(violations))
+	block := map[string]any{"_routing": map[string]any{"receiver": map[string]any{"type": "slack"}}}
+	v := m.CheckTenantRouting("db-a", block, routingpolicy.Layers{})
+	if len(v) != 1 || v[0].Target != "receiver" || v[0].Constraint != "forbidden_receiver_types" {
+		t.Fatalf("CheckTenantRouting = %+v, want one forbidden violation on the main receiver", v)
 	}
 }
 
@@ -249,14 +254,16 @@ func TestCheckWrite_BothForbiddenAndAllowed(t *testing.T) {
 		t.Errorf("expected allowed_receiver_types constraint, got %q", violations1[0].Constraint)
 	}
 
-	// Test: type in forbidden list (violates forbidden constraint)
+	// Test: type in forbidden list — and so also not in the allowed list.
+	// #2280: the two constraints are independent (the route generator's
+	// semantics), so this is TWO violations; before, forbidden returned early.
 	patch2 := map[string]string{"_routing_receiver_type": "slack"}
 	violations2 := m.CheckWrite("db-a", patch2)
-	if len(violations2) != 1 {
-		t.Errorf("expected 1 violation for forbidden type, got %d", len(violations2))
+	if len(violations2) != 2 {
+		t.Fatalf("expected 2 violations for a forbidden type outside the allowed list, got %d", len(violations2))
 	}
-	if violations2[0].Constraint != "forbidden_receiver_types" {
-		t.Errorf("expected forbidden_receiver_types constraint, got %q", violations2[0].Constraint)
+	if violations2[0].Constraint != "forbidden_receiver_types" || violations2[1].Constraint != "allowed_receiver_types" {
+		t.Errorf("expected forbidden then allowed, got %q, %q", violations2[0].Constraint, violations2[1].Constraint)
 	}
 
 	// Test: type that's both in allowed and not forbidden (no violations)
@@ -391,12 +398,12 @@ func TestCheckWrite_MultipleViolations(t *testing.T) {
 	}
 
 	violations := m.CheckWrite("db-a", patch)
-	if len(violations) != 1 {
-		t.Errorf("expected violations for slack (forbidden), got %d: %v", len(violations), violations)
+	// #2280: forbidden and allowed are judged independently — both fire.
+	if len(violations) != 2 {
+		t.Fatalf("expected 2 violations for slack (forbidden AND not allowed), got %d: %v", len(violations), violations)
 	}
-	// slack should trigger the forbidden constraint
-	if violations[0].Constraint != "forbidden_receiver_types" {
-		t.Errorf("expected forbidden_receiver_types constraint, got %q", violations[0].Constraint)
+	if violations[0].Constraint != "forbidden_receiver_types" || violations[1].Constraint != "allowed_receiver_types" {
+		t.Errorf("expected forbidden then allowed, got %+v", violations)
 	}
 }
 
@@ -494,5 +501,69 @@ waitLoaded:
 	}
 	if _, ok := cfg.DomainPolicies["test"]; !ok {
 		t.Error("test policy not found after update")
+	}
+}
+
+func TestCheckTenantRouting_ResolvedRoutingEveryReceiver(t *testing.T) {
+	t.Parallel()
+	m := NewForTest(&DomainPolicyConfig{
+		DomainPolicies: map[string]DomainPolicy{
+			"finance": {
+				Tenants: []string{"t-fin"},
+				Constraints: Constraints{
+					ForbiddenReceiverTypes: []string{"slack"},
+					AllowedReceiverTypes:   []string{"pagerduty", "email"},
+				},
+			},
+			"ops": {
+				Tenants:     []string{"t-other"},
+				Constraints: Constraints{ForbiddenReceiverTypes: []string{"pagerduty"}},
+			},
+		},
+	})
+	layers := routingpolicy.Layers{
+		Defaults: map[string]any{"group_wait": "30s"},
+		Profiles: map[string]map[string]any{
+			"team-esc": {
+				"receiver": map[string]any{"type": "pagerduty", "service_key": "k"},
+				"routes": []any{map[string]any{
+					"match":    map[string]any{"severity": "critical"},
+					"receiver": map[string]any{"type": "slack", "api_url": "https://hooks.slack.com/x"},
+				}},
+			},
+		},
+	}
+	cases := []struct {
+		name  string
+		block map[string]any
+		want  []string // target/constraint
+	}{
+		{"profile route is judged", map[string]any{"_routing_profile": "team-esc"},
+			[]string{"routes[0]/forbidden_receiver_types", "routes[0]/allowed_receiver_types"}},
+		{"tenant routes: [] drops the profile's routes", map[string]any{"_routing_profile": "team-esc",
+			"_routing": map[string]any{"routes": []any{}}}, nil},
+		{"override is judged", map[string]any{"_routing": map[string]any{
+			"receiver":  map[string]any{"type": "email"},
+			"overrides": []any{map[string]any{"alertname": "A", "receiver": map[string]any{"type": "webhook"}}}}},
+			[]string{"overrides[0]/allowed_receiver_types"}},
+		{"disabled routing is not judged", map[string]any{"_routing_profile": "team-esc", "_routing": "disable"}, nil},
+		{"no main receiver: nothing renders", map[string]any{"_routing": map[string]any{
+			"overrides": []any{map[string]any{"alertname": "A", "receiver": map[string]any{"type": "slack"}}}}}, nil},
+	}
+	for _, tc := range cases {
+		var got []string
+		for _, v := range m.CheckTenantRouting("t-fin", tc.block, layers) {
+			got = append(got, v.Target+"/"+v.Constraint)
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: violations %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	v := m.CheckTenantRouting("t-fin", map[string]any{"_routing_profile": "team-esc"}, layers)
+	if len(v) == 0 || !strings.Contains(v[0].Message, "routes[0] (from routing profile 'team-esc')") {
+		t.Errorf("message must name the route and the profile it came from: %+v", v)
+	}
+	if got := m.CheckTenantRouting("t-nobody", map[string]any{"_routing_profile": "team-esc"}, layers); got != nil {
+		t.Errorf("tenant in no policy: %+v", got)
 	}
 }

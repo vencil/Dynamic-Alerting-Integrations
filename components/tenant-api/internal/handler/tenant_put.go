@@ -110,10 +110,17 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// v2.5.0: Domain policy enforcement before write
+		// v2.5.0: Domain policy enforcement before write. #2280: the body's
+		// routing is judged as the generator renders it — resolved over the
+		// root's `_routing_defaults` and the referenced routing profile, every
+		// receiver (main, overrides, routes) — not just a nested main-receiver
+		// key. A PUT replaces the whole file, so the whole body is judged.
 		if d.Policy != nil {
 			patch := extractPatchKeys(body, tenantID)
-			if violations := d.Policy.CheckWrite(tenantID, patch); len(violations) > 0 {
+			violations := d.Policy.CheckWrite(tenantID, patch)
+			violations = append(violations, d.Policy.CheckTenantRouting(
+				tenantID, extractTenantBlock(body, tenantID), loadRoutingLayers(d.ConfigDir))...)
+			if len(violations) > 0 {
 				writePolicyViolation(rw, r, violations)
 				return
 			}

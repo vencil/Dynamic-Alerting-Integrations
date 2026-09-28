@@ -47,7 +47,7 @@
 - **衝突偵測**:寫入後比對 commit 的 parent 與寫入前的 HEAD;若期間被外部 commit 移動 → 回 409
 - **租戶檔解析**:一個租戶的設定檔可拼成 `<id>.yaml` 或 `<id>.yml`(副檔名大小寫不敏感),讀取與寫入都解析**同一個實際檔案**——寫入落在既有檔上,只有全新租戶才用 `.yaml` 預設拼法。同一個 id 被兩種拼法同時宣告時 **fail-loud**:per-tenant 端點回 409、租戶清單整個以 500 失敗並指名兩個檔(與 threshold-exporter 的 `DuplicateTenantError` 同一立場,不做優先序猜測)
 - **內容範圍驗證**:固定欄位走 struct validator,`Patch` / `Filters` map 走逐 key 規則,違反一次回完整清單
-- **Domain policy**:寫入前檢查租戶的 domain 規則,違反回 403
+- **Domain policy**:寫入前檢查租戶的 domain 規則,違反回 403。判的是租戶**解析後**的 routing([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)):根目錄 `_routing_defaults` → `_routing_profile` 指向的 profile → 租戶 `_routing`,主 receiver、`overrides`、`routes` 每個 receiver 的 type 都判;`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判,可同時回兩條(403 的 `violations[].target` 指出是哪個 route)。policy 只讀 `_domain_policy.yaml`(不讀 `.yml`);profile / defaults 檔讀不開時記 warn、略過該層照判(fail-open)。範圍只有 receiver type,receiver 形狀不在此判(da-guard 判)
 - **Async task**:worker goroutine 池跑批次,`/api/v1/tasks/{id}` polling
 - **SSE 事件**:寫入成功後廣播 `config_change`,讓 UI 即時更新
 - **Path traversal 防護**:租戶 id 驗證拒絕 `..`、`/`、`\`
@@ -77,10 +77,10 @@
 | `GET` | `/api/v1/tenants/{id}/access` | read | 輕量 RBAC 授權探測:可讀該租戶回 `200 {allow,tenant,permission}`、否則 `403`。供姊妹服務(如 recipe-preview #657)重用 tenant-isolation 決策、不重寫 RBAC 也不過度取得設定 |
 | `GET` | `/api/v1/audit/tenants/{id}/access-report` | platform admin(非 org-scoped) | 逆向存取稽核報告:列出「誰、經哪條規則、在什麼 org 條件下」能存取該租戶(shadow/enforce 雙態並列;audit-only,不參與授權)。`?include=org_values` 展開 org 值、`?view=redacted` 去識別化投影;非 admin 恆定 403(防租戶枚舉)。redacted 視圖無法消除 grant 存在性本身的 org-membership 推論(value-pinned org rule 的 grant entry 即弱識別)。**⚠️ environments/domains 為 rule 原文照錄、僅約束租戶清單可見性、不阻擋 read-by-id/write**——受影響 grant 以機器可讀欄 `constraints_not_evaluated` 標示,稽核判讀勿當作存取邊界 |
 | `POST` | `/api/v1/audit/tenants/{id}/access-report/dry-run` | platform admin(非 org-scoped) | what-if 稽核:body 送候選 `_rbac.yaml`(`{"candidate":{"rbac_yaml":"..."}}`),與 live 基準各算一份逆向報告並做結構化 diff(changed / added / removed;以 rule name 對齊,rename 呈現為 removed+added)。純模擬、不寫入;query 同上(`include` / `view`);orgs 沿用 live `_tenant_orgs.yaml`;候選解析失敗回 400 `CANDIDATE_INVALID`;非 admin 恆定 403(同上) |
-| `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR);body 格式錯誤回 400;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE`(見下方「單一租戶端點與 conf.d 範圍」) |
+| `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR;policy 判 body 解析後的**整份** routing,不含平台檔 `tenants:` overlay 提供的 `_routing_profile`);body 格式錯誤回 400;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE`(見下方「單一租戶端點與 conf.d 範圍」) |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE` |
-| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池) |
+| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池)。patch 碰到 `_routing_profile` 或 `_routing` 時,把 patch 蓋上磁碟上的租戶 block 後判解析結果,違反的那筆被排除(PR 模式其餘照常開 PR);**只碰其他 key 的 patch 不判 routing**——磁碟上已違規的租戶,與 routing 無關的寫入不會因此被擋(與 PUT 不對稱) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
 
