@@ -349,6 +349,19 @@ type Writer struct {
 	treeScanTimeout time.Duration
 	stuckTreeScans  atomic.Int32
 
+	// treePrior is the last conf.d walk that COMPLETED and was handed back to
+	// its caller (#2153): scanTree passes it to the next cfg.ScanDirTree as
+	// the prior, so a file whose stat is unchanged is not read and parsed
+	// again. Only scanTree stores it (see there for which walks qualify);
+	// atomic because scanTree runs both under w.mu and without it (Diff,
+	// DryRunValidate).
+	treePrior atomic.Pointer[cfg.TreeScan]
+
+	// onTreeScan is a TEST-ONLY seam (#2153): scanTree calls it, when
+	// non-nil, once per walk it starts. Per-Writer for the same reason as
+	// beforeBaseRestore. Always nil in production.
+	onTreeScan func()
+
 	// beforeBaseRestore is a TEST-ONLY seam (#2070): restoreBase calls it, when
 	// non-nil, right before each checkoutBaseClean attempt (attempt is 1-based).
 	// Per-Writer rather than package-level so parallel tests cannot see each
@@ -769,7 +782,9 @@ type MergeFunc func(existing []byte) (string, error)
 // declaration, not writing to either one.
 //
 // Every call walks the tree as it is NOW, so each op of a batch is judged
-// after the ops before it have written.
+// after the ops before it have written. (Since #2153 the walk takes the
+// previous one as its prior — see scanTree — so an unchanged file is not
+// parsed again; the verdict is still the walker's on the current tree.)
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
@@ -813,9 +828,42 @@ var (
 // serialised. A blocked walk ends
 // only when the file it is reading is opened for writing or the process
 // restarts: removing the file does not unblock a read already in progress.
+//
+// #2153: each walk takes treePrior as its prior — the exporter's own mtime
+// fast-path, under ScanDirTree's contract unchanged: a file whose stat
+// matches the prior's and is older than cfg.TreeScanMtimeGuard carries the
+// prior's hash and tenant declarations unread; anything else (moved stat,
+// young file, prior parse failure, no prior entry) is read, and parsed
+// unless its hash equals the prior's. The walk is therefore never a cache
+// with its own invalidation rule — this Writer's own writes and the PR
+// paths' checkouts change a file's stat, and the walker judges that.
+// ⚠️ It inherits that contract's known gap: if the prior recorded a file
+// while it was still inside the guard, and the file is then rewritten with
+// the same size within the same mtime tick, a walk made after the guard has
+// passed carries the prior's declarations for the old bytes.
+//
+// ⛔ ONLY A WALK HANDED BACK TO ITS CALLER BECOMES THE PRIOR. The store
+// happens in the walking goroutine, under the same mutex that decides
+// abandonment, and only when the walk succeeded and was not abandoned: a
+// walk that errored, or that returns after its caller already timed out and
+// failed closed, never replaces the prior. (A walk that ends with a
+// duplicate-tenant Conflict is a completed walk — its files are exactly what
+// the next walk's fast-path reads — so it does qualify.) The store is
+// last-writer-wins between concurrent callers; any completed walk is a valid
+// prior, an older one only costs reads.
+//
+// ⛔ The prior is published only after ReleaseData, as ScanDirTree's
+// contract asks of a retained scan: the fast-path reads Hash, Stat,
+// TenantIDs and ParseFailed, and keeping every file's bytes and decoded
+// config alive until the next walk would be a retention nobody asked for.
+// No caller of scanTree reads TreeFile.Data or Partials. Once published the
+// scan is never mutated again, so concurrent walks may read it as a prior.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 	if w.stuckTreeScans.Load() > 0 {
 		return nil, errTreeScanStuck
+	}
+	if w.onTreeScan != nil {
+		w.onTreeScan()
 	}
 	timeout := w.treeScanTimeout
 	if timeout <= 0 {
@@ -831,14 +879,20 @@ func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 	// the walk has not finished, and the walk decrements only if abandoned.
 	var mu sync.Mutex
 	finished, abandoned := false, false
+	prior := w.treePrior.Load()
 	go func() {
 		// obs is a literal nil interface on purpose — see cfg.ScanObserver's
-		// typed-nil trap. No prior: a cold scan, nothing retained.
-		s, err := cfg.ScanDirTree(w.configDir, nil, nil, discardScanLogger)
+		// typed-nil trap.
+		s, err := cfg.ScanDirTree(w.configDir, prior, nil, discardScanLogger)
+		if err == nil {
+			s.ReleaseData() // before anyone else can see s
+		}
 		mu.Lock()
 		finished = true
 		if abandoned {
 			w.stuckTreeScans.Add(-1)
+		} else if err == nil {
+			w.treePrior.Store(s)
 		}
 		mu.Unlock()
 		done <- result{s, err}
