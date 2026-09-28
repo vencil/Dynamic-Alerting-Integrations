@@ -82,6 +82,8 @@ from pathlib import Path
 
 import pytest
 
+from _pysource import parse_py
+
 _REPO = Path(__file__).resolve().parents[2]
 _TOOLS_DIR = _REPO / "scripts" / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DIR))
@@ -814,8 +816,7 @@ def test_transition_flags_a_changed_reference_pin_as_its_own_event():
 
 # ── 3. THE SUMMARY-ONLY PROPERTY ──────────────────────────────────────────
 
-_SOURCE = (_TOOLS_DIR / "paired_trend_watch.py").read_text(encoding="utf-8")
-_TREE = ast.parse(_SOURCE)
+_TREE = parse_py(_TOOLS_DIR / "paired_trend_watch.py")
 
 # Every name in `analyze_bench_history` that can mutate an issue. Listed by name
 # rather than checked by intent, so adding a new writer over there does not
@@ -2613,7 +2614,7 @@ def test_the_page_never_spells_an_ordinal_outside_key_label():
     ⚠️ Which is why `render`'s disclosure paragraph builds its two example
     labels by CALLING `key_label` rather than typing `?#1`, `?#2`.
     """
-    tree = ast.parse(Path(ptw.__file__).read_text(encoding="utf-8"))
+    tree = parse_py(ptw.__file__)
 
     docstrings = set()
     for node in ast.walk(tree):

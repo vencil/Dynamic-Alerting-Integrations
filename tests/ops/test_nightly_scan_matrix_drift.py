@@ -60,6 +60,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _pysource import parse_py
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 WORKFLOW = WORKFLOWS_DIR / "nightly-image-scan.yaml"
@@ -2130,7 +2132,7 @@ def test_nothing_in_this_module_reads_the_pin_table_at_import_time() -> None:
             "author to move a call that is already inside a function.")
 
     # And the watched names must still exist, or the scan watches ghosts.
-    defined = {n.name for n in ast.parse(Path(__file__).read_text(encoding="utf-8")).body
+    defined = {n.name for n in parse_py(__file__).body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     ghosts = _WATCHED - defined - {"delivered_refs"}  # delivered_refs is imported
     assert not ghosts, (
