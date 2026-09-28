@@ -228,20 +228,49 @@ class TestRenderCrFile:
             rc = render_cr_file(cr_path, Path(d))
             assert rc == EXIT_CALLER_ERROR
 
-    @pytest.mark.parametrize("text", [
-        pytest.param("- kind: ThresholdConfig\n", id="non-empty-list"),
-        pytest.param("just-a-string\n", id="scalar"),
-        pytest.param("42\n", id="int"),
-        pytest.param("null\n", id="null-document"),
-        pytest.param("[]\n", id="empty-list"),
-        pytest.param("kind: Foo\n", id="wrong-kind-control"),
-    ])
-    def test_non_threshold_config_top_level_is_caller_error(
-            self, text, tmp_path, caplog):
-        """#2371 (b)：頂層不是 mapping 的 CR 與 kind 不符走同一條 rc 2 路徑。
+    _K = "kind: ThresholdConfig\n"
+    _T = "spec:\n  tenants:\n    t1: {}\n"
+    _NOT_TC = "is not a ThresholdConfig resource"
+    _BAD_NAME = "metadata.name must be a non-empty string"
+    _BAD_SPEC = "spec must be a mapping"
 
-        先前 `cr.get("kind")` 在 list／純量上丟 AttributeError，CLI 印
-        traceback、rc 1，破壞「rc 2 = caller error」的契約。
+    @pytest.mark.parametrize("text, message", [
+        pytest.param("- kind: ThresholdConfig\n", _NOT_TC,
+                     id="non-empty-list"),
+        pytest.param("just-a-string\n", _NOT_TC, id="scalar"),
+        pytest.param("42\n", _NOT_TC, id="int"),
+        pytest.param("null\n", _NOT_TC, id="null-document"),
+        pytest.param("[]\n", _NOT_TC, id="empty-list"),
+        pytest.param("kind: Foo\n", _NOT_TC, id="wrong-kind-control"),
+        pytest.param(_K + _T, _BAD_NAME, id="metadata-missing"),
+        pytest.param(_K + "metadata: [x]\n" + _T, _BAD_NAME,
+                     id="metadata-list"),
+        pytest.param(_K + "metadata: null\n" + _T, _BAD_NAME,
+                     id="metadata-null"),
+        pytest.param(_K + "metadata: {namespace: n}\n" + _T, _BAD_NAME,
+                     id="name-missing"),
+        pytest.param(_K + 'metadata: {name: ""}\n' + _T, _BAD_NAME,
+                     id="name-empty"),
+        pytest.param(_K + "metadata: {name: 42}\n" + _T, _BAD_NAME,
+                     id="name-int"),
+        pytest.param(_K + "metadata: {name: [a]}\n" + _T, _BAD_NAME,
+                     id="name-list"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: [x]\n", _BAD_SPEC,
+                     id="spec-list"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: hello\n", _BAD_SPEC,
+                     id="spec-scalar"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: null\n", _BAD_SPEC,
+                     id="spec-null"),
+    ])
+    def test_malformed_cr_is_caller_error(
+            self, text, message, tmp_path, caplog):
+        """#2371 (b)：形狀不對的 CR 一律 rc 2、一行訊息、不寫任何檔案。
+
+        先前頂層 list／純量在 `cr.get("kind")` 丟 AttributeError；缺
+        metadata／name 在 reconcile_one 的 try 外丟 KeyError／TypeError，
+        兩者都是 traceback rc 1。name 為空或不是字串時會寫出 `.yaml`、
+        `42.yaml` 這類檔名。spec 不是 mapping 則被 reconcile_one 的
+        except 吞掉，rc 0 卻什麼都沒寫。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(text, encoding="utf-8")
@@ -249,8 +278,26 @@ class TestRenderCrFile:
         out_dir.mkdir()
         rc = render_cr_file(cr_path, out_dir)
         assert rc == EXIT_CALLER_ERROR
-        assert "is not a ThresholdConfig resource" in caplog.text
+        assert message in caplog.text
         assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("spec", [
+        pytest.param("", id="spec-missing"),
+        pytest.param("spec: {}\n", id="spec-empty"),
+    ])
+    def test_absent_or_empty_spec_still_renders(self, spec, tmp_path):
+        """#2371：缺 spec 維持既有行為，等同 `spec: {}`，只寫 header。
+
+        只有「spec 存在但不是 mapping」算 caller error。缺 spec 與空 spec
+        先前都是 rc 0 並寫出檔案，本次刻意不改。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\n" + spec,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert (out_dir / "ok.yaml").exists()
 
 
 class TestSignalHandler:

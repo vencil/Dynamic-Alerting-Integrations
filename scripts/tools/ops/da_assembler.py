@@ -403,6 +403,21 @@ def render_cr_file(
         log.error("%s is not a ThresholdConfig resource", cr_path)
         return EXIT_CALLER_ERROR
 
+    # #2371: shape checks `reconcile_one` does not make. Its
+    # `cr["metadata"]["name"]` sits outside its try (KeyError/TypeError
+    # traceback, rc 1), a non-str/empty name became the filename (`.yaml`,
+    # `42.yaml`), and a non-mapping `spec` failed inside the try and was
+    # swallowed (rc 0, nothing written). An absent `spec` is left alone: it
+    # renders as `spec: {}` did before.
+    metadata = cr.get("metadata")
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str) or not name:
+        log.error("%s: metadata.name must be a non-empty string", cr_path)
+        return EXIT_CALLER_ERROR
+    if "spec" in cr and not isinstance(cr["spec"], dict):
+        log.error("%s: spec must be a mapping", cr_path)
+        return EXIT_CALLER_ERROR
+
     reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
     return EXIT_OK
 
