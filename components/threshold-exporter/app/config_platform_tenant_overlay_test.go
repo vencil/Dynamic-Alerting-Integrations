@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -55,6 +56,7 @@ type overlayMatrix struct {
 		Files  map[string]string `json:"files"`
 		Expect map[string]struct {
 			Metric        *float64       `json:"metric"`
+			TenantAPI     *float64       `json:"tenant_api"` // #2208: the tenant-api merge core (GET / write gate)
 			Dedup         *string        `json:"dedup"`      // Python routing plane
 			GroupWait     *string        `json:"group_wait"` // Python routing plane
 			ExporterDedup *string        `json:"exporter_dedup"`
@@ -226,6 +228,9 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				assertWalkerRow(t, dir, tree.Name, tenant, want.Walker)
 				assertWalkerAgreesWithMetrics(t, tree.Name, tenant, want.Walker, want.Metric, want.SilentMode, want.ExporterDedup)
 				assertWalkerCriticalRowsServed(t, mgr, tree.Name, tenant, want.Walker)
+				// #2208: the tenant-api merge core, and why it may differ.
+				assertTenantAPIRow(t, dir, tree.Name, tenant, want.TenantAPI)
+				assertTenantAPIAgreesWithMetrics(t, tree.Name, tenant, want.TenantAPI, want.Metric, want.Walker)
 			}
 			// No tenant the table does not name is served — otherwise an
 			// orphan row passes by checking only the tenants it lists.
@@ -235,6 +240,77 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// tenantAPIServed is what the tenant-api merge core — the one behind GET
+// /api/v1/tenants/{id}, POST …/validate and the write gate — resolves for
+// (tenant, overlayMetricKey) when handed the tenant's declaring file.
+// reached=false when tenant-api never gets that far: the tenant is declared
+// by no file, or by one below the root (tenant-api serves top-level files).
+//
+// ⚠️ Not the whole GET: which top-level file GET opens is confd's
+// filename-addressed lookup in the tenant-api module, which this module
+// cannot import. The column pins the merge given the declaring file's bytes.
+func tenantAPIServed(t *testing.T, dir, tenant string) (value float64, served, reached bool) {
+	t.Helper()
+	scan, err := config.ScanDirTree(dir, nil, nil, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("ScanDirTree: %v", err)
+	}
+	loc, lerr := scan.Locate(tenant)
+	if lerr != nil || filepath.Dir(loc) != scan.AbsRoot {
+		return 0, false, false
+	}
+	body, err := os.ReadFile(loc)
+	if err != nil {
+		t.Fatalf("read %s: %v", loc, err)
+	}
+	merged := config.MergeTenantWithRootDefaults(dir, tenant, body)
+	for _, r := range merged.ResolveAt(time.Now()) {
+		if r.Tenant == tenant && r.Component+"_"+r.Metric == overlayMetricKey && r.Severity == "warning" && len(r.CustomLabels) == 0 {
+			return r.Value, true, true
+		}
+	}
+	return 0, false, true
+}
+
+// assertTenantAPIRow checks the tenant-api merge core against the
+// tenant_api column: null ⇔ not reached.
+func assertTenantAPIRow(t *testing.T, dir, tree, tenant string, want *float64) {
+	t.Helper()
+	got, served, reached := tenantAPIServed(t, dir, tenant)
+	switch {
+	case want == nil && reached:
+		t.Errorf("%s: tenant-api merge core reaches %s (%s=%v, served=%v), want not reached", tree, tenant, overlayMetricKey, got, served)
+	case want != nil && !served:
+		t.Errorf("%s: tenant-api merge core serves no %s for %s (reached=%v), want %v", tree, overlayMetricKey, tenant, reached, *want)
+	case want != nil && got != *want:
+		t.Errorf("%s: tenant-api merge core serves %s=%v for %s, want %v", tree, overlayMetricKey, got, tenant, *want)
+	}
+}
+
+// assertTenantAPIAgreesWithMetrics is the column's oracle: the tenant-api
+// core serves what /metrics serves, with exactly two sanctioned gaps.
+//
+//   - not reached (null) while /metrics serves the tenant: only for a
+//     tenant declared below the root (the walker column still resolves it);
+//   - a different value: only where /metrics expands a profile (the walker
+//     column's profile_overlay is set) — the core does not expand profiles
+//     yet (#1385).
+func assertTenantAPIAgreesWithMetrics(t *testing.T, tree, tenant string, api, metric *float64, w *overlayWalker) {
+	t.Helper()
+	switch {
+	case api == nil && metric == nil:
+	case api == nil:
+		// Nested declaring file: /metrics serves it, tenant-api cannot reach it.
+		if w == nil {
+			t.Errorf("%s: %s tenant_api null while /metrics serves %v and the walker finds nothing", tree, tenant, *metric)
+		}
+	case metric == nil:
+		t.Errorf("%s: %s tenant_api %v for a tenant /metrics does not serve", tree, tenant, *api)
+	case *api != *metric && (w == nil || w.ProfileOverlay == nil):
+		t.Errorf("%s: %s tenant_api %v differs from /metrics %v without a profile expansion to explain it", tree, tenant, *api, *metric)
 	}
 }
 

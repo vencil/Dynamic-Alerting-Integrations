@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/boundedcall"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -820,6 +821,8 @@ var (
 // by treeScanTimeout. A walk that outlives it cannot be cancelled (the walker
 // takes no context), so it is left running and counted in stuckTreeScans
 // until it returns; while the count is non-zero, later calls fail at once.
+// The mechanism is boundedcall.Run, shared with the tenant GET's bounded
+// read of the root platform files (#2208).
 //
 // ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
 // without the writer lock — Diff — can each start a walk within the same
@@ -873,47 +876,34 @@ func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 		scan *cfg.TreeScan
 		err  error
 	}
-	done := make(chan result, 1) // buffered: an abandoned walk must not block on send
-	// mu orders "the walk finished" against "the caller gave up", so exactly
-	// one side accounts for an abandoned walk: the caller increments only if
-	// the walk has not finished, and the walk decrements only if abandoned.
-	var mu sync.Mutex
-	finished, abandoned := false, false
 	prior := w.treePrior.Load()
-	go func() {
+	// boundedcall.RunCommit keeps #2153's publication rule: the commit runs
+	// on the walking goroutine under the same mutex that decides abandonment,
+	// and only for a walk handed back to its caller (returned, not panicked,
+	// not abandoned) — so an errored, panicked or late walk never becomes the
+	// prior.
+	r, err := boundedcall.RunCommit(timeout, &w.stuckTreeScans, func() result {
 		// obs is a literal nil interface on purpose — see cfg.ScanObserver's
 		// typed-nil trap.
 		s, err := cfg.ScanDirTree(w.configDir, prior, nil, discardScanLogger)
 		if err == nil {
 			s.ReleaseData() // before anyone else can see s
 		}
-		mu.Lock()
-		finished = true
-		if abandoned {
-			w.stuckTreeScans.Add(-1)
-		} else if err == nil {
-			w.treePrior.Store(s)
+		return result{s, err}
+	}, func(r result) {
+		if r.err == nil {
+			w.treePrior.Store(r.scan)
 		}
-		mu.Unlock()
-		done <- result{s, err}
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case r := <-done:
-		return r.scan, r.err
-	case <-timer.C:
-		mu.Lock()
-		if finished { // lost the race to a walk that just completed: use it
-			mu.Unlock()
-			r := <-done
-			return r.scan, r.err
-		}
-		abandoned = true
-		w.stuckTreeScans.Add(1)
-		mu.Unlock()
+	})
+	switch {
+	case errors.Is(err, boundedcall.ErrStuck):
+		return nil, errTreeScanStuck
+	case errors.Is(err, boundedcall.ErrTimedOut):
 		return nil, fmt.Errorf("%w after %v", errTreeScanTimeout, timeout)
+	case err != nil: // boundedcall.ErrPanicked: the guard fails closed on it too
+		return nil, err
 	}
+	return r.scan, r.err
 }
 
 // ensureNotDeclaredElsewhere is the #2078 guard: target may be written only if
@@ -1439,7 +1429,8 @@ func CheckTenantDocSize(yamlContent string) []string {
 //
 //   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
 //   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>'s root defaults
-//     carrier (the one the exporter's chain selects, #1674)
+//     carrier (the one the exporter's chain selects, #1674) and the root
+//     platform files' per-tenant `tenants:` entries (#2208)
 //   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
 //
 // The middle one is the trap: "key validation" reads like a pure body check and
@@ -1563,13 +1554,18 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 //     the same body (ADR-024 PR4 / #704 write-vs-read asymmetry). It also
 //     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
 //     pass without the tenant having to inline `defaults:` into the body.
+//     The merge also carries the root platform files' `tenants:` entries for
+//     the tenant (#2208) — but only the tenant's OWN keys are judged for
+//     errs: a problem in a platform file's entry never blocks this write and
+//     comes back as a notice naming that file (cfg.TenantMerge).
 //
 // configDir == "" falls back to structural-only key validation (unit tests
 // that exercise YAML shape without a defaults fixture).
 //
 // Returns two channels (#1231 1b, mirroring cfg.KeyValidation): errs is the
 // blocking set every write gate turns into ErrValidation; notices is the
-// advisory set (deprecated-key alias advisories) that must NEVER block a
+// advisory set (deprecated-key alias advisories, and problems in a root
+// platform file's entry for the tenant, #2208) that must NEVER block a
 // write — callers thread it up to the handler responses so the config author
 // sees the migration signal on the write path itself, not only via GET /
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant

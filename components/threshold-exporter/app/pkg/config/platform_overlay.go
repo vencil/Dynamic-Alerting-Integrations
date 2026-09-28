@@ -8,7 +8,9 @@ package config
 // (sortFlatMergeOrder / mergePartialConfigs); this file is what lets the
 // merge core the walker plane shares — ResolveEffective (/effective),
 // ScopeEffective (da-guard) and the exporter's merged_hash — apply the same
-// layer instead of reading only the defaults chain and the tenant file.
+// layer instead of reading only the defaults chain and the tenant file. The
+// tenant-api merge core (merge_tenant.go, #2208) applies it too, from the
+// typed decode (it resolves ScheduledValues, not the untyped values here).
 //
 // Semantics (the oracle is tests/shared/platform_tenant_overlay_matrix.json):
 //
