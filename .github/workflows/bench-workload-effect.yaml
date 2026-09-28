@@ -422,15 +422,35 @@ jobs:
       # 上的變形，而且會來得更早：main 的測試碼用到參考版本沒有的產品 API 就
       # 編不過。實測 2026-08-18（參考版本 2.5 個月大）：bench 檔 + config_test.go
       # 編得過且跑得起來；覆蓋兩個 package 的全部 *_test.go 編不過。
+      #
+      # ⛔ 編不過時的訊息要**分流**，不能一律叫人「縮小 overlay_helpers」（#2348）：
+      #    `*bench_test.go` 由 derived_glob 推導、**永遠**會被疊上去，錯誤只要落在
+      #    其中任何一支，縮小 helper 集合就修不了——唯一的出路是換參考版本，而那是
+      #    一次吸收事件（`.github/bench-reference.yaml` 檔頭、ADR-032 §待決 1）。
+      #    分流依據是**編譯器自己點名的檔案**，不是我們猜的相依；`-gcflags=-e` 關掉
+      #    10 個錯就截斷的預設，否則被截掉的那幾行可能正是 helper 檔的錯。
       - name: Verify the overlay tree builds
         run: |
           set -euo pipefail
+          mkdir -p .build
           cd .refw/components/threshold-exporter/app
           for pkg in "." "./pkg/config"; do
-            if ! go test -c -o /dev/null "$pkg"; then
-              echo "::error::the overlay tree does not build ($pkg) — main's test code has outgrown the pinned reference's API. Narrow overlay_helpers, or this triage needs the reference moved."
-              exit 1
+            log="$GITHUB_WORKSPACE/.build/overlay-build.log"
+            if go test -c -gcflags=-e -o /dev/null "$pkg" > "$log" 2>&1; then
+              continue
             fi
+            cat "$log"
+            # 編譯器錯誤行的形狀是 `<path>.go:<line>:<col>: ...`；只取檔名，其餘不解析。
+            files=$( sed -n 's|^\(\./\)\{0,1\}\([^: ]*\.go\):[0-9][0-9]*:[0-9][0-9]*:.*|\2|p' "$log" | sort -u )
+            bench_files=$( printf '%s\n' "$files" | grep -E '(^|/)[^/]*bench_test\.go$' || true )
+            if [ -n "$bench_files" ]; then
+              echo "::error::the overlay tree does not build ($pkg): compile errors in derived bench file(s): $(printf '%s\n' "$bench_files" | tr '\n' ' '). These are always overlaid (derived_glob '*bench_test.go'), so narrowing overlay_helpers cannot fix this — main's benchmark code has outgrown the pinned reference's API, and W/R is unavailable until the reference is moved. Moving it is an absorption event (.github/bench-reference.yaml header, ADR-032 open question 1); see benchmark-playbook.md, section on workload-definition effect."
+            elif [ -n "$files" ]; then
+              echo "::error::the overlay tree does not build ($pkg): compile errors only in helper/non-bench file(s): $(printf '%s\n' "$files" | tr '\n' ' '). Narrow overlay_helpers, or this triage needs the reference moved."
+            else
+              echo "::error::the overlay tree does not build ($pkg) and no compiler error names a file (see log above) — cannot tell whether narrowing overlay_helpers would help."
+            fi
+            exit 1
           done
           echo "overlay tree builds (both packages)"
 

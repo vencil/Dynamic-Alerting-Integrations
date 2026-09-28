@@ -301,6 +301,12 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 
 `overlay_helpers` 的預設值是**實測迭代出的閉包**（2026-08-18，`3fd96b51`..main）：4 支 `*bench_test.go` ＋ `config_test.go` / `config_debounce_test.go` / `config_metrics_test.go` / `watchloop_test.go`，共 8 個檔，第 4 輪達到不動點。起點是 `config_bench_test.go` 用到 `config_test.go` 的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）。⚠️ 範圍不能無限外推：覆蓋兩個 package 的**全部** `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` / `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗——所以「全都蓋、絕不遺漏」這個安全方向**不可用**。
 
+⛔ **已知狀態：參考版本 `exporter/v2.9.0` 上 W/R 目前不可用，直到下次換參考版本（[#2348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2348)）。** main 的 `config_bench_test.go` 自 [#1935](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1935) 起引用 `scanDirTree` / `tenantExistenceFor` / 新簽名的 `mergePartialConfigs` 等參考版本沒有的產品 API，overlay 樹因此編不過。`*bench_test.go` 由 `derived_glob` 推導、**永遠**會被疊上去，所以**縮小 `overlay_helpers` 修不了這種失敗**——唯一的出路是換參考版本，而那是一次吸收事件（`bench-reference.yaml` 檔頭、ADR-032 §待決 1：不得關閉未結案的效能票）。在那之前：
+
+- 改到 `bench-workload-effect.yaml` 的 PR，其 self-test（`Workload-definition effect (W/R)`，**非** required check）會紅在「Verify the overlay tree builds」。這是預期狀態，不是那支 PR 造成的。
+- 該步驟依**編譯器點名的檔案**分流錯誤訊息：錯誤落在任一 `*bench_test.go` ⇒ 訊息明講「縮小 helper 無效、需換參考版本」；只落在 helper／其他檔 ⇒ 才提示縮小 `overlay_helpers`。編譯帶 `-gcflags=-e`，避免 10 個錯就截斷而漏掉後面 helper 檔的錯。
+- 夜跑 `bench-record.yaml` 的 `M/R` 不做 overlay，兩側各編自己的樹，所以不受這個編譯錯誤影響（2026-09-28 的排程夜跑 [run 36402090814](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/36402090814) 為 `success`；參考樹 `3fd96b51` 單獨 `go test -c` 本機 rc 0）。
+
 residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summary**：首次 self-test 實測 44 個檔、其中真正被 overlay 過的檔引用到的只有 1 個（精確度 2.3%，比它要修的 `workload_drift` 清單 1/20 還差）。summary 印的是封閉性判定，因為那才是「residue 重不重要」的答案。
 
 ⛔ **這是診斷，不是判定**：不開票、不關票、不寫任何跨次執行狀態、也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
