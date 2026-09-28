@@ -15,8 +15,10 @@ import (
 // (invalid YAML among them).
 //
 // It runs write()'s refusal sequence in the same order: guardTenantID → the
-// body-only pre-flight (validateBodyOnly, then the receivers the body writes —
-// what the PUT handler checks before calling Write, #2295) → the tenant file resolution
+// body-only pre-flight (validateBodyOnly, then the receivers the body writes,
+// #2295 — the PUT handler judges those receivers (ReceiverPreflight) before it
+// calls Write, so for a body refused by both, PUT and this dry-run can name a
+// different first reason) → the tenant file resolution
 // (ambiguous tenant file, #2078 declared-elsewhere; here through
 // w.previewTenantFilePath, the lock-free twin of write()'s w.tenantFilePath)
 // → validate(configDir, …). write() runs the last two under its lock; the

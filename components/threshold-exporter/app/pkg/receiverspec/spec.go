@@ -315,10 +315,13 @@ func exactlyOneProblem(rtype string, receiver map[string]any, group []string) (P
 //   - bearer_token / bearer_token_file: null and "" are unset; otherwise a
 //     string. A number, boolean or date is refused (strict): Alertmanager
 //     would take its text, but PyYAML rewrites that text first ('0123' → 83).
+//     So is a string PyYAML would not read as one (pyyamlImplicitKind).
 //   - at most one of HTTPConfigAuthFields may be set.
 //   - proxy_url: null is unset; otherwise a string (strict for the same
-//     reason) that Go's net/url parses the way Alertmanager's release binary
-//     does (ProxyURLProblem).
+//     two reasons) that Go's net/url parses the way Alertmanager's release
+//     binary does (ProxyURLProblem).
+//   - no_proxy: null is unset; otherwise a string (strict for the same two
+//     reasons).
 //   - proxy_from_environment is a YAML boolean; set together with a
 //     non-empty proxy_url or a no_proxy, Alertmanager refuses it. no_proxy
 //     needs a proxy_url key; proxy_connect_header needs a non-empty proxy_url
@@ -358,6 +361,8 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 		}
 		if x, isString := val.(string); !isString {
 			invalid(field, "a string", val)
+		} else if kind := pyyamlImplicitKind(x); kind != "" {
+			out = append(out, pyyamlTextProblem(rtype, field, x, kind))
 		} else if x != "" {
 			set = append(set, key)
 		}
@@ -378,7 +383,9 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 	case nil:
 	case string:
 		proxyText = x != ""
-		if p := ProxyURLProblem(x); p != "" {
+		if kind := pyyamlImplicitKind(x); kind != "" {
+			out = append(out, pyyamlTextProblem(rtype, "http_config.proxy_url", x, kind))
+		} else if p := ProxyURLProblem(x); p != "" {
 			out = append(out, Problem{Kind: KindInvalid, Field: "http_config.proxy_url", Message: fmt.Sprintf(
 				"receiver type %q field \"http_config.proxy_url\" value %q does not parse as a URL (%s)", rtype, x, p)})
 		}
@@ -398,8 +405,9 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 	case nil:
 	case string:
 		noProxy = x != ""
-	case bool, int, int64, uint64, float64:
-		noProxy = true
+		if kind := pyyamlImplicitKind(x); kind != "" {
+			out = append(out, pyyamlTextProblem(rtype, "http_config.no_proxy", x, kind))
+		}
 	default:
 		invalid("http_config.no_proxy", "a string", x)
 	}
@@ -441,6 +449,57 @@ var YAML11BoolLiterals = map[string]bool{
 	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
 	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
 	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
+}
+
+// pyyamlImplicit holds the plain-scalar shapes PyYAML's SafeLoader resolves
+// to something other than a string while yaml.v3 hands them to Go as
+// strings: YAML 1.1 sexagesimal ints and floats (`1:30`, `190:20:30.5`),
+// timestamps (yaml.v3 types fewer of them, e.g. not `2001-12-15T02:59:43`),
+// and the merge / value keys `<<` and `=` (a load error in PyYAML). The
+// boolean words are YAML11BoolLiterals. Copied from PyYAML's
+// Resolver.yaml_implicit_resolvers, but not trusted as a copy:
+// testdata/pyyaml_plain_scalars.json holds PyYAML's verdict on a few hundred
+// candidates (tests/shared/test_receiver_spec_parity.py regenerates it) and
+// TestPyYAMLImplicitKind_MatchesPyYAML holds this to it in both directions.
+var pyyamlImplicit = []struct {
+	kind string
+	re   *regexp.Regexp
+}{
+	{"an integer", regexp.MustCompile(`^[-+]?[1-9][0-9_]*(:[0-5]?[0-9])+$`)},
+	{"a float", regexp.MustCompile(`^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\.[0-9_]*$`)},
+	{"a date", regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\.[0-9]*)?([ \t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?)$`)},
+	{"a merge or value key", regexp.MustCompile(`^(<<|=)$`)},
+}
+
+// pyyamlImplicitKind names what PyYAML reads the plain scalar s as, or ""
+// when it reads a string (#2295). A string field whose text PyYAML retypes
+// is lost on the Python side: the route generator refuses the non-string
+// and skips the receiver, while da-guard and tenant-api (yaml.v3) accepted
+// it — the tenant's routes vanish with rc 0.
+//
+// Trade-off: the Go readers decode into `any`, so they cannot tell a plain
+// scalar from a quoted one; like YAML11BoolLiterals, the rule applies to the
+// text either way. A quoted `"on"` is therefore refused too, although PyYAML
+// reads it as a string (a strict item; the case table's
+// yaml-http-bearer-quoted-on row).
+func pyyamlImplicitKind(s string) string {
+	if _, ok := YAML11BoolLiterals[s]; ok {
+		return "a boolean"
+	}
+	for _, p := range pyyamlImplicit {
+		if p.re.MatchString(s) {
+			return p.kind
+		}
+	}
+	return ""
+}
+
+// pyyamlTextProblem is the refusal of a string field whose text PyYAML
+// retypes (pyyamlImplicitKind).
+func pyyamlTextProblem(rtype, field, text, kind string) Problem {
+	return Problem{Kind: KindInvalid, Field: field, Message: fmt.Sprintf(
+		"receiver type %q field %q value %q reaches the route generator (PyYAML) as %s, not a string, when unquoted; "+
+			"this check cannot see quotes, so use a value that is not a YAML 1.1 boolean, number or date", rtype, field, text, kind)}
 }
 
 // isYAMLBool reports whether v is a value a YAML boolean field accepts:

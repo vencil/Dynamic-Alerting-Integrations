@@ -261,7 +261,6 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
 _YAML_BOOL_REF = "#/definitions/yamlBool"
 _HTTP_CONFIG_REF = "#/definitions/httpConfigOrNull"
 _YAML_BOOL_LITERALS: dict[str, bool] = {}
-_SCALAR_TEXT = (str, bool, int, float)
 
 
 def yaml_bool_literals() -> dict[str, bool]:
@@ -332,7 +331,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
       even when empty); the other ``HTTP_CONFIG_AUTH_FIELDS``: null and ``""``
       are unset, else a string (a number or date is refused: PyYAML has
       already rewritten its text, '0123' → 83); at most one set;
-    - ``proxy_url``: null and ``""`` are unset; else a string. Whether it
+    - ``proxy_url`` / ``no_proxy``: null and ``""`` are unset; else a string
+      (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
       generator's ``--validate`` hands the rendered config to amtool, which
       runs it (the Go copy checks it itself, ProxyURLProblem);
@@ -376,7 +376,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
                     f"false, got {_type_name(pfe)}")
         from_env = _yaml_bool_true(pfe)
     no_proxy_value = value.get("no_proxy")
-    if no_proxy_value is not None and not isinstance(no_proxy_value, _SCALAR_TEXT):
+    if no_proxy_value is not None and not isinstance(no_proxy_value, str):
         return f"field 'http_config.no_proxy' must be a string, got {_type_name(no_proxy_value)}"
     no_proxy = no_proxy_value is not None and no_proxy_value != ""
     header = value.get("proxy_connect_header")

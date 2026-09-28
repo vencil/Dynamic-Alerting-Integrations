@@ -44,7 +44,9 @@ proxy_url parses as a URL is left to amtool (the generator's --validate gate);
 the Go side checks it itself, so those rows carry `python_differs` (the Python
 verdict and why), as tests/shared/routing_policy_parity_matrix.json does. A row may carry its receiver
 as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and yaml.v3 on
-the Go side, which is where the two readers differ (plain `yes`). `schema_valid`
+the Go side, which is where the two readers differ: yaml.v3 keeps plain `on` /
+`1:30` as strings that PyYAML retypes, so Go refuses such text in string fields
+(quoted or not — it cannot see quotes; see the plain-scalar table below). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
 http_config keys its additionalProperties refuses); `strict` names each row
 Alertmanager accepts but the platform refuses on purpose.
@@ -248,3 +250,105 @@ def test_pipeline_writes_yaml_bool_words_as_booleans():
     entry = cfg["webhook_configs"][0]
     assert entry["send_resolved"] is False
     assert entry["http_config"]["proxy_from_environment"] is True
+
+
+# --- PyYAML's implicit typing of plain scalars (#2295) ----------------------
+#
+# bearer_token / bearer_token_file / proxy_url / no_proxy must be strings.
+# yaml.v3 (da-guard, tenant-api) hands `on` or `1:30` over as a string, while
+# PyYAML (the route generator) reads a boolean or an integer — the generator
+# then skips the receiver and the tenant's routes vanish with rc 0. The Go
+# side refuses such text (receiverspec pyyamlImplicitKind); which text that
+# is comes from PyYAML itself, not from memory: the table below is PyYAML's
+# SafeLoader verdict on each candidate, and the Go test
+# TestPyYAMLImplicitKind_MatchesPyYAML reads it.
+
+_PLAIN_SCALARS = os.path.join(os.path.dirname(_CASES), "pyyaml_plain_scalars.json")
+
+
+def _plain_scalar_candidates() -> list[str]:
+    import itertools
+
+    def casings(word):
+        return {"".join(p) for p in itertools.product(*[(c.lower(), c.upper()) for c in word])}
+
+    words = set()
+    for w in ("yes", "no", "true", "false", "on", "off", "y", "n", "null", "nan", "inf"):
+        words |= casings(w)
+    bodies = ("0", "7", "8", "017", "0123", "089", "0_7", "1_000", "1__0", "_1", "1_",
+              "0b101", "0b2", "0b_1", "0B101", "0x1F", "0x_1f", "0xg", "0X1F", "0o17", "0O17",
+              "1:30", "190:20:30", "1:60", "1:5:9", "0:30", "01:30", "1:3a", "1:30:", "1_0:30",
+              "1:30.5", "1:30.", "0:30.5", "1.5", "1.", "1._5", "1_0.5", ".5", "._5", "1e3",
+              "1.0e+3", "1.0e3", "1.e+3", ".5e-1", "1.0E+3", "1:30e+3", ".inf", ".Inf", ".INF",
+              ".iNf", ".nan", ".NaN", ".NAN", ".nAn")
+    numbers = {sign + b for sign in ("", "+", "-") for b in bodies}
+    dates = {"2024-01-01", "2024-1-1", "2024-13-01", "99-01-01", "2002-12-14", "2024-01-01T",
+             "2001-12-14t21:59:43.10-05:00", "2001-12-14 21:59:43.10 -5", "2001-12-15T02:59:43.1Z",
+             "2001-12-15 2:59:43.10", "2001-12-15T02:59:43", "2024-01-01 10:00"}
+    other = {"<<", "=", "~", "!", "&", "*", "abc", "http://p.example:3128", "localhost,127.0.0.1",
+             "/var/run/token", "1.2.3.4", "token-1:30", "a:b", "NULL_x", "yes!", "0x", "0b",
+             "+", "-", ".", ":30"}
+    return sorted(words | numbers | dates | other)
+
+
+def _pyyaml_verdict(text: str) -> str:
+    """The tag PyYAML's SafeLoader resolves the plain scalar `text` to, or
+    "error" when it cannot even compose it."""
+    try:
+        node = yaml.compose("v: " + text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return "error"
+    return node.value[0][1].tag.rsplit(":", 1)[-1]
+
+
+def _plain_scalar_table() -> list[dict]:
+    return [{"text": t, "pyyaml": _pyyaml_verdict(t)} for t in _plain_scalar_candidates()]
+
+
+def test_plain_scalar_table_is_pyyamls_verdict():
+    """The committed table is what PyYAML says today. Regenerate with
+    REGEN_PYYAML_SCALARS=1 when PyYAML or the candidates change."""
+    table = _plain_scalar_table()
+    if os.environ.get("REGEN_PYYAML_SCALARS"):
+        with open(_PLAIN_SCALARS, "w", encoding="utf-8") as fh:
+            fh.write("[\n" + ",\n".join(json.dumps(r, ensure_ascii=False) for r in table) + "\n]\n")
+    with open(_PLAIN_SCALARS, encoding="utf-8") as fh:
+        committed = json.load(fh)
+    assert committed == table, (
+        "pyyaml_plain_scalars.json differs from PyYAML's verdict; rerun with REGEN_PYYAML_SCALARS=1")
+
+
+def test_plain_scalar_table_covers_every_implicit_resolver():
+    """Each tag SafeLoader resolves plain scalars to appears in the table.
+
+    `yaml` (`!`, `&`, `*`) cannot stand as a plain value — those rows compose
+    as null or fail — so it is the one tag the table cannot show."""
+    implicit = {tag.rsplit(":", 1)[-1] for resolvers in yaml.SafeLoader.yaml_implicit_resolvers.values()
+                for tag, _ in resolvers}
+    seen = {row["pyyaml"] for row in _plain_scalar_table()}
+    assert implicit - {"yaml"} <= seen, f"no candidate resolves to {sorted(implicit - {'yaml'} - seen)}"
+    assert {"!", "&", "*"} <= set(_plain_scalar_candidates())
+    assert "yaml" not in seen
+
+
+@pytest.mark.parametrize("key", ["bearer_token", "bearer_token_file", "proxy_url", "no_proxy"])
+def test_generator_refuses_what_pyyaml_retypes(key):
+    """The Python half of the contract: a candidate PyYAML does not read as a
+    string is refused by the generator in each of the four string fields
+    (null is unset; text PyYAML cannot construct fails the whole file)."""
+    from _lib_validation import _http_config_problem
+
+    checked = 0
+    for row in _plain_scalar_table():
+        if row["pyyaml"] in ("str", "null", "error"):
+            continue
+        try:
+            value = yaml.safe_load("v: " + row["text"])["v"]
+        except (yaml.YAMLError, ValueError):
+            continue
+        checked += 1
+        hc = {key: value}
+        if key == "no_proxy":
+            hc["proxy_url"] = "http://p.example:1"
+        assert _http_config_problem(hc), f"{key}: {row['text']!r} ({row['pyyaml']}) is not refused"
+    assert checked > 50
