@@ -609,10 +609,9 @@ class TestCheckLayoutDepthAssumptions:
     def test_nested_dirname_counts_the_same(self, tmp_path):
         """巢狀 dirname 與 parents/.parent 同樣被計數。
 
-        ⚠️ 這一格**不**證明「換拼法不是轉綠的路」——那句宣稱已被撤回。
-        規則只認三種建模過的拼法；字面 `".."` 段、`os.pardir`、間接
-        `_THIS_DIR` 賦值都繞得過，逐條列在
-        `check_layout_depth_assumptions` 的 docstring 裡。
+        ⚠️ 這一格**不**證明「換拼法不是轉綠的路」——規則只認建模過的拼法。
+        `".."` 段與 `_THIS_DIR` 賦值已由下方各格釘住（#1503）；仍繞得過的
+        拼法逐條列在 `check_layout_depth_assumptions` 的 docstring 裡。
         """
         _make_tool(tmp_path, "ops/t.py",
                    "import os\n"
@@ -660,20 +659,112 @@ class TestCheckLayoutDepthAssumptions:
         assert len(errors) == 1
         assert "不是字面常數" in errors[0][1]
 
+    # ── #1503：docstring 七個盲點裡「已關」的那幾條，各自一格 ─────────────
+    #
+    # ⛔ 每一格只靠**一種**機制轉紅，所以撤回那一種機制就只有那一格轉綠——
+    # 這是反事實能分辨「哪個機制在做事」的前提。
+
+    @staticmethod
+    def _levels(tmp_path, body):
+        _make_tool(tmp_path, "ops/t.py", body)
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        return errors
+
+    def test_parents_index_counts_n_plus_one(self, tmp_path):
+        """盲點 1／7：`parents[2]` 是 3 層，與 `.parent` ×3 判決相同。"""
+        by_index = self._levels(
+            tmp_path, "from pathlib import Path\n"
+                      "ROOT = Path(__file__).resolve().parents[2]\n")
+        assert len(by_index) == 1 and "上溯 3 層" in by_index[0][1]
+        by_chain = self._levels(
+            tmp_path, "from pathlib import Path\n"
+                      "ROOT = Path(__file__).resolve().parent.parent.parent\n")
+        assert len(by_chain) == 1 and "上溯 3 層" in by_chain[0][1]
+
+    def test_chained_parents_accumulate(self, tmp_path):
+        """盲點 2：`parents[1].parents[1]` 是 2+2 = 4 層。"""
+        errors = self._levels(
+            tmp_path, "from pathlib import Path\n"
+                      "ROOT = Path(__file__).parents[1].parents[1]\n")
+        assert len(errors) == 1 and "上溯 4 層" in errors[0][1]
+
+    @pytest.mark.parametrize("expr", [
+        "os.path.join(os.path.dirname(__file__), '..', '..')",
+        "os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)",
+        "os.path.join(os.path.dirname(__file__), '../..')",
+        "Path(__file__).parent.joinpath('..', '..')",
+        "Path(__file__).parent / '..' / '..'",
+        "Path(os.path.dirname(__file__), '..', '..')",
+        # 非字面段計 0（不往寬鬆方向花掉未知）
+        "os.path.join(os.path.dirname(__file__), sub, '..', '..')",
+        # 判的是峰值不是淨值：爬到 3 再下探回 2 仍然碰過 `/`
+        "os.path.join(os.path.dirname(__file__), '..', '..', 'rule-packs')",
+    ])
+    def test_literal_pardir_segments_count(self, tmp_path, expr):
+        """盲點 4：字面 `..` / `os.pardir` 段計為上溯（不經任何賦值）。"""
+        errors = self._levels(
+            tmp_path, f"import os\nfrom pathlib import Path\nsub = 'x'\n"
+                      f"ROOT = {expr}\n")
+        assert len(errors) == 1, errors
+        assert "上溯 3 層" in errors[0][1] and "飽和" in errors[0][1]
+
+    def test_module_scope_assignment_is_followed(self, tmp_path):
+        """盲點 3：隔一層賦值不再看不見（不含任何 `..`）。"""
+        errors = self._levels(
+            tmp_path, "from pathlib import Path\n"
+                      "HERE = Path(__file__).resolve().parent\n"
+                      "ROOT = HERE.parent.parent\n")
+        assert len(errors) == 1 and "ops/t.py:3" in errors[0][1]
+        assert "上溯 3 層" in errors[0][1]
+
+    def test_function_scope_assignment_is_followed(self, tmp_path):
+        """盲點 3（函式內）：區域變數同樣依序追蹤，且看得到 module 的名字。"""
+        errors = self._levels(
+            tmp_path, "import os\n"
+                      "_THIS_DIR = os.path.dirname(__file__)\n"
+                      "def f():\n"
+                      "    here = os.path.dirname(_THIS_DIR)\n"
+                      "    return os.path.dirname(here)\n")
+        assert len(errors) == 1 and "ops/t.py:5" in errors[0][1]
+        assert "函式內" in errors[0][1]
+
+    def test_the_issue_1501_shape_is_caught(self, tmp_path):
+        """⛔ 活體原形：`_THIS_DIR` + 三個 `".."`（賦值 + `..` 兩個機制合力）。
+
+        只報定義那一行：用到 `_REPO_ROOT` 的後續各行不重複報，否則一個缺陷
+        會變成十幾條訊息。
+        """
+        errors = self._levels(
+            tmp_path,
+            "import os\n"
+            "_THIS_DIR = os.path.dirname(os.path.abspath(__file__))\n"
+            "_REPO_ROOT = os.path.abspath(os.path.join(_THIS_DIR, '..', '..', '..'))\n"
+            "P = os.path.join(_REPO_ROOT, 'rule-packs')\n"
+            "Q = os.path.join(_REPO_ROOT, 'docs', 'schemas')\n")
+        assert len(errors) == 1, errors
+        assert "ops/t.py:3" in errors[0][1] and "上溯 4 層" in errors[0][1]
+
     @pytest.mark.parametrize("body", [
-        # ⚠️ 這一格釘的是**今天的（已知偏低的）門檻**，不是「這樣寫是安全的」。
-        # `parents[2]` 與 `.parent` ×3 爬一樣多層、在映像深度都解析成 `/`，
-        # 但目前只有後者被擋（盲點 #1／#7，見 check_layout_depth_assumptions
-        # 的 docstring）。⇒ 修那個偏移量時**必須同時改這一格**，否則會被自己
-        # 的測試擋住。
-        "from pathlib import Path\nROOT = Path(__file__).resolve().parents[2]\n",
+        # 2 層是映像的上限（→ `/opt`）。`parents[1]` ≡ `.parent` ×2。
+        # ⛔ 先前這一格放的是 `parents[2]`——那是 3 層、在映像解析成 `/`，
+        # 釘成合法等於把盲點 1／7 寫進測試（#1503）。它現在在報錯側。
+        "from pathlib import Path\nROOT = Path(__file__).resolve().parents[1]\n",
         # 同目錄尋址：映像 flat layout 的正解，必須不被擋
         "from pathlib import Path\nD = Path(__file__).resolve().parent / 'x.yaml'\n",
         # 與 __file__ 無關的深度運算不歸這條規則管
         "from pathlib import Path\nROOT = Path('/etc/a/b').parents[2]\n",
+        # 出貨檔幾乎每支都有的 repo-layout sys.path：_THIS_DIR(1) + ".." = 2 層
+        "import os, sys\n_THIS_DIR = os.path.dirname(os.path.abspath(__file__))\n"
+        "sys.path.insert(0, os.path.join(_THIS_DIR, '..'))\n",
+        # 先下探再上來：峰值只到 1 層
+        "import os\nP = os.path.join(os.path.dirname(__file__), 'sub', '..', 'x')\n",
+        # 名字被重新賦值成與 __file__ 無關的東西之後，不再算 rooted
+        "import os\nD = os.path.dirname(__file__)\nD = '/etc'\n"
+        "P = os.path.join(D, '..', '..', '..')\n",
     ])
     def test_legal_shapes_stay_green(self, tmp_path, body):
-        """⛔ 誤紅面。這三種都是正當寫法，擋掉它們會讓人把規則刪掉。"""
+        """⛔ 誤紅面。這些都是正當寫法，擋掉它們會讓人把規則刪掉。"""
         _make_tool(tmp_path, "ops/t.py", body)
         assert mod.check_layout_depth_assumptions(
             {"ops/t.py"}, tools_src=tmp_path) == []

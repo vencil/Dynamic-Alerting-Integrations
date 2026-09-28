@@ -57,7 +57,6 @@ from _lib_confd import resolve_defaults_file  # noqa: E402  (#1674 carrier selec
 # Repo-layout import compatibility
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,

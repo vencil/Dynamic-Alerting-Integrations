@@ -32,6 +32,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from _lint_helpers import (
     parse_command_map,
@@ -116,9 +117,12 @@ REQUIRED_DATA_FILES: dict = {
 }
 
 # 映像把每支工具攤平到 WORKDIR（Dockerfile `WORKDIR /opt/da-tools` + build.sh
-# 的 `cp <src> tools/`），所以 `/opt/da-tools/x.py` 只有 3 個祖先 → 合法的
-# `parents[N]` 上限是 2。repo 佈局下同一支檔案有 8~9 個，因此任何「數上去幾層」
-# 的寫法在兩種佈局下必然分岔，而 repo 佈局會把它藏住。
+# 的 `cp <src> tools/`），所以 `/opt/da-tools/x.py` 只有 3 個祖先
+# （/opt/da-tools、/opt、/）→ 從 `__file__` 合法的上溯上限是 **2 層**
+# （`.parent` ×2 ≡ `parents[1]` → `/opt`；第 3 層就是 `/`）。⛔ 這是層數，不是
+# `parents[]` 的 index——`parents[N]` 是 N+1 層（#1503 盲點 1）。repo 佈局下
+# 同一支檔案有 8~9 個，因此任何「數上去幾層」的寫法在兩種佈局下必然分岔，
+# 而 repo 佈局會把它藏住。
 MAX_IMAGE_ANCESTOR_INDEX = 2
 
 
@@ -276,84 +280,268 @@ def check_underscore_imports(
     return errors
 
 
-def _ascent_kind(node: ast.AST) -> str:
+class _Ascent(NamedTuple):
+    """How far an expression rooted at ``__file__`` sits above the file.
+
+    ``cur`` is the net level the expression ENDS at (``__file__`` is 0, its
+    directory 1). ``peak`` is the highest level any step *inside this
+    expression* reaches — the number that decides saturation, because
+    ``os.path.join(d, "..", "..", "..", "rule-packs")`` ends one level lower
+    than it climbed, and it is the climb that hits ``/``. A name looked up in
+    the assignment table contributes its ``cur`` but NOT a peak: its own
+    definition line is where its climb is reported, so every later use does
+    not repeat the finding.
+    """
+
+    cur: int
+    peak: int
+    unknown: bool
+    kinds: frozenset
+
+
+_NO_PEAK = -1
+# Callables that hand back (a form of) their first argument's path.
+_PASSTHROUGH_FUNCS = frozenset({
+    "abspath", "realpath", "normpath", "fspath", "str", "expanduser",
+    "Path", "PurePath", "PosixPath", "PurePosixPath", "WindowsPath",
+    "PureWindowsPath",
+})
+# Of those, the pathlib constructors also JOIN their further arguments.
+_JOINING_CTORS = frozenset({
+    "Path", "PurePath", "PosixPath", "PurePosixPath", "WindowsPath",
+    "PureWindowsPath",
+})
+_OS_PATH_OWNERS = frozenset({"path", "posixpath", "ntpath", "osp"})
+
+
+def _func_name(func: ast.AST) -> "str | None":
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _is_os_path_func(func: ast.AST, name: str) -> bool:
+    """``os.path.<name>`` / ``path.<name>`` / a bare ``<name>`` import."""
+    if isinstance(func, ast.Name):
+        return func.id == name
+    if not (isinstance(func, ast.Attribute) and func.attr == name):
+        return False
+    owner = func.value
+    return ((isinstance(owner, ast.Attribute) and owner.attr == "path")
+            or (isinstance(owner, ast.Name) and owner.id in _OS_PATH_OWNERS))
+
+
+def _segment_steps(node: ast.AST) -> "list[int]":
+    """Level changes one join argument makes: ``+1`` per ``..``, ``-1`` per name.
+
+    ⛔ A segment this reader cannot evaluate (a variable, a ``*parts``) counts
+    as **0**, not as a descent. Counting it as ``-1`` would let
+    ``join(d, var, "..", "..", "..")`` net out below the threshold — i.e. the
+    unknown would be spent in the permissive direction.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        steps = []
+        for part in node.value.replace("\\", "/").split("/"):
+            if part == "..":
+                steps.append(1)
+            elif part not in ("", "."):
+                steps.append(-1)
+        return steps
+    if ((isinstance(node, ast.Attribute) and node.attr == "pardir")
+            or (isinstance(node, ast.Name) and node.id == "pardir")):
+        return [1]
+    return [0]
+
+
+def _apply_segments(base: _Ascent, segments) -> _Ascent:
+    cur, peak, kinds = base.cur, base.peak, base.kinds
+    for seg in segments:
+        for step in _segment_steps(seg):
+            cur += step
+            if step > 0:
+                # Only a CLIMB moves the peak: descending from an inherited
+                # level is not this expression reaching it.
+                kinds = kinds | {"chain"}
+                peak = max(peak, cur)
+    return _Ascent(cur, peak, base.unknown, kinds)
+
+
+def _climb(base: _Ascent, levels: int, kind: str) -> _Ascent:
+    cur = base.cur + levels
+    return _Ascent(cur, max(base.peak, cur), base.unknown,
+                   base.kinds | {kind})
+
+
+def _evaluate_ascent(node: ast.AST, names: dict) -> "_Ascent | None":
+    """Where *node* sits relative to ``__file__``, or None if it is not rooted there.
+
+    Rooted means: built from ``__file__`` itself or from a name whose
+    assignment this scan already evaluated (``names``). Four spellings climb:
+    ``parents[N]`` (N+1 levels), ``.parent``, ``dirname(...)``, and a literal
+    ``..`` / ``os.pardir`` join segment (``os.path.join``, ``joinpath``,
+    ``Path(a, b)``, the ``/`` operator).
+    """
+    if isinstance(node, ast.Name):
+        if node.id == "__file__":
+            return _Ascent(0, 0, False, frozenset())
+        entry = names.get(node.id)
+        if entry is None:
+            return None
+        return _Ascent(entry.cur, _NO_PEAK, False, entry.kinds)
+    if isinstance(node, ast.Attribute):
+        if node.attr == "parent":
+            base = _evaluate_ascent(node.value, names)
+            return None if base is None else _climb(base, 1, "chain")
+        return None
+    if isinstance(node, ast.Subscript):
+        target = node.value
+        if not (isinstance(target, ast.Attribute) and target.attr == "parents"):
+            return None
+        base = _evaluate_ascent(target.value, names)
+        if base is None:
+            return None
+        idx = node.slice
+        if isinstance(idx, ast.Constant) and isinstance(idx.value, int):
+            # ⛔ parents[N] is N+1 levels: parents[0] is already the directory.
+            return _climb(base, idx.value + 1, "index")
+        return _Ascent(base.cur, base.peak, True, base.kinds | {"index"})
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        base = _evaluate_ascent(node.left, names)
+        return None if base is None else _apply_segments(base, [node.right])
+    if not isinstance(node, ast.Call):
+        return None
+
+    func = node.func
+    if _is_os_path_func(func, "dirname"):
+        base = _evaluate_ascent(node.args[0], names) if node.args else None
+        return None if base is None else _climb(base, 1, "chain")
+    if _is_os_path_func(func, "join") and node.args:
+        base = _evaluate_ascent(node.args[0], names)
+        return None if base is None else _apply_segments(base, node.args[1:])
+    if isinstance(func, ast.Attribute) and func.attr == "joinpath":
+        base = _evaluate_ascent(func.value, names)
+        return None if base is None else _apply_segments(base, node.args)
+    name = _func_name(func)
+    if name in _PASSTHROUGH_FUNCS and node.args:
+        base = _evaluate_ascent(node.args[0], names)
+        if base is not None:
+            if name in _JOINING_CTORS:
+                return _apply_segments(base, node.args[1:])
+            return base
+    if isinstance(func, ast.Attribute):
+        # A method on a rooted path (`.resolve()`, `.absolute()`, …) keeps it.
+        base = _evaluate_ascent(func.value, names)
+        if base is not None:
+            return base
+    # ⛔ Any other call that takes a rooted argument is assumed to hand it back
+    # (the conservative reading: it keeps a climb inside visible rather than
+    # letting an unmodelled wrapper launder it).
+    for arg in node.args:
+        base = _evaluate_ascent(arg, names)
+        if base is not None:
+            return base
+    return None
+
+
+_ASCENT_NODES = (ast.Attribute, ast.Subscript, ast.Call, ast.BinOp)
+
+
+def _scan_depth(tree: ast.Module) -> "dict[int, _Ascent]":
+    """Every line whose expression climbs past the image, with its worst ascent.
+
+    Statements are visited IN ORDER per scope, so an assignment is known to
+    the lines after it (``_THIS_DIR = os.path.dirname(__file__)`` then
+    ``os.path.join(_THIS_DIR, "..", "..", "..")``). Functions are visited
+    after their enclosing scope, seeded with that scope's final table —
+    which is what they see when called.
+    """
+    worst: "dict[int, _Ascent]" = {}
+
+    def emit(expr: ast.AST, names: dict) -> None:
+        for n in ast.walk(expr):
+            if not isinstance(n, _ASCENT_NODES):
+                continue
+            r = _evaluate_ascent(n, names)
+            if r is None or not (r.unknown or r.peak > MAX_IMAGE_ANCESTOR_INDEX):
+                continue
+            prev = worst.get(n.lineno)
+            if (prev is None or (r.unknown and not prev.unknown)
+                    or (not prev.unknown and r.peak > prev.peak)):
+                worst[n.lineno] = r
+
+    def assign(stmt: ast.stmt, names: dict) -> None:
+        if isinstance(stmt, ast.Assign):
+            targets, value = stmt.targets, stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets, value = [stmt.target], stmt.value
+        else:
+            return
+        r = _evaluate_ascent(value, names)
+        for t in targets:
+            if not isinstance(t, ast.Name):
+                continue
+            if r is None:
+                names.pop(t.id, None)
+            else:
+                names[t.id] = r
+
+    def visit(stmts, names: dict, funcs: list) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs.append(stmt)
+                continue
+            if isinstance(stmt, ast.ClassDef):
+                visit(stmt.body, dict(names), funcs)
+                continue
+            for _, value in ast.iter_fields(stmt):
+                items = value if isinstance(value, list) else [value]
+                if items and all(isinstance(i, ast.stmt) for i in items):
+                    visit(items, names, funcs)
+                    continue
+                for item in items:
+                    if isinstance(item, (ast.excepthandler, ast.match_case)):
+                        visit(item.body, names, funcs)
+                    elif isinstance(item, ast.withitem):
+                        emit(item.context_expr, names)
+                    elif isinstance(item, ast.expr):
+                        emit(item, names)
+            assign(stmt, names)
+
+    module_names: dict = {}
+    pending: list = []
+    visit(tree.body, module_names, pending)
+    scopes = [(fn, module_names) for fn in pending]
+    while scopes:
+        fn, outer = scopes.pop()
+        local = dict(outer)
+        inner: list = []
+        visit(fn.body, local, inner)
+        scopes.extend((f, local) for f in inner)
+    return worst
+
+
+def _ascent_kind(kinds: frozenset) -> str:
     """Which spelling produced the ascent: ``index`` / ``chain`` / ``mixed``.
 
     ⛔ The CONSEQUENCE differs by spelling, not by scope, and the failure
     message has to say which one: ``parents[N]`` past the end raises
-    ``IndexError`` (loud, wherever it sits), while a ``.parent`` chain or
-    nested ``dirname`` SATURATES at the filesystem root and returns a wrong
-    path with no exception (quiet). An earlier version of this message keyed
-    the consequence off module-vs-function scope, which is unrelated: a
-    ``parents[N]`` inside a function still raises.
+    ``IndexError`` (loud, wherever it sits), while a ``.parent`` chain, nested
+    ``dirname`` or a ``..`` segment SATURATES at the filesystem root and
+    returns a wrong path with no exception (quiet). An earlier version of this
+    message keyed the consequence off module-vs-function scope, which is
+    unrelated: a ``parents[N]`` inside a function still raises.
     """
-    has_index = any(
-        isinstance(n, ast.Subscript) and isinstance(n.value, ast.Attribute)
-        and n.value.attr == "parents" for n in ast.walk(node))
-    has_chain = any(
-        (isinstance(n, ast.Attribute) and n.attr == "parent")
-        or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "dirname")
-        for n in ast.walk(node))
-    if has_index and has_chain:
+    if "index" in kinds and "chain" in kinds:
         return "mixed"
-    return "index" if has_index else "chain"
-
-
-def _walks_up_from_file(node: ast.AST) -> "int | None":
-    """How many directory levels *node* climbs, if it is rooted at ``__file__``.
-
-    Returns None when the expression is not rooted at ``__file__`` (nothing to
-    say about it) and ``-1`` when it climbs by an amount this reader cannot
-    evaluate — a non-literal ``parents[n]``. That case is reported rather than
-    waved through: an index the lint cannot read is an index it cannot vouch
-    for, and fail-open is the direction that let #1494 ship.
-
-    ⛔ Three spellings, not one. `parents[N]` raises IndexError past the end,
-    while a `.parent` chain and `os.path.dirname` nesting SATURATE at the
-    filesystem root — same wrong answer, no exception, which is strictly
-    harder to notice (measured: `Path('/opt/da-tools/x.py').parent` four times
-    is `/`, no error). A lint that understood only the loud spelling would
-    name the two quiet ones as its own bypass route.
-    """
-    if not any(isinstance(n, ast.Name) and n.id == "__file__"
-               for n in ast.walk(node)):
-        return None
-    depth, cur, unknown = 0, node, False
-    while True:
-        if (isinstance(cur, ast.Subscript)
-                and isinstance(cur.value, ast.Attribute)
-                and cur.value.attr == "parents"):
-            idx = cur.slice
-            if isinstance(idx, ast.Constant) and isinstance(idx.value, int):
-                depth += idx.value
-            else:
-                unknown = True
-            cur = cur.value.value
-            continue
-        if isinstance(cur, ast.Attribute) and cur.attr == "parent":
-            depth += 1
-            cur = cur.value
-            continue
-        if isinstance(cur, ast.Attribute) and cur.attr in ("resolve", "absolute"):
-            cur = cur.value
-            continue
-        if isinstance(cur, ast.Call):
-            func = cur.func
-            if isinstance(func, ast.Attribute) and func.attr == "dirname":
-                depth += 1
-                cur = cur.args[0] if cur.args else func.value
-                continue
-            cur = func
-            continue
-        break
-    return -1 if unknown else depth
+    return "index" if "index" in kinds else "chain"
 
 
 def check_layout_depth_assumptions(
     tool_rel_paths: set, tools_src: Path = None
 ) -> list:
-    """出貨檔不得靠「數上去幾層」定位 repo 內的東西（#1494）。
+    """出貨檔不得靠「數上去幾層」定位 repo 內的東西（#1494、#1501、#1503）。
 
     映像把每支工具攤平（``/opt/da-tools/x.py``，3 個祖先），repo 佈局下同一支
     有 8~9 個。任何 ``__file__`` 起算、上溯超過
@@ -361,50 +549,49 @@ def check_layout_depth_assumptions(
     客戶手上的映像裡永遠是錯的 —— 這正是本 repo 全套 5000+ 測試看不到
     ``_grar_validate.py`` 那一行的原因。
 
-    ⚠️ **這是 best-effort 的補刀，不是完整的類別守衛。** 它認得三種拼法
-    （``parents[N]`` / ``.parent`` 鏈 / 巢狀 ``os.path.dirname``），而**與拼法
-    無關**的那一支是 ``tests/ops/test_image_flat_layout.py``（實際 import，
-    任何拼法都躲不掉，但只看得到會拋錯的那一半）。本規則的價值在於補「安靜
-    飽和」那一半，代價是它只覆蓋建模過的拼法。
+    ⚠️ **這是 best-effort 的補刀，不是完整的類別守衛。** 它認得四種上溯
+    （``parents[N]`` / ``.parent`` 鏈 / 巢狀 ``dirname`` / 字面 ``..`` 段），
+    而**與拼法無關**的那一支是 ``tests/ops/test_image_flat_layout.py``（實際
+    import、實跑 ``--generate-observed-map``，任何拼法都躲不掉）。本規則的價值
+    在於補「安靜飽和」那一半，代價是它只覆蓋建模過的拼法。
 
-    ⛔ 三輪對抗式盲審實測出來的已知盲點，逐條列在這裡而不是留白：
+    ⛔ 三輪對抗式盲審實測出來的七個盲點，逐條標明現況（issue 1503）：
 
-    1. ``parents[N]`` 的層數記成 N，實際是 **N+1**（``parents[2]`` ≡
-       ``.parent`` ×3）。方向是**少報**（只會漏，不會誤擋）。
-    2. 鏈式 ``parents[1].parents[1]`` 因此被算成 2 層而放行，但它在映像深度
-       實測就是 ``IndexError`` ——與 #1494 同形。
-    3. ``__file__`` 必須字面出現在同一個運算式裡；隔一層 ``_THIS_DIR =
-       os.path.dirname(__file__)`` 就看不到，而 71 支出貨檔裡有 **58 支**用
-       這個慣用寫法。
-    4. 字面 ``".."`` / ``os.pardir`` 路徑段（``os.path.join(d, "..", "..")``、
-       ``joinpath("..")``、``p / ".."``）完全不計數。
-    5. ``Path(*parts[:-4])`` 這類切片不計數。
-    6. ``try/except IndexError`` 已經處置過的寫法仍會被報。
-    7. 因為第 1 條，**等價的兩種拼法判決不同**：``parents[2]`` 與
-       ``.parent`` ×3 爬一樣多層、在映像深度都解析成 ``/``，但前者放行、後者
-       被擋。⇒ 把 ``.parent.parent.parent`` 改寫成 ``parents[2]`` 就是一條
-       轉綠路。⚠️ 而 ``tests/lint/test_check_build_completeness.py`` 的
-       ``test_legal_shapes_stay_green`` 目前把 ``parents[2]`` 明文釘成合法，
-       所以修第 1 條時**必須同時改那一格**，否則會被自己的測試擋住。
+    1. **已關** — ``parents[N]`` 記成 **N+1** 層（``parents[2]`` ≡
+       ``.parent`` ×3）。``test_legal_shapes_stay_green`` 原本把
+       ``parents[2]`` 釘成合法，那一格已移到報錯側。
+    2. **已關** — 鏈式 ``parents[1].parents[1]`` 逐段累加（2+2=4 層）。
+    3. **已關（範圍內）** — 同一 scope 內**依序**追蹤 ``NAME = <rooted 運算式>``
+       賦值（module scope 與函式 scope 皆然，函式以外層 scope 的最終表為起點），
+       所以 ``_THIS_DIR = os.path.dirname(__file__)`` 之後的
+       ``os.path.join(_THIS_DIR, "..", "..", "..")`` 會被算成 4 層。
+       **知情保留**：跨模組（``from x import _THIS_DIR``）、屬性
+       （``self.root``）、函式參數、tuple 解構、``global`` 回寫、``AugAssign``
+       不追——它們需要的是資料流分析，而本規則刻意維持單檔、單趟 AST。
+    4. **已關（範圍內）** — 字面 ``".."`` / ``os.pardir`` 段在
+       ``os.path.join`` / ``joinpath`` / ``Path(a, b, …)`` / ``p / ".."`` 中
+       計為上溯，``"../.."`` 這類複合字串逐段拆開；一般名稱段計為下探，而
+       ``peak``（途中爬到的最高點）才是判決依據。**知情保留**：非字面段
+       （變數、``*parts``）計為 0——既不上也不下，刻意不往寬鬆方向花掉未知；
+       字串拼接（``d + "/.."``、f-string）不計，出貨檔今天零處（改寫成
+       ``os.path.join`` 即落回範圍內）。
+    5. **知情保留** — ``Path(*p.parts[:-4])`` 這類切片不計數。要建模得模擬
+       序列運算；今天出貨檔零處，觸發條件是第一處出現——屆時它仍逃不過
+       ``test_image_flat_layout`` 的實跑，只是安靜的那一半要靠那支測試的
+       具體斷言。
+    6. **知情保留** — ``try/except IndexError`` 包起來的 ``parents[N]`` 仍會
+       被報。捕到例外不代表退路正確（#1494 那種退到常數的退路正是 fail-open），
+       而誤紅的代價是改寫成「找檔案」，那本來就是正解。
+    7. **已關** — 隨第 1 條一起關：``parents[2]`` 與 ``.parent`` ×3 現在判決
+       相同，把一種改寫成另一種不再是轉綠路。
 
-    ⇒ **今天出貨檔裡確實還有第 3+4 條合起來造成的活體漏網**（`_registry_lib`
-    與 `_observed_map_lib` 各一處 ``_THIS_DIR`` + 三個 ``".."``）。修法與這些
-    盲點的收口一起放在 **issue 1503**（那兩處程式碼本身是 **issue 1501**），
-    刻意不夾帶進 #1494——理由是本規則每被加固一輪就製造新的缺陷，而真正與
-    拼法無關的守衛是上面那支行為測試。
-
-    ⚠️ **本規則在 CI 的執行點是 pytest twin，不是 pre-commit hook。**
-    ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``。⛔ 先前這裡
-    寫「沒有任何 workflow 呼叫 ``pre-commit run``」是**錯的**——``ci.yml`` 的
-    Lint job 有 **47** 條 ``pre-commit run <hook-id> --all-files``，只是這個
-    hook **不在那份列舉裡**（``grep build-completeness .github/workflows/``
-    零命中）。差別很要緊：修法是往既有清單加一行，不是引進 pre-commit。
-    CI 上實際跑到這條規則的是
+    ⛔ **本規則在 CI 有兩個執行點**：``ci.yml`` Lint job 的
+    ``pre-commit run build-completeness-check --all-files``（issue 1503 接上，
+    先前 47 條 ``pre-commit run`` 裡沒有它），以及
     ``tests/lint/test_check_build_completeness.py`` 的 repo-level 迴歸
-    （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``），
-    它們住在 ``tests/`` 底下由 ``python-tests-run`` 帶到。後果是：只加在 hook
-    側、twin 沒跟上的新規則在 CI 是零覆蓋。把 hook 也接進 Lint job 一併留在
-    **issue 1503**。
+    （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``，由
+    ``python-tests-run`` 帶到）。後者仍是必要的：新規則若只加在 hook 側、
+    twin 沒跟上，hook 的 ``files:`` 過濾可能讓它在 PR 上不觸發。
 
     Returns:
         list of (severity, message) tuples
@@ -442,34 +629,22 @@ def check_layout_depth_assumptions(
                 for ln in range(node.lineno,
                                 (node.end_lineno or node.lineno) + 1):
                     enclosing.setdefault(ln, True)
-        worst = {}
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
-                continue
-            depth = _walks_up_from_file(node)
-            if depth is None:
-                continue
-            if depth != -1 and depth <= MAX_IMAGE_ANCESTOR_INDEX:
-                continue
-            prev = worst.get(node.lineno)
-            if prev is None or depth == -1 or depth > prev[0]:
-                worst[node.lineno] = (depth, _ascent_kind(node))
-        for lineno, (depth, kind) in sorted(worst.items()):
+        for lineno, r in sorted(_scan_depth(tree).items()):
             where = "函式內" if lineno in enclosing else "module scope"
             how = ("上溯層數不是字面常數，無法驗證"
-                   if depth == -1 else f"從 __file__ 上溯 {depth} 層")
+                   if r.unknown else f"從 __file__ 上溯 {r.peak} 層")
             # ⛔ 後果由**拼法**決定，不是由 scope 決定。
             consequence = {
                 "index": "超出範圍時 IndexError（module scope 就是 import 期死）",
                 "chain": "不會拋錯，飽和在檔案系統根目錄——安靜地算出錯的路徑",
                 "mixed": "視實際運算順序而定：可能 IndexError，也可能安靜飽和",
-            }[kind]
+            }[_ascent_kind(r.kinds)]
             errors.append((
                 "error",
                 f"{rel}:{lineno} ({where}) {how}，"
                 f"但映像攤平後只有 {MAX_IMAGE_ANCESTOR_INDEX + 1} 個祖先 → "
                 f"{consequence}。改成「找檔案」而不是「數層數」"
-                f"（見 _grar_validate._find_platform_rules_configmap）。"
+                f"（見 _lib_compat.find_project_root）。"
             ))
     return errors
 

@@ -49,7 +49,6 @@ from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 # Repo-layout import compatibility (stripped in Docker build)
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         YamlFileError,
