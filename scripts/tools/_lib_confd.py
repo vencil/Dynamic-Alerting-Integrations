@@ -75,6 +75,9 @@ __all__ = [
     "multi_carrier_warning",
     "readable_carriers",
     "warn_multi_carrier",
+    "warn_dir_symlink_once",
+    "is_dir_symlink",
+    "dir_link_target_is_walked",
     "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
@@ -383,6 +386,26 @@ def warn_multi_carrier(directory: "str | os.PathLike[str]",
     print(msg, file=sys.stderr)
 
 
+# Directory symlinks whose skip WARNING this process has already printed.
+_DIR_LINK_WARNED: set[str] = set()
+
+
+def warn_dir_symlink_once(link: Path) -> None:
+    """Name a directory symlink the walk skipped, at most ONCE per link per
+    process (#1972). describe_tenant names it from its own listing AND calls
+    the custom-alerts loader over the same tree (and compile_custom_alerts
+    runs the loader more than once): each printing its own copy named every
+    link two times — the #1674 shape `warn_multi_carrier` already fixed.
+    Keyed by the LINK's own absolute path (not its target, which is what
+    two different links may share)."""
+    key = os.path.abspath(link)
+    if key in _DIR_LINK_WARNED:
+        return
+    _DIR_LINK_WARNED.add(key)
+    print(f"WARNING: skipped {link} — {unusable_reason(link)}",
+          file=sys.stderr)
+
+
 def config_stem(name: str) -> str:
     """Tenant id carried by a filename, or `""` if it carries none.
 
@@ -559,7 +582,10 @@ def list_config_tree(config_dir: str | os.PathLike[str]) -> ConfigTreeListing:
 
     The walk mirrors the exporter's (`pkg/config.ScanDirTree`): recursive,
     `.`-prefixed directories pruned, `.`-prefixed files dropped (`_is_config`),
-    directory symlinks listed but never descended (`os.walk` default).
+    directory symlinks never descended (`os.walk` default) and, unless
+    hidden or pointing where the walk goes anyway
+    (`dir_link_target_is_walked`), named in `unusable` whatever their
+    name (#1972).
     See `iter_config_files` for the ordering promise and
     `unusable_config_paths` for what `unusable` carries and why the two
     lists are disjoint (one `_is_regular_file` call per entry, whose
@@ -595,10 +621,27 @@ def list_config_tree(config_dir: str | os.PathLike[str]) -> ConfigTreeListing:
         # every `iter_config_files` caller, and an entry swapped between the
         # two asks could land in BOTH lists or in NEITHER — breaking the
         # disjointness promised below.
-        for name in list(dirnames) + list(filenames):
-            if not _is_config(name):
-                continue
+        n_dirs = len(dirnames)
+        for i, name in enumerate(list(dirnames) + list(filenames)):
             p = Path(dirpath) / name
+            if not _is_config(name):
+                # ⛔ A DIRECTORY SYMLINK, config-named or not (#1972).
+                # `os.walk` (followlinks=False) leaves it in `dirnames` and
+                # never descends, exactly as the exporter's walker does not.
+                # kubelet projects a ConfigMap `items[].path` with a
+                # sub-directory as ONE such link (`team-a -> ..data/team-a`),
+                # so every tenant under it is lost; it used to be lost with
+                # no signal here either. Hidden names were pruned above, so
+                # the `..data` link of every ConfigMap volume never gets here.
+                # Only `dirnames` entries pay the lstat: a file link in the
+                # kubelet flat layout is in `filenames` and costs nothing more.
+                # A link whose target this same walk reaches by itself
+                # (`current -> team-b` beside a real `team-b/`) loses
+                # nothing and is NOT listed — `dir_link_target_is_walked`.
+                if (i < n_dirs and p.is_symlink()
+                        and not dir_link_target_is_walked(root, p)):
+                    found.append(p)
+                continue
             (files if _is_regular_file(p) else found).append(p)
     files.sort(key=lambda q: q.relative_to(root).as_posix())
     # An unscannable directory is reported even when it is NOT config-named:
@@ -607,6 +650,46 @@ def list_config_tree(config_dir: str | os.PathLike[str]) -> ConfigTreeListing:
     found.sort(key=lambda q: q.relative_to(root).as_posix()
                if q != root else "")
     return ConfigTreeListing(files, found, unscannable)
+
+
+def is_dir_symlink(p: Path) -> bool:
+    """A symlink whose target is a directory; False instead of raising.
+
+    The shape `list_config_tree` names in `unusable` for #1972. A reader
+    that filters `unusable` by NAME (`_`-prefixed entries it never reads)
+    must not filter these, for the same reason it keeps `unscannable`: what
+    is lost is a whole subtree, and the exporter descends `_`-prefixed
+    directories (`_custom_alerts -> ..data/_custom_alerts`).
+    """
+    try:
+        return p.is_symlink() and p.is_dir()
+    except OSError:
+        return False
+
+
+def dir_link_target_is_walked(root: Path, link: Path) -> bool:
+    """Does the walk from `root` reach `link`'s final target by itself?
+
+    True when the fully resolved target is `root` or lies inside it with no
+    `.`-prefixed segment on the way (those directories are pruned). Then
+    the files under the link are loaded through their real path and nothing
+    is lost, so naming the link as unusable would be a false alarm (#1972
+    blind review F1: `alias/current -> team-b` made `validate_config` FAIL
+    for a tenant that WAS loaded).
+
+    Anything else — outside the root, through a hidden segment (kubelet's
+    `team-a -> ..data/team-a` resolves into `..<ts>/`), unresolvable — is
+    not walked.
+
+    ⛔ Go twin: `pkg/config.dirLinkTargetIsWalked`. Same rule, or one plane
+    names a loss the other calls clean.
+    """
+    try:
+        real = Path(os.path.realpath(link))
+        rel = real.relative_to(Path(os.path.realpath(root)))
+    except (OSError, ValueError):
+        return False
+    return not any(part.startswith(".") for part in rel.parts)
 
 
 def _is_regular_file(p: Path) -> bool:
@@ -641,6 +724,14 @@ def unusable_reason(p: Path) -> str:
     "what happened to beta.yaml" in front of the operator.
     """
     try:
+        if p.is_symlink() and p.is_dir():
+            # Asked BEFORE the directory branch (#1972): `is_dir()` follows
+            # the link, so that branch would call a directory link "a
+            # directory, not a config file" — true, and silent about the
+            # part that matters: the exporter never looks inside it.
+            return ("is a symlink to a directory — threshold-exporter does "
+                    "not follow it, so the config files under it are NOT "
+                    "loaded")
         if p.is_dir():
             # A different fact from "you named a directory like a config
             # file": this one means a whole subtree was NOT scanned, so the
@@ -743,7 +834,9 @@ def unusable_config_paths(
 
     (Plus any directory whose contents could not be enumerated — see the
     ⛔ note below; that one is NOT necessarily config-named, because what
-    it costs the caller is a whole subtree rather than one file.)
+    it costs the caller is a whole subtree rather than one file. The
+    recursive branch likewise names every non-hidden DIRECTORY SYMLINK,
+    whose subtree neither walker enters — #1972.)
 
     Sibling of `iter_config_files`, and the reason it can stay simple.
     `iter_config_files` answers "what should I read"; anything it drops
@@ -1046,6 +1139,7 @@ def reset_warned_for_test() -> None:
     """
     _WARNED.clear()
     _MULTI_CARRIER_WARNED.clear()
+    _DIR_LINK_WARNED.clear()
 
 
 class FlatRead(NamedTuple):

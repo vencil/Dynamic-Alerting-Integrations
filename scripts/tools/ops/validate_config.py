@@ -100,6 +100,7 @@ from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
     duplicate_declarations,
+    is_dir_symlink,
     is_reserved_name,
     iter_config_files,
     observe_flat_reads,
@@ -379,6 +380,18 @@ def _unusable_consequence(bad: Path) -> str:
     required gate, and the sentence is what a customer reads when it turns
     their build red.
     """
+    # ⛔ A DIRECTORY SYMLINK FIRST (#1972). `iter_config_files(bad)` would
+    # walk INTO the link — it is the root of that call, and `os.walk`
+    # follows a symlinked root — and the branch below would then print
+    # "the config file(s) INSIDE it ARE loaded", contradicting the reason
+    # printed just before it. Neither this scan nor the exporter enters it.
+    # The reason already says "NOT loaded", so the clause here is the remedy
+    # only — repeating the loss read as a stutter (#1972 blind review N3).
+    if is_dir_symlink(bad):
+        return ("project those files as flat ConfigMap keys (no `/` in "
+                "`items[].path`), or copy them into conf.d")
+    if bad.is_symlink():
+        return "nothing in it is loaded, by this tool or by threshold-exporter"
     reason = unusable_reason(bad)
     if reason.startswith("is a directory that could not be read"):
         return ("so THIS REPORT IS INCOMPLETE: fix the permissions and "

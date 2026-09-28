@@ -47,7 +47,12 @@
     "describe_tenant described acme in dupA and dupB with rc 0 and no warning,",
     "while Go refused both. Each duplicate tree keeps a control tenant that",
     "must still resolve. The ConfigMap mount's root link (cm above) is the",
-    "no-false-positive control: its acme is ONE entry and still resolves."
+    "no-false-positive control: its acme is ONE entry and still resolves.",
+    "#1972: cm-nested is kubelet's layout for an items[].path with a",
+    "sub-directory: ONE top-level DIRECTORY link `team-a -> ..data/team-a`.",
+    "Neither walker follows it, so ghostnested is absent on both sides (they",
+    "now WARN about it; this table pins only what is read), and the ghost",
+    "recipe for acme under it must not reach describe_tenant's acme."
   ],
   "trees": [
     {
@@ -162,6 +167,23 @@
         "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
         "ghostdot": {"absent": true},
         "ghostpayload": {"absent": true}
+      }
+    },
+    {
+      "name": "cm-nested-dir-link-is-not-walked",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_pct: 50\n",
+        "acme.yaml": "tenants:\n  acme: {}\n",
+        "..ts/team-a/nested.yaml": "tenants:\n  ghostnested: {}\n",
+        "..ts/team-a/ghostalert.yaml": "tenants:\n  acme:\n    _custom_alerts:\n      - {recipe: threshold, name: GHOST, metric: ghost_metric, op: \">\", window: 5m, threshold: \"80:warning\"}\n"
+      },
+      "symlinks": {
+        "..data": "..ts",
+        "team-a": "..data/team-a"
+      },
+      "expect": {
+        "acme": {"chain_len": 1, "effective_config": {"cpu_pct": 50}, "merged_hash": "5fa35ba41e70b280"},
+        "ghostnested": {"absent": true}
       }
     },
     {

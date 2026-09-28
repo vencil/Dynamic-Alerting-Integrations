@@ -42,6 +42,7 @@ from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
     has_yaml_extension,
     is_defaults_name,
+    is_dir_symlink,
     is_hidden_name,
     iter_config_files,
     select_defaults_carrier,
@@ -556,13 +557,21 @@ def main() -> int:
     # "could not measure", which is the one thing this gate must never round
     # down to clean. An unreadable FILE is different and only gets named: the
     # exporter cannot read it either, so it declares nothing we would miss.
+    #
+    # A DIRECTORY SYMLINK is not blind (#1972): the exporter does not follow
+    # it, so nothing under it is read and nothing under it can be a second
+    # declaration. It is named, like an unreadable file, and not counted
+    # as "could not measure".
     if output_dir is not None:
-        blind = [p for p in unusable_config_paths(output_dir) if p.is_dir()]
-        unreadable_files = [p for p in unusable_config_paths(output_dir)
-                            if not p.is_dir()]
+        unusable_out = unusable_config_paths(output_dir)
+        blind = [p for p in unusable_out
+                 if p.is_dir() and not is_dir_symlink(p)]
+        unreadable_files = [p for p in unusable_out if p not in blind]
         for p in sorted(unreadable_files):
-            print(f"WARN: {p} {unusable_reason(p)} — the exporter cannot read "
-                  f"it either", file=sys.stderr)
+            # A directory link's reason already says what the exporter does.
+            tail = ("" if is_dir_symlink(p)
+                    else " — the exporter cannot read it either")
+            print(f"WARN: {p} {unusable_reason(p)}{tail}", file=sys.stderr)
         if blind:
             print(f"\n❌ cannot answer the duplicate-tenant question for "
                   f"{output_dir}: " +

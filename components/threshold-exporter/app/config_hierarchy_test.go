@@ -296,13 +296,21 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 //   - **file-level symlinks** ARE followed when we call `os.ReadFile(path)`
 //     (ReadFile uses Stat, which resolves symlinks) → content IS read
 //   - **dir-level symlinks** are NOT recursed into (WalkDir sees them as
-//     non-dir leaves via Lstat; we then call os.ReadFile which fails
-//     with "is a directory" and we log+skip)
+//     non-dir leaves via Lstat). A non-config-named one like `sl-dir`
+//     never reaches os.ReadFile: it is dropped at the name filter, with a
+//     WARN since #1972 (`.`-prefixed ones such as `..data` stay silent).
 //
-// K8s ConfigMap mount pattern flattens to file-level symlinks only
-// (nested keys are legal via `/` in the key name becoming subdirs, but
-// each leaf is a file-symlink). So file-symlinks must work; dir-symlinks
-// must NOT cause double-walk or infinite loops.
+// ⚠️ THIS FIXTURE IS NOT WHAT KUBELET BUILDS FOR A NESTED KEY. `team-a/`
+// here is a REAL directory holding a file-symlink. kubelet's AtomicWriter
+// projects an `items[].path` with a sub-directory (`team-a/tenant-a.yaml`)
+// as a single top-level DIRECTORY symlink, `team-a -> ..data/team-a` —
+// the `sl-dir` shape below, which this walker does not follow, so such a
+// tenant is NOT loaded. An earlier version of this comment claimed "each
+// leaf is a file-symlink" and that belief hid #1972 (tenants lost with no
+// log). The real layout, and the WARN it now gets, is pinned in
+// pkg/config/tree_scan_symlink_test.go::TestScanDirTree_KubeletDirSymlinkIsAudible.
+// What this test still pins: file-symlinks must work at any depth, and
+// dir-symlinks must NOT cause double-walk or infinite loops.
 //
 // The production scanner relies on this behavior but never asserts it.
 // Per Gemini R3 #1: invariant under-test → future Go stdlib change could

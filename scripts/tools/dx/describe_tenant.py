@@ -33,10 +33,12 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     duplicate_declarations,
     has_yaml_extension,
     is_defaults_name,
+    is_dir_symlink,
     is_reserved_name,
     list_config_tree,
     readable_carriers,
     select_defaults_carrier,
+    warn_dir_symlink_once,
     warn_multi_carrier,
     unusable_reason,
 )
@@ -483,8 +485,14 @@ class ConfDScanner:
         # could not read: the exporter descends `_`-prefixed directories
         # (`_arch/arch.yaml` is a tenant to it), so a chmod-000 `_locked/`
         # hides real tenants and must be named like `locked/` is (#2054).
+        # A directory SYMLINK likewise (#1972): `_shared -> .payload/_shared`
+        # hides a subtree the exporter would otherwise have descended.
+        # Printed through the once-per-process helper: the custom-alerts
+        # loader this tool also runs names the same link.
         for bad in listing.unusable:
-            if (bad in listing.unscannable or is_defaults_name(bad.name)
+            if is_dir_symlink(bad):
+                warn_dir_symlink_once(bad)
+            elif (bad in listing.unscannable or is_defaults_name(bad.name)
                     or not is_reserved_name(bad.name)):
                 print(f"WARNING: skipped {bad} — {unusable_reason(bad)}",
                       file=sys.stderr)

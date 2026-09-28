@@ -25,11 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_defaults_name,
     is_hidden_name,
+    is_dir_symlink,
     defaults_files_in,
     list_config_tree,
     readable_carriers,
     select_defaults_carrier,
     unusable_reason,
+    warn_dir_symlink_once,
     warn_multi_carrier,
 )
 from _lib_io import strict_safe_load  # noqa: E402  (#2123)
@@ -254,6 +256,17 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
         # it: true, and irrelevant — the commit claimed every reader names
         # what it drops, and this was the one path where that was false.
         if is_defaults_name(bad.name) and not _is_dir(bad):
+            continue
+        # ⛔ A DIRECTORY SYMLINK is not a quarantined recipe (#1972 blind
+        # review F2). It is a subtree neither this walk nor the exporter
+        # enters — kubelet's `team-a -> ..data/team-a` — so there is no
+        # recipe in it to quarantine. Recording it in `file_errors` made it a
+        # `tenant=None name=None` QUARANTINED row, and `--allow-empty` then
+        # refused to write (rc 0 → 1) over a tree the exporter serves fine.
+        # Named on stderr, in `describe_tenant`'s wording, once per process
+        # (describe_tenant names it too), and not counted.
+        if is_dir_symlink(bad):
+            warn_dir_symlink_once(bad)
             continue
         file_errors.append(_file_record(
             str(bad.relative_to(config_dir)), unusable_reason(bad)))
