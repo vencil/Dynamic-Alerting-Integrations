@@ -37,7 +37,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Repo-layout import compatibility (stripped in Docker build)
+# Repo-layout import compatibility: the repo subdir layout needs the
+# parent dir. Shipped unmodified; in the flat image it points at /opt,
+# which is harmless (#2313).
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:

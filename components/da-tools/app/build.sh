@@ -281,17 +281,14 @@ done
 
 echo "  Copied ${#REPO_DATA_FILES[@]} data file(s) from the repo tree"
 
-# ── Strip repo-layout sys.path hack ──────────────────────────────────
-# In the repo, tools use dual sys.path (current dir + parent dir) to
-# support both flat Docker layout and subdir repo layout.  In Docker
-# everything is flat, so remove the parent-dir line to keep images clean.
-for py in "$SCRIPT_DIR"/tools/*.py; do
-    [ -f "$py" ] || continue
-    # Match both quote styles ('..' and "..") — _observed_map_lib.py uses
-    # double quotes; single-quote-only left its parent-dir line unstripped.
-    sed -i "/sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*[\"']\.\.[\"'])/d" "$py"
-done
-echo "  Stripped repo-layout sys.path from Docker copies"
+# ── Parent-dir sys.path inserts are shipped as-is (#2313) ────────────
+# Tools insert both their own dir and their parent dir on sys.path; the
+# parent entry is what the repo's subdir layout needs. Copies are NOT
+# rewritten here: in the flat image the parent entry points at /opt
+# (only venv/ and da-tools/ live there), which is harmless, and the real
+# risk — a module shadowed from that directory — is guarded behaviourally
+# by tests/ops/test_image_flat_layout.py. A build-time source edit only
+# made the shipped code differ from the code the tests exercised.
 
 # ── Build bundled Go binaries (v2.8.0 C-8/C-10/C-11) ─────────────────
 # da-tools' `guard` / `batch-pr` / `parser` subcommands shell out to the

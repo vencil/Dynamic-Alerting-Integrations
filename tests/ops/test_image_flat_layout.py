@@ -38,7 +38,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import re
 import warnings
 import shutil
 import subprocess
@@ -61,13 +60,6 @@ from _lint_helpers import (  # noqa: E402
 
 # `/opt/da-tools/x.py` -> parents are (/opt/da-tools, /opt, /). Three.
 IMAGE_ANCESTOR_COUNT = 3
-
-# build.sh's own sed, transcribed. Kept next to the assertion that it matched
-# something, so a change on either side surfaces instead of silently making
-# this harness less like the image.
-_BUILD_SH_STRIP_RE = re.compile(
-    r"""sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*["']\.\.["']\)"""
-)
 
 
 def _image_depth_bases() -> "list[Path]":
@@ -134,10 +126,10 @@ def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
             reasons.append(f"{base}: already deeper than the image layout")
             continue
         # ⚠️ Context for the reader, NOT a check: the leaf's parent lands on
-        # sys.path for this run, because **16 lines across 13 shipped modules**
-        # insert their own parent directory after build.sh's strip (10 spell it
-        # with a literal `".."`, 6 with `.parent` / `parents[1]`; the sed only
-        # matches the `_THIS_DIR` spelling). At image depth that parent must be
+        # sys.path for this run, because shipped modules insert their own
+        # parent directory (the repo subdir layout needs it) and build.sh ships
+        # every such line unmodified — it no longer strips any spelling of it
+        # (#2313). In the image that parent is `/opt`. At image depth it must be
         # a shared directory — depth three leaves no room for a private one.
         # Whether anything there actually shadowed a module is decided AFTER the
         # imports, from provenance, in `_CHILD`.
@@ -232,40 +224,28 @@ _RESULTS_MARKER = "__FLAT_LAYOUT_RESULTS__"
 
 
 def _stage_shipped_set(flat: Path, tool_paths, data_paths) -> None:
-    """Copy the shipped set into *flat* the way build.sh does (flatten + strip)."""
+    """Copy the shipped set into *flat* the way build.sh does (flatten only)."""
     # Same flattening build.sh performs: destination is one directory.
     for rel in tool_paths:
         shutil.copy2(TOOLS_SRC / rel, flat / Path(rel).name)
     for rel in data_paths:
         shutil.copy2(REPO_ROOT / rel, flat / Path(rel).name)
 
-    # build.sh strips the repo-layout parent-dir `sys.path.insert` lines
-    # from its copies, so the image does not carry them. Replicated here
-    # with build.sh's own pattern, because NOT replicating it was wrong in
-    # both directions: the harness diverged from the image, AND every line
-    # left in inserts the leaf's parent — a SHARED directory at image
-    # depth — onto sys.path.
+    # ⛔ Verbatim copies, NO source rewriting — because build.sh does none
+    # (#2313). It used to `sed` out one spelling of the repo-layout
+    # parent-dir `sys.path.insert`, and this function carried a transcribed
+    # copy of that pattern plus an assertion that it matched. The strip was
+    # cosmetic (in the image the parent is `/opt`) and made the shipped code
+    # differ from the code tests import, so it was removed; every
+    # parent-dir insert now runs here exactly as it does in the image,
+    # putting the leaf's parent — a SHARED directory at image depth — on
+    # sys.path. Whether that shadowed anything is judged from provenance in
+    # `_CHILD`, not predicted here.
     #
-    # ⛔ Two earlier versions of this comment were false. The first said
-    # the parent directory does not exist (it does). The second said it is
-    # empty (it is `/tmp`, or the drive root). The pattern below is a
-    # second copy of build.sh's rule and can drift from it, which is a real
-    # cost — the assertion after it makes the drift visible rather than
-    # silent: build.sh's sed matches only the `_THIS_DIR` spelling, so a
-    # measured TEN shipped lines survive it and still run in the image.
-    stripped = 0
-    for copy in flat.glob("*.py"):
-        text = copy.read_text(encoding="utf-8")
-        kept = [ln for ln in text.splitlines(keepends=True)
-                if not _BUILD_SH_STRIP_RE.search(ln)]
-        if len(kept) != len(text.splitlines(keepends=True)):
-            stripped += 1
-            copy.write_text("".join(kept), encoding="utf-8")
-    assert stripped, (
-        "the build.sh strip pattern matched nothing — either build.sh "
-        "changed its sed and this copy did not follow, or the staging "
-        "step is not copying what it thinks it is"
-    )
+    # ⚠️ If build.sh ever starts rewriting copies again, this harness keeps
+    # MORE parent-dir inserts than the image, i.e. it errs strict (more
+    # chances to be shadowed), not lax. Mirror the rewrite here anyway so
+    # the harness stays the image.
 
 
 @pytest.fixture(scope="module")
@@ -431,8 +411,8 @@ def test_shadowing_is_detected_by_provenance_not_predicted(
     flat = shadow / "d"
     flat.mkdir(parents=True)
     # ⛔ probe 自己把 parent dir 插到 sys.path[0] —— 這是出貨模組真的會做的事
-    # （build.sh 的 sed 不剝的那 6 行 `.parent` 拼法），也是遮蔽得以發生的
-    # 唯一機制。少了它，flat 永遠先命中，這個測試就什麼都沒測到。
+    # （repo 佈局需要的 parent-dir insert，build.sh 原樣出貨、不剝除，#2313），
+    # 也是遮蔽得以發生的唯一機制。少了它，flat 永遠先命中，這個測試就什麼都沒測到。
     (flat / "probe_mod.py").write_text(
         'import os, sys\nsys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\ntry:\n    import zzshadowcanary\nexcept ImportError:\n    pass\ntry:\n    import victim\nexcept ImportError:\n    pass\n', encoding="utf-8")
     if plant == "module":
