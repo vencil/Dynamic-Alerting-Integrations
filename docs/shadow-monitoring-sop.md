@@ -311,6 +311,7 @@ for tenant in db-a db-b db-c; do
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
 done
 ```
+<!-- image-caveat: v2.9.0 — 上方區塊裡「v2.9.0 映像印在 stdout」那段註解 -->
 
 **`--force` 的使用時機：**
 

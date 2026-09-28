@@ -649,10 +649,10 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
-	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness (advisory — read its output above; it never blocks)"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  playbook-freshness (advisory — read its output above; it never blocks)"
 	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
@@ -903,6 +903,10 @@ lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支�
 	@python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
+
+.PHONY: lint-image-caveats
+lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門：標記 <!-- image-caveat: vX.Y.Z --> 舊於 da-tools VERSION 即失敗（pre-tag 會跑）
+	@python3 ./scripts/tools/lint/check_image_caveats.py
 
 .PHONY: lint-egress
 lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；ARGS="--values prod.yaml --allow-host siem.example.com"）

@@ -212,6 +212,7 @@ kubectl patch configmap alertmanager-config -n monitoring \
 kubectl rollout restart deployment prometheus -n monitoring
 kubectl rollout restart deployment alertmanager -n monitoring
 ```
+<!-- image-caveat: v2.9.0 — 上方區塊裡「v2.9.0 映像的 migrate」那段註解 -->
 
 ### 階段 3：驗證（Day 1–14）
 

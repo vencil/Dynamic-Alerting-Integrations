@@ -296,6 +296,8 @@ frontmatter 是否存在，由 CI 的 `add_frontmatter.py --check`（`.github/wo
 - **雙語標題同步**：有 `.en.md` 配對的文件（`docs/internal/**` 以外），改 h2／h3 標題要在同一顆 commit 改 `.en.md`。⚠️ `bilingual-structure-check` 的 `files:` 只配 `.en.md`／`.zh.md`——只 staged 中文那一份時本地 hook 不會跑。
 - **frontmatter `version:`** 填**已發布**的平台版本，不是開發中的目標版本。
 
+**「已發布的映像還是舊行為」要加標記**：文件隨 merge 發布，da-tools 映像要等下一個 `tools/v*` tag。描述新行為時若要提醒讀者「vX.Y.Z 映像還是舊行為」，同一段（表格則同一列）要加 `<!-- image-caveat: vX.Y.Z -->`，`vX.Y.Z` 寫該註記所指的那顆映像（例如 `v2.9.0`）；code fence 裡的註記，把標記放在收尾 fence 的下一行（中間不留空行）。`image-caveat-check`（`scripts/tools/lint/check_image_caveats.py`，也在 `make pre-tag`）在 `components/da-tools/app/VERSION` 超過標記版號時失敗，發版時就得把註記拿掉或改寫成歷史敘述。它也會擋「用了 `vX.Y.Z 映像`／`the image you have` 這類句型卻沒有標記」的段落；換別的措辭它看不到，所以標記才是契約。釘版的映像參照（`ghcr.io/vencil/da-tools:vX.Y.Z`）不用標：發版時 `bump_docs.py --tools` 會改寫，`bump_docs.py --check` 擋漏網。
+
 ---
 
 ## 6. 模板快速複製

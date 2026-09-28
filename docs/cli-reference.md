@@ -247,7 +247,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 對單一 tenant 執行健康檢查：MariaDB Pod 狀態、exporter 的 `mysql_up`、運營模式（維護／靜音），以及給了 `--config-dir` 時的 profile 與繼承鏈。
 
-**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_metadata.db_type` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。
+**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_metadata.db_type` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。 <!-- image-caveat: v2.9.0 -->
 
 **語法**
 
@@ -305,7 +305,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
 | `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON） |
 
-⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。
+⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -334,7 +334,7 @@ da-tools batch-diagnose [options]
 
 **輸出**
 
-JSON 格式統一報告，包含所有租戶的檢查結果摘要。`unchecked` 的租戶另計在 `unchecked_count`，不算進 `healthy_count` 也不算進 `issue_count`；`health_score` 的分母只算有檢查的租戶，全部都是 `unchecked` 時為 `null`。文字報告另列一段 `Unchecked Tenants` 並附跳過原因。⚠️ v2.9.0 映像沒有 `unchecked` 這個狀態與欄位。
+JSON 格式統一報告，包含所有租戶的檢查結果摘要。`unchecked` 的租戶另計在 `unchecked_count`，不算進 `healthy_count` 也不算進 `issue_count`；`health_score` 的分母只算有檢查的租戶，全部都是 `unchecked` 時為 `null`。文字報告另列一段 `Unchecked Tenants` 並附跳過原因。⚠️ v2.9.0 映像沒有 `unchecked` 這個狀態與欄位。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
@@ -395,7 +395,7 @@ da-tools baseline --tenant <name> [options]
 | `slow_queries` | 每分鐘 | 沒有租戶 key：`MariaDBHighSlowQueries` 比的是固定值 |
 | `disk_io` | KiB/s | 沒有租戶 key：沒有 rule pack 告警讀這個量 |
 
-`cpu`／`memory` 直接用 cAdvisor 用量除以 kube-state-metrics 的 limit，算法與 rule pack 的 `tenant:container_{cpu,memory}_percent:by_container` 相同，需要 kube-state-metrics。沒設 limit 的容器量不到（rule pack 對這種容器的 CPU 改用 node share，baseline 不涵蓋）。`cpu`／`memory` 有上界（到 100% 就 OOMKill 或被節流），所以不用 p95×1.2／p99×1.5 算門檻，那樣 p99 超過約 67% 時會給出永遠不會響的 >100 門檻。改為對照平台預設（取自 scaffold，目前 `container_cpu` 80、`container_memory` 85）：p99 低於預設時印「預設可用，不需覆寫」；p99 已達預設時印「照預設會常響，請先調高 limit」，並附讓 p99 落在預設九成所需的 limit 倍數。其餘指標的建議以 `patch-config <tenant> <key> <值>` 的寫法印出，沒有租戶 key 的只印觀測值與原因。⚠️ v2.9.0 映像仍是舊行為：`cpu` 是單核 %、`memory` 是 MiB，建議的 key 一律拼成 `mysql_<指標>`，其中 `mysql_memory`／`mysql_disk_io`／`mysql_slow_queries` 沒有任何告警讀，`mysql_cpu` 其實是 threads_running 的閾值（後來改名為 `mysql_threads_running`）。用 v2.9.0 時不要照抄它印的 patch-config。
+`cpu`／`memory` 直接用 cAdvisor 用量除以 kube-state-metrics 的 limit，算法與 rule pack 的 `tenant:container_{cpu,memory}_percent:by_container` 相同，需要 kube-state-metrics。沒設 limit 的容器量不到（rule pack 對這種容器的 CPU 改用 node share，baseline 不涵蓋）。`cpu`／`memory` 有上界（到 100% 就 OOMKill 或被節流），所以不用 p95×1.2／p99×1.5 算門檻，那樣 p99 超過約 67% 時會給出永遠不會響的 >100 門檻。改為對照平台預設（取自 scaffold，目前 `container_cpu` 80、`container_memory` 85）：p99 低於預設時印「預設可用，不需覆寫」；p99 已達預設時印「照預設會常響，請先調高 limit」，並附讓 p99 落在預設九成所需的 limit 倍數。其餘指標的建議以 `patch-config <tenant> <key> <值>` 的寫法印出，沒有租戶 key 的只印觀測值與原因。⚠️ v2.9.0 映像仍是舊行為：`cpu` 是單核 %、`memory` 是 MiB，建議的 key 一律拼成 `mysql_<指標>`，其中 `mysql_memory`／`mysql_disk_io`／`mysql_slow_queries` 沒有任何告警讀，`mysql_cpu` 其實是 threads_running 的閾值（後來改名為 `mysql_threads_running`）。用 v2.9.0 時不要照抄它印的 patch-config。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
@@ -441,7 +441,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
      new_query: tenant:custom_mysql_global_status_threads_connected:max
    ```
    每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式依租戶聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
-   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。
+   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
 
 2. **Query 模式**：`--old <query> --new <query>`
    直接指定兩組 PromQL
@@ -479,7 +479,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 | `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
 | `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
 
-⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。
+⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。 <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -621,7 +621,7 @@ cron 一律以 **UTC** 解讀，指定時區的選項尚未實作；例如台北
 
 **輸出**
 
-stderr 列出每個排程目前是否在窗口內，最後一行是摘要：實際建立時是 `Summary: N created, N skipped, N errors`；沒給 `--alertmanager` 時是 `Summary: N in window (report only …)`；帶 `--dry-run` 時是 `Summary: N would be created (dry run …)`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ `--dry-run` 不讀 Alertmanager 既有的 silence，所以已經存在的也算在「會建立」裡。v2.9.0 映像在這兩種情況下仍印 `N created`，也沒有 `mode` 欄位，實際上什麼都沒建立。
+stderr 列出每個排程目前是否在窗口內，最後一行是摘要：實際建立時是 `Summary: N created, N skipped, N errors`；沒給 `--alertmanager` 時是 `Summary: N in window (report only …)`；帶 `--dry-run` 時是 `Summary: N would be created (dry run …)`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ `--dry-run` 不讀 Alertmanager 既有的 silence，所以已經存在的也算在「會建立」裡。v2.9.0 映像在這兩種情況下仍印 `N created`，也沒有 `mode` 欄位，實際上什麼都沒建立。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
@@ -1771,7 +1771,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 |------|------|
 | `0` | 成功 |
 | `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -1930,11 +1930,11 @@ da-tools migrate <input_file> [options]
 
 - `migration_output/tenant-config.yaml` — 提取出的 threshold
 - `migration_output/platform-recording-rules.yaml` — Recording rules
-- `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串）
+- `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/prefix-mapping.yaml` — Metric 前綴對應表
-- `migration_output/defaults-snippet.yaml` — 要合併進 `_defaults.yaml` 的 `defaults:` 片段。threshold-exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔）
+- `migration_output/defaults-snippet.yaml` — 要合併進 `_defaults.yaml` 的 `defaults:` 片段。threshold-exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
 
 **Triage 模式**：
 
@@ -1980,7 +1980,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
@@ -1989,16 +1989,16 @@ da-tools validate-config --config-dir <path> [options]
 
 **檢查項目**
 
-- YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組
-- **字串欄位的引號**（`yaml_quoting`）：JSON Schema 標為字串（含 enum）的欄位，值未加引號、而 PyYAML 把它讀成布林、數字或 null 時 FAIL——`channel: yes` 在 PyYAML 是 `True`，在 exporter 與 Alertmanager 是字串 `"yes"`，同一份檔各工具讀到不同的值。每筆列出檔案、行號與欄位路徑；解法是加引號（`channel: "yes"`）。租戶閾值也是字串欄位，所以 `mysql_connections: 70` 會被列出——寫成 `"70"`。租戶檔對照 `tenant-config.schema.json`，`_defaults*` 對照 `platform-defaults.schema.json`（其中 `_routing_defaults`／`_routing_enforced` 沿用租戶 schema 的 routing 定義）；其餘 `_*` 檔不讀。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定（所以 PyYAML 讀成字串的 `y`／`n` 不會被列出），哪些欄位是字串由 schema 決定（#2164）。⚠️ **v2.9.0 映像沒有這一項**
-- Schema 驗證（必需的 key、類型正確）。`_routing_enforced.enabled` 不是 YAML 布林（`n`、`'yes'`、`~` 等）時 FAIL：平台強制（NOC）路由**不會**啟用，`generate-routes --validate` 也對同一行回 1（#2164）。⚠️ v2.9.0 映像遇到非空字串會**啟用** NOC 路由
+- YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組 <!-- image-caveat: v2.9.0 -->
+- **字串欄位的引號**（`yaml_quoting`）：JSON Schema 標為字串（含 enum）的欄位，值未加引號、而 PyYAML 把它讀成布林、數字或 null 時 FAIL——`channel: yes` 在 PyYAML 是 `True`，在 exporter 與 Alertmanager 是字串 `"yes"`，同一份檔各工具讀到不同的值。每筆列出檔案、行號與欄位路徑；解法是加引號（`channel: "yes"`）。租戶閾值也是字串欄位，所以 `mysql_connections: 70` 會被列出——寫成 `"70"`。租戶檔對照 `tenant-config.schema.json`，`_defaults*` 對照 `platform-defaults.schema.json`（其中 `_routing_defaults`／`_routing_enforced` 沿用租戶 schema 的 routing 定義）；其餘 `_*` 檔不讀。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定（所以 PyYAML 讀成字串的 `y`／`n` 不會被列出），哪些欄位是字串由 schema 決定（#2164）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
+- Schema 驗證（必需的 key、類型正確）。`_routing_enforced.enabled` 不是 YAML 布林（`n`、`'yes'`、`~` 等）時 FAIL：平台強制（NOC）路由**不會**啟用，`generate-routes --validate` 也對同一行回 1（#2164）。⚠️ v2.9.0 映像遇到非空字串會**啟用** NOC 路由 <!-- image-caveat: v2.9.0 -->
 - 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）
 - Policy 檢查（webhook 域名）——**只在給了 `--policy` 時才會出現這一列**
 - 自訂規則 lint（`rule-packs/` 的 deny-list）——**只在給了 `--rule-packs` 時**
 - Profile 參照（租戶的 `_profile` 指向的 profile 有沒有定義）
 - 版號一致性——**只在給了 `--version-check` 時**
 - Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）
-- **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0
+- **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0 <!-- image-caveat: v2.9.0 -->
 
 ⛔ **以報表實際印出的列為準**（`Total: N checks` 那一段）。這份清單先前列著一個叫「Tenant 名稱一致性」的項目，而**沒有任何檢查在做那件事**——實測檔名 `hotel.yaml` 宣告租戶 `totally-different`，六項全 PASS、exit 0；同時它漏掉了四個真的會跑的檢查。條件式的那幾項省略對應旗標時**整列不會出現**，不是靜默通過。
 
@@ -2019,11 +2019,11 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 |------|------|
 | `0` | 沒有 FAIL（可能有 WARN——包含下方 [Hierarchical conf.d](#hierarchical-confd) 那種列沒涵蓋子目錄檔的情況；看 `Result:` 行） |
 | `1` | 驗證失敗（一項或多項），或 `--config-dir` 底下有檔案讀不到。⚠️ 命令列上的路徑（`--policy` / `--rule-packs`）讀不到算 `2`，不算這一碼 |
-| `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
+| `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 <!-- image-caveat: v2.9.0 --> |
 
 ##### Hierarchical conf.d
 
-**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。「略過了什麼」依讀取方式而定：讀租戶的平面讀取器略過的是子目錄裡的**所有**設定檔；只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。因此只要子目錄裡有 `_defaults.yaml`（標準 ADR-017 樹），Policy-as-Code 列即使沒有任何 `_policies` 也會是 WARN、具名該檔——「沒有 policies」這個答案是沒打開它就得出的。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS`
+**階層式 `conf.d/`（子目錄裡有設定檔）**：schema、routes、policy、Policy-as-Code 這幾列取租戶用的讀取器是**平面**的（只讀 `--config-dir` 頂層），exporter 則遞迴讀整棵樹。當某一列的讀取**實際略過了**子目錄裡的檔，那一列就**不會回 PASS**：原本的 PASS 降為 WARN，且不論狀態都多一行具名被略過的檔（前 5 個，其餘 `(+N more)`；完整清單在 `--json` 該列的 `skipped_nested_files`）。「略過了什麼」依讀取方式而定：讀租戶的平面讀取器略過的是子目錄裡的**所有**設定檔；只找根目錄 `_defaults.yaml` 的那一步（Policy-as-Code 的 `_policies` 從這裡來）略過的只有子目錄裡的 `_defaults.yaml`。因此只要子目錄裡有 `_defaults.yaml`（標準 ADR-017 樹），Policy-as-Code 列即使沒有任何 `_policies` 也會是 WARN、具名該檔——「沒有 policies」這個答案是沒打開它就得出的。哪幾列受影響是執行時觀測出來的，不是寫死的清單；沒碰到讀取器就回答的列（例如 policy 檔沒有 `allowed_domains`）維持 PASS。⚠️ 觀測不到的：以檔名直接開根目錄檔的讀取——`profiles` 只讀根目錄的 `_profiles.yaml`。要讓這幾列檢查子目錄裡的檔：對每個子目錄各跑一次 `--config-dir <子目錄>`，或把樹攤平；兩者都**不會**重現 exporter 逐層繼承 `_defaults.yaml` 的語意。⛔ **結束碼不帶這個訊號**：WARN 照舊是 `0`（本 repo 自己的 conf.d 就有 `examples/` 子目錄）——要知道每一列是否涵蓋每個檔，看 `Result:` 或 `--json`，不要看結束碼（#1652）。⚠️ v2.9.0 映像沒有這項：同一棵樹在那顆映像上是 `[PASS] routes  0 routes`、`Result: PASS` <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -2268,7 +2268,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | `--json` | stdout 只印 JSON | false |
 | `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
-兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。
+兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。 <!-- image-caveat: v2.9.0 -->
 
 **輸出**
 
@@ -2285,7 +2285,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 |
+| `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 <!-- image-caveat: v2.9.0 --> |
 
 ---
 

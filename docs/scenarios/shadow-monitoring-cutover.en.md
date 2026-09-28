@@ -222,6 +222,7 @@ kubectl patch configmap alertmanager-config -n monitoring \
 kubectl rollout restart deployment prometheus -n monitoring
 kubectl rollout restart deployment alertmanager -n monitoring
 ```
+<!-- image-caveat: v2.9.0 — the "migrate in the v2.9.0 image" comment in the block above -->
 
 ### Phase 3: Validation (Days 1–14)
 

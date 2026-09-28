@@ -311,6 +311,7 @@ for tenant in db-a db-b db-c; do
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
 done
 ```
+<!-- image-caveat: v2.9.0 — the "v2.9.0 image prints this on stdout" comment in the block above -->
 
 **When to Use `--force`:**
 
