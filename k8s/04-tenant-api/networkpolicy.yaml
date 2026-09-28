@@ -37,11 +37,11 @@ spec:
         - port: 4180
           protocol: TCP
 
-    # Allow ONLY Prometheus + threshold-govern + recipe-preview (pod-scoped) on
-    # internal port 8080. Three separate `from` entries: each ns+pod pair is AND-ed
-    # within an entry, and the entries are OR-ed — so this admits
-    # (monitoring ∧ prometheus) OR (monitoring ∧ threshold-govern) OR
-    # (monitoring ∧ recipe-preview), and nothing else. (A single entry with
+    # Allow ONLY Prometheus + threshold-govern + recipe-preview + da-portal
+    # (pod-scoped) on internal port 8080. One `from` entry per workload: each
+    # ns+pod pair is AND-ed within an entry, and the entries are OR-ed — so this
+    # admits (monitoring ∧ prometheus) OR (monitoring ∧ threshold-govern) OR
+    # (monitoring ∧ recipe-preview) OR (monitoring ∧ da-portal), and nothing else. (A single entry with
     # bare podSelectors would OR the pod labels across ANY namespace — wrong.)
     - from:
         - namespaceSelector:

@@ -168,7 +168,7 @@ docker run -p 8080:80 \
 
 | Property | Value |
 |----------|-------|
-| Base image | `nginx:1.28-alpine3.23` |
+| Base image | nginx-alpine（版本以 [`Dockerfile`](Dockerfile) 的 `FROM` 為準） |
 | Image size | ~15 MB（含 dist + vendor），~12 MB（CDN-only，不含 vendor） |
 | Health check | `GET /healthz`（`HEALTHCHECK --interval=30s --timeout=3s`，probe 走 127.0.0.1） |
 | Listen port | 80 |
