@@ -67,6 +67,10 @@ to the tenant keys above. Likewise a scalar VALUE that names a key — a
 tenant's ``_profile: 010`` naming profile ``010:`` — is opt-in per call
 through *raw_text_scalars* (#2216; non-null scalars only).
 
+A tool that WRITES the file back reads it through ``load_for_rewrite`` /
+``RewriteLoader`` instead (#2220, end of this module): there plain scalar
+values keep their source text too, so the rewrite does not retype them.
+
 ⛔ Leaf module: imports ``yaml`` and the standard library ONLY, never another
 ``_lib_*`` — ``_lib_io`` and ``_lib_confd`` import it.
 
@@ -90,8 +94,14 @@ import yaml
 
 __all__ = [
     "ExporterKeyLoader",
+    "KeepPlainScalarText",
+    "RawPlain",
+    "RewriteDumper",
+    "RewriteLoader",
+    "dump_for_rewrite",
     "load_exporter_keys",
     "load_first_document_exporter_keys",
+    "load_for_rewrite",
 ]
 
 _NULL_TAG = "tag:yaml.org,2002:null"
@@ -214,3 +224,129 @@ def load_first_document_exporter_keys(
         return None
     finally:
         loader.dispose()
+
+
+# ── #2220: reading a file that will be WRITTEN BACK ─────────────────────────
+#
+# A tool that loads a conf.d file, deletes or sets one key and dumps the rest
+# (``deprecate_rule --execute``, ``patch_config``) re-serialises every OTHER
+# value it did not mean to touch. Through ``safe_load`` + ``safe_dump`` that
+# is a retype, and the exporter's value moves with it (measured with
+# ``da-guard served-values``): ``010`` is written as ``8`` (10 → 8), ``12:30``
+# as ``750`` (12 → 750), ``0x1F`` as ``31``, ``yes`` as ``true``, and
+# ``expires: 2099-01-01T00:00:00Z`` as ``2099-01-01 00:00:00+00:00`` — which
+# the exporter no longer reads as a time, so a maintenance window closes.
+#
+# The fix is (a'): an UNQUOTED (plain) scalar is loaded as :class:`RawPlain`,
+# its source text, and :class:`RewriteDumper` writes it back plain with the
+# tag that text resolves to — so the emitter prints the same characters. A
+# quoted scalar was a ``str`` already and still is; ``null`` / ``~`` / empty
+# stays ``None``.
+#
+# ⛔ NOT (a) "keep every scalar as a string": a string is written back QUOTED
+# unless YAML would read it as a string anyway, and the exporter's typed
+# fields refuse a quoted number — ``defaults`` is ``map[string]float64``
+# (the whole ``_defaults.yaml`` is dropped), ``max_metrics_per_tenant`` is an
+# ``int``, ``_custom_alerts[].min_events`` a ``strictInt`` (the alert is
+# dropped). RawPlain keeps them plain, hence typed.
+#
+# ⚠️ Rewrite paths ONLY. Every other reader keeps PyYAML-typed values (a
+# RawPlain ``"8"`` compares unequal to ``8``); that is why these are separate
+# entry points and not a flag on the loaders above. Comments are still lost
+# on rewrite — that is the existing behaviour, not addressed here.
+
+
+class RawPlain(str):
+    """A plain (unquoted) scalar's source text, as read for a rewrite.
+
+    A ``str``, so every string operation and comparison a caller already
+    does works; :class:`RewriteDumper` is what gives it back its style.
+    """
+
+    __slots__ = ()
+
+
+def _implicit_tag(resolver: Any, text: str) -> str:
+    """The tag YAML gives *text* written plain (what the composer stamps)."""
+    return resolver.resolve(yaml.ScalarNode, text, (True, False))
+
+
+#: The implicit tags a RawPlain may carry: the ones ``SafeConstructor``
+#: builds a value for. ⛔ NOT every tag the resolver can give — ``=`` resolves
+#: to ``!!value`` and ``<<`` (as a value) to ``!!merge``, which SafeConstructor
+#: REFUSES ("could not determine a constructor"), and the non-rewrite read
+#: (``deprecate_rule``'s scan, ``patch_config``'s pre-#2220 reader) refuses
+#: the file with it. Wrapping them would let the rewrite read — and rewrite —
+#: a file every other read of the same run calls unreadable (#2220 review).
+_RAW_PLAIN_TAGS = frozenset("tag:yaml.org,2002:" + t for t in
+                            ("str", "int", "float", "bool", "timestamp"))
+
+
+def _is_plain_as_written(resolver: Any, node: Any) -> bool:
+    """A plain scalar whose tag is the one its text implies — i.e. writing
+    the text back plain reproduces the node — and a tag ``SafeConstructor``
+    accepts (``_RAW_PLAIN_TAGS``; null stays None). ``!!str 5`` is not (its
+    tag differs), so it keeps its constructed ``"5"``; ``=`` / ``<<`` go to
+    ``SafeConstructor`` and fail there exactly as in the non-rewrite read."""
+    return (isinstance(node, yaml.ScalarNode) and node.style is None
+            and node.tag in _RAW_PLAIN_TAGS
+            and node.tag == _implicit_tag(resolver, node.value))
+
+
+class KeepPlainScalarText:
+    """Loader mixin: plain scalars — values AND mapping keys — are RawPlain.
+
+    Put it BEFORE the loader class in the bases, so ``construct_object``
+    sees the node first. Keys are text already (``ExporterKeyLoader``); a
+    plain key is re-wrapped so it is written back plain too (``010:`` stays
+    ``010:``, not ``'010':``).
+    """
+
+    def construct_object(self, node, deep=False):  # noqa: D102 — see class
+        if _is_plain_as_written(self, node):
+            return RawPlain(node.value)
+        return super().construct_object(node, deep=deep)  # type: ignore[misc]
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        mapping = super().construct_mapping(node, deep=deep)  # type: ignore[misc]
+        # `node.value` is flattened by now (merge keys expanded). By text,
+        # the LAST spelling wins — the same one whose value the dict kept.
+        plain = {k.value: _is_plain_as_written(self, k)
+                 for k, _v in node.value if isinstance(k, yaml.ScalarNode)}
+        return {(RawPlain(k) if isinstance(k, str) and plain.get(k) else k): v
+                for k, v in mapping.items()}
+
+
+class RewriteLoader(KeepPlainScalarText, ExporterKeyLoader):
+    """``ExporterKeyLoader`` for a file that will be dumped back (#2220)."""
+
+
+class RewriteDumper(yaml.SafeDumper):
+    """``SafeDumper`` that writes a :class:`RawPlain` back as it was read."""
+
+
+def _represent_raw_plain(dumper: Any, data: RawPlain) -> Any:
+    text = str(data)
+    return yaml.ScalarNode(_implicit_tag(dumper, text), text, style=None)
+
+
+RewriteDumper.add_representer(RawPlain, _represent_raw_plain)
+
+
+def load_for_rewrite(stream: Any) -> Any:
+    """:func:`load_exporter_keys` for a rewrite: plain scalars are RawPlain.
+
+    Longhand for the reason given in ``load_exporter_keys``; NOT strict (a
+    repeated key keeps the last value), like that function. The strict
+    sibling is ``_lib_io.strict_load_for_rewrite``.
+    """
+    loader = RewriteLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
+def dump_for_rewrite(data: Any, **kwargs: Any) -> str:
+    """``yaml.safe_dump(data, **kwargs)`` that writes RawPlain back plain."""
+    return yaml.dump(data, Dumper=RewriteDumper, **kwargs)
