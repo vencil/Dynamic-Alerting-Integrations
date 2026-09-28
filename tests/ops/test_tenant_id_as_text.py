@@ -505,6 +505,155 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
     assert got == {"tenants": {row["exporter_key"]: {"container_cpu": "2"}}}, got
 
 
+# ── da_assembler --render-cr: VALUES and metadata.name as written ──────
+#
+# #2331: the CR was read with PyYAML typing and dumped back, so an unquoted
+# value was retyped on the way through — `010` written as `8`, `0x1F` as
+# `31`, `12:30` as `750` (the `:30` severity suffix gone), a timestamp as
+# `2026-01-02 03:04:05+00:00`. The exporter's value moved with it.
+# #2372: `metadata.name` was read the same way, so `name: 010` rendered
+# `8.yaml` (and `yes` → `True.yaml`) while the body still said `010` —
+# tenant-api finds a tenant by file name and answered 404.
+
+_VALUES_BLOCK = ("    t1:\n"
+                 "      mysql_connections: {q}010{q}\n"
+                 "      container_cpu: {q}0x1F{q}\n"
+                 "      pg_connections: {q}12:30{q}\n"
+                 "      _metadata:\n"
+                 "        owner: {q}2026-01-02T03:04:05Z{q}\n")
+_VALUES_DEFAULTS = ("defaults:\n  mysql_connections: 1\n  container_cpu: 1\n"
+                    "  pg_connections: 1\n")
+
+
+def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
+    """(the CR's tenants block, the conf.d file the assembler wrote)."""
+    block = _VALUES_BLOCK.format(q=q)
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr("t1", block), encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    return block, out / "t1.yaml"
+
+
+def test_da_assembler_writes_unquoted_values_back_as_written(tmp_path):
+    """Before: `mysql_connections: 8`, `container_cpu: 31`,
+    `pg_connections: 750`, `owner: 2026-01-02 03:04:05+00:00`."""
+    _block, out = _render_values(tmp_path, "")
+    body = out.read_text(encoding="utf-8")
+    for line in ("mysql_connections: 010\n", "container_cpu: 0x1F\n",
+                 "pg_connections: 12:30\n", "owner: 2026-01-02T03:04:05Z\n"):
+        assert line in body, (line, body)
+
+
+def test_da_assembler_quoted_values_stay_quoted(tmp_path):
+    """Control: a quoted value was a string before and still is."""
+    _block, out = _render_values(tmp_path, '"')
+    body = out.read_text(encoding="utf-8")
+    for line in ("mysql_connections: '010'\n", "container_cpu: '0x1F'\n",
+                 "pg_connections: '12:30'\n",
+                 "owner: '2026-01-02T03:04:05Z'\n"):
+        assert line in body, (line, body)
+
+
+@pytest.mark.parametrize("q", ["", '"'], ids=["UNQ", "QUOTED"])
+def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
+    """Oracle: the exporter's served values for the rendered file equal those
+    for the CR's `tenants:` block copied verbatim into conf.d. Before (UNQ):
+    10 → 8, 12 → 750, the `:30` severity lost, the timestamp text changed."""
+    block, out = _render_values(tmp_path, q)
+    (out.parent / "_defaults.yaml").write_text(_VALUES_DEFAULTS,
+                                               encoding="utf-8")
+    ref = _tree(tmp_path / "ref", {
+        "_defaults.yaml": _VALUES_DEFAULTS,
+        "t1.yaml": "tenants:\n" + "".join(
+            line[2:] + "\n" for line in block.splitlines())})
+    if da_guard is None:
+        pytest.skip("go not on PATH: this test needs da-guard "
+                    "(set VIBE_REQUIRE_GO=1 to fail instead)")
+    got = _lib_tenant_values.load_served_values(out.parent, binary=da_guard)
+    want = _lib_tenant_values.load_served_values(ref, binary=da_guard)
+    assert {t: (v.values, v.severities) for t, v in got.items()} == \
+        {t: (v.values, v.severities) for t, v in want.items()}
+
+
+@pytest.mark.parametrize("name,want", [
+    ("010", "010"), ("0x1F", "0x1F"), ("yes", "yes"),
+    ('"010"', "010"), ('"0x1F"', "0x1F"), ('"yes"', "yes"), ("abc", "abc"),
+], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc"])
+def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
+    """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
+    `True.yaml`; the header named the same wrong CR."""
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr(name, '    "010":\n      mysql_connections: "70"\n'),
+                  encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    assert sorted(p.name for p in out.iterdir()) == [f"{want}.yaml"]
+    header = (out / f"{want}.yaml").read_text(encoding="utf-8").split("\n")[0]
+    assert header.endswith(f"ThresholdConfig ns/{want}"), header
+
+
+# A spec block that is not a mapping is not written (as before #2331). Read
+# PyYAML-typed, `defaults: 0` / `stateFilters: false` were falsy and dropped;
+# read as their text (RawPlain "0") they are truthy, and writing them out
+# made the exporter skip the whole tenant file (YamlFileError, ValueError).
+_SPEC_TENANT = '    t1:\n      mysql_connections: "70"\n'
+
+
+def _cr_with_spec_extra(extra: str) -> str:
+    return _cr("t1", _SPEC_TENANT) + extra
+
+
+@pytest.mark.parametrize("extra", [
+    "  defaults: 0\n", "  defaults: false\n", "  defaults: no\n",
+    "  stateFilters: false\n", "  stateFilters: 0\n",
+    "  defaults: 0\n  stateFilters: false\n",
+], ids=["defaults-0", "defaults-false", "defaults-no", "stateFilters-false",
+        "stateFilters-0", "both"])
+def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+                                        encoding="utf-8")
+    assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
+    got = _as_text(out / "t1.yaml")
+    assert got == {"tenants": {"t1": {"mysql_connections": "70"}}}, got
+
+
+@pytest.mark.parametrize("tenants", ["0", "false"])
+def test_da_assembler_drops_a_scalar_tenants_block(tmp_path, tenants):
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr("t1", "").replace("  tenants:\n",
+                                        f"  tenants: {tenants}\n"),
+                  encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    assert _as_text(out / "t1.yaml") == {}
+
+
+def test_da_assembler_still_writes_mapping_spec_blocks(tmp_path, da_guard):
+    """Control: a mapping `stateFilters` is written as before."""
+    extra = ("  stateFilters:\n    container_crashloop:\n"
+             "      reasons: [CrashLoopBackOff]\n      severity: critical\n")
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    got = _as_text(out / "t1.yaml")
+    assert got["state_filters"] == {"container_crashloop": {
+        "reasons": ["CrashLoopBackOff"], "severity": "critical"}}, got
+    (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+                                        encoding="utf-8")
+    assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
+
+
 # ── patch-config: the tenant patched is the tenant named (#2216, #2237) ──
 #
 # `_patch_carrier` rewrote the carrier from `yaml.safe_load(old)`: a lone
