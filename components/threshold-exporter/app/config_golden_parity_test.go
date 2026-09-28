@@ -53,7 +53,6 @@ package main
 //   - EffectiveConfig compares Go canonicalJSON with Go canonicalJSON, so it
 //     is blind to a Go-side escaping change; MergedHash / ResolveEffective
 //     catch that.
-//   - The Python leg is skipped wholesale on a Windows host (#1550 item 2).
 // Orphan files in the fixture trees are guarded on the Python side
 // (tests/golden/test_merge_parity.py::test_fixture_trees_have_no_orphans,
 // #1551).
