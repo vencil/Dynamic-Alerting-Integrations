@@ -179,5 +179,35 @@ describe('TenantManager — batch YAML excludes degraded rows', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('# t-healthy');
     expect(within(dialog).queryByTestId('modal-excluded')).not.toBeInTheDocument();
+    // Control for the degraded-only case below: Copy enabled, paste note shown.
+    expect(within(dialog).getByRole('button', { name: 'Copy' })).toBeEnabled();
+    expect(within(dialog).getByTestId('paste-note').textContent).toMatch(/tenants\.<id>:/);
+  });
+
+  it.each(['Maintenance YAML', 'Silent Mode YAML'])('%s with only degraded rows selected: nothing to copy', async (opener) => {
+    stubSearch(searchBody);
+    render(<TenantManager />);
+    await waitFor(() => expect(screen.getByLabelText('Tenant: t-healthy — prod normal')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Select t-broken'));
+    fireEvent.click(await screen.findByRole('button', { name: opener }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).not.toContain('# t-broken');
+    expect(within(dialog).getByRole('button', { name: 'Copy' })).toBeDisabled();
+    const note = within(dialog).getByTestId('paste-note').textContent || '';
+    expect(note).toBe('No tenants to generate a fragment for');
+    expect(within(dialog).getByTestId('modal-excluded')).toHaveTextContent('t-broken');
+  });
+});
+
+describe('TenantManager — filters agree with the stat cards', () => {
+  it('Mode = Unknown keeps only the readable unknown row, not the degraded one', async () => {
+    stubSearch(searchBody);
+    render(<TenantManager />);
+    await waitFor(() => expect(screen.getByLabelText('Tenant: t-healthy — prod normal')).toBeInTheDocument());
+    fireEvent.change(document.getElementById('filter-mode') as HTMLSelectElement, { target: { value: 'unknown' } });
+    await waitFor(() => expect(screen.queryByLabelText('Tenant: t-healthy — prod normal')).not.toBeInTheDocument());
+    // Control: the readable unknown row is what the "unknown" stat card counts.
+    expect(screen.getByLabelText('Tenant: t-unlabeled — unknown unknown')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Tenant: t-broken — config error: malformed_yaml')).not.toBeInTheDocument();
   });
 });

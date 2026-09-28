@@ -309,9 +309,11 @@ export default function TenantManager() {
             data.owner?.toLowerCase().includes(searchText.toLowerCase()) ||
             data.routing_channel?.toLowerCase().includes(searchText.toLowerCase()) ||
             (data.tags || []).some(tag => tag.toLowerCase().includes(searchText.toLowerCase())));
-      const matchEnv = !filterEnv || data.environment === filterEnv;
+      // #2068: a degraded row's environment / mode are placeholders, so it
+      // matches no env / mode filter — the same rows the stat cards count.
+      const matchEnv = !filterEnv || (!data.config_error && data.environment === filterEnv);
       const matchTier = !filterTier || data.tier === filterTier;
-      const matchMode = !filterMode || data.operational_mode === filterMode;
+      const matchMode = !filterMode || (!data.config_error && data.operational_mode === filterMode);
       const matchDomain = !filterDomain || data.domain === filterDomain;
       const matchDBType = !filterDBType || data.db_type === filterDBType;
       return matchSearch && matchEnv && matchTier && matchMode && matchDomain && matchDBType;
@@ -1110,7 +1112,8 @@ export default function TenantManager() {
                 : t('生成靜默模式 YAML', 'Generate Silent Mode YAML')}
             </div>
             <p data-testid="paste-note" style={{ marginBottom: 'var(--da-space-3)' }}>
-              {(() => {
+              {/* #2068: every selected row was degraded → no fragment at all. */}
+              {!modalData ? t('沒有可產生片段的租戶', 'No tenants to generate a fragment for') : (() => {
                 const key = modalType === 'maintenance' ? '_state_maintenance' : '_silent_mode';
                 return t(`每段以 # <id> 標示租戶；選了多個租戶時，請把每段分別貼到各自租戶既有檔案的 tenants.<id>: 之下。若該租戶已有 ${key}，請取代原有區塊，不要再新增一個（重複的鍵會讓檔案無法解析）。`,
                   `Each block is headed by # <id>. With several tenants selected, paste each block under tenants.<id>: in that tenant's own existing file. If the tenant already has ${key}, replace that block instead of adding a second one (a duplicate key makes the file fail to parse).`);
@@ -1134,7 +1137,8 @@ export default function TenantManager() {
             <div style={styles.codeBlock}>{modalData}</div>
             <div style={styles.buttonGroup2}>
               {/* Both outputs are per-tenant fragments, not a file (#1988, #2033): copy only. */}
-              <button onClick={copyToClipboard} style={styles.button}>
+              <button onClick={copyToClipboard} disabled={!modalData}
+                style={{ ...styles.button, ...(!modalData ? styles.buttonDisabled : {}) }}>
                 {t('複製到剪貼板', 'Copy')}
               </button>
               <button onClick={() => setModalType(null)} style={{ ...styles.button, ...styles.buttonSecondary }}>
