@@ -3427,7 +3427,7 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "docs/assets/template-data.json", "docs/schemas/tenant-config.schema.json",
     "rule-packs/threshold-registry.yaml", "rule-packs/ALERT-REFERENCE.md",
     "components/tenant-api/internal/rbac/testdata/wizard/**",
-    "helm/**",
+    "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # ⛔ Keyed by (FILTER, pattern), and note which filter each falls under —
