@@ -224,7 +224,7 @@ rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
 from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 `mtail` + `logrotate`) — build it, then set `auditLog.image.repository`.
 
-> ⛔ **#1337 bumped this image's tag to `3.0.8-2` — rebuild and push before you
+> ⛔ **#1278 bumped this image's tag to `3.0.8-3` (previously `3.0.8-2`, #1337) — rebuild and push before you
 > upgrade the chart, or the gateway pods will not start.** The mtail *version* is
 > unchanged; the *build* is not: mtail is now compiled from its pinned upstream
 > commit with a current Go toolchain instead of upstream's 2024 prebuilt binary,
@@ -295,7 +295,7 @@ exposed, 1 = one ingress, …).
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `256Mi` | `emptyDir` cap for the audit-log mirror |
 | `auditLog.image.repository` | `federation-audit-sidecar` | mtail + logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
-| `auditLog.image.tag` | `3.0.8-2` | `<mtail version>-<build revision>`. Bump the suffix whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
+| `auditLog.image.tag` | `3.0.8-3` | `<mtail version>-<build revision>`. Bump the suffix whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
 | `auditLog.logrotate.sizeMB` / `.keep` | `50` / `2` | Rotate the mirror at this size; keep this many rotations |
 
 ## Resiliency
