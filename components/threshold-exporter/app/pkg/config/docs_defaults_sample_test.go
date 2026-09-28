@@ -14,9 +14,11 @@ package config
 //      values loose ("only the top-level `defaults` key itself is guarded"),
 //      so it is structurally incapable of catching either shape.
 //   3. scripts/tools/ops/validate_config.py — the command the docs themselves
-//      tell readers to run. Measured: it returns PASS/exit 0 on a sample the
-//      loader cannot decode at all, and the byte-identical verdict on the
-//      corrected one. Zero discriminating power for this class.
+//      tell readers to run. It used to return PASS/exit 0 on a sample the
+//      loader cannot decode at all. Since #2359 (#1414) its `root_defaults`
+//      row fails a conf.d-ROOT `_defaults.yaml` the loader would drop or
+//      decode to 0 — but that is a Python re-statement of this decoder, and
+//      it judges a config TREE, not a markdown sample.
 //
 // So the only faithful oracle is the loader, which is what this test uses —
 // the same move as `mdbook test` for Rust, testable Examples for Go, and the
@@ -38,8 +40,11 @@ package config
 //     least both audible — but only the exporter side is also observable in
 //     metrics.
 //
-// Either way the operator's own feedback loop stays green:
-// scripts/tools/ops/validate_config.py returns PASS/exit 0 on a sample that cannot load.
+// Until #2359 (#1414) the operator's own feedback loop stayed green here too:
+// scripts/tools/ops/validate_config.py returned PASS/exit 0 on a root
+// `_defaults.yaml` that cannot load. It now fails that row, but it reads a
+// config tree, not the markdown samples this file checks, so this test is
+// still their oracle.
 //
 // Scope boundary: this pins the LOADER contract only. Whether a key is one the
 // threshold-registry knows (a dead-series risk) is the reachability class
