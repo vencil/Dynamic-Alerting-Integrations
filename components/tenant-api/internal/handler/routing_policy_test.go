@@ -229,3 +229,105 @@ func TestBatchTenants_RoutingProfilePolicy_PRMode(t *testing.T) {
 		t.Errorf("t-dirty = %+v, want included in the PR", r)
 	}
 }
+
+// offTree: t-off is on disk with the violating profile team-chat, routing
+// disabled — compliant as it stands.
+func offTree(disk string) map[string]string {
+	files := routingPolicyTree()
+	files["_domain_policy.yaml"] = "domain_policies:\n  finance:\n    tenants: [t-off]\n" +
+		"    constraints:\n      forbidden_receiver_types: [slack]\n"
+	files["t-off.yaml"] = "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n" + disk
+	return files
+}
+
+const offDisabledChat = "    _routing_profile: team-chat\n    _routing: disable\n"
+
+// The block ON DISK is part of what a batch op is judged on: re-enabling
+// routing on a tenant whose file names a violating profile is refused even
+// though the patch alone names nothing forbidden. And the other way round,
+// pointing a disabled tenant at that profile is allowed (nothing renders).
+func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
+	cases := []struct {
+		name, disk, patch string
+		refused           bool
+	}{
+		{"re-enable over a violating profile on disk", offDisabledChat, `{"_routing":"on"}`, true},
+		{"violating profile while disabled on disk", "    _routing_profile: domain-ok\n    _routing: disable\n",
+			`{"_routing_profile":"team-chat"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			configDir := seedGitTree(t, offTree(tc.disk))
+			before, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+			d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+				Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
+			resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":`+tc.patch+`}]`)
+			r := resp.Results[0]
+			after, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+			if tc.refused {
+				if r.Status != "error" || !strings.Contains(r.Message, "domain policy violation") {
+					t.Fatalf("result = %+v, want refused for domain policy", r)
+				}
+				if !bytes.Equal(before, after) {
+					t.Errorf("refused op changed t-off.yaml:\n%s", after)
+				}
+				return
+			}
+			if r.Status != "ok" || bytes.Equal(before, after) {
+				t.Errorf("result = %+v (file changed: %v), want ok and written", r, !bytes.Equal(before, after))
+			}
+		})
+	}
+}
+
+// Two ops on one tenant in one request, each fine alone: point the disabled
+// tenant at the violating profile, then re-enable routing. Stacked they
+// render slack. The second op must be refused in BOTH write modes.
+const stackedOps = `[
+	{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
+	{"tenant_id":"t-off","patch":{"_routing":"on"}}]`
+
+func TestBatchTenants_StackedOpsSameTenant_Direct(t *testing.T) {
+	configDir := seedGitTree(t, offTree("    _routing_profile: domain-ok\n    _routing: disable\n"))
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
+	resp := runBatch(t, configDir, d, stackedOps)
+	if len(resp.Results) != 2 || resp.Results[0].Status != "ok" || resp.Results[1].Status != "error" ||
+		!strings.Contains(resp.Results[1].Message, "domain policy violation") {
+		t.Fatalf("results = %+v, want the first op ok and the second refused", resp.Results)
+	}
+	b, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+	if !strings.Contains(string(b), "team-chat") || !strings.Contains(string(b), "disable") {
+		t.Errorf("t-off.yaml should hold op 1 only (team-chat, still disabled):\n%s", b)
+	}
+}
+
+func TestBatchTenants_StackedOpsSameTenant_PRMode(t *testing.T) {
+	configDir := seedGitTree(t, offTree("    _routing_profile: domain-ok\n    _routing: disable\n"))
+	var head string
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, h string, labels []string) (*platform.PRInfo, error) {
+			head = h
+			return &platform.PRInfo{Number: 9, WebURL: "https://example/pr/9", State: "open"}, nil
+		},
+	}
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: mockClient,
+		PRTracker: &mockPlatformTracker{}}
+	resp := runBatch(t, configDir, d, stackedOps)
+	if len(resp.Results) != 2 || resp.Results[0].Status != "included" || resp.Results[1].Status != "error" ||
+		!strings.Contains(resp.Results[1].Message, "policy violation") {
+		t.Fatalf("results = %+v, want the first op included and the second refused", resp.Results)
+	}
+	if head == "" {
+		t.Fatalf("no PR opened: %+v", resp)
+	}
+	out, err := exec.Command("git", "-C", configDir, "show", head+":t-off.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git show %s:t-off.yaml: %v\n%s", head, err, out)
+	}
+	if !strings.Contains(string(out), "team-chat") || !strings.Contains(string(out), "disable") {
+		t.Errorf("PR branch must hold op 1 only (team-chat, still disabled):\n%s", out)
+	}
+}

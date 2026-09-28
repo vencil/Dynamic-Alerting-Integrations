@@ -38,11 +38,18 @@ func extractTenantBlock(body []byte, tenantID string) map[string]any {
 func loadRoutingLayers(configDir string) routingpolicy.Layers {
 	layers, _, problems := routingpolicy.LoadRoot(configDir, nil)
 	for _, p := range problems {
-		if p.Kind == routingpolicy.ProblemDomainPolicyUnusable && p.File != "" {
+		switch {
+		case p.Kind == routingpolicy.ProblemDomainPolicyUnusable && p.File != "":
 			continue
+		case p.Kind == routingpolicy.ProblemRoutingDefaultsRoutes:
+			// Not a layer left out: the rest of _routing_defaults applies;
+			// only its `routes` are dropped, as the route generator drops them.
+			slog.Warn("_routing_defaults.routes ignored by the domain-policy check; the rest of _routing_defaults applies",
+				"file", p.File)
+		default:
+			slog.Warn("routing layer not applied to the domain-policy check",
+				"kind", p.Kind, "file", p.File, "field", p.Field, "detail", p.Message)
 		}
-		slog.Warn("routing layer not applied to the domain-policy check",
-			"kind", p.Kind, "file", p.File, "field", p.Field, "detail", p.Message)
 	}
 	return layers
 }
@@ -55,16 +62,10 @@ func touchesRouting(patch map[string]string) bool {
 	return profile || routing
 }
 
-// batchRoutingViolations judges a batch op's effect on the tenant's routing:
-// the tenant's block on disk with the patch's scalars laid over its top
-// level, resolved and checked. An op that touches neither `_routing_profile`
-// nor `_routing` is not judged — an unrelated write is not refused for the
-// routing already on disk (documented asymmetry with PUT, which always
-// judges the whole body).
-func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID string, patch map[string]string) []policy.Violation {
-	if mgr == nil || !touchesRouting(patch) {
-		return nil
-	}
+// tenantBlockOnDisk is tenants.<tenantID> of the tenant's file in configDir,
+// or an empty block for a new tenant. A file that cannot be resolved or read
+// is logged and read as empty (fail-open: the patches are judged alone).
+func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 	block := map[string]any{}
 	path, err := confd.ResolveTenantFile(configDir, tenantID)
 	switch {
@@ -78,10 +79,41 @@ func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID stri
 			block[k] = v
 		}
 	case errors.Is(err, confd.ErrTenantFileNotFound):
-		// A new tenant: the patch is the whole block.
+		// A new tenant: the patches are the whole block.
 	default:
 		slog.Warn("batch routing policy check: tenant file not resolved, judging the patch alone",
 			"tenant", tenantID, "error", err)
+	}
+	return block
+}
+
+// batchRoutingViolations judges a batch op's effect on the tenant's routing:
+// the tenant's block ON DISK, then each patch in prior, then this op's patch,
+// laid over its top level in that order, resolved and checked. An op that
+// touches neither `_routing_profile` nor `_routing` is not judged — an
+// unrelated write is not refused for the routing already on disk (documented
+// asymmetry with PUT, which always judges the whole body).
+//
+// The disk block is load-bearing: a patch judged alone would let
+// `_routing: "on"` re-enable a tenant whose file already names a violating
+// profile.
+//
+// prior is the SAME tenant's earlier ops of this request that will be
+// applied before this one without being written first — PR mode, where
+// WritePRBatch merges every op onto the same base in order (#2280 review:
+// `_routing_profile: <violating>` then `_routing: "on"` on a disabled tenant
+// each passed alone and stacked into a violation on the PR branch). Only ops
+// that were taken into the batch belong there. Direct mode writes each op
+// before judging the next, which reads the file back, so it passes nil.
+func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID string, prior []map[string]string, patch map[string]string) []policy.Violation {
+	if mgr == nil || !touchesRouting(patch) {
+		return nil
+	}
+	block := tenantBlockOnDisk(configDir, tenantID)
+	for _, p := range prior {
+		for k, v := range p {
+			block[k] = v
+		}
 	}
 	for k, v := range patch {
 		block[k] = v

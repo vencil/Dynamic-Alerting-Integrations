@@ -480,7 +480,12 @@
           "unknown_profile": null,
           "tenant_api": {
             "put": "ok",
-            "batch": null
+            "batch": {
+              "patch": {
+                "_routing": "on"
+              },
+              "verdict": "policy_violation"
+            }
           },
           "python_differs": null
         },

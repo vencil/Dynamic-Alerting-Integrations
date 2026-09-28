@@ -80,7 +80,7 @@
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR;policy 判 body 解析後的**整份** routing,不含平台檔 `tenants:` overlay 提供的 `_routing_profile`);body 格式錯誤回 400;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE`(見下方「單一租戶端點與 conf.d 範圍」) |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE` |
-| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池)。patch 碰到 `_routing_profile` 或 `_routing` 時,把 patch 蓋上磁碟上的租戶 block 後判解析結果,違反的那筆被排除(PR 模式其餘照常開 PR);**只碰其他 key 的 patch 不判 routing**——磁碟上已違規的租戶,與 routing 無關的寫入不會因此被擋(與 PUT 不對稱) |
+| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池)。patch 碰到 `_routing_profile` 或 `_routing` 時,把 patch 蓋上磁碟上的租戶 block(以及同一請求中同租戶前面已納入的 op)後判解析結果,違反的那筆被排除(PR 模式其餘照常開 PR);**只碰其他 key 的 patch 不判 routing**——磁碟上已違規的租戶,與 routing 無關的寫入不會因此被擋(與 PUT 不對稱) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
 
