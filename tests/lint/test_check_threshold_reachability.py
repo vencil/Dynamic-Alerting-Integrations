@@ -1947,7 +1947,7 @@ def test_the_witness_reads_every_artifact_and_every_document_in_it():
     Blind review truncated the loop to `rels[:1]` and swapped `safe_load_all`
     for `safe_load`; both left the whole suite green, because no test had ever
     handed the witness an offender anywhere but first, and no tracked artifact
-    is a multi-document file (measured: 0 of 17).
+    is a multi-document file.
     """
     # offender is NOT first — `sorted()` puts the clean one ahead of it
     with pytest.raises(gate._GateViolation) as exc:
@@ -2279,8 +2279,8 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
 #     construction, and the pin above is what actually held.
 #   * part of #1434's reopen trigger (`no tracked artifact has a `None` conf.d
 #     root`). `tests/ops/test_guard_defaults_scopes.py` still asserts it for
-#     files named exactly `_defaults.yaml`, which is 16 of the 17 tracked
-#     artifacts; what nothing observes is this gate's deliberate `_defaults*`
+#     files named exactly `_defaults.yaml`, which is not every tracked
+#     artifact; what nothing observes is this gate's deliberate `_defaults*`
 #     PREFIX widening — a `_defaults-multidb.yaml`-shaped name outside every
 #     conf.d tree. The replacement test asserts such a file is validated and
 #     stays silent when it is schema-clean, which is intended.
@@ -2303,11 +2303,10 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
 # arm has a floor but not a ceiling.
 #
 # ⚠️ And one shape of OVER-reporting: a witness that invents a violation on a
-# legal top-level key is caught only for the keys today's tree actually uses.
-# Measured across the 17 tracked artifacts, that is five — `defaults` (15),
-# `state_filters` (2), `optional_overrides` (2), `_custom_alerts` (1),
-# `_routing_defaults` (1) — so a mutant that reddens on, say, `_metadata:`
-# survives. Closing it would mean synthesising a document per schema property,
+# legal top-level key is caught only for the keys today's tracked artifacts
+# actually use, so a mutant that reddens on a key none of them carries (say,
+# `_metadata:`) survives. (Which keys, and how often, is left out on purpose:
+# the list written here went stale in every count (#1586).) Closing it would mean synthesising a document per schema property,
 # which is the derived-classifier shape blind review has now broken twice: the
 # probe value that is legal for one property violates another, so the fixture
 # ends up encoding the schema a second time.
@@ -2412,7 +2411,7 @@ def test_a_conf_d_tree_spelled_in_another_case_is_refused_not_ignored():
     # `x/{spelling}/_defaults.yaml`, so the immediate parent was always the
     # offending directory — and mutation showed the walk could be narrowed to
     # `.parents[:1]` with the whole suite still green. The real index is not
-    # flat: of the 17 tracked artifacts, 6 sit below their root and the deepest
+    # flat: tracked artifacts sit below their root too, and the deepest
     # is three levels down (`…/full-l0-l3/conf.d/db/mariadb/prod/`), so the
     # narrowed walk would go silent on the layout this repo actually uses.
     for spelling in ("CONF.D", "Conf.d", "conf.D"):
@@ -3578,9 +3577,9 @@ def _counted_artifact_groups(
 def test_the_two_artifact_groupings_are_one_partition():
     """⛔ `_artifact_groups` (rsplit on `/conf.d`) and `conf_d_root` must agree.
 
-    The gate's nine-row note says these two spellings "produce the IDENTICAL
-    partition — measured, all 17 tracked artifacts agree", and nothing computed
-    it. That is the same shape as every other number this file has had to
+    The gate's nine-row note used to say these two spellings "produce the
+    IDENTICAL partition — measured, all 17 tracked artifacts agree", and nothing
+    computed it (the count was already stale when #1586 found it). That is the same shape as every other number this file has had to
     correct: a measurement taken once, written down, and left.
 
     ⛔ This is NOT scraping a digit out of prose (which this file bans, and for
