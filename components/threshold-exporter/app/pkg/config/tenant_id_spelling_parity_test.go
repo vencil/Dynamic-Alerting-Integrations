@@ -29,7 +29,10 @@ type tenantIDSpellingMatrix struct {
 	} `json:"spellings"`
 }
 
-func TestTenantIDSpellingMatrix_ExporterKeyIsTheDecodedKey(t *testing.T) {
+// loadTenantIDSpellingMatrix reads the shared matrix; also the source of
+// tenant_id_bare_scalar_test.go's walker-plane rows (#2118).
+func loadTenantIDSpellingMatrix(t *testing.T) tenantIDSpellingMatrix {
+	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
 	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "..",
 		"tests", "shared", "tenant_id_yaml_spelling_matrix.json")
@@ -46,6 +49,11 @@ func TestTenantIDSpellingMatrix_ExporterKeyIsTheDecodedKey(t *testing.T) {
 	if len(m.Spellings) == 0 {
 		t.Fatal("matrix has no rows — a vacuous table passes nothing")
 	}
+	return m
+}
+
+func TestTenantIDSpellingMatrix_ExporterKeyIsTheDecodedKey(t *testing.T) {
+	m := loadTenantIDSpellingMatrix(t)
 	for _, row := range m.Spellings {
 		t.Run(row.Source, func(t *testing.T) {
 			doc := "tenants:\n  " + row.Source + ":\n    mysql_connections: \"1\"\n"
