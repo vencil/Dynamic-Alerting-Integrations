@@ -913,7 +913,7 @@ lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-overri
 	@python3 ./scripts/tools/lint/check_log_egress_policy.py --ci $(ARGS)
 
 .PHONY: adr-index adr-index-check
-adr-index: ## 重新渲染 docs/architecture-and-design.md 的 ADR 索引表（新增/修改 ADR 後跑）
+adr-index: ## 重新渲染 ADR 索引表（architecture-and-design.md + docs/adr/README{,.en}.md；新增/修改 ADR 後跑）
 	@python3 ./scripts/dx/generate_adr_index.py --write
 
 adr-index-check: ## 驗證 ADR 索引表 freshness（pre-commit 已掛同等檢查）

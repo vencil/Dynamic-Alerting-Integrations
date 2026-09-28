@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""generate_adr_index.py — Auto-render the ADR index table inside docs/architecture-and-design.md.
+"""generate_adr_index.py — Auto-render the ADR index tables.
 
 Discovers `docs/adr/[0-9][0-9][0-9]-*.md` (ZH primary; `.en.md` siblings excluded),
 parses each ADR's frontmatter `title` + `## 狀態` H2 block, and renders a Markdown table
-between the `<!-- ADR_INDEX_START -->` / `<!-- ADR_INDEX_END -->` sentinels in the target doc.
+between the `<!-- ADR_INDEX_START -->` / `<!-- ADR_INDEX_END -->` sentinels in each target:
+`docs/architecture-and-design.md`, `docs/adr/README.md` and `docs/adr/README.en.md` (the
+EN table takes title and link from the `.en.md` sibling when there is one). `--target`
+renders a single ZH target instead.
 
 Modes:
     --check   exit 1 if rendered output differs from current target file (drift gate)
@@ -45,6 +48,12 @@ if hasattr(sys.stdout, "reconfigure"):
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADR_DIR = REPO_ROOT / "docs" / "adr"
 TARGET_DOC = REPO_ROOT / "docs" / "architecture-and-design.md"
+# (path, link prefix, language). Links are relative to the target's own directory.
+DEFAULT_TARGETS = (
+    (TARGET_DOC, "adr/", "zh"),
+    (ADR_DIR / "README.md", "./", "zh"),
+    (ADR_DIR / "README.en.md", "./", "en"),
+)
 SENTINEL_START = "<!-- ADR_INDEX_START -->"
 SENTINEL_END = "<!-- ADR_INDEX_END -->"
 
@@ -71,6 +80,8 @@ class AdrEntry:
     status_name: str  # e.g. "Accepted", "Proposed", "Extended"
     version: str      # first vX.Y.Z found in the status block (may be "")
     rel_path: str     # relative to architecture-and-design.md, e.g. "adr/001-...-md"
+    en_title: str = ""     # title from the `.en.md` sibling, "" when there is none
+    en_filename: str = ""  # the `.en.md` sibling's name, "" when there is none
 
 
 class AdrParseError(ValueError):
@@ -119,6 +130,14 @@ def parse_adr(path: Path) -> AdrEntry:
     v = VERSION_RE.search(status_block)
     version = v.group(0) if v else ""
 
+    en_title, en_filename = "", ""
+    en_path = path.with_name(path.name[: -len(".md")] + ".en.md")
+    if en_path.is_file():
+        en_fm = FRONTMATTER_RE.match(en_path.read_text(encoding="utf-8"))
+        en_meta = (yaml.safe_load(en_fm.group(1)) or {}) if en_fm else {}
+        en_title = TITLE_PREFIX_RE.sub("", (en_meta.get("title") or "").strip()).strip()
+        en_filename = en_path.name
+
     return AdrEntry(
         number=number,
         title=title,
@@ -126,6 +145,8 @@ def parse_adr(path: Path) -> AdrEntry:
         status_name=status_name,
         version=version,
         rel_path=f"adr/{path.name}",
+        en_title=en_title,
+        en_filename=en_filename,
     )
 
 
@@ -140,40 +161,54 @@ def discover_adrs(adr_dir: Path = ADR_DIR) -> List[Path]:
     return files
 
 
-def render_table(entries: List[AdrEntry]) -> str:
-    """Render a Markdown table. Trailing newline included so sentinel block stays clean."""
-    lines = [
-        "| ADR | 標題 | 狀態 | 版本 |",
-        "|-----|------|------|------|",
-    ]
+def render_table(entries: List[AdrEntry], link_prefix: str = "adr/", lang: str = "zh") -> str:
+    """Render a Markdown table. Trailing newline included so sentinel block stays clean.
+
+    `lang="en"` uses the `.en.md` sibling's title and link where one exists and falls
+    back to the ZH file otherwise (some ADRs are ZH-only by language policy).
+    """
+    header = "| ADR | Title | Status | Version |" if lang == "en" else "| ADR | 標題 | 狀態 | 版本 |"
+    lines = [header, "|-----|------|------|------|"]
     for e in entries:
-        title_cell = f"[{e.title}]({e.rel_path})"
+        title, filename = e.title, e.rel_path.split("/", 1)[1]
+        if lang == "en" and e.en_filename:
+            title, filename = e.en_title or e.title, e.en_filename
+        title_cell = f"[{title}]({link_prefix}{filename})"
         status_cell = f"{e.status_emoji} {e.status_name}"
         version_cell = e.version or "—"
         lines.append(f"| ADR-{e.number} | {title_cell} | {status_cell} | {version_cell} |")
     return "\n".join(lines) + "\n"
 
 
-def replace_sentinel_block(content: str, table: str) -> str:
+def replace_sentinel_block(content: str, table: str, target: Path = TARGET_DOC) -> str:
     """Replace whatever sits between SENTINEL_START / SENTINEL_END with the rendered table."""
     pattern = re.compile(
         r"(" + re.escape(SENTINEL_START) + r"\n)"
-        r".*?"
-        r"(\n" + re.escape(SENTINEL_END) + r")",
+        r"(?:.*?\n)?"  # optional: the two sentinels may sit on adjacent lines
+        r"(" + re.escape(SENTINEL_END) + r")",
         re.DOTALL,
     )
     if not pattern.search(content):
         raise ValueError(
             f"Sentinel block missing in target doc. Add the following two lines around an empty "
-            f"region in {TARGET_DOC.relative_to(REPO_ROOT).as_posix()}:\n"
+            f"region in {_display(target)}:\n"
             f"  {SENTINEL_START}\n  {SENTINEL_END}"
         )
-    return pattern.sub(r"\1" + table + r"\2", content)
+    return pattern.sub(lambda m: m.group(1) + table + "\n" + m.group(2), content, count=1)
+
+
+def _display(path: Path) -> str:
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        # `--target` lives outside REPO_ROOT (e.g., test fixtures under /tmp);
+        # fall back to the absolute path so the message stays readable.
+        return str(path)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Generate the ADR index table inside docs/architecture-and-design.md.",
+        description="Generate the ADR index tables (architecture-and-design.md + docs/adr/README{,.en}.md).",
     )
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="exit 1 if rendered table differs (drift gate)")
@@ -187,8 +222,8 @@ def main() -> int:
     ap.add_argument(
         "--target",
         type=Path,
-        default=TARGET_DOC,
-        help="Target doc to update (default: docs/architecture-and-design.md)",
+        default=None,
+        help="Render a single ZH target doc instead of the default three",
     )
     args = ap.parse_args()
 
@@ -203,38 +238,38 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
-    table = render_table(entries)
-    current = args.target.read_text(encoding="utf-8")
-    try:
-        new = replace_sentinel_block(current, table)
-    except ValueError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 2
-
-    try:
-        rel_target = args.target.relative_to(REPO_ROOT).as_posix()
-    except ValueError:
-        # `--target` lives outside REPO_ROOT (e.g., test fixtures under /tmp);
-        # fall back to the absolute path so the message stays readable.
-        rel_target = str(args.target)
+    targets = [(args.target, "adr/", "zh")] if args.target else list(DEFAULT_TARGETS)
+    stale, changed = [], []
+    for target, prefix, lang in targets:
+        current = target.read_text(encoding="utf-8")
+        try:
+            new = replace_sentinel_block(current, render_table(entries, prefix, lang), target)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        if new != current:
+            stale.append(_display(target))
+            if args.write:
+                atomic_write_text(target, new)
+                changed.append(_display(target))
 
     if args.check:
-        if new == current:
-            print(f"OK: ADR index up-to-date in {rel_target} ({len(entries)} entries)")
+        if not stale:
+            print(f"OK: ADR index up-to-date in {len(targets)} target(s) ({len(entries)} entries)")
             return 0
+        for name in stale:
+            print(f"DRIFT: ADR index in {name} is stale.", file=sys.stderr)
         print(
-            f"DRIFT: ADR index in {rel_target} is stale.\n"
-            f"  Run `make adr-index` (or `python scripts/dx/generate_adr_index.py --write`) to sync.",
+            "  Run `make adr-index` (or `python scripts/dx/generate_adr_index.py --write`) to sync.",
             file=sys.stderr,
         )
         return 1
 
     # --write
-    if new == current:
+    if not changed:
         print(f"OK: no change ({len(entries)} entries)")
-    else:
-        atomic_write_text(args.target, new)
-        print(f"WROTE: {rel_target} ({len(entries)} entries)")
+    for name in changed:
+        print(f"WROTE: {name} ({len(entries)} entries)")
     return 0
 
 
