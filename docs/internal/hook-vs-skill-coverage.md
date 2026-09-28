@@ -32,7 +32,7 @@ lang: zh
 | 要求 preflight marker | 每次 `git push`（main/master 直接放行） | `make pr-preflight` 跑過 | push 被拒 | `scripts/ops/require_preflight_pass.sh` |
 | mkdocs strict | 被推的 commit 改到符合守衛裡 `DOC_RE` 的檔（⛔ SSOT 在該腳本，本表刻意不重列；⚠️ 它**不限於 `docs/**`**），**或**該 ref 的 base 判不出來（fail-safe 一律建站） | dev-rule #4 site-root 語意 | push 被拒（Tier 1）/ CI backstop（Tier 2） | `scripts/ops/pre_push_mkdocs_strict.sh` |
 
-- 不是 pre-commit hook。安裝配方只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等，串接既有 lfs hook 為 `pre-push.chained`）；⛔ 別假設有人替你跑過：自動呼叫端是 `session-init.py` 與 `.claude/hooks/session-start.sh`，而多 repo 的 web session 兩個都不跑（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。「接上了沒」由 `make pr-preflight` 的 `Local hooks` 回答，`--skip-hooks` 略不過（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)、[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)、[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）。`pre-commit install --hook-type pre-push` 不是替代方案。
+- 不是 pre-commit hook。安裝配方只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等，串接既有 lfs hook 為 `pre-push.chained`）；⛔ 別假設有人替你跑過：自動呼叫端是 `session-init.py` 與 `.claude/hooks/session-start.sh`，而事後才 `add_repo` 進來的 web session 兩個都不跑（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。「接上了沒」由 `make pr-preflight` 的 `Local hooks` 回答，`--skip-hooks` 略不過（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)、[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)、[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）。`pre-commit install --hook-type pre-push` 不是替代方案。
 - 多 refspec 同推時最多只看得到一列的殘差已由 #1689 修掉（dispatcher 自己讀 stdin；釘在 `tests/ops/test_prepush_hook_wiring.py`）；mkdocs 守衛對被推的那顆 commit 建站而非工作樹（[#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690)）。
 - 動到 `docs/**` 想提早看：`make lint-docs-mkdocs`。
 
@@ -49,7 +49,7 @@ lang: zh
 | `stop_evidence.py` | `Stop`（主 agent 每回合結束） | 最後一則訊息含宣稱詞卻無 `$ ` 證據區塊、或任一 fence 裡的 `$ 指令`（任意縮排）不等於本回合 transcript 的 Bash/PowerShell tool_use 跑過的整條指令或其 `&&`／`;`／`\|` 一段 ⇒ exit 2 **一次**（`stop_hook_active` 與 per-prompt marker 保證不迴圈；transcript 還沒寫到這個 prompt 時只查形狀並在 stderr 說明；子代理跑的指令不算本回合） | `scripts/session-guards/stop_evidence.py` |
 
 已知不涵蓋：
-- 多 repo web session（project root 是本 repo 上層）整份 `.claude/settings.json` 不載入，上表全部涵蓋為零（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)；起手式先查 `/tmp/vibe-session-start-hook.ran`）。
+- 啟動時沒掛 repo、事後才 `add_repo` 的 web session（project root 是本 repo 上層；單 repo session 實測正常、多 repo 未量）整份 `.claude/settings.json` 不載入，上表全部涵蓋為零（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)；起手式先查 `/tmp/vibe-session-start-hook.ran`）。
 - matcher 不含 `PowerShell` 工具與 MCP 寫入類工具（`stop_evidence.py` 的來源比對認 PowerShell tool_use，但 `paths_map.py` 不看它的指令——路徑與 `commands` 兩半都一樣，在 PowerShell 裡跑 `git rebase` 不會觸發）。
 - `sed -i` 攔截只認絕對掛載路徑；相對路徑放行（#824）。
 - `paths_map.py` 看不見 Bash 即將**建立**的檔案（存在性是它過濾雜訊 token 的唯一方法）；`stop_evidence.py` 不套 `SubagentStop`、不是 required check。

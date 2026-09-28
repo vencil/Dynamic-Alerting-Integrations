@@ -34,9 +34,12 @@
 #   handoff note before. They are neither — they are this list.
 #
 # ⛔ THIS HOOK MAY NEVER RUN — SEE #1719
-#   In a multi-repo web session the project root is the PARENT of this repo
+#   In a web session that started with no repo attached and got this one via
+#   `add_repo` later, the project root is the PARENT of this repo
 #   (`/home/user`), so Claude Code reads `/home/user/.claude/settings.json` and
-#   this repo's `.claude/settings.json` is never loaded at all. Measured: the
+#   this repo's `.claude/settings.json` is never loaded at all. (A session
+#   started with this one repo loads it normally — measured in #1719; two
+#   or more repos unmeasured.) Measured: the
 #   PreToolUse session-guards declared in the same file have zero effect
 #   there. That is why the last thing this script does is drop a marker: the
 #   session bootstrap in CLAUDE.md checks for it, so "the hook did not run" is
