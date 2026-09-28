@@ -478,3 +478,50 @@ def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_f
     assert res.returncode == rc, res.stderr
     if strict:
         assert "'tenants' entry must be a tenant id, got dict" in res.stderr
+
+
+def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):
+    """F1's reader carries nothing from a file that does not parse — Go's
+    LoadTree skips it the same way — so only the multi-carrier WARN."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_defaults.yaml": _SLACK_RD,
+        "team/_defaults.yml": "a: [1, 2\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_OK, res.stderr
+    assert "has 2 defaults carriers" in res.stderr
+
+
+def test_a_non_mapping_level_contributes_nothing(tmp_path):
+    """A subdirectory `_routing_defaults` that is not a mapping is named and
+    skipped: the tenant inherits the levels above it unchanged."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_defaults.yaml": "_routing_defaults: [a, b]\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--dry-run")
+    assert res.returncode == EXIT_OK, res.stderr
+    assert ("_routing_defaults in team/_defaults.yaml must be a mapping, got list"
+            in res.stderr)
+    tree = load_tenant_tree(str(d))
+    assert tree.routing_configs["t-team"]["receiver"]["type"] == "email"
+
+
+def test_routes_in_a_nested_level_are_stripped_and_block_validate(tmp_path):
+    """#2245 as at the root: `routes` never belong to the defaults — named,
+    dropped from the level, and blocking under --validate."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_defaults.yaml": _SLACK_RD + "  routes:\n  - match: {a: b}\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    msg = "_routing_defaults in team/_defaults.yaml: 'routes' is not supported here"
+    tree = load_tenant_tree(str(d))
+    assert "routes" not in tree.routing_configs["t-team"]
+    assert tree.routing_configs["t-team"]["receiver"]["type"] == "slack"
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert msg in res.stderr
