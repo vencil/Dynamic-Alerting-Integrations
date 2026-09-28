@@ -19,6 +19,9 @@
     "rejected_routes: the refs of `routes` entries the generator skips (route_entry_matchers), or",
     "['routes'] when `routes` is not a list; da-guard reports each as invalid_route_entry.",
     "unknown_profile: the referenced routing profile no profile file defines (WARN), else null.",
+    "A reference is any non-empty string, trimmed: '   ' references the unknown profile ''.",
+    "An allowed_receiver_types list with entries but no string among them allows no receiver type",
+    "(Python restricts on the non-empty set); a non-string forbidden entry matches nothing.",
     "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
     "with POLICY_VIOLATION, 'ok' = allowed. tenant-api reads only _domain_policy.yaml (not .yml),",
     "and a PUT body carries no platform-file overlay. tenant_api.batch: null, or one patch applied",
@@ -886,6 +889,78 @@
           "policy": [],
           "rejected_routes": [],
           "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "allowed-list-non-string-entries",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-nonstr]\n    constraints:\n      allowed_receiver_types: [true]\n  ops:\n    tenants: [t-forb-nonstr]\n    constraints:\n      forbidden_receiver_types: [1]\n",
+        "t-nonstr.yaml": "tenants:\n  t-nonstr:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "t-forb-nonstr.yaml": "tenants:\n  t-forb-nonstr:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-nonstr": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-forb-nonstr": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "whitespace-profile-reference",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  team-a:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-blank.yaml": "tenants:\n  t-blank:\n    cpu_usage_percent: '85'\n    _routing_profile: '   '\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-blank": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": "",
           "tenant_api": {
             "put": "ok",
             "batch": null

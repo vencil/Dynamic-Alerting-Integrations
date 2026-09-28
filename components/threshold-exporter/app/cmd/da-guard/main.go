@@ -381,8 +381,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			routing[ec.TenantID] = resolved
 			provenance[ec.TenantID] = prov
 		}
-		if unknown != "" {
-			unknownProfiles[ec.TenantID] = unknown
+		if unknown != nil {
+			unknownProfiles[ec.TenantID] = *unknown
 		}
 		// PR-5: redundant-override warn-tier inputs. We populate
 		// both fields as soon as the resolver hands them to us; an

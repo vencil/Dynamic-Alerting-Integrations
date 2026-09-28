@@ -287,6 +287,12 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 					name, cn.key, kindName(l))
 				continue
 			}
+			// Only strings can equal a receiver type; the other entries are
+			// dropped, but a non-empty allowed list still restricts (see
+			// Policy.AllowedListNonEmpty).
+			if cn.key == ConstraintAllowed && len(l.Content) > 0 {
+				p.AllowedListNonEmpty = true
+			}
 			for _, item := range l.Content {
 				var v any
 				if err := deref(item).Decode(&v); err == nil {

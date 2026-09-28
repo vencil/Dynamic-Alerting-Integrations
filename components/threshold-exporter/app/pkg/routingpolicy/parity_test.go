@@ -197,12 +197,9 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
-					var wantUnknown string
-					if want.UnknownProfile != nil {
-						wantUnknown = *want.UnknownProfile
-					}
-					if unknown != wantUnknown {
-						t.Errorf("unknown profile = %q, want %q", unknown, wantUnknown)
+					if (unknown == nil) != (want.UnknownProfile == nil) ||
+						(unknown != nil && *unknown != *want.UnknownProfile) {
+						t.Errorf("unknown profile = %v, want %v", unknown, want.UnknownProfile)
 					}
 					if want.TenantAPI != nil {
 						checkTenantAPIModel(t, tree.Files, tenantID, block, layers, *want.TenantAPI)

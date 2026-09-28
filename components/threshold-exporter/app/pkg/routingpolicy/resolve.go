@@ -56,20 +56,24 @@ func IsDisabled(v any) bool {
 // block is the tenant's config block (its `_routing` and `_routing_profile`
 // keys are read). ok=false: the tenant has no routing — `_routing` is a
 // disabling string, or no layer supplies anything. unknownProfile is the
-// referenced profile name when no profile has that name ("" otherwise); it
-// is reported even when ok=false, like the Python reader's WARN.
+// referenced profile name, trimmed, when no profile has that name (nil
+// otherwise); it is reported even when ok=false, like the Python reader's
+// WARN. A reference is any non-empty string, so `"   "` is a reference to the
+// profile named "" — unknown, as in Python (`rp_ref.strip()`).
 //
 // The result shares nothing with block or l.
-func Resolve(tenantID string, block map[string]any, l Layers) (resolved map[string]any, ok bool, prov Provenance, unknownProfile string) {
-	ref, hasRef := "", false
-	if s, isStr := block["_routing_profile"].(string); isStr && s != "" {
-		ref, hasRef = strings.TrimSpace(s), true
-	}
+func Resolve(tenantID string, block map[string]any, l Layers) (resolved map[string]any, ok bool, prov Provenance, unknownProfile *string) {
+	// "Is there a reference" (a non-empty string, Python truthiness) and
+	// "what does it name" (trimmed) are two questions: a whitespace-only
+	// value is a reference that names "".
+	raw, isStr := block["_routing_profile"].(string)
+	hasRef := isStr && raw != ""
+	ref := strings.TrimSpace(raw)
 	var profile map[string]any
 	if hasRef {
 		p, known := l.Profiles[ref]
 		if !known {
-			unknownProfile = ref
+			unknownProfile = &ref
 		}
 		profile = p
 	}

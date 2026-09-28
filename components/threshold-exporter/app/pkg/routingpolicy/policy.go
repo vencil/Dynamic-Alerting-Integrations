@@ -14,6 +14,12 @@ type Policy struct {
 	Tenants                []string
 	ForbiddenReceiverTypes []string
 	AllowedReceiverTypes   []string
+	// AllowedListNonEmpty is true when `allowed_receiver_types` has any
+	// entry, string or not. The Python check restricts on a non-empty set,
+	// so a list of only non-string entries (`[true]`, `[~]`, `[1]`) allows
+	// NO receiver type; AllowedReceiverTypes keeps the strings only, and
+	// would read that list as "unconstrained" on its own.
+	AllowedListNonEmpty bool
 }
 
 // Violation is one receiver type a domain policy rejects.
@@ -54,7 +60,7 @@ func CheckReceiverTypes(tenantID string, resolved map[string]any, policies []Pol
 				if len(p.ForbiddenReceiverTypes) > 0 && contains(p.ForbiddenReceiverTypes, rt) {
 					out = append(out, Violation{Domain: p.Domain, Constraint: ConstraintForbidden, Target: tg.Ref, ReceiverType: rt})
 				}
-				if len(p.AllowedReceiverTypes) > 0 && !contains(p.AllowedReceiverTypes, rt) {
+				if (p.AllowedListNonEmpty || len(p.AllowedReceiverTypes) > 0) && !contains(p.AllowedReceiverTypes, rt) {
 					out = append(out, Violation{Domain: p.Domain, Constraint: ConstraintAllowed, Target: tg.Ref, ReceiverType: rt})
 				}
 			}

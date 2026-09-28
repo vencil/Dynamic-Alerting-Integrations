@@ -46,8 +46,8 @@ func TestResolve_ShallowLayersAndProvenance(t *testing.T) {
 	}
 	block := decode(t, "_routing_profile: ' team-a '\n_routing:\n  group_by: [b, '{{tenant}}']\n  routes: []\n")
 	got, ok, prov, unknown := Resolve("t-one", block, layers)
-	if !ok || unknown != "" {
-		t.Fatalf("ok=%v unknown=%q", ok, unknown)
+	if !ok || unknown != nil {
+		t.Fatalf("ok=%v unknown=%v", ok, unknown)
 	}
 	want := map[string]any{
 		"receiver":   map[string]any{"type": "slack", "api_url": "https://t-one.hooks.example/x"},
@@ -83,20 +83,26 @@ func TestResolve_NoRouting(t *testing.T) {
 		name        string
 		block       string
 		wantOK      bool
-		wantUnknown string
+		wantUnknown string // "-" = none
 	}{
-		{"disable string beats the profile", "_routing_profile: chat\n_routing: ' Disabled '\n", false, ""},
+		{"disable string beats the profile", "_routing_profile: chat\n_routing: ' Disabled '\n", false, "-"},
 		{"unknown profile, nothing else", "_routing_profile: nope\n", false, "nope"},
 		{"unknown profile is reported even when disabled", "_routing_profile: nope\n_routing: off\n", false, "nope"},
-		{"known but not a mapping", "_routing_profile: broken\n", false, ""},
-		{"empty _routing mapping", "_routing: {}\n", false, ""},
-		{"non-string profile reference is ignored", "_routing_profile: 7\n_routing: {receiver: {type: email}}\n", true, ""},
-		{"non-disabling string _routing is ignored", "_routing_profile: chat\n_routing: yes-please\n", true, ""},
+		{"whitespace-only reference names the unknown profile ''", "_routing_profile: '   '\n", false, ""},
+		{"empty string is no reference", "_routing_profile: ''\n", false, "-"},
+		{"known but not a mapping", "_routing_profile: broken\n", false, "-"},
+		{"empty _routing mapping", "_routing: {}\n", false, "-"},
+		{"non-string profile reference is ignored", "_routing_profile: 7\n_routing: {receiver: {type: email}}\n", true, "-"},
+		{"non-disabling string _routing is ignored", "_routing_profile: chat\n_routing: yes-please\n", true, "-"},
 	}
 	for _, tc := range cases {
 		_, ok, _, unknown := Resolve("t-x", decode(t, tc.block), layers)
-		if ok != tc.wantOK || unknown != tc.wantUnknown {
-			t.Errorf("%s: ok=%v unknown=%q, want ok=%v unknown=%q", tc.name, ok, unknown, tc.wantOK, tc.wantUnknown)
+		got := "-"
+		if unknown != nil {
+			got = *unknown
+		}
+		if ok != tc.wantOK || got != tc.wantUnknown {
+			t.Errorf("%s: ok=%v unknown=%q, want ok=%v unknown=%q", tc.name, ok, got, tc.wantOK, tc.wantUnknown)
 		}
 	}
 }
@@ -211,6 +217,15 @@ func TestCheckReceiverTypes_IndependentConstraintsInDomainOrder(t *testing.T) {
 	if pols[0].Domain != "zeta" {
 		t.Error("CheckReceiverTypes reordered the caller's slice")
 	}
+
+	// An allowed list whose entries are all non-strings allows nothing (the
+	// Python check restricts on the non-empty set); non-string forbidden
+	// entries match nothing.
+	odd := []Policy{{Domain: "odd", Tenants: []string{"t-x"}, AllowedListNonEmpty: true}}
+	if v := CheckReceiverTypes("t-x", decode(t, "receiver: {type: pagerduty}\n"), odd); len(v) != 1 ||
+		v[0].Constraint != ConstraintAllowed {
+		t.Errorf("non-string-only allowed list: %+v, want one allowed violation", v)
+	}
 }
 
 func TestLoadRoot_Layers(t *testing.T) {
@@ -225,7 +240,7 @@ func TestLoadRoot_Layers(t *testing.T) {
 		"_routing_profiles.yml":  "routing_profiles:\n  b: {receiver: {type: teams}}\n  c: not-a-mapping\n",
 		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-a, 010]\n" +
 			"    constraints: {forbidden_receiver_types: [slack], allowed_receiver_types: [email, 3]}\n",
-		"_domain_policy.yml":         "domain_policies:\n  ops: {tenants: [t-b], constraints: {allowed_receiver_types: [email]}}\n",
+		"_domain_policy.yml":         "domain_policies:\n  ops: {tenants: [t-b], constraints: {allowed_receiver_types: [email]}}\n  odd: {tenants: [t-c], constraints: {allowed_receiver_types: [true, ~, 1], forbidden_receiver_types: [1]}}\n",
 		"tenant.yaml":                "_routing_defaults: {receiver: {type: slack}}\nrouting_profiles: {x: {}}\n",
 		"sub/_routing_profiles.yaml": "routing_profiles:\n  nested: {receiver: {type: slack}}\n",
 		".hidden.yaml":               "_routing_defaults: {receiver: {type: slack}}\n",
@@ -252,8 +267,10 @@ func TestLoadRoot_Layers(t *testing.T) {
 		}
 	}
 	want := []Policy{
-		{Domain: "finance", Tenants: []string{"t-a", "010"}, ForbiddenReceiverTypes: []string{"slack"}, AllowedReceiverTypes: []string{"email"}},
-		{Domain: "ops", Tenants: []string{"t-b"}, AllowedReceiverTypes: []string{"email"}},
+		{Domain: "finance", Tenants: []string{"t-a", "010"}, ForbiddenReceiverTypes: []string{"slack"},
+			AllowedReceiverTypes: []string{"email"}, AllowedListNonEmpty: true},
+		{Domain: "odd", Tenants: []string{"t-c"}, AllowedListNonEmpty: true},
+		{Domain: "ops", Tenants: []string{"t-b"}, AllowedReceiverTypes: []string{"email"}, AllowedListNonEmpty: true},
 	}
 	if !reflect.DeepEqual(pols, want) {
 		t.Errorf("policies = %+v\nwant %+v", pols, want)
@@ -301,7 +318,7 @@ func TestLoadRoot_ProblemsAndSkip(t *testing.T) {
 	}
 	// b keeps the constraint that is usable; a / c / d / e / f enforce nothing.
 	if len(pols) != 1 || pols[0].Domain != "b" || len(pols[0].ForbiddenReceiverTypes) != 0 ||
-		!reflect.DeepEqual(pols[0].AllowedReceiverTypes, []string{"email"}) {
+		!reflect.DeepEqual(pols[0].AllowedReceiverTypes, []string{"email"}) || !pols[0].AllowedListNonEmpty {
 		t.Errorf("policies = %+v", pols)
 	}
 
