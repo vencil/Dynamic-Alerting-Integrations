@@ -350,6 +350,22 @@ class TestAnalyzeAlertmanager:
         routings, _ = analyze_alertmanager(am)
         assert routings["t1"]["receiver"]["url"] == "https://main.example.com"
 
+    def test_per_tenant_enforced_route_keeps_its_skip_reason(self):
+        """A `continue: true` route of the tenant that loses the tie is
+        reported as enforced routing, not as a narrower sub-route."""
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "tenant-t1",
+                     "continue": True},
+                    {"matchers": ['tenant="t1"'], "receiver": "tenant-t1"}],
+            receivers=self._RECEIVERS,
+        )
+        _, summary = analyze_alertmanager(am)
+        tenant_skips = [s for s in summary["skipped_routes"]
+                        if s["receiver"] == "tenant-t1"]
+        assert tenant_skips == [{
+            "receiver": "tenant-t1",
+            "reason": "platform/continue route (likely enforced routing)"}]
+
 
 class TestCheckTimingGuardrails:
     """檢查時序機制的有效性。"""

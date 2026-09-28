@@ -1089,9 +1089,10 @@ SUBROUTE_INHERITED_KEYS = ("group_wait", "group_interval", "repeat_interval",
 def _renders_on_route(key: str, value: object) -> bool:
     """Whether the generator writes ``key: value`` onto a route.
 
-    Mirrors ``_grar_merge._apply_timing_params`` (a timing key is emitted
-    when truthy) and ``_grar_routes`` (``group_by`` is emitted when it is a
-    non-empty list).
+    Mirrors WHETHER ``_grar_merge._apply_timing_params`` emits a timing key
+    (when truthy) and ``_grar_routes`` emits ``group_by`` (a non-empty list)
+    — not the emitted VALUE: guardrail clamping is not modelled, matching
+    the main route's own check, which also reads the unclamped value.
     """
     if key == "group_by":
         return bool(value) and isinstance(value, list)

@@ -332,8 +332,11 @@ def analyze_alertmanager(am_config, tenant_label=DEFAULT_TENANT_LABEL):
         if tenant and default_idx[tenant] != idx:
             skipped_routes.append({
                 "receiver": entry["receiver"],
-                "reason": f"narrower route of {tenant_label} '{tenant}' "
-                          f"(per-alert routing is not reverse-mapped)",
+                "reason": (
+                    "platform/continue route (likely enforced routing)"
+                    if entry.get("continue_flag") else
+                    f"narrower route of {tenant_label} '{tenant}' "
+                    f"(per-alert routing is not reverse-mapped)"),
             })
             continue
 
