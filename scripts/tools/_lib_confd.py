@@ -1481,6 +1481,7 @@ def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"
 def overlay_platform_tenants(
     entries: "Iterable[tuple[str, str, dict]]",
     exists: "Callable[[], set[str]]",
+    merge: "Callable[[dict, dict], None] | None" = None,
 ) -> "tuple[dict[str, dict], list[tuple[str, str]]]":
     """Merge per-tenant blocks read from ROOT files: platform first, tenant wins.
 
@@ -1500,7 +1501,15 @@ def overlay_platform_tenants(
 
     Returns ``({tenant: merged_overrides}, orphans)``; the merged dicts are
     fresh (shallow) copies, and each tenant appears once.
+
+    *merge* ``(dst, src)`` applies one entry; default ``dst.update(src)``,
+    per literal key — right for the routing readers, whose keys have one
+    spelling. A reader of THRESHOLD keys passes
+    ``_grar_validate.overlay_across_spellings`` so a tenant's legacy
+    ``mysql_cpu`` beats a platform ``mysql_threads_running`` (#2368) as it
+    does on /metrics.
     """
+    apply = merge if merge is not None else dict.update
     platform: list[tuple[str, str, dict]] = []
     owned: list[tuple[str, str, dict]] = []
     for fname, tenant, overrides in entries:
@@ -1515,7 +1524,7 @@ def overlay_platform_tenants(
         if tenant not in known:
             orphans.append((fname, tenant))
             continue
-        merged.setdefault(tenant, {}).update(overrides)
+        apply(merged.setdefault(tenant, {}), overrides)
     for _fname, tenant, overrides in owned:
-        merged.setdefault(tenant, {}).update(overrides)
+        apply(merged.setdefault(tenant, {}), overrides)
     return merged, orphans

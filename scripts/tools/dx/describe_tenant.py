@@ -55,7 +55,11 @@ from _lib_io import strict_load_all_exporter_keys, strict_load_exporter_keys  # 
 # repo-layout path is `ops/`; the image is flat (build.sh ships both).
 # Appended, not prepended, so no `ops/` module can shadow one already found.
 sys.path.append(os.path.join(str(_THIS_DIR), "..", "ops"))
-from _grar_validate import DEPRECATED_KEY_ALIASES, _canonical_tenant_key  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    _canonical_tenant_key,
+    _legacy_tenant_key,
+    overlay_across_spellings,
+)
 
 try:
     import yaml
@@ -275,45 +279,10 @@ def _tenant_body(tconfig: Any) -> Any:
 # `walker` column pins both against /metrics.
 # ---------------------------------------------------------------------------
 
-_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
-
-
-def _legacy_spelling(key: str) -> "str | None":
-    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
-    (exact, `_critical`-suffixed, dimensional), or None."""
-    if key in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key]
-    if key.endswith("_critical"):
-        base = key.removesuffix("_critical")
-        if base in _LEGACY_BY_CANONICAL:
-            return _LEGACY_BY_CANONICAL[base] + "_critical"
-    brace = key.find("{")
-    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
-    return None
-
-
-def _other_spellings(key: str) -> "list[str]":
-    """Go `otherSpellings`: every spelling of `key`'s threshold but `key`."""
-    if not isinstance(key, str):
-        return []  # a non-text YAML key names no aliased threshold
-    canon, _ = _canonical_tenant_key(key)
-    out = [canon] if canon != key else []
-    legacy = _legacy_spelling(canon)
-    if legacy is not None and legacy != key:
-        out.append(legacy)
-    return out
-
-
-def _overlay_across_spellings(dst: dict, src: dict) -> None:
-    """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per threshold —
-    a key `src` writes also drops from `dst` every other spelling of it that
-    `src` does not write itself."""
-    for k, v in src.items():
-        for s in _other_spellings(k):
-            if s not in src:
-                dst.pop(s, None)
-        dst[k] = v
+# Go `legacySpellingFor` / `overlayAcrossSpellings` (#2368): one Python copy,
+# in `_grar_validate` beside `_canonical_tenant_key`, shared with diagnose.
+_legacy_spelling = _legacy_tenant_key
+_overlay_across_spellings = overlay_across_spellings
 
 
 def _has_alias_equivalent(own: dict, key: str) -> bool:

@@ -1331,7 +1331,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|tests/shared/platform_tenant_overlay_matrix\.json)$
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
@@ -1353,7 +1353,8 @@ repos:
         # file trips its own hook. Excluded files are the alias-window fixture
         # family — their fixtures ARE the old key as a live value by design.
         # #2368 added the platform-`tenants:`-vs-tenant spelling fixtures (the
-        # two alias test files and the shared overlay matrix's a-rows).
+        # alias test files — exporter, pkg/config, da-guard — and the shared
+        # overlay matrix's a-rows).
         # Phase 2 (#1231 alias window close): tighten to a full-token ban like
         # forbid-legacy-mariadb-threshold-name above and drop the excludes.
 

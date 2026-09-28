@@ -423,17 +423,67 @@ func computeEffectiveConfigDocDetailed(
 	// wholesale, so the platform's value for it is not a fallback).
 	pr := profiles.inherited(p.own, p.tenantRaw, overlay)
 	pi := platformInherited(overlay, p.tenantRaw)
+	//
+	// Each layer goes on per THRESHOLD, not per spelling (#2368,
+	// mergeOverSpellings): the platform's `mysql_threads_running` is what
+	// deleting the tenant's `mysql_cpu` falls back to on /metrics, so the
+	// chain's `mysql_cpu` must not stay beside it for the guard to compare
+	// against.
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chain)
 	case pr == nil:
-		p.mergedDefaults = deepMerge(chain, pi)
+		p.mergedDefaults = mergeOverSpellings(chain, pi)
 	case pi == nil:
-		p.mergedDefaults = deepMerge(chain, pr)
+		p.mergedDefaults = mergeOverSpellings(chain, pr)
 	default:
-		p.mergedDefaults = deepMerge(deepMerge(chain, pr), pi)
+		p.mergedDefaults = mergeOverSpellings(mergeOverSpellings(chain, pr), pi)
 	}
 	return p.effectiveParts, nil
+}
+
+// mergeOverSpellings is deepMerge(base, over) where a key means the
+// THRESHOLD, not its spelling (#2368): a key `over` sets drops every other
+// spelling of it from base, unless `over` sets that spelling too (one
+// layer's own pair is left to the canonical-wins dedup, as everywhere).
+//
+// ⛔ It builds MergedDefaults — da-guard's "what deleting this override
+// falls back to" — and nothing else. Measured without it: chain
+// `mysql_cpu` at 30, platform entry `mysql_threads_running` at 70, tenant
+// `mysql_cpu` at 30 → MergedDefaults held both spellings, the guard compared
+// the tenant's `mysql_cpu` with the chain's 30 and advised deleting it, and
+// deleting it moved /metrics from 30 to 70. The effective config is NOT
+// built with it: that map keeps each layer's own spelling (see
+// docs/design/config-driven.md), and changing it would move every merged_hash.
+//
+// A null in `over` drops nothing: on a threshold key deepMerge ignores it,
+// so the base value is still the fallback.
+func mergeOverSpellings(base, over map[string]any) map[string]any {
+	var drop []string
+	for k, v := range over {
+		if v == nil {
+			continue
+		}
+		for _, s := range otherSpellings(k) {
+			if _, own := over[s]; own {
+				continue
+			}
+			if _, in := base[s]; in {
+				drop = append(drop, s)
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return deepMerge(base, over)
+	}
+	trimmed := make(map[string]any, len(base))
+	for k, v := range base {
+		trimmed[k] = v
+	}
+	for _, s := range drop {
+		delete(trimmed, s)
+	}
+	return deepMerge(trimmed, over) // deepMerge deep-copies trimmed's values
 }
 
 // ChainDefaults is one defaults file taken through the FIRST half of the

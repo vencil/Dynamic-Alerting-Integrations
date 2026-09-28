@@ -257,6 +257,17 @@ func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[st
 	for k := range out {
 		// The tenant's mapping replaces the platform value under ANY
 		// spelling of the threshold (#2368), as it does in overlayTenant.
+		//
+		// ⚠️ Not observable today, measured: with this cross-spelling half
+		// reverted to `tenantRaw[k]`, da-guard's findings are identical on
+		// every tree tried (chain legacy / platform canonical / tenant
+		// legacy mapping, and the mirror). The guard compares a tenant's
+		// leaves only with MergedDefaults under the SAME spelling, and
+		// under that spelling MergedDefaults holds a chain scalar either
+		// way. Kept because it is the #2191 rule stated per threshold —
+		// a leaf dropped from the tenant's mapping falls back to the chain
+		// (/metrics: the mapping still wins over the platform) — and a
+		// consumer reading MergedDefaults per threshold would need it.
 		for _, s := range append([]string{k}, otherSpellings(k)...) {
 			if _, tenantMap := tenantRaw[s].(map[string]any); tenantMap {
 				delete(out, k)
