@@ -331,3 +331,90 @@ func TestBatchTenants_StackedOpsSameTenant_PRMode(t *testing.T) {
 		t.Errorf("PR branch must hold op 1 only (team-chat, still disabled):\n%s", out)
 	}
 }
+
+// runOffBatch runs ops against offTree(disk) in the given write mode and
+// returns the per-op results and t-off.yaml as it would land: the file on
+// disk (direct) or on the PR branch (PR mode; "" when no PR was opened).
+func runOffBatch(t *testing.T, mode WriteMode, disk, ops string) ([]BatchResult, string) {
+	t.Helper()
+	configDir := seedGitTree(t, offTree(disk))
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: mode}
+	var head string
+	if mode == WriteModePR {
+		d.PRClient = &mockPlatformClient{
+			providerName: "github",
+			createPRFunc: func(title, body, h string, labels []string) (*platform.PRInfo, error) {
+				head = h
+				return &platform.PRInfo{Number: 9, WebURL: "https://example/pr/9", State: "open"}, nil
+			},
+		}
+		d.PRTracker = &mockPlatformTracker{}
+	}
+	resp := runBatch(t, configDir, d, ops)
+	if mode != WriteModePR {
+		b, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+		return resp.Results, string(b)
+	}
+	if head == "" {
+		return resp.Results, ""
+	}
+	out, err := exec.Command("git", "-C", configDir, "show", head+":t-off.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git show %s:t-off.yaml: %v\n%s", head, err, out)
+	}
+	return resp.Results, string(out)
+}
+
+func statuses(results []BatchResult) string {
+	out := make([]string, len(results))
+	for i, r := range results {
+		out[i] = r.Status
+	}
+	return strings.Join(out, ",")
+}
+
+// A REFUSED op is not stacked under the ops after it: nothing of it is
+// written, so judging a later op as if it were would judge a state that
+// never lands. Two shapes, both write modes (PR mode stacks in memory,
+// direct mode reads the file back).
+func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
+	ok := "included"
+	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
+		if mode == WriteModeDirect {
+			ok = "ok"
+		}
+		t.Run(string(mode)+"/bypass: refused op carried _routing: disable", func(t *testing.T) {
+			// op1 is refused (its flat receiver-type key is forbidden) but
+			// also sets `_routing: disable`. Stacked, it would make op2's
+			// violating profile look disabled — while what lands is op2's
+			// profile with routing ENABLED.
+			results, file := runOffBatch(t, mode, "    _routing_profile: domain-ok\n", `[
+				{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}},
+				{"tenant_id":"t-off","patch":{"_routing":"disable","_routing_receiver_type":"slack"}},
+				{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+			if got := statuses(results); got != ok+",error,error" {
+				t.Fatalf("statuses = %s, want %s,error,error: %+v", got, ok, results)
+			}
+			if strings.Contains(file, "team-chat") || strings.Contains(file, "disable") || !strings.Contains(file, "domain-ok") {
+				t.Errorf("t-off.yaml must keep domain-ok, enabled:\n%s", file)
+			}
+		})
+		t.Run(string(mode)+"/variant B: op3 is judged over op1 only", func(t *testing.T) {
+			// Disk: compliant profile, disabled. op1 (violating profile,
+			// still disabled) is fine; op2 re-enables → refused; op3 swaps
+			// to another violating profile — fine over op1 (still
+			// disabled), refused only if the refused op2 were stacked.
+			results, file := runOffBatch(t, mode, "    _routing_profile: domain-ok\n    _routing: disable\n", `[
+				{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
+				{"tenant_id":"t-off","patch":{"_routing":"on"}},
+				{"tenant_id":"t-off","patch":{"_routing_profile":"team-page"}}]`)
+			if got := statuses(results); got != ok+",error,"+ok {
+				t.Fatalf("statuses = %s, want %s,error,%s: %+v", got, ok, ok, results)
+			}
+			if !strings.Contains(file, "team-page") || !strings.Contains(file, "disable") {
+				t.Errorf("t-off.yaml must be team-page, still disabled:\n%s", file)
+			}
+		})
+	}
+}
