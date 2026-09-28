@@ -17,10 +17,10 @@ sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 import explain_route as er  # noqa: E402
 
 # #2293: --trace asks Alertmanager (`amtool config routes test --tree`) where
-# an alert goes. Tests about THAT verdict need a real amtool and skip without
-# one; the fake-amtool tests further down run everywhere (CI has no amtool).
-_AMTOOL = shutil.which("amtool")
-needs_amtool = pytest.mark.skipif(_AMTOOL is None, reason="amtool not on PATH")
+# an alert goes. Tests about THAT verdict need a real amtool: they skip without
+# one, and FAIL without one under VIBE_REQUIRE_AMTOOL=1 (the CI Python Tests
+# jobs, which install it) — fixture `amtool_required` in tests/conftest.py.
+needs_amtool = pytest.mark.usefixtures("amtool_required")
 
 
 # Structured receivers (ADR-007 schema). #2293: the flat `receiver_type` key
@@ -545,6 +545,46 @@ class TestTraceThroughAmtool:
         assert _delivered(trace) == [f"tenant-{_TT}"]
         assert trace["timing"]["group_wait"] == "45s"
 
+    def test_noc_receiver_type_is_not_policed_as_the_tenants(self, capsys,
+                                                             tmp_path):
+        """Step 5 judges the tenant's receiver, not the enforced copy."""
+        conf = _tree(tmp_path, enforced={"receiver": _SLACK},
+                     policy={"p": {"tenants": [_TT], "constraints": {
+                         "forbidden_receiver_types": ["slack"]}}})
+        trace = _trace(capsys, conf)
+        assert _delivered(trace) == ["platform-enforced", f"tenant-{_TT}"]
+        assert trace["steps"][4]["passed"] is True
+
+    def test_base_config_global_reaches_alertmanager(self, capsys, tmp_path):
+        """The trace hands amtool the generator's own assembly, `global:`
+        included — a base receiver relying on global.slack_api_url loads."""
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({
+            "global": {"slack_api_url": "https://hooks.slack.com/services/T/B/x"},
+            "route": {"receiver": "ops", "group_wait": "10s"},
+            "receivers": [{"name": "ops", "slack_configs": [{"channel": "#ops"}]}],
+        }), encoding="utf-8")
+        trace, err = _trace_err(capsys, _tree(tmp_path), "--base-config", str(base))
+        assert "WARN" not in err
+        assert _delivered(trace) == [f"tenant-{_TT}"]
+
+    @pytest.mark.parametrize("char", ["\r", "\x0c", "\u2028", "\x85"])
+    def test_line_break_like_chars_in_another_route(self, capsys, tmp_path, char):
+        """amtool prints another tenant's matcher value with the character in
+        it; only "\\n" ends a line, so the tree is still read."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+        (d / f"{_TT}.yaml").write_text(yaml.safe_dump({"tenants": {
+            _TT: {"_routing": {"receiver": _HOOK_MAIN}},
+            "other": {"_routing": {"receiver": _HOOK_MAIN, "routes": [
+                {"match": {"team": f"a{char}b"}, "receiver": _HOOK_TEAM}]}}}}),
+            encoding="utf-8")
+        trace, err = _trace_err(capsys, d)
+        assert "WARN" not in err
+        assert _delivered(trace) == [f"tenant-{_TT}"]
+        assert trace["timing"]["group_wait"] == "10s"
+
     def test_only_enforced_matched_has_no_root_fallback(self, capsys, tmp_path):
         """A tenant whose receiver the generator skips has no route; the
         match-all enforced route (continue: true) is then the only match and
@@ -554,6 +594,8 @@ class TestTraceThroughAmtool:
         trace = _trace(capsys, conf)
         assert _delivered(trace) == ["platform-enforced"]
         assert trace["final_receiver"].startswith("webhook → platform-enforced ")
+        assert "only the enforced route matched, no root fallback" \
+            in trace["final_receiver"]
         assert trace["steps"][1]["receiver_type"] == "webhook"
 
 
@@ -566,7 +608,7 @@ def _am_quote(value: str) -> str:
                   .replace("\n", "\\n")) + '"'
 
 
-@pytest.mark.skipif(_AMTOOL is None, reason="amtool not on PATH")
+@needs_amtool
 class TestTraceAgreesWithAmtool:
     @pytest.mark.parametrize(
         "tree, alertname, severity, labels, expected",
@@ -586,21 +628,18 @@ class TestTraceAgreesWithAmtool:
         trace = _trace(capsys, conf, *_label_args(labels), severity=severity,
                        alertname=alertname)
         am = subprocess.run(
-            [_AMTOOL, "config", "routes", "test", f"--config.file={am_yml}"]
+            [shutil.which("amtool"), "config", "routes", "test",
+             f"--config.file={am_yml}"]
             + [f"{k}={_am_quote(v)}" for k, v in trace["labels"].items()],
             capture_output=True, text=True, encoding="utf-8", timeout=300)
         assert am.returncode == 0, am.stdout + am.stderr
         assert am.stdout.strip().split(",") == _delivered(trace) == expected
 
 
+@needs_amtool
 class TestPolicyScope:
     """Step 5 applies only the policies whose ``tenants`` list the traced
-    tenant — the same scope the generator's check_domain_policies uses.
-    Runs on the fake amtool (delivery: the tenant's main receiver)."""
-
-    @pytest.fixture(autouse=True)
-    def _fake(self, fake_amtool):
-        fake_amtool()
+    tenant — the same scope the generator's check_domain_policies uses."""
 
     def _conf(self, tmp_path, tenants):
         return _tree(
@@ -664,174 +703,29 @@ class TestPolicyScope:
         assert "All domain policies passed" not in json.dumps(step5)
 
 
-# ---------------------------------------------------------------------------
-# Fake amtool: canned `routes show` / `routes test --tree` text, so the parsing,
-# step 5 and the no-amtool path run on every CI runner (#2293).
-# ---------------------------------------------------------------------------
-_FAKE_SHOW = f"""Routing tree:
-.
-└── default-route  receiver: default
-    ├── {{alertname="Watchdog"}}  receiver: watchdog-heartbeat
-    ├── {{component="custom"}}  receiver: custom-alerts-firehose
-    │   └── {{tenant="{_TT}"}}  receiver: tenant-{_TT}
-    ├── {{component="synthetic-probe"}}  receiver: synthetic-receiver
-    ├── {{component="sentinel"}}  receiver: sentinel-sinkhole
-    └── {{tenant="{_TT}"}}  receiver: tenant-{_TT}
-
-"""
-_FAKE_TEST = f"""Matching routes:
-.
-└── default-route
-    └── {{tenant="{_TT}"}}  receiver: tenant-{_TT}
-
-
-tenant-{_TT}
-"""
-_FAKE_SCRIPT = """
-import json, pathlib, sys
-base = pathlib.Path(__file__).resolve().parent.parent
-log = base / "fake-amtool-argv.json"
-calls = json.loads(log.read_text(encoding="utf-8")) if log.exists() else []
-calls.append(sys.argv[1:])
-log.write_text(json.dumps(calls), encoding="utf-8")
-name = "fake-show.txt" if "show" in sys.argv[1:] else "fake-test.txt"
-sys.stdout.buffer.write((base / name).read_bytes())
-sys.exit(int((base / "fake-rc.txt").read_text(encoding="utf-8")))
-"""
-
-
+# The one path a real amtool cannot be made to take on demand: it answers
+# non-zero. A minimal stand-in, first on PATH, that exits 1.
 @pytest.fixture
-def fake_amtool(tmp_path, monkeypatch):
-    """Put a fake ``amtool`` first on PATH (pattern of #2311's
-    ``amtool_accepts``). Returns ``configure(show=, test=, rc=)``; the argv of
-    every call is readable through ``configure.calls()``."""
+def failing_amtool(tmp_path, monkeypatch):
     if sys.platform == "win32":
-        pytest.skip("fake amtool is a POSIX script")
-    bin_dir = tmp_path / "fake-amtool-bin"
+        pytest.skip("the stand-in is a POSIX script")
+    bin_dir = tmp_path / "failing-amtool-bin"
     bin_dir.mkdir()
     stub = bin_dir / "amtool"
-    stub.write_text(f"#!{sys.executable}\n{_FAKE_SCRIPT}", encoding="utf-8")
+    stub.write_text("#!/bin/sh\necho 'amtool: error: parse error' >&2\nexit 1\n",
+                    encoding="utf-8")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
 
-    def configure(show=_FAKE_SHOW, test=_FAKE_TEST, rc=0):
-        (tmp_path / "fake-show.txt").write_text(show, encoding="utf-8")
-        (tmp_path / "fake-test.txt").write_text(test, encoding="utf-8")
-        (tmp_path / "fake-rc.txt").write_text(str(rc), encoding="utf-8")
 
-    def calls():
-        log = tmp_path / "fake-amtool-argv.json"
-        return json.loads(log.read_text(encoding="utf-8")) if log.exists() else []
-
-    configure.calls = calls
-    return configure
-
-
-class TestFakeAmtool:
-    def test_delivery_path_and_inherited_timing(self, capsys, tmp_path, fake_amtool):
-        fake_amtool()
-        conf = _tree(tmp_path)
-        trace = _trace(capsys, conf)
-        assert _delivered(trace) == [f"tenant-{_TT}"]
-        assert trace["final_receiver"] == (
-            f'webhook → tenant-{_TT} ({{tenant="{_TT}"}})')
-        assert trace["steps"][1]["route_path"] == f'{{tenant="{_TT}"}}'
-        # the tenant route sets no timing: all three come from the base root
-        assert trace["timing"] == {"group_wait": "10s", "group_interval": "10s",
-                                   "repeat_interval": "12h"}
-        assert "enforced_receiver" not in trace["steps"][2]
-
-    def test_labels_are_passed_quoted_and_escaped(self, capsys, tmp_path, fake_amtool):
-        fake_amtool()
-        _trace(capsys, _tree(tmp_path), "--label", 'team=q"u,o=t e\nx\\y')
-        test_call = [c for c in fake_amtool.calls() if "test" in c][0]
-        assert test_call[:4] == ["config", "routes", "test", "--tree"]
-        assert 'team="q\\"u,o=t e\\nx\\\\y"' in test_call
-        assert f'tenant="{_TT}"' in test_call
-
-    def test_continue_mark_and_enforced_leaf(self, capsys, tmp_path, fake_amtool):
-        show = _FAKE_SHOW.replace(
-            f'    └── {{tenant="{_TT}"}}',
-            '    ├── default-route  continue: true  receiver: platform-enforced\n'
-            f'    └── {{tenant="{_TT}"}}')
-        test = (".\n└── default-route\n"
-                "    ├── default-route  receiver: platform-enforced\n"
-                f'    └── {{tenant="{_TT}"}}  receiver: tenant-{_TT}\n\n\n'
-                f"platform-enforced,tenant-{_TT}\n")
-        fake_amtool(show=show, test=test)
-        trace, err = _trace_err(capsys, _tree(tmp_path, enforced={"receiver": _HOOK_NOC}))
-        assert _delivered(trace) == ["platform-enforced", f"tenant-{_TT}"]
-        assert trace["steps"][2]["enforced_receiver"] == "webhook → platform-enforced"
-        assert "WARN" not in err
-        assert trace["timing"]["group_wait"] == "10s"
-
-    def test_same_label_siblings_resolved_by_receiver(self, capsys, tmp_path,
-                                                      fake_amtool):
-        """A per-tenant enforced route (`{{tenant}}`) and the tenant's main
-        route both render as {tenant="<t>"}; the delivered receiver is what
-        tells them apart — never a guess."""
-        show = _FAKE_SHOW.replace(
-            f'    └── {{tenant="{_TT}"}}',
-            f'    ├── {{tenant="{_TT}"}}  continue: true  receiver: '
-            f'platform-enforced-{_TT}\n'
-            f'    └── {{tenant="{_TT}"}}')
-        test = (".\n└── default-route\n"
-                f'    ├── {{tenant="{_TT}"}}  receiver: platform-enforced-{_TT}\n'
-                f'    └── {{tenant="{_TT}"}}  receiver: tenant-{_TT}\n\n\n'
-                f"platform-enforced-{_TT},tenant-{_TT}\n")
-        fake_amtool(show=show, test=test)
-        conf = _tree(tmp_path, routing={"group_wait": "1m"}, enforced={
-            "receiver": {"type": "webhook",
-                         "url": "https://noc.example.com/{{tenant}}"},
-            "group_wait": "5s"})
-        trace, err = _trace_err(capsys, conf)
-        assert "WARN" not in err
-        assert _delivered(trace) == [f"platform-enforced-{_TT}", f"tenant-{_TT}"]
-        assert trace["timing"]["group_wait"] == "1m"  # the tenant route's
-
-    def test_amtool_failure_is_unknown_not_a_crash(self, capsys, tmp_path, fake_amtool):
-        fake_amtool(show="amtool: error: error parsing regexp\n", rc=1)
-        conf = _tree(tmp_path)
-        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
-                      "--json"])
-        captured = capsys.readouterr()
-        assert rc == 0
-        assert "failed (rc=1)" in captured.err
-        [trace] = json.loads(captured.out)
-        assert trace["final_receiver"] == "(unknown: amtool gave no verdict)"
-
-    def test_tree_and_receiver_list_disagree(self, capsys, tmp_path, fake_amtool):
-        fake_amtool(test=_FAKE_TEST.replace(f"\n\n\ntenant-{_TT}", "\n\n\nother"))
-        conf = _tree(tmp_path)
-        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
-                      "--json"])
-        captured = capsys.readouterr()
-        assert rc == 0 and "disagree" in captured.err
-        [trace] = json.loads(captured.out)
-        assert trace["final_receiver"].startswith("(unknown:")
-
-    def test_unmapped_path_warns_and_does_not_guess_timing(self, capsys, tmp_path,
-                                                           fake_amtool):
-        fake_amtool(test=_FAKE_TEST.replace(f'{{tenant="{_TT}"}}  receiver',
-                                            '{tenant="elsewhere"}  receiver'))
-        conf = _tree(tmp_path)
-        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
-                      "--json"])
-        captured = capsys.readouterr()
-        assert rc == 0 and "timings not looked up" in captured.err
-        [trace] = json.loads(captured.out)
-        assert trace["timing"] == {"group_wait": None, "group_interval": None,
-                                   "repeat_interval": None}
-        assert _delivered(trace) == [f"tenant-{_TT}"]
-
-    def test_step5_uses_the_delivered_receiver(self, capsys, tmp_path, fake_amtool):
-        fake_amtool()
-        conf = _tree(tmp_path, routing={"receiver": _SLACK},
-                     policy={"p": {"tenants": [_TT], "constraints": {
-                         "forbidden_receiver_types": ["slack"]}}})
-        step5 = _trace(capsys, conf)["steps"][4]
-        assert step5["passed"] is False
-        assert step5["violations"] == ["Domain 'p' forbids receiver type 'slack'"]
+def test_amtool_failure_is_unknown_not_a_crash(capsys, tmp_path, failing_amtool):
+    rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+                  "--trace", "--json"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "failed (rc=1)" in captured.err and "parse error" in captured.err
+    [trace] = json.loads(captured.out)
+    assert trace["final_receiver"] == "(unknown: amtool gave no verdict)"
 
 
 class TestWithoutAmtool:
@@ -875,49 +769,3 @@ class TestWithoutAmtool:
         step5 = _trace(capsys, conf)["steps"][4]
         assert step5["passed"] is None
         assert "not evaluated" in step5["detail"]
-
-
-class TestParseAmtoolTree:
-    def test_show_output_with_continue_mark(self):
-        root = er.parse_amtool_tree(
-            "Routing tree:\n.\n└── default-route  receiver: default\n"
-            '    ├── {a="1",b=~"x|y"}  continue: true  receiver: r1\n'
-            "    └── default-route  receiver: r2\n"
-            '        └── {c!="3"}  receiver: r3\n')
-        assert root["label"] == "default-route" and root["receiver"] == "default"
-        kids = root["children"]
-        assert [(k["label"], k["receiver"]) for k in kids] == [
-            ('{a="1",b=~"x|y"}', "r1"), ("default-route", "r2")]
-        assert kids[1]["children"][0]["label"] == '{c!="3"}'
-
-    @pytest.mark.parametrize("text", [
-        "no tree here\n",
-        '.\n└── default-route\n        └── {x="1"}  receiver: r\n',
-        ".\n?? default-route\n",
-    ])
-    def test_unrecognised_shapes_raise(self, text):
-        with pytest.raises(er.AmtoolOutputError):
-            er.parse_amtool_tree(text)
-
-
-@needs_amtool
-def test_canned_fake_output_matches_real_amtool(capsys, tmp_path):
-    """The fake's text is what amtool 0.34 really prints for that tree —
-    measured, so a format change in amtool shows up here, not in production."""
-    conf = _tree(tmp_path)
-    root, receivers, _types = er.build_trace_tree(
-        er._parse_config_files(str(conf)))
-    am_yml = tmp_path / "am.yml"
-    am_yml.write_text(yaml.safe_dump({"route": root,
-                                      "receivers": list(receivers.values())}),
-                      encoding="utf-8")
-    show = subprocess.run([_AMTOOL, "config", "routes", "show",
-                           f"--config.file={am_yml}"], capture_output=True,
-                          text=True, encoding="utf-8", timeout=300)
-    test = subprocess.run([_AMTOOL, "config", "routes", "test", "--tree",
-                           f"--config.file={am_yml}", 'alertname="X"',
-                           f'tenant="{_TT}"', 'severity="warning"'],
-                          capture_output=True, text=True, encoding="utf-8",
-                          timeout=300)
-    assert show.stdout == _FAKE_SHOW
-    assert test.stdout == _FAKE_TEST

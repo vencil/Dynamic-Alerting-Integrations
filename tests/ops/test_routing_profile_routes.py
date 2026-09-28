@@ -469,8 +469,7 @@ class TestExplainRouteShowsEffectiveSubRoutes:
         assert "Not in effect (skipped by the generator):" in text
 
     # #2293: --trace takes the delivery from `amtool config routes test`.
-    @pytest.mark.skipif(shutil.which("amtool") is None,
-                        reason="amtool not on PATH")
+    @pytest.mark.usefixtures("amtool_required")
     def test_trace_critical_lands_on_the_routes_receiver(self, tmp_path):
         import explain_route
         from generate_alertmanager_routes import _parse_config_files

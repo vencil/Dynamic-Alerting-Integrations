@@ -431,7 +431,8 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
 # ============================================================
 
 def _run_binary(argv: list[str], *, timeout: int,
-                stdin_text: str | None = None) -> subprocess.CompletedProcess:
+                stdin_text: str | None = None,
+                text: bool = True) -> subprocess.CompletedProcess:
     """Run *argv*, turning "that binary is not runnable here" into a result.
 
     ⛔ ``subprocess.run`` raises ``OSError`` when the binary is absent, and that
@@ -453,18 +454,26 @@ def _run_binary(argv: list[str], *, timeout: int,
     defect this file's own history records twice (``EOFError`` is not an
     ``OSError`` either). 124 is what ``timeout(1)`` reports, kept distinct from
     127 so the two environment failures stay tellable apart.
+
+    ``text=False`` returns stdout / stderr as bytes (the two failure results
+    too), for a caller that must not have ``\r`` translated to ``\n``.
     """
+    enc = (lambda m: m) if text else (lambda m: m.encode("utf-8"))
     try:
+        if not text:
+            return subprocess.run(argv, input=None if stdin_text is None
+                                  else stdin_text.encode("utf-8"),
+                                  capture_output=True, timeout=timeout)
         return subprocess.run(argv, input=stdin_text, capture_output=True,
                               text=True, timeout=timeout, encoding="utf-8")
     except subprocess.TimeoutExpired as exc:
         return subprocess.CompletedProcess(
-            argv, returncode=124, stdout="",
-            stderr=f"{argv[0]!r} did not finish within {exc.timeout}s")
+            argv, returncode=124, stdout=enc(""),
+            stderr=enc(f"{argv[0]!r} did not finish within {exc.timeout}s"))
     except OSError as exc:
         return subprocess.CompletedProcess(
-            argv, returncode=127, stdout="",
-            stderr=f"cannot run {argv[0]!r}: {exc}")
+            argv, returncode=127, stdout=enc(""),
+            stderr=enc(f"cannot run {argv[0]!r}: {exc}"))
 
 
 # ── #2219: Alertmanager's own parser as the last gate ───────────────

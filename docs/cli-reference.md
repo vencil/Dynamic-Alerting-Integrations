@@ -2937,11 +2937,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
 
-`--trace` **需要 PATH 上有 `amtool`**（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。它先組出 `--output-configmap` 會產出的**整棵**路由樹：平台頂層路由（Watchdog、`component="custom"`、`component="synthetic-probe"`、`component="sentinel"`，皆 `continue: false`）、`_routing_enforced` 的 NOC 路由（`continue: true`）、tenant 主路由與其子路由，掛在 base 的 root 之下；再交給 `amtool config routes test --tree`。**命中的路徑與投遞到哪些 receiver，都由 Alertmanager 自己的 parser 判定**，本工具不自行比對 matcher 或正規式。解析不了的設定（例如 Alertmanager 不接受的正規式）會印 `WARN`，receiver 顯示為 `(unknown: …)`。
-
-輸出的 `Receiver:` 是主要投遞的 receiver，類型取自設定的 `receiver.type`；`Path:` 是這個主要投遞點所走的那一條路徑，寫法照 amtool 的輸出（其餘投遞點，例如 enforced 的副本，見 `--json` 的 `matched_routes`）。只有 enforced 路由命中時，它就是投遞點，`Receiver:` 直接寫出它的名稱（如 `platform-enforced`），Alertmanager 不會再回退到 root receiver；`Enforced:` 只在 NOC 路由命中這則 alert 時出現。`Timing:` 是把 amtool 給的路徑對回產出的路由樹，依 Alertmanager 的繼承規則取的值；對不上時印 `WARN`，timing 顯示 `(unknown)`。domain policy 只套用 `tenants` 列出這個 tenant 的 policy（與產生器相同），只檢查 receiver 類型的限制，對象是 Alertmanager 實際投遞到的 tenant receiver。
-
-**PATH 上沒有 `amtool` 時**：stderr 印一行 `WARN: Not validated by Alertmanager: amtool not found on PATH`，receiver 為 `(unknown: amtool not found)`，timing 為 `(unknown)`，第 2 步改列產出的整棵路由樹摘要（`--json` 為 `rendered_tree`）；結束碼仍是 `0`，`--json` 頂層鍵不變。
+`--trace` 需要 `amtool`；da-tools 映像自 [#2294](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2294) 起內含，v2.9.0 映像不含。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 

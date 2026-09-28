@@ -7,6 +7,7 @@ _lib_python``, ``import bump_docs``, etc. without per-file boilerplate.
 Factory helpers are defined in ``tests/factories.py``.
 """
 import os
+import shutil
 import sys
 import tempfile
 
@@ -218,6 +219,23 @@ def cli_argv(monkeypatch):
     def _set(*args):
         monkeypatch.setattr(sys, "argv", list(args))
     return _set
+
+
+@pytest.fixture
+def amtool_required():
+    """A test whose verdict comes from Alertmanager's own ``amtool`` (#2293).
+
+    No ``amtool`` on PATH → skip, EXCEPT under ``VIBE_REQUIRE_AMTOOL=1`` (the
+    CI Python Tests jobs, which install it): there a missing binary means the
+    install step regressed, so the test FAILS instead of turning into a quiet
+    skip — same fail-closed pattern as ``VIBE_REQUIRE_MTAIL``. Use it as
+    ``pytest.mark.usefixtures("amtool_required")``.
+    """
+    if shutil.which("amtool") is None:
+        if os.environ.get("VIBE_REQUIRE_AMTOOL") == "1":
+            pytest.fail("VIBE_REQUIRE_AMTOOL=1 but `amtool` is not on PATH — "
+                        "the CI 'Install amtool' step is missing or broke")
+        pytest.skip("amtool not on PATH")
 
 
 @pytest.fixture

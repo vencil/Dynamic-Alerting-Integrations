@@ -44,11 +44,12 @@ from generate_alertmanager_routes import (  # noqa: E402
     _merge_tenant_routing,
     _parse_config_files,
     _substitute_tenant,
+    generate_inhibit_rules,
     generate_routes,
     load_base_config,
     merge_routing_with_defaults,
 )
-from _grar_render import _inject_custom_alert_isolation, _run_binary  # noqa: E402
+from _grar_render import _run_binary, assemble_configmap  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
@@ -417,11 +418,11 @@ def parse_amtool_tree(text: str) -> dict:
     """
     rows: list[tuple[int, str, str | None]] = []
     started = False
-    for line in text.splitlines():
+    for line in text.split("\n"):  # "\n" only: see run_amtool_trace
         if not started:
             started = line == "."
             continue
-        if not line.strip():
+        if not line:
             break  # the tree ends at the first blank line
         pos = depth = 0
         while line[pos:pos + 4] in _TREE_PADS:
@@ -495,25 +496,30 @@ def _inherited(nodes: list[dict]) -> dict:
     return opts
 
 
-def run_amtool_trace(root: dict, receivers: dict[str, dict],
-                     labels: dict[str, str], *, warn
-                     ) -> tuple[list[dict] | None, str]:
+def run_amtool_trace(am_yml: str, root: dict, labels: dict[str, str], *,
+                     warn) -> tuple[list[dict] | None, str]:
     """Ask Alertmanager where an alert with *labels* goes.
 
-    Writes ``{route: root, receivers}`` to a private temp file and runs
-    ``amtool config routes show`` and ``amtool config routes test --tree`` on
-    it. Returns one dict per delivery, in Alertmanager's order: ``receiver``,
+    Writes *am_yml* (the assembled alertmanager.yml, *root* its parsed route)
+    to a private temp file and runs ``amtool config routes show`` and
+    ``amtool config routes test --tree`` on it. amtool's output is read as
+    bytes, decoded as UTF-8 and split on ``\n`` only: a CR, FF or U+2028 in
+    some tenant's matcher value is part of a line, not a line break. Returns
+    one dict per delivery (a leaf of the ``--tree`` output), in Alertmanager's
+    order: ``receiver``,
     ``labels`` (amtool's matcher rendering along the path, root excluded) and
     ``nodes`` (the rendered route dicts along it, root included, or None when
     the path could not be looked up — *warn* says why), plus ``""``. When
     amtool is absent or gave no verdict: ``(None, reason)``, *warn* called.
+
+    Not handled, all fail-safe (a WARN or an unknown, never a wrong verdict):
+    an ``~/.config/amtool`` user config changing amtool's defaults, a tenant
+    name containing a comma, a long WARN, and the fake amtool on Windows.
     """
     amtool = shutil.which("amtool")
     if amtool is None:
         warn(AMTOOL_MISSING)
         return None, "amtool not found"
-    am_yml = yaml.safe_dump({"route": root, "receivers": list(receivers.values())},
-                            allow_unicode=True, sort_keys=False)
     with tempfile.TemporaryDirectory(prefix="explain-route-") as tmp:
         path = Path(tmp) / "alertmanager.yml"
         with open(path, "w", encoding="utf-8", newline="") as fh:
@@ -521,29 +527,27 @@ def run_amtool_trace(root: dict, receivers: dict[str, dict],
         os.chmod(path, 0o600)  # receiver URLs / keys live in here
         cfg = f"--config.file={path}"
         show = _run_binary([amtool, "config", "routes", "show", cfg],
-                           timeout=AMTOOL_TIMEOUT_S)
+                           timeout=AMTOOL_TIMEOUT_S, text=False)
         test = _run_binary(
             [amtool, "config", "routes", "test", "--tree", cfg]
             + [amtool_label_arg(k, v) for k, v in labels.items()],
-            timeout=AMTOOL_TIMEOUT_S)
+            timeout=AMTOOL_TIMEOUT_S, text=False)
+    out = {}
     for what, res in (("routes show", show), ("routes test --tree", test)):
+        text = res.stdout.decode("utf-8", "replace")
         if res.returncode != 0:
+            err = res.stderr.decode("utf-8", "replace")
             warn(f"amtool config {what} failed (rc={res.returncode}), so "
-                 f"Alertmanager did not route this alert: "
-                 f"{(res.stdout + res.stderr).strip()}")
+                 f"Alertmanager did not route this alert: {(text + err).strip()}")
             return None, "amtool gave no verdict"
+        out[what] = text
     try:
-        shown = parse_amtool_tree(show.stdout)
-        tested = parse_amtool_tree(test.stdout)
+        shown = parse_amtool_tree(out["routes show"])
+        tested = parse_amtool_tree(out["routes test --tree"])
     except AmtoolOutputError as exc:
         warn(f"cannot read amtool's route tree: {exc}")
         return None, "amtool output not understood"
-    delivered = [ln for ln in test.stdout.splitlines() if ln.strip()][-1].split(",")
     leaves = _leaf_paths(tested)
-    if [p[-1]["receiver"] for p in leaves] != delivered:
-        warn(f"amtool's tree {[p[-1]['receiver'] for p in leaves]} and its "
-             f"receiver list {delivered} disagree")
-        return None, "amtool output not understood"
     aligned: dict[int, dict] = {}
     if not _align(shown, root, aligned):
         warn("amtool's route tree does not have the shape of the rendered "
@@ -606,16 +610,18 @@ def _receiver_type(name: str, receivers: dict[str, dict],
 
 
 def build_trace_tree(parsed: dict, base: dict | None = None
-                     ) -> tuple[dict, dict[str, dict], dict[str, str]]:
-    """The routing tree ``--output-configmap`` would render, minus the wrapping.
+                     ) -> tuple[str, dict, dict[str, dict], dict[str, str]]:
+    """The alertmanager.yml ``--output-configmap`` would emit, and its tree.
 
     Same pipeline as the generator — the four-layer merge, ``generate_routes``
-    with the enforced routing, then ``_inject_custom_alert_isolation`` — hung
-    under the root of *base* (the built-in base when None, as ``--validate``
-    uses). Like ``assemble_configmap``, the base's own ``route.routes`` is
-    replaced; only its root receiver / group_by / timings are kept.
+    with the enforced routing, the severity-dedup inhibit rules — assembled by
+    the generator's own ``assemble_configmap`` on *base* (the built-in base
+    when None, as ``--validate`` uses), so ``global`` / ``templates`` /
+    ``inhibit_rules`` are the ones Alertmanager would load. Raises ValueError
+    where the generator refuses to assemble.
 
-    Returns (root route, receivers by name, conf.d receiver types by name).
+    Returns (alertmanager.yml text, its root route, receivers by name,
+    conf.d receiver types by name).
     """
     routing_configs = _merge_tenant_routing(
         parsed, parsed.get("routing_defaults") or {})
@@ -624,15 +630,16 @@ def build_trace_tree(parsed: dict, base: dict | None = None
         enforced = None
     routes, receivers, _warnings = generate_routes(
         routing_configs, None, enforced_routing=enforced)
-    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
-    base = base if base is not None else load_base_config(None)
-    root = {k: v for k, v in (base.get("route") or {}).items() if k != "routes"}
-    root["routes"] = routes
-    by_name: dict[str, dict] = {}
-    for recv in list(base.get("receivers") or []) + receivers:
-        if isinstance(recv, dict) and recv.get("name"):
-            by_name.setdefault(recv["name"], recv)  # base wins, as in assembly
-    return root, by_name, _conf_receiver_types(routing_configs, enforced)
+    inhibit_rules, _warnings = generate_inhibit_rules(
+        parsed.get("dedup_configs") or {})
+    cm_yaml = assemble_configmap(
+        base if base is not None else load_base_config(None),
+        routes, receivers, inhibit_rules)
+    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    am = yaml.safe_load(am_yml)
+    by_name = {r["name"]: r for r in am.get("receivers") or []}
+    return am_yml, am["route"], by_name, _conf_receiver_types(
+        routing_configs, enforced)
 
 
 def summarize_tree(root: dict) -> list[str]:
@@ -798,13 +805,17 @@ def trace_alert_routing(
         "result": final_routing,
     })
 
-    # Step 2: Alertmanager's verdict on the rendered tree (#2293)
-    root, receivers, conf_types = build_trace_tree(parsed, base_config)
-
+    # Step 2: Alertmanager's verdict on the assembled config (#2293)
     def _warn(msg: str) -> None:
         print(f"  WARN: {safe_label(msg)}", file=sys.stderr)
 
-    hits, unknown = run_amtool_trace(root, receivers, alert_labels, warn=_warn)
+    try:
+        am_yml, root, receivers, conf_types = build_trace_tree(parsed, base_config)
+        hits, unknown = run_amtool_trace(am_yml, root, alert_labels, warn=_warn)
+    except ValueError as exc:
+        _warn(f"the generator refuses to assemble this config: {exc}")
+        root, receivers, conf_types = {}, {}, {}
+        hits, unknown = None, "the generator refuses this config"
     main_prefix = f"tenant-{tenant}"
 
     def _is_enforced(hit: dict) -> bool:
@@ -887,7 +898,7 @@ def trace_alert_routing(
         else:
             steps.append({"step": 3, "action": "enforced_routing",
                           "detail": "No enforced routing active"})
-        tenant_types = [h["receiver_type"] for h in primary
+        tenant_types = [h["receiver_type"] for h in hits
                         if h["receiver"] == main_prefix
                         or h["receiver"].startswith(main_prefix + "-")]
         if top["nodes"] is None:
