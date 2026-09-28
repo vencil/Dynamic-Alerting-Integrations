@@ -124,7 +124,7 @@ exporter:
 
 exporter 啟動時先把整棵 conf.d 載入完，**才**啟動 HTTP server；載入期間 `/health`、`/ready`、`/metrics` 都連不上。載入時間主要花在 YAML 解析，而 YAML 解析器會對同一個 mapping 的鍵兩兩比對找重複鍵，所以**單一檔案宣告的租戶數**與**單一 mapping 的鍵數**越大，載入時間成長得比線性更快（[#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)）。
 
-chart 預設帶 `startupProbe`（打 `/health`，`periodSeconds: 10`、`failureThreshold: 60`，也就是最多等 10 分鐘）。startupProbe 成功之前，liveness 與 readiness probe 都不會執行，所以冷載入再久也不會被 liveness 重啟。樹很小的部署第一次 probe 就會成功，這個上限不會拖慢啟動。載入超過 10 分鐘時，調高 `startupProbe.failureThreshold`；也可以設 `startupProbe: null` 拿掉它。
+chart 預設帶 `startupProbe`（打 `/health`，`periodSeconds: 10`、`failureThreshold: 60`，也就是最多等 10 分鐘）。startupProbe 成功之前，liveness 與 readiness probe 都不會執行，所以冷載入再久也不會被 liveness 重啟。載入超過 10 分鐘時，調高 `startupProbe.failureThreshold`；也可以設 `startupProbe: null` 拿掉它。
 
 | 訊號 | 來源 | 用途 |
 |---|---|---|

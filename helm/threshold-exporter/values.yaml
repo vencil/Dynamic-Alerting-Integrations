@@ -213,9 +213,9 @@ resources:
 # load time is reported as da_config_initial_load_duration_seconds.
 # Liveness and readiness probes do not run until this probe succeeds.
 # Budget = periodSeconds × failureThreshold = 10s × 60 = 10 minutes: raise
-# failureThreshold if your trees load slower; a healthy small tree passes
-# on the first probe, so the budget costs nothing. Set `startupProbe: null`
-# to omit it.
+# failureThreshold if your trees load slower. To use an exec or tcpSocket
+# handler instead, also set `httpGet: null` (Helm merges maps, so the
+# default httpGet would otherwise stay). Set `startupProbe: null` to omit it.
 startupProbe:
   httpGet:
     path: /health

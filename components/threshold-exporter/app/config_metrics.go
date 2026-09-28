@@ -207,11 +207,11 @@ func newConfigMetrics() *configMetrics {
 		}),
 		maxTenantsPerFile: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_max_tenants_per_file",
-			Help: "Largest number of tenants declared under `tenants:` in any single config file of the committed config (#2153). A whole-tree maximum, not a per-file series. Load and reload time grow faster than linearly with this number, so a file declaring thousands of tenants is the shape to split into several files. Re-Set on every config commit.",
+			Help: "Largest number of tenants declared under `tenants:` in any single config file of the committed config (#2153). A whole-tree maximum, not a per-file series. Load and reload time grow faster than linearly with this number, so a file declaring thousands of tenants is the shape to split into several files. A file that failed to parse is not counted. Re-Set on every config commit.",
 		}),
 		maxMappingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_max_mapping_keys",
-			Help: "Largest key count of any single mapping in one config file of the committed config (#2153): `defaults`, `state_filters`, `tenants`, one tenant's overrides, `profiles`, or one profile. The YAML decoder checks duplicate keys pairwise, so decoding a mapping costs time proportional to the square of its key count. Counted on the already-decoded config, so mappings the exporter does not decode into it (unknown keys, nested `_`-prefixed files, sections dropped by the file-placement rules) are not counted. Re-Set on every config commit.",
+			Help: "Largest key count of any single mapping in one config file of the committed config (#2153): `defaults`, `state_filters`, `tenants`, one tenant's overrides, `profiles`, or one profile. The YAML decoder checks duplicate keys pairwise, so decoding a mapping costs time proportional to the square of its key count. Counted on the already-decoded config, so mappings the exporter does not decode into it (unknown keys, nested `_`-prefixed files, sections dropped by the file-placement rules) are not counted, nor is a file that failed to parse. Re-Set on every config commit.",
 		}),
 		initialLoadDuration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_initial_load_duration_seconds",

@@ -124,7 +124,7 @@ Suggested alert: fire when `sys_bytes` approaches 90% of `limits.memory` (an ear
 
 At startup the exporter loads the whole conf.d tree **before** it starts its HTTP server, so `/health`, `/ready` and `/metrics` refuse connections for as long as the load takes. The load time is dominated by YAML decoding, and the decoder compares every key of a mapping with every other key to find duplicates. The **number of tenants declared in one file** and the **key count of one mapping** therefore make the load grow faster than linearly ([#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)).
 
-The chart ships a `startupProbe` by default (`/health`, `periodSeconds: 10`, `failureThreshold: 60`, i.e. up to 10 minutes). Liveness and readiness probes do not run until the startupProbe succeeds, so a slow cold load is not restarted by liveness. A small tree passes on the first probe, so the budget does not delay startup. If your load takes longer than 10 minutes, raise `startupProbe.failureThreshold`; set `startupProbe: null` to omit the probe.
+The chart ships a `startupProbe` by default (`/health`, `periodSeconds: 10`, `failureThreshold: 60`, i.e. up to 10 minutes). Liveness and readiness probes do not run until the startupProbe succeeds, so a slow cold load is not restarted by liveness. If your load takes longer than 10 minutes, raise `startupProbe.failureThreshold`; set `startupProbe: null` to omit the probe.
 
 | Signal | Source | Purpose |
 |---|---|---|

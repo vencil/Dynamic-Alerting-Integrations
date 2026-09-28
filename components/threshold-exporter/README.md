@@ -106,8 +106,8 @@
 | `da_config_reload_duration_seconds` | Histogram | 完整 reload 耗時（scan + parse + merge + commit） |
 | `da_config_scan_duration_seconds` | Histogram | 目錄掃描耗時 |
 | `da_config_initial_load_duration_seconds` | Gauge | 啟動時那一次載入的秒數；只在載入成功時設一次，之後的 reload 不動它。HTTP server 在載入完成後才啟動，startupProbe 的上限要大於這個值（[#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)） |
-| `da_config_max_tenants_per_file` | Gauge | 所有檔案中，單一檔案 `tenants:` 宣告的租戶數最大值；整棵樹一個值、無檔名 label，每次 config commit 重設（#2153） |
-| `da_config_max_mapping_keys` | Gauge | 所有檔案中，單一 mapping（`defaults`／`state_filters`／`tenants`／單一租戶覆寫／`profiles`／單一 profile）鍵數最大值。YAML 解碼對 mapping 的鍵兩兩比對，成本隨鍵數平方成長。只計 exporter 解碼進設定的 mapping（未知 key、巢狀 `_` 檔、被檔案擺放規則剝掉的區塊不計）；每次 config commit 重設（#2153） |
+| `da_config_max_tenants_per_file` | Gauge | 所有檔案中，單一檔案 `tenants:` 宣告的租戶數最大值；整棵樹一個值、無檔名 label；解析失敗的檔不計；每次 config commit 重設（#2153） |
+| `da_config_max_mapping_keys` | Gauge | 所有檔案中，單一 mapping（`defaults`／`state_filters`／`tenants`／單一租戶覆寫／`profiles`／單一 profile）鍵數最大值。YAML 解碼對 mapping 的鍵兩兩比對，成本隨鍵數平方成長。只計 exporter 解碼進設定的 mapping（未知 key、巢狀 `_` 檔、被檔案擺放規則剝掉的區塊、解析失敗的檔不計）；每次 config commit 重設（#2153） |
 | `da_config_debounce_batch_size` | Histogram | 每次 fire 吸收的 trigger 數（debounce 健康指標） |
 | `da_config_parse_failure_total{file_basename}` | Counter | YAML parse 失敗次數（定位壞檔）。租戶檔：**每次掃描計一次**（#1957 起由 walker 計、平面層不重計）；注意 watch 偵測到變更的那個 tick 會掃兩次（detectChange＋reload），所以「每次掃描」≠「每次 reload」。壞掉的 defaults 檔：平面層計一次，**另外每個受影響租戶再計一次**（刻意的，計數即影響範圍；例如根目錄 `_defaults.yaml` 壞、底下 3 個租戶，一次冷載計 4） |
 | `da_config_defaults_change_noop_total` | Counter | 純 cosmetic 的 `_defaults` 變更（註解 / 排序，無實質影響） |
