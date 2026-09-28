@@ -1,10 +1,10 @@
 # guard-defaults-impact.yml — C-12 Dangling Defaults Guard PR-5
 #
-# Triggered on PRs that touch any defaults carrier (`**/_defaults.yaml` /
-# `.yml`, any casing — #1674). Builds the
-# da-guard Go binary (PR-4), runs it against the changed
-# _defaults.yaml's directory subtree, and posts a sticky Markdown
-# report as a PR comment.
+# Triggered on PRs that touch any `_`-prefixed YAML (`**/_*.yaml` / `.yml`,
+# any casing — every root platform file da-guard reads, #1674 / #2192). Builds the
+# da-guard Go binary (PR-4), runs it once per conf.d tree that a changed
+# `_` file resolves to (scope narrowed to that file's directory when only one
+# directory changed), and posts a sticky Markdown report as a PR comment.
 #
 # Same posting pattern as blast-radius.yml (marker-based update vs
 # create) so reviewers see ONE comment per PR that updates in-place
@@ -35,7 +35,7 @@
 #   (1) the Build da-guard step assumes the threshold-exporter Go module
 #       is co-located; consuming a pre-built binary means replacing that
 #       step with a release-asset download (see C-11 packaging), and
-#   (2) `Determine scope from changed _defaults.yaml` shells out to
+#   (2) `Determine scope from changed _-prefixed YAML` shells out to
 #       `scripts/ops/guard_defaults_scopes.py` (and therefore to python3).
 #       Measured in a copy without it: rc=2 and a bare interpreter error,
 #       no `::error::` annotation. ⛔ The invocation is a REPO-RELATIVE path,
@@ -64,15 +64,36 @@ on:
   pull_request:
     branches: [main]
     paths:
-      # Every spelling the exporter treats as a defaults CHAIN carrier
-      # (`_lib_confd.is_defaults_name` / Go `confdname.IsDefaults`: the name
-      # lower-cased is exactly `_defaults.yaml` or `_defaults.yml`). Since
-      # #1674 `_DEFAULTS.YAML` and `_defaults.yml` are chain levels, so a PR
-      # touching only one of them used to skip this guard. GitHub's filter
-      # globs support `[]` character classes; the diff pathspec in the scope
-      # step below uses `:(icase)` for the same set.
-      - "**/_[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss].[Yy][Aa][Mm][Ll]"
-      - "**/_[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss].[Yy][Mm][Ll]"
+      # Every `_`-prefixed YAML, any casing (#2192). This covers every file
+      # that feeds da-guard as configuration rather than as a tenant: the
+      # defaults CHAIN carriers (`_lib_confd.is_defaults_name` / Go
+      # `confdname.IsDefaults` — `_defaults.yaml` / `.yml` in any casing since
+      # #1674), `_profiles.yaml` (#2117), AND every other root `_` platform
+      # file — `LoadRootPlatformProfiles` reads `profiles:` and
+      # `platform_overlay.go` reads a `tenants:` overlay from ANY of them, so
+      # a PR editing only `conf.d/_platform.yaml` changes what the guard sees.
+      # Enumerating names (the old `_defaults` + `_profiles` pair) missed
+      # exactly that file.
+      # ⚠️ "Root platform file" is every `_` file at a conf.d root
+      # (`isRootPlatformKey`, flat_build.go) — `try-local/seed/conf.d/_rbac.yaml`
+      # and `_views.yaml` included, whose `tenants:` / `profiles:` da-guard
+      # does read. So those are real input, not noise.
+      # ⚠️ Deliberate over-trigger, never under: `**/` also fires on NESTED
+      # `_` files that are not chain carriers (`conf.d/examples/_*.yaml`),
+      # which da-guard does not read — that costs one extra run on the
+      # directory they sit in. A `_` file outside every conf.d tree
+      # (`docs/_config.yml`) is reported as `unmanaged` (NOT CHECKED), and
+      # when no tree resolves the run still falls back to the whole-tree
+      # smoke over the detected tree rather than validating nothing. A missed
+      # platform file, by contrast, costs a green comment about input the
+      # guard never saw.
+      # GitHub filter globs: `*` does not cross `/`, `**/` also matches zero
+      # directories (so a repo-root `_x.yaml` fires), `[]` classes are
+      # supported. The diff pathspec in the scope step below is the same set
+      # spelled `:(icase,glob)`; `tests/ops/test_guard_defaults_scopes.py`
+      # pins both.
+      - "**/_*.[Yy][Aa][Mm][Ll]"
+      - "**/_*.[Yy][Mm][Ll]"
       - "components/threshold-exporter/app/cmd/da-guard/**"
       - "components/threshold-exporter/app/internal/guard/**"
       - "components/threshold-exporter/app/pkg/config/scope.go"
@@ -89,20 +110,24 @@ on:
       - "components/threshold-exporter/app/pkg/config/platform_overlay.go"
       - "components/threshold-exporter/app/pkg/config/profile_overlay.go"
       - "components/threshold-exporter/app/pkg/config/aliases.go"
+      # WHICH root `_` files count as platform files (#2192):
+      # `isRootPlatformKey` / `rootPlatformKeys` live here and are called by
+      # both platform_overlay.go and profile_overlay.go above.
+      - "components/threshold-exporter/app/pkg/config/flat_build.go"
+      # `rootDefaultsCarrier` lives here and max_metrics.go (below) reads the
+      # cap through it; the root-platform loading itself is shared with the
+      # tenant-api merge core.
+      - "components/threshold-exporter/app/pkg/config/merge_tenant.go"
       # ParseConfigFile decides whether a root platform file is read at all
       # (a file its typed decode rejects contributes no `tenants:` and no
       # `profiles:` to any tenant the guard sees).
       - "components/threshold-exporter/app/pkg/config/config_file.go"
-      # Profile definitions (#2117): a tenant's `_profile` fills keys into
-      # what da-guard compares, so a PR editing only `_profiles.yaml`
-      # changes the guard's input. Such a PR has no changed `_defaults.yaml`,
-      # so the scope step resolves no target and the run validates the whole
-      # detected tree (the zero-target route). ⚠️ Residual, on purpose: `profiles:` in
-      # any OTHER root `_` file (`_defaults.yaml` is already covered above)
-      # does not trigger this workflow — rare, and widening to every
-      # `_*.yaml` would run the guard on unrelated platform files.
-      - "**/_[Pp][Rr][Oo][Ff][Ii][Ll][Ee][Ss].[Yy][Aa][Mm][Ll]"
-      - "**/_[Pp][Rr][Oo][Ff][Ii][Ll][Ee][Ss].[Yy][Mm][Ll]"
+      # (Profile definitions — `_profiles.yaml`, #2117 — used to have their
+      # own two entries here. They are a subset of the `**/_*` pair at the
+      # top of this list, and the scope step now resolves a changed
+      # `_profiles.yaml` to the tree it lives in instead of routing it to the
+      # zero-target whole-detected-tree run, which validated the wrong tree
+      # whenever the file sat anywhere but the auto-detected root.)
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"
@@ -220,13 +245,13 @@ jobs:
             # prevent. Failing here rather than in the verdict step keeps the
             # message pointed at the actual cause.
             if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-              echo "::error::No conf.d/ directory found on a PR that changed a _defaults.yaml — nothing was validated. If the tree moved, update the resolution order above."
+              echo "::error::No conf.d/ directory found on a PR that triggered this guard — nothing was validated. If the tree moved, update the resolution order above."
               exit 1
             fi
             echo "::warning::No conf.d/ directory found; nothing to validate"
           fi
 
-      - name: Determine scope from changed _defaults.yaml
+      - name: Determine scope from changed _-prefixed YAML
         if: steps.detect.outputs.conf_d != '' && github.event_name == 'pull_request'
         id: scope
         # Same env-var hygiene as the Detect step — keep all
@@ -284,7 +309,7 @@ jobs:
             exit "$mb_rc"
           fi
           if [ "$mb_rc" -eq 1 ]; then
-            echo "::warning::origin/${BASE_REF} and HEAD share no history, so this PR has no computable _defaults.yaml diff — falling back to validating the whole detected tree"
+            echo "::warning::origin/${BASE_REF} and HEAD share no history, so this PR has no computable diff of _-prefixed config files — falling back to validating the whole detected tree"
             : > "$RUNNER_TEMP/changed-defaults.txt"
           else
             # ⛔ The listing gets the SAME wrapper as the probe above, and this
@@ -300,9 +325,22 @@ jobs:
             # (`test_zero_defaults_is_not_an_error`) forbids an `::error::` in
             # this step that names one, because zero resolved files must stay
             # benign. This error is about git being unable to answer.
+            # ⛔ The pathspec is the `paths:` trigger's own set (#2192): every
+            # `_`-prefixed YAML, not just `_defaults`. A PR that edits only
+            # `_platform.yaml` / `_profiles.yaml` used to list NOTHING here,
+            # take the zero-target branch, and validate the auto-detected tree
+            # — the wrong tree whenever the file sat in another one (e.g.
+            # try-local/seed/conf.d). guard_defaults_scopes.py places any path
+            # by its nearest `conf.d` ancestor, so a root `_platform.yaml`
+            # resolves to its own tree with the whole tree as scope.
+            # ⚠️ `glob` magic is load-bearing, not decoration. Without it `*`
+            # crosses `/` — measured: `:(icase)**/_*.yaml` lists
+            # `conf.d/_arch/tenant.yaml` (a tenant under a `_` directory) and
+            # misses a repo-root `_x.yaml`; `:(icase,glob)` does neither,
+            # which is what the GitHub `paths:` globs above mean.
             set +e
             git diff -z --name-only "origin/${BASE_REF}...HEAD" -- \
-              ':(icase)**/_defaults.yaml' ':(icase)**/_defaults.yml' \
+              ':(icase,glob)**/_*.yaml' ':(icase,glob)**/_*.yml' \
               > "$RUNNER_TEMP/changed-defaults.txt"
             diff_rc=$?
             set -e
@@ -311,7 +349,7 @@ jobs:
               exit "$diff_rc"
             fi
           fi
-          echo "Changed _defaults.yaml:"
+          echo "Changed _-prefixed config files (_defaults / _profiles / _platform / …):"
           tr '\0' '\n' < "$RUNNER_TEMP/changed-defaults.txt"
 
           # This repo's _defaults.yaml files live in SEVERAL independent conf.d
@@ -421,6 +459,14 @@ jobs:
             return 0
           }
 
+          # ⛔ Whether da-guard ran for a `target` row, NOT whether the TSV is
+          # non-empty (#2192 review). Since the trigger covers every `_` YAML,
+          # a PR can change guard source AND add an `_` file outside every
+          # conf.d tree (`docs/_config.yml`): the TSV then holds only an
+          # `unmanaged` row, and gating the whole-tree smoke on `-s` skipped
+          # it — da-guard never ran and the job stayed green. `unmanaged` rows
+          # are still reported below; they just no longer stand in for a run.
+          RAN_TARGET=0
           if [ -s "$TARGETS" ]; then
             # One da-guard run per conf.d tree the PR actually touched.
             while IFS=$'\t' read -r kind a b; do
@@ -448,14 +494,15 @@ jobs:
                 continue
               fi
               case "$kind" in
-                target)    run_one "$a" "$b" ;;
-                # ⛔ Never silent: a _defaults.yaml outside every conf.d tree is
-                # reported as NOT CHECKED with the reason, because a green
+                target)    run_one "$a" "$b"
+                           RAN_TARGET=1 ;;
+                # ⛔ Never silent: a changed `_` file outside every conf.d tree
+                # is reported as NOT CHECKED with the reason, because a green
                 # comment that quietly skipped the changed file is exactly the
                 # failure this workflow had (#1219).
                 unmanaged) echo "### \`$a\` — NOT CHECKED" >> "$REPORT"
                            echo >> "$REPORT"
-                           echo "此檔不在任何 \`conf.d\` 樹底下，da-guard 無從解析它的繼承鏈。" >> "$REPORT"
+                           echo "此檔不在任何 \`conf.d\` 樹底下，不是 da-guard 會讀的設定。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::warning::${a} is outside every conf.d tree — not validated" ;;
                 # The whole point of guard_defaults_scopes.py is that a file
@@ -475,15 +522,18 @@ jobs:
                            WORST=2 ;;
               esac
             done < "$TARGETS"
-          else
-            # Zero _defaults.yaml resolved. This is NOT necessarily a broken
-            # scope computation: the `paths:` filter above has six entries, and
-            # five of them are the guard's own source / this workflow. A PR that
-            # touches only those legitimately changes no _defaults.yaml — and
-            # validating the whole detected tree is exactly the right smoke test
-            # for "does the guard still work after this change".
+          fi
+          if [ "$RAN_TARGET" -eq 0 ]; then
+            # No conf.d tree resolved from this diff. This is NOT necessarily a
+            # broken scope computation: apart from the `**/_*` pair, every
+            # entry in the `paths:` filter above is the guard's own source /
+            # this workflow. A PR that touches only those (plus, possibly, `_`
+            # files outside every conf.d tree, reported above) legitimately
+            # resolves no tree — and validating the whole detected tree is
+            # exactly the right smoke test for "does the guard still work
+            # after this change".
             # (push / workflow_dispatch land here too: no PR diff to scope against.)
-            echo "No _defaults.yaml in this diff — running whole-tree over ${CONF_D}"
+            echo "No conf.d tree resolved from this diff — running whole-tree over ${CONF_D}"
             run_one "${CONF_D}" "${CONF_D}"
           fi
 
