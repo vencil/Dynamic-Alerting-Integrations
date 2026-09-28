@@ -135,6 +135,11 @@ PATH_METHOD_SINKS = frozenset({"write_text", "write_bytes", "mkdir", "chmod", "t
 # shared `_atomic_write.atomic_write_text`, so one name is left — and every
 # file that calls it is pinned (`test_every_shared_atomic_writer_caller_is_pinned`).
 NAMED_WRITER_SINKS = frozenset({"atomic_write_text"})
+# The module those names come from. `from _atomic_write import
+# atomic_write_text as w` makes `w(...)` a sink too (scan_source resolves the
+# alias), and ANY import of it makes a file a caller for
+# `test_every_shared_atomic_writer_caller_is_pinned` (#2128 S3).
+SHARED_WRITER_MODULE = "_atomic_write"
 # `open` and its aliases; only a WRITE mode is a sink.
 OPEN_NAMES = frozenset({"open"})
 OPEN_MODULE_NAMES = {"io": frozenset({"open"}), "codecs": frozenset({"open"})}
@@ -353,11 +358,28 @@ def _method_open_mode_is_write(node: ast.Call) -> bool | None:
     return False
 
 
-def _classify_sink(node: ast.Call) -> str | None:
+def _is_shared_writer_module(name: str | None) -> bool:
+    return bool(name) and name.rsplit(".", 1)[-1] == SHARED_WRITER_MODULE
+
+
+def _named_writer_aliases(tree: ast.AST) -> dict[str, str]:
+    """``{local name: writer name}`` for ``from _atomic_write import X as Y``."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and _is_shared_writer_module(node.module):
+            for a in node.names:
+                if a.name in NAMED_WRITER_SINKS and a.asname:
+                    aliases[a.asname] = a.name
+    return aliases
+
+
+def _classify_sink(node: ast.Call, aliases: dict[str, str] | None = None) -> str | None:
     """The sink label for *node*, or ``None`` if it does not write."""
     func = node.func
     if _name_of(func) in NAMED_WRITER_SINKS:
         return f"{_name_of(func)}()"
+    if aliases and isinstance(func, ast.Name) and func.id in aliases:
+        return f"{aliases[func.id]}()"
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         mod, attr = func.value.id, func.attr
         if attr in MODULE_SINKS.get(mod, ()):
@@ -559,6 +581,7 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
         for child in ast.iter_child_nodes(node):
             parents[child] = node
 
+    aliases = _named_writer_aliases(tree)
     found: list[SinkCall] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -567,7 +590,7 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
         if name in _CLOSED_WRITERS:
             found.append(SinkCall(label, node.lineno, f"{name}()", "or_die"))
             continue
-        sink = _classify_sink(node)
+        sink = _classify_sink(node, aliases)
         if sink is None:
             continue
         guard: str | None = None
@@ -1131,29 +1154,96 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 _SHARED_WRITER_HOME = "scripts/tools/dx/_atomic_write.py"
 
 
+def shared_writer_import_lines(source: str, label: str = "<snippet>") -> list[int]:
+    """Lines that import ``_atomic_write`` — ``from _atomic_write import …``
+    (any names, any alias, any relative level) or ``import _atomic_write``
+    (``as`` included, dotted too).
+
+    #2128 S3: the caller population is derived from the IMPORT, not from a
+    call spelled with a known name. A call through an alias, a
+    ``getattr``, a re-export or a function reference handed elsewhere all
+    need the import first; a name-based scan misses every one of them.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source, label)):
+        if isinstance(node, ast.ImportFrom) and _is_shared_writer_module(node.module):
+            lines.append(node.lineno)
+        elif isinstance(node, ast.Import) and any(
+                _is_shared_writer_module(a.name) for a in node.names):
+            lines.append(node.lineno)
+    return sorted(lines)
+
+
+def shared_writer_caller_lines(source: str, label: str = "<snippet>") -> list[int]:
+    """Import lines plus every sink call of a ``NAMED_WRITER_SINKS`` writer
+    (aliases resolved). Empty ⇔ this source is not a caller."""
+    calls = [c.line for c in scan_source(source, label)
+             if c.sink.removesuffix("()") in NAMED_WRITER_SINKS]
+    return sorted(set(shared_writer_import_lines(source, label)) | set(calls))
+
+
 def shared_writer_callers(root: Path = SCRIPTS_DIR) -> dict[str, list[int]]:
-    """``{repo-relative file: [lines]}`` of every ``NAMED_WRITER_SINKS`` call
-    under *root* — the whole ``scripts/`` tree, not ``TOOLS_DIR``."""
+    """``{repo-relative file: [lines]}`` for every file under *root* — the
+    whole ``scripts/`` tree, not ``TOOLS_DIR`` — that imports the shared
+    writer or calls it."""
     found: dict[str, list[int]] = {}
     for py in sorted(root.rglob("*.py")):
         rel = py.relative_to(REPO_ROOT).as_posix()
         if rel == _SHARED_WRITER_HOME:
             continue
-        for c in scan_source(py.read_text(encoding="utf-8"), rel):
-            if c.sink.removesuffix("()") in NAMED_WRITER_SINKS:
-                found.setdefault(rel, []).append(c.line)
+        lines = shared_writer_caller_lines(py.read_text(encoding="utf-8"), rel)
+        if lines:
+            found[rel] = lines
     return found
+
+
+class TestSharedWriterCallerDetection:
+    """Controls for the caller derivation, both signs (#2128 S3)."""
+
+    def test_an_aliased_import_and_call_is_a_caller(self):
+        src = "from _atomic_write import atomic_write_text as w\nw(p, s)\n"
+        assert shared_writer_caller_lines(src) == [1, 2]
+        # …and the aliased call is a sink the guard check sees, unguarded.
+        assert [(c.line, c.sink, c.guard) for c in scan_source(src)] == [
+            (2, "atomic_write_text()", None)]
+
+    def test_a_wrapped_aliased_call_is_guarded(self):
+        src = ("from _atomic_write import atomic_write_text as w\n"
+               "with output_write(p, flag=None):\n    w(p, s)\n")
+        assert [c.guard for c in scan_source(src)] == ["output_write"]
+
+    @pytest.mark.parametrize("src", [
+        "import _atomic_write\n",
+        "import _atomic_write as aw\nfn = aw.atomic_write_text\n",
+        "from _atomic_write import OutputNoSpaceError\n",
+        "from ._atomic_write import atomic_write_text\n",
+        "import dx._atomic_write\n",
+    ])
+    def test_any_import_makes_a_caller(self, src):
+        assert shared_writer_import_lines(src) == [1]
+
+    @pytest.mark.parametrize("src", [
+        "import atomic_write\n",
+        "from _atomic_write_extra import x\n",
+        "w = something.atomic_writer\n",
+        "text = '_atomic_write'\n",
+    ])
+    def test_non_imports_are_not_callers(self, src):
+        assert shared_writer_caller_lines(src) == []
 
 
 def test_every_shared_atomic_writer_caller_is_pinned():
     """#2128. The shared atomic writer raises ``OutputWriteError`` and may
-    fall back in place with a WARN; both are only right at a call site
-    wrapped in ``output_write`` under ``exit_on_output_write_error`` — which
-    the gate below checks, but only for files in ``GUARDED_FILES``. So the
-    CALLER population is closed here: a new caller anywhere under
-    ``scripts/`` (``scripts/dx`` and ``scripts/ops`` included, where the
-    ``TOOLS_DIR`` walk never looks) must join ``GUARDED_FILES`` in the same
-    diff, or this is red.
+    fall back in place with a WARN. What the gate below checks statically,
+    and only for files in ``GUARDED_FILES``, is that each call site sits in
+    a ``with output_write(...)`` (or a ``try`` whose handler ends the run
+    at rc 2). It does NOT check that ``main`` carries
+    ``exit_on_output_write_error`` — that part is exercised behaviourally,
+    per caller, by ``tests/dx/test_shared_atomic_write_callers.py`` (rc 2,
+    one line, no traceback). So the CALLER population is closed here: any
+    file under ``scripts/`` (``scripts/dx`` and ``scripts/ops`` included,
+    where the ``TOOLS_DIR`` walk never looks) that imports ``_atomic_write``
+    must join ``GUARDED_FILES`` in the same diff, or this is red.
 
     A specific break that reddens this: drop any caller file from
     ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).

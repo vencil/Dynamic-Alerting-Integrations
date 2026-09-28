@@ -30,7 +30,17 @@ THE CONTRACT
   that run, and said so, instead of silently detaching the other names or
   failing a write that works in place. Same for xattrs / ACLs / a security
   label a replacement would not carry (:func:`_xattr_mismatch`), an owner we
-  cannot restore, and a target that cannot be renamed over (a mount point).
+  cannot restore (someone else's writable file, non-root run), and a target
+  that cannot be renamed over (a mount point).
+* **The mode is best effort on a file we do not own.** After a successful
+  in-place write, a ``chmod`` refused with EPERM (not the file's owner) is a
+  WARN, not an error: the bytes landed, and "cannot write" would be false.
+* **A read-only file is refused, not replaced.** ``os.access(W_OK)`` false
+  ⇒ the in-place write, which the kernel refuses ⇒ an error — even when the
+  directory would allow a replace. (The pre-#2128 helper replaced it.)
+* **A dangling symlink into a missing directory is an error**: its target's
+  directory cannot take a tmp and the write through the link fails. (The
+  pre-#2128 helper replaced the link with a regular file.)
 * **The tmp is private**: ``mkstemp`` beside the real target, so a file the
   user happens to call ``<target>.tmp`` is never touched.
 * **Errors name the TARGET, never the tmp.** Every ``OSError`` leaves as
@@ -168,15 +178,38 @@ def _warn_not_atomic(out: Path, why: str) -> None:
 
 
 def _write_in_place(out: Path, content: str, opts: _Opts, *, set_mode: bool) -> None:
-    """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks."""
+    """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks.
+
+    #2128 S1: a ``chmod`` refused with EPERM AFTER the write succeeded — the
+    file belongs to someone else (root-owned 0666, a non-root run) — is a
+    WARN, not an error. The content is on disk; reporting "cannot write" at
+    rc 2 would be false. Silent when the mode is already the one asked for.
+    Any other chmod failure still raises.
+    """
     try:
         # `newline` is atomic_write_text's own parameter, default "\n" —
         # pinned by test_line_ending_policy::test_atomic_write_text_defaults_to_lf.
         out.write_text(content, encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
-        if set_mode:
-            os.chmod(out, opts.mode)
     except OSError as exc:
         raise _output_error(out, exc, opts, previous_kept=False) from exc
+    if not set_mode:
+        return
+    try:
+        os.chmod(out, opts.mode)
+    except OSError as exc:
+        if exc.errno != errno.EPERM:
+            raise _output_error(out, exc, opts, previous_kept=False) from exc
+        try:
+            current = stat.S_IMODE(os.stat(out).st_mode)
+        except OSError:
+            current = None
+        if current != opts.mode:
+            shown = "unknown" if current is None else oct(current)
+            print(
+                f"WARN: {safe_label(str(out))}: written, but its mode cannot be "
+                f"set to {oct(opts.mode)} (not its owner); it stays {shown}",
+                file=sys.stderr,
+            )
 
 
 def _xattrs(ref: Union[str, int]) -> dict:
@@ -301,7 +334,11 @@ def atomic_write_text(
 
     regular = st is None or stat.S_ISREG(st.st_mode)
     eligible = st is None or (
-        regular and st.st_nlink == 1 and os.access(out, os.W_OK)
+        # `<= 1`, not `== 1`: st_nlink is 0 when the file was unlinked (by a
+        # concurrent writer's replace) between our stat and now — there are
+        # no other names to keep, and an in-place truncate is the one thing
+        # to avoid (#2128 S2).
+        regular and st.st_nlink <= 1 and os.access(out, os.W_OK)
     )
     if eligible:
         done, why = _try_atomic(out, content, st, opts)
@@ -335,11 +372,12 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
       succeeds as it always did or reports the real error;
     * the tmp cannot be handed back to the file's OWNER (``fchown``, any
       ``OSError`` — EPERM for a non-root run, EINVAL for an unmapped id in a
-      rootless / userns container). No WARN: for a non-root run the in-place
-      write then fails its own chmod (an error), exactly as before, and a
-      WARN ahead of that ERROR is noise. Only the GROUP not being settable
-      while the owner matches is not a reason: the owner can still rewrite
-      the file, so the replace goes ahead (the group becomes ours);
+      rootless / userns container). WARN: since #2128 the in-place write
+      then succeeds (its chmod EPERM is only a WARN, see
+      :func:`_write_in_place`), so atomicity is really lost and is said so.
+      Only the GROUP not being settable while the owner matches is not a
+      reason: the owner can still rewrite the file, so the replace goes
+      ahead (the group becomes ours);
     * the tmp's extended attributes differ from the target's
       (:func:`_xattr_mismatch`) or cannot be compared. Compared AFTER
       ``fchown`` / ``fchmod``: a ``chmod`` of a file whose access ACL was
@@ -380,9 +418,10 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
                 st.st_uid != os.geteuid() or st.st_gid != os.getegid()):
             try:
                 os.fchown(fd, st.st_uid, st.st_gid)
-            except OSError:
+            except OSError as exc:
                 if st.st_uid != os.geteuid():
-                    return False, None
+                    return False, (f"it belongs to uid {st.st_uid} and a replacement "
+                                   f"could not keep that owner ({exc.strerror})")
         if hasattr(os, "fchmod"):
             os.fchmod(fd, opts.mode)
         else:  # Windows before 3.13: only the read-only bit exists anyway

@@ -423,6 +423,123 @@ class TestErrorNamesTheTarget:
 
 
 # ---------------------------------------------------------------------------
+# Blind-review round (#2128 S1 / S2 / N2 / N3)
+# ---------------------------------------------------------------------------
+def _hard_link_forces_in_place(target: Path) -> None:
+    os.link(target, target.with_name("other.md"))
+
+
+def _chmod_refused_for(monkeypatch, target: Path, code: int) -> list:
+    real = os.chmod
+    fired: list = []
+
+    def chmod(path, mode, *a, **k):
+        if os.fspath(path) == str(target):
+            fired.append(mode)
+            raise PermissionError(code, os.strerror(code), str(target))
+        return real(path, mode, *a, **k)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    return fired
+
+
+class TestChmodAfterAnInPlaceWrite:
+    """S1(a): someone else's writable file (root-owned 0666, a non-root run).
+    The in-place write succeeds; its chmod is refused EPERM. That must not
+    turn a write that happened into "cannot write" at rc 2."""
+
+    def test_eperm_is_a_warn_and_the_content_stays(self, mod, target, monkeypatch, capsys):
+        _hard_link_forces_in_place(target)
+        os.chmod(target, 0o666)
+        fired = _chmod_refused_for(monkeypatch, target, errno.EPERM)
+        mod.atomic_write_text(target, NEW)       # must not raise
+        assert fired == [0o644]
+        assert target.read_text(encoding="utf-8") == NEW
+        err = capsys.readouterr().err
+        assert "its mode cannot be set to 0o644 (not its owner); it stays 0o666" in err, err
+
+    def test_eperm_with_the_mode_already_right_is_silent_about_the_mode(
+            self, mod, target, monkeypatch, capsys):
+        _hard_link_forces_in_place(target)
+        os.chmod(target, 0o644)
+        _chmod_refused_for(monkeypatch, target, errno.EPERM)
+        mod.atomic_write_text(target, NEW)
+        assert "mode cannot be set" not in capsys.readouterr().err
+
+    def test_another_chmod_error_is_still_an_error(self, mod, target, monkeypatch):
+        _hard_link_forces_in_place(target)
+        _chmod_refused_for(monkeypatch, target, errno.EROFS)
+        with pytest.raises(_lib_io.OutputWriteError) as info:
+            mod.atomic_write_text(target, NEW)
+        assert info.value.path == str(target)
+
+
+def test_an_owner_that_cannot_be_restored_goes_in_place_with_a_warn(mod, target, monkeypatch,
+                                                                     capsys):
+    """N2: the fchown fallback WARNs, as the module docstring says."""
+    st = os.stat(target)
+    monkeypatch.setattr(os, "geteuid", lambda: st.st_uid + 1)
+
+    def fchown(fd, uid, gid):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "fchown", fchown)
+    ino = st.st_ino
+    mod.atomic_write_text(target, NEW)
+    assert os.stat(target).st_ino == ino, "went atomic although the owner cannot be kept"
+    assert target.read_text(encoding="utf-8") == NEW
+    err = capsys.readouterr().err
+    assert f"it belongs to uid {st.st_uid}" in err and "writing it in place" in err, err
+    assert _entries(target.parent) == ["out.md"]
+
+
+def test_nlink_zero_takes_the_atomic_path(mod, target, monkeypatch):
+    """S2: st_nlink == 0 (the file was unlinked by a concurrent replace after
+    our stat) has no other names to keep — it must not fall into the
+    in-place truncate."""
+    real_stat = os.stat
+    seen: list = []
+
+    def fake_stat(path, *a, **k):
+        st = real_stat(path, *a, **k)
+        if os.fspath(path) == str(target) and not a and not k:
+            seen.append(True)
+            fields = list(st[:10])
+            fields[stat.ST_NLINK] = 0
+            return os.stat_result(fields)
+        return st
+
+    real_write_text = Path.write_text
+
+    def write_text(self, *a, **k):
+        if str(self) == str(target):
+            raise AssertionError("in-place write for st_nlink == 0")
+        return real_write_text(self, *a, **k)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(Path, "write_text", write_text)
+    ino = real_stat(target).st_ino
+    mod.atomic_write_text(target, NEW)
+    monkeypatch.undo()
+    assert seen, "the nlink=0 stat was never served"
+    assert os.stat(target).st_ino != ino
+    assert target.read_text(encoding="utf-8") == NEW
+
+
+def test_a_dangling_symlink_into_a_missing_directory_is_an_error(mod, tmp_path):
+    """N3: the documented behaviour change — the pre-#2128 helper replaced
+    such a link with a regular file; now the link stays and it is an error
+    named by the link."""
+    link = tmp_path / "link.md"
+    link.symlink_to(tmp_path / "no-such-dir" / "data.md")
+    with pytest.raises(_lib_io.OutputWriteError) as info:
+        mod.atomic_write_text(link, NEW)
+    assert info.value.path == str(link)
+    assert link.is_symlink()
+    assert _entries(tmp_path) == ["link.md"]
+
+
+# ---------------------------------------------------------------------------
 # Extended attributes (#2082, carried over)
 # ---------------------------------------------------------------------------
 def _user_xattrs_supported(p: Path) -> bool:

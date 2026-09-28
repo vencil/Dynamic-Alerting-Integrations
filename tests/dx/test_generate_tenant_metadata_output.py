@@ -660,12 +660,15 @@ class TestSameResultAsInPlace:
         assert "WARN" not in capsys.readouterr().err
         assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
-    def test_an_owner_that_cannot_be_restored_goes_in_place_like_before(
+    def test_an_owner_that_cannot_be_restored_goes_in_place_with_a_warn(
         self, monkeypatch, confd, tmp_path, capsys,
     ):
-        """Someone else's writable file, non-root run: the in-place writer
-        wrote it and then failed its own chmod (EPERM, rc 2 — measured as
-        nobody). Same result, no WARN ahead of the ERROR."""
+        """Someone else's writable file, non-root run: the tmp cannot be
+        handed to the owner, so the write goes in place. Before #2128 the
+        in-place writer then failed its own chmod (EPERM) and ended rc 2 with
+        the content already written — "cannot write" for a write that
+        happened. Since #2128 S1 that chmod EPERM is a WARN: rc 0, and the
+        lost atomicity is WARNed too (N2)."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         st = out.stat()
@@ -687,10 +690,11 @@ class TestSameResultAsInPlace:
         monkeypatch.undo()
         err = capsys.readouterr().err
 
-        assert rc == 2
-        assert f"ERROR: cannot write {out}: Operation not permitted" in err
-        assert "WARN" not in err
-        assert _is_fresh_metadata(out)   # written in place, as the old tool did
+        assert rc == 0, err
+        assert "ERROR" not in err, err
+        assert f"WARN: {out}: it belongs to uid {st.st_uid}" in err, err
+        assert "writing it in place" in err, err
+        assert _is_fresh_metadata(out)   # written in place
         assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
     def test_the_tmp_mode_is_set_on_the_fd_not_through_the_name(
