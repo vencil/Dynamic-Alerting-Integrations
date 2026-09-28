@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import explain_route as er  # noqa: E402
+import generate_alertmanager_routes as gar  # noqa: E402
 
 # #2293: --trace asks Alertmanager (`amtool config routes test --tree`) where
 # an alert goes. Tests about THAT verdict need a real amtool: they skip without
@@ -119,7 +121,8 @@ class TestTraceAlertRouting:
             all_tenants=["db-a"],
         )
         # Warning with dedup enabled → possible inhibition
-        trace = er.trace_alert_routing(parsed, "db-a", "HighMem", "warning")
+        trace = er.trace_alert_routing(parsed, "db-a", "HighMem", "warning",
+                                       {"metric_group": "mem"})
         inhibit_step = trace["steps"][3]
         assert inhibit_step["action"] == "inhibit_check"
         assert inhibit_step["inhibited"] == "possible"
@@ -469,6 +472,18 @@ class TestBaseConfigFlag:
         assert "Traceback" not in err
         assert trace["final_receiver"] == \
             "(unknown: the generator refuses this config)"
+        # No config, no inhibit rules: step 4 cannot say "possible" either.
+        assert trace["steps"][3]["inhibited"] == "unknown"
+
+    def test_trace_own_bug_is_not_swallowed(self, monkeypatch, tmp_path):
+        """Only assemble_configmap's crash reads as a malformed base; a
+        KeyError from the trace's own code must surface, not rc 0 + WARN."""
+        def _boom(*_a, **_k):
+            raise KeyError("injected")
+        monkeypatch.setattr(er, "_conf_receiver_types", _boom)
+        with pytest.raises(KeyError, match="injected"):
+            er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+                     "--trace", "--json"])
 
 
 class TestInhibitStepFromConfd:
@@ -476,21 +491,41 @@ class TestInhibitStepFromConfd:
     produces from a real conf.d (default enable, ``_severity_dedup: disable``
     opts out)."""
 
-    @pytest.mark.parametrize("dedup, severity, expected", [
-        (None, "warning", "possible"),
-        (None, "critical", False),
-        ("disable", "warning", False),
-    ])
-    def test_dedup_from_confd(self, tmp_path, dedup, severity, expected):
+    @staticmethod
+    def _rule_can_inhibit(conf, labels):
+        """The generator's own inhibit rules for this conf.d: does one whose
+        target_matchers (``k="v"`` / ``k=~"re"``) match *labels* exist?"""
+        rules, _ = gar.generate_inhibit_rules(
+            gar._parse_config_files(str(conf))["dedup_configs"])
+
+        def _matches(matcher):
+            key, op, val = re.fullmatch(r'(\w+)(=~|=)"(.*)"', matcher).groups()
+            got = labels.get(key, "")
+            return re.fullmatch(val, got) if op == "=~" else got == val
+        return any(all(_matches(m) for m in r["target_matchers"])
+                   for r in rules)
+
+    @pytest.mark.parametrize("group", [None, "mem"])
+    @pytest.mark.parametrize("dedup", [None, "enable", "disable"])
+    @pytest.mark.parametrize("severity", ["warning", "critical"])
+    def test_dedup_from_confd(self, capsys, tmp_path, dedup, severity, group):
+        """Step 4 says ``possible`` exactly when the generator emits a rule
+        that can inhibit this alert (the rule's target needs a non-empty
+        ``metric_group``), ``False`` otherwise."""
         conf = _tree(tmp_path)
         if dedup is not None:
             tenant_file = conf / f"{_TT}.yaml"
             doc = yaml.safe_load(tenant_file.read_text(encoding="utf-8"))
             doc["tenants"][_TT]["_severity_dedup"] = dedup
             tenant_file.write_text(yaml.safe_dump(doc), encoding="utf-8")
-        parsed = er._parse_config_files(str(conf))
-        step4 = er.trace_alert_routing(parsed, _TT, "X", severity)["steps"][3]
+        args = ["--severity", severity]
+        if group is not None:
+            args += ["--label", f"metric_group={group}"]
+        trace, _ = _trace_err(capsys, conf, *args)
+        step4 = trace["steps"][3]
         assert step4["action"] == "inhibit_check"
+        expected = ("possible" if self._rule_can_inhibit(conf, trace["labels"])
+                    else False)
         assert step4["inhibited"] == expected
 
 

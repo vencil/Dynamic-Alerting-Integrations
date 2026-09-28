@@ -609,6 +609,10 @@ def _receiver_type(name: str, receivers: dict[str, dict],
     return "+".join(kinds) if kinds else "none"
 
 
+class UnassemblableBase(ValueError):
+    """``assemble_configmap`` crashed on the --base-config (not a refusal)."""
+
+
 def build_trace_tree(parsed: dict, base: dict | None = None
                      ) -> tuple[str, dict, dict[str, dict], dict[str, str]]:
     """The alertmanager.yml ``--output-configmap`` would emit, and its tree.
@@ -632,9 +636,15 @@ def build_trace_tree(parsed: dict, base: dict | None = None
         routing_configs, None, enforced_routing=enforced)
     inhibit_rules, _warnings = generate_inhibit_rules(
         parsed.get("dedup_configs") or {})
-    cm_yaml = assemble_configmap(
-        base if base is not None else load_base_config(None),
-        routes, receivers, inhibit_rules)
+    try:
+        cm_yaml = assemble_configmap(
+            base if base is not None else load_base_config(None),
+            routes, receivers, inhibit_rules)
+    except (KeyError, TypeError) as exc:
+        # It crashes rather than refuses on a malformed --base-config (a
+        # receiver without `name`, `receivers` not a list). Only this call:
+        # the trace's own bugs must surface, not read as a bad base.
+        raise UnassemblableBase(f"{type(exc).__name__}: {exc}") from exc
     am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
     am = yaml.safe_load(am_yml)
     by_name = {r["name"]: r for r in am.get("receivers") or []}
@@ -811,16 +821,16 @@ def trace_alert_routing(
 
     hits, unknown = None, "the generator refuses this config"
     root, receivers, conf_types = {}, {}, {}
+    assembled = False
     try:
         am_yml, root, receivers, conf_types = build_trace_tree(parsed, base_config)
+    except UnassemblableBase as exc:
+        _warn("the generator cannot assemble this config (malformed "
+              f"--base-config?): {exc}")
     except ValueError as exc:
         _warn(f"the generator refuses to assemble this config: {exc}")
-    except (KeyError, TypeError) as exc:
-        # assemble_configmap crashes rather than refuses on a malformed
-        # --base-config (a receiver without `name`, `receivers` not a list).
-        _warn("the generator cannot assemble this config (malformed "
-              f"--base-config?): {type(exc).__name__}: {exc}")
     else:
+        assembled = True
         hits, unknown = run_amtool_trace(am_yml, root, alert_labels, warn=_warn)
     main_prefix = f"tenant-{tenant}"
 
@@ -917,7 +927,14 @@ def trace_alert_routing(
     inhibited = False
     inhibit_reason = ""
     dedup_enabled = (parsed.get("dedup_configs") or {}).get(tenant) == "enable"
-    if dedup_enabled and severity == "warning":
+    # The generated rule's target also needs metric_group=~".+" (and
+    # equal: [metric_group]); re's `.` excludes \n as RE2's does.
+    has_group = re.fullmatch(".+", alert_labels.get("metric_group", ""))
+    if not assembled:
+        steps.append({"step": 4, "action": "inhibit_check",
+                      "detail": f"Unknown: {unknown}",
+                      "inhibited": "unknown"})
+    elif dedup_enabled and severity == "warning" and has_group:
         # If tenant has severity dedup enabled, warning alerts may be
         # inhibited when a critical alert is also firing
         inhibited = False  # can't know at config time; mark as "possible"
@@ -1005,14 +1022,18 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
 
     # Final summary
     receiver = safe_label(trace["final_receiver"])
+    inhibited = trace["steps"][3]["inhibited"]
     if lang == "zh":
         lines.append("── 最終結果 ──")
         lines.append(f"  接收者: {receiver}")
-        lines.append(f"  抑制: {'可能' if trace['inhibit_reason'] else '否'}")
+        lines.append("  抑制: " + {"possible": "可能", "unknown": "(未知)"}
+                     .get(inhibited, "否"))
     else:
         lines.append("── Final Result ──")
         lines.append(f"  Receiver: {receiver}")
-        lines.append(f"  Inhibited: {'possible' if trace['inhibit_reason'] else 'no'}")
+        lines.append("  Inhibited: " + {"possible": "possible",
+                                        "unknown": "(unknown)"}
+                     .get(inhibited, "no"))
 
     t_info = {k: ("(unknown)" if v is None else v)
               for k, v in trace["timing"].items()}
