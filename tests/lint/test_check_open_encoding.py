@@ -14,6 +14,7 @@ like a clean tree. These tests pin both directions of the fix:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -84,3 +85,163 @@ class TestExistingScanRoot:
         bad.write_text(_BARE, encoding="utf-8")
         rc = _run(monkeypatch, "--ci", "--strict-open-encoding", str(bad))
         assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# subprocess text mode (#1374)
+# ---------------------------------------------------------------------------
+
+def _sp(tmp_path: Path, body: str) -> list[tuple[int, str, str]]:
+    f = tmp_path / "probe.py"
+    f.write_text(body, encoding="utf-8")
+    return mod.scan_subprocess(f)
+
+
+class TestSubprocessVerdict:
+    @pytest.mark.parametrize("body", [
+        "import subprocess\nsubprocess.run(c, capture_output=True, text=True)\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True, universal_newlines=True)\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True, errors='replace')\n",
+        "import subprocess\nsubprocess.check_output(c, text=True)\n",
+        "import subprocess\nsubprocess.Popen(c, stdout=subprocess.PIPE, text=True)\n",
+        "import subprocess as sp\nsp.run(c, text=True)\n",
+        "from subprocess import run as r\nr(c, text=True)\n",
+        "import subprocess\nsubprocess.getoutput('git log')\n",
+    ], ids=["text", "universal_newlines", "errors-only", "check_output", "Popen",
+            "module-alias", "from-import-alias", "getoutput"])
+    def test_text_mode_without_encoding_is_flagged(self, tmp_path, body):
+        assert [line for line, _r, _s in _sp(tmp_path, body)] == [2]
+
+    @pytest.mark.parametrize("body", [
+        "import subprocess\nsubprocess.run(c, capture_output=True, text=True, encoding='utf-8')\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True, text=True, encoding='locale')\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True)\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True, text=False)\n",
+        "import asyncio\nfrom somewhere import run\nrun(c, text=True)\n",
+        "import subprocess\nsubprocess.run(\n    c,\n    text=True,  # open-encoding: ignore\n)\n",
+    ], ids=["utf-8", "locale", "bytes", "text-False", "run-not-from-subprocess",
+            "ignore-on-later-line"])
+    def test_stated_encoding_bytes_or_foreign_call_passes(self, tmp_path, body):
+        assert _sp(tmp_path, body) == []
+
+    @pytest.mark.parametrize("body", [
+        "import subprocess\nsubprocess.run(c, **kw)\n",
+        "import subprocess\nsubprocess.run(c, capture_output=True, text=flag)\n",
+        "import subprocess\nsubprocess.Popen(c, -1)\n",
+    ], ids=["kwargs", "text-variable", "extra-positional"])
+    def test_unreadable_call_is_flagged_as_unmeasurable(self, tmp_path, body):
+        found = _sp(tmp_path, body)
+        assert len(found) == 1 and found[0][1].startswith("unmeasurable")
+
+
+def _tree(tmp_path: Path, sites: int) -> Path:
+    root = tmp_path / "pkg"
+    root.mkdir(exist_ok=True)
+    body = "import subprocess\n" + "".join(
+        f"subprocess.run(c{i}, capture_output=True, text=True)\n" for i in range(sites))
+    (root / "a.py").write_text(body, encoding="utf-8")
+    return root
+
+
+def _ledger(tmp_path: Path, rows: dict[str, int] | None) -> Path:
+    path = tmp_path / "ledger.json"
+    if rows is not None:
+        path.write_text(json.dumps({"files": rows}), encoding="utf-8")
+    return path
+
+
+def _key(root: Path) -> str:
+    return mod.ledger_key(root / "a.py")
+
+
+class TestSubprocessLedger:
+    def _strict(self, monkeypatch, root: Path, ledger: Path) -> int:
+        return _run(monkeypatch, "--ci", "--strict-open-encoding",
+                    "--subprocess-baseline", str(ledger), str(root))
+
+    def test_count_equal_to_ledger_passes(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 2)
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, {_key(root): 2})) == 0
+
+    def test_one_more_than_ledger_fails_and_names_the_file(self, monkeypatch, capsys, tmp_path):
+        root = _tree(tmp_path, 3)
+        rc = self._strict(monkeypatch, root, _ledger(tmp_path, {_key(root): 2}))
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert "1 are new" in captured.err
+        assert "a.py:4:" in captured.out
+
+    def test_file_missing_from_ledger_fails(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, {})) == 1
+
+    def test_fewer_than_ledger_is_a_stale_row(self, monkeypatch, capsys, tmp_path):
+        root = _tree(tmp_path, 1)
+        rc = self._strict(monkeypatch, root, _ledger(tmp_path, {_key(root): 2}))
+        assert rc == 1
+        assert "stale ledger row" in capsys.readouterr().err
+
+    def test_row_for_a_deleted_file_inside_the_roots_is_stale(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        gone = mod.ledger_key(root / "gone.py")
+        rows = {_key(root): 1, gone: 1}
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, rows)) == 1
+
+    def test_rows_outside_the_scanned_roots_are_not_compared(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        rows = {_key(root): 1, "scripts/elsewhere.py": 5}
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, rows)) == 0
+
+    def test_missing_ledger_fails_strict(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, None)) == 1
+
+    def test_malformed_count_fails_strict(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        assert self._strict(monkeypatch, root, _ledger(tmp_path, {_key(root): 0})) == 1
+
+    def test_without_strict_a_surplus_only_warns(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 3)
+        rc = _run(monkeypatch, "--ci", "--subprocess-baseline",
+                  str(_ledger(tmp_path, {})), str(root))
+        assert rc == 0
+
+
+class TestWriteSubprocessLedger:
+    def _write(self, monkeypatch, root: Path, ledger: Path) -> int:
+        return _run(monkeypatch, "--write-subprocess-baseline",
+                    "--subprocess-baseline", str(ledger), str(root))
+
+    def _rows(self, ledger: Path) -> dict[str, int]:
+        return json.loads(ledger.read_text(encoding="utf-8"))["files"]
+
+    def test_bootstrap_writes_every_count(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 2)
+        ledger = _ledger(tmp_path, None)
+        assert self._write(monkeypatch, root, ledger) == 0
+        assert self._rows(ledger) == {_key(root): 2}
+
+    def test_lowers_a_count(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        ledger = _ledger(tmp_path, {_key(root): 3})
+        assert self._write(monkeypatch, root, ledger) == 0
+        assert self._rows(ledger) == {_key(root): 1}
+
+    def test_drops_a_row_at_zero_and_keeps_rows_outside_the_roots(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 0)
+        ledger = _ledger(tmp_path, {_key(root): 2, "scripts/elsewhere.py": 5})
+        assert self._write(monkeypatch, root, ledger) == 0
+        assert self._rows(ledger) == {"scripts/elsewhere.py": 5}
+
+    def test_refuses_to_raise_a_count(self, monkeypatch, capsys, tmp_path):
+        root = _tree(tmp_path, 3)
+        ledger = _ledger(tmp_path, {_key(root): 2})
+        assert self._write(monkeypatch, root, ledger) == 1
+        assert self._rows(ledger) == {_key(root): 2}
+        assert "REFUSED" in capsys.readouterr().err
+
+    def test_refuses_to_add_a_file(self, monkeypatch, tmp_path):
+        root = _tree(tmp_path, 1)
+        ledger = _ledger(tmp_path, {})
+        assert self._write(monkeypatch, root, ledger) == 1
+        assert self._rows(ledger) == {}

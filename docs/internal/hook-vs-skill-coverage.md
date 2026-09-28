@@ -77,7 +77,7 @@ lang: zh
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `aria-references-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |
 | **平台資料 / routing** | `platform-data-check` `routing-profiles-check` `metric-dictionary-check` | 四層路由、Cardinality | Rule Pack ↔ metric 交叉驗證 |
 | **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射（原 ⚙️ CI-only，#1185 PR2 升為 hook） |
-| **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（FATAL；掃描範圍以該 hook 的 `entry` 為準） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
+| **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（FATAL；掃描範圍以該 hook 的 `entry` 為準；subprocess 文字模式走只減不增的 `subprocess-encoding-baseline.json` 帳本，#1374） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
 | **Shell 正確性** | `shellcheck`（`--norc --include=SC2006,SC1071,SC1072,SC1073,SC1008`） | lint-policy hybrid | 反引號命令替換；額外的 SC10xx 與 `--norc` 是 fail-closed 用（ShellCheck 沉默＝零輸出 exit 0） |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
 
