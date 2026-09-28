@@ -7,9 +7,9 @@
 消除 JSX 工具間的硬編碼數據不一致問題。
 
 Usage:
-    python3 scripts/tools/generate_platform_data.py              # 產生 JSON
-    python3 scripts/tools/generate_platform_data.py --check      # CI 模式（drift 偵測）
-    python3 scripts/tools/generate_platform_data.py --dry-run    # 只印出 JSON 不寫檔
+    python3 scripts/tools/dx/generate_platform_data.py              # 產生 JSON
+    python3 scripts/tools/dx/generate_platform_data.py --check      # CI 模式（drift 偵測）
+    python3 scripts/tools/dx/generate_platform_data.py --dry-run    # 只印出 JSON 不寫檔
 """
 import argparse
 import importlib.util

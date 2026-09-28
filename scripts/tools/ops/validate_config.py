@@ -56,18 +56,18 @@ code, to learn whether every row covered every file.
 
 Usage:
   # Minimal (YAML + schema + routes):
-  python3 scripts/tools/validate_config.py \\
+  python3 scripts/tools/ops/validate_config.py \\
     --config-dir components/threshold-exporter/config/conf.d/
 
   # Full suite (CI):
-  python3 scripts/tools/validate_config.py \\
+  python3 scripts/tools/ops/validate_config.py \\
     --config-dir components/threshold-exporter/config/conf.d/ \\
     --policy .github/custom-rule-policy.yaml \\
     --rule-packs rule-packs/ \\
     --version-check
 
   # JSON output for CI consumption:
-  python3 scripts/tools/validate_config.py \\
+  python3 scripts/tools/ops/validate_config.py \\
     --config-dir components/threshold-exporter/config/conf.d/ \\
     --json
 """

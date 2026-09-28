@@ -19,17 +19,12 @@ appears" — a string that reads as ``python3 <path>`` / ``bash <path>``, i.e.
 something the reader is being told to run.  Measured on the tree that fixed
 #1447: five hits before, zero after, and no false positives in between.
 
-⚠️ What this deliberately does NOT cover, stated so the zero above is not
-read as "nothing is stale anywhere": docstrings are skipped, and **seven**
-module docstrings still carry a ``Usage:`` line invoking the pre-``ops/``
-path (``python3 scripts/tools/<tool>.py``) — ``baseline_discovery``,
-``blind_spot_discovery``, ``config_diff``, ``generate_alertmanager_routes``,
-``lint_custom_rules``, ``scaffold_tenant``, ``validate_config``.  Those are
-read by whoever opens the source, not printed at a user, so they are a
-different (maintainer-facing) problem, left for a follow-up rather than
-folded in here.  ⛔ No issue number is cited because none has been filed
-yet — writing one here before it exists is how a reader ends up trusting a
-pointer to nothing.
+⚠️ Docstrings are skipped by the sweep below: they are read by whoever opens
+the source, not printed at a user, and they legitimately carry historical
+paths.  The one docstring shape that is NOT history is a module ``Usage:``
+line invoking the tool itself — #1464 found sixteen still naming the pre-move
+``scripts/tools/<tool>.py``.  ``TestModuleDocstringInvocationsExist`` at the
+bottom holds that narrower line for every module under ``scripts/``.
 """
 
 import ast
@@ -37,6 +32,8 @@ import os
 import re
 
 import pytest
+
+from _tree import repo_files
 
 _REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -328,3 +325,52 @@ class TestPrintedSubcommandsExist:
         assert not problems, (
             "these tools tell the reader to run a `da-tools` subcommand that "
             "the image does not dispatch:\n  " + "\n  ".join(problems))
+
+
+def _module_docstring_dead_invocations(source_path):
+    """``python3 <repo path>`` lines in the MODULE docstring naming no file.
+
+    Only the module docstring: that is where a tool's ``Usage:`` block lives,
+    and it describes how to run the file it sits in — so a dead path there is
+    not history, it is a wrong instruction (#1464).  Function and class
+    docstrings stay exempt for the reason ``_docstring_lines`` gives.
+    """
+    tree = ast.parse(open(source_path, encoding="utf-8").read())
+    doc = ast.get_docstring(tree, clean=False) or ""
+    return sorted({m.group(1) for m in _INVOCATION.finditer(doc)
+                   if not os.path.exists(os.path.join(_REPO_ROOT, m.group(1)))})
+
+
+class TestModuleDocstringInvocationsExist:
+    """#1464 — a module's ``Usage:`` must name a path that exists."""
+
+    @pytest.mark.parametrize("snippet,expected", [
+        ('"""Usage:\n  python3 scripts/tools/no_such_zz9.py --x\n"""\n',
+         ["scripts/tools/no_such_zz9.py"]),
+        # Exists on disk.
+        ('"""Usage:\n  python3 scripts/tools/ops/config_diff.py\n"""\n', []),
+        # A path mentioned, not invoked.
+        ('"""See scripts/tools/no_such_zz9.py for history."""\n', []),
+        # Function docstrings stay exempt.
+        ('def f():\n    """python3 scripts/tools/no_such_zz9.py"""\n', []),
+    ])
+    def test_detector(self, tmp_path, snippet, expected):
+        probe = tmp_path / "probe.py"
+        probe.write_text(snippet, encoding="utf-8", newline="\n")
+        assert _module_docstring_dead_invocations(str(probe)) == expected
+
+    def test_no_module_usage_names_a_dead_path(self):
+        sources = [p for p in repo_files(".py")
+                   if p.relative_to(_REPO_ROOT).parts[0] == "scripts"]
+        assert len(sources) >= 100, (
+            f"only {len(sources)} modules under scripts/ — the walk changed, "
+            "so the sweep is not looking at the population it claims to")
+        problems = [
+            f"{p.relative_to(_REPO_ROOT).as_posix()} -> {target}"
+            for p in sources
+            for target in _module_docstring_dead_invocations(str(p))
+        ]
+        assert not problems, (
+            "these module docstrings tell the reader to run a path that does "
+            "not exist (#1464) — usually the tool moved into a subdirectory "
+            "and its Usage: line did not follow:\n  " + "\n  ".join(problems))

@@ -5,12 +5,12 @@
 自動產生 docs/internal/doc-map.md 表格。
 
 用法:
-  python3 scripts/tools/generate_doc_map.py              # 印出 (zh)
-  python3 scripts/tools/generate_doc_map.py --generate    # 寫入 doc-map.md
-  python3 scripts/tools/generate_doc_map.py --check       # CI drift 偵測
-  python3 scripts/tools/generate_doc_map.py --lang en     # 英文版
-  python3 scripts/tools/generate_doc_map.py --generate --lang all  # 中英文
-  python3 scripts/tools/generate_doc_map.py --generate --no-adr      # 排除 ADR
+  python3 scripts/tools/dx/generate_doc_map.py              # 印出 (zh)
+  python3 scripts/tools/dx/generate_doc_map.py --generate    # 寫入 doc-map.md
+  python3 scripts/tools/dx/generate_doc_map.py --check       # CI drift 偵測
+  python3 scripts/tools/dx/generate_doc_map.py --lang en     # 英文版
+  python3 scripts/tools/dx/generate_doc_map.py --generate --lang all  # 中英文
+  python3 scripts/tools/dx/generate_doc_map.py --generate --no-adr      # 排除 ADR
 """
 import argparse
 import os

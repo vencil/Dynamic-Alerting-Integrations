@@ -33,7 +33,7 @@
 
   # 搭配負載注入使用（典型流程）：
   #   Terminal 1: ./scripts/run_load.sh --tenant db-a --type composite
-  #   Terminal 2: python3 scripts/tools/baseline_discovery.py --tenant db-a
+  #   Terminal 2: python3 scripts/tools/ops/baseline_discovery.py --tenant db-a
 
 需求:
   - Prometheus Query API 可達

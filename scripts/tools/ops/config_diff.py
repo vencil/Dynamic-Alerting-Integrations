@@ -10,9 +10,9 @@ Complements patch_config.py --diff (single-metric live ConfigMap preview).
 config_diff compares entire directory snapshots for PR review.
 
 Usage:
-  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/
-  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format json
-  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format markdown
+  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/
+  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format json
+  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format markdown
 """
 import argparse
 import json

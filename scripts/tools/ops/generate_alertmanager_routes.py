@@ -18,10 +18,10 @@ v2.0.0 Bilingual Templates (i18n):
   No changes to route generator needed — the fallback pattern is in Alertmanager's global templates.
 
 Usage:
-  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/
-  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ -o alertmanager-routes.yaml
-  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
-  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ -o alertmanager-routes.yaml
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
 
 v2.8.0 PR-3a: This file is now a CLI facade. The 1645-line monolith was
 split into 5 helper modules (_grar_validate / _grar_merge / _grar_parse /

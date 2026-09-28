@@ -12,9 +12,9 @@
   5. 雙語文件配對數量是否與 badge 一致
 
 用法:
-  python3 scripts/tools/validate_docs_versions.py          # 互動報告
-  python3 scripts/tools/validate_docs_versions.py --ci     # CI 模式 (exit 1 on fail)
-  python3 scripts/tools/validate_docs_versions.py --json   # JSON 輸出
+  python3 scripts/tools/lint/validate_docs_versions.py          # 互動報告
+  python3 scripts/tools/lint/validate_docs_versions.py --ci     # CI 模式 (exit 1 on fail)
+  python3 scripts/tools/lint/validate_docs_versions.py --json   # JSON 輸出
 """
 import argparse
 import json
