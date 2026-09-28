@@ -212,14 +212,18 @@ func overlayTenant(tenantRaw map[string]any, overlay []PlatformBlock, chain map[
 // over the chain. nil when nothing qualifies.
 //
 // ⛔ NOT THE WHOLE PLATFORM UNION. The layer replaces per TOP-LEVEL key
-// (overlayTenant), so a key whose platform value is a mapping (`_routing`,
-// a scheduled `{default: …}`) or which the tenant file writes as a mapping
-// is replaced wholesale by the tenant's value: a leaf removed from the
-// tenant's mapping falls back to the CHAIN, not to the platform's mapping.
-// Merging the platform mapping in made the guard call a leaf redundant
-// whose removal changes the effective config. Only a non-mapping platform
-// value over a non-mapping (or absent) tenant value is what deleting that
-// tenant key falls back to.
+// (overlayTenant), so a key the tenant file writes as a mapping (`_routing`,
+// a scheduled `{default: …}`) is replaced wholesale by the tenant's value:
+// a leaf removed from the tenant's mapping falls back to the CHAIN, not to
+// the platform's mapping. Such a key is left out. Every other platform
+// value is kept — including a MAPPING platform value (the schedule form)
+// over a scalar the tenant writes: deleting the scalar falls back to the
+// platform's mapping, so MergedDefaults holds its leaves and the guard never
+// calls the scalar redundant (#2191; dropping it made the guard compare the
+// scalar with the chain's value and advise a deletion that moved /metrics).
+// Same rule as PlatformProfiles.inherited. The cost is conservative: a
+// scalar equal to a schedule's value (platform `{default: 80}`, tenant 80)
+// is truly redundant but is not reported — a missed hint, never a wrong one.
 func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[string]any {
 	var out map[string]any
 	for _, pb := range overlay {
@@ -230,10 +234,8 @@ func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[st
 			out[k] = v
 		}
 	}
-	for k, v := range out {
-		_, platformMap := v.(map[string]any)
-		_, tenantMap := tenantRaw[k].(map[string]any)
-		if platformMap || tenantMap {
+	for k := range out {
+		if _, tenantMap := tenantRaw[k].(map[string]any); tenantMap {
 			delete(out, k)
 		}
 	}

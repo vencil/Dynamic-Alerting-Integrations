@@ -298,11 +298,9 @@ func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, [
 // a scalar the tenant writes is kept: deleting the scalar falls back to the
 // profile's mapping merged into the chain — which is what MergedDefaults
 // then holds, so the guard compares the tenant's scalar with its leaves and
-// never calls it redundant. (platformInherited still drops mapping
-// platform values — a known pre-existing gap there, not this function's
-// rule.) A key the platform
-// overlay sets under any spelling is left out: deleting the tenant's value
-// falls back to the overlay's, not the profile's. The profile is the one
+// never calls it redundant. (platformInherited follows the same rule for
+// the platform overlay's values, #2191.) A key the platform overlay sets
+// under any spelling is left out: deleting the tenant's value falls back to the overlay's, not the profile's. The profile is the one
 // `own` (tenant + overlay) elects.
 func (pp *PlatformProfiles) inherited(own, tenantRaw map[string]any, overlay []PlatformBlock) map[string]any {
 	_, profile := pp.profileFor(own)

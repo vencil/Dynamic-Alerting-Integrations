@@ -99,13 +99,13 @@ type EffectiveConfig struct {
 
 	// MergedDefaults is the defaults chain merged together for this
 	// tenant's directory, BEFORE the tenant override is applied — with the
-	// root platform files' NON-MAPPING values for this tenant (#2019)
-	// merged over it, because deleting such a key from the tenant file
-	// falls back to THAT value, not to the chain's. A mapping-valued
-	// platform key (or one the tenant writes as a mapping) is replaced
-	// wholesale by the tenant's value, so its leaves fall back to the chain
-	// and are left as the chain has them (platformInherited). Under those,
-	// the elected profile's values (#2117, PlatformProfiles.inherited): a
+	// root platform files' values for this tenant (#2019) merged over it,
+	// because deleting such a key from the tenant file falls back to THAT
+	// value, not to the chain's (a mapping platform value — the schedule
+	// form — included, #2191). A key the tenant writes as a mapping is
+	// replaced wholesale by the tenant's value, so its leaves fall back to
+	// the chain and are left as the chain has them (platformInherited).
+	// Under those, the elected profile's values (#2117, PlatformProfiles.inherited): a
 	// key deleted from a tenant on a profile falls back to the PROFILE's
 	// value on /metrics, and a chain-only view told the tenant to delete an
 	// override whose removal changed what /metrics serves. This
@@ -359,7 +359,8 @@ type effectiveParts struct {
 //   - mergedDefaults: the defaults chain merged together, BEFORE the
 //     tenant override is applied — with the platform values a deleted
 //     tenant key falls back to merged over it (#2019, platformInherited:
-//     non-mapping platform values only). Captured as a copy so
+//     every platform value except a key the tenant writes as a mapping,
+//     #2191). Captured as a copy so
 //     subsequent merging into `merged` doesn't mutate it.
 //   - tenantRaw:      the tenant.yaml override block, raw. Returned
 //     by extractTenantRaw and never mutated past this point.
@@ -415,7 +416,8 @@ func computeEffectiveConfigDocDetailed(
 	// effective config. Over it, what deleting a tenant key really falls
 	// back to: the profile's values (#2117, PlatformProfiles.inherited),
 	// then the platform overlay's (platformInherited) — not the whole
-	// platform union (a mapping-valued platform key is replaced wholesale).
+	// platform union (a key the tenant writes as a mapping is replaced
+	// wholesale, so the platform's value for it is not a fallback).
 	pr := profiles.inherited(p.own, p.tenantRaw, overlay)
 	pi := platformInherited(overlay, p.tenantRaw)
 	switch {
