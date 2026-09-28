@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -821,5 +822,133 @@ func TestRun_PathSeparators_OnAnyOS(t *testing.T) {
 	// is OS-agnostic; users review reports across platforms).
 	if !strings.Contains(stdout, "db/tenant-a.yaml") {
 		t.Errorf("scanned-files list should use forward slashes: %q", stdout)
+	}
+}
+
+// --- #2280: resolved routing, routes, domain policies --------------------
+
+// adr007Tree is the ADR-007 worked example from the parity matrix.
+func adr007Tree(t *testing.T) map[string]string {
+	t.Helper()
+	for _, tree := range loadRoutingPolicyMatrix(t) {
+		if tree.Name == "adr007-five-tenants" {
+			return tree.Files
+		}
+	}
+	t.Fatal("matrix has no adr007-five-tenants tree")
+	return nil
+}
+
+// Before #2280 da-guard read the tenant's raw `_routing` only: t-ovr (a
+// profile tenant with its own overrides) was missing_receiver_field, and the
+// profile-only tenants and the domain policy were never looked at. The exit 1
+// must now come from the policy, and from nothing else.
+func TestRun_ADR007_ExitOneComesFromDomainPolicy(t *testing.T) {
+	t.Parallel()
+	files := adr007Tree(t)
+	code, findings, _ := runTreeJSON(t, files)
+	if code != exitFindings {
+		t.Fatalf("exit = %d, want %d", code, exitFindings)
+	}
+	perTenant := map[string]int{}
+	for _, f := range findings {
+		if f.Kind == "missing_receiver_field" {
+			t.Errorf("profile routing not resolved: %+v", f)
+		}
+		if f.Severity == "error" && f.Kind != "domain_policy_violation" {
+			t.Errorf("error that is not a policy violation: %+v", f)
+		}
+		if f.Kind == "domain_policy_violation" {
+			perTenant[f.TenantID]++
+		}
+	}
+	// slack / webhook main receivers break both forbidden and allowed.
+	want := map[string]int{"t-sre": 2, "t-dba": 2, "t-ovr": 2, "t-livedbb": 2}
+	if len(perTenant) != len(want) {
+		t.Errorf("violations per tenant = %v, want %v", perTenant, want)
+	}
+	for tenant, n := range want {
+		if perTenant[tenant] != n {
+			t.Errorf("violations per tenant = %v, want %v", perTenant, want)
+			break
+		}
+	}
+
+	// Control: the same tree without the policy file is clean — so the
+	// exit 1 above is the policy's.
+	delete(files, "_domain_policy.yaml")
+	if code, findings, _ := runTreeJSON(t, files); code != exitOK {
+		t.Errorf("without _domain_policy.yaml: exit = %d, want 0; findings %+v", code, findings)
+	}
+}
+
+// A policy file whose structure cannot be used is ONE finding (TenantID "")
+// and the other checks still run: exit 1, never 3, and parse_failed stays the
+// exporter's own list (#1654).
+func TestRun_UnusablePolicyStructure_NamedAndOtherChecksRun(t *testing.T) {
+	t.Parallel()
+	code, findings, parseFailed := runTreeJSON(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 70\n",
+		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: t-pol\n" +
+			"    constraints:\n      forbidden_receiver_types: [slack]\n",
+		"_routing_profiles.yaml": "routing_profiles: [not, a, mapping]\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
+			"      receiver: {type: telegram, url: 'https://x.example/h'}\n",
+	})
+	if code != exitFindings || len(parseFailed) != 0 {
+		t.Fatalf("exit = %d parse_failed = %v, want exit 1 and no parse_failed", code, parseFailed)
+	}
+	var got []string
+	for _, f := range findings {
+		got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
+	}
+	sort.Strings(got)
+	want := []string{
+		"error/domain_policy_unusable//_domain_policy.yaml:domain_policies.finance.tenants",
+		"error/unknown_receiver_type/t-pol/receiver.type",
+		"warn/routing_profiles_unusable//_routing_profiles.yaml:routing_profiles",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("findings %v\nwant %v", got, want)
+	}
+}
+
+// A profiles / policy file that fails YAML syntax is a file the exporter
+// drops: exit 3 names it, and the routing loader skips it rather than naming
+// it a second time as an unusable structure.
+func TestRun_SyntaxBrokenPlatformFile_ExitThreeNamedOnce(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"_routing_profiles.yaml", "_domain_policy.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, findings, parseFailed := runTreeJSON(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  cpu: 70\n",
+				name:             "routing_profiles: [\n",
+				"t-a.yaml":       "tenants:\n  t-a:\n    cpu: 80\n",
+			})
+			if code != exitParseFailed || !equalStrings(parseFailed, []string{name}) {
+				t.Fatalf("exit = %d parse_failed = %v, want 3 naming %s", code, parseFailed, name)
+			}
+			for _, f := range findings {
+				if f.TenantID == "" {
+					t.Errorf("%s named twice: %+v", name, f)
+				}
+			}
+		})
+	}
+}
+
+// `{{tenant}}` is substituted before the receiver shape is judged, as the
+// generator renders it; before #2280 the placeholder in a URL host was an
+// invalid_receiver_field.
+func TestRun_TenantPlaceholderSubstitutedBeforeShapeCheck(t *testing.T) {
+	t.Parallel()
+	code, findings, _ := runTreeJSON(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n  receiver:\n    type: slack\n" +
+			"    api_url: 'https://{{tenant}}.hooks.slack.example/services/x'\n",
+		"t-a.yaml": "tenants:\n  t-a:\n    cpu: 80\n",
+	})
+	if code != exitOK || len(findings) != 0 {
+		t.Errorf("exit = %d findings %+v, want a clean run", code, findings)
 	}
 }
