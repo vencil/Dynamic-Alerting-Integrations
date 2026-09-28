@@ -90,6 +90,10 @@ What is deliberately NOT modelled (under-detection, the safe direction):
   * a token split across two COMMA-SEPARATED string literals — that is two
     strings, not one written across lines, and joining them is what arms a
     check over every list of paths in the repo (measured on #1394);
+  * the breaks `_is_one_token` refuses (#1500): a bare name cut inside its
+    first, separator-free segment, a hanging-indent continuation after a `/`,
+    and a continuation line that opens with `- `. Each is indistinguishable
+    from a false-red shape by the text alone;
   * a token split across THREE or more lines — the window is two lines.
     Measured when this bullet was written, and nothing re-checks it: a
     three-line window added no reports, so the gap was structural and empty
@@ -201,17 +205,25 @@ than they look: every false report teaches somebody one of these edits.
 anything that leaves a directory-ish string at the end of one line and a
 filename-ish string at the start of the next reads as a wrapped reference:
 
-  * a directory-tree listing — `dir/` and then an indented member. Connector
-    characters (`├──`, `|--`, `- `) happen to silence it, by accident of the
-    token character class rather than by design;
+  * a directory-tree listing — `dir/` and then a member. ⚠️ Since #1500 a
+    member indented DEEPER than the directory line is refused by
+    `_is_one_token`; a member at the SAME indent still reads as a wrap, because
+    that is exactly what a real one looks like. Connector characters (`├──`,
+    `|--`) still silence it only by accident of the token character class;
   * any list whose consecutive items are a directory and a file, under ANY of
     the five continuation markers — measured, all five produce it, and `#` is
     far commoner in this tree than the Markdown `*` case that first showed it.
     ⛔ Dropping a marker is NOT the fix: `*` is load-bearing for the
-    block-comment case `test_detector_finds_a_synthetic_wrap` pins;
+    block-comment case `test_detector_finds_a_synthetic_wrap` pins. (A `- `
+    bullet is refused by design since #1500 — it can only open a new item —
+    which the five continuation markers cannot be, since every line of a
+    comment carries its marker;)
   * a sentence whose last word runs into a filename on the next line. The join
     invents a name nobody wrote, and reports it the day somebody adds a file
-    that happens to have that name — from a file they never touched.
+    that happens to have that name — from a file they never touched. ⚠️ Since
+    #1500 a last word with no `/`, `-`, `_` or `.` in it is not joined at all
+    (the live instance was `merged` + `_groups.yaml`); a last word that DOES
+    carry one — `e.g.`, `foo_bar` — is still joined.
 
 ⛔ None of these is fixable by REFLOWING, because there is no reference to
 reflow. Each does have a harmless rewrite, measured rather than guessed: a
@@ -222,7 +234,8 @@ guard still cannot see that shape afterwards, so the report was noise and the
 silence that follows is also noise. What this module does NOT have is a
 per-line exemption, so a false report cannot be annotated away — it is
 rewritten harmlessly, or the guard is fixed. The tree is at zero today, so
-all three are latent, not live.
+all three are latent, not live — which is also how #1500 arrived: adding one
+empty testdata file turned an untouched comment elsewhere red.
 
 ⚠️ A fixture that must genuinely contain a wrapped path should cite a path that
 does not exist — the `docs/integration/…` illustration at the very top of this
@@ -436,7 +449,55 @@ _TOKEN_RUN_HEAD = re.compile(r"[A-Za-z0-9_.\-/]+")
 # are NOT modelled — a path wrapped inside one of those is invisible. Blind
 # review demonstrated all of them; none occurred in the 46 wraps #1383
 # flattened, but the gap is real, so it is named rather than implied.
-LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
+# ⚠️ `-` is recognised too (#1500), but NOT as a continuation marker: a line
+# that opens with a `- ` bullet starts a new list item, and `_is_one_token`
+# refuses to join into it. It is here so the bullet counts toward the line's
+# indent — without it, a list item's ordinary continuation line reads as
+# DEEPER than the bullet line and the directory-listing rule eats a real wrap.
+# ⛔ `(?=[ \t])` is load-bearing: `-rules.md` at the start of a line is the
+# second half of a path broken before its hyphen, not a bullet.
+LINE_PREFIX = re.compile(r"^[ \t]*(?P<marker>#|//|\*|--|-(?=[ \t])|;)?[ \t]*")
+
+# A path breaks where a path has a separator; an English word does not have one.
+_SEPARATORS = frozenset("/-_.")
+
+
+def _is_one_token(line: str, following: str, front: str) -> bool:
+    """Could `front` (the token run ending `line`) and the start of `following`
+    be ONE token that the line break cut in two? (#1500)
+
+    ⛔ The join is mechanical, so without this every line whose last word runs
+    into a filename on the next line is a candidate — and becomes a report the
+    day somebody adds a file with the invented name, in a file they never
+    touched. #1500's instance: `…After the / fix, … carries A's merged` +
+    `_groups.yaml …` read as `merged_groups.yaml` the moment such a testdata
+    file was added. Three shapes are refused here; each has a case in
+    `test_a_break_between_two_things_is_not_a_wrap`.
+
+    ① The front half is a plain word — no `/`, `-`, `_` or `.` anywhere in it.
+       Real wraps break AFTER a separator (`…guide-` / `name.md`,
+       `tests/rulepacks/` / `vm_engine_version`), or mid-name inside a segment
+       that already carries one. `merged`, `root`, `the`, `See` carry none.
+       ⚠️ The cost, not hidden: a bare name cut inside its FIRST segment
+       (`test` / `_wrapped_….py`) is structurally the same as `merged` /
+       `_groups.yaml` and is now silent. Under-detection, the safe direction.
+    ② A directory-tree listing: the front ends in `/` and the next line is
+       indented DEEPER — that is a member of the directory, not the rest of its
+       name. ⚠️ Cost: a hanging-indent continuation after a `/` is silent too.
+    ④ The next line opens a `- ` bullet: a new list item, never a continuation.
+       (This was silent before only because `-` stopped the head run, by
+       accident of the token class; it is now a decision.)
+    """
+    if not _SEPARATORS & set(front):
+        return False                                              # ①
+    here = LINE_PREFIX.match(line)
+    there = LINE_PREFIX.match(following)
+    if there.group("marker") == "-":
+        return False                                              # ④
+    if front.endswith("/") and (len(there.group(0).expandtabs())
+                                > len(here.group(0).expandtabs())):
+        return False                                              # ②
+    return True
 
 # A bare filename counts as a reference only if it is unambiguous, at least this
 # long, and carries a separator. What each bound EXCLUDES is measured over the
@@ -737,6 +798,8 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
         tail = _TOKEN_RUN_TAIL.search(lines[index])
         head = _TOKEN_RUN_HEAD.match(body)
         if not tail or not head:
+            continue
+        if not _is_one_token(lines[index], lines[index + 1], tail.group(0)):
             continue
         rejoined = tail.group(0) + head.group(0)
         for token in sorted(_tokens(rejoined)):
@@ -1149,6 +1212,69 @@ def test_detector_finds_a_synthetic_wrap() -> None:
     assert _wrapped_references(contiguous) == [], (
         "a reference that is NOT split must not be reported — otherwise every "
         "normal citation reds and the fix is to delete the guard")
+
+
+def test_a_break_between_two_things_is_not_a_wrap() -> None:
+    """#1500: the false-red shapes `_is_one_token` refuses, and the real wraps
+    beside each one that it must NOT refuse.
+
+    ⛔ Every MUST-NOT case below is reported by the guard without that
+    function, and every MUST-REPORT case is one a too-eager version of it
+    silences — each pairs with exactly one clause, so deleting a clause, or
+    widening one, turns a named case red. Derived from this module's own path,
+    like every other fixture here.
+    """
+    target = "tests/ops/test_wrapped_path_references.py"
+    assert target in _tracked(), "this module moved; re-point the fixture"
+    directory, base = target.rsplit("/", 1)
+    assert base in _unique_basenames(), (
+        base + " stopped being a repo-unique basename; re-derive the subject")
+    word, rest = base.split("_", 1)
+    assert word.isalnum() and _resolves(word + "_" + rest), (
+        "case ① needs a basename whose first segment is a plain word")
+
+    # ① MUST NOT REPORT: a plain word at the end of a sentence, then a name
+    # starting with a separator. #1500's live shape (`merged` + `_groups.yaml`).
+    sentence = f"# the guard lives in the {word}\n# _{rest} module\n"
+    assert _wrapped_references(sentence) == [], (
+        "a plain word glued to the next line's filename is an invented name, "
+        "not a wrapped reference: " + repr(_wrapped_references(sentence)))
+
+    # ② MUST NOT REPORT: a directory-tree listing — the member is indented
+    # deeper than the directory it sits in.
+    tree = f"# {directory}/\n#     {base}\n"
+    assert _wrapped_references(tree) == [], (
+        "an indented member under `dir/` is a listing, not a wrap: "
+        + repr(_wrapped_references(tree)))
+    # ... while the same break at the SAME indent is a real wrap.
+    same_indent = f"# see {directory}/\n# {base} for the rule\n"
+    assert [t for _, t in _wrapped_references(same_indent)] == [target], (
+        "the listing rule must not eat a wrap whose continuation keeps the "
+        "indent: " + repr(_wrapped_references(same_indent)))
+
+    # ④ MUST NOT REPORT: two sibling `- ` list items, a directory then a file.
+    siblings = f"- {directory}/\n- {base}\n"
+    assert _wrapped_references(siblings) == [], (
+        "a line opening a `- ` bullet is a new list item, not a continuation: "
+        + repr(_wrapped_references(siblings)))
+    # ... while a list item's own continuation line IS one. This is what makes
+    # `-` in LINE_PREFIX load-bearing: without it the bullet line's indent reads
+    # as zero, the continuation as deeper, and rule ② silences a real wrap.
+    in_item = f"- see {directory}/\n  {base} for the rule\n"
+    assert [t for _, t in _wrapped_references(in_item)] == [target], (
+        "a wrap inside a `- ` list item must still be reported: "
+        + repr(_wrapped_references(in_item)))
+
+    # MUST REPORT: a path broken just BEFORE a hyphen. `-rules.md` opening a
+    # line is the second half of a name, not a bullet — the `(?=[ \t])` in
+    # LINE_PREFIX is what keeps the hyphen in the token.
+    other = "docs/internal/dev-rules.md"
+    assert other in _tracked(), f"{other} moved; re-point this fixture"
+    cut = other.index("-")
+    for text in (f"# see {other[:cut]}\n# {other[cut:]} here\n",
+                 f"    see {other[:cut]}\n    {other[cut:]} here\n"):
+        assert [t for _, t in _wrapped_references(text)] == [other], (
+            "a break before a hyphen must still be reported: " + repr(text))
 
 
 def test_a_prefixed_token_is_resolved_through_its_basename() -> None:
