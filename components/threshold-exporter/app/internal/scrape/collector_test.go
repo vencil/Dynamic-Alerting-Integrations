@@ -103,3 +103,40 @@ func TestCollector_ObserveOncePerScrape(t *testing.T) {
 		t.Errorf("Ops.Silences = %+v", r.Ops.Silences)
 	}
 }
+
+// The readings Observe hands over are resolved at Hooks.Now, not the wall
+// clock: served-values' --at moves a silence across its expires with them.
+func TestCollector_ObserveFollowsHooksNow(t *testing.T) {
+	t.Parallel()
+	cfg := &config.ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]config.ScheduledValue{
+			"tenant-a": {"_silent_mode": {Default: "target: warning\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n"}},
+		},
+	}
+	observe := func(at time.Time) Reserved {
+		t.Helper()
+		var got []Reserved
+		c := NewCollectorWithHooks(staticSource{cfg}, Hooks{
+			Now:     func() time.Time { return at },
+			Observe: func(r Reserved) { got = append(got, r) },
+		})
+		reg := prometheus.NewRegistry()
+		Register(reg, c, NewConfigMetrics())
+		if _, err := reg.Gather(); err != nil {
+			t.Fatalf("gather at %s: %v", at, err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("at %s: Observe called %d times, want 1", at, len(got))
+		}
+		return got[0]
+	}
+	before := observe(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+	if len(before.Ops.Silences) != 1 || len(before.Ops.ExpiredSilences) != 0 {
+		t.Errorf("before expires: Silences=%+v Expired=%+v, want one active silence", before.Ops.Silences, before.Ops.ExpiredSilences)
+	}
+	after := observe(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	if len(after.Ops.Silences) != 0 || len(after.Ops.ExpiredSilences) != 1 {
+		t.Errorf("after expires: Silences=%+v Expired=%+v, want one expired silence", after.Ops.Silences, after.Ops.ExpiredSilences)
+	}
+}
