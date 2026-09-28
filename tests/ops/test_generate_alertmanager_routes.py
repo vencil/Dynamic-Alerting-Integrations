@@ -2437,6 +2437,183 @@ class TestDomainPolicyStrictMessages:
 
 
 # ============================================================
+# #2243: domain policy 也套用在 _routing.overrides 產生的子路由
+# ============================================================
+class TestDomainPolicyOverrideSubroutes:
+    """每條會產出 AM receiver 的 override 子路由，受與主路由相同的約束。
+
+    子路由沒宣告的 timing / group_by 在 AM 裡繼承的是 ROOT route（產生器把
+    override 放在 tenant 主路由旁、同層於 route.routes），不是 tenant 主路由，
+    所以檢查只看子路由自己宣告的值，不從主路由回填。
+    """
+
+    _PD = {"type": "pagerduty", "service_key": "k"}
+    _SLACK = {"type": "slack", "api_url": "https://hooks.slack.com/x"}
+
+    @classmethod
+    def _routing(cls, *overrides, **main):
+        rc = {"receiver": cls._PD}
+        rc.update(main)
+        if overrides:
+            rc["overrides"] = list(overrides)
+        return {"tenant-fin": rc}
+
+    @staticmethod
+    def _policy(**constraints):
+        return {"finance": {"tenants": ["tenant-fin"],
+                            "constraints": constraints}}
+
+    def test_forbidden_override_receiver_strict_errors_and_names_it(self):
+        routing = self._routing({"alertname": "MysqlDown",
+                                 "receiver": self._SLACK})
+        policy = self._policy(forbidden_receiver_types=["slack"])
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert msgs == [
+            "  ERROR: domain_policy 'finance', tenant 'tenant-fin' "
+            "override[0] (alertname=MysqlDown): receiver type 'slack' is "
+            "forbidden — fix: domain forbids ['slack']; switch override[0]'s "
+            "receiver.type to a compliant type or amend the domain policy"]
+        # 非 strict：同一違規以 WARN 呈現，不阻擋
+        lenient = check_domain_policies(routing, policy)
+        assert len(lenient) == 1
+        assert lenient[0].lstrip().startswith("WARN:")
+        assert "override[0] (alertname=MysqlDown)" in lenient[0]
+
+    def test_override_receiver_not_in_allowed_types(self):
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD},
+            {"metric_group": "disk", "receiver": self._SLACK})
+        policy = self._policy(allowed_receiver_types=["pagerduty", "email"])
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 1, msgs
+        assert "override[1] (metric_group=disk)" in msgs[0]
+        assert "not in allowed types ['email', 'pagerduty']" in msgs[0]
+
+    def test_override_own_repeat_interval_above_max(self):
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD, "repeat_interval": "4h"},
+            repeat_interval="30m")
+        policy = self._policy(max_repeat_interval="1h")
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 1, msgs
+        assert "override[0] (alertname=A): repeat_interval '4h' exceeds " \
+               "max '1h'" in msgs[0]
+        assert "lower override[0]'s repeat_interval" in msgs[0]
+        assert len(check_domain_policies(routing, policy)) == 1
+
+    def test_override_own_group_wait_below_min(self):
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD, "group_wait": "5s"},
+            group_wait="30s")
+        policy = self._policy(min_group_wait="30s")
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 1, msgs
+        assert "override[0] (alertname=A): group_wait '5s' below minimum" \
+            in msgs[0]
+
+    def test_override_without_timing_is_not_backfilled_from_main(self):
+        """沒帶 timing 的 override 不沿用主路由的值（AM 繼承的是 root）。
+
+        主路由 24h 違規 → 只報主路由一條；override 不因主路由的值被點名。
+        """
+        routing = self._routing({"alertname": "A", "receiver": self._PD},
+                                repeat_interval="24h", group_wait="5s")
+        policy = self._policy(max_repeat_interval="1h", min_group_wait="30s")
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 2, msgs
+        assert not any("override" in m for m in msgs), msgs
+
+    def test_override_group_by_follows_main_route_semantics(self):
+        """enforce_group_by：與主路由同判定——宣告缺 label 或未宣告都算缺。"""
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD,
+             "group_by": ["alertname"]},
+            {"alertname": "B", "receiver": self._PD},
+            group_by=["tenant", "alertname"])
+        policy = self._policy(enforce_group_by=["tenant", "alertname"])
+        msgs = check_domain_policies(routing, policy, strict=True)
+        assert len(msgs) == 2, msgs
+        assert "override[0] (alertname=A): group_by missing required " \
+               "labels: ['tenant']" in msgs[0]
+        assert "override[1] (alertname=B): group_by missing required " \
+               "labels: ['alertname', 'tenant']" in msgs[1]
+
+    def test_compliant_overrides_produce_no_messages(self):
+        routing = self._routing(
+            {"alertname": "A", "receiver": self._PD, "repeat_interval": "30m",
+             "group_wait": "30s", "group_by": ["tenant", "alertname"]},
+            repeat_interval="1h", group_wait="30s",
+            group_by=["tenant", "alertname"])
+        policy = self._policy(
+            allowed_receiver_types=["pagerduty"],
+            forbidden_receiver_types=["slack"],
+            enforce_group_by=["tenant", "alertname"],
+            max_repeat_interval="1h", min_group_wait="30s")
+        assert check_domain_policies(routing, policy, strict=True) == []
+        assert check_domain_policies(routing, policy) == []
+
+    def test_overrides_the_generator_skips_are_not_checked(self):
+        """產生器不產出的 override（缺 receiver、matcher 不合法、主 receiver
+        缺席）不是子路由，不被點名。"""
+        policy = self._policy(forbidden_receiver_types=["slack"],
+                              max_repeat_interval="1h")
+        skipped = [
+            {"alertname": "A", "repeat_interval": "9h"},          # 無 receiver
+            {"alertname": "A", "metric_group": "g",
+             "receiver": self._SLACK},                           # 兩個 matcher
+            {"receiver": self._SLACK},                           # 無 matcher
+            "not-a-mapping",
+        ]
+        routing = self._routing(*skipped)
+        assert check_domain_policies(routing, policy, strict=True) == []
+        no_main = {"tenant-fin": {"overrides": [
+            {"alertname": "A", "receiver": self._SLACK}]}}
+        assert check_domain_policies(no_main, policy, strict=True) == []
+
+    def test_main_route_messages_unchanged_without_overrides(self):
+        """無 overrides 時主路由訊息逐字不變（回歸釘）。"""
+        routing = {"tenant-fin": {"receiver": self._SLACK}}
+        policy = self._policy(forbidden_receiver_types=["slack"])
+        assert check_domain_policies(routing, policy, strict=True) == [
+            "  ERROR: domain_policy 'finance', tenant 'tenant-fin': receiver "
+            "type 'slack' is forbidden — fix: domain forbids ['slack']; "
+            "switch the tenant's receiver.type to a compliant type or amend "
+            "the domain policy"]
+        assert check_domain_policies(routing, policy) == [
+            "  WARN: domain_policy 'finance', tenant 'tenant-fin': receiver "
+            "type 'slack' is forbidden"]
+
+    def test_cli_strict_blocks_override_violation(self):
+        """CLI：override 違規在 --strict 下 exit 1 並點名該 override；
+        非 strict 仍 exit 0。"""
+        import subprocess
+        script = TestStrictValidateCLI._SCRIPT
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d, "_domain_policy.yaml", {"domain_policies": self._policy(
+                forbidden_receiver_types=["slack"])})
+            _wy(d, "tenant-fin.yaml", {"tenants": {"tenant-fin": {
+                "_routing": {
+                    "receiver": self._PD,
+                    "overrides": [{"alertname": "MysqlDown",
+                                   "receiver": self._SLACK}],
+                }}}})
+
+            def run(*flags):
+                return subprocess.run(
+                    [sys.executable, script, "--config-dir", d, "--validate",
+                     *flags],
+                    capture_output=True, text=True, encoding="utf-8",
+                    timeout=60)
+
+            strict = run("--strict")
+            assert strict.returncode == 1, strict.stdout + strict.stderr
+            assert "override[0] (alertname=MysqlDown)" in strict.stderr
+            lenient = run()
+            assert lenient.returncode == 0, lenient.stdout + lenient.stderr
+            assert "override[0] (alertname=MysqlDown)" in lenient.stderr
+
+
+# ============================================================
 # ADR-007 --strict: CLI-level exit-code contract
 # ============================================================
 class TestStrictValidateCLI:
