@@ -27,7 +27,7 @@ import signal
 import stat
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -411,6 +411,11 @@ def render_cr_file(
     # renders as `spec: {}` did before.
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
+    # An unquoted `2024-01-01` is read as a `date`; it rendered to
+    # `2024-01-01.yaml` before this check, so it stays accepted. A
+    # `datetime` does not: its str() is not the text the CR wrote.
+    if isinstance(name, date) and not isinstance(name, datetime):
+        name = name.isoformat()
     if not isinstance(name, str) or not name:
         log.error("%s: metadata.name must be a non-empty string", cr_path)
         return EXIT_CALLER_ERROR

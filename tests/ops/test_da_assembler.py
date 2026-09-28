@@ -255,6 +255,10 @@ class TestRenderCrFile:
                      id="name-int"),
         pytest.param(_K + "metadata: {name: [a]}\n" + _T, _BAD_NAME,
                      id="name-list"),
+        pytest.param(_K + "metadata: {name: 2024-01-01T10:20:30Z}\n" + _T,
+                     _BAD_NAME, id="name-datetime"),
+        pytest.param(_K + "metadata: {name: 2024-01-01 10:20:30}\n" + _T,
+                     _BAD_NAME, id="name-datetime-space"),
         pytest.param(_K + "metadata: {name: ok}\nspec: [x]\n", _BAD_SPEC,
                      id="spec-list"),
         pytest.param(_K + "metadata: {name: ok}\nspec: hello\n", _BAD_SPEC,
@@ -298,6 +302,28 @@ class TestRenderCrFile:
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == 0
         assert (out_dir / "ok.yaml").exists()
+
+    @pytest.mark.parametrize("name, filename", [
+        pytest.param("2024-01-01", "2024-01-01.yaml", id="date"),
+        # PyYAML's date resolver needs two-digit month/day: this one stays str.
+        pytest.param("2024-1-1", "2024-1-1.yaml", id="date-short-is-str"),
+        pytest.param('"2024-01-01"', "2024-01-01.yaml", id="quoted-date"),
+    ])
+    def test_yaml_date_name_renders_as_before(self, name, filename, tmp_path):
+        """#2371：未加引號的日期 name 被 PyYAML 讀成 `date`，維持修前行為。
+
+        修前檔名是 `str(date)`，rc 0；name 檢查不可把它變成 rc 2。帶時間的
+        `datetime` 不在此列：修前寫出 `2024-01-01 10:20:30+00:00.yaml`，
+        檔名已不是 CR 寫的字，歸入 caller error（見上方 name-datetime）。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert [p.name for p in out_dir.iterdir()] == [filename]
 
 
 class TestSignalHandler:
