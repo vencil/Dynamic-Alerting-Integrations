@@ -529,10 +529,11 @@ class DiffBaseMissingError(RuntimeError):
     """
 
 
-def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/main") -> str:
-    """Return the diff base ref, validating it actually exists locally.
+def resolve_diff_base_ref(env_var: str = "LINT_DIFF_BASE",
+                          default: str = "origin/main") -> Tuple[str, str]:
+    """Return ``(ref, commit)``: the base ref and its merge base with HEAD.
 
-    Resolution order:
+    Resolution order for ``ref``:
 
     1. ``$LINT_DIFF_BASE`` env var (explicit override; useful for testing
        a different branch base locally).
@@ -540,10 +541,20 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
        ``pull_request`` events; means "the branch this PR targets").
     3. ``origin/main`` default for local dev not on a PR branch.
 
-    Calls ``git rev-parse --verify`` to confirm the ref resolves; raises
-    ``DiffBaseMissingError`` with a fetch-depth hint if not — never
-    silently falls through to "scan everything", which would defeat the
-    diff-aware purpose per lint-policy.md.
+    ``commit`` is ``git merge-base <ref> HEAD``, and it is what callers diff
+    the working tree against (#2205). Diffing against ``ref`` itself is
+    two-way: on a branch that is BEHIND the base, every file the base changed
+    since the fork shows its old content as "added", so a violation the base
+    already fixed is reported against this branch — and the fix hint sends
+    the contributor to exempt lines they never touched. In CI the checkout
+    is the PR merge commit, whose merge base with the base ref is the base
+    tip, so CI sees the same diff as before.
+
+    Raises ``DiffBaseMissingError`` with a fetch hint when the ref does not
+    resolve, or when it has no merge base with HEAD (a shallow clone cut
+    below the fork point, or unrelated histories) — never silently falls
+    through to "scan everything" or back to the two-way diff, which would
+    defeat the diff-aware purpose per lint-policy.md.
     """
     base = os.environ.get(env_var)
     if not base:
@@ -556,8 +567,8 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
         ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
         capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=10,
     )
+    hint_branch = base.removeprefix("origin/")
     if result.returncode != 0:
-        hint_branch = base.removeprefix("origin/")
         raise DiffBaseMissingError(
             f"git diff base ref '{base}' does not resolve in this repo.\n"
             f"  - In CI: `git fetch --no-tags origin {hint_branch}` before the\n"
@@ -569,7 +580,41 @@ def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/ma
             f"  - Override with $LINT_DIFF_BASE if your base branch differs\n"
             f"  See docs/internal/lint-policy.md §\"GitHub Actions 淺拷貝陷阱\""
         )
-    return base
+    mb = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=10,
+    )
+    commit = mb.stdout.strip()
+    if mb.returncode != 0 or not commit:
+        raise DiffBaseMissingError(
+            f"'{base}' and HEAD have no merge base in this repo, so what this\n"
+            f"branch changed cannot be told apart from what '{base}' changed.\n"
+            f"  - Shallow clone: deepen it, e.g.\n"
+            f"    `git fetch --deepen=1000 origin {hint_branch}` (or fetch-depth: 0 in CI)\n"
+            f"  - Override with $LINT_DIFF_BASE if your base branch differs"
+        )
+    return base, commit
+
+
+def resolve_diff_base_labeled(explicit: str | None = None) -> Tuple[str, str]:
+    """Return ``(commit, label)`` for a lint's ``--diff-base`` handling.
+
+    ``explicit`` (the ``--diff-base`` value) is used as given, as both. Without
+    it the commit is the merge base from ``resolve_diff_base_ref`` and the
+    label keeps the ref's name, so "mode=diff vs ..." still says which branch
+    was compared instead of printing a bare SHA (#2205).
+    """
+    if explicit:
+        return explicit, explicit
+    ref, commit = resolve_diff_base_ref()
+    return commit, f"{ref} (merge base {commit[:12]})"
+
+
+def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/main") -> str:
+    """Return the commit diff-aware lints diff against: the merge base of the
+    base ref and HEAD. See ``resolve_diff_base_ref`` for resolution and
+    failure modes (#2205)."""
+    return resolve_diff_base_ref(env_var, default)[1]
 
 
 class DiffScanError(RuntimeError):

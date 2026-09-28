@@ -77,7 +77,7 @@ from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
     parse_bypass_tag,
-    resolve_diff_base,
+    resolve_diff_base_labeled,
 )
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -303,11 +303,11 @@ def main(argv: list[str] | None = None) -> int:
     base = None
     if not args.full_scan:
         try:
-            base = args.diff_base or resolve_diff_base()
+            base, base_label = resolve_diff_base_labeled(args.diff_base)
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        scan_mode = f"diff vs {base}"
+        scan_mode = f"diff vs {base_label}"
 
     all_findings: list[ChangelogNoTbdFinding] = []
     for path in paths:

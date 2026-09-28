@@ -82,7 +82,7 @@ from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
     parse_bypass_tag,
-    resolve_diff_base,
+    resolve_diff_base_labeled,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -296,11 +296,11 @@ def main() -> int:
         scanner = scan_file_full
     else:
         try:
-            base = args.diff_base or resolve_diff_base()
+            base, base_label = resolve_diff_base_labeled(args.diff_base)
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        scan_mode = f"diff vs {base}"
+        scan_mode = f"diff vs {base_label}"
         scanner = lambda fp: scan_file_diff(fp, base)  # noqa: E731
 
     findings: list[tuple[str, int, str, str]] = []
