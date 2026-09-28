@@ -47,7 +47,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -876,21 +875,32 @@ func (t *tenantFilesOnce) get(absPath string, read func(string) ([]byte, error))
 	return t.doc, nil
 }
 
-// tenantsByFile is tenants' IDs ordered by source file, then ID: the order
-// in which tenantFilesOnce parses each file once. A merge pass's result does
-// not depend on its order (each tenant's merge is independent; the maps it
-// fills are keyed by tenant), which was Go's random map order before.
+// tenantsByFile is tenants' IDs grouped by source file — every tenant of a
+// file next to the others — the order in which tenantFilesOnce parses each
+// file once. Grouped, not sorted: it runs on every reload tick, a no-change
+// tick included, and a sort whose comparator looks up two map entries per
+// comparison cost that tick more than grouping does (bench gate on #2255).
+// Counted then placed into one pre-sized slice, not appended per file: a
+// slice per file grew hundreds of allocations per tick (bench gate on
+// #2261). Neither the file order nor the order within a file is defined; a
+// merge pass's result does not depend on it (each tenant's merge is
+// independent; the maps it fills are keyed by tenant), which was Go's
+// random map order before.
 func tenantsByFile(tenants map[string]string) []string {
-	ids := make([]string, 0, len(tenants))
-	for tid := range tenants {
-		ids = append(ids, tid)
+	next := make(map[string]int) // file → its tenants' count, then next slot
+	for _, file := range tenants {
+		next[file]++
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		if a, b := tenants[ids[i]], tenants[ids[j]]; a != b {
-			return a < b
-		}
-		return ids[i] < ids[j]
-	})
+	start := 0
+	for file, n := range next {
+		next[file] = start
+		start += n
+	}
+	ids := make([]string, len(tenants))
+	for tid, file := range tenants {
+		ids[next[file]] = tid
+		next[file]++
+	}
 	return ids
 }
 
