@@ -316,5 +316,29 @@
     "source_file": "yaml-binary/tenants.yaml",
     "source_hash": "a1f71016aed84237",
     "tenant_id": "tenant-binary"
+  },
+  {
+    "defaults_chain": [
+      "yaml-keys/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_x": {
+        "010": "quoted",
+        "1": "float",
+        "2026-12-31 00:00:00 +0000 UTC": {
+          "from_defaults": 1,
+          "from_tenant": 2
+        },
+        "2026-12-31 10:20:30.5 +0800 +0800": "zoned",
+        "31": "hex",
+        "true": "bool"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "95100ab947c92d8d",
+    "scenario": "yaml-keys",
+    "source_file": "yaml-keys/tenants.yaml",
+    "source_hash": "82c34cb35bb62008",
+    "tenant_id": "tenant-keys"
   }
 ]

@@ -1,0 +1,9 @@
+tenants:
+  tenant-keys:
+    _x:
+      2026-12-31:
+        from_tenant: 2
+      2026-12-31T10:20:30.5+08:00: "zoned"
+      1.0: "float"
+      True: "bool"
+      "010": "quoted"

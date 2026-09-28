@@ -1313,11 +1313,6 @@ class TestYamlTypedScalarParity:
          '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
         ("date-one-digit-fields", "_x:\n  at: 2026-1-2\n", None,
          '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":50}'),
-        ("date-as-key-in-tenant", "_x:\n  2026-12-31: a\n", None,
-         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":"a"},"mysql_connections":50}'),
-        ("date-as-key-in-defaults", "mysql_connections: 60\n",
-         "defaults:\n  _x:\n    2026-12-31: a\n",
-         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":"a"},"mysql_connections":60}'),
     ]
 
     def _python_canonical(self, tmp_path, body, defaults):
@@ -1368,3 +1363,155 @@ class TestYamlTypedScalarParity:
         assert "Traceback" not in res.stderr
         out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
         assert out
+
+
+class TestYamlMappingKeyParity:
+    """#2371: mapping KEYS. Below a tenant id yaml.v3 decodes a mapping with
+    a non-string key into `map[any]any`, and pkg/config spells each key with
+    `fmt.Sprintf("%v", k)` — an unquoted `2026-12-31:` is
+    "2026-12-31 00:00:00 +0000 UTC". A `date` key in a `_defaults.yaml` ended
+    every mode with "keys must be str…"; in a tenant file the key was its
+    source text, so merged_hash differed from the exporter's.
+
+    Go column: pkg/config `CanonicalJSON(ComputeEffectiveConfig(...))` over
+    the same two files, measured with time.Local = UTC (the `+00:00` row
+    depends on it). The same key is tried in the tenant file and in the
+    `_defaults.yaml`; golden row `yaml-keys` re-checks a few against Go on
+    every run."""
+
+    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+
+    # (key as written, the exporter's spelling)
+    ALIGNED = [
+        ("2026-12-31", "2026-12-31 00:00:00 +0000 UTC"),
+        ('"2026-12-31"', "2026-12-31"),
+        ("'2026-12-31'", "2026-12-31"),
+        ("!!str 2026-12-31", "2026-12-31"),
+        ("!!timestamp 2026-12-31", "2026-12-31 00:00:00 +0000 UTC"),
+        ("2026-1-2", "2026-01-02 00:00:00 +0000 UTC"),
+        ("0999-01-02", "0999-01-02 00:00:00 +0000 UTC"),
+        ("2026-13-01", "2026-13-01"),
+        ("2026-02-30", "2026-02-30"),
+        ("2026-12-31T10:20:30Z", "2026-12-31 10:20:30 +0000 UTC"),
+        ("2026-12-31t10:20:30Z", "2026-12-31 10:20:30 +0000 UTC"),
+        ("2026-12-31T10:20:30+00:00", "2026-12-31 10:20:30 +0000 UTC"),
+        ("2026-12-31T10:20:30+08:00", "2026-12-31 10:20:30 +0800 +0800"),
+        ("2026-12-31T10:20:30-05:30", "2026-12-31 10:20:30 -0530 -0530"),
+        ("2026-12-31T10:20:30.5Z", "2026-12-31 10:20:30.5 +0000 UTC"),
+        ("2026-12-31T10:20:30,5Z", "2026-12-31 10:20:30.5 +0000 UTC"),
+        ("2026-12-31T10:20:30.123456789Z", "2026-12-31 10:20:30.123456789 +0000 UTC"),
+        ("2026-12-31 10:20:30", "2026-12-31 10:20:30 +0000 UTC"),
+        ("2026-12-31  10:20:30", "2026-12-31 10:20:30 +0000 UTC"),
+        ("2026-12-31T10:20:30", "2026-12-31T10:20:30"),
+        ("2026-12-31T24:00:00Z", "2026-12-31T24:00:00Z"),
+        ("1", "1"), ("010", "8"), ("0777", "511"), ("08", "8"), ("0888", "888"),
+        ("0x1F", "31"), ("-0x1F", "-31"), ("+0x1F", "31"), ("0x_1F", "31"), ("0x", "0x"),
+        ("0o17", "15"), ("0b101", "5"), ("0b", "0b"), ("1_000", "1000"), ("1__0", "10"),
+        ("+5", "5"), ("-5", "-5"),
+        ("9223372036854775808", "9223372036854775808"),
+        ("18446744073709551615", "18446744073709551615"),
+        ("+18446744073709551615", "1.8446744073709552e+19"),
+        ("18446744073709551616", "1.8446744073709552e+19"),
+        ("-9223372036854775809", "-9.223372036854776e+18"),
+        ("1.5", "1.5"), ("1.0", "1"), ("0.", "0"), (".5", "0.5"), ("+1.5", "1.5"),
+        ("1.5_0", "1.5"), ("-0.0", "-0"), ("0.1", "0.1"),
+        ("1e3", "1000"), ("1.5e3", "1500"), ("1e21", "1e+21"), ("1e400", "1e400"),
+        ("1000000.0", "1e+06"), ("123456.0", "123456"), ("123456789.0", "1.23456789e+08"),
+        ("0.0001", "0.0001"), ("1e-4", "0.0001"), ("0.00001", "1e-05"), ("-1.5e-7", "-1.5e-07"),
+        (".inf", "+Inf"), ("-.Inf", "-Inf"), ("+.INF", "+Inf"), (".nan", "NaN"),
+        ("true", "true"), ("True", "true"), ("TRUE", "true"), ("false", "false"),
+        ("yes", "yes"), ("on", "on"), ("no", "no"), ("off", "off"), ("y", "y"),
+        ("12:30", "12:30"), ("1:30:00", "1:30:00"),
+        ("!!str 010", "010"), ('"010"', "010"), ("!!int 010", "8"), ("!!float 1", "1"),
+        ("abc", "abc"),
+    ]
+
+    # yaml.v3 keeps a null key as "<nil>"; the #2114 key reader drops it. An
+    # explicit `!!str` PyYAML would also have inferred leaves no trace.
+    DIVERGENT = [("~", "<nil>"), ("null", "<nil>"), ("!!str 1e3", "1e3")]
+
+    def _tree(self, tmp_path, key, where):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        if where == "tenant":
+            (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+            (conf_d / "t1.yaml").write_text(f"tenants:\n  t1:\n    _x:\n      {key}: v\n", encoding="utf-8")
+        else:
+            (conf_d / "_defaults.yaml").write_text(f"defaults:\n  _x:\n    {key}: v\n", encoding="utf-8")
+            (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    mysql_connections: 60\n", encoding="utf-8")
+        return conf_d
+
+    @staticmethod
+    def _go_json(go_key, where):
+        return json.dumps({"_x": {go_key: "v"}, "mysql_connections": 50 if where == "tenant" else 60},
+                          sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+    @pytest.mark.parametrize("where", ["tenant", "defaults"])
+    @pytest.mark.parametrize("key,go_key", ALIGNED, ids=[k for k, _ in ALIGNED])
+    def test_key_is_spelled_as_the_exporter_spells_it(self, tmp_path, key, go_key, where):
+        eff = dt.ConfDScanner(self._tree(tmp_path, key, where)).effective_config("t1")
+        go_json = self._go_json(go_key, where)
+        assert dt._canonical_json(eff) == go_json
+        assert dt._canonical_hash(eff) == hashlib.sha256(go_json.encode("utf-8")).hexdigest()[:16]
+
+    @pytest.mark.parametrize("where", ["tenant", "defaults"])
+    @pytest.mark.parametrize(
+        "key,go_key",
+        [pytest.param(k, g, marks=pytest.mark.xfail(
+            strict=True, reason="#2371: the key reader has no trace of what Go keys on"))
+         for k, g in DIVERGENT],
+        ids=[k for k, _ in DIVERGENT])
+    def test_known_key_divergence_from_go(self, tmp_path, key, go_key, where):
+        eff = dt.ConfDScanner(self._tree(tmp_path, key, where)).effective_config("t1")
+        assert dt._canonical_json(eff) == self._go_json(go_key, where)
+
+    def test_a_date_key_merges_across_defaults_and_tenant(self, tmp_path):
+        """One key to Go (both are time.Time), so their bodies deep-merge."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  _x:\n    2026-12-31:\n      a: 1\n", encoding="utf-8")
+        (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    _x:\n      2026-12-31:\n        b: 2\n", encoding="utf-8")
+        eff = dt.ConfDScanner(conf_d).effective_config("t1")
+        assert dt._canonical_json(eff) == '{"_x":{"2026-12-31 00:00:00 +0000 UTC":{"a":1,"b":2}}}'
+
+    @pytest.mark.xfail(strict=True, reason="#2371: `010` and `8` are one Go key, two text keys here")
+    def test_two_spellings_of_one_go_key_merge(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  _x:\n    010:\n      a: 1\n", encoding="utf-8")
+        (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    _x:\n      8:\n        b: 2\n", encoding="utf-8")
+        eff = dt.ConfDScanner(conf_d).effective_config("t1")
+        assert dt._canonical_json(eff) == '{"_x":{"8":{"a":1,"b":2}}}'
+
+    @pytest.mark.parametrize("where", ["tenant", "defaults"])
+    @pytest.mark.parametrize("key", ["2026-12-31", "2026-12-31T10:20:30+08:00", "2026-12-31 10:20:30.5", "010"])
+    @pytest.mark.parametrize("mode", [
+        ["t1"], ["t1", "--show-sources"], ["t1", "--format", "yaml"],
+        ["--all"], ["--all", "--format", "yaml"],
+    ], ids=lambda m: " ".join(m))
+    def test_no_mode_ends_in_a_traceback(self, tmp_path, key, where, mode):
+        conf_d = self._tree(tmp_path, key, where)
+        res = subprocess.run([sys.executable, self.DESCRIBE, *mode, "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        assert "Traceback" not in res.stderr
+        # yaml.safe_load refuses a `!!python/...` tag: no key object leaked out.
+        out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
+        effective = (out["t1"] if "--all" in mode else out)["effective_config"]
+        assert list(effective["_x"]) == [dt._go_plain_key(key)]
+
+    def test_a_surrogate_escape_is_a_file_that_does_not_parse(self, tmp_path):
+        """yaml.v3 refuses `"\\udfff"` (invalid Unicode escape); PyYAML built
+        the str and the hash died in UnicodeEncodeError. Now the tenant file
+        takes the "does not parse" path, as the exporter does not load it."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+        (conf_d / "t1.yaml").write_text('tenants:\n  t1:\n    _x: "\\udfff"\n', encoding="utf-8")
+        (conf_d / "t2.yaml").write_text("tenants:\n  t2: {}\n", encoding="utf-8")
+        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        assert "Traceback" not in res.stderr
+        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
+        assert set(json.loads(res.stdout)) == {"t2"}

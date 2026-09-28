@@ -45,6 +45,9 @@ package main
 //   yaml-binary       — `!!binary` values as their UTF-8 text (#2371); an
 //                       invalid byte cannot be a row (golden.json is JSON
 //                       text), see tests/dx/test_describe_tenant.py
+//   yaml-keys         — non-string mapping keys spelled with `%v` (a date key
+//                       is time.Time.String()); a date key in both files is
+//                       one key, so the bodies merge (#2371)
 //
 // Chain discovery: MergedHash / EffectiveConfig read the defaults chain out of
 // golden.json on purpose (they isolate the merge core). The chain itself is

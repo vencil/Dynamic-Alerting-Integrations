@@ -7,8 +7,8 @@ The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
 reserved-key null deletion, `_routing` null and canonical-JSON escaping rows
-are scenarios 11-13 below, and #2371's YAML date / `!!binary` values are
-14-15; #1550's chain-discovery gap is closed on the Go side
+are scenarios 11-13 below, and #2371's YAML date / `!!binary` values and
+non-string mapping keys are 14-16; #1550's chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
 
@@ -516,6 +516,32 @@ def s_yaml_binary():
 """)
 
 
+# Scenario 16: non-string mapping KEYS below the tenant id (#2371). yaml.v3
+# decodes such a mapping into map[any]any and pkg/config spells each key with
+# `%v`: a date key is "2026-12-31 00:00:00 +0000 UTC" (time.Time.String()),
+# `0x1F` is "31", `1.0` is "1", `True` is "true"; a quoted `"010"` stays text.
+# The date key is written in BOTH files: one key to Go, so the two bodies
+# deep-merge — describe_tenant must merge them too, not emit two keys.
+def s_yaml_keys():
+    d = reset("mixed-mode") / "yaml-keys"
+    write(d / "_defaults.yaml", """defaults:
+  _x:
+    2026-12-31:
+      from_defaults: 1
+    0x1F: "hex"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-keys:
+    _x:
+      2026-12-31:
+        from_tenant: 2
+      2026-12-31T10:20:30.5+08:00: "zoned"
+      1.0: "float"
+      True: "bool"
+      "010": "quoted"
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -535,6 +561,7 @@ SCENARIOS = [
     ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
     ("yaml-date", "tenant-date", s_yaml_date),
     ("yaml-binary", "tenant-binary", s_yaml_binary),
+    ("yaml-keys", "tenant-keys", s_yaml_keys),
 ]
 
 
@@ -586,6 +613,7 @@ def main() -> int:
         "reserved-null-delete": "mixed-mode",
         "yaml-date": "mixed-mode",
         "yaml-binary": "mixed-mode",
+        "yaml-keys": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:
