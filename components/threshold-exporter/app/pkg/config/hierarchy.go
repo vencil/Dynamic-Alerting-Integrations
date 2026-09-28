@@ -331,8 +331,11 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 }
 
 // ============================================================
-// Internals — duplicated with app/config_inheritance.go. When updating one,
-// update the other and the golden fixtures will catch any drift.
+// Internals — the only Go implementation. app/config_inheritance.go just
+// forwards to these (every wrapper is `return config.X(...)`), so there is
+// no second Go copy to keep in step. The drift that can happen is Go vs the
+// Python implementation (describe_tenant.py): app/config_golden_parity_test.go
+// pins both to the same hashes on its fixtures.
 // ============================================================
 
 func computeEffectiveConfigBytes(
