@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-05-13
+updated_at: 2026-09-28
 ---
 # ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
@@ -68,7 +68,7 @@ conf.d/
 - 層次深度 **0-3 層皆合法**（flat = 0 層）
 - 建議命名：`{domain}/{region}/{env}/` — 與 `_metadata` 欄位對齊
 - Scanner 不校驗目錄名 vs `_metadata` 對應（僅產生 warning 級 log）
-- 超過 3 層的子目錄也會被掃描（未來擴展空間），但 `_defaults.yaml` 繼承只認 domain/region/env 三層
+- 超過 3 層的子目錄也會被掃描，`_defaults.yaml` 繼承同樣**沒有深度上限**：從根目錄到租戶所在目錄，每一層的載體都會進繼承鏈（`pkg/config/inheritance_graph.go` 的 `CollectDefaultsChain` 一路往上走到根目錄，不限層數）。⚠️ 2026-09-28 更正（#2326）：這一行原本寫「繼承只認 domain/region/env 三層」，程式碼從來沒有這個限制；三層是命名建議，不是上限
 
 ### 目錄路徑產生 metadata 預設值
 
@@ -131,7 +131,8 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 | threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
 | threshold-exporter **實際吐出的 metric** | ✅ 完整遞迴繼承（#1521 修復；在那之前是平面，見下方補記） |
 | `validate_config.py` | ✅ 已改為遞迴 |
-| 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
+| 路由面：路由生成器（`generate_alertmanager_routes.py`）與 da-guard / tenant-api 的路由層（`pkg/routingpolicy`） | ⚠️ **目前仍是平面**：生成器只從 conf.d 根目錄讀租戶與路由層；da-guard 會遞迴找租戶，但路由層只讀根目錄。**已決定改為階層**（見下方「Amendment 2026-09-28」）；⛔ 實作在後續 PR 落地 |
+| 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
 
 > ⚠️ **補記（2026-08-22 發現 → 2026-08-24 關閉，#1521）**：本表原本只有一列
 > `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter
@@ -159,12 +160,32 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 > `Defaults`：那個 map 沒有子樹 scope，混進去會重新定價全樹每一個沒有自己覆寫
 > 的租戶。
 
-⇒ **路由面尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
-不會被任何元件消費。要用路由就把租戶檔放在 `conf.d/` 頂層。
+⇒ **路由面目前尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
+不會被任何元件消費，生成器也不會為子目錄裡的租戶產出路由。後續實作 PR 合併之前，需要
+路由的租戶檔請放在 `conf.d/` 頂層。
 
 這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
 新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
-`scripts/tools/_lib_confd.py`。
+`scripts/tools/_lib_confd.py`。路由生成器目前仍屬於「平面但出聲」的那一批；下方修訂的
+實作 PR 會把它移出這一批，並一併更新契約測試裡它的條目。
+
+### Amendment 2026-09-28 (#2326)：路由面改為階層（已決定；實作在後續 PR）
+
+owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
+的選項 **P2**）：路由面改跟閾值面走同一套目錄階層，不再只讀根目錄。**本修訂只定語意，
+程式碼尚未改動。** 實作 PR 合併之前，上方的表與上一段描述的才是實際行為。
+
+- **走訪器**：與閾值面共用——Python `_lib_confd.list_config_tree()`、Go
+  `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏目錄、回報目錄 symlink、只有 README
+  的目錄不貢獻任何東西）。路由生成器與 da-guard / tenant-api（`pkg/routingpolicy`）一起改，
+  Python ↔ Go 的 parity 矩陣維持同一個答案。
+- **分層鏈**：租戶繼承鏈上的 `_routing_defaults` → routing profile → 租戶本體的
+  `_routing`。完整語意（頂層逐鍵淺合併、`_routing_enforced` 只認根目錄、profile 與 domain
+  policy 以子樹為範圍、租戶 id 重複）記在負責繼承語意的
+  [ADR-017「Amendment 2026-09-28」](017-defaults-yaml-inheritance-dual-hash.md)，這裡不重複。
+- **阻擋條件**（取代 #2326 第 1 步止血的「子目錄有設定檔就 rc 2」；整棵樹都讀之後，子目錄
+  有檔本身不再是錯誤）：子目錄檔案裡出現 `_routing_enforced` → rc 2；同一個租戶 id 在多個
+  檔案宣告 → rc 2；以及 ADR-017 列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
 
 ## 相關
 
