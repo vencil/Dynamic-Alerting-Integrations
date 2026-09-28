@@ -1057,7 +1057,7 @@ def _pr_shaped_repo(tmp_path, monkeypatch, entry: str, *,
 
     def run(*a):
         return subprocess.run(["git", *a], cwd=repo, check=True,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
     run("init", "-q")
     run("config", "user.email", "t@t")

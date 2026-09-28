@@ -75,7 +75,7 @@ def run(*args, cwd=None):
     """
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(TOOL), *args],
-        capture_output=True, text=True, cwd=cwd, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=120,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -84,7 +84,7 @@ def run_stdout(*args, cwd=None):
     """Same, but returns only stdout — the stream the workflow actually tees."""
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(TOOL), *args],
-        capture_output=True, text=True, cwd=cwd, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=120,
     )
     return proc.returncode, proc.stdout
 

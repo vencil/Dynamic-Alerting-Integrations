@@ -26,7 +26,7 @@ def run_python_snippet(code: str, stdin_data: str = "") -> str:
         [sys.executable, "-c", code],
         input=stdin_data,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=5,
     )
     return result.stdout.strip()

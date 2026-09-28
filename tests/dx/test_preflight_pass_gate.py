@@ -67,7 +67,7 @@ def _init_git(repo: Path) -> str:
                    check=True, env=env)
     return subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True, env=env,
+        check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     ).stdout.strip()
 
 
@@ -112,7 +112,7 @@ def _run_gate(repo: Path, stdin: str, *,
         env.update(env_extra)
     return subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SH_SCRIPT)],
-        cwd=repo, input=stdin, capture_output=True, text=True, env=env,
+        cwd=repo, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
 
 
@@ -282,7 +282,7 @@ def test_gh_missing_falls_back_to_require_marker(tmp_path: Path):
     r = subprocess.run(  # subprocess-timeout: ignore
         ["/usr/bin/bash", str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha),
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
     assert r.returncode == 1
     assert "Push blocked" in r.stderr
@@ -296,7 +296,7 @@ def test_gh_missing_with_marker_still_allows(tmp_path: Path):
     r = subprocess.run(  # subprocess-timeout: ignore
         ["/usr/bin/bash", str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha),
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
     assert r.returncode == 0, f"stderr: {r.stderr}"
 
@@ -390,7 +390,7 @@ def _second_branch(repo: Path, name: str) -> str:
     def g(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(  # subprocess-timeout: ignore
             ["git", "-C", str(repo), *args],
-            check=True, capture_output=True, text=True, env=env,
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
         )
 
     g("checkout", "-q", "-b", name, "main")
@@ -557,7 +557,7 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     assert subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "worktree", "add", "-q", "-b", "sibling",
          str(wt), "main"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).returncode == 0
 
     env = {
@@ -568,18 +568,18 @@ def test_a_marker_written_in_another_worktree_is_visible_here(tmp_path: Path):
     (wt / "b.txt").write_text("work\n")
     for args in (["add", "-A"], ["commit", "-q", "-m", "sibling work"]):
         assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "-C", str(wt), *args], capture_output=True, text=True, env=env,
+            ["git", "-C", str(wt), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
         ).returncode == 0
     sib_sha = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(wt), "rev-parse", "HEAD"],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     ).stdout.strip()
 
     # Preflight run inside that worktree writes to the SHARED dir.
     common = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(wt), "rev-parse", "--path-format=absolute",
          "--git-common-dir"],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     ).stdout.strip()
     assert common, "could not resolve the shared git dir"
     (Path(common) / f".preflight-ok.{sib_sha}").touch()
@@ -642,7 +642,7 @@ def _paste_the_hint(stderr: str, cwd: Path, preflight: str) -> subprocess.Comple
     script = (lines[0].replace("make pr-preflight", preflight)
               + '; r=$?; printf "\\0after\\0%s" "$(pwd -P)"; exit $r')
     return subprocess.run(  # subprocess-timeout: ignore
-        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
+        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -671,7 +671,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
     }
     return subprocess.run(  # subprocess-timeout: ignore
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env,
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
 
 
@@ -770,7 +770,7 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     # would time out for a reason that says nothing about the line.
     proc = subprocess.Popen(["bash", "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
                             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     try:
         deadline = time.monotonic() + 20
         while not started.exists():
@@ -890,7 +890,7 @@ def test_git_missing_refuses_instead_of_allowing_silently(tmp_path: Path):
     r = subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha), capture_output=True,
-        text=True, env={"PATH": str(nogit), "GIT_PREFLIGHT_STRICT": "1"},
+        text=True, encoding="utf-8", errors="replace", env={"PATH": str(nogit), "GIT_PREFLIGHT_STRICT": "1"},
     )
     assert r.returncode == 1, (
         f"the gate allowed a push it could not judge. stderr={r.stderr}"
@@ -912,7 +912,7 @@ def test_a_main_row_does_not_silence_the_other_branches(tmp_path: Path):
     feat_sha = _second_branch(tmp_path, "feat/y")
     main_sha = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "rev-parse", "main"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout.strip()
 
     shim = _make_fake_gh(tmp_path / "bin", state="OPEN")

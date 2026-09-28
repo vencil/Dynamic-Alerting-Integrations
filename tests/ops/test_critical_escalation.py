@@ -95,7 +95,7 @@ def _policy(tenants, value=True):
 def _run(d: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_GAR), "--config-dir", str(d), "--validate",
-         *extra], capture_output=True, text=True, timeout=300)
+         *extra], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 
 
 _NONCOMPLIANT = (
@@ -451,7 +451,7 @@ def _amtool_nonpd_destinations(tmp_path: Path, d: Path, rc: dict) -> set[str]:
     r = subprocess.run(
         [sys.executable, str(_GAR), "--config-dir", str(d),
          "--output-configmap", "-o", str(out)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     am = yaml.safe_load(
         yaml.safe_load(out.read_text(encoding="utf-8"))["data"]["alertmanager.yml"])
@@ -479,7 +479,7 @@ def _amtool_nonpd_destinations(tmp_path: Path, d: Path, rc: dict) -> set[str]:
         t = subprocess.run(
             [_AMTOOL, "config", "routes", "test", f"--config.file={am_yml}",
              *[f"{k}={v}" for k, v in probe.items()]],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert t.returncode in (0, 1) and t.stdout.strip(), t.stderr
         names = t.stdout.strip().split(",")
         if not any(types[n] == "pagerduty_configs" for n in names):

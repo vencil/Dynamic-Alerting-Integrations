@@ -137,7 +137,7 @@ class Run:
         else:
             self.proc = subprocess.Popen(
                 cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, start_new_session=True)
+                text=True, encoding="utf-8", errors="replace", start_new_session=True)
 
     def wait_log(self, marker, timeout=20):
         deadline = time.monotonic() + timeout

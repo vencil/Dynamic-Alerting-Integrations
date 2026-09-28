@@ -71,7 +71,7 @@ def repo(tmp_path, monkeypatch):
     def _git(*args, check=True):
         # subprocess-timeout: ignore — local git on a tiny fixture repo.
         return subprocess.run(
-            ["git", *args], cwd=root, capture_output=True, text=True, check=check
+            ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=check
         )
 
     _git("init", "--quiet", "--initial-branch=main")

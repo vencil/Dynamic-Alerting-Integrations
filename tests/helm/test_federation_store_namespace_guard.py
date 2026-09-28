@@ -83,7 +83,7 @@ def _render(*, store_namespace: str | None) -> list[dict]:
     ]
     if store_namespace is not None:
         cmd += ["--set", f"federation.store.namespace={store_namespace}"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 

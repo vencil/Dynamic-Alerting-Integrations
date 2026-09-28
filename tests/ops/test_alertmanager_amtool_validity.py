@@ -223,7 +223,7 @@ def ensure_am_image():
         return
     try:
         pull = subprocess.run(["docker", "pull", _AM_IMAGE],
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     except (OSError, subprocess.SubprocessError):
         _skip_or_fail_closed(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
     if pull.returncode != 0:
@@ -245,7 +245,7 @@ class TestAmtoolCheckConfig:
             ["docker", "run", "--rm", "--entrypoint", "amtool",
              "-v", f"{etc.as_posix()}:/etc/alertmanager",
              _AM_IMAGE, "check-config", "/etc/alertmanager/alertmanager.yml"],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 
     def test_live_config_is_amtool_valid(self, tmp_path):
         """live conf.d → render → amtool check-config 必須 SUCCESS。"""

@@ -53,7 +53,7 @@ def _helm_template(repo_root: Path, replica_count: int):
     return subprocess.run(
         ["helm", "template", "t", str(repo_root / _CHART),
          "--set", f"replicaCount={replica_count}"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
 
 

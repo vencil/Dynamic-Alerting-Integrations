@@ -147,7 +147,7 @@ def _promtool_ok(fixture_text: str, rules_text: str, tmp: Path, tag: str) -> sub
     (tmp / f"{tag}_pr_rules.yml").write_text(rules_text, encoding="utf-8")
     (tmp / f"{tag}_pr_test.yml").write_text(fixture_text, encoding="utf-8")
     return subprocess.run([_PROMTOOL, "test", "rules", f"{tag}_pr_test.yml"],
-                          cwd=str(tmp), capture_output=True, text=True, timeout=60)
+                          cwd=str(tmp), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 # ===========================================================================

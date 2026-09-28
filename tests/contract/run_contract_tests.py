@@ -388,7 +388,7 @@ def main() -> int:
             env=env,
             stdout=log_fh,
             stderr=subprocess.STDOUT,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         try:

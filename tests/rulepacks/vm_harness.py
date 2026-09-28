@@ -178,7 +178,7 @@ def replay(vmalert_bin: str, rules_text: str, w_start: int, w_end: int, tmp: Pat
         cmd.append(f"-remoteWrite.flushInterval={int(remote_write_flush_interval_s)}s")
     if rules_delay_s is not None:
         cmd.append(f"-replay.rulesDelay={int(rules_delay_s)}s")
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_s)
     assert p.returncode == 0 and "replay succeed" in p.stderr, (
         f"vmalert -replay failed for {tag}:\n{p.stderr[-1500:]}")
 

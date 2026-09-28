@@ -68,7 +68,7 @@ def test_assignment_does_not_depend_on_the_process_hash_seed():
         env = {**os.environ, "PYTHONHASHSEED": seed}
         proc = subprocess.run(
             [sys.executable, "-c", code, str(REPO_ROOT / "tests")],
-            capture_output=True, text=True, env=env, timeout=60, check=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60, check=True,
         )
         outs.add(proc.stdout.strip())
     assert len(outs) == 1
@@ -90,7 +90,7 @@ def _collect(*extra: str) -> set[str]:
         [sys.executable, "-m", "pytest", "--collect-only", "-q",
          "-p", "no:cacheprovider", "-p", "no:xdist",
          str(Path(__file__).relative_to(REPO_ROOT)), *extra],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return {line for line in proc.stdout.splitlines() if "::" in line}
@@ -113,7 +113,7 @@ def test_a_malformed_shard_option_is_a_usage_error(option):
         [sys.executable, "-m", "pytest", "--collect-only", "-q",
          "-p", "no:cacheprovider", "-p", "no:xdist",
          str(Path(__file__).relative_to(REPO_ROOT)), option],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
     )
     # pytest's UsageError exit code; a silent "collected 0" would be rc 5.
     assert proc.returncode == 4, proc.stdout + proc.stderr
@@ -179,6 +179,6 @@ def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, p
         d.mkdir(parents=True)
         (d / ".coverage").write_bytes(b"")
     proc = subprocess.run(["bash", "-c", _combine_script()], cwd=tmp_path,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"found {present}" in proc.stdout, proc.stdout

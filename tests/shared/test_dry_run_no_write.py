@@ -371,7 +371,7 @@ def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
          "-c", "init.defaultBranch=main", *args],
-        cwd=str(cwd), capture_output=True, text=True, timeout=60,
+        cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         env={**os.environ, **_GIT_ENV},
     )
     assert proc.returncode == 0, f"fixture git {args} failed: {proc.stderr}"

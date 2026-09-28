@@ -1527,7 +1527,7 @@ class TestPortalCarrier:
              "process.stdout.write(JSON.stringify(Object.fromEntries("
              "Object.entries(COMMANDS).map(([k, c]) => [k, {flags: c.flags.map(f => f.name),"
              " preview: (c.preview || '').split('\\n')[0]}]))));"],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         assert listing.returncode == 0, listing.stderr
         catalog = json.loads(listing.stdout)
         rows, _ = mod.portal_commands(_PLAYGROUND)

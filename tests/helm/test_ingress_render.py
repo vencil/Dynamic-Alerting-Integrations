@@ -38,7 +38,7 @@ def repo_root() -> Path:
 
 def _helm_template(repo_root: Path, chart: str, *args: str):
     cmd = ["helm", "template", "t", str(repo_root / chart), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 def _docs(stdout: str) -> list[dict]:

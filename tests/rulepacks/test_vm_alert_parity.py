@@ -189,7 +189,7 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
         ],
         cwd=str(xlate_dir),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=120,
     )
     diverged = proc.returncode != 0
@@ -288,7 +288,7 @@ def test_gate_detects_a_known_divergence(tmp_path: Path) -> None:
     proc = subprocess.run(
         [_VMALERT_TOOL, "unittest", "--disableAlertgroupLabel",
          f"--files={fixture.as_posix()}"],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60,
+        cwd=str(tmp_path), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode != 0, (
         "vmalert-tool did NOT flag the known rate() cold-start divergence — the parity "

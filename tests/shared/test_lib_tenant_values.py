@@ -30,7 +30,7 @@ def da_guard(tmp_path_factory) -> str:
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
     proc = subprocess.run(
         [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-        cwd=APP, capture_output=True, text=True, check=False, timeout=600)
+        cwd=APP, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600)
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -245,7 +245,7 @@ def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
                          "    mysql_connections{__x=\"y\"}: 4\n    mysql_connections{q=\"ok\"}: 6\n",
     })
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
-                          capture_output=True, text=True, check=False, timeout=120)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=120)
     assert proc.returncode == 0, proc.stderr
     assert "WARN" not in proc.stderr, proc.stderr
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]

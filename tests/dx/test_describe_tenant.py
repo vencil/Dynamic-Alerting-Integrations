@@ -1054,7 +1054,7 @@ class TestPlatformOverlayCLI:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
 
     def test_default_output_carries_platform_overlay_only_when_supplied(self, tmp_path):
         conf_d = self._tree(tmp_path)
@@ -1133,7 +1133,7 @@ class TestProfileOverlayCLI:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
 
     def test_default_output_carries_profile_overlay_only_when_supplied(self, tmp_path):
         conf_d = self._tree(tmp_path)

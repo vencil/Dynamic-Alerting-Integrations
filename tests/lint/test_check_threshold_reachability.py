@@ -4315,7 +4315,7 @@ def test_the_scan_is_tracked_scope_not_a_filesystem_walk():
     assert tracked, "empty scan — the floor should have caught this first"
     listed = subprocess.run(
         ["git", "-C", str(gate.PROJECT_ROOT), "ls-files"],
-        capture_output=True, text=True, check=True, timeout=60).stdout.split()
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60).stdout.split()
     assert tracked <= set(listed), sorted(tracked - set(listed))
     assert not [r for r in tracked if r.startswith(".claude/")], sorted(tracked)
 

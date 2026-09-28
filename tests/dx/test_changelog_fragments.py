@@ -225,7 +225,7 @@ def test_the_freeze_is_skipped_without_a_section_on_either_side():
 
 def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(TOOL), *args], cwd=REPO_ROOT,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
 
 def test_cli_fragments_exit_codes(tmp_path):

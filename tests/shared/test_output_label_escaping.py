@@ -605,7 +605,7 @@ def test_the_suite_does_not_write_to_the_repo(hostile_dirs, tmp_path):
         # at the top of this file records what happened the last time
         # `Unmeasurable` was stretched — it hid a real hole.
         r = subprocess.run(["git", "status", "--porcelain"], cwd=str(REPO_ROOT),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         assert r.returncode == 0, r.stderr
         return sorted(l for l in r.stdout.splitlines() if l.strip())
 
