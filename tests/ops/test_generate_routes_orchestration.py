@@ -15,7 +15,6 @@ import builtins
 import codecs
 import copy
 import functools
-import hashlib
 import json
 import os
 import posixpath
@@ -2443,7 +2442,7 @@ class TestPlatformAlertSourceContract:
 
 
 # ============================================================
-# runbook_url coverage contract (#1207 續 — the last 2 of the 42)
+# runbook_url coverage contract (#1207; the last two closed by #1360)
 # ============================================================
 # Shape of every runbook_url in the platform tree: an absolute GitHub blob URL
 # on main, optionally with an ASCII #anchor. Asserted (not merely described) by
@@ -2520,49 +2519,12 @@ def _git_tracked_paths() -> frozenset:
         "check', which would silently pass every runbook URL.")
     return tracked
 
-# The platform alerts that still ship WITHOUT a runbook_url.
-#
-# SHRINK-ONLY + EXIT-LOCKED, same discipline as check_scrape_reachability's
-# KNOWN_UNKNOWN_SOURCE / check_orphan_recordings' KNOWN_ORPHANS: a row may only
-# be deleted, never added to paper over a new alert, and a row whose alert HAS
-# since gained a runbook_url is reported as a violation (see
-# test_runbook_ledger_is_exit_locked). A ledger rather than a straight
-# "all 42 must have one" assertion because these two are a KNOWN, deliberately
-# deferred gap — #1207's sweep took the tree from 0/34 to 30/34 and its
-# follow-up to 40/42, recording that these two alone have no existing
-# disposition page to point at and need IR content written first
-# (CHANGELOG.md `## [Unreleased]`; the writing is tracked in #1360, which is
-# also what deletes these two rows). Pointing them at a page that does not
-# answer the page-out is the failure mode the upstream ecosystem keeps hitting
-# (prometheus-community/helm-charts#3893: a shipped runbook_url that 404s), and
-# it is strictly worse than an honest absence: the operator loses the ability
-# to tell "no runbook yet" from "runbook exists, go read it".
-_PLATFORM_ALERTS_WITHOUT_RUNBOOK: dict[str, str] = {
-    "CronJobLastRunFailed":
-        "no existing page documents what to do when a platform CronJob's last "
-        "run failed. The sibling ThresholdGovernanceStale points at "
-        "docs/cli-reference.md#threshold-govern, but this rule is deliberately "
-        "GENERIC over the monitoring namespace (that genericity is the point of "
-        "#1242), so a per-command CLI page is the wrong target the moment "
-        "maintenance-scheduler is the failing CronJob. Triage lives only in the "
-        "alert's own description today.",
-    "MassExporterOutage":
-        "no existing page documents a FLEET-WIDE tenant-exporter outage. "
-        "docs/integration/troubleshooting-checklist.md 1.1.1 is the nearest "
-        "entry but it triages a SINGLE threshold-exporter target (wrong "
-        "workload — this alert reads the tenant-exporters job) and its advice "
-        "is per-target remediation, which is exactly what this alert's "
-        "description tells the operator NOT to do.",
-}
-
-
 class TestPlatformRunbookCoverageContract:
     """Every platform self-monitoring alert must carry a `runbook_url` that
     resolves to a page in THIS repo.
 
     WHY: platform alerts page the platform's own on-call, who has no tenant to
-    hand the incident to. 40 of the 42 already carry one; nothing stopped the
-    41st from shipping without it — the annotation is not part of any schema,
+    hand the incident to. Nothing stopped a new one from shipping without it — the annotation is not part of any schema,
     and no linter asks the question this one asks.
 
     ⚠️ Do NOT restate the two older versions of this note; both were false and
@@ -2582,8 +2544,7 @@ class TestPlatformRunbookCoverageContract:
     pointing at a deleted page passes pint and fails an on-call at 3am.
 
     Two directions:
-      1. coverage — every platform alert except the shrink-only ledger above
-         carries a non-empty runbook_url;
+      1. coverage — every platform alert carries a non-empty runbook_url;
       2. resolvability — every runbook_url that IS present names a file that
          exists on disk, INSIDE this repo and TRACKED BY GIT, and an #anchor (if
          any) names a heading that exists in that file. A dead runbook link is
@@ -2742,8 +2703,6 @@ class TestPlatformRunbookCoverageContract:
             url = (rule.get("annotations") or {}).get("runbook_url")
             if url:
                 continue
-            if name in _PLATFORM_ALERTS_WITHOUT_RUNBOOK:
-                continue
             missing.append((where, name))
         # Non-vacuity first: an empty scan would make the assertion below pass
         # for the wrong reason (this is the hole #1283 fixed elsewhere).
@@ -2757,146 +2716,18 @@ class TestPlatformRunbookCoverageContract:
             f'`runbook_url: "{_RUNBOOK_URL_PREFIX}<path-in-this-repo>"` to the '
             "alert's annotations, pointing at a page that already exists and "
             "actually answers the page-out (an ADR, a docs/internal/*runbook, "
-            "or a troubleshooting entry — see the 40 that do). ⛔ Do NOT invent "
-            "a URL to get past this gate and do NOT add a row to "
-            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK: that ledger is shrink-only and "
-            "exists solely for the two alerts #1207 left pending. If no such "
-            "page exists yet, write the disposition content first. "
+            "or a troubleshooting entry). ⛔ Do NOT invent a URL to get past "
+            "this gate. If no such page exists yet, write the disposition "
+            "content first (docs/integration/troubleshooting-checklist.md §1.7 "
+            "holds entries written for exactly this). "
             f"Offenders: {missing}")
 
-    def test_runbook_ledger_is_subset_locked(self):
-        """Count pin: make "shrink-only" mechanical instead of aspirational.
-
-        The docstring on _PLATFORM_ALERTS_WITHOUT_RUNBOOK says a row may only be
-        DELETED. Nothing enforced that: shipping a 43rd platform alert with no
-        runbook_url and adding one line to the ledger turned the coverage gate
-        green again — the ledger absorbed the regression instead of reporting it,
-        which is exactly the "gate goes quiet as the debt grows" shape the two
-        sibling ledgers in this repo pin against
-        (test_check_scrape_reachability.py `== 9`,
-        test_check_orphan_recordings.py `== 12`).
-
-        `<=`, not `==`, and the choice is load-bearing. Those two siblings assert
-        `len(infos) == len(LEDGER) == N`: one statement doing double duty as a
-        STALENESS check (every row still applies on the live repo) and a size pin.
-        This ledger already has the staleness half — test_runbook_ledger_is_exit_locked
-        below reports a row that gained a runbook_url AND a row naming a deleted
-        alert — so the only missing half is the growth ratchet. Spelling
-        it `== 2` would additionally make the DESIRED direction cost a test edit:
-        #1360 lands the two IR pages, deletes both rows, and would then have to
-        come back here to re-pin. `<=` lets the ledger empty itself and still
-        forces an explicit, reviewed bump to grow, the same shape as
-        test_bilingual_help_contract.py::test_allowlists_shrink_only_count_pin.
-        """
-        # ⛔ Pin the KEY SET, not the row count. A count pin says "no more than
-        # two deferrals", which a SWAP satisfies: give CronJobLastRunFailed a
-        # runbook_url, delete its row, and land a brand-new runbook-less alert
-        # with a row of its own — still two, still green, and the docstring's
-        # "a row may only be DELETED" is quietly false. Subset-of-the-original
-        # is the property actually wanted, and it still lets the ledger empty.
-        _LEDGER_ORIGIN = frozenset({"CronJobLastRunFailed", "MassExporterOutage"})
-
-        # ⛔ The ledger is keyed by ALERTNAME, and an alertname is not unique —
-        # Prometheus happily takes two `- alert: CronJobLastRunFailed` in
-        # different groups. A new runbook-less alert given an existing ledger
-        # key therefore rides in without the ledger changing by one character,
-        # and can do so any number of times: the subset pin stops a SWAP but
-        # not a PIGGYBACK. Duplicate platform alertnames are independently
-        # wrong (they collide in dedup and in every by-name lookup below), so
-        # forbid them outright rather than trying to make the ledger unique.
-        names = [rule["alert"] for where, rule in _iter_repo_alert_rules()
-                 if _is_platform_cm_location(where)]
+    def test_platform_alertnames_are_unique(self):
+        # Prometheus happily takes two `- alert: X` in different groups, but
+        # duplicates collide in dedup and in every by-name lookup in this class.
+        names = [rule["alert"] for _where, rule in self._platform_alerts()]
         dupes = sorted({n for n in names if names.count(n) > 1})
-        assert not dupes, (
-            f"duplicate platform alertname(s) {dupes}. Beyond the dedup and "
-            "by-name-lookup breakage, a duplicate is how a runbook-less alert "
-            "inherits an existing ledger entry's exemption without the ledger "
-            "changing at all.")
-
-        # ⛔ …and the ledger itself must name alerts that EXIST. Nothing audited
-        # _LEDGER_ORIGIN, so a typo sat there silently, and once #1360 empties
-        # the ledger these two names would stay valid forever — a standing
-        # licence to re-add exactly them, unreviewed.
-        # ⛔ A name is a slot, not an identity. Rename the real
-        # CronJobLastRunFailed, give it a runbook, then land a NEW runbook-less
-        # critical under the vacated name: the ledger is untouched, the subset
-        # pin holds, `unknown` is empty (the name still exists), and there are
-        # no duplicates. Pinning each ledger entry to its EXPRESSION makes the
-        # slot non-transferable — taking the name over means matching the rule.
-        # Digest rather than the literal: these exprs are multi-line PromQL and
-        # pasting them here would rot on any reformat while saying nothing a
-        # reader can check at a glance.
-        def _expr_digest(expr: str) -> str:
-            return hashlib.sha256(
-                " ".join(str(expr).split()).encode("utf-8")).hexdigest()[:16]
-
-        _LEDGER_EXPR_DIGESTS = {
-            "CronJobLastRunFailed": "47e14d4f7ecebc93",
-            "MassExporterOutage": "ceb1cee6443d2c81",
-        }
-        by_expr = {r["alert"]: str(r.get("expr", ""))
-                   for _w, r in _iter_repo_alert_rules()
-                   if _is_platform_cm_location(_w)}
-        # ⛔ Every ledger row needs a pin. Without this, deleting one digest
-        # line silently retires that row's protection while the subset lock
-        # keeps reporting green.
-        assert set(_LEDGER_EXPR_DIGESTS) == _LEDGER_ORIGIN, (
-            f"_LEDGER_EXPR_DIGESTS must pin exactly the ledger's original rows; "
-            f"missing {sorted(_LEDGER_ORIGIN - set(_LEDGER_EXPR_DIGESTS))}, "
-            f"extra {sorted(set(_LEDGER_EXPR_DIGESTS) - _LEDGER_ORIGIN)}")
-        for alert, pinned in _LEDGER_EXPR_DIGESTS.items():
-            if alert in by_expr:
-                actual = _expr_digest(by_expr[alert])
-                assert actual == pinned, (
-                    f"{alert} still carries its ledger exemption but its expr "
-                    f"changed (digest {actual}, pinned {pinned}). If the alert "
-                    f"was legitimately rewritten, update the pin deliberately; "
-                    f"if a DIFFERENT alert took the vacated name over, it does "
-                    f"not inherit the exemption.")
-
-        unknown = _LEDGER_ORIGIN - set(names)
-        assert not unknown, (
-            f"_LEDGER_ORIGIN names alert(s) that do not exist in the platform "
-            f"tree: {sorted(unknown)}. Either they were renamed (update the "
-            "ledger) or retired (delete the entry) — a ledger row for a "
-            "non-existent alert is a pre-authorised exemption for whoever "
-            "creates that name next.")
-
-        added = set(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) - _LEDGER_ORIGIN
-        assert not added, (
-            f"_PLATFORM_ALERTS_WITHOUT_RUNBOOK gained {sorted(added)}. This "
-            "ledger is shrink-only: it exists for the two alerts #1207 left "
-            "pending (CronJobLastRunFailed, MassExporterOutage), NOT as an "
-            "escape hatch for a new alert that shipped without a runbook_url — "
-            "and swapping one out for another is exactly the move a count-only "
-            "pin would have waved through. Write the disposition page and point "
-            "the alert at it. If a new deferral is genuinely unavoidable, adding "
-            "it to _LEDGER_ORIGIN above is the deliberate, reviewed cost of that.")
-        # Every row must carry its own written justification — the ledger's value
-        # is the REASON, not the name (a bare name set would let a row be added
-        # with no argument for it).
-        unexplained = sorted(name for name, why
-                             in _PLATFORM_ALERTS_WITHOUT_RUNBOOK.items()
-                             if len(why.strip()) < 80)
-        assert unexplained == [], (
-            "each ledger row must state WHY no existing page answers the "
-            f"page-out: {unexplained}")
-
-    def test_runbook_ledger_is_exit_locked(self):
-        # The ledger must shrink, never linger: a row whose alert has gained a
-        # runbook_url, or that names an alert no longer in the tree, is stale.
-        by_name = {rule["alert"]: (rule.get("annotations") or {}).get("runbook_url")
-                   for _, rule in self._platform_alerts()}
-        gone = sorted(set(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) - set(by_name))
-        assert gone == [], (
-            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK names alert(s) that no longer "
-            f"exist in the platform tree — delete the row(s): {gone}")
-        fixed = sorted(name for name in _PLATFORM_ALERTS_WITHOUT_RUNBOOK
-                       if by_name.get(name))
-        assert fixed == [], (
-            "these alerts now HAVE a runbook_url but are still listed in "
-            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK — delete the row(s) so the "
-            f"coverage gate starts holding them: {fixed}")
+        assert not dupes, f"duplicate platform alertname(s) {dupes}"
 
     def test_runbook_urls_resolve_inside_this_repo(self):
         broken = []
@@ -2990,8 +2821,7 @@ class TestPlatformRunbookCoverageContract:
             if anchor not in slugs:
                 broken.append((where, rule["alert"], url,
                                f"no heading in {rel} slugs to #{anchor}"))
-        assert checked >= _MIN_PLATFORM_ALERTS - len(
-            _PLATFORM_ALERTS_WITHOUT_RUNBOOK), (
+        assert checked >= _MIN_PLATFORM_ALERTS, (
             f"only {checked} runbook_url(s) checked — the scan did not reach "
             "the platform tree, so this gate is vacuous")
         assert broken == [], (

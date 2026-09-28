@@ -305,6 +305,7 @@ data:
                 Self-resolving: a subsequent successful run clears this without
                 anyone deleting the failed Job. Suspending the CronJob also
                 silences it, matching ThresholdGovernanceStale.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
 
           # --- Exporter Health ---
           - alert: ThresholdExporterDown
@@ -1558,6 +1559,7 @@ data:
                 one by one will not address the common cause. Per-tenant detail is in
                 the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
                 tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
 
       # ============================================================
       # Federation Audit (ADR-020 IV-2f, issue #511)

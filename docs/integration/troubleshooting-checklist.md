@@ -1131,6 +1131,95 @@ grep -rE 'ALERTS\{|alert_count' grafana-dashboards/
 - §13 walkthrough Phase 3「SLO 誤判」（真實案例：50→5 critical alert 客戶 SRE 花 3 天改 SLO 邏輯）
 - [Google SRE Workbook §3 — Implementing SLOs](https://sre.google/workbook/implementing-slos/)（SLI 設計原則）
 
+### 1.7 平台自我監控告警
+
+平台告警的 `runbook_url` 指到這一節。標題刻意只用告警名，讓錨點是 ASCII（非 ASCII 錨點由 `test_runbook_anchors_are_ascii` 擋下）。
+
+#### 1.7.1 CronJobLastRunFailed
+
+**Symptom**：`CronJobLastRunFailed`（warning）fire，`owner_name` 是失敗的 CronJob，`namespace` 是 `monitoring`。
+
+這條告警涵蓋 `monitoring` namespace 的**所有** CronJob，不綁特定一支。**不急**：平台 CronJob 沒有需要半夜處理的動作，上班時間處理即可。
+
+**Quick diagnosis**：
+
+```bash
+# 1. 找出失敗的那次 Job（最新的在最下面）
+kubectl get jobs -n monitoring --sort-by=.status.startTime | grep <owner_name>
+# expected：最後一列 COMPLETIONS 0/1，STATUS Failed
+
+# 2. 看失敗 Pod 的 log
+kubectl logs -n monitoring job/<job-name> --tail=50
+# expected：最後幾行就是失敗原因（exec 找不到程式、連線被拒、Python traceback）
+
+# 3. 看 CronJob 用的 image
+kubectl get cronjob <owner_name> -n monitoring \
+    -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[*].image}{"\n"}'
+```
+
+**最常見原因**：**image 裡沒有 Job 要跑的程式**——CronJob 釘的 da-tools 版本比它呼叫的工具還舊，log 會是 `No such file or directory` 或 unknown command。這正是這條告警被加上的原因；CI 端另由 `scripts/tools/lint/check_image_pin_capability.py` 擋。
+
+**Fix**：把 CronJob 的 image 改成含該程式的版本並 apply，再手動觸發一次確認：
+
+```bash
+kubectl create job --from=cronjob/<owner_name> <owner_name>-manual-$(date +%s) -n monitoring
+kubectl get jobs -n monitoring -w
+# expected：新 Job COMPLETIONS 1/1
+```
+
+告警會自己解除：下一次（或手動觸發的那次）成功後，最新一次 Job 就不是 Failed。不需要刪掉失敗的 Job。
+
+**If not this**：
+- (a) log 是連線錯誤 → Job 依賴的服務（tenant-api、Prometheus）從 `monitoring` 連不到；查該服務是否健康、NetworkPolicy 是否放行
+- (b) 這支 CronJob 暫時不該跑 → `kubectl patch cronjob <owner_name> -n monitoring -p '{"spec":{"suspend":true}}'`。suspend 的 CronJob 不會觸發這條告警
+
+**Cross-ref**：`ThresholdGovernanceStale` 只看「上次成功距今多久」，從未成功過的 CronJob 要靠這條告警。
+
+#### 1.7.2 MassExporterOutage
+
+**Symptom**：`MassExporterOutage`（critical）fire，summary 寫「Mass exporter outage (N tenants)」，同時有一批 `TenantExporterAbsent`。
+
+條件是**同時**超過 5 個租戶、且超過 10% 的租戶 exporter 沒有健康的 scrape target。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
+
+```mermaid
+flowchart TD
+    A[租戶 exporter 沒有 up==1] --> B{整個 tenant-exporters job 都不見？}
+    B -- 是 --> J[TenantExporterJobAbsent<br/>本告警不 fire]
+    B -- 否 --> C{超過 5 個且超過 10%？}
+    C -- 是 --> M[MassExporterOutage：<br/>當成一個事件查共因]
+    C -- 否 --> T[個別 TenantExporterAbsent：<br/>逐租戶處理]
+```
+
+⛔ **不要逐租戶修**。一個一個重啟 exporter 不會處理共因，還會拖延。
+
+**Quick diagnosis**：
+
+```bash
+# 1. node 狀態
+kubectl get nodes
+# expected if node 問題：有 NotReady／SchedulingDisabled
+
+# 2. Prometheus 看到的錯誤（先 port-forward Prometheus 到 localhost:9090）
+curl -s localhost:9090/api/v1/targets | jq -r '.data.activeTargets[]
+    | select(.labels.job=="tenant-exporters" and .health!="up") | .lastError' \
+    | sort | uniq -c | sort -rn | head
+# expected：少數幾種錯誤佔大多數（context deadline exceeded / connection refused / no route to host）
+
+# 3. 最近的叢集層變更
+kubectl get events -A --sort-by=.lastTimestamp | tail -30
+# expected：drain、rolling restart、ImagePullBackOff、NetworkPolicy 變更
+```
+
+**最常見原因**：node pool 被 drain 或升級、網路分割、rolling restart 時 image registry 拉不到。
+
+**Fix**：修共因本身——恢復 node、修網路或 NetworkPolicy、修 registry 存取。共因解除後，exporter 通常不需手動處理就會回到 `up==1`，各 `TenantExporterAbsent` 與本告警一起解除。
+
+**If not this**：
+- (a) Prometheus 自己出問題（Pod 重啟中、資源不足）→ 此時其他 scrape job 也會一起異常；先看 Prometheus Pod 狀態
+- (b) 一次退租了很多租戶但 conf.d 的 `_metadata` 沒移除 → 這是殘留組態，不是故障；移除後告警解除
+
+**Cross-ref**：門檻（5 與 10%）的由來與 `unless on() absent(...)` 的用意寫在 `k8s/03-monitoring/configmap-rules-platform.yaml` 本告警上方的註解。
+
 ---
 
 ## Part 2 — Build（CI / conf.d / lint failures，**deploy 之前**）

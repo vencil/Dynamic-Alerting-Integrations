@@ -1133,6 +1133,95 @@ grep -rE 'ALERTS\{|alert_count' grafana-dashboards/
 - §13 walkthrough Phase 3 "SLO misjudgement" (real case: 50→5 critical alerts; customer SRE spends 3 days fixing SLO logic)
 - [Google SRE Workbook §3 — Implementing SLOs](https://sre.google/workbook/implementing-slos/) (SLI design principles)
 
+### 1.7 Platform self-monitoring alerts
+
+Platform alerts point their `runbook_url` at this section. Headings carry only the alert name so the anchor stays ASCII (a non-ASCII anchor is rejected by `test_runbook_anchors_are_ascii`).
+
+#### 1.7.1 CronJobLastRunFailed
+
+**Symptom**: `CronJobLastRunFailed` (warning) fires; `owner_name` is the failing CronJob, `namespace` is `monitoring`.
+
+The alert covers **every** CronJob in the `monitoring` namespace rather than one named job. **Not urgent**: no platform CronJob needs a 3am action; handle it in business hours.
+
+**Quick diagnosis**:
+
+```bash
+# 1. Find the failed Job (newest at the bottom)
+kubectl get jobs -n monitoring --sort-by=.status.startTime | grep <owner_name>
+# expected: last row COMPLETIONS 0/1, STATUS Failed
+
+# 2. Read the failed Pod's log
+kubectl logs -n monitoring job/<job-name> --tail=50
+# expected: the last lines state the failure (exec not found, connection refused, Python traceback)
+
+# 3. Check the image the CronJob runs
+kubectl get cronjob <owner_name> -n monitoring \
+    -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[*].image}{"\n"}'
+```
+
+**Most likely cause**: **the image does not contain the program the Job runs** — the CronJob pins a da-tools version older than the tool it invokes, and the log reads `No such file or directory` or an unknown command. This is the failure that motivated the alert; CI additionally blocks it via `scripts/tools/lint/check_image_pin_capability.py`.
+
+**Fix**: point the CronJob at an image that contains the program, apply, then trigger one run by hand to confirm:
+
+```bash
+kubectl create job --from=cronjob/<owner_name> <owner_name>-manual-$(date +%s) -n monitoring
+kubectl get jobs -n monitoring -w
+# expected: the new Job reaches COMPLETIONS 1/1
+```
+
+The alert resolves on its own: once the next run (or the manual one) succeeds, the newest Job is no longer Failed. There is no need to delete the failed Job.
+
+**If not this**:
+- (a) the log shows a connection error → a service the Job depends on (tenant-api, Prometheus) is unreachable from `monitoring`; check that service's health and whether NetworkPolicy allows the traffic
+- (b) the CronJob should not run for now → `kubectl patch cronjob <owner_name> -n monitoring -p '{"spec":{"suspend":true}}'`. A suspended CronJob does not trigger this alert
+
+**Cross-ref**: `ThresholdGovernanceStale` only measures time since the last success; a CronJob that has never succeeded is caught by this alert instead.
+
+#### 1.7.2 MassExporterOutage
+
+**Symptom**: `MassExporterOutage` (critical) fires with summary "Mass exporter outage (N tenants)", alongside a batch of `TenantExporterAbsent`.
+
+It fires when **both** more than 5 tenants and more than 10% of expected tenant exporters have no healthy scrape target. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
+
+```mermaid
+flowchart TD
+    A[Tenant exporter has no up==1] --> B{Whole tenant-exporters job absent?}
+    B -- yes --> J[TenantExporterJobAbsent<br/>this alert stays silent]
+    B -- no --> C{More than 5 AND more than 10%?}
+    C -- yes --> M[MassExporterOutage:<br/>treat as ONE incident, find the common cause]
+    C -- no --> T[Individual TenantExporterAbsent:<br/>handle per tenant]
+```
+
+⛔ **Do not fix tenants one by one.** Restarting exporters individually does not address the common cause and only delays finding it.
+
+**Quick diagnosis**:
+
+```bash
+# 1. Node state
+kubectl get nodes
+# expected if nodes are the cause: NotReady / SchedulingDisabled
+
+# 2. Errors Prometheus sees (port-forward Prometheus to localhost:9090 first)
+curl -s localhost:9090/api/v1/targets | jq -r '.data.activeTargets[]
+    | select(.labels.job=="tenant-exporters" and .health!="up") | .lastError' \
+    | sort | uniq -c | sort -rn | head
+# expected: a few error kinds dominate (context deadline exceeded / connection refused / no route to host)
+
+# 3. Recent cluster-level changes
+kubectl get events -A --sort-by=.lastTimestamp | tail -30
+# expected: drain, rolling restart, ImagePullBackOff, NetworkPolicy change
+```
+
+**Most likely cause**: a node pool drained or upgraded, a network partition, or the image registry unreachable during a rolling restart.
+
+**Fix**: fix the common cause itself — restore the nodes, fix the network or NetworkPolicy, fix registry access. Once it is gone, exporters usually return to `up==1` without manual action, and the `TenantExporterAbsent` alerts resolve together with this one.
+
+**If not this**:
+- (a) Prometheus itself is unhealthy (Pod restarting, starved of resources) → other scrape jobs degrade at the same time; check the Prometheus Pod first
+- (b) many tenants were offboarded at once but their conf.d `_metadata` was not removed → stale config, not an outage; removing it clears the alert
+
+**Cross-ref**: why the thresholds are 5 and 10%, and what `unless on() absent(...)` is for, are explained in the comment above this alert in `k8s/03-monitoring/configmap-rules-platform.yaml`.
+
 ---
 
 ## Part 2 — Build (CI / conf.d / lint failures, **before deploy**)
