@@ -84,6 +84,7 @@ modules:
       output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
       _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
       exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
+      find_metric_dictionary: "Filesystem probe over two fixed candidate paths (issue 1513); the answer is which file exists on disk, not a value law — example-pinned for both layouts and the none-found case in tests/ops/test_metric_dictionary_inputs.py"
       # #2123 strict YAML reading. The key-identity rule is a closed matrix
       # measured against yaml.v3 (one row per branch of the rule), which a
       # generator would only re-derive from the implementation under test.

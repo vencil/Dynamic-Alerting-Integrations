@@ -257,6 +257,20 @@ class TestFormatChainSummary:
 # check()
 # ---------------------------------------------------------------------------
 
+# issue 1513（本輪決策 N2）：Pod／exporter 兩項只對 db_type=mariadb 的租戶執行，
+# check() 先查 tenant_expected_exporter。這組測試描述 MariaDB 租戶，所以第一個
+# 回應固定是它；非 MariaDB 與沒宣告的情境在 test_diagnose_db_type_and_exit.py。
+_MARIADB = ([{"metric": {"tenant": "db-a", "db_type": "mariadb"}, "value": [0, "1"]}], None)
+
+
+def _mariadb_then(results, err):
+    def fake(_url, query):
+        if query.startswith("tenant_expected_exporter"):
+            return _MARIADB
+        return results, err
+    return fake
+
+
 class TestCheck:
     """Tests for check() — the main health check function.
 
@@ -268,6 +282,7 @@ class TestCheck:
     def test_healthy(self, mock_qp, mock_cmd, capsys):
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),       # mysql_up
             ([], None),                                     # maintenance
             ([], None),                                     # silent
@@ -295,6 +310,7 @@ class TestCheck:
         """
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),       # mysql_up
             ([], None),                                     # maintenance
             ([], None),                                     # silent
@@ -312,7 +328,7 @@ class TestCheck:
     @mock.patch("diagnose.query_prometheus")
     def test_pod_not_found(self, mock_qp, mock_cmd, capsys):
         mock_cmd.side_effect = [None, None]  # pod check fails, log fetch returns None
-        mock_qp.return_value = (None, "query failed")
+        mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
         out = json.loads(capsys.readouterr().out)
@@ -323,7 +339,7 @@ class TestCheck:
     @mock.patch("diagnose.query_prometheus")
     def test_pod_not_running(self, mock_qp, mock_cmd, capsys):
         mock_cmd.side_effect = ["Pending", "ERROR log line\nERROR another"]
-        mock_qp.return_value = (None, "query failed")
+        mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
         out = json.loads(capsys.readouterr().out)
@@ -335,6 +351,7 @@ class TestCheck:
     def test_exporter_down(self, mock_qp, mock_cmd, capsys):
         mock_cmd.side_effect = ["Running", None]  # pod ok, log fetch
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [0, "0"]}], None),  # mysql_up value "0" = DOWN
             ([], None),                       # maintenance
             ([], None),                       # silent
@@ -349,7 +366,7 @@ class TestCheck:
     @mock.patch("diagnose.query_prometheus")
     def test_prometheus_query_fails(self, mock_qp, mock_cmd, capsys):
         mock_cmd.return_value = "Running"
-        mock_qp.return_value = (None, "connection refused")
+        mock_qp.side_effect = _mariadb_then(None, "connection refused")
 
         diagnose.check("db-a", "http://prom:9090")
         out = json.loads(capsys.readouterr().out)
@@ -361,6 +378,7 @@ class TestCheck:
     def test_maintenance_mode(self, mock_qp, mock_cmd, capsys):
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
             ([{"value": [1700000000, "1"]}], None),        # maintenance active
         ]
@@ -375,6 +393,7 @@ class TestCheck:
     def test_silent_mode_all(self, mock_qp, mock_cmd, capsys):
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
             ([], None),                                     # maintenance (empty)
             ([                                              # silent mode: both severities
@@ -392,6 +411,7 @@ class TestCheck:
     def test_silent_mode_single_severity(self, mock_qp, mock_cmd, capsys):
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
             ([], None),                                     # no maintenance
             ([{"metric": {"target_severity": "warning"}, "value": [1700000000, "1"]}], None),
@@ -406,6 +426,7 @@ class TestCheck:
     def test_with_config_dir(self, mock_qp, mock_cmd, capsys, tmp_path):
         mock_cmd.return_value = "Running"
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
             ([], None),                                     # maintenance
             ([], None),                                     # silent
@@ -431,6 +452,7 @@ class TestCheck:
         mock_cmd.side_effect = ["Running", None]
         # First call (mysql_up) raises, caught by except Exception
         mock_qp.side_effect = [
+            _MARIADB,                                       # tenant_expected_exporter
             Exception("connection error"),
             ([], None),  # maintenance
             ([], None),  # silent
@@ -449,7 +471,7 @@ class TestCheck:
             None,  # pod check fails
             "2024-01-01 ERROR crash\n2024-01-01 INFO ok\n2024-01-01 ERROR oom",
         ]
-        mock_qp.return_value = (None, "query failed")
+        mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
         out = json.loads(capsys.readouterr().out)

@@ -4,9 +4,12 @@
 Wave 12 pytest 遷移。
 """
 
+import json
+import sys
 import tempfile
 import urllib.error
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -728,3 +731,38 @@ class TestBuildParser:
         assert args.pushgateway is None
         assert not args.dry_run
         assert not args.json_output
+
+
+# ── Summary 不得把「會建立」說成「已建立」（issue 1513）────────────
+_ALWAYS_IN_WINDOW = """\
+tenants:
+  db-a:
+    _state_maintenance:
+      recurring:
+        - cron: "* * * * *"
+          duration: "2h"
+          reason: "always"
+"""
+
+
+def _run_scheduler(tmp_path, *extra):
+    import subprocess
+    (tmp_path / "db-a.yaml").write_text(_ALWAYS_IN_WINDOW, encoding="utf-8")
+    script = Path(__file__).resolve().parents[2] / "scripts/tools/ops/maintenance_scheduler.py"
+    return subprocess.run(
+        [sys.executable, str(script), "--config-dir", str(tmp_path), "--json-output", *extra],
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+
+@requires_croniter
+@pytest.mark.parametrize("extra,mode,phrase", [
+    ((), "report-only", "1 in window (report only"),
+    (("--alertmanager", "http://127.0.0.1:9", "--dry-run"), "dry-run", "1 would be created (dry run"),
+])
+def test_summary_does_not_claim_silences_were_created(tmp_path, extra, mode, phrase):
+    proc = _run_scheduler(tmp_path, *extra)
+    assert proc.returncode == 0, proc.stderr
+    summary = [line for line in proc.stderr.splitlines() if line.startswith("Summary:")]
+    assert len(summary) == 1 and phrase in summary[0], proc.stderr
+    assert "created," not in summary[0]
+    assert json.loads(proc.stdout)["mode"] == mode

@@ -180,6 +180,71 @@ class TestInjectPrometheusEnv:
         assert result[idx + 1] == "http://prom:9090"
 
 
+class TestInjectSkipsFlagsExclusiveWithPrometheus:
+    """argv 已有與 --prometheus 互斥的旗標時，不注入（issue 1513）。
+
+    `discover-mappings` 的 `--endpoint` 與 `--prometheus` 在同一個互斥群組；
+    照 cli-reference 跑 `da-tools discover-mappings --endpoint <url>` 的讀者只要
+    環境裡設了 PROMETHEUS_URL，注入後 argparse 就以 rc=2 拒收。
+    """
+
+    @pytest.mark.parametrize("argv", [
+        ["--endpoint", "http://exporter:9104/metrics"],
+        ["--endpoint=http://exporter:9104/metrics"],
+        # argparse 接受唯一前綴縮寫，`--end` 就是 `--endpoint`
+        ["--end", "http://exporter:9104/metrics"],
+        ["--endp=http://exporter:9104/metrics"],
+    ])
+    def test_discover_mappings_endpoint_is_left_alone(self, monkeypatch, argv):
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        assert entrypoint.inject_prometheus_env(list(argv), "discover-mappings") == argv
+
+    def test_discover_mappings_without_endpoint_still_gets_the_env(self, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        result = entrypoint.inject_prometheus_env(["--job", "mysql"], "discover-mappings")
+        assert result == ["--job", "mysql", "--prometheus", "http://env:9090"]
+
+    def test_a_prefix_of_another_flag_still_gets_the_env(self, monkeypatch):
+        """`--e` 在 discover-mappings 不唯一（沒有其他 --e 開頭的旗標時才算）；
+        `--json` 不是 --endpoint 的前綴，照常注入。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        result = entrypoint.inject_prometheus_env(["--json"], "discover-mappings")
+        assert result[-2:] == ["--prometheus", "http://env:9090"]
+
+    def test_the_flag_only_counts_for_its_own_command(self, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        result = entrypoint.inject_prometheus_env(["--endpoint", "x"], "diagnose")
+        assert result[-2:] == ["--prometheus", "http://env:9090"]
+
+    def test_every_exclusive_flag_in_the_real_parsers_is_listed(self):
+        """表由真的 parser 推導、比對，不靠人記得同步。
+
+        對每個會被注入的子命令，找出與 `--prometheus` 同一互斥群組的旗標，
+        必須都在 PROMETHEUS_EXCLUSIVE_FLAGS 裡；反過來，表裡的旗標也必須真的
+        與 `--prometheus` 互斥（避免表比 parser 多、默默少注入）。
+        """
+        import importlib.util
+        script = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
+                              "scripts", "tools", "lint", "check_cli_contract.py")
+        spec = importlib.util.spec_from_file_location("check_cli_contract_for_entrypoint",
+                                                      script)
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        captured, _unscoreable, blind, faults = gate.introspect_parsers()
+        assert not faults and not blind, (faults, blind)
+
+        derived = {}
+        for command in sorted(entrypoint.PROMETHEUS_COMMANDS):
+            parser = captured[command].parser
+            for group in parser._mutually_exclusive_groups:
+                opts = {o for a in group._group_actions for o in a.option_strings}
+                if "--prometheus" in opts:
+                    derived.setdefault(command, set()).update(opts - {"--prometheus"})
+        assert derived, "no --prometheus mutex group found; the probe is blind"
+        assert {c: frozenset(v) for c, v in derived.items()} == \
+            dict(entrypoint.PROMETHEUS_EXCLUSIVE_FLAGS)
+
+
 # ── Version Display ────────────────────────────────────────────────
 
 

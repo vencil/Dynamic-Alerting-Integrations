@@ -915,10 +915,10 @@ def judge_parse(args: list[str], command: str, model: ParserModel,
     A flag entrypoint.py injects (``--prometheus``) is supplied only to answer
     "is it missing": the dispatcher appends it when ``$PROMETHEUS_URL`` is
     set, so a line that fails for that reason alone passes on a retry with it
-    and is disclosed. It is NOT added up front — measured on
-    ``discover-mappings --endpoint``, adding it makes argparse refuse the line
-    as mutually exclusive, which is what happens to a reader who has the
-    variable set, not to one who copies the line as written.
+    and is disclosed. It is NOT added up front: on
+    ``discover-mappings --endpoint`` adding it makes argparse refuse the line
+    as mutually exclusive, and the dispatcher does not add it there either
+    (``PROMETHEUS_EXCLUSIVE_FLAGS`` in entrypoint.py, issue 1513).
     """
     parser = model.parser
     if parser is None:

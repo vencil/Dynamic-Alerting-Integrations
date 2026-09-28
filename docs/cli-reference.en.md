@@ -246,7 +246,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 Health check for a single tenant: the MariaDB Pod's status, the exporter's `mysql_up`, the operational mode (maintenance / silent), and, when `--config-dir` is given, the profile and inheritance chain.
 
-**Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod check always looks for an `app=mariadb` Pod in the namespace named after the tenant, and the exporter check always queries `mysql_up{instance="<tenant>"}`, so a non-MariaDB tenant always comes back `status: error` (`Pod not found`).
+**Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod and exporter checks are written for MariaDB. The Pod check looks for an `app=mariadb` Pod in the namespace named after the tenant; it needs `kubectl` and cluster access, and the da-tools image does not ship `kubectl`. The exporter check queries `mysql_up{instance="<tenant>"}`. The tool first reads the tenant's `db_type` from Prometheus via `tenant_expected_exporter{tenant="<tenant>"}`; that series exists only when the tenant declares `_metadata.db_type`. Both checks run only when `db_type` is `mariadb`. For any other database, or a tenant that declares none, they are listed under `skipped` with a reason and `status` is `unchecked`: neither `healthy` nor `error`. A MariaDB tenant that does not declare `db_type` therefore skips them too; declare `mariadb` in `_metadata.db_type` to have them checked. ⚠️ The v2.9.0 image still has the old behavior: it ignores `db_type`, and every non-MariaDB tenant comes back `status: error` (`Pod not found`).
 
 **Syntax**
 
@@ -284,7 +284,11 @@ When something is wrong it lists `issues` and recent error logs:
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`.
+A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
+
+```json
+{"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
+```
 
 **Examples**
 
@@ -307,9 +311,11 @@ docker run --rm --network=host \
 
 | Code | Description |
 |------|-------------|
-| `0` | Check completed: `0` whether `status` is `healthy` or `error`; read the output's `status` to judge health |
-| `1` | Without `kubectl` in the environment the tool ends with a Python traceback (known issue, tracked in issue 1513) |
-| `2` | Parameter error: missing tenant, or `--show-inheritance` without `--config-dir` |
+| `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
+| `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
+| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); or the Pod check needs to run but `kubectl` is not in the environment (one line on stderr, no JSON) |
+
+⚠️ The v2.9.0 image does not have these exit codes yet: it returns `0` whether `status` is `healthy` or `error`, and ends with a Python traceback (rc=1) when `kubectl` is missing. On v2.9.0, read the output's `status`.
 
 ---
 
@@ -342,7 +348,7 @@ None (auto-discover tenants).
 
 **Output**
 
-Unified JSON report with summary of all tenant checks.
+Unified JSON report with summary of all tenant checks. `unchecked` tenants are counted in `unchecked_count`, in neither `healthy_count` nor `issue_count`; `health_score` is computed over checked tenants only and is `null` when every tenant is `unchecked`. The text report lists them in a separate `Unchecked Tenants` section with the skip reason. ⚠️ The v2.9.0 image has no `unchecked` status or field.
 
 **Examples**
 
@@ -671,13 +677,13 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 | `--alertmanager <URL>` | Alertmanager base URL; silences are only created when this is given, otherwise it just reports | (none) |
 | `--pushgateway <URL>` | Push the run's results to a Pushgateway (skipped with `--dry-run`) | (none) |
 | `--dry-run` | Report only, create no silences | false |
-| `--json-output` | Also print one line `{"created", "skipped", "errors"}` on stdout | false |
+| `--json-output` | Also print one line `{"created", "skipped", "errors", "mode"}` on stdout; `mode` is `apply`, `dry-run` or `report-only`, and in the last two `created` is the number it *would* create | false |
 
 Cron expressions are always read as **UTC**; an option to choose a timezone is not implemented yet. For 02:00 Taipei time every day, write `0 18 * * *`. The output is not a silence YAML file either: the tool calls the Alertmanager API directly.
 
 **Output**
 
-stderr lists whether each schedule is currently inside its window, ending with `Summary: N created, N skipped, N errors`. A created silence matches `tenant="<tenant>"` and `alert_source=""`, is created by `da-tools/maintenance-scheduler`, carries the schedule's `reason` as its comment, and ends when the window ends; if the window already has a silence that lasts until the window ends, it counts as skipped; if that silence would expire before the window ends, the tool extends it to the window's end (stderr prints `Extended silence …`) and counts the extension as created. ⚠️ Without `--alertmanager`, or with `--dry-run`, `created` is the number it *would* create; nothing is actually created (known issue, tracked in issue 1513).
+stderr lists whether each schedule is currently inside its window and ends with a summary line: `Summary: N created, N skipped, N errors` when it really creates silences, `Summary: N in window (report only …)` without `--alertmanager`, and `Summary: N would be created (dry run …)` with `--dry-run`. A created silence matches `tenant="<tenant>"` and `alert_source=""`, is created by `da-tools/maintenance-scheduler`, carries the schedule's `reason` as its comment, and ends when the window ends; if the window already has a silence that lasts until the window ends, it counts as skipped; if that silence would expire before the window ends, the tool extends it to the window's end (stderr prints `Extended silence …`) and counts the extension as created. ⚠️ `--dry-run` does not read Alertmanager's existing silences, so ones that already exist are counted as "would be created" too. The v2.9.0 image still prints `N created` in both cases and has no `mode` field, although nothing is created.
 
 **Examples**
 
@@ -2491,9 +2497,9 @@ docker run --rm \
 |--------|-------------|---------|
 | `-o, --output <FILE>` | Also write the JSON report to a file | (none) |
 | `--json` | Print only JSON on stdout | false |
-| `--metric-dictionary <FILE>` | Metric dictionary | the `metric-dictionary.yaml` bundled in the image |
+| `--metric-dictionary <FILE>` | Metric dictionary; exit code 2 if given but the file does not exist | `metric-dictionary.yaml` beside the tool (image) or one level up (`scripts/tools/` in the repo) |
 
-⚠️ When you run `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` directly in the repo, the default dictionary path does not exist; the tool does not warn and falls back to guessing by name prefix (`match_type: "prefix"`, `confidence: 0.7`). Pass `--metric-dictionary scripts/tools/metric-dictionary.yaml`. Running inside the da-tools image is not affected (known issue, tracked in issue 1513).
+If the dictionary is in neither default location, one `WARN` line goes to stderr and matching falls back to name prefix and token overlap (`match_type: "prefix"`, `confidence: 0.7`). ⚠️ The v2.9.0 image is not affected (the dictionary sits beside the tool), but running that version's code directly in the repo as `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` finds no dictionary and does not warn; pass `--metric-dictionary scripts/tools/metric-dictionary.yaml`.
 
 **Output**
 
@@ -2513,8 +2519,8 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success. ⚠️ A `--tenant-config` / `--config-dir` path that does not exist also gives `0`, treated as having no `custom_` metrics (known issue, tracked in issue 1513) |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `0` | Success |
+| `2` | Caller error: bad arguments; a `--config-dir` / `--tenant-config` / `--metric-dictionary` path that does not exist (the message names the flag); the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ The v2.9.0 image returns `0` for an input path that does not exist, treating it as having no `custom_` metrics |
 
 ---
 

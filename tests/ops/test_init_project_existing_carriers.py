@@ -560,8 +560,9 @@ def da_guard(tmp_path_factory):
 
 # `1a-007`：Go 端 extractTenantRaw 對數字形狀的租戶 key 回 "not in file"，
 # ScopeEffective 因此整個 scope 失敗（rc=2），walker 與 exporter 卻照常服務
-# 該租戶——記在 issue 1379。修好時 strict xfail 會轉紅，提醒拿掉這一行。
-_GUARD_XFAIL = {"1a-007": "issue 1379: da-guard resolves tenant key 007 as "
+# 該租戶——issue 1379 量到，移到 issue 2019（walker 平面）追。修好時 strict
+# xfail 會轉紅，提醒拿掉這一行。
+_GUARD_XFAIL = {"1a-007": "issue 2019: da-guard resolves tenant key 007 as "
                           "'not in file' while the walker serves it"}
 
 

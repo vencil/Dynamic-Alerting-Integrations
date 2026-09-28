@@ -414,6 +414,16 @@ PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
                        # honoured neither standalone env nor dispatcher inject).
                        "federation-check", "byo-check", "shadow-verify"}
 
+# Flags that sit in the same mutually exclusive group as `--prometheus`.
+# When argv already carries one, the caller chose the other source, and
+# appending `--prometheus $PROMETHEUS_URL` would make argparse refuse the
+# line (rc=2) — measured on `discover-mappings --endpoint <url>` with
+# PROMETHEUS_URL set (issue 1513). The table is checked against the live
+# parsers by tests/shared/test_entrypoint.py, so a new group cannot be missed.
+PROMETHEUS_EXCLUSIVE_FLAGS = {
+    "discover-mappings": frozenset({"--endpoint"}),
+}
+
 
 # Usage examples shown after the help text. These command lines are
 # language-agnostic (no translatable prose), so they live in a single
@@ -463,7 +473,7 @@ def print_usage():
     sys.exit(0)
 
 
-def inject_prometheus_env(args):
+def inject_prometheus_env(args, command=None):
     """If --prometheus is not in args, inject PROMETHEUS_URL env var as default.
 
     Both argv spellings count as "already specified": the separate-token form
@@ -472,10 +482,23 @@ def inject_prometheus_env(args):
     env value appended — and since argparse keeps the LAST occurrence, the
     injected env URL would then silently override the endpoint the caller
     explicitly asked for. Explicit CLI always wins.
+
+    A flag in ``PROMETHEUS_EXCLUSIVE_FLAGS[command]`` counts the same way: the
+    caller picked the other side of the mutually exclusive group.
     """
-    already_specified = any(
-        a == "--prometheus" or a.startswith("--prometheus=") for a in args
-    )
+    blocking = {"--prometheus"} | PROMETHEUS_EXCLUSIVE_FLAGS.get(command, frozenset())
+
+    def _names_a_blocking_flag(arg):
+        # argparse resolves a unique prefix (`--end` → `--endpoint`), so a
+        # prefix of a blocking flag counts too. `--e`-style one-letter prefixes
+        # are only unique when no other option shares them; the tool's own
+        # parser rejects an ambiguous one, so treating it as blocking cannot
+        # turn a working line into a failing one.
+        name = arg.split("=", 1)[0]
+        return name.startswith("--") and len(name) > 2 and any(
+            flag.startswith(name) for flag in blocking)
+
+    already_specified = any(_names_a_blocking_flag(a) for a in args)
     if not already_specified:
         prom_url = os.environ.get("PROMETHEUS_URL")
         if prom_url:
@@ -574,7 +597,7 @@ def main():
 
     # Inject PROMETHEUS_URL for applicable commands
     if command in PROMETHEUS_COMMANDS:
-        args = inject_prometheus_env(args)
+        args = inject_prometheus_env(args, command)
 
     run_tool(COMMAND_MAP[command], args)
 

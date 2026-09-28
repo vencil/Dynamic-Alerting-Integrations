@@ -566,3 +566,33 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
             monkeypatch,
             ["_defaults.yaml", "_profiles.yml", "db-a.yaml", "db-b.yml"])
         assert got == ["db-a", "db-b"]
+
+
+# ── unchecked 不算健康（issue 1513，本輪決策 N2 的後續）─────────────
+def test_unchecked_tenants_are_counted_apart_from_healthy():
+    results = [
+        {"tenant": "a", "status": "healthy"},
+        {"tenant": "b", "status": "unchecked", "skipped": [{"check": "pod", "reason": "r"}]},
+        {"tenant": "c", "status": "error", "issues": ["Pod not found"]},
+    ]
+    report = bd.generate_report(results, "http://p")
+    assert report["healthy_count"] == 1
+    assert report["unchecked_count"] == 1
+    assert report["issue_count"] == 1
+    # 分母只算有檢查的租戶：1 健康 / 2 有檢查
+    assert report["health_score"] == 0.5
+    assert not any(r.startswith("b:") for r in report["recommendations"])
+
+
+def test_all_unchecked_has_no_score():
+    report = bd.generate_report([{"tenant": "b", "status": "unchecked"}], "http://p")
+    assert report["health_score"] is None and report["healthy_count"] == 0
+
+
+def test_text_report_lists_unchecked_tenants(capsys):
+    report = bd.generate_report([
+        {"tenant": "b", "status": "unchecked",
+         "skipped": [{"check": "pod", "reason": "db_type=postgresql"}]}], "http://p")
+    bd.print_text_report(report)
+    out = capsys.readouterr().out
+    assert "Unchecked" in out and "b" in out and "db_type=postgresql" in out
