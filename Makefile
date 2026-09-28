@@ -769,7 +769,17 @@ docker-build-all: ## 建 7 個 self-built image（local --load，無 push；#474
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar
 	@docker buildx build --load -t local-test:vector-projection-gate helm/vector/projection-gate
 
+# Trivy 版本釘：與 .github/workflows/** 每個 trivy-action 的 `version:`、
+# .devcontainer/install-trivy.sh 同版（tests/shared/test_toolchain_pin_parity.py）。
+# 本地與 CI 的 trivy 不同版，偵測邏輯就不同，pre-tag 看到的 CVE 清單對不上 CI——
+# 所以版本不符時明講，不靜默用 PATH 上剛好有的那支。
+TRIVY_VERSION := 0.74.0
+
 trivy-scan-all: docker-build-all ## Trivy CVE scan 7 個 image（informational：印出但不擋，#448）
+	@have=$$(trivy --version 2>/dev/null | awk '/^Version:/{print $$2; exit}'); \
+	if [ "$$have" != "$(TRIVY_VERSION)" ]; then \
+	  echo "⚠️  本地 trivy $${have:-<未安裝>} ≠ CI 釘的 $(TRIVY_VERSION)：CVE 結果可能與 CI 不同（bash .devcontainer/install-trivy.sh 裝同版）"; \
+	fi
 	@for img in threshold-exporter da-portal tenant-api da-tools recipe-preview federation-audit-sidecar vector-projection-gate; do \
 	  echo "[trivy] local-test:$$img"; \
 	  trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 local-test:$$img || true; \

@@ -1136,6 +1136,13 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
+          # ⚠️ Deliberately NOT the repo-wide Helm pin (v4.x, every other
+          # setup-helm): this job must render with the SAME helm as the
+          # wrapper's Docker fallback, HELM_VERSION in
+          # scripts/tools/lint/check_iac_helm.py (image + digest pinned there).
+          # Bump both together; tests/shared/test_toolchain_pin_parity.py
+          # asserts the equality and docs/internal/toolchain-versions.md
+          # tracks moving this job onto the repo-wide pin.
           version: v3.16.4
 
       # Download-cache for the kube-linter tarball (see the Lint job's
@@ -1342,6 +1349,10 @@ jobs:
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       # Go for the one pytest file that builds threshold-exporter (see
       # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
@@ -1727,6 +1738,10 @@ jobs:
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       # Go for the one pytest file that builds threshold-exporter (see
       # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
@@ -2681,6 +2696,10 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
