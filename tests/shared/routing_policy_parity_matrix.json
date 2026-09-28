@@ -3,7 +3,7 @@
     "Cross-language parity for #2280: how a tenant's routing is RESOLVED from the conf.d root",
     "(_routing_defaults -> the referenced routing profile -> the tenant's _routing, shallow,",
     "then {{tenant}} substitution; _routing_enforced takes no part) and how the ADR-007",
-    "domain policies judge its receiver TYPES. Only the root is read (the Python reader is flat).",
+    "domain policies judge its receiver TYPES. The whole tree is read (#2326, see the last lines).",
     "Readers: tests/shared/test_routing_policy_parity.py (Python SSOT, _grar_parse.load_tenant_tree",
     "strict_policies=True + _grar_validate), components/threshold-exporter/app/pkg/routingpolicy/",
     "parity_test.go (the shared Go package), components/threshold-exporter/app/cmd/da-guard/",
@@ -41,7 +41,18 @@
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
     "platform row, field = the key path in that file. The generator itself reports nothing there,",
     "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
-    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first."
+    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
+    "#2326 (ADR-017 / ADR-007 amendment 2026-09-28) - the routing plane is hierarchical: tenants at any",
+    "depth; _routing_defaults from the root (any root _ file), then from each subdirectory's defaults",
+    "carrier on the tenant's path, shallow per top-level key, deeper wins; profiles visible to their",
+    "own subtree; a subtree _domain_policy applies to its subtree only (entries naming a tenant outside",
+    "it: domain_policy_out_of_scope, not enforced), every level judged additively. Blocking platform",
+    "rows (the generator exits 2 before rendering; da-guard reports them as errors):",
+    "routing_enforced_below_root, routing_defaults_null_below_root (receiver / overrides null below the",
+    "root), routing_profile_duplicate (one name in two files; the first in root-first name order is kept,",
+    "the later file is named), duplicate_tenant (the later file in name order is named; da-guard stops",
+    "earlier, exit 2, on the exporter's DuplicateTenantError). tenant_api is null for these trees:",
+    "tenant-api lists tenant files at the conf.d root only."
   ],
   "trees": [
     {
@@ -1189,6 +1200,381 @@
             "put": "ok",
             "batch": null
           },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-a-routing-defaults-chain-deeper-wins",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n  group_wait: 30s\n  group_by: [tenant, alertname]\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-root, t-team, t-deep, t-other]\n    constraints:\n      forbidden_receiver_types: [slack]\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n",
+        "team/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n",
+        "team/sub/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: pagerduty\n    service_key: k-{{tenant}}\n",
+        "team/sub/t-deep.yaml": "tenants:\n  t-deep:\n    cpu_usage_percent: '85'\n",
+        "other/t-other.yaml": "tenants:\n  t-other:\n    cpu_usage_percent: '85'\n",
+        "docs/README.md": "# a directory holding only a README contributes nothing\n",
+        ".hidden/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-root": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-deep": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-other": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-a-null-receiver-below-root",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n",
+        "team/_defaults.yaml": "_routing_defaults:\n  receiver: null\n  overrides: ~\n  group_wait: null\n",
+        "team/t-own.yaml": "tenants:\n  t-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/o\n"
+      },
+      "platform": [
+        [
+          "routing_defaults_null_below_root",
+          "team/_defaults.yaml",
+          "_routing_defaults.receiver"
+        ],
+        [
+          "routing_defaults_null_below_root",
+          "team/_defaults.yaml",
+          "_routing_defaults.overrides"
+        ]
+      ],
+      "expect": {
+        "t-root": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-b-routing-enforced-below-root",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "team/_defaults.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/a\n",
+        "team/_platform.yaml": "_routing_enforced:\n  enabled: false\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_below_root",
+          "team/_defaults.yaml",
+          "_routing_enforced"
+        ],
+        [
+          "routing_enforced_below_root",
+          "team/_platform.yaml",
+          "_routing_enforced"
+        ]
+      ],
+      "expect": {
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-c-profiles-scoped-to-subtree",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  root-p:\n    receiver:\n      type: email\n      to: [a@example.com]\n      from: b@example.com\n      smarthost: smtp.example.com:587\n",
+        "team/_routing_profiles.yaml": "routing_profiles:\n  team-p:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/z\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n    _routing_profile: team-p\n",
+        "team/t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing_profile: team-p\n",
+        "team/sub/t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n    _routing_profile: team-p\n",
+        "other/t-c.yaml": "tenants:\n  t-c:\n    cpu_usage_percent: '85'\n    _routing_profile: root-p\n",
+        "other/t-d.yaml": "tenants:\n  t-d:\n    cpu_usage_percent: '85'\n    _routing_profile: team-p\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-root": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": "team-p",
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-c": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-d": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": "team-p",
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-c-profile-name-defined-twice",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver:\n      type: email\n      to: [a@example.com]\n      from: b@example.com\n      smarthost: smtp.example.com:587\n  p2:\n    receiver:\n      type: pagerduty\n      service_key: k\n",
+        "_routing_profiles.yml": "routing_profiles:\n  p2:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/y\n",
+        "team/_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/z\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n    _routing_profile: p2\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n    _routing_profile: p1\n"
+      },
+      "platform": [
+        [
+          "routing_profile_duplicate",
+          "_routing_profiles.yml",
+          "routing_profiles.p2"
+        ],
+        [
+          "routing_profile_duplicate",
+          "team/_routing_profiles.yaml",
+          "routing_profiles.p1"
+        ]
+      ],
+      "expect": {
+        "t-root": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-d-subtree-policy-additive-and-scoped",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n",
+        "_domain_policy.yaml": "domain_policies:\n  ops:\n    tenants: [t-root, t-team]\n    constraints:\n      allowed_receiver_types: [email]\n",
+        "team/_domain_policy.yaml": "domain_policies:\n  fin:\n    tenants: [t-team, t-root, t-ghost]\n    constraints:\n      forbidden_receiver_types: [slack]\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "domain_policy_out_of_scope",
+          "team/_domain_policy.yaml",
+          "domain_policies.fin.tenants"
+        ]
+      ],
+      "expect": {
+        "t-root": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "ops",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "ops",
+              "receiver",
+              "allowed_receiver_types"
+            ],
+            [
+              "fin",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-e-duplicate-tenant-id",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "t-x.yaml": "tenants:\n  t-x:\n    cpu_usage_percent: '85'\n",
+        "team/t-x.yaml": "tenants:\n  t-x:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "duplicate_tenant",
+          "team/t-x.yaml",
+          "tenants.t-x"
+        ]
+      ],
+      "expect": {
+        "t-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
           "python_differs": null
         }
       }

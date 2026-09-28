@@ -8,6 +8,7 @@ package routingpolicy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -82,13 +83,19 @@ func loadParityMatrix(t *testing.T) parityMatrix {
 	return m
 }
 
-// tenantBlock is tenants.<id> of the root tenant file that declares it (the
-// matrix trees keep every tenant in its own root file; a root platform
-// file's entry for it is the overlay, Layers.TenantBlock).
-func tenantBlock(t *testing.T, files map[string]string, tenantID string) map[string]any {
+// tenantBlock is tenants.<id> of the tenant file that declares it — the
+// first in name order, at any depth (#2326) — and that file's path; a root
+// platform file's entry for it is the overlay, Layers.TenantBlock.
+func tenantBlock(t *testing.T, files map[string]string, tenantID string) (map[string]any, string) {
 	t.Helper()
-	for name, content := range files {
-		if filepath.Dir(name) != "." || name[0] == '_' {
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		content := files[name]
+		if base := filepath.Base(name); base[0] == '_' || !config.IsScannedPath(name) {
 			continue
 		}
 		var doc struct {
@@ -98,11 +105,11 @@ func tenantBlock(t *testing.T, files map[string]string, tenantID string) map[str
 			t.Fatalf("%s: %v", name, err)
 		}
 		if b, ok := doc.Tenants[tenantID]; ok {
-			return b
+			return b, name
 		}
 	}
-	t.Fatalf("no root file declares tenant %q", tenantID)
-	return nil
+	t.Fatalf("no tenant file declares tenant %q", tenantID)
+	return nil, ""
 }
 
 func gotTargets(resolved map[string]any, ok bool) *[]parityTarget {
@@ -182,18 +189,29 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			}
 			dir := t.TempDir()
 			for rel, content := range tree.Files {
-				if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
+				p := filepath.Join(dir, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
-			layers, pols, probs := LoadRoot(dir, nil)
+			// #2326: the whole tree, as the generator reads it.
+			ltree, pols, probs := LoadTree(dir, nil)
 			// #2291: routing where the generator never reads it — the
-			// defaults carriers come from the exporter's own walk.
+			// defaults carriers come from the exporter's own walk. A tree
+			// with a duplicate tenant id is one the exporter rejects outright
+			// (the table's duplicate_tenant row), so it has no scope to walk.
 			scoped, err := config.ScopeEffective(dir, "")
-			if err != nil {
+			var dup *config.DuplicateTenantError
+			switch {
+			case err == nil:
+				probs = append(probs, UnreadRouting(dir, scoped.DefaultsFiles, nil)...)
+			case errors.As(err, &dup):
+			default:
 				t.Fatal(err)
 			}
-			probs = append(probs, UnreadRouting(dir, scoped.DefaultsFiles, nil)...)
 			gotPlatform := [][3]string{}
 			for _, p := range probs {
 				gotPlatform = append(gotPlatform, [3]string{p.Kind, p.File, p.Field})
@@ -204,7 +222,11 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					// The generator's tenant layer: the tenant file's keys over
 					// the root platform overlay (#2291). tenant-api's PUT body
 					// carries no overlay, so its model below takes the file alone.
-					block := tenantBlock(t, tree.Files, tenantID)
+					block, file := tenantBlock(t, tree.Files, tenantID)
+					if got := ltree.TenantLevel(tenantID); got != LevelOf(file) {
+						t.Errorf("tenant level = %q, want %q (%s)", got, LevelOf(file), file)
+					}
+					layers := ltree.LayersFor(LevelOf(file))
 					resolved, ok, _, unknown := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers)
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)

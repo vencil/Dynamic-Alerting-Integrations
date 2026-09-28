@@ -268,13 +268,15 @@ func checkDomainPolicies(tenantID string, routing map[string]any, policies []rou
 	return out
 }
 
-// platformProblemFindings turns what routingpolicy.LoadRoot could not use
+// platformProblemFindings turns what routingpolicy.LoadTree could not use
 // into findings with an empty TenantID. An unusable domain policy is an
 // error (a policy that is not enforced reads as a clean pass); an unusable
 // routing_profiles block is a warning, as in the Python reader; ignored
 // `_routing_defaults.routes` is an error, as the generator's --validate;
 // routing in a location the generator never reads is an error (#2291): the
-// author meant it to route, and nothing is rendered from it.
+// author meant it to route, and nothing is rendered from it. The #2326
+// routing-tree shapes are errors: the generator refuses the tree on the
+// blocking ones, and an out-of-scope policy entry is not enforced.
 func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 	var out []Finding
 	for _, p := range problems {
@@ -286,6 +288,16 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 			f.Kind = FindingRoutingDefaultsRoutesIgnored
 		case routingpolicy.ProblemRoutingInUnreadLocation:
 			f.Kind = FindingRoutingInUnreadLocation
+		case routingpolicy.ProblemRoutingEnforcedBelowRoot:
+			f.Kind = FindingRoutingEnforcedBelowRoot
+		case routingpolicy.ProblemRoutingDefaultsNullBelowRoot:
+			f.Kind = FindingRoutingDefaultsNullBelowRoot
+		case routingpolicy.ProblemRoutingProfileDuplicate:
+			f.Kind = FindingRoutingProfileDuplicate
+		case routingpolicy.ProblemDuplicateTenant:
+			f.Kind = FindingDuplicateTenant
+		case routingpolicy.ProblemDomainPolicyOutOfScope:
+			f.Kind = FindingDomainPolicyOutOfScope
 		}
 		switch {
 		case p.File != "" && p.Field != "":

@@ -336,9 +336,10 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //   - RoutingByTenant[id]       ← the tenant's RESOLVED routing (#2280):
 //     routingpolicy.Resolve over the tenant file's `_routing` /
 //     `_routing_profile` laid over the root platform overlay's (#2291,
-//     never the effective config) and the conf.d root's
-//     `_routing_defaults` and routing profiles — the same three layers the
-//     route generator merges. `--required-fields _routing.*` is judged
+//     never the effective config) and the `_routing_defaults` and routing
+//     profiles of the conf.d root and of every directory level down to the
+//     tenant's (#2326) — the same three layers the route generator merges.
+//     `--required-fields _routing.*` is judged
 //     against it too.
 //   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
 //   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
@@ -365,7 +366,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	newDefaultsByTenant := make(map[string]map[string]any)
 
 	// #2280: the routing layers and the domain policies come from the conf.d
-	// ROOT (--config-dir, never --scope), as the route generator reads them.
+	// tree at --config-dir (never --scope), as the route generator reads them.
 	// A file the exporter already fails is skipped so it is named once, by
 	// exit 3; what the loader cannot use comes back as PlatformProblems —
 	// findings that skip only the checks depending on them (#1654), never
@@ -375,7 +376,13 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		failed[pf] = true
 	}
 	skip := func(rel string) bool { return failed[rel] }
-	layers, policies, problems := routingpolicy.LoadRoot(f.configDir, skip)
+	// #2326: the WHOLE tree — `_routing_defaults` along each tenant's
+	// directory chain, profiles and domain policies scoped to their subtree
+	// (ADR-017 amendment 2026-09-28), as the route generator reads it. Read
+	// from --config-dir even for a --scope run: the generator refuses the
+	// whole tree on a blocking shape anywhere in it, so a scoped run reports
+	// it too.
+	tree, policies, problems := routingpolicy.LoadTree(f.configDir, skip)
 	// #2291: routing written where the generator never reads it (a defaults
 	// block, a threshold profile) — the exporter merges it into the
 	// effective config, but no route is rendered from it.
@@ -395,6 +402,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// ec.EffectiveConfig, which also carries the defaults chain and the
 		// threshold profile. Routing there is never rendered (UnreadRouting
 		// names it); reading it here judged routes that do not exist.
+		// #2326: the layers of the tenant's own directory level.
+		layers := tree.LayersFor(routingpolicy.LevelOf(ec.SourceFile))
 		block := layers.TenantBlock(ec.TenantID, ec.TenantOverridesRaw)
 		if routingpolicy.IsDisabled(block["_routing"]) {
 			disabled[ec.TenantID] = true

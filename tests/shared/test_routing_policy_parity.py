@@ -14,7 +14,8 @@ What this half measures, per tree written to a tmp dir:
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
-* `platform` — the generator's blocking `_routing_defaults.routes` WARN; the
+* `platform` — the generator's blocking `_routing_defaults.routes` WARN and
+  (#2326) its routing-tree findings, `TenantTree.routing_tree_problems`; the
   Go-only `routing_in_unread_location` rows (#2291) are left out here, their
   `targets` column pins that the generator renders nothing from those bytes.
 
@@ -44,7 +45,11 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 # that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "platform", "expect"}
-PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location"}
+PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
+                  # #2326: the hierarchical routing plane's tree findings.
+                  "routing_enforced_below_root", "routing_defaults_null_below_root",
+                  "routing_profile_duplicate", "duplicate_tenant",
+                  "domain_policy_out_of_scope"}
 # #2291: routing where the generator never reads it. The Go side reports it;
 # the generator says nothing (it does not read those bytes), so this half
 # leaves the kind out of its platform comparison — the tree's `targets`
@@ -178,8 +183,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
 
     # Platform-file findings: the table's rows, and no other.
-    got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
-                          for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m)
+    got_platform = sorted(
+        [["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
+         for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m]
+        # #2326: the tree findings travel as data on the tree, not as text.
+        + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
     want_platform = sorted(r for r in tree["platform"] if r[0] not in GO_ONLY_PLATFORM_KINDS)
     assert got_platform == want_platform, (tree["name"], got_platform)
 

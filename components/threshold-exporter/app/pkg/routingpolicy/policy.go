@@ -20,6 +20,11 @@ type Policy struct {
 	// NO receiver type; AllowedReceiverTypes keeps the strings only, and
 	// would read that list as "unconstrained" on its own.
 	AllowedListNonEmpty bool
+	// Scope is the directory level (root-relative, slash-separated) of the
+	// `_domain_policy.yaml` below the conf.d root this policy came from
+	// (#2326); "" for a root policy. LoadTree has already dropped the
+	// `tenants:` entries outside that subtree, so Tenants is what applies.
+	Scope string
 }
 
 // Violation is one receiver type a domain policy rejects.
