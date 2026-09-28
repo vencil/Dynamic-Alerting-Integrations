@@ -10,7 +10,8 @@ Generates:
   2. CI/CD pipeline (GitHub Actions / GitLab CI / both)
   3. Kustomize overlays for ConfigMap generation
   4. .pre-commit-config.yaml snippet for shift-left validation
-  5. .da-init.yaml marker for upgrade detection
+  5. .da-init.yaml marker — a second `init` in this directory refuses
+     unless given --force
 
 Usage:
   da-tools init                                   # Interactive mode
@@ -3103,7 +3104,6 @@ def _gen_da_init_marker(
     a fresh tree is unchanged.
     """
     marker = {
-        'version': '2.2.0',
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'ci_platform': ci_platform,
         'deploy_method': deploy_method,
@@ -3116,7 +3116,8 @@ def _gen_da_init_marker(
             t: list(files) for t, files in declared_elsewhere.items()}
     header = textwrap.dedent("""\
     # .da-init.yaml — Dynamic Alerting project marker
-    # Do not edit manually. Used by da-tools for upgrade detection.
+    # Do not edit manually. While this file exists, `da-tools init` refuses to
+    # run here again unless given --force (which overwrites every file).
     """)
     return header + yaml.dump(marker, default_flow_style=False, sort_keys=False)
 
