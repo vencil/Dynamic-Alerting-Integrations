@@ -9,13 +9,10 @@ Usage:
     python3 scripts/tools/dx/generate_tenant_metadata.py --dry-run    # 只印出不寫檔
 """
 import argparse
-import errno
 import json
 import os
-import stat
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,10 +43,10 @@ from _lib_confd import (  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load  # noqa: E402  (#2231 duplicate key = YAML error)
 from _lib_io import (  # noqa: E402  (#1789)
-    OutputWriteError,
     exit_on_output_write_error,
     output_write,
 )
+from _atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -469,349 +466,13 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# --output: atomic replace that does not regress the in-place write (#2082)
+# --output: atomic replace (#2082) — the shared helper since #2128
 # ---------------------------------------------------------------------------
-# 0644, the mode this tool has always left on --output (a pre-existing 0600
-# file comes out 0644 too — measured on the in-place writer this replaces).
-_OUTPUT_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
-_NO_SPACE_ERRNOS = frozenset(
-    e for e in (errno.ENOSPC, getattr(errno, "EDQUOT", None)) if e is not None
-)
-# fsync errnos that mean "this filesystem does not do fsync", not "the bytes
-# did not land". ENOSPC / EIO from fsync are NOT here: with delayed
-# allocation that is where a full disk shows up, and replacing the good file
-# with that tmp would be the exact damage this function exists to prevent.
-_FSYNC_UNSUPPORTED_ERRNOS = frozenset(
-    e for e in (errno.EINVAL, getattr(errno, "ENOTSUP", None),
-                getattr(errno, "EOPNOTSUPP", None)) if e is not None
-)
-# mkstemp's prefix embeds the target name; cap it (in UTF-8 BYTES) so a
-# target name near NAME_MAX cannot turn a write that works in place into
-# ENAMETOOLONG. (If it still happens, the mkstemp fallback catches it.)
-_TMP_PREFIX_NAME_CAP = 64
-# os.replace errnos meaning "this name cannot be renamed over", where writing
-# through it may still work — so the answer is the in-place write, not rc 2:
-# EBUSY — the target is a mount point (docker `-v file:file`, k8s subPath);
-# EXDEV — the same, seen through some bind setups; EPERM / EACCES — rename
-# refused by policy rather than by file mode (an LSM such as SELinux /
-# AppArmor, an append-only or immutable attribute). ⚠️ Not the sticky-/tmp
-# case: measured, that never reaches the rename (a non-root run falls back
-# at the fchown first, root has CAP_FOWNER).
-_REPLACE_REFUSED_ERRNOS = frozenset({errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES})
-# listxattr / getxattr errnos that mean "this filesystem has no xattrs": that
-# side reads as {}. Any OTHER failure is "cannot compare" ⇒ in place.
-_XATTR_UNSUPPORTED_ERRNOS = frozenset(
-    e for e in (getattr(errno, "ENOTSUP", None), getattr(errno, "EOPNOTSUPP", None))
-    if e is not None
-)
-# Kernel-maintained xattrs left out of the old-vs-new comparison. IMA's
-# ``security.ima`` is a hash of the CONTENT and EVM's ``security.evm`` an HMAC
-# over inode / uid / gid / mode: they differ on ANY new file, so comparing them
-# would send every write in place on an IMA/EVM host and cost #2082 its
-# protection — yet they are not "lost": the kernel computes them afresh for
-# the replacement. Exactly these two; every other security.* is compared.
-_KERNEL_MAINTAINED_XATTRS = frozenset({"security.ima", "security.evm"})
-
-
-class OutputNoSpaceError(OutputWriteError):
-    """``OutputWriteError`` for a full / over-quota filesystem (#2082).
-
-    The shared message ends in "check the value given to --output", which
-    for ENOSPC sends the operator to the one thing that is right. Same class
-    family (so ``exit_on_output_write_error`` still turns it into rc 2 with no
-    traceback), different hint — and it says whether the previous file
-    survived, because on the atomic path it did and on the in-place
-    fallbacks it may not have.
-    """
-
-    def __init__(self, path: Any, cause: OSError, *, flag: str | None,
-                 previous_kept: bool) -> None:
-        super().__init__(path, cause, flag=flag)
-        self.previous_kept = previous_kept
-
-    def __str__(self) -> str:
-        detail = self.strerror or str(self.cause)
-        if self.errno is not None:
-            detail = f"{detail} (errno {self.errno})"
-        state = ("the previous file is unchanged" if self.previous_kept
-                 else "the file may now be incomplete")
-        return (f"cannot {self.action} {self.path}: {detail} — the filesystem "
-                f"holding it is full or over quota; free space and re-run "
-                f"({state})")
-
-
-def _output_error(out: Path, exc: OSError, *, previous_kept: bool) -> OutputWriteError:
-    """The #1789 exception for a failure while producing *out*, named by *out*.
-
-    Named by the ``--output`` value, never by the private tmp file or the
-    symlink's resolved target: those are paths the operator did not type.
-    """
-    if getattr(exc, "errno", None) in _NO_SPACE_ERRNOS:
-        return OutputNoSpaceError(out, exc, flag="--output", previous_kept=previous_kept)
-    return OutputWriteError(out, exc, flag="--output")
-
-
-def _warn_not_atomic(out: Path, why: str) -> None:
-    print(
-        f"WARN: {safe_label(str(out))}: {why}; writing it in place instead "
-        f"of atomically — an interrupted run can leave it truncated",
-        file=sys.stderr,
-    )
-
-
-def _write_in_place(out: Path, content: str, *, set_mode: bool) -> None:
-    """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks."""
-    try:
-        out.write_text(content, encoding="utf-8", newline="\n")
-        if set_mode:
-            os.chmod(out, _OUTPUT_MODE)
-    except OSError as exc:
-        raise _output_error(out, exc, previous_kept=False) from exc
-
-
-def _xattrs(ref: str | int) -> dict[str, bytes]:
-    """Every extended attribute of *ref* (a path or an fd), as ``{name: value}``.
-
-    A filesystem without xattr support reads as ``{}``; a name that vanished
-    between list and get (ENODATA) is skipped, and so is
-    ``_KERNEL_MAINTAINED_XATTRS``. Any other ``OSError`` is raised.
-    """
-    try:
-        names = os.listxattr(ref)
-    except OSError as exc:
-        if exc.errno in _XATTR_UNSUPPORTED_ERRNOS:
-            return {}
-        raise
-    found: dict[str, bytes] = {}
-    for name in names:
-        if name in _KERNEL_MAINTAINED_XATTRS:
-            continue
-        try:
-            found[name] = os.getxattr(ref, name)
-        except OSError as exc:
-            if exc.errno in _XATTR_UNSUPPORTED_ERRNOS:
-                return {}
-            if exc.errno == getattr(errno, "ENODATA", None):
-                continue
-            raise
-    return found
-
-
-def _xattr_mismatch(target: Path, fd: int) -> str | None:
-    """The WARN text when the tmp *fd* would not reproduce *target*'s xattrs.
-
-    A replace makes a NEW inode, and POSIX ACLs (``system.posix_acl_*``),
-    the SELinux label (``security.selinux``) and ``user.*`` are all xattrs:
-    measured, a ``user.*`` xattr is gone after a replace and kept by the
-    in-place write. So the tmp's xattrs — whatever the directory gave it
-    (default ACL, SELinux default context) — are compared with the target's,
-    and only a difference sends the write in place. On an SELinux host both
-    usually get the same ``security.selinux`` ⇒ atomic stays. IMA / EVM
-    values are not compared (``_KERNEL_MAINTAINED_XATTRS``).
-    Not copied: setting ``security.*`` / ``trusted.*`` needs privileges.
-
-    ⚠️ Only what the RUNNING user can list is compared. Without
-    CAP_SYS_ADMIN, ``listxattr`` omits ``trusted.*`` on BOTH sides, so they
-    compare equal and a replace silently drops a root-set ``trusted.*``
-    (measured as uid 65534).
-
-    ⚠️ Linux only: without ``os.listxattr`` (macOS, the BSDs, Windows)
-    nothing is compared and a replace does not keep xattrs (``com.apple.*``
-    and the like) — the pre-comparison behaviour of #2082.
-    """
-    if not hasattr(os, "listxattr"):
-        return None
-    try:
-        old, new = _xattrs(str(target)), _xattrs(fd)
-    except OSError as exc:
-        return (f"its extended attributes cannot be compared (errno {exc.errno}) "
-                f"and a replacement might not keep them")
-    if old == new:
-        return None
-    differ = sorted(n for n in old.keys() | new.keys() if old.get(n) != new.get(n))
-    return ("it carries extended attributes (ACLs / security labels) that a "
-            f"replacement would not keep: {', '.join(differ)}")
-
-
-def atomic_replace_output(out: Path, content: str) -> None:
-    """Write *content* to ``--output`` so an interrupted run keeps the old file.
-
-    #2082: the in-place ``write_text`` truncated first, so ENOSPC / a kill /
-    a FUSE drop mid-write left half a JSON document where the last good one
-    was. When the file is *eligible* (below) this writes a private tmp file
-    beside the REAL target, fsyncs it and ``os.replace``-s it over the
-    target: a reader sees the old bytes or the new ones, never a prefix.
-
-    **The rule**: wherever the in-place write succeeded or refused, this ends
-    the same way. When atomic is not possible it falls back to the in-place
-    write — with a WARN when that silently costs atomicity on an existing
-    file — and never adds an rc 2 of its own.
-
-    **Eligible for atomic** = no file yet, or a regular file with ONE link
-    that we may write (``os.access(out, W_OK)``). Everything else goes in
-    place, as before:
-
-    * a non-regular file (``/proc/self/fd/1`` → pipe / tty, a FIFO, a
-      directory) — nothing to replace; no chmod on what we did not create;
-      a directory still ends in rc 2;
-    * a hard-linked file — a replace would detach this name from the other
-      links without a word; WARN and write in place so every name updates;
-    * a read-only file — it is refused with EACCES (rc 2) as before, instead
-      of being replaced through a writable directory.
-
-    ⛔ Not the shared ``_atomic_write.atomic_write_text``, measured to
-    regress this tool three ways: the target here is ``os.path.realpath``
-    (a symlink stays a symlink, its target is replaced — across filesystems
-    too); the tmp comes from ``mkstemp`` (a user's ``<out>.tmp`` is never
-    touched); and an unwritable directory falls back instead of failing.
-    What makes :func:`_try_atomic` give up is listed there.
-
-    ⚠️ A replace makes a NEW inode: extended attributes, POSIX ACLs and the
-    SELinux label of the old file are not carried over — the new inode gets
-    the directory's defaults. :func:`_try_atomic` compares the two sets and
-    gives up where they differ. Mode and owner are carried.
-
-    Every ``OSError`` leaves as :class:`OutputWriteError` (or
-    :class:`OutputNoSpaceError`) naming *out*, so ``main``'s
-    ``exit_on_output_write_error`` ends it at rc 2 with no traceback.
-    """
-    try:
-        st = os.stat(out)  # follows symlinks, /proc magic links included
-    except FileNotFoundError:
-        st = None
-    except OSError as exc:
-        raise _output_error(out, exc, previous_kept=True) from exc
-
-    regular = st is None or stat.S_ISREG(st.st_mode)
-    eligible = st is None or (
-        regular and st.st_nlink == 1 and os.access(out, os.W_OK)
-    )
-    if eligible:
-        done, why = _try_atomic(out, content, st)
-        if done:
-            return
-        # No file yet ⇒ nothing to truncate, and the in-place write reports
-        # the real failure itself: a WARN would only be noise ahead of it.
-        if why is not None and st is not None:
-            _warn_not_atomic(out, why)
-    elif regular and st.st_nlink > 1:
-        _warn_not_atomic(
-            out,
-            f"it has {st.st_nlink} hard links and replacing it would detach "
-            f"this name from the others",
-        )
-    _write_in_place(out, content, set_mode=regular)
-
-
-def _try_atomic(out: Path, content: str,
-                st: os.stat_result | None) -> tuple[bool, str | None]:
-    """Replace *out* atomically: ``(True, None)``, or ``(False, why)`` to fall back.
-
-    ``why`` is the WARN text, or ``None`` when no WARN is due. On a
-    ``False`` return nothing has changed on disk — the tmp is gone. It gives
-    up (``False``) exactly where the in-place write would still have
-    produced the old result:
-
-    * ``mkstemp`` fails for ANY reason (EACCES, EROFS, ENOSPC for inodes,
-      ENAMETOOLONG, …): the directory cannot take a new file but the
-      existing one may still be writable — the in-place write either
-      succeeds as it always did or reports the real error;
-    * the tmp cannot be handed back to the file's OWNER (``fchown``, any
-      ``OSError`` — EPERM for a non-root run, EINVAL for an unmapped id in a
-      rootless / userns container). No WARN: for a non-root run the in-place
-      write then fails its own chmod (rc 2), exactly as before, and a WARN
-      ahead of that ERROR is noise. Only the GROUP not being settable while
-      the owner matches is not a reason: the owner can still rewrite the
-      file, so the replace goes ahead (the group becomes ours);
-    * ``os.replace`` refused with one of ``_REPLACE_REFUSED_ERRNOS``.
-
-    * the tmp's extended attributes differ from the target's
-      (:func:`_xattr_mismatch`) — a ``user.*`` xattr, a named ACL, a custom
-      SELinux label the directory defaults would not reproduce — or cannot
-      be compared (any errno but ENOTSUP / ENODATA). WARN, in place, where
-      they survive. Linux only, and only the namespaces the running user can
-      list (a non-root run cannot see ``trusted.*``) — see there. Compared AFTER ``fchown`` / ``fchmod``: a ``chmod`` of a
-      file whose access ACL was inherited from a default ACL rewrites the
-      mask entry inside ``system.posix_acl_access``, and the in-place writer
-      chmods too, so this is the state a replace would really leave.
-
-    A real write failure (write / fsync: ENOSPC, EIO, …) is NOT a fallback:
-    the tmp is removed, the target is untouched, and it is raised as
-    :class:`OutputWriteError` naming *out* — writing in place at that point
-    would put the truncation risk straight back.
-
-    ⚠️ **The one deliberate exception to "same result as in place"**: with
-    the data blocks full, the in-place write could truncate the old file and
-    reuse its blocks, and succeed; here the tmp write fails with ENOSPC and
-    the run ends rc 2 with the old file intact. That truncation is exactly
-    what #2082 exists to prevent, so it is kept (owner ruling on #2082).
-
-    The mode is set with ``fchmod`` on the open fd, before any byte is
-    written: a path-based chmod could follow a symlink someone swapped in
-    for the tmp name.
-    """
-    target = Path(os.path.realpath(out))
-    # Capped in BYTES, not characters: 64 four-byte characters would push
-    # the tmp name past NAME_MAX (255 bytes) for a target name that fits.
-    name_head = os.fsencode(target.name)[:_TMP_PREFIX_NAME_CAP].decode(
-        "utf-8", "ignore")
-    fd, tmp_name, replaced = -1, None, False
-    try:
-        try:
-            fd, tmp_name = tempfile.mkstemp(
-                dir=target.parent, prefix=f".{name_head}.", suffix=".tmp",
-            )
-        except OSError as exc:
-            # ANY failure to create the tmp: the in-place write may still
-            # work (an unwritable or read-only directory holding a writable
-            # file — readOnlyRootFilesystem + a subPath / `-v file:file`
-            # mount), and where it cannot, it reports the real error itself.
-            return False, f"cannot create a temporary file beside it ({exc.strerror})"
-        if st is not None and hasattr(os, "fchown") and (
-                st.st_uid != os.geteuid() or st.st_gid != os.getegid()):
-            try:
-                os.fchown(fd, st.st_uid, st.st_gid)
-            except OSError:
-                if st.st_uid != os.geteuid():
-                    return False, None
-        if hasattr(os, "fchmod"):
-            os.fchmod(fd, _OUTPUT_MODE)
-        else:  # Windows before 3.13: only the read-only bit exists anyway
-            os.chmod(tmp_name, _OUTPUT_MODE)
-        if st is not None:
-            why = _xattr_mismatch(target, fd)
-            if why is not None:
-                return False, why
-        fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
-        fd = -1  # the file object owns it now
-        with fh:
-            fh.write(content)
-            fh.flush()
-            try:
-                os.fsync(fh.fileno())
-            except OSError as exc:
-                if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
-                    raise
-        try:
-            os.replace(tmp_name, target)
-        except OSError as exc:
-            if exc.errno not in _REPLACE_REFUSED_ERRNOS:
-                raise
-            return False, f"it cannot be replaced ({exc.strerror})"
-        replaced = True
-        return True, None
-    except OSError as exc:
-        if isinstance(exc, OutputWriteError):
-            raise
-        raise _output_error(out, exc, previous_kept=True) from exc
-    finally:
-        if fd >= 0:
-            os.close(fd)
-        if tmp_name is not None and not replaced:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
+# The #2082 writer that lived here (realpath, private mkstemp tmp, owner /
+# mode / xattr carry-over, in-place fallback + WARN for hard links and
+# unwritable directories) moved into `_atomic_write.atomic_write_text` so
+# there is one implementation; this tool passes its flag so an error still
+# ends "check the value given to --output".
 
 
 def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
@@ -947,7 +608,7 @@ def main():
     # failures to OutputWriteError; the wrapper stays as the #1789 guard for
     # anything it does not, and is what the static pin looks for.
     with output_write(args.output, flag="--output"):
-        atomic_replace_output(args.output, content)
+        atomic_write_text(args.output, content, flag="--output")
 
     try:
         display_path = args.output.relative_to(REPO_ROOT)

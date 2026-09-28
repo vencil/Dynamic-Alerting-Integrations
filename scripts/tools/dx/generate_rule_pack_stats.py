@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 
 from _lib_io import safe_load as yaml_safe_load  # noqa: E402  (libyaml when available)
 from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
@@ -359,6 +360,7 @@ def format_summary(stats: dict) -> str:
             f"{stats['total']} rules")
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: Rule Pack 統計單一來源產生器."""
     try_utf8_stdout()
@@ -443,12 +445,17 @@ def main():
     has_drift = False
     for kind, path, rel, current, updated in plan:
         if args.generate:
+            # #2128: internal paths (flag=None); a write failure is rc 2 +
+            # one line naming the file, not a traceback.
             if kind == "fragment":
-                INCLUDE_DIR.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(path, updated)
+                with output_write(INCLUDE_DIR, flag=None, action="create directory"):
+                    INCLUDE_DIR.mkdir(parents=True, exist_ok=True)
+                with output_write(path, flag=None):
+                    atomic_write_text(path, updated)
                 print(f"✅ Generated {rel}")
             elif updated != current:
-                atomic_write_text(path, updated)
+                with output_write(path, flag=None):
+                    atomic_write_text(path, updated)
                 print(f"✅ Injected table into {rel}")
         elif args.check:
             if current is None:

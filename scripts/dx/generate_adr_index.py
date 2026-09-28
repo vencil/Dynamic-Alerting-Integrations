@@ -32,11 +32,13 @@ import yaml
 # regen run on Windows and Linux produces byte-identical output — without it,
 # Path.write_text translates "\n" to os.linesep and Windows local invocations
 # emit CRLF, creating noise diffs even though .gitattributes normalises on
-# commit) and writes via a sibling .tmp + os.replace, defending against FUSE
+# commit) and writes via a private tmp + os.replace, defending against FUSE
 # Trap #60 mid-flush corruption.
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 from _atomic_write import atomic_write_text  # noqa: E402
+# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
@@ -206,6 +208,7 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+@exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Generate the ADR index tables (architecture-and-design.md + docs/adr/README{,.en}.md).",
@@ -250,7 +253,11 @@ def main() -> int:
         if new != current:
             stale.append(_display(target))
             if args.write:
-                atomic_write_text(target, new)
+                # #2128: rc 2 + one line naming the doc; --target is named
+                # only when the operator gave it.
+                flag = "--target" if args.target else None
+                with output_write(target, flag=flag):
+                    atomic_write_text(target, new, flag=flag)
                 changed.append(_display(target))
 
     if args.check:

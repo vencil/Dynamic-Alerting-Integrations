@@ -39,6 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 from generate_rule_pack_stats import gather_stats  # noqa: E402
@@ -182,6 +183,7 @@ def replace_sentinel_block(content: str, table: str, doc: Path) -> str:
     return pattern.sub(lambda m: m.group(1) + table + m.group(2), content)
 
 
+@exit_on_output_write_error
 def main() -> int:
     """CLI 入口。回傳 0（無 drift／已寫入）、1（drift，`--check`）、2（caller error）。"""
     ap = argparse.ArgumentParser(
@@ -255,7 +257,9 @@ def main() -> int:
             if updated == current:
                 print(f"✅ {rel}：無變更")
             else:
-                atomic_write_text(doc, updated)
+                # #2128: internal path; a failure is rc 2 + one line.
+                with output_write(doc, flag=None):
+                    atomic_write_text(doc, updated)
                 print(f"✅ 已更新 {rel}")
 
     if has_drift:

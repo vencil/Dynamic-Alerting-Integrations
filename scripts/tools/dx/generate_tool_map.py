@@ -21,6 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
@@ -319,6 +320,7 @@ def _force_utf8_streams() -> None:
         pass
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: 工具導覽自動生成."""
     _force_utf8_streams()
@@ -344,7 +346,7 @@ def main():
     parser.add_argument("--lang", choices=["zh", "en", "all"], default="all",
                         help="Language: all (default), zh, or en")
     parser.add_argument("--safe", action="store_true",
-                        help="Write via sibling .tmp + atomic os.replace "
+                        help="Write via a private temp file + atomic os.replace "
                              "(FUSE interruption safety; v2.8.0 Trap #60)")
 
     args = parser.parse_args()
@@ -366,17 +368,20 @@ def main():
         target = TOOL_MAP if lang == "zh" else TOOL_MAP_EN
 
         if args.generate:
-            if args.safe:
-                # Keep atomic_write_text's newline="\n" default — passing
-                # newline=None here opted back into Python's platform-default
-                # translation, so --safe regens emitted CRLF on Windows hosts
-                # while CI emitted LF (same generator, different bytes).
-                atomic_write_text(target, content)
-            else:
-                target.write_text(content, encoding="utf-8", newline="\n")
-            os.chmod(target,
-                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                     | stat.S_IROTH)
+            # #2128: an internal path (flag=None); either writer's failure is
+            # rc 2 + one line naming the map, not a traceback.
+            with output_write(target, flag=None):
+                if args.safe:
+                    # Keep atomic_write_text's newline="\n" default — passing
+                    # newline=None here opted back into Python's platform-default
+                    # translation, so --safe regens emitted CRLF on Windows hosts
+                    # while CI emitted LF (same generator, different bytes).
+                    atomic_write_text(target, content)
+                else:
+                    target.write_text(content, encoding="utf-8", newline="\n")
+                os.chmod(target,
+                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+                         | stat.S_IROTH)
             print(f"✅ Generated {target.relative_to(REPO_ROOT)} "
                   f"({total} tools, {lang})")
 

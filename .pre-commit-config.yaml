@@ -236,6 +236,8 @@ repos:
         name: Tool map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check --lang all
         language: python
+        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
 
@@ -275,6 +277,8 @@ repos:
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
         language: python
+        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
 
