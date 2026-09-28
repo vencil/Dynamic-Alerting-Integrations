@@ -14,7 +14,9 @@ with override semantics (ADR-017). Array fields are replaced, not concatenated.
 Output: JSON or YAML of the effective (merged) config.
 """
 import argparse
+import codecs
 import copy
+import datetime
 import hashlib
 import json
 import os
@@ -135,10 +137,121 @@ def _file_hash(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+# ---------------------------------------------------------------------------
+# JSON for the values PyYAML types but JSON does not (#2371)
+# ---------------------------------------------------------------------------
+#
+# An unquoted `2026-12-31` is a `date` to PyYAML and a `!!binary` value is
+# `bytes`; `json.dumps` raised TypeError on both, so one such value anywhere
+# in the tree ended every mode — `--all` included — with a traceback, while
+# the exporter served the same tree. The oracle for what they should become
+# is Go: yaml.v3 reads a timestamp into time.Time and a `!!binary` into a
+# string of its raw bytes, and pkg/config's canonical JSON (encoding/json)
+# writes them as below. merged_hash must match the exporter's byte for byte,
+# so this is the exporter's rendering, not a nicer one.
+#
+#   date                   -> "YYYY-MM-DDT00:00:00Z"   (time.Time at UTC midnight)
+#   datetime with a zone   -> RFC 3339: fraction without trailing zeros, "Z"
+#                             for a zero offset, else "+hh:mm"
+#   naive datetime         -> the same without a zone suffix
+#   bytes                  -> UTF-8 decoded; each byte that is not part of a
+#                             valid sequence becomes the six characters
+#                             `�` in the JSON text (encoding/json's
+#                             escape), NOT a raw U+FFFD
+#
+# ⛔ Shapes where the hook CANNOT agree with Go, because PyYAML has already
+# discarded the source text it would need (tests/dx/test_describe_tenant.py
+# TestYamlTypedScalarParity pins each as a strict xfail):
+#   - a naive datetime: yaml.v3 reads `2026-12-31 10:20:30` (space) as UTC
+#     time ("…Z") but `2026-12-31T10:20:30` (`T`, no zone) as a plain
+#     string; PyYAML makes both the same naive datetime. The hook renders the
+#     `T` spelling, so the space spelling differs.
+#   - a naive `T` value whose fraction has trailing zeros, or a lower-case
+#     `t` without a zone: yaml.v3 keeps those as the source string.
+#   - `2026-12-31 10:20:30 +08:00` (space before the zone) and a bare-hour
+#     zone `+08`: a string to yaml.v3, a zoned datetime to PyYAML.
+#   - more than 6 fractional digits: PyYAML truncates to microseconds.
+#   - `2026-1-2` (one-digit month/day): a date to yaml.v3, a string to
+#     PyYAML — no crash, and nothing for a hook to see.
+#   - a date as a mapping KEY (json's `default` is not called for keys):
+#     yaml.v3 writes it as "2026-12-31 00:00:00 +0000 UTC". In a tenant file
+#     keys are already source text ("2026-12-31"); in a `_defaults.yaml` the
+#     key is a `date` and the hash still raises TypeError.
+_GO_INVALID_UTF8 = "\udfff"
+"""Stand-in for one invalid byte while `json.dumps` runs; `_json_text`
+turns it into encoding/json's `\\ufffd` escape afterwards. A lone surrogate
+is still reachable from source text — PyYAML accepts a `"\\udfff"` escape
+(yaml.v3 rejects the file) — so `_json_text` replaces only when every
+occurrence is one it inserted; otherwise the text is left as it is and the
+hash's `.encode("utf-8")` fails exactly as it did before #2371."""
+
+
+def _go_invalid_utf8_handler(exc: UnicodeError):
+    # Resume ONE byte later, as Go's utf8 decoding does: b"\xe4\xb8" (a
+    # truncated 3-byte sequence) is two replacements there, one under
+    # Python's built-in "replace" handler.
+    return _GO_INVALID_UTF8, exc.start + 1
+
+
+codecs.register_error("describe_tenant.go_invalid_utf8", _go_invalid_utf8_handler)
+
+
+def _go_time_text(value: "datetime.datetime") -> str:
+    """`value` as encoding/json writes a time.Time (RFC 3339 with nanosecond
+    precision): trailing zeros of the fraction dropped, `Z` for UTC."""
+    text = (f"{value.year:04d}-{value.month:02d}-{value.day:02d}"
+            f"T{value.hour:02d}:{value.minute:02d}:{value.second:02d}")
+    if value.microsecond:
+        text += f".{value.microsecond:06d}".rstrip("0")
+    offset = value.utcoffset()
+    if offset is None:
+        return text
+    if not offset:
+        return text + "Z"
+    minutes = int(offset.total_seconds()) // 60
+    sign = "+" if minutes >= 0 else "-"
+    return text + f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def _go_json_default(value: Any) -> Any:
+    """`json.dumps(default=...)` for the YAML scalars JSON has no type for,
+    rendered as the exporter's canonical JSON renders them (see above)."""
+    if isinstance(value, datetime.datetime):
+        return _go_time_text(value)
+    if isinstance(value, datetime.date):
+        return f"{value.isoformat()}T00:00:00Z"
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="describe_tenant.go_invalid_utf8")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_text(data: Any, **kwargs: Any) -> str:
+    """`json.dumps(data, ensure_ascii=False, **kwargs)` through
+    `_go_json_default` — the one JSON writer for the hash and the output."""
+    inserted = 0
+
+    def default(value: Any) -> Any:
+        nonlocal inserted
+        rendered = _go_json_default(value)
+        if isinstance(value, (bytes, bytearray)):
+            inserted += rendered.count(_GO_INVALID_UTF8)
+        return rendered
+
+    text = json.dumps(data, ensure_ascii=False, default=default, **kwargs)
+    if inserted and text.count(_GO_INVALID_UTF8) == inserted:
+        text = text.replace(_GO_INVALID_UTF8, "\\ufffd")
+    return text
+
+
+def _canonical_json(data: Any) -> str:
+    """The canonical JSON merged_hash is computed over — pkg/config's
+    CanonicalJSON: sorted keys, no spaces, no HTML or non-ASCII escaping."""
+    return _json_text(data, sort_keys=True, separators=(",", ":"))
+
+
 def _canonical_hash(data: dict) -> str:
     """SHA-256 of canonical JSON representation."""
-    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(_canonical_json(data).encode("utf-8")).hexdigest()[:16]
 
 
 def _iter_confd_yaml(entries, suffixes):
@@ -1054,8 +1167,8 @@ def main() -> None:
                 return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
             print("⚠️  PyYAML not installed — falling back to JSON output "
                   "(pip install pyyaml)", file=sys.stderr)
-            return json.dumps(data, indent=2, ensure_ascii=False)
-        return json.dumps(data, indent=2, ensure_ascii=False)
+            return _json_text(data, indent=2)
+        return _json_text(data, indent=2)
 
     # #2049: THE checkpoint for "this tenant is declared by more than one
     # carrier". Every mode that names a tenant (default, --show-sources,

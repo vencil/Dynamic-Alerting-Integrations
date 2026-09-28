@@ -273,5 +273,48 @@
     "source_file": "reserved-null/child/tenants.yaml",
     "source_hash": "8a3e644e7b760369",
     "tenant_id": "tenant-reserved"
+  },
+  {
+    "defaults_chain": [
+      "yaml-date/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_silent_mode": {
+        "expires": "2026-12-31T00:00:00Z",
+        "reason": "inherits an unquoted date",
+        "target": "warning"
+      },
+      "_state_maintenance": {
+        "expires": "2026-12-31T23:59:59.5+08:00",
+        "target": "all"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "36aacbc5f829c26c",
+    "scenario": "yaml-date",
+    "source_file": "yaml-date/tenants.yaml",
+    "source_hash": "a623de914a9c6a34",
+    "tenant_id": "tenant-date"
+  },
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "_routing": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/alerts"
+        }
+      },
+      "_silent_mode": {
+        "reason": "\u4e2d\u6587",
+        "target": "warning"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "955ff9d9f97759d3",
+    "scenario": "yaml-binary",
+    "source_file": "yaml-binary/tenants.yaml",
+    "source_hash": "a1f71016aed84237",
+    "tenant_id": "tenant-binary"
   }
 ]

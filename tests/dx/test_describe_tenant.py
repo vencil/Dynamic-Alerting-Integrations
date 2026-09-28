@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for describe_tenant.py — Effective tenant config resolution with ADR-017 semantics."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -1203,3 +1204,167 @@ class TestProfileOverlayCLI:
         assert "redis_x" not in info["effective_config"], info
         assert info["profile_overlay"] == [
             {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]
+
+
+class TestYamlTypedScalarParity:
+    """#2371: a value PyYAML reads as `date` / `datetime` / `bytes` (an
+    unquoted `2026-12-31`, a `!!binary`) used to end every mode with a
+    TypeError traceback while the exporter served the tree. The hash and the
+    output now render them as the exporter's canonical JSON does.
+
+    The Go column is the oracle, measured with pkg/config
+    `CanonicalJSON(ComputeEffectiveConfig(t1.yaml, "t1", [_defaults.yaml]))`
+    over the same two files. The date and `!!binary` shapes are also
+    re-checked against Go on every run by the golden rows `yaml-date` /
+    `yaml-binary` (tests/golden, TestGoldenParity_*); the rest are pinned
+    here only."""
+
+    DEFAULTS = "defaults:\n  mysql_connections: 50\n"
+    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+
+    def _tree(self, tmp_path, tenant_body, defaults=None):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(defaults or self.DEFAULTS, encoding="utf-8")
+        (conf_d / "t1.yaml").write_text(
+            "tenants:\n  t1:\n" + textwrap.indent(tenant_body, "    "), encoding="utf-8")
+        return conf_d
+
+    # (id, tenant body, defaults or None, Go canonical JSON)
+    ALIGNED = [
+        ("date", "_state_maintenance:\n  target: all\n  expires: 2026-12-31\n", None,
+         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z","target":"all"},"mysql_connections":50}'),
+        ("date-tagged", "_x:\n  at: !!timestamp 2026-12-31\n", None,
+         '{"_x":{"at":"2026-12-31T00:00:00Z"},"mysql_connections":50}'),
+        ("date-in-list", "_x:\n  - 2026-12-31\n  - a\n", None,
+         '{"_x":["2026-12-31T00:00:00Z","a"],"mysql_connections":50}'),
+        ("date-year-below-1000", "_x:\n  at: 0999-01-02\n", None,
+         '{"_x":{"at":"0999-01-02T00:00:00Z"},"mysql_connections":50}'),
+        ("date-in-defaults", "mysql_connections: 60\n",
+         "defaults:\n  mysql_connections: 50\n  _state_maintenance:\n    expires: 2026-12-31\n",
+         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z"},"mysql_connections":60}'),
+        ("date-in-defaults-merged", "_state_maintenance:\n  target: all\n",
+         "defaults:\n  _state_maintenance:\n    expires: 2026-12-31\n",
+         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z","target":"all"}}'),
+        ("datetime-z", "_x:\n  at: 2026-12-31T10:20:30Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-lower-t-z", "_x:\n  at: 2026-12-31t10:20:30Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-plus-zero", "_x:\n  at: 2026-12-31T10:20:30+00:00\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-offset", "_x:\n  at: 2026-12-31T10:20:30+08:00\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+08:00"},"mysql_connections":50}'),
+        ("datetime-negative-offset", "_x:\n  at: 2026-12-31T10:20:30-05:30\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30-05:30"},"mysql_connections":50}'),
+        ("datetime-fraction-6", "_x:\n  at: 2026-12-31T10:20:30.123456Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.123456Z"},"mysql_connections":50}'),
+        ("datetime-fraction-1", "_x:\n  at: 2026-12-31T10:20:30.5Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
+        ("datetime-fraction-trailing-zeros", "_x:\n  at: 2026-12-31T10:20:30.500Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
+        ("datetime-one-digit-fields", "_x:\n  at: 2026-1-2T3:04:05Z\n", None,
+         '{"_x":{"at":"2026-01-02T03:04:05Z"},"mysql_connections":50}'),
+        ("datetime-naive-t", "_x:\n  at: 2026-12-31T10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30"},"mysql_connections":50}'),
+        ("datetime-naive-t-fraction", "_x:\n  at: 2026-12-31T10:20:30.5\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.5"},"mysql_connections":50}'),
+        ("binary-utf8", "_routing:\n  receiver:\n    type: webhook\n    url: !!binary aHR0cDovL3g=\n", None,
+         '{"_routing":{"receiver":{"type":"webhook","url":"http://x"}},"mysql_connections":50}'),
+        ("binary-cjk", "_x:\n  v: !!binary 5Lit5paH\n", None,
+         '{"_x":{"v":"中文"},"mysql_connections":50}'),
+        ("binary-empty", '_x:\n  v: !!binary ""\n', None,
+         '{"_x":{"v":""},"mysql_connections":50}'),
+        ("binary-in-defaults", "mysql_connections: 60\n",
+         "defaults:\n  _x:\n    v: !!binary aHR0cDovL3g=\n",
+         '{"_x":{"v":"http://x"},"mysql_connections":60}'),
+        # Invalid UTF-8: encoding/json writes the six characters \ufffd per
+        # invalid BYTE (a truncated sequence is two), not a raw U+FFFD.
+        ("binary-invalid-byte", "_routing:\n  receiver:\n    type: webhook\n    url: !!binary /w==\n", None,
+         r'{"_routing":{"receiver":{"type":"webhook","url":"\ufffd"}},"mysql_connections":50}'),
+        ("binary-nul-and-invalid", "_x:\n  v: !!binary YQDA/2I=\n", None,
+         r'{"_x":{"v":"a\u0000\ufffd\ufffdb"},"mysql_connections":50}'),
+        ("binary-truncated-sequence", "_x:\n  v: !!binary 5Lg=\n", None,
+         r'{"_x":{"v":"\ufffd\ufffd"},"mysql_connections":50}'),
+        ("binary-overlong", "_x:\n  v: !!binary wIA=\n", None,
+         r'{"_x":{"v":"\ufffd\ufffd"},"mysql_connections":50}'),
+        ("binary-encoded-surrogate", "_x:\n  v: !!binary 7aCA\n", None,
+         r'{"_x":{"v":"\ufffd\ufffd\ufffd"},"mysql_connections":50}'),
+        # Control: a real U+FFFD in a string stays a raw character.
+        ("string-real-fffd", '_x:\n  v: "\\ufffd"\n', None,
+         '{"_x":{"v":"\ufffd"},"mysql_connections":50}'),
+    ]
+
+    # Shapes the hook cannot align: PyYAML has already discarded the source
+    # text Go's rendering depends on (describe_tenant.py, the #2371 block).
+    DIVERGENT = [
+        ("datetime-naive-space", "_x:\n  at: 2026-12-31 10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
+        ("datetime-naive-space-fraction", "_x:\n  at: 2026-12-31 10:20:30.5\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
+        ("datetime-naive-t-trailing-zeros", "_x:\n  at: 2026-12-31T10:20:30.500\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.500"},"mysql_connections":50}'),
+        ("datetime-naive-lower-t", "_x:\n  at: 2026-12-31t10:20:30\n", None,
+         '{"_x":{"at":"2026-12-31t10:20:30"},"mysql_connections":50}'),
+        ("datetime-space-before-zone", "_x:\n  at: 2026-12-31 10:20:30 +08:00\n", None,
+         '{"_x":{"at":"2026-12-31 10:20:30 +08:00"},"mysql_connections":50}'),
+        ("datetime-hour-only-zone", "_x:\n  at: 2026-12-31T10:20:30+08\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30+08"},"mysql_connections":50}'),
+        ("datetime-fraction-9", "_x:\n  at: 2026-12-31T10:20:30.123456789Z\n", None,
+         '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
+        ("date-one-digit-fields", "_x:\n  at: 2026-1-2\n", None,
+         '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":50}'),
+        ("date-as-key-in-tenant", "_x:\n  2026-12-31: a\n", None,
+         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":"a"},"mysql_connections":50}'),
+        ("date-as-key-in-defaults", "mysql_connections: 60\n",
+         "defaults:\n  _x:\n    2026-12-31: a\n",
+         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":"a"},"mysql_connections":60}'),
+    ]
+
+    def _python_canonical(self, tmp_path, body, defaults):
+        conf_d = self._tree(tmp_path, body, defaults)
+        eff = dt.ConfDScanner(conf_d).effective_config("t1")
+        return dt._canonical_json(eff), dt._canonical_hash(eff)
+
+    @pytest.mark.parametrize("body,defaults,go_json",
+                             [c[1:] for c in ALIGNED], ids=[c[0] for c in ALIGNED])
+    def test_canonical_json_and_merged_hash_match_go(self, tmp_path, body, defaults, go_json):
+        got_json, got_hash = self._python_canonical(tmp_path, body, defaults)
+        assert got_json == go_json
+        assert got_hash == hashlib.sha256(go_json.encode("utf-8")).hexdigest()[:16]
+
+    @pytest.mark.parametrize(
+        "body,defaults,go_json",
+        [pytest.param(*c[1:], marks=pytest.mark.xfail(
+            strict=True, reason="#2371: PyYAML drops the source text Go renders from"))
+         for c in DIVERGENT],
+        ids=[c[0] for c in DIVERGENT])
+    def test_known_divergence_from_go(self, tmp_path, body, defaults, go_json):
+        got_json, _ = self._python_canonical(tmp_path, body, defaults)
+        assert got_json == go_json
+
+    def test_the_go_merged_hash_of_an_unquoted_date(self, tmp_path):
+        """The merged_hash Go computes for the issue's own shape, via the CLI."""
+        conf_d = self._tree(tmp_path, self.ALIGNED[0][1])
+        res = subprocess.run([sys.executable, self.DESCRIBE, "t1", "--conf-d", str(conf_d), "--show-sources"],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        assert json.loads(res.stdout)["merged_hash"] == "2a9fcc779be99d98"
+
+    @pytest.mark.parametrize("body", [
+        "_state_maintenance:\n  target: all\n  expires: 2026-12-31\n",
+        "_x:\n  at: 2026-12-31T10:20:30+08:00\n",
+        "_routing:\n  receiver:\n    type: webhook\n    url: !!binary aHR0cDovL3g=\n",
+        "_x:\n  v: !!binary /w==\n",
+    ], ids=["date", "datetime", "binary", "binary-invalid-utf8"])
+    @pytest.mark.parametrize("mode", [
+        ["t1"], ["t1", "--show-sources"], ["t1", "--format", "yaml"],
+        ["--all"], ["--all", "--format", "yaml"],
+    ], ids=lambda m: " ".join(m))
+    def test_no_mode_ends_in_a_traceback(self, tmp_path, body, mode):
+        conf_d = self._tree(tmp_path, body)
+        res = subprocess.run([sys.executable, self.DESCRIBE, *mode, "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        assert "Traceback" not in res.stderr
+        out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
+        assert out
