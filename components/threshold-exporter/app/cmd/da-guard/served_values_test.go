@@ -18,7 +18,6 @@ import (
 
 // servedOut is the JSON document as a reader decodes it.
 type servedOut struct {
-	ConfigDir   string   `json:"config_dir"`
 	At          string   `json:"at"`
 	ParseFailed []string `json:"parse_failed"`
 	Tenants     map[string]struct {
@@ -729,7 +728,13 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 		"_metadata value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _metadata:\n      runbook_url: !!binary /w==\n      db_type: !!binary /w==\n",
-		}, `tenants["tenant-a"].values["_metadata"]`},
+		}, `tenants["tenant-a"].values["_metadata"]["db_type"]`}, // first in key order
+		// A map KEY, not a value: `eP8=` / `eP4=` are "x\xff" / "x\xfe".
+		"_routing receiver key": {map[string]string{
+			"_defaults.yaml": defaultsOnly + sf,
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: http://x\n" +
+				"        ? !!binary eP8=\n        : a\n        ? !!binary eP4=\n        : b\n",
+		}, `values["_routing"]["receiver"]["x\xfe"] (key)`},
 		"_routing value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: !!binary /w==\n",
@@ -745,12 +750,17 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			code, _, _, stderr := served(t, tc.files, "")
-			if code != exitCallerErr {
-				t.Fatalf("exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
-			}
-			if !strings.Contains(stderr, tc.want) || !strings.Contains(stderr, "not valid UTF-8") {
-				t.Errorf("stderr should name it (%s): %q", tc.want, stderr)
+			// Several runs: where two strings are bad, the one named must be
+			// the first in key order every time, not whichever map
+			// iteration happens to reach first.
+			for run := 0; run < 8; run++ {
+				code, _, _, stderr := served(t, tc.files, "")
+				if code != exitCallerErr {
+					t.Fatalf("exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
+				}
+				if !strings.Contains(stderr, tc.want) || !strings.Contains(stderr, "not valid UTF-8") {
+					t.Fatalf("run %d: stderr should name it (%s): %q", run, tc.want, stderr)
+				}
 			}
 		})
 	}
@@ -834,5 +844,22 @@ func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	code, _, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
 	if code != exitCallerErr || !strings.Contains(stderr, "da_config_event") {
 		t.Fatalf("after expiry: exit = %d, want %d naming da_config_event; stderr=%q", code, exitCallerErr, stderr)
+	}
+}
+
+// --config-dir is the caller's own argument and is not in the output, so a
+// path that is not valid UTF-8 does not refuse the tree.
+func TestServedValues_NonUTF8ConfigDir_Serves(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "conf\xff.d")
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf\xff.d/_defaults.yaml": defaultsOnly,
+		"conf\xff.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+	})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+	mustOK(t, code, stderr)
+	if strings.Contains(stdout, `\ufffd`) || strings.Contains(stdout, "\ufffd") {
+		t.Errorf("output carries U+FFFD:\n%s", stdout)
 	}
 }

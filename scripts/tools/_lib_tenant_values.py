@@ -90,6 +90,13 @@ class ServedValuesError(RuntimeError):
         super().__init__(f"{message}: {detail}" if detail else message)
 
 
+def _stderr_text(b: bytes | str | None) -> str:
+    """da-guard's stderr as text; bytes that are not UTF-8 are shown escaped."""
+    if b is None:
+        return ""
+    return b if isinstance(b, str) else b.decode("utf-8", errors="backslashreplace")
+
+
 def _threshold(v: Any) -> float:
     """A threshold value from the JSON as a float: JSON's number (an int when
     it has no fraction), or the text da-guard writes for a value JSON has no
@@ -121,23 +128,26 @@ def load_served_values(
     if at is not None:
         cmd += ["--at", at]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+        # Bytes, not text: stderr may carry a file name that is not UTF-8
+        # (the exporter's load logs it as is).
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        raise ServedValuesError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s", None, stderr) from e
+        raise ServedValuesError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s", None,
+                                _stderr_text(e.stderr)) from e
     except OSError as e:
         raise ServedValuesError(f"da-guard {SUBCOMMAND} could not be run ({exe}): {e}", None, "") from e
 
+    stderr = _stderr_text(proc.stderr)
     if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
-        raise ServedValuesError(f"da-guard {SUBCOMMAND} exited {proc.returncode}", proc.returncode, proc.stderr)
+        raise ServedValuesError(f"da-guard {SUBCOMMAND} exited {proc.returncode}", proc.returncode, stderr)
     try:
-        doc = json.loads(proc.stdout)
+        doc = json.loads(proc.stdout.decode("utf-8"))
         parse_failed = list(doc["parse_failed"])
         tenants = doc["tenants"]
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {proc.returncode} without the expected JSON ({e})",
-            proc.returncode, proc.stderr) from e
+            proc.returncode, stderr) from e
 
     if parse_failed:
         raise YamlFileError(
@@ -147,7 +157,7 @@ def load_served_values(
     if proc.returncode != _EXIT_OK:
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {proc.returncode} with no file in parse_failed",
-            proc.returncode, proc.stderr)
+            proc.returncode, stderr)
 
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -161,7 +171,7 @@ def load_served_values(
         except (ValueError, KeyError, TypeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
-                proc.returncode, proc.stderr) from e
+                proc.returncode, stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()})
     return out

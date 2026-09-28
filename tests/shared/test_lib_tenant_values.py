@@ -250,3 +250,16 @@ def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
     assert "WARN" not in proc.stderr, proc.stderr
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
     assert set(got.dropped) == {'mysql_connections{__name__="x"}', 'mysql_connections{__x="y"}'}
+
+
+def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
+    """壞檔的檔名不是 UTF-8：da-guard 的 stderr 帶原始 bytes，lib 仍 raise 已列出的例外並點名該檔。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+    })
+    (conf_d / os.fsdecode(b"b\xff.yaml")).write_bytes(b"tenants: [\n")
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_values(conf_d, binary=da_guard)
+    assert ei.value.returncode == 2
+    assert 'parse_failed[0]: "b\\xff.yaml"' in str(ei.value)

@@ -45,9 +45,12 @@ const servedValuesCmd = "served-values"
 const customAlertsKey = "_custom_alerts"
 
 // servedValuesDoc is the JSON document on stdout.
+//
+// The --config-dir argument is not echoed back: it is the caller's own
+// input, no reader uses it, and a path that is not valid UTF-8 is no reason
+// to refuse the tree.
 type servedValuesDoc struct {
-	ConfigDir string `json:"config_dir"`
-	At        string `json:"at"`
+	At string `json:"at"`
 	// ParseFailed is LoadDir's parseFailed: the files the exporter's load
 	// skips because they do not decode. Always present ([] when none).
 	ParseFailed []string                      `json:"parse_failed"`
@@ -149,7 +152,6 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		parseFailed = []string{}
 	}
 	doc := servedValuesDoc{
-		ConfigDir:   f.configDir,
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
 		Tenants:     tenants,
@@ -208,8 +210,11 @@ func checkUTF8(cfg *config.ThresholdConfig) error {
 // checkOutputUTF8 walks every string the output document carries — struct
 // fields, map keys and values, list items, whatever their nesting — and
 // refuses the first that is not valid UTF-8, naming its path (keys and the
-// string itself shown with %q). One walk, so a field added later is covered
-// without being listed.
+// string itself shown with %q). It follows the value structure, so a plain
+// field added later is walked without being listed. ⚠️ Not walked: what JSON
+// encodes through a custom MarshalJSON, a TextMarshaler used as a map key,
+// unexported embedded structs, json.RawMessage, and fields tagged `json:"-"`
+// (a skipped field is walked anyway). None of today's output types use them.
 func checkOutputUTF8(path string, v reflect.Value) error {
 	switch v.Kind() {
 	case reflect.Interface, reflect.Pointer:
