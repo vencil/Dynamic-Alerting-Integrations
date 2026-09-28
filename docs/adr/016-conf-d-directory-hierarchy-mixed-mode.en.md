@@ -194,8 +194,10 @@ layers (`LoadRoot`); see the table above.
   `_lib_confd.list_config_tree()`, Go `config.ScanDirTree` +
   `CollectDefaultsChain` (hidden directories pruned, directory symlinks
   reported, a directory holding only a README contributes nothing). The route
-  generator and da-guard / tenant-api (`pkg/routingpolicy`) change together, so
-  the Python ↔ Go parity matrix stays one answer.
+  generator and da-guard (`pkg/routingpolicy.LoadTree`) change together, so the
+  Python ↔ Go parity matrix stays one answer; tenant-api serves tenant files at
+  the root only and keeps the root half of the routing layers (`LoadRoot`), see
+  the table above.
 - **Layer chain**: `_routing_defaults` along the tenant's chain → routing profile
   → the tenant's own `_routing`. The full semantics (shallow merge per top-level
   key, root-only `_routing_enforced`, subtree-scoped profiles and domain

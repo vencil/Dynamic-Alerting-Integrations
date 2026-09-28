@@ -181,8 +181,9 @@ owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/i
 
 - **走訪器**：與閾值面共用——Python `_lib_confd.list_config_tree()`、Go
   `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏目錄、回報目錄 symlink、只有 README
-  的目錄不貢獻任何東西）。路由生成器與 da-guard / tenant-api（`pkg/routingpolicy`）一起改，
-  Python ↔ Go 的 parity 矩陣維持同一個答案。
+  的目錄不貢獻任何東西）。路由生成器與 da-guard（`pkg/routingpolicy.LoadTree`）一起改，
+  Python ↔ Go 的 parity 矩陣維持同一個答案；tenant-api 只服務根目錄的租戶檔，路由層維持
+  根目錄那一半（`LoadRoot`），見上方的表。
 - **分層鏈**：租戶繼承鏈上的 `_routing_defaults` → routing profile → 租戶本體的
   `_routing`。完整語意（頂層逐鍵淺合併、`_routing_enforced` 只認根目錄、profile 與 domain
   policy 以子樹為範圍、租戶 id 重複）記在負責繼承語意的
