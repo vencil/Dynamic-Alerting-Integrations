@@ -47,6 +47,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -453,7 +454,10 @@ func (m *ConfigManager) rebuildParsedDefaults(prior reloadPriorState, scan reloa
 // the per-tick emission buckets, and emitting the trigger/shadowed/noop
 // counters. Extracted verbatim from the classifyAndCount per-tenant loop body;
 // res is mutated through the pointer, buckets through the shared map.
-func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorState, scan reloadScanState, res *reloadResult, buckets map[reloadEmissionKey]int) {
+//
+// tenantFiles is this tick's tenant files, each read and parsed once for
+// every tenant it declares (#2153) — classifyAndCount's, dropped with it.
+func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorState, scan reloadScanState, res *reloadResult, buckets map[reloadEmissionKey]int, tenantFiles *tenantFilesOnce) {
 	prevSrc, wasKnown := prior.tenantSources[tid]
 	sourceChanged := !wasKnown || prevSrc != srcPath || scan.hashes[srcPath] != prior.hashes[srcPath]
 
@@ -513,7 +517,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	}
 
 	overlay := config.PlatformOverlayFor(scan.platform, tid)
-	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles})
+	mh, mergeErr := m.recomputeMergedHashWith(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles}, tenantFiles)
 	if mergeErr != nil {
 		logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
 		// Preserve any prior merged_hash we had so the /effective
@@ -618,8 +622,12 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 	// reloadEmissionKey); each tenant increments exactly one bucket.
 	buckets := make(map[reloadEmissionKey]int)
 
-	for tid, srcPath := range scan.tenants {
-		m.classifyTenant(tid, srcPath, prior, scan, &res, buckets)
+	// #2153: one read + parse per tenant file for this tick's merges, not
+	// one per tenant it declares — tenants visited file by file. This tick
+	// only: the next tick starts empty, so no parse outlives its bytes.
+	tenantFiles := &tenantFilesOnce{onParse: m.onReloadTenantParse}
+	for _, tid := range tenantsByFile(scan.tenants) {
+		m.classifyTenant(tid, scan.tenants[tid], prior, scan, &res, buckets, tenantFiles)
 	}
 
 	// Detect deleted tenants — previously known, absent now. Deletions
@@ -787,7 +795,17 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 // config.PlatformOverlayFor) and the tree's profiles (#2117) — part of what
 // merged_hash is a hash of.
 func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string, layers config.TenantLayers) (string, error) {
-	tenantBytes, err := os.ReadFile(tenantFile)
+	return m.recomputeMergedHashWith(tenantID, tenantFile, defaultsChain, layers, &tenantFilesOnce{})
+}
+
+// recomputeMergedHashWith is recomputeMergedHash taking the tenant file from
+// tenantFiles (#2153): read and parsed on the first tenant of that file this
+// tick, reused for the rest. Same errors in the same order — the tenant
+// file's read error first, then the chain's, then the chain's parse errors,
+// then the tenant file's (config.ComputeMergedHashDoc keeps a syntax error
+// until the merge reaches the tenant file, as the byte form did).
+func (m *ConfigManager) recomputeMergedHashWith(tenantID, tenantFile string, defaultsChain []string, layers config.TenantLayers, tenantFiles *tenantFilesOnce) (string, error) {
+	doc, err := tenantFiles.get(tenantFile, os.ReadFile)
 	if err != nil {
 		return "", err
 	}
@@ -799,11 +817,81 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 		}
 		chainBytes = append(chainBytes, b)
 	}
-	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes, layers)
+	h, mergeErr := config.ComputeMergedHashDoc(doc, tenantID, chainBytes, layers)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
 	return h, mergeErr
+}
+
+// tenantFilesOnce is the tenant file one merge pass (a cold load, or one
+// reload tick) read and parsed last: the next tenant of the same file reuses
+// that read and parse (config.ParseTenantDoc) instead of its own (#2153).
+// Before it a file declaring T tenants was read and parsed T times per pass,
+// each parse paying yaml.v3's duplicate-key check over the whole `tenants:`
+// mapping — quadratic in T.
+//
+// ONE file is held, not every file of the pass: the passes visit tenants
+// grouped by file (tenantsByFile), so one slot parses each file once, while
+// memory stays that of one parsed file, as before — a map of every parsed
+// file would hold the whole tree's decoded documents until the pass ends.
+// A caller that interleaves files is still correct, it only parses again.
+//
+// ⛔ Lifetime: ONE pass. The owner (populateHierarchyStateWith's
+// coldMergeInputs, classifyAndCount's local) drops it with the pass, so a
+// parse never outlives the bytes it was taken from and there is nothing to
+// invalidate across reloads. One held path names one read: the tenants after
+// the first reuse that read — including its error.
+//
+// Isolation between the tenants sharing one parse: config.TenantDoc hands
+// each merge a deep copy of that tenant's own block (see its comment); the
+// shared document is never written after the parse.
+//
+// Not safe for concurrent use: both passes merge on one goroutine. The zero
+// value is ready to use.
+type tenantFilesOnce struct {
+	path    string // the held file; "" = none
+	doc     *config.TenantDoc
+	readErr error
+	// onParse is a test seam, nil in production: called once per parse.
+	onParse func(absPath string)
+}
+
+// get is absPath's parsed document, reading it with read unless it is the
+// held file.
+func (t *tenantFilesOnce) get(absPath string, read func(string) ([]byte, error)) (*config.TenantDoc, error) {
+	if t.path != "" && t.path == absPath {
+		return t.doc, t.readErr
+	}
+	t.path, t.doc, t.readErr = absPath, nil, nil
+	b, err := read(absPath)
+	if err != nil {
+		t.readErr = err
+		return nil, err
+	}
+	t.doc = config.ParseTenantDoc(b)
+	if t.onParse != nil {
+		t.onParse(absPath)
+	}
+	return t.doc, nil
+}
+
+// tenantsByFile is tenants' IDs ordered by source file, then ID: the order
+// in which tenantFilesOnce parses each file once. A merge pass's result does
+// not depend on its order (each tenant's merge is independent; the maps it
+// fills are keyed by tenant), which was Go's random map order before.
+func tenantsByFile(tenants map[string]string) []string {
+	ids := make([]string, 0, len(tenants))
+	for tid := range tenants {
+		ids = append(ids, tid)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if a, b := tenants[ids[i]], tenants[ids[j]]; a != b {
+			return a < b
+		}
+		return ids[i] < ids[j]
+	})
+	return ids
 }
 
 // emitParseFailureSignal classifies a computeMergedHash error and, if

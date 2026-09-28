@@ -191,6 +191,13 @@ type ConfigManager struct {
 	// once per config commit. See config_subtree_undeliverable.go.
 	undeliverable undeliverableLogState
 
+	// onReloadTenantParse is a test seam, nil in production (#2153): called
+	// once per tenant-file parse a reload tick's merges make (classifyAndCount
+	// → tenantFilesOnce.onParse). On this manager, not a package global, so a
+	// parallel test observes only its own manager's ticks. Set it before the
+	// tick; it is read on the reloading goroutine.
+	onReloadTenantParse func(absPath string)
+
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
 	// clockwork.FakeClock instead of time.Sleep'ing for real wall-clock
@@ -1640,7 +1647,9 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	})
 
 	newMergedHashes := make(map[string]string, len(tenants))
-	for tid, srcPath := range tenants {
+	// File by file (#2153): in.tenants parses each tenant file once.
+	for _, tid := range tenantsByFile(tenants) {
+		srcPath := tenants[tid]
 		chain := graph.TenantDefaults[tid]
 		mh, mergeErr := m.coldMergedHash(tid, srcPath, chain, in, config.TenantLayers{
 			Overlay:  config.PlatformOverlayFor(platform, tid),
@@ -1686,14 +1695,21 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 // one goroutine for one populateHierarchyStateFrom call and dropped with it;
 // the bytes are the scan's own (released by commitFlatFrom as before), and
 // the parsed blocks are the very maps the parsedDefaults cache keeps, so
-// what it adds to a load's footprint is two index maps.
+// what it adds to a load's footprint is two index maps — plus the one tenant
+// file's parse it holds at a time (tenantFilesOnce, #2153).
 //
 // ⛔ Cold load only. The debounced path (classifyTenant) keeps
-// recomputeMergedHash: it re-merges only the tenants whose inputs moved, and
-// a file its scan carried unread has no bytes to hand out.
+// recomputeMergedHash's reads: it re-merges only the tenants whose inputs
+// moved, and a file its scan carried unread has no bytes to hand out. It
+// shares the tenant-file half (tenantFilesOnce) with this one.
 type coldMergeInputs struct {
 	data     map[string][]byte // AbsPath → TreeFile.Data (files this scan read)
 	defaults map[string]*coldDefaultsEntry
+	// tenants is the tenant file read and parsed last, shared by every
+	// tenant the file declares (#2153; see tenantFilesOnce). Its zero value
+	// is ready, so a literal coldMergeInputs without it works; its onParse
+	// is the tenant-file half of the seams below.
+	tenants tenantFilesOnce
 
 	// Test seams, nil in production (#1978 review): called once per disk
 	// read bytesOf falls back to and once per defaults parse. They live on
@@ -1762,7 +1778,7 @@ func (in *coldMergeInputs) defaultsSource(absPath string) ([]byte, config.ChainD
 // precedence over parse errors (recomputeMergedHash reads the tenant file
 // and every chain file before it parses anything).
 func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChain []string, in *coldMergeInputs, layers config.TenantLayers) (string, error) {
-	tenantBytes, err := in.bytesOf(tenantFile)
+	doc, err := in.tenants.get(tenantFile, in.bytesOf)
 	if err != nil {
 		return "", err
 	}
@@ -1774,7 +1790,7 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 		}
 		chain = append(chain, e.parsed)
 	}
-	h, mergeErr := computeMergedHashFromChain(tenantBytes, tenantID, chain, layers)
+	h, mergeErr := config.ComputeMergedHashFromChainDoc(doc, tenantID, chain, layers)
 	if mergeErr != nil {
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
