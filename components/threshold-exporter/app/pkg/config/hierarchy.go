@@ -175,6 +175,19 @@ type effectiveResolver struct {
 	// decoded on the first resolve and shared by every tenant after it.
 	profiles     *PlatformProfiles
 	profilesDone bool
+
+	// docs is each tenant file parsed once (ParseTenantDoc) and shared by
+	// every tenant it declares that this resolver resolves (#2153): a
+	// ScopeEffective over a file declaring T tenants parsed it T times.
+	// Keyed by absolute path; the bytes are the scan's own (bytesOf), so
+	// one key always names the same bytes. Lives and dies with the
+	// resolver — one ResolveEffective / ScopeEffective call.
+	docs map[string]*TenantDoc
+
+	// onTenantParse is a test seam, nil in production: called once per
+	// tenant-file parse. On this value (one call's resolver), not a
+	// package global, so a parallel test observes only its own resolver.
+	onTenantParse func(absPath string)
 }
 
 // newEffectiveResolver reads the chain rule off the scan — the SAME
@@ -184,7 +197,20 @@ type effectiveResolver struct {
 // entered /effective's chain and not the exporter's. The rule that function
 // implemented is the one SelectDefaultsCarriers now carries for everyone.
 func newEffectiveResolver(scan *TreeScan) *effectiveResolver {
-	return &effectiveResolver{scan: scan, defaultsByDir: scan.DefaultsCarriers().ByDir}
+	return &effectiveResolver{scan: scan, defaultsByDir: scan.DefaultsCarriers().ByDir, docs: make(map[string]*TenantDoc)}
+}
+
+// tenantDoc is absPath's bytes parsed once per resolver (#2153).
+func (r *effectiveResolver) tenantDoc(absPath string, b []byte) *TenantDoc {
+	if d, ok := r.docs[absPath]; ok {
+		return d
+	}
+	d := ParseTenantDoc(b)
+	if r.onTenantParse != nil {
+		r.onTenantParse(absPath)
+	}
+	r.docs[absPath] = d
+	return d
 }
 
 // chain returns the defaults files from the scan root (L0) down to leafDir.
@@ -262,7 +288,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
-	parts, err := computeEffectiveConfigBytesDetailed(tenantBytes, tenantID, defaultsYAML, overlay, r.platformProfiles())
+	parts, err := computeEffectiveConfigDocDetailed(r.tenantDoc(tenantFile, tenantBytes), tenantID, defaultsYAML, overlay, r.platformProfiles())
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
 		// can tell "this file is broken" from any other resolve failure
@@ -353,6 +379,19 @@ func computeEffectiveConfigBytesDetailed(
 	overlay []PlatformBlock,
 	profiles *PlatformProfiles,
 ) (effectiveParts, error) {
+	return computeEffectiveConfigDocDetailed(ParseTenantDoc(tenantYAMLBytes), tenantID, defaultsChainYAML, overlay, profiles)
+}
+
+// computeEffectiveConfigDocDetailed is computeEffectiveConfigBytesDetailed
+// over a tenant file already parsed by ParseTenantDoc (#2153) — the one
+// implementation: the byte form above only parses and calls it.
+func computeEffectiveConfigDocDetailed(
+	tenantDoc *TenantDoc,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+	overlay []PlatformBlock,
+	profiles *PlatformProfiles,
+) (effectiveParts, error) {
 	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
 	// debounced path's per-tenant call, and a slice per call was +1 alloc
 	// per re-merged tenant). A file after a broken one is never parsed.
@@ -365,7 +404,7 @@ func computeEffectiveConfigBytesDetailed(
 	}
 
 	chain := merged
-	p, err := mergeTenantOver(chain, tenantYAMLBytes, tenantID, overlay, profiles)
+	p, err := mergeTenantOver(chain, tenantDoc, tenantID, overlay, profiles)
 	if err != nil {
 		return effectiveParts{}, err
 	}
@@ -450,6 +489,57 @@ func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]an
 	return deepMerge(merged, pd.block), nil
 }
 
+// TenantDoc is one tenant file taken through the first half of the tenant
+// merge — yaml.Unmarshal and normalizeYAMLToJSON — once, so a caller merging
+// every tenant a file declares parses the file once instead of once per
+// tenant (#2153: a file declaring T tenants was parsed T times per cold load
+// and per reload, each parse also paying yaml.v3's duplicate-key check over
+// the whole `tenants:` mapping — quadratic in T). The byte-input merge
+// (computeEffectiveConfigBytesDetailed) is built on it, so the two cannot
+// drift: same merged result, same errors.
+//
+// ⛔ Isolation between the tenants sharing one TenantDoc — chosen: COPY, not
+// a read-only promise. tenantRaw hands each merge a deep copy of its own
+// `tenants.<id>` subtree; the shared document is written by nothing after
+// ParseTenantDoc returns. A read-only promise would have to hold for every
+// reader of effectiveParts.tenantRaw (EffectiveConfig.TenantOverridesRaw is
+// exported, and the guard reads it), which this package cannot enforce;
+// the copy costs one walk of that tenant's own block, not of the file.
+//
+// A syntax error is kept, not returned: every tenant merged from the file
+// gets it as its own `parse tenant: …` (*tenantParseError), at the same
+// point of its merge (after the defaults chain) as a per-tenant parse gave.
+// Safe to share across goroutines: built complete by ParseTenantDoc and only
+// read afterwards.
+type TenantDoc struct {
+	doc any   // normalizeYAMLToJSON of the document; nil when err != nil
+	err error // the yaml.Unmarshal error, unwrapped
+}
+
+// ParseTenantDoc parses one tenant file's bytes for the *Doc merge entry
+// points (ComputeMergedHashDoc, ComputeMergedHashFromChainDoc).
+func ParseTenantDoc(b []byte) *TenantDoc {
+	var raw any
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return &TenantDoc{err: err}
+	}
+	return &TenantDoc{doc: normalizeYAMLToJSON(raw)}
+}
+
+// tenantRaw is tenantID's override block — a fresh deep copy, see TenantDoc —
+// or the error the per-tenant parse + extractTenantRaw gave: a fresh
+// *tenantParseError per call (errors.As / DecodeError attribution unchanged).
+func (d *TenantDoc) tenantRaw(tenantID string) (map[string]any, error) {
+	if d.err != nil {
+		return nil, &tenantParseError{err: d.err}
+	}
+	raw, err := extractTenantRaw(d.doc, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return deepCopyMap(raw), nil
+}
+
 // tenantMerge is mergeTenantOver's result: the effective parts it fills
 // (not mergedDefaults) and `own`, the tenant block with the platform
 // overlay applied (before profile expansion) — the layer whose `_profile`
@@ -459,17 +549,16 @@ type tenantMerge struct {
 	own map[string]any
 }
 
-// mergeTenantOver applies tenantID's override block from the tenant file's
-// bytes on top of the merged defaults — with the platform overlay's keys
+// mergeTenantOver applies tenantID's override block from the parsed tenant
+// file on top of the merged defaults — with the platform overlay's keys
 // the tenant file does not write filled in first (overlayTenant; #2019),
 // then the elected profile's keys neither of those writes
 // (PlatformProfiles.expand; #2117). `profiles` nil = no profile expansion.
-func mergeTenantOver(merged map[string]any, tenantYAMLBytes []byte, tenantID string, overlay []PlatformBlock, profiles *PlatformProfiles) (tenantMerge, error) {
-	var tenantDoc any
-	if err := yaml.Unmarshal(tenantYAMLBytes, &tenantDoc); err != nil {
-		return tenantMerge{}, &tenantParseError{err: err}
-	}
-	tenantRaw, err := extractTenantRaw(normalizeYAMLToJSON(tenantDoc), tenantID)
+// The block is the tenant's own copy (TenantDoc.tenantRaw), so nothing done
+// to it here or by a caller holding effectiveParts.tenantRaw reaches the
+// shared document.
+func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID string, overlay []PlatformBlock, profiles *PlatformProfiles) (tenantMerge, error) {
+	tenantRaw, err := tenantDoc.tenantRaw(tenantID)
 	if err != nil {
 		return tenantMerge{}, err
 	}
@@ -735,11 +824,25 @@ func ComputeMergedHash(
 	defaultsChainYAML [][]byte,
 	layers ...TenantLayers,
 ) (string, error) {
-	merged, err := ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML, layers...)
+	return ComputeMergedHashDoc(ParseTenantDoc(tenantYAMLBytes), tenantID, defaultsChainYAML, layers...)
+}
+
+// ComputeMergedHashDoc is ComputeMergedHash over a tenant file already
+// parsed by ParseTenantDoc (#2153) — ComputeMergedHash is this plus the
+// parse. For a caller hashing many tenants of one file: parse it once and
+// pass the same TenantDoc for each.
+func ComputeMergedHashDoc(
+	tenantDoc *TenantDoc,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+	layers ...TenantLayers,
+) (string, error) {
+	l := oneLayers(layers)
+	parts, err := computeEffectiveConfigDocDetailed(tenantDoc, tenantID, defaultsChainYAML, l.Overlay, l.Profiles)
 	if err != nil {
 		return "", err
 	}
-	return mergedHashOf(merged)
+	return mergedHashOf(parts.merged)
 }
 
 // ComputeMergedHashFromChain is ComputeMergedHash over a defaults chain whose
@@ -756,12 +859,24 @@ func ComputeMergedHashFromChain(
 	defaultsChain []ChainDefaults,
 	layers ...TenantLayers,
 ) (string, error) {
+	return ComputeMergedHashFromChainDoc(ParseTenantDoc(tenantYAMLBytes), tenantID, defaultsChain, layers...)
+}
+
+// ComputeMergedHashFromChainDoc is ComputeMergedHashFromChain over a tenant
+// file already parsed by ParseTenantDoc (#2153): the cold load's form, with
+// both the defaults chain and the tenant file parsed once per load.
+func ComputeMergedHashFromChainDoc(
+	tenantDoc *TenantDoc,
+	tenantID string,
+	defaultsChain []ChainDefaults,
+	layers ...TenantLayers,
+) (string, error) {
 	merged, err := mergeDefaultsChain(defaultsChain)
 	if err != nil {
 		return "", err
 	}
 	l := oneLayers(layers)
-	tm, err := mergeTenantOver(merged, tenantYAMLBytes, tenantID, l.Overlay, l.Profiles)
+	tm, err := mergeTenantOver(merged, tenantDoc, tenantID, l.Overlay, l.Profiles)
 	if err != nil {
 		return "", err
 	}
