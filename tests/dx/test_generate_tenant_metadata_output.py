@@ -11,10 +11,14 @@ What is pinned here, and the mutant each group was measured against:
 * ``TestInterruptedWrite`` — the old file survives a failed write. Red under
   the in-place ``write_text`` it replaced.
 * ``TestNoRegressionVsInPlace`` — the shapes the shared
-  ``_atomic_write.atomic_write_text`` was measured to break (symlink output,
-  a user's ``<out>.tmp``) plus the fallbacks (unwritable directory, hard
-  link, extended attributes) and the 0644 mode. The symlink / ``.tmp`` tests are red under
-  ``atomic_write_text``.
+  ``_atomic_write.atomic_write_text`` was measured to break before #2128
+  (symlink output, a user's ``<out>.tmp``) plus the fallbacks (unwritable
+  directory, hard link, extended attributes) and the 0644 mode. Since #2128
+  the #2082 writer IS that shared helper (this tool calls it with
+  ``flag="--output"``), so these now pin the helper through this tool; the
+  helper's own tests are in ``test_atomic_write.py``. The ``mkstemp`` fault
+  injections patch the ``tempfile`` module itself, which is where the helper
+  looks it up.
 * ``TestCheckOnDamagedOutput`` — every damaged shape is rc 2 "damaged",
   distinct from rc 1 "outdated"; with must-fire controls for ``ok`` and
   ``stale`` so a check that says "damaged" to everything cannot pass.
@@ -206,7 +210,7 @@ class TestInterruptedWrite:
         def refuse(*a, **k):
             raise OSError(code, os.strerror(code), str(tmp_path / ".meta.json.abc.tmp"))
 
-        monkeypatch.setattr(gtm.tempfile, "mkstemp", refuse)
+        monkeypatch.setattr(tempfile, "mkstemp", refuse)
         rc = _run(monkeypatch, confd, out)
         err = capsys.readouterr().err
 
@@ -265,7 +269,7 @@ class TestNoRegressionVsInPlace:
             raise PermissionError(errno.EACCES, "Permission denied",
                                   str(tmp_path / ".meta.json.xyz.tmp"))
 
-        monkeypatch.setattr(gtm.tempfile, "mkstemp", denied)
+        monkeypatch.setattr(tempfile, "mkstemp", denied)
         rc = _run(monkeypatch, confd, out)
         err = capsys.readouterr().err
 
@@ -656,12 +660,15 @@ class TestSameResultAsInPlace:
         assert "WARN" not in capsys.readouterr().err
         assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
-    def test_an_owner_that_cannot_be_restored_goes_in_place_like_before(
+    def test_an_owner_that_cannot_be_restored_goes_in_place_with_a_warn(
         self, monkeypatch, confd, tmp_path, capsys,
     ):
-        """Someone else's writable file, non-root run: the in-place writer
-        wrote it and then failed its own chmod (EPERM, rc 2 — measured as
-        nobody). Same result, no WARN ahead of the ERROR."""
+        """Someone else's writable file, non-root run: the tmp cannot be
+        handed to the owner, so the write goes in place. Before #2128 the
+        in-place writer then failed its own chmod (EPERM) and ended rc 2 with
+        the content already written — "cannot write" for a write that
+        happened. Since #2128 S1 that chmod EPERM is a WARN: rc 0, and the
+        lost atomicity is WARNed too (N2)."""
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         st = out.stat()
@@ -683,10 +690,11 @@ class TestSameResultAsInPlace:
         monkeypatch.undo()
         err = capsys.readouterr().err
 
-        assert rc == 2
-        assert f"ERROR: cannot write {out}: Operation not permitted" in err
-        assert "WARN" not in err
-        assert _is_fresh_metadata(out)   # written in place, as the old tool did
+        assert rc == 0, err
+        assert "ERROR" not in err, err
+        assert f"WARN: {out}: it belongs to uid {st.st_uid}" in err, err
+        assert "writing it in place" in err, err
+        assert _is_fresh_metadata(out)   # written in place
         assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d", "meta.json"]
 
     def test_the_tmp_mode_is_set_on_the_fd_not_through_the_name(
@@ -707,7 +715,7 @@ class TestSameResultAsInPlace:
             os.symlink(victim, name)
             return fd, name
 
-        monkeypatch.setattr(gtm.tempfile, "mkstemp", swapped)
+        monkeypatch.setattr(tempfile, "mkstemp", swapped)
         _run(monkeypatch, confd, out)
         monkeypatch.undo()
 
@@ -810,7 +818,7 @@ class TestSameResultAsInPlace:
                 raise PermissionError(errno.EACCES, "Permission denied", str(out))
             return real_write_text(self, *a, **k)
 
-        monkeypatch.setattr(gtm.tempfile, "mkstemp", denied)
+        monkeypatch.setattr(tempfile, "mkstemp", denied)
         monkeypatch.setattr(Path, "write_text", write_text)
         rc = _run(monkeypatch, confd, out)
         err_lines = capsys.readouterr().err.strip().splitlines()

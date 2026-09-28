@@ -44,11 +44,13 @@ from typing import Iterable, List, Optional
 
 import yaml
 
-# Reuse the shared atomic-write helper (LF-forcing + sibling-tmp + os.replace).
+# Reuse the shared atomic-write helper (LF-forcing + private tmp + os.replace).
 # Same import pattern as generate_adr_index.py.
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 from _atomic_write import atomic_write_text  # noqa: E402
+# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 
 # Make stdout tolerate non-ASCII on Windows shells.
 if hasattr(sys.stdout, "reconfigure"):
@@ -449,6 +451,7 @@ def replace_sentinel_block(content: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+@exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Generate the unified planning index (ADR-019 Layer 2).",
@@ -500,7 +503,11 @@ def main() -> int:
     if new == current:
         print(f"OK: no change ({len(entries)} entries)")
     else:
-        atomic_write_text(args.target, new)
+        # #2128: rc 2 + one line naming the doc; --target is named only
+        # when it is not the built-in default.
+        flag = None if args.target == TARGET_DOC else "--target"
+        with output_write(args.target, flag=flag):
+            atomic_write_text(args.target, new, flag=flag)
         print(f"WROTE: {rel_target} ({len(entries)} entries)")
     return 0
 

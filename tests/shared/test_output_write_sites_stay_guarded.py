@@ -131,7 +131,15 @@ PATH_METHOD_SINKS = frozenset({"write_text", "write_bytes", "mkdir", "chmod", "t
 # does not convert escaped as a traceback at rc=1. A closed list of names
 # that write and do nothing else, not a `*atomic*` pattern: a pattern would
 # also match readers and predicates, and nobody would audit the next one.
-NAMED_WRITER_SINKS = frozenset({"atomic_write_text", "atomic_replace_output"})
+# #2128: `generate_tenant_metadata.atomic_replace_output` was folded into the
+# shared `_atomic_write.atomic_write_text`, so one name is left — and every
+# file that calls it is pinned (`test_every_shared_atomic_writer_caller_is_pinned`).
+NAMED_WRITER_SINKS = frozenset({"atomic_write_text"})
+# The module those names come from. `from _atomic_write import
+# atomic_write_text as w` makes `w(...)` a sink too (scan_source resolves the
+# alias), and ANY import of it makes a file a caller for
+# `test_every_shared_atomic_writer_caller_is_pinned` (#2128 S3).
+SHARED_WRITER_MODULE = "_atomic_write"
 # `open` and its aliases; only a WRITE mode is a sink.
 OPEN_NAMES = frozenset({"open"})
 OPEN_MODULE_NAMES = {"io": frozenset({"open"}), "codecs": frozenset({"open"})}
@@ -194,11 +202,27 @@ _STOPPING_CODE = 2
 # counting, and what stops a green run from being read as tree-wide
 # coverage. Everything NOT in this tuple is unpinned and this file knows
 # nothing about it.
+#
+# #2128 added the seven files that call the shared `_atomic_write` helper
+# (`scripts/dx/*`, `scripts/ops/audit_rules_drift` and four
+# `scripts/tools/dx/generate_*`). Three of them live OUTSIDE `scripts/tools/`:
+# pinning is by repo-relative path, so they are scanned like any other; only
+# the anti-vacuity walk (`scan_tools_tree`) is rooted at `TOOLS_DIR`. What
+# keeps the helper's caller population from growing unpinned is
+# `test_every_shared_atomic_writer_caller_is_pinned`, which walks the whole
+# `scripts/` tree.
 GUARDED_FILES: tuple[str, ...] = (
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/audit_rules_drift.py",
     "scripts/tools/dx/compile_custom_alerts.py",
     "scripts/tools/dx/describe_tenant.py",
     "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_rule_pack_stats.py",
     "scripts/tools/dx/generate_tenant_metadata.py",
+    "scripts/tools/dx/generate_tool_map.py",
     "scripts/tools/dx/migrate_conf_d.py",
     "scripts/tools/dx/paired_trend_watch.py",
     "scripts/tools/dx/pair_bench_ratio.py",
@@ -216,7 +240,7 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/ops/generate_rule_pack_split.py",
     "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 20
+_GUARDED_FILES_CEILING = 27
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an
@@ -334,11 +358,28 @@ def _method_open_mode_is_write(node: ast.Call) -> bool | None:
     return False
 
 
-def _classify_sink(node: ast.Call) -> str | None:
+def _is_shared_writer_module(name: str | None) -> bool:
+    return bool(name) and name.rsplit(".", 1)[-1] == SHARED_WRITER_MODULE
+
+
+def _named_writer_aliases(tree: ast.AST) -> dict[str, str]:
+    """``{local name: writer name}`` for ``from _atomic_write import X as Y``."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and _is_shared_writer_module(node.module):
+            for a in node.names:
+                if a.name in NAMED_WRITER_SINKS and a.asname:
+                    aliases[a.asname] = a.name
+    return aliases
+
+
+def _classify_sink(node: ast.Call, aliases: dict[str, str] | None = None) -> str | None:
     """The sink label for *node*, or ``None`` if it does not write."""
     func = node.func
     if _name_of(func) in NAMED_WRITER_SINKS:
         return f"{_name_of(func)}()"
+    if aliases and isinstance(func, ast.Name) and func.id in aliases:
+        return f"{aliases[func.id]}()"
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         mod, attr = func.value.id, func.attr
         if attr in MODULE_SINKS.get(mod, ()):
@@ -540,6 +581,7 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
         for child in ast.iter_child_nodes(node):
             parents[child] = node
 
+    aliases = _named_writer_aliases(tree)
     found: list[SinkCall] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -548,7 +590,7 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
         if name in _CLOSED_WRITERS:
             found.append(SinkCall(label, node.lineno, f"{name}()", "or_die"))
             continue
-        sink = _classify_sink(node)
+        sink = _classify_sink(node, aliases)
         if sink is None:
             continue
         guard: str | None = None
@@ -647,7 +689,6 @@ class TestSinkVocabulary:
         ("shutil.copytree(src, dst)", "shutil.copytree"),
         ("atomic_write_text(p, s)", "atomic_write_text()"),
         ("_atomic_write.atomic_write_text(p, s)", "atomic_write_text()"),
-        ("atomic_replace_output(p, s)", "atomic_replace_output()"),
     ])
     def test_write_sinks_are_seen(self, src, sink):
         assert [(c.sink, c.guard) for c in scan_source(src)] == [(sink, None)]
@@ -998,6 +1039,8 @@ _KNOWN_SITES = {
     "scripts/tools/ops/assemble_config_dir.py": {"shutil.copy2", "os.chmod"},
     "scripts/tools/ops/state_reconcile.py": {"tempfile.mkstemp", "os.fdopen", "os.replace"},
     "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
+    # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
+    "scripts/dx/generate_planning_index.py": {"atomic_write_text()"},
 }
 
 
@@ -1104,6 +1147,116 @@ def test_guarded_files_are_real_and_have_sinks():
         elif not scan_file(rel):
             stale.append(f"{rel}: no raw sink left — remove it from GUARDED_FILES")
     assert not stale, "\n".join(stale)
+
+
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+# The helper's own module defines the name; it does not call it.
+_SHARED_WRITER_HOME = "scripts/tools/dx/_atomic_write.py"
+
+
+def shared_writer_import_lines(source: str, label: str = "<snippet>") -> list[int]:
+    """Lines that import ``_atomic_write`` — ``from _atomic_write import …``
+    (any names, any alias, any relative level) or ``import _atomic_write``
+    (``as`` included, dotted too).
+
+    #2128 S3: the caller population is derived from the IMPORT, not from a
+    call spelled with a known name. A call through an alias, a
+    ``getattr``, a re-export or a function reference handed elsewhere all
+    need the import first; a name-based scan misses every one of them.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source, label)):
+        if isinstance(node, ast.ImportFrom) and _is_shared_writer_module(node.module):
+            lines.append(node.lineno)
+        elif isinstance(node, ast.Import) and any(
+                _is_shared_writer_module(a.name) for a in node.names):
+            lines.append(node.lineno)
+    return sorted(lines)
+
+
+def shared_writer_caller_lines(source: str, label: str = "<snippet>") -> list[int]:
+    """Import lines plus every sink call of a ``NAMED_WRITER_SINKS`` writer
+    (aliases resolved). Empty ⇔ this source is not a caller."""
+    calls = [c.line for c in scan_source(source, label)
+             if c.sink.removesuffix("()") in NAMED_WRITER_SINKS]
+    return sorted(set(shared_writer_import_lines(source, label)) | set(calls))
+
+
+def shared_writer_callers(root: Path = SCRIPTS_DIR) -> dict[str, list[int]]:
+    """``{repo-relative file: [lines]}`` for every file under *root* — the
+    whole ``scripts/`` tree, not ``TOOLS_DIR`` — that imports the shared
+    writer or calls it."""
+    found: dict[str, list[int]] = {}
+    for py in sorted(root.rglob("*.py")):
+        rel = py.relative_to(REPO_ROOT).as_posix()
+        if rel == _SHARED_WRITER_HOME:
+            continue
+        lines = shared_writer_caller_lines(py.read_text(encoding="utf-8"), rel)
+        if lines:
+            found[rel] = lines
+    return found
+
+
+class TestSharedWriterCallerDetection:
+    """Controls for the caller derivation, both signs (#2128 S3)."""
+
+    def test_an_aliased_import_and_call_is_a_caller(self):
+        src = "from _atomic_write import atomic_write_text as w\nw(p, s)\n"
+        assert shared_writer_caller_lines(src) == [1, 2]
+        # …and the aliased call is a sink the guard check sees, unguarded.
+        assert [(c.line, c.sink, c.guard) for c in scan_source(src)] == [
+            (2, "atomic_write_text()", None)]
+
+    def test_a_wrapped_aliased_call_is_guarded(self):
+        src = ("from _atomic_write import atomic_write_text as w\n"
+               "with output_write(p, flag=None):\n    w(p, s)\n")
+        assert [c.guard for c in scan_source(src)] == ["output_write"]
+
+    @pytest.mark.parametrize("src", [
+        "import _atomic_write\n",
+        "import _atomic_write as aw\nfn = aw.atomic_write_text\n",
+        "from _atomic_write import OutputNoSpaceError\n",
+        "from ._atomic_write import atomic_write_text\n",
+        "import dx._atomic_write\n",
+    ])
+    def test_any_import_makes_a_caller(self, src):
+        assert shared_writer_import_lines(src) == [1]
+
+    @pytest.mark.parametrize("src", [
+        "import atomic_write\n",
+        "from _atomic_write_extra import x\n",
+        "w = something.atomic_writer\n",
+        "text = '_atomic_write'\n",
+    ])
+    def test_non_imports_are_not_callers(self, src):
+        assert shared_writer_caller_lines(src) == []
+
+
+def test_every_shared_atomic_writer_caller_is_pinned():
+    """#2128. The shared atomic writer raises ``OutputWriteError`` and may
+    fall back in place with a WARN. What the gate below checks statically,
+    and only for files in ``GUARDED_FILES``, is that each call site sits in
+    a ``with output_write(...)`` (or a ``try`` whose handler ends the run
+    at rc 2). It does NOT check that ``main`` carries
+    ``exit_on_output_write_error`` — that part is exercised behaviourally,
+    per caller, by ``tests/dx/test_shared_atomic_write_callers.py`` (rc 2,
+    one line, no traceback). So the CALLER population is closed here: any
+    file under ``scripts/`` (``scripts/dx`` and ``scripts/ops`` included,
+    where the ``TOOLS_DIR`` walk never looks) that imports ``_atomic_write``
+    must join ``GUARDED_FILES`` in the same diff, or this is red.
+
+    A specific break that reddens this: drop any caller file from
+    ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).
+    """
+    callers = shared_writer_callers()
+    # Anti-vacuity: the walk must see callers on both sides of TOOLS_DIR.
+    assert any(not f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    assert any(f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    unpinned = sorted(f"  {f}:{','.join(map(str, lines))}"
+                      for f, lines in callers.items() if f not in GUARDED_FILES)
+    assert not unpinned, (
+        "callers of the shared atomic writer that GUARDED_FILES does not pin:\n"
+        + "\n".join(unpinned))
 
 
 def test_not_guarded_entries_point_at_real_unguarded_sinks():

@@ -38,11 +38,13 @@ from typing import Optional
 
 import yaml
 
-# Reuse shared atomic-write helper (LF-forcing + sibling-tmp + os.replace).
+# Reuse shared atomic-write helper (LF-forcing + private tmp + os.replace).
 # Same import pattern as scripts/dx/generate_planning_index.py.
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 from _atomic_write import atomic_write_text  # noqa: E402
+# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 
 # Make stdout tolerate non-ASCII on legacy Windows consoles.
 if hasattr(sys.stdout, "reconfigure"):
@@ -428,6 +430,7 @@ def render_report(
 # --------------------------------------------------------------------------- main
 
 
+@exit_on_output_write_error
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="季度 rule-corpus drift 稽核 (TRK-307)")
     ap.add_argument(
@@ -473,8 +476,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     if out is None:
         month = datetime.now(timezone.utc).strftime("%Y-%m")
         out = DEFAULT_REPORT_DIR / f"rules-drift-{month}.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(out, report)
+    # #2128: a failure ends at rc 2 with one line naming the report, and the
+    # flag is named only when the operator actually gave --out.
+    flag = "--out" if args.out is not None else None
+    with output_write(out.parent, flag=flag, action="create directory"):
+        out.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(out, flag=flag):
+        atomic_write_text(out, report, flag=flag)
     sys.stdout.write(f"wrote drift report: {out.relative_to(REPO_ROOT)}\n")
     if not memory_available:
         sys.stderr.write(
