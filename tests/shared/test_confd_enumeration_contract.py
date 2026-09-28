@@ -308,6 +308,9 @@ def test_legitimate_shapes_are_not_flagged(name, tmp_path: pathlib.Path):
 # that answer — the pin cannot be satisfied by the classifier going dark.
 
 FLAT_OUTSIDE_POPULATION: dict[str, str] = {
+    "_lib_toolcount.py":
+        "iterdir over scripts/tools and its ops/dx/lint subdirectories — the "
+        "repo's own Python tools, counted case-insensitively (issue 1541)",
     "dx/gen_agent_adapters.py":
         "os.listdir over .agents/skills — the repo-owned skill SSOT it generates adapters from",
     "dx/inject_waveform.py":

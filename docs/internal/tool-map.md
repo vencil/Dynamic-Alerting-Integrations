@@ -15,15 +15,6 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
-| `_federation_revocation_reconciler.py` | Federation revocation reconciler — ADR-028 D1 detective control (#924). |
-| `_grar_merge.py` | Routing-config merging + tenant substitution + receiver building. |
-| `_grar_parse.py` | Configuration loading + parsing for generate_alertmanager_routes. |
-| `_grar_render.py` | Output rendering + Alertmanager ConfigMap operations. |
-| `_grar_routes.py` | Route generation: tenant routes, override expansion, enforced routes, inhibit rules. |
-| `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
-| `_observed_map_lib.py` | Shared SoT extractor for the threshold observed-map (#719). |
-| `_registry_lib.py` | threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200). |
-| `_threshold_alerts.py` | Which alerts read a threshold key — looked up in the rule packs, not guessed. |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
@@ -85,9 +76,6 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
-| `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
-| `_recipe_preview.py` | recipe would-fire preview core (#657 P2). |
-| `_waveform_lib.py` | fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫） |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `agent_output_metrics.py` | Measure CHANGELOG entry lengths and PR-body evidence blocks; a ruler, not a gate. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
@@ -144,9 +132,6 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
-| `_lint_helpers.py` | Shared utilities for lint tools. |
-| `_rule_tree.py` | Rule-tree scanner — what alerting rules this repo actually ships. |
-| `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_admin_config_schema.py` | validate tenant-api admin meta-config YAML against JSON Schemas. |
@@ -268,4 +253,19 @@ lang: zh
 - `scripts/tools/_lib_versions.py`：Version SSOT readers for the dx doc-generation tools.
 - `scripts/tools/_lib_yaml.py`：Minimal CRD YAML serialization helpers for operator tooling.
 - `scripts/tools/_lib_yaml_keys.py`：Read YAML the way the exporter reads a tenant id: as the scalar's TEXT.
+- `scripts/tools/ops/_federation_revocation_reconciler.py`：Federation revocation reconciler — ADR-028 D1 detective control (#924).
+- `scripts/tools/ops/_grar_merge.py`：Routing-config merging + tenant substitution + receiver building.
+- `scripts/tools/ops/_grar_parse.py`：Configuration loading + parsing for generate_alertmanager_routes.
+- `scripts/tools/ops/_grar_render.py`：Output rendering + Alertmanager ConfigMap operations.
+- `scripts/tools/ops/_grar_routes.py`：Route generation: tenant routes, override expansion, enforced routes, inhibit rules.
+- `scripts/tools/ops/_grar_validate.py`：URL / domain / schema validation for generate_alertmanager_routes.
+- `scripts/tools/ops/_observed_map_lib.py`：Shared SoT extractor for the threshold observed-map (#719).
+- `scripts/tools/ops/_registry_lib.py`：threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200).
+- `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
+- `scripts/tools/dx/_atomic_write.py`：Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation).
+- `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
+- `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
+- `scripts/tools/lint/_lint_helpers.py`：Shared utilities for lint tools.
+- `scripts/tools/lint/_rule_tree.py`：Rule-tree scanner — what alerting rules this repo actually ships.
+- `scripts/tools/lint/_version_patterns.py`：Version pattern registry for validate_docs_versions.py
 - `scripts/_lib.sh`：Shell scenario/benchmark 共用

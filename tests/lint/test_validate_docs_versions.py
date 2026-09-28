@@ -99,8 +99,7 @@ def _unlisted_tool_subdirs(tools_dir: Path, listed) -> list:
             continue
         if (sub / "__init__.py").exists():
             continue
-        if any(not any(f.name.startswith(p)
-                       for p in _toolcount.TOOL_SKIP_PREFIXES)
+        if any(not f.name.startswith(_toolcount.HELPER_PREFIX)
                for f in sub.glob("*.py")):
             out.append(sub.name)
     return out
@@ -1295,8 +1294,7 @@ class TestFixDoesNotTurnTheGateOff:
         tools_dir = mod.REPO_ROOT / "scripts" / "tools"
 
         def _keep(f):
-            return not any(f.name.startswith(p)
-                           for p in _toolcount.TOOL_SKIP_PREFIXES)
+            return not f.name.startswith(_toolcount.HELPER_PREFIX)
 
         documented = sum(1 for s in ("ops", "dx", "lint")
                          for f in (tools_dir / s).glob("*.py") if _keep(f))

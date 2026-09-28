@@ -735,10 +735,10 @@ def _count_python_tools() -> int:
 
 
 def check_tool_count_in_docs() -> List[Issue]:
-    """Check that CLAUDE.md and README tool counts match actual scripts/tools/*.py.
+    """Check that the README tool counts match actual scripts/tools/*.py.
 
-    Compares the "XX 個 Python 工具" / "XX Python tools" counts in CLAUDE.md
-    and README files against `count_scope` — the tools under
+    Compares the "XX 個 Python 工具" / "XX Python tools" counts in the
+    README files against `count_scope` — the tools under
     `scripts/tools/{ops,dx,lint}`.
 
     ⛔ TOOL_COUNT_CHECK_FILES is a list of files whose tool-count sentence
