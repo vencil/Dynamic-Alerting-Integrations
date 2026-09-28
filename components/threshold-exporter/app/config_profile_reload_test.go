@@ -192,3 +192,64 @@ func TestReload_ProfileEdit_MovesMergedHash(t *testing.T) {
 		})
 	}
 }
+
+// #2118: profileDeltaFor reads the tenant's own block by the flat plane's
+// id. A tenant keyed by a bare `010:` (yaml types it int 8) must be found
+// as "010" — the generic decode re-spelled it "8", the lookup missed, and
+// an edit to the profile it elects left its merged_hash stale (reloaded 0,
+// no blast-radius sample) while /metrics served the new value. `tx` is the
+// control: the same tree with a string key.
+func TestReload_ProfileEdit_BareScalarTenantKey(t *testing.T) {
+	t.Parallel()
+	const profiles = "profiles:\n  std:\n    mysql_connections: 60\n"
+	want := 50.0
+	for _, key := range []string{"010", "tx"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeOverlayTree(t, dir, map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+				"_profiles.yaml": profiles,
+				"tx.yaml":        "tenants:\n  " + key + ":\n    _profile: std\n",
+			})
+			fresh, _ := freshMetrics(t)
+			m := NewConfigManagerWithDebounce(dir, 0)
+			m.SetMetrics(fresh)
+			m.SetLogger(log.New(io.Discard, "", 0))
+			defer m.Close()
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			before := cachedMergedHash(m, key)
+			if before == "" {
+				t.Fatalf("no merged_hash for %q after Load — the case tests nothing", key)
+			}
+
+			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"), strings.Replace(profiles, "60", "50", 1))
+			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
+			reloaded, noOp, err := m.diffAndReload()
+			if err != nil {
+				t.Fatalf("diffAndReload: %v", err)
+			}
+			assertServed(t, m, key, key, &want)
+
+			after := cachedMergedHash(m, key)
+			if after == before {
+				t.Errorf("%s merged_hash did not move (%s) though its profile's value changed", key, after)
+			}
+			pe, err := config.ResolveEffective(dir, key)
+			if err != nil {
+				t.Fatalf("ResolveEffective(%s): %v", key, err)
+			}
+			if after != pe.MergedHash {
+				t.Errorf("%s: exporter merged_hash=%s, /effective merged_hash=%s — DIVERGED", key, after, pe.MergedHash)
+			}
+			if reloaded != 1 || noOp != 0 {
+				t.Errorf("reloaded=%d noOp=%d, want 1/0", reloaded, noOp)
+			}
+			if n, _ := blastRadiusSample(t, fresh, ReloadReasonDefaults, "global", "applied"); n != 1 {
+				t.Errorf("blast-radius (defaults, global, applied) sampleCount = %d, want 1", n)
+			}
+		})
+	}
+}
