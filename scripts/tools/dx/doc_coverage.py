@@ -4,9 +4,9 @@
 掃描文件庫，產出雙語覆蓋率、front matter 完整度、連結健康度報告。
 
 用法:
-  python3 scripts/tools/doc_coverage.py              # 文字報告
-  python3 scripts/tools/doc_coverage.py --json        # JSON 輸出
-  python3 scripts/tools/doc_coverage.py --ci          # CI 模式（exit 1 if below 80%）
+  python3 scripts/tools/dx/doc_coverage.py              # 文字報告
+  python3 scripts/tools/dx/doc_coverage.py --json        # JSON 輸出
+  python3 scripts/tools/dx/doc_coverage.py --ci          # CI 模式（exit 1 if below 80%）
 """
 
 import os

@@ -14,16 +14,16 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
 
 用法:
   # 掃描 custom rule 目錄
-  python3 scripts/tools/lint_custom_rules.py rule-packs/custom/
+  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/
 
   # 掃描指定檔案
-  python3 scripts/tools/lint_custom_rules.py path/to/rules.yaml
+  python3 scripts/tools/ops/lint_custom_rules.py path/to/rules.yaml
 
   # 使用自訂 policy 檔
-  python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
+  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
 
   # CI 模式 (非零退出碼)
-  python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --ci
+  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --ci
 
 參考: docs/custom-rule-governance.md §4
 """

@@ -8,10 +8,10 @@ Generates:
   3. scaffold-report.txt   — Summary with rule pack & Helm deployment instructions
 
 Usage:
-  python3 scripts/tools/scaffold_tenant.py
-  python3 scripts/tools/scaffold_tenant.py --tenant db-c --db mariadb,redis -o output/
-  python3 scripts/tools/scaffold_tenant.py --non-interactive --tenant db-c --db mariadb
-  python3 scripts/tools/scaffold_tenant.py --tenant db-c --db mariadb --namespaces ns1,ns2,ns3
+  python3 scripts/tools/ops/scaffold_tenant.py
+  python3 scripts/tools/ops/scaffold_tenant.py --tenant db-c --db mariadb,redis -o output/
+  python3 scripts/tools/ops/scaffold_tenant.py --non-interactive --tenant db-c --db mariadb
+  python3 scripts/tools/ops/scaffold_tenant.py --tenant db-c --db mariadb --namespaces ns1,ns2,ns3
 """
 from __future__ import annotations
 

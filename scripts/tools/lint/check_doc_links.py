@@ -4,9 +4,9 @@
 掃描 repo 中的 Markdown 文件，驗證所有相對路徑連結和 §X.Y 引用的目標存在。
 
 用法:
-  python3 scripts/tools/check_doc_links.py              # 顯示報告
-  python3 scripts/tools/check_doc_links.py --ci          # CI 模式（exit 1 if broken）
-  python3 scripts/tools/check_doc_links.py --verbose     # 顯示所有掃描的連結
+  python3 scripts/tools/lint/check_doc_links.py              # 顯示報告
+  python3 scripts/tools/lint/check_doc_links.py --ci          # CI 模式（exit 1 if broken）
+  python3 scripts/tools/lint/check_doc_links.py --verbose     # 顯示所有掃描的連結
 """
 
 import os

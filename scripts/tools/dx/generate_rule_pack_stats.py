@@ -5,10 +5,10 @@
 讀取實際規則數量，產生 Markdown include 片段供文件引用。
 
 用法:
-  python3 scripts/tools/generate_rule_pack_stats.py              # 印出統計
-  python3 scripts/tools/generate_rule_pack_stats.py --check      # CI 模式 (exit 1 on drift)
-  python3 scripts/tools/generate_rule_pack_stats.py --json       # JSON 輸出
-  python3 scripts/tools/generate_rule_pack_stats.py --generate   # 產生 docs/includes/rule-pack-stats.md
+  python3 scripts/tools/dx/generate_rule_pack_stats.py              # 印出統計
+  python3 scripts/tools/dx/generate_rule_pack_stats.py --check      # CI 模式 (exit 1 on drift)
+  python3 scripts/tools/dx/generate_rule_pack_stats.py --json       # JSON 輸出
+  python3 scripts/tools/dx/generate_rule_pack_stats.py --generate   # 產生 docs/includes/rule-pack-stats.md
 """
 import argparse
 import json

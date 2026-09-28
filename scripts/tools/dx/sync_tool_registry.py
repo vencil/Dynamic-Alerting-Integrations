@@ -11,7 +11,7 @@ frontmatter，沒有任何讀取端，而那份副本用的詞彙又與 registry
 --sync-frontmatter 旗標隨之移除。
 
 Usage:
-    python3 scripts/tools/sync_tool_registry.py [--dry-run] [--verbose] [--scan-appears-in]
+    python3 scripts/tools/dx/sync_tool_registry.py [--dry-run] [--verbose] [--scan-appears-in]
 
 Flags:
     --dry-run            只顯示差異，不寫入檔案

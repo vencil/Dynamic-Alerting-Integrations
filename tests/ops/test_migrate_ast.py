@@ -11,8 +11,8 @@
   7. End-to-end process_rule 整合
 
 用法:
-  python3 -m pytest tests/test_migrate_ast.py -v
-  python3 tests/test_migrate_ast.py  # 直接執行
+  python3 -m pytest tests/ops/test_migrate_ast.py -v
+  python3 tests/ops/test_migrate_ast.py  # 直接執行
 """
 
 import os

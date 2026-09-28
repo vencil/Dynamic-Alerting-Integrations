@@ -5,7 +5,7 @@
 並為每個工具推薦 top-3 related tools。
 
 Usage:
-    python3 scripts/tools/suggest_related.py [--top N] [--show-scores] [--apply]
+    python3 scripts/tools/dx/suggest_related.py [--top N] [--show-scores] [--apply]
 
 Flags:
     --top N         推薦數量（預設 3）

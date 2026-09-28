@@ -9,49 +9,49 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 
 用法:
   # 更新 exporter 版號 (Chart.yaml version + appVersion + image tag + OCI chart)
-  python3 scripts/tools/bump_docs.py --exporter 1.1.0
+  python3 scripts/tools/dx/bump_docs.py --exporter 1.1.0
 
   # 更新 da-tools 版號 (所有 image tag + VERSION)
-  python3 scripts/tools/bump_docs.py --tools 1.1.0
+  python3 scripts/tools/dx/bump_docs.py --tools 1.1.0
 
   # 更新 da-portal 版號 (Chart.yaml + README 標題 + image tag + OCI chart)
-  python3 scripts/tools/bump_docs.py --portal 2.8.0
+  python3 scripts/tools/dx/bump_docs.py --portal 2.8.0
 
   # 更新 tenant-api 版號 (Chart.yaml + Dockerfile LABEL + image tag)
-  python3 scripts/tools/bump_docs.py --tenant-api 2.4.0
+  python3 scripts/tools/dx/bump_docs.py --tenant-api 2.4.0
 
   # 更新平台文件版號
-  python3 scripts/tools/bump_docs.py --platform 1.1.0
+  python3 scripts/tools/dx/bump_docs.py --platform 1.1.0
 
   # 只檢查不修改 (CI lint 用)
-  python3 scripts/tools/bump_docs.py --check
+  python3 scripts/tools/dx/bump_docs.py --check
 
   # Dry-run：顯示 before→after diff 但不寫入
-  python3 scripts/tools/bump_docs.py --dry-run --platform 2.1.0
+  python3 scripts/tools/dx/bump_docs.py --dry-run --platform 2.1.0
 
   # 限定範圍：只處理 docs/ 下的檔案
   # （--scope 對「指名的版號線」選不到任何規則時 → exit 2，不會回報「已完成」；
   #   bare --check 下被 scope 排除的線會印 SCOPE-EMPTY，不算 violation）
-  python3 scripts/tools/bump_docs.py --dry-run --scope docs --platform 2.1.0
+  python3 scripts/tools/dx/bump_docs.py --dry-run --scope docs --platform 2.1.0
 
   # 初始化英文 CHANGELOG
-  python3 scripts/tools/bump_docs.py --init-changelog 2.1.0 --changelog-lang en
+  python3 scripts/tools/dx/bump_docs.py --init-changelog 2.1.0 --changelog-lang en
 
   # 同時初始化中英文 CHANGELOG
-  python3 scripts/tools/bump_docs.py --init-changelog 2.1.0 --changelog-lang all
+  python3 scripts/tools/dx/bump_docs.py --init-changelog 2.1.0 --changelog-lang all
 
   # 完整規則審計（顯示所有規則的當前匹配狀態）
-  python3 scripts/tools/bump_docs.py --what-if
+  python3 scripts/tools/dx/bump_docs.py --what-if
 
   # 自動更新散落在文件中的硬編碼計數（工具、Rule Pack、文件數、hooks 等）
-  python3 scripts/tools/bump_docs.py --sync-counts
+  python3 scripts/tools/dx/bump_docs.py --sync-counts
 
   # 檢查計數是否需要更新（`make version-check` / `make pre-tag` 會跑這條）
   # ⛔ --sync-counts 不接受版號旗標與 --scope（它只同步計數，過去照收然後靜默丟棄）
-  python3 scripts/tools/bump_docs.py --sync-counts --check
+  python3 scripts/tools/dx/bump_docs.py --sync-counts --check
 
   # 組合使用
-  python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0 --tenant-api 2.4.0
+  python3 scripts/tools/dx/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0 --tenant-api 2.4.0
 """
 import argparse
 import os

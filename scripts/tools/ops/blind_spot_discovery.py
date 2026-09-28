@@ -7,8 +7,8 @@ Complements analyze_rule_pack_gaps.py (custom rule vs Rule Pack coverage).
 Blind Spot Discovery analyzes infrastructure coverage vs tenant config coverage.
 
 Usage:
-  python3 scripts/tools/blind_spot_discovery.py --prometheus http://localhost:9090 --config-dir conf.d/
-  python3 scripts/tools/blind_spot_discovery.py --config-dir conf.d/ --json-output
+  python3 scripts/tools/ops/blind_spot_discovery.py --prometheus http://localhost:9090 --config-dir conf.d/
+  python3 scripts/tools/ops/blind_spot_discovery.py --config-dir conf.d/ --json-output
 """
 import argparse
 import os
