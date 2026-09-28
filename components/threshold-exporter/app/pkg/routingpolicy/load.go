@@ -183,37 +183,39 @@ func normalizeTaggedBools(n *yaml.Node) {
 }
 
 // DecodePyYAML decodes n as PyYAML's safe_load reads it (#2325), for where
-// the Python generator's reading of a value decides the outcome. It returns
-// an error exactly when safe_load refuses the value (`!!bool y`, `!!int abc`,
-// a plain `2001-13-40`) — the generator then drops the whole file. Otherwise
-// it returns what PyYAML builds: nil for None (`!!null x` included), the
-// bool for a bool (a plain `yes` / `On`, a `!!bool yEs`; a quoted `"yes"`
-// or `!!str yes` stays a string), and for anything else a non-bool value —
-// yaml.v3's decode where it has one, else the scalar's text. Pinned against
-// PyYAML by tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind
-// spot (the non-specific tag `!` on a quoted scalar) is in pyyaml.go.
+// the Python generator's reading of a boolean flag decides the outcome. For
+// a scalar it returns an error exactly when safe_load refuses the value
+// (`!!bool y`, `!!int abc`, a plain `2001-13-40`) — the generator then drops
+// the whole file. Otherwise it returns what PyYAML builds: nil for None
+// (`!!null x` included), the bool for a bool (a plain `yes` / `On`, a
+// `!!bool yEs`; a quoted `"yes"` or `!!str yes` stays a string), and for
+// anything else a non-bool value — yaml.v3's decode where it has one, else
+// the scalar's text. Pinned against PyYAML by
+// tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind spot (the
+// non-specific tag `!` on a quoted scalar) is in pyyaml.go.
+//
+// A mapping or sequence (an alias is followed once) is never a bool, so it
+// is returned as a non-bool without looking inside: no recursion, so an
+// alias cycle (`&x [*x]`) or fan-out costs nothing. Accepted gap: where
+// PyYAML refuses a scalar inside it (`[!!bool y]`) the generator drops the
+// whole file, while here only this flag is off — stricter, fail-closed.
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
 	}
-	if n.Kind == yaml.ScalarNode {
-		v, other, err := pyScalar(n)
-		if err != nil || !other {
-			return v, err
-		}
-	} else if err := pyCollection(n); err != nil {
-		return nil, err
+	if n.Kind != yaml.ScalarNode {
+		return kindName(n), nil
 	}
-	var v any
+	v, other, err := pyScalar(n)
+	if err != nil || !other {
+		return v, err
+	}
 	if n.Decode(&v) == nil && v != nil {
 		if _, isBool := v.(bool); !isBool {
 			return v, nil
 		}
 	}
-	if n.Kind == yaml.ScalarNode {
-		return n.Value, nil
-	}
-	return kindName(n), nil
+	return n.Value, nil
 }
 
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent

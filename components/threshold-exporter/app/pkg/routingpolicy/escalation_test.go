@@ -6,8 +6,11 @@ package routingpolicy
 // languages; these pin the pieces a message is built from).
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -202,5 +205,35 @@ func TestCheckCriticalEscalation_PerRequiringDomain(t *testing.T) {
 	got := CheckCriticalEscalation("t1", esc("slack", nil), pols)
 	if len(got) != 2 || got[0].Domain != "a" || got[1].Domain != "z" || got[0].Verdict.Compliant() {
 		t.Errorf("got %+v, want non-compliant for a then z", got)
+	}
+}
+
+// A mapping or sequence value — an alias cycle and a fan-out included —
+// fails closed without a crash and fast (#2325): the document is refused
+// (yaml.v3's own alias checks) or the constraint is reported and off while
+// the rest of the policy still applies.
+func TestParseDomainPolicies_CollectionEscalationFailsClosed(t *testing.T) {
+	t.Parallel()
+	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
+	for i := 1; i <= 8; i++ {
+		fan += fmt.Sprintf(", &l%d [%s]", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 10), ","))
+	}
+	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}"} {
+		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " +
+			v + "\n      forbidden_receiver_types: [slack]\n"
+		start := time.Now()
+		pols, probs, err := ParseDomainPolicies([]byte(src))
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("%.40s: took %v", v, d)
+		}
+		if err != nil {
+			continue // refused whole: fail-closed
+		}
+		if len(pols) != 1 || pols[0].RequireCriticalEscalation || !reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("%.40s: policies %+v, want escalation off and forbid [slack]", v, pols)
+		}
+		if len(probs) != 1 || probs[0].Field != "domain_policies.d.constraints.require_critical_escalation" {
+			t.Errorf("%.40s: problems %+v, want the constraint reported", v, probs)
+		}
 	}
 }

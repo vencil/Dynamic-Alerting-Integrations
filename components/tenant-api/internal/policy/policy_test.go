@@ -656,6 +656,45 @@ func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
 	}
 }
 
+// A mapping or sequence value is not a boolean (#2325), however it is built:
+// an alias cycle or fan-out must neither crash the process (a CrashLoop, on
+// the first load and on a hot reload alike) nor stall it, and as for any
+// other non-boolean the constraint is off while the rest still applies.
+// PyYAML-refused children (`!!omap [{[1]: 2}]`) and merge sources
+// (`{<<: !foo {b: 1}}`) are not looked at.
+func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
+	t.Parallel()
+	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
+	for i := 1; i <= 8; i++ {
+		fan += fmt.Sprintf(", &l%d [%s]", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 10), ","))
+	}
+	want := func(what, v string, m *Manager, took time.Duration) {
+		t.Helper()
+		if took > time.Second {
+			t.Errorf("%s %.40s: took %v", what, v, took)
+		}
+		pols := m.RoutingPolicies()
+		if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("%s %.40s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
+		}
+	}
+	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}"} {
+		start := time.Now()
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		want("initial load", v, NewManager(dir), time.Since(start))
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		m := NewManager(dir)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		start = time.Now()
+		if err := m.Reload(); err != nil {
+			t.Errorf("hot reload %.40s: Reload() = %v, want a non-boolean to load", v, err)
+		}
+		want("hot reload", v, m, time.Since(start))
+	}
+}
+
 // Not parallel: it swaps the process-wide slog default to read the WARN.
 func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
 	var buf lockedBuffer

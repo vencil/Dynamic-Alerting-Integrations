@@ -45,8 +45,8 @@ type Constraints struct {
 	// (routingpolicy.DecodePyYAML, #2325): a plain `yes` / `on` or a
 	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
 	// the constraint on (the generator's `is True`); any other value PyYAML
-	// reads (`"true"`, `1`) is logged once per load and left off, and the
-	// rest of the file still applies. A value PyYAML refuses (`!!bool y`,
+	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
+	// left off, and the rest of the file still applies. A scalar PyYAML refuses (`!!bool y`,
 	// `!!int abc`) fails the file, as the generator drops it: a hot reload
 	// keeps the last good policy and records the failure.
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`

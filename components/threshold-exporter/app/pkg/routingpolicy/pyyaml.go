@@ -1,14 +1,15 @@
 package routingpolicy
 
 // pyyaml.go — what PyYAML's safe_load (the route generator's reader, 6.0.x
-// SafeLoader) makes of one node, for DecodePyYAML (#2325). Only the outcome
-// DecodePyYAML needs is modelled: refused (safe_load raises, the generator
-// drops the whole file), None, a bool, or some other value. The contract is
+// SafeLoader) makes of one SCALAR node, for DecodePyYAML (#2325). Only the
+// outcome DecodePyYAML needs is modelled: refused (safe_load raises, the
+// generator drops the whole file), None, a bool, or some other value.
+// Collections are not modelled at all (see DecodePyYAML). The contract is
 // pinned row by row against PyYAML itself by
 // tests/shared/pyyaml_tagged_scalar_matrix.json.
 //
 // The one thing a yaml.Node cannot tell apart is the non-specific tag `!` on
-// a QUOTED or block scalar: PyYAML resolves `! 'yes'` as if it were plain
+// a quoted or block scalar: PyYAML resolves `! 'yes'` as if it were plain
 // (True), while yaml.v3 drops the tag and keeps a quoted string.
 
 import (
@@ -63,17 +64,11 @@ func pyResolve(v string) string {
 	return "!!str"
 }
 
-// pyTag is the tag PyYAML constructs n with: the explicit one, else (plain
-// scalar) the resolved one, else the kind's default.
+// pyTag is the tag PyYAML constructs scalar n with: the explicit one, else
+// !!str for a quoted or block scalar, else the resolved one.
 func pyTag(n *yaml.Node) string {
 	if n.Style&yaml.TaggedStyle != 0 {
 		return n.ShortTag()
-	}
-	switch n.Kind {
-	case yaml.SequenceNode:
-		return "!!seq"
-	case yaml.MappingNode:
-		return "!!map"
 	}
 	if n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
 		return "!!str"
@@ -111,55 +106,6 @@ func pyScalar(n *yaml.Node) (v any, other bool, err error) {
 		return nil, false, fmt.Errorf("PyYAML cannot read %q as %s", n.Value, tag)
 	}
 	return nil, true, nil
-}
-
-// pyCollection reports whether safe_load refuses collection n or anything
-// in it.
-func pyCollection(n *yaml.Node) error {
-	tag := pyTag(n)
-	if n.Kind == yaml.SequenceNode {
-		switch tag {
-		case "!!seq", "!!omap", "!!pairs":
-		default:
-			return fmt.Errorf("PyYAML has no constructor for tag %s on a sequence", tag)
-		}
-		for _, c := range n.Content {
-			if c = deref(c); tag != "!!seq" && (c.Kind != yaml.MappingNode || len(c.Content) != 2) {
-				return fmt.Errorf("PyYAML reads %s items as single-pair mappings only", tag)
-			}
-			if _, err := DecodePyYAML(c); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if tag != "!!map" && tag != "!!set" {
-		return fmt.Errorf("PyYAML has no constructor for tag %s on a mapping", tag)
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		k, v := deref(n.Content[i]), deref(n.Content[i+1])
-		if k.Kind == yaml.ScalarNode && pyTag(k) == "!!merge" {
-			srcs := []*yaml.Node{v}
-			if v.Kind == yaml.SequenceNode {
-				srcs = v.Content
-			}
-			for _, s := range srcs {
-				if deref(s).Kind != yaml.MappingNode {
-					return fmt.Errorf("PyYAML merges mappings only")
-				}
-			}
-		} else if k.Kind != yaml.ScalarNode {
-			return fmt.Errorf("PyYAML refuses an unhashable mapping key")
-		} else if pyTag(k) != "!!value" {
-			if _, err := DecodePyYAML(k); err != nil {
-				return err
-			}
-		}
-		if _, err := DecodePyYAML(v); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // pyNumeric is the text Python's int() / float() parse: underscores already

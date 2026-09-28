@@ -2,10 +2,12 @@
 
 `routingpolicy.DecodePyYAML` (Go) reads `require_critical_escalation` the way
 the route generator reads it — PyYAML's `safe_load` — and its contract is:
-it returns an error exactly when `safe_load` refuses the document, and
-otherwise the value PyYAML builds (a bool as that bool, None as nil, anything
-else as some non-bool). The Go half
-(components/threshold-exporter/app/pkg/routingpolicy/tagged_scalar_oracle_test.go)
+for a scalar it returns an error exactly when `safe_load` refuses the
+document, and otherwise the value PyYAML builds (a bool as that bool, None as
+nil, anything else as some non-bool). The table holds scalars only: Go reads
+any mapping or sequence as a non-bool without looking inside, a contract the
+Go half asserts on its own (there is nothing to compare with PyYAML there).
+The Go half (components/threshold-exporter/app/pkg/routingpolicy/tagged_scalar_oracle_test.go)
 asserts that contract row by row; this half asserts every row IS what the
 installed PyYAML says, so the table cannot drift from its oracle.
 
@@ -56,23 +58,13 @@ VALUES = [
     # quoted and block: whitespace, Unicode digits, embedded newline
     "''", '""', "'yes'", '"no"', "'5'", '"1.5"', "'abc'", "'~'", "'2001-12-14'",
     "' 5 '", "' 1.5'", '"\\u0665"', '"1\\u0660"', '"\\uff15.5"', '"yes\\n"',
-    '"2001-12-14\\n"', "|\n  yes\n",
+    '"2001-12-14\\n"', "|\n  yes\n", ">\n  yes\n",
 ]
 
 # Tags outside the seven kinds; they take the plain values only.
 OTHER_TAGS = ["!", "!foo", "!!foo", "!!merge", "!!value", "!!seq", "!!map",
               "!!set", "!<tag:yaml.org,2002:omap>"]
 OTHER_VALUES = ["yes", "5", "abc", "'yes'", "'5'", "~"]
-
-# Collections: PyYAML reads the children with the same constructors.
-COLLECTIONS = [
-    "[1, 2]", "[yes]", "[!!null x]", "[!!int abc]", "{b: !!int abc}", "{b: yes}",
-    "{[1]: 2}", "{!!binary 1_000: 1}", "{=: 1}", "{<<: {b: 1}}", "{<<: 1}",
-    "{<<: [{b: 1}]}", "{<<: [1]}", "[<<]", "[=]", "!!omap [{b: 1}]",
-    "!!omap [1]", "!!omap [{b: 1, c: 2}]", "!!pairs [{b: 1}, {b: 2}]",
-    "!!set {b: null}", "!!set [1]", "!!seq {b: 1}", "!!map [1]", "!foo [1]",
-    "! [1]", "{b: 2001-13-40}",
-]
 
 
 def _source(tag: str, value: str) -> str:
@@ -93,7 +85,7 @@ def _measure(source: str) -> dict:
             row["bool"] = v
     # yaml.v3 drops the non-specific tag `!`: it hands Go a quoted `'yes'`
     # where PyYAML resolved the text as if plain. Go cannot see these rows.
-    if source.startswith("! ") and source[2:3] in ("'", '"', "|"):
+    if source.startswith("! ") and source[2:3] in ("'", '"', "|", ">"):
         row["go_blind"] = "yaml.v3 drops the non-specific tag on a non-plain scalar"
     return row
 
@@ -101,7 +93,6 @@ def _measure(source: str) -> dict:
 def _rows() -> list[dict]:
     sources = [_source(t, v) for t in TAGS for v in VALUES]
     sources += [f"{t} {v}" for t in OTHER_TAGS for v in OTHER_VALUES]
-    sources += COLLECTIONS
     seen: set = set()
     return [_measure(s) for s in sources if not (s in seen or seen.add(s))]
 
@@ -147,4 +138,4 @@ def test_matrix_is_not_vacuous() -> None:
         assert any(r["source"] == needle and "refused" in r for r in rows), needle
     # The rows Go skips are the non-specific tag on a non-plain scalar only.
     blind = [r["source"] for r in rows if "go_blind" in r]
-    assert blind and all(b.startswith("! ") and b[2] in "'\"|" for b in blind), blind
+    assert blind and all(b.startswith("! ") and b[2] in "'\"|>" for b in blind), blind

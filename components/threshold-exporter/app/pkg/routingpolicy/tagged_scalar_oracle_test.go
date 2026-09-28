@@ -11,10 +11,13 @@ package routingpolicy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -77,6 +80,34 @@ func TestDecodePyYAML_MatchesPyYAMLOracle(t *testing.T) {
 			if _, isBool := v.(bool); isBool || v == nil {
 				t.Errorf("%s: PyYAML builds a %s, DecodePyYAML = %#v", row.Source, row.Type, v)
 			}
+		}
+	}
+}
+
+// A mapping or sequence is never a bool: DecodePyYAML returns a non-bool
+// without looking inside, whatever PyYAML would make of the children — an
+// alias cycle or a fan-out included (#2325), so it must also be fast.
+func TestDecodePyYAML_CollectionIsNonBool(t *testing.T) {
+	t.Parallel()
+	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
+	for i := 1; i <= 8; i++ {
+		fan += fmt.Sprintf(", &l%d [%s]", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 10), ","))
+	}
+	for _, src := range []string{
+		"[yes]", "{b: true}", "[!!bool y]", "!foo [1]", "!!omap [{[1]: 2}]",
+		"{<<: !foo {b: 1}}", "&x [*x]", "&x {b: *x}", "[" + fan + "]",
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte("a: "+src+"\n"), &doc); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		start := time.Now()
+		v, err := DecodePyYAML(doc.Content[0].Content[1])
+		if _, isBool := v.(bool); err != nil || isBool || v == nil {
+			t.Errorf("%.40s: DecodePyYAML = %#v, %v; want a non-bool, no error", src, v, err)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("%.40s: DecodePyYAML took %v", src, d)
 		}
 	}
 }
