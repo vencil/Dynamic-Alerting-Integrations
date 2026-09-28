@@ -60,6 +60,7 @@ from _lib_confd import (  # noqa: E402
 # alias window), as the exporter's merge does.
 from _grar_validate import (  # noqa: E402
     _other_tenant_key_spellings,
+    drop_shadowed_spellings,
     overlay_across_spellings,
 )
 
@@ -521,14 +522,24 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # spelling (#2368): a later layer's `mysql_cpu` replaces an earlier
     # layer's `mysql_threads_running`, so `resolved` carries the one value
     # /metrics serves, under the spelling that supplied it.
+    #
+    # #2420 (CodeRabbit, checked against Go): each layer first takes
+    # resolve's canonical-wins dedup (drop_shadowed_spellings) — a layer
+    # writing BOTH spellings serves only the canonical one on /metrics — and
+    # a tenant-layer threshold written as null is NOT a value: /metrics logs
+    # `unknown value ""` and falls back to the defaults, so it is left out of
+    # the tenant overlay (it still keeps the profile out, via _tenant_sets,
+    # and still displaced the platform's other spelling in _tenant_block,
+    # both as on /metrics).
     resolved = {}
-    overlay_across_spellings(resolved, default_only)
+    overlay_across_spellings(resolved, drop_shadowed_spellings(default_only))
     if profile_keys:
         # Profile fills in only where tenant hasn't overridden
-        overlay_across_spellings(resolved, {
+        overlay_across_spellings(resolved, drop_shadowed_spellings({
             k: v for k, v in profile_keys.items()
-            if not k.startswith("_") and not _tenant_sets(k)})
-    overlay_across_spellings(resolved, tenant_metric_keys)
+            if not k.startswith("_") and not _tenant_sets(k)}))
+    overlay_across_spellings(resolved, drop_shadowed_spellings(
+        {k: v for k, v in tenant_metric_keys.items() if v is not None}))
 
     out: dict[str, object] = {
         "chain": chain,

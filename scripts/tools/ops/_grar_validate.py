@@ -1132,6 +1132,18 @@ def _other_tenant_key_spellings(key: object) -> "list[str]":
     return out
 
 
+def drop_shadowed_spellings(m: dict) -> dict:
+    """Go `dropShadowedSpellings` / resolve's canonical-wins dedup inside
+    ONE layer: a deprecated spelling whose canonical spelling the same map
+    also sets is dropped (a lone deprecated spelling is kept, not renamed).
+    Returns `m` itself when nothing is dropped."""
+    drop = [k for k in m if isinstance(k, str)
+            and _canonical_tenant_key(k)[1] and _canonical_tenant_key(k)[0] in m]
+    if not drop:
+        return m
+    return {k: v for k, v in m.items() if k not in drop}
+
+
 def overlay_across_spellings(dst: dict, src: dict) -> None:
     """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per THRESHOLD,
     not per spelling — a key `src` writes also drops from `dst` every other

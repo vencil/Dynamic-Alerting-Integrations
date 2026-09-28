@@ -237,6 +237,7 @@ modules:
       - _legacy_tenant_key
       - _other_tenant_key_spellings
       - overlay_across_spellings
+      - drop_shadowed_spellings
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
       _validate_profile_refs: "Covered by test_e2e_routing_profile.py integration"

@@ -2353,6 +2353,35 @@ class TestAliasSpellingProperties:
         gv.overlay_across_spellings(dst, {later: b})
         assert dst == {later: b, "keep": 1}
 
+    @given(st.sampled_from(_ALIAS_CANONICALS or ["_none_"]),
+           st.sampled_from(["exact", "critical", "dimensional"]), _LABEL,
+           st.dictionaries(_UNTOUCHED_KEY, st.integers(), max_size=4),
+           st.booleans(), st.integers(), st.integers())
+    @PILOT_SETTINGS
+    def test_drop_shadowed_spellings_is_canonical_wins(self, canon, shape, labels, rest, with_canon, a, b):
+        # #2420: inside one layer the canonical spelling wins and the
+        # deprecated one is dropped; a lone deprecated spelling stays as
+        # written (never renamed); untouched keys are never touched.
+        assume(canon != "_none_")
+        k = _alias_shape(canon, shape, labels)
+        legacy = gv._legacy_tenant_key(k)
+        layer = dict(rest)
+        layer[legacy] = a
+        if with_canon:
+            layer[k] = b
+        got = gv.drop_shadowed_spellings(layer)
+        want = dict(rest)
+        if with_canon:
+            want[k] = b
+        else:
+            want[legacy] = a
+        assert got == want
+
+    @given(st.dictionaries(_UNTOUCHED_KEY, st.integers(), max_size=5))
+    @PILOT_SETTINGS
+    def test_drop_shadowed_spellings_is_identity_off_the_alias_table(self, layer):
+        assert gv.drop_shadowed_spellings(layer) is layer
+
     def test_overlay_keeps_one_layers_own_pair(self):
         # A map writing BOTH spellings removes neither (the canonical-wins
         # dedup inside that layer decides, as on /metrics).

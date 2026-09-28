@@ -864,6 +864,14 @@ MUTATIONS: list[Mutation] = [
         old="            if s not in src:\n                dst.pop(s, None)",
         new="            if False:\n                dst.pop(s, None)",
     ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="drop_shadowed_spellings: keep the shadowed deprecated spelling",
+        fn_name="drop_shadowed_spellings",
+        old="    if not drop:\n        return m\n    return {k: v for k, v in m.items() if k not in drop}",
+        new="    if True:\n        return m\n    return {k: v for k, v in m.items() if k not in drop}",
+    ),
     # ── _parse_policy_duration (_grar_validate) ──────────────────
     # ROI refactor round 5: #1136 promoted check_domain_policies +
     # _parse_policy_duration from dead code to the CI blocking gate's

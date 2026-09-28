@@ -65,6 +65,57 @@ def test_profile_layer_excludes_a_threshold_the_tenant_writes_in_the_other_spell
     assert {k: v for k, v in chain["resolved"].items() if k in (canon, legacy)} == {legacy: "90"}
 
 
+def _cr_trees() -> "list[tuple[str, dict, dict]]":
+    """#2420 (CodeRabbit) shapes: (name, files, resolved threshold keys
+    expected). Each expected value is what Go's /metrics serves for the tree
+    (measured with LoadDir + Resolve on the PR head): a layer writing BOTH
+    spellings serves only its canonical one, and a tenant-layer null falls
+    back to the defaults."""
+    legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    return [
+        ("tenant-null-legacy-over-chain-canonical",
+         {"_defaults.yaml": f"defaults:\n  {canon}: 70\n",
+          "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
+         {canon: 70}),
+        # The null still displaces the platform entry's other spelling (as
+        # on /metrics), so the defaults' 30 is served, not the platform's 70.
+        ("tenant-null-legacy-over-platform-canonical",
+         {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {canon}: 70\n",
+          "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
+         {canon: 30}),
+        ("chain-writes-both-spellings",
+         {"_defaults.yaml": f"defaults:\n  {legacy}: 40\n  {canon}: 30\n",
+          "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
+         {canon: 30}),
+        ("tenant-writes-both-spellings",
+         {"_defaults.yaml": f"defaults:\n  {canon}: 30\n",
+          "tx.yaml": f"tenants:\n  tx:\n    {legacy}: '40'\n    {canon}: '50'\n"},
+         {canon: "50"}),
+        ("platform-entry-writes-both-spellings",
+         {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {legacy}: 40\n    {canon}: 50\n",
+          "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
+         {canon: 50}),
+        # Not an alias shape: a tenant null on a plain threshold also falls
+        # back to the defaults on /metrics.
+        ("tenant-null-plain-threshold",
+         {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+          "tx.yaml": "tenants:\n  tx:\n    mysql_connections: null\n"},
+         {"mysql_connections": 80}),
+    ]
+
+
+@pytest.mark.parametrize("name,files,want", _cr_trees(), ids=lambda x: x if isinstance(x, str) else "")
+def test_resolved_matches_metrics_for_same_layer_pairs_and_nulls(
+        name: str, files: dict, want: dict, tmp_path: Path) -> None:
+    for rel, content in files.items():
+        (tmp_path / rel).write_text(content, encoding="utf-8")
+    legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    keys = {legacy, canon, "mysql_connections"}
+    chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+    got = {k: v for k, v in chain["resolved"].items() if k in keys}
+    assert got == want, (name, got)
+
+
 def test_routing_readers_keep_literal_key_merge() -> None:
     """Without `merge=`, overlay_platform_tenants is the per-literal-key
     `dict.update` the routing readers (_grar_parse, check_routing_profiles)
