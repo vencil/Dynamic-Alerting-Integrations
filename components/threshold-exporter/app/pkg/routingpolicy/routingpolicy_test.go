@@ -368,3 +368,28 @@ func TestWithPyYAMLReceivers_NonStringKeysAndFailClosed(t *testing.T) {
 		t.Error("WithPyYAMLReceivers modified its routing argument")
 	}
 }
+
+// TestParseDoc_GeneratorRepeatedKeyRefusesTheFile (#2295): a key the route
+// generator counts as written twice and yaml.v3 does not (an alias key beside
+// its anchor, two `<<`) fails the whole document, as a plain repeat does — no
+// block of it is read, whatever mapping the repeat is in.
+func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
+	for name, src := range map[string]string{
+		"policy alias key":   "domain_policies:\n  d1:\n    &c constraints :\n      forbidden_receiver_types: [webhook]\n    *c : {}\n",
+		"profiles alias key": "routing_profiles:\n  &p p1 :\n    receiver: {type: webhook}\n  *p : {}\n",
+		"repeat elsewhere":   "unrelated:\n  &k a : 1\n  *k : 2\nrouting_profiles:\n  p1: {receiver: {type: webhook}}\n",
+		"two merge keys":     "x: &x {a: 1}\ny: &y {b: 1}\nz:\n  <<: *x\n  <<: *y\n",
+	} {
+		if _, err := parseDoc([]byte(src)); err == nil || !strings.Contains(err.Error(), "already defined") {
+			t.Errorf("%s: err = %v, want the repeated key named", name, err)
+		}
+	}
+	tenant := "tenants:\n  &a t1 :\n    _routing: {receiver: {type: webhook}}\n  *a :\n    _routing: {receiver: {type: email}}\n"
+	if got := PyYAMLRoutingByTenant([]byte(tenant)); got != nil {
+		t.Errorf("PyYAMLRoutingByTenant = %v, want nil (no PyYAML reading: Unmatched downstream)", got)
+	}
+	// A merge key overridden by an explicit key is no repeat.
+	if _, err := parseDoc([]byte("x: &x {a: 1}\nz:\n  <<: *x\n  a: 2\n")); err != nil {
+		t.Errorf("merge override: %v", err)
+	}
+}

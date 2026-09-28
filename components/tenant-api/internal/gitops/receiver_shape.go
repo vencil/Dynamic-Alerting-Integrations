@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
@@ -96,8 +97,8 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	var doc struct {
 		Tenants map[string]map[string]any `yaml:"tenants"`
 	}
-	if yaml.Unmarshal([]byte(yamlContent), &doc) != nil {
-		return nil // validateBodyOnly owns every decode error
+	if yaml.Unmarshal([]byte(yamlContent), &doc) != nil || pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)) != nil {
+		return nil // validateBodyOnly owns every decode error, a repeated key included
 	}
 	// Keys made strings as the exporter's merge does, so a `1:` or `~:` key
 	// beside the receiver leaves `_routing` a mapping (da-guard reads it so).

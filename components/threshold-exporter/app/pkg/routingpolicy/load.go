@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,12 +87,23 @@ var (
 	profileFileNames = []string{"_routing_profiles.yaml", "_routing_profiles.yml"}
 )
 
+// ReportsUnusable reports whether LoadRoot names a root file of this name
+// that it cannot parse as a Problem (domain_policy_unusable /
+// routing_profiles_unusable) — a duplicate key included — rather than
+// leaving it to the exporter's parse-failure list.
+func ReportsUnusable(name string) bool {
+	return contains(policyFileNames, name) || contains(profileFileNames, name)
+}
+
 // errUnusable marks a block that decodes but has the wrong shape.
 var errUnusable = errors.New("unusable")
 
 // parseDoc decodes one YAML document into its top-level node. A nil node with
 // a nil error is an empty document. The full decode is run as well so that a
-// duplicate key fails here as it fails in every other reader of the file.
+// duplicate key fails here as it fails in every other reader of the file —
+// and so does a key only the route generator counts as written twice (an
+// alias key beside its anchor, two `<<`): its StrictLoader refuses the whole
+// file (#2295, pyyamlcompat.FindDuplicateKey), so nothing in it is read.
 func parseDoc(data []byte) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -105,6 +117,9 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	if err := top.Decode(&probe); err != nil {
 		return nil, err
 	}
+	if d := pyyamlcompat.FindDuplicateKeyIn(data); d != nil {
+		return nil, d
+	}
 	if probe == nil {
 		return nil, nil
 	}
@@ -114,32 +129,17 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	return top, nil
 }
 
-// lookup returns the value node of key in a mapping node, or nil. A key
-// written twice (an alias key beside its anchor: yaml.v3 lets it through,
-// the generator's StrictLoader refuses the file) is not found either.
+// lookup returns the value node of key in a mapping node, or nil.
 func lookup(m *yaml.Node, key string) *yaml.Node {
-	n, dup := lookupDup(m, key)
-	if dup {
-		return nil
-	}
-	return n
-}
-
-// lookupDup is lookup that also returns the first value of a key written
-// twice, reporting dup.
-func lookupDup(m *yaml.Node, key string) (n *yaml.Node, dup bool) {
 	if m == nil || m.Kind != yaml.MappingNode {
-		return nil, false
+		return nil
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if deref(m.Content[i]).Value == key { // an alias key: its anchor's text
-			if n != nil {
-				return n, true
-			}
-			n = deref(m.Content[i+1])
+			return deref(m.Content[i+1])
 		}
 	}
-	return n, false
+	return nil
 }
 
 func deref(n *yaml.Node) *yaml.Node {
@@ -184,7 +184,7 @@ func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, er
 // routingDefaultsFromNode is RoutingDefaultsFrom over a parsed document;
 // stripped reports that the block carried `routes`, which were removed.
 func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, stripped bool, err error) {
-	n, dup := lookupDup(top, "_routing_defaults")
+	n := lookup(top, "_routing_defaults")
 	if n == nil {
 		return nil, false, false, nil
 	}
@@ -192,11 +192,7 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 	if err := n.Decode(&v); err != nil {
 		return nil, true, false, err
 	}
-	py := n
-	if dup { // the generator refuses the file: no PyYAML reading, Unmatched
-		py = nil
-	}
-	m, ok := asStringMap(withPyYAMLReceiversFrom(v, py))
+	m, ok := asStringMap(withPyYAMLReceiversFrom(v, n))
 	if !ok {
 		return nil, true, false, nil
 	}
@@ -476,11 +472,7 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 			continue
 		}
 		if r, has := body["_routing"]; has {
-			var py *yaml.Node
-			if !e.dup {
-				py = routingNode(e.value)
-			}
-			body["_routing"] = withPyYAMLReceiversFrom(r, py)
+			body["_routing"] = withPyYAMLReceiversFrom(r, routingNode(e.value))
 		}
 		tid := e.key
 		for _, k := range routingBlockKeys {
@@ -502,7 +494,6 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 type mapEntry struct {
 	key   string // the key's source text (tenant ids are text: `010` is "010")
 	value *yaml.Node
-	dup   bool // written twice (alias key beside its anchor); value is the last
 }
 
 // mappingEntries lists a mapping node's entries with YAML merge keys
@@ -539,26 +530,17 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 		}
 		own = append(own, mapEntry{key: deref(k).Value, value: v}) // an alias key: its anchor's text, as a decode reads it
 	}
-	// A key written twice after deref is one entry (yaml.v3 keeps the last)
-	// marked dup: the generator's StrictLoader refuses the file, so there
-	// is no PyYAML reading of it.
-	written := map[string]int{}
-	var ownOnce []mapEntry
+	written := map[string]bool{}
 	for _, e := range own {
-		if i, seen := written[e.key]; seen {
-			ownOnce[i] = mapEntry{key: e.key, value: e.value, dup: true}
-			continue
-		}
-		written[e.key] = len(ownOnce)
-		ownOnce = append(ownOnce, e)
+		written[e.key] = true
 	}
-	out := make([]mapEntry, 0, len(merged)+len(ownOnce))
+	out := make([]mapEntry, 0, len(merged)+len(own))
 	for _, e := range merged {
-		if _, w := written[e.key]; !w {
+		if !written[e.key] {
 			out = append(out, e)
 		}
 	}
-	return append(out, ownOnce...)
+	return append(out, own...)
 }
 
 func trimUnusable(err error) string {

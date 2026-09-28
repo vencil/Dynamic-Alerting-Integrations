@@ -34,7 +34,9 @@
 //	3  config files the exporter drops (#2123, #2179; the one definition
 //	   of which files: docs/cli-reference.md §guard): the files
 //	   ScopeEffective reports in ParseFailed — the exporter's own load's
-//	   parse-failure list, kept when the file bears on --scope — or a
+//	   parse-failure list, kept when the file bears on --scope — plus the
+//	   files the route generator refuses whole for a repeated key yaml.v3
+//	   lets through (#2295, withGeneratorDuplicates) — or a
 //	   config.DecodeError met while resolving. Independent of
 //	   --cardinality-limit. The report names them (relative to
 //	   --config-dir). A DecodeError stops the run before any tenant is
@@ -225,6 +227,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 		}
 		return exitCallerErr
 	}
+	withGeneratorDuplicates(f.configDir, scoped, errOut)
 
 	// #2043: without an explicit --cardinality-limit, predict against the cap
 	// the exporter will actually enforce for this tree, not a constant. The

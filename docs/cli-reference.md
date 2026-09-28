@@ -2500,7 +2500,7 @@ da-tools guard <subcommand> [flags]
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列、同一 mapping 兩個 `<<`；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
 

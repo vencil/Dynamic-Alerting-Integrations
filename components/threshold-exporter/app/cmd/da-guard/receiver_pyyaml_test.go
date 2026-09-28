@@ -160,37 +160,21 @@ func TestPyYAMLOwn_FailsClosedWithoutThePyYAMLReading(t *testing.T) {
 	}
 }
 
-// TestRun_ReceiverDupAliasKeyAndPlatformIntKey (#2295 review), expectations
-// from the route generator run against each shape:
-//   - an alias key beside its anchor (`&a tx:` + `*a:`, `&k _routing:` +
-//     `*k:`) is one key written twice: yaml.v3 keeps the last, the
-//     generator's StrictLoader refuses the file whole. There is no PyYAML
-//     reading, so the receiver is refused whichever copy is the bad one.
-//   - a `1:` beside `_routing` or in the tenant body of the root platform
-//     file does not drop the overlay unjudged (the generator judges it).
-func TestRun_ReceiverDupAliasKeyAndPlatformIntKey(t *testing.T) {
+// TestRun_PlatformIntKey (#2295 review): a `1:` beside `_routing` or in the
+// tenant body of the root platform file does not drop the overlay unjudged
+// (the route generator judges it). Repeated keys: generator_duplicates_test.go.
+func TestRun_PlatformIntKey(t *testing.T) {
 	t.Parallel()
 	const (
 		bad  = "{type: webhook}"
 		good = "{type: webhook, url: 'https://t.example/g'}"
 		on   = "\n        type: webhook\n        url: https://t.example/h\n        http_config:\n          bearer_token: on\n"
-		body = "    mysql_connections: \"50\"\n"
 	)
-	dupTenant := func(first, second string) string {
-		return "tenants:\n  &a tx :\n" + body + "    _routing:\n      receiver: " + first + "\n  *a :\n" + body +
-			"    _routing:\n      receiver: " + second + "\n"
-	}
 	for _, tc := range []struct {
 		name  string
 		files map[string]string
 		want  int
 	}{
-		{"tenant alias dup, bad first", map[string]string{"tx.yaml": dupTenant(bad, good)}, 1},
-		{"tenant alias dup, good first", map[string]string{"tx.yaml": dupTenant(good, bad)}, 1},
-		{"_routing alias dup, bad first", map[string]string{"tx.yaml": rsTenant +
-			"    &k _routing :\n      receiver: " + bad + "\n    *k :\n      receiver: " + good + "\n"}, 1},
-		{"platform tenant alias dup, bad first", map[string]string{"tx.yaml": rsTenant, "_platform.yaml": "tenants:\n  &a tx :\n" +
-			"    _routing:\n      receiver: " + bad + "\n  *a :\n    _routing:\n      receiver: " + good + "\n"}, 1},
 		{"platform 1: beside _routing, plain on", map[string]string{"tx.yaml": rsTenant,
 			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver:" + on}, 1},
 		{"platform 1: beside _routing, bad receiver", map[string]string{"tx.yaml": rsTenant,

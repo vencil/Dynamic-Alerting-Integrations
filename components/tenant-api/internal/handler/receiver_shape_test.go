@@ -11,6 +11,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -185,30 +186,78 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 	}
 }
 
-// TestPutTenant_ReceiverDupAliasKey (#2295 review): an alias key beside its
-// anchor (`&a rs-t:` + `*a:`, `&k _routing:` + `*k:`) is one key written
-// twice. yaml.v3 keeps the last copy; the route generator's StrictLoader
-// refuses the file whole, so there is no PyYAML reading of the receiver and
-// the PUT is refused — whichever copy is the bad one — and nothing written.
-func TestPutTenant_ReceiverDupAliasKey(t *testing.T) {
+// TestPutTenant_GeneratorRepeatedKey (#2295): a key the route generator's
+// StrictLoader counts as written twice — an alias key beside its anchor,
+// which yaml.v3 does not count — makes the generator refuse the WHOLE file,
+// wherever the repeat sits and whichever copy is the bad one. PUT answers it
+// as it answers a plain repeated key (400 "invalid YAML: … already defined"
+// — "already set" where yaml.v3's struct decode catches it first — nothing
+// written, both write modes), and POST /validate agrees. Positions:
+// the tenant-file ones revS10 measured going through.
+func TestPutTenant_GeneratorRepeatedKey(t *testing.T) {
 	const (
 		bad  = "{type: webhook}"
 		good = "{type: webhook, url: 'https://hook.example.com/g'}"
-		body = "    cpu_usage_percent: \"50\"\n"
+		b    = "    cpu_usage_percent: \"50\"\n"
+		head = "tenants:\n  rs-t:\n" + b
 	)
-	dupTenant := func(first, second string) string {
-		return "tenants:\n  &a rs-t :\n" + body + "    _routing:\n      receiver: " + first + "\n  *a :\n" + body +
-			"    _routing:\n      receiver: " + second + "\n"
+	url := map[string]string{bad: "x", good: "https://hook.example.com/a"}
+	positions := map[string]func(x, y string) string{
+		"receiver": func(x, y string) string {
+			return head + "    _routing:\n      &r receiver : " + x + "\n      *r : " + y + "\n"
+		},
+		"override receiver": func(x, y string) string {
+			return head + "    _routing:\n      receiver: " + good + "\n      overrides:\n        - alertname: X\n          &r receiver : " + x + "\n          *r : " + y + "\n"
+		},
+		"override alertname": func(x, _ string) string {
+			return head + "    _routing:\n      receiver: " + good + "\n      overrides:\n        - &n alertname : X\n          *n : Y\n          receiver: " + x + "\n"
+		},
+		"route receiver": func(x, y string) string {
+			return head + "    _routing:\n      receiver: " + good + "\n      routes:\n        - match: {team: a}\n          &r receiver : " + x + "\n          *r : " + y + "\n"
+		},
+		"overrides key": func(x, y string) string {
+			return head + "    _routing:\n      receiver: " + good + "\n      &o overrides :\n        - alertname: X\n          receiver: " + x + "\n      *o :\n        - alertname: X\n          receiver: " + y + "\n"
+		},
+		"routes key": func(x, y string) string {
+			return head + "    _routing:\n      receiver: " + good + "\n      &o routes :\n        - match: {team: a}\n          receiver: " + x + "\n      *o :\n        - match: {team: a}\n          receiver: " + y + "\n"
+		},
+		"receiver url": func(x, y string) string {
+			return head + "    _routing:\n      receiver:\n        type: webhook\n        &u url : " + url[x] + "\n        *u : " + url[y] + "\n"
+		},
+		"tenants key": func(x, y string) string {
+			return "&t tenants :\n  rs-t:\n" + b + "    _routing:\n      receiver: " + x + "\n*t :\n  rs-t:\n" + b + "    _routing:\n      receiver: " + y + "\n"
+		},
+		"tenant id": func(x, y string) string {
+			return "tenants:\n  &a rs-t :\n" + b + "    _routing:\n      receiver: " + x + "\n  *a :\n" + b + "    _routing:\n      receiver: " + y + "\n"
+		},
+		"_routing key": func(x, y string) string {
+			return head + "    &k _routing :\n      receiver: " + x + "\n    *k :\n      receiver: " + y + "\n"
+		},
+		"unrelated body key": func(x, _ string) string {
+			return "tenants:\n  rs-t:\n    &q cpu_usage_percent : \"50\"\n    *q : \"60\"\n    _routing:\n      receiver: " + good + "\n"
+		},
+		"two merge keys": func(x, y string) string {
+			return "tenants:\n  rs-t:\n" + b + "    _routing:\n      <<: {receiver: " + x + "}\n      <<: {group_wait: 30s}\n"
+		},
+		"plain repeat (control)": func(x, y string) string {
+			return head + "    _routing:\n      receiver: " + x + "\n      receiver: " + y + "\n"
+		},
 	}
-	for name, doc := range map[string]string{
-		"tenant alias dup, bad first":   dupTenant(bad, good),
-		"tenant alias dup, good first":  dupTenant(good, bad),
-		"_routing alias dup, bad first": "tenants:\n  rs-t:\n" + body + "    &k _routing :\n      receiver: " + bad + "\n    *k :\n      receiver: " + good + "\n",
-	} {
-		for _, pr := range []bool{false, true} {
-			code, resp, written := putReceiverDoc(t, doc, pr)
-			if code != http.StatusBadRequest || written != "" {
-				t.Errorf("%s (pr=%v): status %d, written %q; want 400 and no write; body: %s", name, pr, code, written, resp)
+	for name, build := range positions {
+		for order, xy := range map[string][2]string{"bad first": {bad, good}, "good first": {good, bad}} {
+			doc := build(xy[0], xy[1])
+			for _, pr := range []bool{false, true} {
+				label := name + ", " + order + fmt.Sprintf(" (pr=%v)", pr)
+				code, resp, written := putReceiverDoc(t, doc, pr)
+				if code != http.StatusBadRequest || written != "" ||
+					!strings.Contains(resp, "invalid YAML") ||
+					!(strings.Contains(resp, "already defined") || strings.Contains(resp, "already set")) {
+					t.Errorf("%s: status %d, written %q; want 400 invalid YAML … already defined, no write; body: %s",
+						label, code, written, resp)
+				}
+				if valid, warnings := validateReceiverDoc(t, doc, pr); valid {
+					t.Errorf("%s: validate says valid (%v), PUT refuses", label, warnings)
+				}
 			}
 		}
 	}
@@ -257,6 +306,13 @@ func TestValidateTenant_AgreesWithPut(t *testing.T) {
 // /{id}/validate, on the same kind of tree and write mode.
 func validateReceiverBody(t *testing.T, routing string, pr bool) (bool, []string) {
 	t.Helper()
+	return validateReceiverDoc(t, "tenants:\n  rs-t:\n    _routing:\n"+routing, pr)
+}
+
+// validateReceiverDoc is validateReceiverBody with the whole tenant document
+// as body.
+func validateReceiverDoc(t *testing.T, body string, pr bool) (bool, []string) {
+	t.Helper()
 	const tenant = "rs-t"
 	dir := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n"})
 	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, WriteMode: WriteModeDirect}
@@ -265,7 +321,6 @@ func validateReceiverBody(t *testing.T, routing string, pr bool) (bool, []string
 		d.PRClient = &mockPlatformClient{}
 		d.PRTracker = &mockPlatformTracker{}
 	}
-	body := "tenants:\n  " + tenant + ":\n    _routing:\n" + routing
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/"+tenant+"/validate", "id", tenant, bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	ValidateTenant(d)(w, req)

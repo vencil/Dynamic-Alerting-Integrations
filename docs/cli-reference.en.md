@@ -2514,7 +2514,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
 | 1 | guard found errors — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
-| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
+| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor, two `<<` in one mapping; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
 
 **Routing checks ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280))**
 
