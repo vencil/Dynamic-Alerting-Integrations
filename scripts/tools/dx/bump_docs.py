@@ -74,7 +74,10 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
-from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
+from _version_patterns import (  # noqa: E402
+    DOCS_TREE_SYMLINK_ALIASES,
+    PORTAL_JSX_FRONTMATTER_ROOT,
+)
 # #1534: the capability oracle and the doc extractor both already exist —
 # `_lint_helpers` reads the working tree's COMMAND_MAP (what the tag being cut
 # will ship), and check_doc_datools_cmds owns the fenced-block / docker-run /
@@ -742,12 +745,18 @@ def _build_platform_rules():
     # Front matter `version: vX.Y.Z`.
     #
     # Two different trees, NOT one: the .md front matter lives under docs/,
-    # the .jsx front matter under PORTAL_JSX_DIR. The old code globbed both
-    # extensions under docs/ — correct for .md, dead for .jsx since TRK-230
-    # moved the JSX out. Zero expansion is silent (no rule, so no SKIP and no
-    # DEAD), which is how 44 of these files sat at v2.7.0 while the platform
-    # SSOT said 2.9.0 and every gate reported green (#1407).
-    for _glob_dir, _ext in (("docs", "**/*.md"), (PORTAL_JSX_DIR, "**/*.jsx")):
+    # the .jsx front matter under PORTAL_JSX_FRONTMATTER_ROOT. The old code
+    # globbed both extensions under docs/ — correct for .md, dead for .jsx
+    # since TRK-230 moved the JSX out. Zero expansion is silent (no rule, so
+    # no SKIP and no DEAD), which is how 44 of these files sat at v2.7.0 while
+    # the platform SSOT said 2.9.0 and every gate reported green (#1407).
+    #
+    # ⛔ The .jsx root is the CHECKER's constant, not PORTAL_JSX_DIR. That
+    # narrower dir left `getting-started/wizard.jsx` checked but never
+    # written (#1614); `test_jsx_frontmatter_writer_and_checker_see_same_files`
+    # holds the two ends together.
+    for _glob_dir, _ext in (("docs", "**/*.md"),
+                            (PORTAL_JSX_FRONTMATTER_ROOT, "**/*.jsx")):
         rules.append({
             "file": "__glob__",
             "glob_dir": _glob_dir,
