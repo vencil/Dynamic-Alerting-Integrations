@@ -2211,8 +2211,11 @@ def test_the_report_job_waits_for_every_bucket() -> None:
 _RUNS_DESPITE_UPSTREAM_FAILURE = frozenset({"always()", "!cancelled()"})
 
 # Inputs that say WHAT to scan and WHERE to put the answer. They cannot shrink
-# what Trivy looks for, so they need no per-value pin.
-_TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output"})
+# what Trivy looks for, so they need no per-value pin here. `version` picks the
+# Trivy BINARY (#1337: the action's default moved with every action bump); it
+# filters nothing, and its value is pinned — identical across every CI step,
+# the Makefile and the dev container — by tests/shared/test_toolchain_pin_parity.py.
+_TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output", "version"})
 
 # Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
 # waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
