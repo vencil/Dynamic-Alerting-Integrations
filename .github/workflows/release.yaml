@@ -29,6 +29,17 @@
 # 前置條件：
 #   - Repository Settings → Actions → Workflow permissions → Read and write
 #   - 或建立 PAT 並設為 GHCR_TOKEN secret
+#
+# ⛔ 先掃再發布（#1278）。每個 component job 的順序是：
+#   build → push 到「候選 tag」`:candidate-<run_id>-<run_attempt>`
+#   → Trivy 掃 build step 輸出的那個 digest（hard gate，exit-code 1）
+#   → `docker buildx imagetools create` 把正式 tag（`:v<version>` + `:latest`）
+#     指到「同一個 digest」並回讀驗證 → 之後才 cosign 簽章（簽 digest）、SBOM、
+#     helm push、GitHub Release。
+#   所以掃到可修的 HIGH/CRITICAL 時，客戶拉得到的東西（正式 tag、chart、簽章、
+#   Release）一件都不會出現。候選 tag 不刻意清理——理由見
+#   docs/internal/github-release-playbook.md §Release-gate 陷阱。
+#   順序由 tests/ops/test_release_scan_before_publish.py 解析本檔守住。
 
 name: Release
 
@@ -85,36 +96,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push threshold-exporter image
+      # #1278: push ONLY a candidate tag. The formal `:v<version>` / `:latest`
+      # tags appear later, by promotion of this step's digest, and only if the
+      # Trivy scan of that digest passes.
+      - name: Build and push threshold-exporter candidate image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: components/threshold-exporter/app
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
-        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter@${{ steps.build.outputs.digest }}
 
-      # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # Verifies the image at Chart.yaml `appVersion` tag actually exists
-      # in GHCR + captures digest for the release audit trail. For
-      # threshold-exporter, appVersion==chart-version==tag-version, so
-      # this is effectively "confirm what we just pushed is queryable".
-      # For other components where appVersion ≠ chart-version (e.g.
-      # tenant-api at chart 2.8.0 + appVersion 2.7.0), this verifies the
-      # chart's claimed binary version still has a corresponding image.
-      # See docs/internal/secret-leak-remediation-sop.md for the full
-      # L0/L1/L2/L3 framing.
-      - name: Verify image digest (#445 AC iii)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
-
-      # --- Helm chart (before scan so Trivy failure doesn't block distribution) ---
+      # --- Helm chart: package + verify now (fail fast, publishes nothing);
+      # `helm push` waits until the image digest has passed the scan ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -138,21 +137,13 @@ jobs:
             --chart helm/threshold-exporter \
             --tgz .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
-
-      # --- Security scan (post-push; BLOCKING — exit-code 1, see below) ---
-      # ⛔ "informational" was wrong and is corrected in #1337: this step sets
-      # exit-code 1 with no continue-on-error, so a fixable HIGH/CRITICAL FAILS
-      # the release job. "post-push" is the real caveat — the image is already in
-      # the registry, so what it actually blocks is the release JOB going green,
-      # not the publication of that image. ⚠️ Be precise about the second-order
-      # effect: in every job but release-da-tools this is the LAST step, so nothing
-      # is prevented; only release-da-tools has steps after it (cosign signing,
-      # SBOM, cross-compiled archives, the GitHub Release itself), and there a red
-      # Trivy really does stop those from happening.
+      # --- Security scan (PRE-publish hard gate — exit-code 1; #1278) ---
+      # Scans the candidate DIGEST the build step produced — the exact object
+      # the promotion step below re-tags — so "scanned" and "published" cannot
+      # diverge. A fixable HIGH/CRITICAL fails the job here, and nothing a
+      # customer pulls (formal tags, chart) has been created yet. (#1337 had
+      # to document the opposite: this used to run after the image AND the
+      # chart were already public.)
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -160,11 +151,51 @@ jobs:
           # action bump). Same version as Makefile TRIVY_VERSION and
           # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
           version: v0.74.0
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter@${{ steps.build.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      # Point the formal tags at the SCANNED digest (single-source imagetools
+      # create keeps the index as-is), then read every tag back and fail unless
+      # it resolves to exactly that digest.
+      - name: Promote scanned digest to release tags
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
+          for t in "v${VERSION}" latest; do
+            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
+            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
+            echo "✓ ${IMG}:${t} -> ${DIGEST}"
+          done
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # Verifies the image at Chart.yaml `appVersion` tag actually exists
+      # in GHCR + captures digest for the release audit trail. For
+      # threshold-exporter, appVersion==chart-version==tag-version, so
+      # this is effectively "confirm what we just promoted is queryable".
+      # For other components where appVersion ≠ chart-version (e.g.
+      # tenant-api at chart 2.8.0 + appVersion 2.7.0), this verifies the
+      # chart's claimed binary version still has a corresponding image.
+      # Runs after promotion because it probes the formal `:v<version>` tag.
+      # See docs/internal/secret-leak-remediation-sop.md for the full
+      # L0/L1/L2/L3 framing.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
 
   # ----------------------------------------------------------------
   # Job 2: Build & push da-tools image + da-guard binaries (C-11)
@@ -256,29 +287,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push da-tools image
+      # #1278: candidate tag only — see release-exporter for the flow.
+      - name: Build and push da-tools candidate image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: components/da-tools/app
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
-        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools@${{ steps.build.outputs.digest }}
 
-      # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # da-tools has no Helm chart — components/da-tools/app/VERSION is the
-      # SoT, and we verify the image at v${VERSION} directly. Catches
-      # silent push failure or VERSION/tag drift.
-      - name: Verify image digest (#445 AC iii)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh da-tools
-
+      # PRE-publish hard gate on the candidate digest (#1278).
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -286,7 +309,7 @@ jobs:
           # action bump). Same version as Makefile TRIVY_VERSION and
           # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
           version: v0.74.0
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools@${{ steps.build.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -294,35 +317,64 @@ jobs:
 
       # C-11 PR-3 Layer 1: sign the Docker image with cosign keyless.
       # We sign by digest (not tag) — tags can be moved, digests are
-      # immutable. `cosign sign --yes` skips the interactive Y/N prompt
+      # immutable. The digest is the build step's output, i.e. the object
+      # Trivy just scanned and the next step re-tags (#1278) — not a fresh
+      # tag lookup. Signed BEFORE promotion so a formal tag never exists
+      # unsigned. `cosign sign --yes` skips the interactive Y/N prompt
       # which doesn't work in non-tty CI.
       - name: Sign Docker image (cosign keyless)
         env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
+          DIGEST: ${{ steps.build.outputs.digest }}
           COSIGN_EXPERIMENTAL: "1"
         run: |
           set -euo pipefail
-          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
-          # Resolve to immutable digest before signing — protects
-          # against TOCTOU between push and sign.
-          DIGEST=$(docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}')
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
           echo "▸ Signing image at digest: $DIGEST"
           cosign sign --yes "${IMG}@${DIGEST}"
+
+      - name: Promote scanned digest to release tags
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
+          for t in "v${VERSION}" latest; do
+            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
+            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
+            echo "✓ ${IMG}:${t} -> ${DIGEST}"
+          done
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # da-tools has no Helm chart — components/da-tools/app/VERSION is the
+      # SoT, and we verify the image at v${VERSION} directly. Catches
+      # silent push failure or VERSION/tag drift. After promotion: it probes
+      # the formal tag.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh da-tools
 
       # C-11 PR-3 Layer 1: generate SBOM (Software Bill of Materials)
       # for the Docker image in BOTH SPDX and CycloneDX formats.
       # Different customer security teams prefer different formats;
       # shipping both costs ~50KB and avoids "we don't accept that
-      # format" rejection on first onboarding review.
+      # format" rejection on first onboarding review. Generated from the
+      # scanned digest, not a tag lookup (#1278).
       - name: Generate SBOM for Docker image
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
           mkdir -p "$RUNNER_TEMP/sbom"
-          syft "$IMG" -o spdx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.spdx.json"
-          syft "$IMG" -o cyclonedx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.cyclonedx.json"
+          syft "${IMG}@${DIGEST}" -o spdx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.spdx.json"
+          syft "${IMG}@${DIGEST}" -o cyclonedx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.cyclonedx.json"
           ls -la "$RUNNER_TEMP/sbom/"
 
       # Sign the SBOM files too — a tampered SBOM defeats the whole
@@ -432,11 +484,16 @@ jobs:
       - name: Save image as gzipped tar (air-gapped customers)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
+          REPO="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools"
+          IMG="${REPO}:v${VERSION}"
           OUT="$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
-          docker pull "$IMG"
+          # Pull the scanned digest (#1278), then tag it so `docker load`
+          # on the air-gapped side yields the familiar `da-tools:v<ver>`.
+          docker pull "${REPO}@${DIGEST}"
+          docker tag "${REPO}@${DIGEST}" "$IMG"
           docker save "$IMG" | gzip > "$OUT"
           ( cd "$RUNNER_TEMP" && sha256sum "$(basename "$OUT")" > "${OUT}.sha256" )
           ls -la "$OUT" "$OUT.sha256"
@@ -544,7 +601,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push da-portal image
+      # #1278: candidate tag only — see release-exporter for the flow.
+      - name: Build and push da-portal candidate image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -552,27 +611,19 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
-        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
-
-      # --- L3 supply-chain digest verification (#445 AC iii) ---
-      - name: Verify image digest (#445 AC iii)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal@${{ steps.build.outputs.digest }}
 
       # --- Helm chart (#1352 case A) ---
       # ⛔ Added because the customer-facing install path was a lie: this job
       # gated Chart.yaml version == tag and bump_docs.py kept the README's
       # `oci://…/charts/da-portal --version` string fresh, while nothing ever
       # packaged or pushed that chart. check_chart_pull_surface.py now asserts
-      # the pair. Placed before the Trivy scan, the same way release-exporter
-      # does, so a scan failure does not withhold a chart whose image is
-      # already published.
+      # the pair. Packaged + verified here (fails fast, publishes nothing);
+      # `helm push` waits until the image digest has passed the scan (#1278),
+      # so a scan failure withholds image AND chart together.
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -596,11 +647,7 @@ jobs:
             --chart helm/da-portal \
             --tgz .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
-
+      # PRE-publish hard gate on the candidate digest (#1278).
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -608,11 +655,39 @@ jobs:
           # action bump). Same version as Makefile TRIVY_VERSION and
           # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
           version: v0.74.0
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal@${{ steps.build.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      - name: Promote scanned digest to release tags
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
+          for t in "v${VERSION}" latest; do
+            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
+            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
+            echo "✓ ${IMG}:${t} -> ${DIGEST}"
+          done
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # After promotion: it probes the formal `:v<version>` tag.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
 
   # ----------------------------------------------------------------
   # Job 4: Build & push recipe-preview image + Helm chart (#657)
@@ -676,7 +751,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push recipe-preview image
+      # #1278: candidate tag only — see release-exporter for the flow.
+      - name: Build and push recipe-preview candidate image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -697,35 +774,13 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=v${{ steps.version.outputs.VERSION }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
-        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview@${{ steps.build.outputs.digest }}
 
-      # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # recipe-preview is sync-bumped: appVersion == version == tag, so this
-      # confirms the image we just pushed is queryable in GHCR.
-      - name: Verify image digest (#445 AC iii)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh recipe-preview helm/recipe-preview/Chart.yaml
-
-      # Sign by IMMUTABLE digest (tags can move, digests can't) before any later
-      # step can abort, so the published image is always signed.
-      - name: Sign Docker image (cosign keyless)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          set -euo pipefail
-          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${VERSION}"
-          DIGEST=$(docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}')
-          echo "▸ Signing image at digest: $DIGEST"
-          cosign sign --yes "${IMG}@${DIGEST}"
-
-      # --- Helm chart (before scan so a Trivy failure doesn't block distribution) ---
+      # --- Helm chart: package + verify now (fail fast, publishes nothing);
+      # `helm push` waits until the image digest has passed the scan (#1278) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -749,12 +804,7 @@ jobs:
             --chart helm/recipe-preview \
             --tgz .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
-
-      # --- Security scan (post-push, hard gate — same stance as sibling jobs) ---
+      # --- Security scan (PRE-publish hard gate on the candidate digest; #1278) ---
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -762,7 +812,7 @@ jobs:
           # action bump). Same version as Makefile TRIVY_VERSION and
           # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
           version: v0.74.0
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview@${{ steps.build.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -776,6 +826,50 @@ jobs:
           # components/recipe-preview/. Gate stays HARD (exit-code 1) — only the
           # register's entries are waived.
           trivyignores: components/recipe-preview/.trivyignore.yaml
+
+      # Sign by IMMUTABLE digest — the build step's output, i.e. the object
+      # Trivy just scanned and the next step re-tags (#1278). Signed BEFORE
+      # promotion, so no formal tag can ever exist unsigned because a later
+      # step aborted.
+      - name: Sign Docker image (cosign keyless)
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
+          DIGEST: ${{ steps.build.outputs.digest }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          echo "▸ Signing image at digest: $DIGEST"
+          cosign sign --yes "${IMG}@${DIGEST}"
+
+      - name: Promote scanned digest to release tags
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
+          for t in "v${VERSION}" latest; do
+            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
+            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
+            echo "✓ ${IMG}:${t} -> ${DIGEST}"
+          done
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # recipe-preview is sync-bumped: appVersion == version == tag, so this
+      # confirms the image we just promoted is queryable in GHCR.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh recipe-preview helm/recipe-preview/Chart.yaml
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
 
   # ----------------------------------------------------------------
   # Job 5: Build & push tenant-api image + Helm chart
@@ -811,7 +905,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push tenant-api image
+      # #1278: candidate tag only — see release-exporter for the flow.
+      - name: Build and push tenant-api candidate image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -819,27 +915,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
-        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api@${{ steps.build.outputs.digest }}
 
-      # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # ⚠️ tenant-api intentionally has Chart.yaml appVersion ≠ version
-      # (chart 2.8.0 wraps appVersion 2.7.0 — chart-template changes can
-      # decouple from binary changes). The verification therefore probes
-      # `:v${appVersion}` (the chart's claimed binary version), NOT the
-      # tag-version we just pushed. This catches "chart claims a binary
-      # version with no corresponding published image" while permitting
-      # the legitimate decoupling.
-      - name: Verify image digest (#445 AC iii)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
-
-      # --- Helm chart ---
+      # --- Helm chart: package + verify now (fail fast, publishes nothing);
+      # `helm push` waits until the image digest has passed the scan (#1278) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -863,12 +945,7 @@ jobs:
             --chart helm/tenant-api \
             --tgz .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
-
-      # --- Security scan ---
+      # --- Security scan (PRE-publish hard gate on the candidate digest; #1278) ---
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -876,8 +953,43 @@ jobs:
           # action bump). Same version as Makefile TRIVY_VERSION and
           # .devcontainer/install-trivy.sh — tests/shared/test_toolchain_pin_parity.py.
           version: v0.74.0
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api@${{ steps.build.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      - name: Promote scanned digest to release tags
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
+          for t in "v${VERSION}" latest; do
+            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
+            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
+            echo "✓ ${IMG}:${t} -> ${DIGEST}"
+          done
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # ⚠️ tenant-api intentionally has Chart.yaml appVersion ≠ version
+      # (chart 2.8.0 wraps appVersion 2.7.0 — chart-template changes can
+      # decouple from binary changes). The verification therefore probes
+      # BOTH `:v${VERSION}` (the tag just promoted) and `:v${appVersion}`
+      # (the chart's claimed binary version). This catches "chart claims a
+      # binary version with no corresponding published image" while
+      # permitting the legitimate decoupling. After promotion: it probes
+      # formal tags.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts

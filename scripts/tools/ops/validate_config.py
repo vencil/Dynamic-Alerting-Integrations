@@ -220,6 +220,27 @@ RECEIVER_COLLISION_ROUTES_HINT = (
     "tenant whose id ends in -route-<n> or -override-<n> next to the tenant "
     "it extends. Rename one of the tenants (or remove one of the entries); "
     "the receivers themselves are not invalid.")
+# #2311: the routes row now runs every `--validate` step, including
+# Alertmanager's own parser. These replace the generic routes advice where it
+# would send the operator to the wrong place.
+AMTOOL_REJECTED_ROUTES_HINT = (
+    "Alertmanager's own parser (amtool check-config) refused the config "
+    "generated from this tree; its message above names the field — often a "
+    "receiver value in _routing (e.g. a webhook URL) that the generator "
+    "accepts but Alertmanager cannot load. Fix that value, then re-run.")
+AMTOOL_UNUSABLE_ROUTES_HINT = (
+    "The amtool on PATH could not give a verdict (it could not run, timed "
+    "out or crashed) — that is this environment, not your config. Fix or "
+    "replace that amtool (or take it off PATH), then re-run.")
+AMTOOL_NOT_FOUND_ROUTES_HINT = (
+    "Put Alertmanager's amtool on PATH so this row can check the generated "
+    "config with Alertmanager's own parser — without it, a value Alertmanager "
+    "refuses to load is not detected here.")
+ROUTES_INVARIANT_HINT = (
+    "A platform invariant refused the generated config (see the lines "
+    "above) — the same verdict `generate_alertmanager_routes.py --validate` "
+    "gives. Fix the _routing / _severity_dedup input that produced it, then "
+    "re-run.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unknown — that is the platform's side missing, not a "
@@ -704,20 +725,81 @@ def check_routes(
     if captured_output:
         all_issues.extend(captured_output.split("\n"))
 
-    # --validate semantics, by calling the SAME predicate `_validate_mode`
-    # calls (#2164 / #2279): skipped entries and duplicate receiver names.
-    errors = gen.blocking_generation_errors(all_issues)
+    summary = (f"{len(routes)} routes, {len(receivers)} receivers, "
+               f"{len(inhibit_rules)} inhibit_rules")
+    if not routes and not inhibit_rules:
+        # Nothing was generated, so there is nothing to assemble or hand to
+        # amtool. ⚠️ This is where the row and `--validate` DISAGREE, and did
+        # before #2311 too: on a tree whose tenants generate nothing (e.g.
+        # only `_severity_dedup: disable`) `--validate` exits 1 with "No valid
+        # routes or inhibit rules generated.", while this row is WARN/PASS at
+        # exit 0. (A tree with no tenants at all is rc 0 on both sides.) Kept
+        # as is: turning it into FAIL would change an existing exit code.
+        errors = gen.blocking_generation_errors(all_issues)
+        if errors:
+            return _make_result("routes", FAIL, all_issues,
+                                hint=_collision_hint(gen, errors))
+        if all_issues:
+            return _make_result("routes", WARN, all_issues)
+        return _make_result("routes", PASS, [summary])
 
-    if errors:
-        only_collisions = all(gen.is_receiver_name_collision(e) for e in errors)
-        return _make_result("routes", FAIL, all_issues,
-                            hint=RECEIVER_COLLISION_ROUTES_HINT
-                            if only_collisions else None)
-    if all_issues:
-        return _make_result("routes", WARN, all_issues)
-    return _make_result("routes", PASS,
-                        [f"{len(routes)} routes, {len(receivers)} receivers, "
-                         f"{len(inhibit_rules)} inhibit_rules"])
+    # #2311: --validate semantics, by calling the SAME function
+    # `_validate_mode` calls — skipped entries, duplicate receiver names
+    # (#2164 / #2279), the ADR-025 inhibit tripwires, the invariants
+    # `assemble_configmap` enforces, and Alertmanager's own parser. Called
+    # OUTSIDE the stderr capture above: the function returns every line it has
+    # instead of printing it, so nothing it says (amtool's "accepted" line, its
+    # NOTICE) can be swept into this row as an issue.
+    verdict = gen.evaluate_generated_config(routes, receivers, inhibit_rules,
+                                            all_issues)
+    details = list(all_issues)
+    details.extend(e for e in verdict.errors if e not in all_issues)
+    details.extend(verdict.warnings)
+    if verdict.assembly_error is not None:
+        details.append("the assembled Alertmanager config was refused: "
+                       + verdict.assembly_error)
+    amtool = verdict.amtool
+    if amtool is not None and amtool.status != gen.AMTOOL_NOT_FOUND:
+        details.extend(ln for ln in amtool.message.splitlines() if ln.strip())
+
+    if verdict.errors:
+        return _make_result("routes", FAIL, details,
+                            hint=_collision_hint(gen, verdict.errors))
+    if verdict.assembly_error is not None:
+        return _make_result("routes", FAIL, details, hint=ROUTES_INVARIANT_HINT)
+    if amtool.status == gen.AMTOOL_REJECTED:
+        return _make_result("routes", FAIL, details,
+                            hint=AMTOOL_REJECTED_ROUTES_HINT)
+    if amtool.status == gen.AMTOOL_UNUSABLE:
+        # No verdict on the config: an environment failure, exit 2 — the
+        # same rc `--validate` gives for it.
+        return _make_result("routes", FAIL, details, caller_error=True,
+                            hint=AMTOOL_UNUSABLE_ROUTES_HINT)
+    # Same shape as before #2311: a clean row leads with the summary, a row
+    # with findings lists the findings.
+    has_findings = bool(all_issues or verdict.warnings)
+    if not has_findings:
+        details.insert(0, summary)
+    if amtool.status == gen.AMTOOL_NOT_FOUND:
+        # ⛔ WARN, not a fourth status (the --json enum is pass/warn/fail,
+        # #2301): the row ran every Python check and passed them, but the
+        # verdict that catches what only Alertmanager refuses was not given.
+        details.append(
+            "Not validated by Alertmanager: amtool not found on PATH, so the "
+            "generated config (assembled on the built-in default base) was "
+            "not checked with Alertmanager's parser")
+        return _make_result("routes", WARN, details,
+                            hint=None if has_findings
+                            else AMTOOL_NOT_FOUND_ROUTES_HINT)
+    return _make_result("routes", WARN if has_findings else PASS, details)
+
+
+def _collision_hint(gen, errors: list[str]) -> str | None:
+    """#2279: the collision-specific hint when every blocking line is a
+    duplicate receiver name; otherwise the generic routes advice."""
+    if all(gen.is_receiver_name_collision(e) for e in errors):
+        return RECEIVER_COLLISION_ROUTES_HINT
+    return None
 
 
 # ============================================================

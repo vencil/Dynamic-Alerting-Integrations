@@ -96,7 +96,7 @@ git ls-remote --heads origin     # 應列出 remote branches
 make version-check        # 確認全 repo 版號一致
 ```
 
-> **Release-time L3 digest verification（#445 AC iii）**：tag push 後 `release.yaml` 的 5 個 release job 各會自動跑一個 `Verify image digest` step（共用 `scripts/ops/verify_release_digest.sh`）— `skopeo inspect` 確認剛 push 的 image 在 GHCR 真的存在，並比對 Chart.yaml `appVersion`。silent push 失敗 / Chart.yaml appVersion claim 無對應 image → release job fail。此步驟在 CI 自動執行，**不需手動跑**；本地 `make version-check` 仍是打 tag 前的必要前置。
+> **Release-time L3 digest verification（#445 AC iii）**：tag push 後 `release.yaml` 的 5 個 release job 各會自動跑一個 `Verify image digest` step（共用 `scripts/ops/verify_release_digest.sh`）— `skopeo inspect` 確認剛 promote 的正式 tag（Trivy 通過後才存在，見 [§Release-gate 陷阱](#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga)）在 GHCR 真的存在，並比對 Chart.yaml `appVersion`。silent push 失敗 / Chart.yaml appVersion claim 無對應 image → release job fail。此步驟在 CI 自動執行，**不需手動跑**；本地 `make version-check` 仍是打 tag 前的必要前置。
 
 ### Step 2: Commit → PR → merge
 
@@ -143,7 +143,7 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 | `weekly-fuzz.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
 | `nightly-image-scan.yaml` | `schedule` + `workflow_dispatch` | ✅ build/scan 邏輯鏡 `component-docker-build.yaml`；它本身就是 release.yaml CVE gate 的**時間維度補位**（見下） |
 
-> **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 **7** 個 self-built image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——不 gate 任何東西，release.yaml 的 tag-time 掃描仍在，但**不要把它當「最後一道線」**（#1337 實測）：它跑在 push 之後，五個 job 有四個它就是最後一步，紅的是 Actions run 而非被攔下的產物。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
+> **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 **7** 個 self-built image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——夜掃本身不 gate 任何東西；真正擋發布的是 release.yaml 的 tag-time 掃描，自 [#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278) 起它在**發布前**跑（候選 tag → 掃 digest → 通過才 promote），所以夜掃 issue 上還開著的 fixable CVE，到打 tag 當下就是一次被擋下、要 patch＋重打 tag 的 release。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
 
 ### Step 3: 建立 Tag
 
@@ -453,7 +453,13 @@ bash smoke.sh   # 需 curl + jq
 
 ### Release-gate 陷阱（component `release.yaml` 實戰，v2.9.0 首次五線 GA）
 
-每個 component job 在 tag push 後依序跑：`Verify Chart.yaml version matches tag` → build+push image → multi-arch verify → `Verify image digest`（#445 L3）→ `Scan image with Trivy`（**HIGH/CRITICAL hard gate**，`exit-code 1` + `ignore-unfixed`）→ cosign 簽 →（da-tools only）建 GitHub Release。**任一步 fail abort 後續**。v2.9.0 首次真實五線 release 連續觸發下列三類：
+每個 component job 在 tag push 後依序跑（**先掃再發布**，[#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278)）：`Verify Chart.yaml version matches tag` → build + push **候選 tag** `:candidate-<run_id>-<run_attempt>`（`id: build`）→ multi-arch verify（對 digest）→（有 chart 的）`helm package` + 封包內容檢查（只產本地 `.tgz`）→ `Scan image with Trivy`（**HIGH/CRITICAL hard gate**，`exit-code 1` + `ignore-unfixed`，`image-ref` 是 `<image>@${{ steps.build.outputs.digest }}`）→（da-tools / recipe-preview）cosign 簽 digest → `Promote scanned digest to release tags`（`docker buildx imagetools create` 把 `:v<version>` + `:latest` 指到同一 digest，並逐一回讀比對）→ `Verify image digest`（#445 L3，查正式 tag）→ `helm push` ／（da-tools）SBOM、archive、GitHub Release。**任一步 fail abort 後續**；Trivy 紅燈時正式 tag、chart、簽章、Release 一件都不會出現。順序由 `tests/ops/test_release_scan_before_publish.py` 解析 YAML 守住。
+
+> **候選 tag 不清理（刻意）**：GHCR 的「版本」就是 digest，tag 只是掛在版本上的標籤；成功的 release 裡候選 tag 與正式 tag 掛在**同一個版本**上，刪「候選那個版本」等於刪掉剛發布的映像，而 GHCR API 沒有「只拿掉一個 tag」的操作。所以成功路徑上候選 tag 只是同一 digest 的無害別名。失敗路徑留下一個只有候選 tag 的孤兒版本：不是 `latest`、不被任何 chart 或文件引用、tag 名不是 semver（Renovate／semver 排序工具不會挑到它）。要清就另開 job 用 `actions/delete-package-versions`（需要 repo 對該 package 有 Admin 角色），只刪**沒有 `v*` tag** 的 `candidate-*` 版本——這是後續選項，目前不做。
+>
+> **重打 tag**：掃描擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。
+
+v2.9.0 首次真實五線 release 連續觸發下列三類：
 
 | # | 陷阱 | 解法 |
 |---|------|------|
