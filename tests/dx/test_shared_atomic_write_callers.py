@@ -345,9 +345,15 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
             return getattr(self._fh, attr)
 
     def fdopen(fd, mode="r", *a, **k):
+        # The helper's tmp is the fd's inode among `where`'s entries — found
+        # by fstat, not /proc/self/fd, so this runs where /proc does not.
+        st = os.fstat(fd)
+        in_where = any(
+            (e.stat(follow_symlinks=False).st_dev, e.stat(follow_symlinks=False).st_ino)
+            == (st.st_dev, st.st_ino)
+            for e in os.scandir(where))
         fh = real_fdopen(fd, mode, *a, **k)
-        path = os.readlink(f"/proc/self/fd/{fd}")
-        if "w" in mode and os.path.dirname(path) == where:
+        if "w" in mode and in_where:
             return _Half(fh)
         return fh
 

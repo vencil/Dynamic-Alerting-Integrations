@@ -493,6 +493,41 @@ def test_an_owner_that_cannot_be_restored_goes_in_place_with_a_warn(mod, target,
     assert _entries(target.parent) == ["out.md"]
 
 
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="the fchmod branch only")
+class TestFchmodOnTheTmp:
+    """EPERM from fchmod on our own tmp (NFS root_squash: the tmp is nobody's)
+    falls back to the in-place write, like S1(a); any other errno is an error."""
+
+    @staticmethod
+    def _fchmod_refused(monkeypatch, err):
+        fired: list = []
+
+        def fchmod(fd, mode):
+            fired.append(mode)
+            raise OSError(err, os.strerror(err))
+
+        monkeypatch.setattr(os, "fchmod", fchmod)
+        return fired
+
+    def test_eperm_goes_in_place_with_a_warn(self, mod, target, monkeypatch, capsys):
+        ino = os.stat(target).st_ino
+        fired = self._fchmod_refused(monkeypatch, errno.EPERM)
+        mod.atomic_write_text(target, NEW)       # must not raise
+        assert fired, "the tmp's fchmod was never reached"
+        assert os.stat(target).st_ino == ino, "replaced although the tmp mode could not be set"
+        assert target.read_text(encoding="utf-8") == NEW
+        assert "cannot set the temporary file's mode" in capsys.readouterr().err
+        assert _entries(target.parent) == ["out.md"]
+
+    def test_another_errno_is_still_an_error(self, mod, target, monkeypatch):
+        self._fchmod_refused(monkeypatch, errno.EIO)
+        with pytest.raises(_lib_io.OutputWriteError) as info:
+            mod.atomic_write_text(target, NEW)
+        assert info.value.path == str(target)
+        assert target.read_text(encoding="utf-8") == OLD
+        assert _entries(target.parent) == ["out.md"]
+
+
 def test_nlink_zero_takes_the_atomic_path(mod, target, monkeypatch):
     """S2: st_nlink == 0 (the file was unlinked by a concurrent replace after
     our stat) has no other names to keep — it must not fall into the

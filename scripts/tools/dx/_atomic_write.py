@@ -423,7 +423,15 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
                     return False, (f"it belongs to uid {st.st_uid} and a replacement "
                                    f"could not keep that owner ({exc.strerror})")
         if hasattr(os, "fchmod"):
-            os.fchmod(fd, opts.mode)
+            try:
+                os.fchmod(fd, opts.mode)
+            except OSError as exc:
+                # EPERM on our own tmp (an NFS root_squash export: the tmp is
+                # nobody's, root may not chmod it) is the case the in-place
+                # path already handles as a WARN; anything else stays an error.
+                if exc.errno != errno.EPERM:
+                    raise
+                return False, f"cannot set the temporary file's mode ({exc.strerror})"
         else:  # Windows before 3.13: only the read-only bit exists anyway
             os.chmod(tmp_name, opts.mode)
         if st is not None:
