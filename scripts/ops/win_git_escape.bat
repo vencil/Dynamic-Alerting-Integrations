@@ -333,12 +333,9 @@ if "%PY_CMD%"=="" (
     echo ERROR: python not found. Install Python or the `py` launcher, then retry.
     goto :done_err
 )
-set "PR_NUM=%~2"
-if "%PR_NUM%"=="" (
-    "%PY_CMD%" scripts/tools/dx/pr_preflight.py --skip-hooks
-) else (
-    "%PY_CMD%" scripts/tools/dx/pr_preflight.py --skip-hooks --pr %PR_NUM%
-)
+set "PR_ARGS="
+if not "%~2"=="" set "PR_ARGS=--pr %~2"
+"%PY_CMD%" scripts/tools/dx/pr_preflight.py --skip-hooks %PR_ARGS%
 REM Propagate the tool's rc (#1472); a bare `goto :done` is `exit /b 0`.
 if %ERRORLEVEL% NEQ 0 goto :done_err
 goto :done

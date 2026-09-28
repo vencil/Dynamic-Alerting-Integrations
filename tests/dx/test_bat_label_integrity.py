@@ -825,6 +825,11 @@ def test_a_failing_git_call_reaches_the_caller(tmp_path, name) -> None:
     out = proc.stdout.decode("utf-8", "replace")
     assert proc.returncode != 0, f"`{name}` swallowed a git failure:\n{out}"
     assert "FAILED" in out, f"`{name}` failed without saying so:\n{out}"
+    # git's own reason, not just the wrapper's verdict. `preflight` lets git
+    # write to the console, so look at both streams.
+    assert "not a git repository" in (out + proc.stderr.decode("utf-8", "replace")).lower(), (
+        f"`{name}` failed without git's reason:\n{out}"
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
