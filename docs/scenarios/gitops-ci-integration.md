@@ -144,14 +144,27 @@ flow 序列（`include: ['a.yml']`）與單一 mapping，在這三種底下**加
 這種**端狀態範例**，請你自己對照著改。工具唯一不會做的事，是在沒看過你的檔案時
 遞給你一段「貼上就好」的內容。
 
-#### GitLab 腿沒有 blast-radius 那一步
+#### GitLab 腿的 blast-radius
 
-GitHub 那一份有第三個階段（config-diff 算爆炸半徑、貼成 PR comment），GitLab
-這一份**刻意沒有**，原因在映像而不在你的 repo：GitLab 是在 `$DA_TOOLS_IMAGE`
-**裡面**跑 `script:`，而那顆映像沒有 `git`，所以比較基準（`git archive <base>`）
-在這個平台根本取不到。取不到的基準不會表現成「沒有變更」，而是表現成「每一個
-租戶都是新增的」。與其出貨一份不能信的報告，不如先不出貨——缺少的檢查看得見，
-錯誤的檢查看不見。追蹤在 [#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358)，補回的作法見 [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444)。
+GitLab 那一份也有 blast-radius 那一步（`generate` stage 的 `blast-radius` job），
+但與 GitHub 那一份有三處不同：
+
+- **只在 merge request pipeline 跑**，比較基準是該 MR 的 base commit
+  （`CI_MERGE_REQUEST_DIFF_BASE_SHA`）。job 設了 `GIT_DEPTH: "0"`：GitLab 新專案
+  預設只 clone 20 個 commit，MR 稍長就取不到 base commit。base commit 不在 clone
+  裡、或 `conf.d` 在 base 是 submodule／symlink 時，job 會以 `ERROR:` 失敗，不會
+  拿空目錄當基準；base 還沒有 `conf.d` 才算首次匯入，報告會把每個租戶列為新增。
+- **報告不貼成 MR comment**（那需要一把有寫入權限的 token）。它印在 job log 裡，
+  也以 artifact 上傳，MR 頁面會出現名為「blast radius」的連結（`artifacts:expose_as`）。
+  job 失敗時不上傳報告，所以看得到的報告一定是那次 MR pipeline 算出來的。
+- **它在 `$DA_TOOLS_IMAGE` 裡面跑 `git`。** da-tools 映像從 issue 1444 起才帶 git；
+  v2.9.0 與更早的映像沒有 git，用它們跑 `da-tools init` 產出的 GitLab pipeline 也
+  沒有這一步。若 `DA_TOOLS_IMAGE` 仍釘在沒有 git 的舊版，job 第一步就會印出一行 `ERROR:`，
+  說明映像裡沒有 git，然後失敗；把 `DA_TOOLS_IMAGE` 換成較新的版本即可。
+
+⚠️ config-diff 只比較租戶檔，會跳過 `_` 開頭的檔案，所以只改
+`conf.d/_defaults.yaml` 的 MR 會得到「No changes detected」——那份檔案影響每個沒有
+覆寫的租戶，要人工審。GitHub 那一份也一樣。
 
 ## 2. 三階段 CI/CD Pipeline
 
@@ -177,9 +190,9 @@ graph LR
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
 
-> ℹ️ 上圖是 **GitHub Actions** 那一份的形狀。**GitLab 那一份沒有 Stage 2**
-> （映像裡沒有 `git`，比較基準取不到——理由見 §1「GitLab 腿沒有 blast-radius
-> 那一步」），只有 Validate 與 Apply 兩個 stage。
+> ℹ️ 上圖是 **GitHub Actions** 那一份的形狀。GitLab 那一份同樣是三個 stage，
+> 但 Stage 2 只在 merge request pipeline 跑，報告以 artifact 呈現而不是 comment
+> （見 §1「GitLab 腿的 blast-radius」）。
 
 ### 2.2 Stage 1: Validate
 

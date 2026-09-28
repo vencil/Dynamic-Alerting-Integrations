@@ -1540,17 +1540,15 @@ class TestGenGitlabCi:
         assert 'stages:' in yaml_str
         assert 'variables:' in yaml_str
 
-    def test_two_stages(self):
-        """Pipeline has validate and apply — and NOT generate (#1358).
+    def test_three_stages(self):
+        """validate → generate → apply (issue 1444 restored `generate`).
 
-        The blast-radius job was removed: GitLab runs `script:` inside
-        $DA_TOOLS_IMAGE, which carries no `git`, so its baseline could never
-        be taken and it reported every tenant as new before failing on
-        config-diff's ordinary exit code 1.
+        #1358 removed the stage because $DA_TOOLS_IMAGE had no `git`; issue
+        1444 put git in the image and brought the blast-radius job back.
         """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
         stages = yaml.safe_load(yaml_str)['stages']
-        assert stages == ['validate', 'apply'], stages
+        assert stages == ['validate', 'generate', 'apply'], stages
 
     def test_validate_config_job(self):
         """validate-config job is present."""
@@ -1558,18 +1556,26 @@ class TestGenGitlabCi:
         assert 'validate-config:' in yaml_str
         assert 'da-tools validate-config' in yaml_str
 
-    def test_no_blast_radius_job(self):
-        """⛔ Absence is the assertion (#1358).
+    def test_blast_radius_job(self):
+        """⛔ The job is back (issue 1444), and it is the ONLY one that may
+        call git or config-diff.
 
-        Parsed, not grepped: the removal left an explanatory comment that
-        names `config-diff` and `git`, so a substring test on the raw text
-        would pass for the wrong reason — and would keep passing if the job
-        came back.
+        Parsed, not grepped: comments in the pipeline name `config-diff` and
+        `git`, so a substring test on the raw text would pass for the wrong
+        reason. The full body is pinned in test_generated_ci_artifacts.py
+        (`_EXPECTED_GL_GENERATE`) and executed in
+        test_generated_gitlab_blast_radius.py.
         """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
         doc = yaml.safe_load(yaml_str)
-        assert 'generate-routes' not in doc, sorted(doc)
+        job = doc['blast-radius']
+        assert job['stage'] == 'generate'
+        script = ' '.join(str(x) for x in job['script'])
+        assert 'command -v git' in script, script
+        assert 'da-tools config-diff' in script, script
         for name, body in doc.items():
+            if name == 'blast-radius':
+                continue
             if not isinstance(body, dict) or 'script' not in body:
                 continue
             script = ' '.join(str(x) for x in body['script'])

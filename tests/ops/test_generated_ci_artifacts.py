@@ -121,10 +121,9 @@ WHAT THIS GUARD DOES **NOT** BUY
   `.github/workflows/config-diff.yaml` has carried in its `Run config diff`
   step since it was burned by the same thing (cited by step name, not by line
   range — a range drifts the moment anything above it moves, and nothing here
-  would notice). **The GitLab leg no longer emits this job at all** — it
-  was REMOVED, not fixed (#1358 option C, owner-approved); see the removal
-  note on `test_generate_stage_body_is_pinned_on_both_legs`, which asserts
-  the ABSENCE.
+  would notice). The GitLab leg's job was REMOVED under #1358 (option C,
+  owner-approved) and came back under issue 1444 with the same contract; see
+  `test_generate_stage_body_is_pinned_on_both_legs`, which pins both bodies.
   ⛔ That deferral's original premise — "nothing loads the GitLab pipeline
   anyway" — NO LONGER HOLDS, and the test that used to pin it says the
   opposite now. `test_gitlab_deferral_premise_still_holds` asserted that NO
@@ -188,13 +187,12 @@ WHAT THIS GUARD DOES **NOT** BUY
   config directory were both present — returning exit 0 with nothing
   extracted, which is what made #2 visible at all.
 
-  Both are fixed on the GitHub leg (#1358). ⛔ The GitLab leg carried the
-  equivalent defects, and rather than being fixed here the whole job was
-  REMOVED (#1358 option C): the published image has no ``git``, so its
-  baseline could never be read at all. Restoring the capability needs ``git``
-  in the image plus the GitHub leg's shape — tracked in #1444.
-  See ``test_generate_stage_body_is_pinned_on_both_legs``, whose removal
-  note records exactly what changed, and
+  Both are fixed on the GitHub leg (#1358). The GitLab leg carried the
+  equivalent defects; its job was first REMOVED (#1358 option C: the
+  published image had no ``git``), then restored under issue 1444 with
+  ``git`` in the image and the GitHub leg's shape, and it is executed in
+  ``test_generated_gitlab_blast_radius.py``.
+  See ``test_generate_stage_body_is_pinned_on_both_legs``, and
   ``test_gitlab_root_shell_wires_the_pipeline``, which pins the wiring. ⛔ So does the portal
   wizard's preview generator, and worse (it passes ``--old-dir`` a path it
   never mounts); that divergence is #1351, and this change widens it.
@@ -737,7 +735,7 @@ _GITLAB_DEPLOY_CONDITIONS = {
 # The generated GitLab pipeline's job set, pinned exactly (see the reasoning at
 # the assertion — a new job is not covered by anything here by default).
 _EXPECTED_GL_JOBS = {
-    "validate-config", "lint-custom-rules", "apply",
+    "validate-config", "lint-custom-rules", "blast-radius", "apply",
 }
 
 # ⛔ The NON-deploy jobs' gates, pinned exactly. The deploy-trigger guard selects
@@ -759,15 +757,12 @@ _EXPECTED_GL_JOBS = {
 #                                                           credentials
 #   default: before_script: [echo pwned]                  → a command injected into
 #                                                           EVERY job, apply included
-# ⛔ `generate-routes` is deliberately ABSENT (#1358 / option C). GitLab runs
-# `script:` inside $DA_TOOLS_IMAGE, which has no `git`, so the blast-radius
-# baseline could never be taken on this platform; the job reported every
-# tenant as new and then failed on config-diff's ordinary exit code 1. A
-# missing check is visible, a confidently wrong one is not. If it comes back,
-# it comes back with `git` in the image and the GitHub leg's two-lookup shape.
+# `blast-radius` was absent from #1358 (option C: the image had no `git`, so
+# the baseline could never be taken) until issue 1444 put git in the image and
+# the job came back with the GitHub leg's two-lookup shape.
 _EXPECTED_GL_TOP_LEVEL = {
     "stages", "variables",
-    "validate-config", "lint-custom-rules", "apply",
+    "validate-config", "lint-custom-rules", "blast-radius", "apply",
 }
 
 # job -> the stage it must run in. `stages:` order was pinned; each job's own
@@ -779,6 +774,7 @@ _EXPECTED_GL_TOP_LEVEL = {
 _EXPECTED_GL_JOB_STAGES = {
     "validate-config": "validate",
     "lint-custom-rules": "validate",
+    "blast-radius": "generate",
     "apply": "apply",
 }
 
@@ -808,6 +804,13 @@ def _expected_gl_job_rules(deploy: str) -> dict:
     "lint-custom-rules": [
         {"changes": ["rule-packs/custom/**/*"],
          "exists": ["rule-packs/custom/**/*"]}
+    ],
+    # Same trees as validate-config, and merge-request pipelines ONLY: the
+    # baseline is the merge request's base commit, which a branch pipeline
+    # does not have (issue 1444).
+    "blast-radius": [
+        {"if": '$CI_PIPELINE_SOURCE == "merge_request_event"',
+         "changes": [f"{tree}/**/*" for tree in _CLI_TRIGGER_TREES[deploy]]}
     ],
     }
 
@@ -3494,13 +3497,13 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # sequence was not. Measured: reordering to `[apply, validate, generate]`
     # left 95 passed, and the manual play button then sits in stage 1, where an
     # operator can deploy before `validate-config` has run at all.
-    # ⚠️ Two stages, not three: the GitLab leg has no blast-radius job (#1358,
-    # option C). The ORDER is what this assertion is really about — the deploy
-    # job carries no `needs:`, so `stages:` is the only thing keeping
-    # validation ahead of deployment — and that property is unchanged.
-    assert pipeline.get("stages") == ["validate", "apply"], (
+    # `generate` sits between them again (issue 1444). Its only job is
+    # merge-request-only and `apply` is default-branch-only, so they never
+    # share a pipeline; what this assertion protects is that `validate` still
+    # precedes `apply`.
+    assert pipeline.get("stages") == ["validate", "generate", "apply"], (
         f"`stages:` is {pipeline.get('stages')!r}, expected "
-        "['validate', 'apply']. "
+        "['validate', 'generate', 'apply']. "
         "The deploy job carries no `needs:`, so this order is the only thing "
         "putting validation before deployment. A boundary stated in prose must "
         "not rest on an unenforced fact."
@@ -4262,69 +4265,94 @@ _EXPECTED_GH_GENERATE: list[str] = [
     '} > .output/blast-radius.md',
 ]
 
-# ⛔ Was the GitLab blast-radius script, pinned line by line. The job is gone
-# (#1358 / option C), so what is pinned now is its ABSENCE — see
-# `test_generate_stage_body_is_pinned_on_both_legs`. Kept as an empty list
-# rather than deleted so the shape of "what GitLab would have to emit" stays
-# next to the GitHub pin it was always meant to be read against.
-_EXPECTED_GL_GENERATE: list[str] = []
+# ⛔ The GitLab blast-radius script, pinned line by line (issue 1444).
+#
+# History, because the list was EMPTY for a while and that state was itself an
+# assertion: #1358 (option C, owner-approved) removed this job because the
+# da-tools image had no `git`, so the baseline could never be taken and the
+# report was computed against an empty directory. issue 1444 put `git` in the
+# image, and the job came back with the GitHub leg's shape — base commit and
+# config directory looked up separately, extraction through a scratch index
+# rather than `git archive`, and config-diff's exit code handled against its
+# documented contract. The differences from the GitHub pin are the platform's:
+# no `docker run` (GitLab runs `script:` INSIDE the image), `ERROR:` lines on
+# stderr instead of `::error::`, a git-presence check for customers still
+# pinned to an older image, and the safe.directory export the non-root image
+# needs to read a checkout another user made.
+_EXPECTED_GL_GENERATE: list[str] = [
+    'if ! command -v git >/dev/null 2>&1; then',
+    'echo "ERROR: this job needs git inside the da-tools image ($DA_TOOLS_IMAGE), and that image has none. da-tools images published before issue 1444 do not carry git; pin a newer da-tools release in DA_TOOLS_IMAGE." >&2',
+    'exit 1',
+    'fi',
+    'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$CI_PROJECT_DIR"',
+    ': "${CI_MERGE_REQUEST_DIFF_BASE_SHA:?not a merge request pipeline, so there is no base commit to compare against}"',
+    'base_sha="$CI_MERGE_REQUEST_DIFF_BASE_SHA"',
+    'config_dir="${CONFIG_DIR%/}"',
+    'if [ ! -d "$config_dir" ]; then',
+    'echo "ERROR: CONFIG_DIR is set to \'$CONFIG_DIR\', which does not exist in this merge request\'s head commit. Either CONFIG_DIR does not match where this repository keeps its tenant config, or this merge request removed that directory. Refusing to compare against a directory that is not there." >&2',
+    'exit 1',
+    'fi',
+    'scratch="$(mktemp -d)"',
+    'mkdir -p .output/base/"$config_dir"',
+    'if ! git rev-parse --git-dir >/dev/null; then',
+    'echo "ERROR: git cannot read the checkout in $(pwd); the line above is git\'s own reason. If it says \'dubious ownership\', the safe.directory export at the top of this job does not match this directory." >&2',
+    'exit 1',
+    'fi',
+    'if ! git cat-file -e "$base_sha" 2>/dev/null; then',
+    'echo "ERROR: base commit $base_sha is not in this clone, so there is nothing to compare against. Two causes: the clone was narrowed (this job sets GIT_DEPTH to 0; check that a project or runner setting does not override it), or the target branch was rewritten and that commit no longer exists." >&2',
+    'exit 1',
+    'fi',
+    'git ls-tree "$base_sha" -- "$config_dir" > "$scratch"/entry.txt',
+    'kind=$(cut -d\' \' -f2 "$scratch"/entry.txt)',
+    'if [ -z "$kind" ]; then kind=missing; fi',
+    'if [ "$kind" = tree ]; then',
+    'GIT_INDEX_FILE="$scratch"/base.idx git read-tree "$base_sha:$config_dir"',
+    'GIT_INDEX_FILE="$scratch"/base.idx git checkout-index -a -f --prefix=.output/base/"$config_dir"/',
+    'elif [ "$kind" = missing ]; then',
+    'echo "NOTE: $config_dir does not exist at $base_sha; treating this as the first import, so every tenant is reported as added"',
+    'else',
+    'echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of \'commit\' means a submodule is mounted there; \'blob\' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2',
+    'exit 1',
+    'fi',
+    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate',
+    'set +e',
+    'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md',
+    'rc=$?',
+    'set -e',
+    'if [ "$rc" -gt 1 ]; then',
+    'echo "ERROR: config-diff exited $rc (expected 0 or 1): a malformed config directory, or the tool itself failed" >&2',
+    'exit "$rc"',
+    'fi',
+    'if [ ! -s .output/blast-radius.md ]; then',
+    'echo "ERROR: config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it" >&2',
+    'exit 1',
+    'fi',
+    'cat .output/blast-radius.md',
+]
+
+# The one GitLab job allowed to shell out to git or config-diff.
+_GL_BLAST_RADIUS_JOB = "blast-radius"
 
 
 @pytest.mark.parametrize("ci,deploy", MATRIX)
 def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> None:
     """The stage that produces the customer-visible artifact, pinned like apply.
 
-    ⛔ The two pins are asymmetric on purpose, and the asymmetry is the thing
-    to read, not an oversight:
+    Both legs carry the same shape (#1358 on GitHub, issue 1444 on GitLab):
+    the base commit and the config directory looked up separately so a fault
+    and a first import stop being the same outcome, the baseline extracted
+    through a scratch index rather than `git archive`, and `config-diff`'s exit
+    code handled against its documented contract. Each leg also pins the one
+    setting outside the script that the shape depends on: `fetch-depth: 0` on
+    the GitHub checkout, `GIT_DEPTH: "0"` on the GitLab job.
 
-    * The **GitHub** pin encodes the fixed shape (#1358): `fetch-depth: 0` on
-      the checkout, the base commit and the config directory looked up
-      separately so a fault and a first import stop being the same outcome,
-      and `config-diff`'s exit code handled against the documented contract.
-    * The **GitLab** pin is now EMPTY (`_EXPECTED_GL_GENERATE == []`) because
-      the job was REMOVED rather than fixed (#1358 option C, owner-approved).
-      The assertion on that leg is the ABSENCE of a `generate` stage and of
-      any job invoking `config-diff` — see the removal note in the body.
-
-      Two of the three original blockers were fixed:
-
-      - ~~#1357 — nothing includes `.gitlab-ci.d/dynamic-alerting.yml`, so the
-        pipeline does not run at all.~~ **Fixed.** `da-tools init` now emits a
-        root `.gitlab-ci.yml` that includes it; see
-        `test_gitlab_root_shell_wires_the_pipeline`.
-      - ~~The three `$DA_TOOLS_IMAGE` jobs pass the image as a bare scalar, so
-        they inherit its ENTRYPOINT — which is the tool itself.~~ **Fixed
-        (#1408).** All three jobs now carry `entrypoint: [""]`, so they do
-        reach their first script line.
-
-      The third could not be fixed from the generator, and fixing the first
-      two is what forced the decision:
-
-      - The image has no `git`, so `git archive` cannot work. Installing it in
-        `before_script` is not a way out either: the image runs as
-        `USER nonroot`, and `apk add` there fails on a locked database. The
-        `2>/dev/null || true` after it swallows the failure, so the baseline
-        would be empty and every merge request would report every tenant as
-        ADDED — with a green pipeline. Bare `config-diff` then turns its
-        documented rc=1 ("changes detected", the ordinary outcome) into a
-        failed job.
-
-      ⛔ So wiring the pipeline up is exactly WHY the job came out: once
-      loaded, those defects would have been customer-visible on every merge
-      request. **A missing check is visible; a wrong check is not** — hence
-      removal rather than shipping it. Restoring the capability needs `git`
-      in the published image plus the GitHub leg's two-lookup shape, which is
-      an image change, not a generator change; tracked in #1444.
-
-    ⚠️ Do NOT describe this leg as "still invoking config-diff" or as
-    carrying a live defect — it emits no such job at all. The ninth blind
-    review has repeatedly found stale copies of that claim in this module's
-    header, written before the removal and left behind by it. ⛔ No count is
-    stated here on purpose: giving one invites the "I fixed the cited
-    instances" reading that let the later copies survive twice. The shipped
-    artifact has three jobs (`validate-config`, `lint-custom-rules`, `apply`)
-    and none of them calls `config-diff` — assert against the artifact, never
-    against this prose.
+    ⚠️ The GitLab job was absent for a while (#1358 option C: the image had no
+    `git`, so the baseline was always empty and the job went red on
+    config-diff's ordinary rc=1). While it was absent THIS test pinned the
+    absence and told whoever restored it to re-pin the body rather than relax
+    the assertion; that is what `_EXPECTED_GL_GENERATE` now is. The
+    `git`/`config-diff` ban on every OTHER GitLab job stays: `git` exists only
+    in images from issue 1444 on, and only the blast-radius job checks for it.
     """
     root = generated[(ci, deploy)]
 
@@ -4391,88 +4419,91 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             )
 
     if ci in ("gitlab", "both"):
-        # ⛔ The GitLab leg emits NO blast-radius job, and that absence is the
-        # assertion (#1358, option C — owner-approved).
-        #
-        # It used to emit one, and every line of it was pinned above. The job
-        # could never have worked: GitLab runs `script:` inside
-        # $DA_TOOLS_IMAGE, and that image is python:alpine plus the tool, with
-        # no `git`. The baseline came from `git archive`, so it always failed;
-        # `2>/dev/null || true` swallowed that, leaving an EMPTY baseline,
-        # against which config-diff reports every tenant as newly added — and
-        # then exits 1, its ordinary "changes found" answer, which the bare
-        # call turned into a failed job.
-        #
-        # So the job produced an authoritative-looking report from a baseline
-        # it never read, and went red doing it. While nothing loaded the
-        # pipeline (#1357) none of that was observable; wiring it up made all
-        # of it customer-visible at once, which is why the job comes out
-        # rather than staying in.
-        #
-        # ⚠️ This is a REMOVAL, not a fix. Restoring the capability needs
-        # `git` in the published image plus the GitHub leg's shape (base
-        # commit and config dir looked up separately, config-diff's exit code
-        # handled against its documented contract). Do that and this
-        # assertion is what tells you to re-pin the body — do not simply
-        # delete it.
         pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
 
-        assert "generate" not in (pipe.get("stages") or []), (
-            "the GitLab pipeline declares a `generate` stage again. If the "
-            "blast-radius job is back, it needs `git` in $DA_TOOLS_IMAGE and "
-            "the GitHub leg's two-lookup baseline — re-pin _EXPECTED_GL_GENERATE "
-            "and rewrite this block rather than relaxing it (#1358)."
+        assert "generate" in (pipe.get("stages") or []), (
+            "the GitLab pipeline no longer declares a `generate` stage, so the "
+            "blast-radius job has nowhere to run (issue 1444)."
+        )
+        job = pipe.get(_GL_BLAST_RADIUS_JOB)
+        assert isinstance(job, dict), (
+            f"the GitLab pipeline has no {_GL_BLAST_RADIUS_JOB!r} job "
+            f"(jobs: {sorted(k for k, v in pipe.items() if isinstance(v, dict))})."
+        )
+        assert job.get("stage") == "generate", job.get("stage")
+
+        got_gl: list[str] = []
+        for line in job["script"]:
+            got_gl.extend(_normalized_commands(str(line)))
+        assert got_gl == _EXPECTED_GL_GENERATE, (
+            f"the GitLab blast-radius body changed for --ci {ci} --deploy {deploy}.\n"
+            f"  expected: {_EXPECTED_GL_GENERATE}\n  got:      {got_gl}\n"
+            "If the change is intended, update the pin in the same commit."
+        )
+        # Shell outside `script:` would run ahead of the git check and the
+        # safe.directory export, which the pin above cannot see.
+        assert not any(k in job for k in ("before_script", "after_script")), (
+            f"the blast-radius job grew {[k for k in ('before_script', 'after_script') if k in job]}; "
+            "pin it or move it into `script:`."
         )
 
-        # ⛔ Every key that can carry shell, not just `script:`. The deferral
-        # paragraph on `test_generate_stage_body_is_pinned_on_both_legs`
-        # explicitly names `before_script` as the tempting way back in, and a
-        # pin that reads only `script:` does not watch the door its own
-        # docstring warns about. Measured: re-introducing both `git` and
-        # `config-diff` through `before_script:` left the whole suite green.
-        # `_READ_KEYS` above enumerates these from GitLab's schema for exactly
-        # this reason — do not narrow this tuple to what the generator
-        # happens to emit today.
-        # ⛔ `_SHELL_KEYS` now lives at module scope beside `_shell_text`, so
-        # this guard and its control cannot drift onto different key sets.
+        # ⛔ The settings the script depends on but cannot state itself.
+        # GIT_DEPTH: GitLab's default shallow clone (20 for a new project)
+        # leaves the base commit out of the clone on any longer merge request,
+        # and the script then fails — correctly — on a healthy repository.
+        assert str((job.get("variables") or {}).get("GIT_DEPTH")) == "0", (
+            "the blast-radius job must set GIT_DEPTH: \"0\"; without it the base "
+            f"commit is routinely missing from the clone. got {job.get('variables')!r}"
+        )
+        # entrypoint: the image's ENTRYPOINT is the tool itself (issue 1408).
+        assert (job.get("image") or {}).get("entrypoint") == [""], job.get("image")
+        # needs: []: a lint ERROR in the validate stage must not take the
+        # report away from every merge request.
+        assert job.get("needs") == [], job.get("needs")
+        # Merge-request pipelines only: CI_MERGE_REQUEST_DIFF_BASE_SHA exists
+        # nowhere else, and the `:?` guard would fail a branch pipeline.
+        rules = job.get("rules") or []
+        assert rules and all(
+            "merge_request_event" in str(r.get("if", "")) for r in rules
+        ), f"every rule must restrict the job to merge-request pipelines: {rules!r}"
+        # The report is what the job is for; `when:` stays at the default
+        # `on_success` so a failed run publishes no report at all.
+        arts = job.get("artifacts") or {}
+        assert ".output/blast-radius.md" in (arts.get("paths") or []), arts
+        assert arts.get("when", "on_success") == "on_success", arts
+
+        # ⛔ Every OTHER job still must not shell out to git or config-diff:
+        # only the blast-radius job checks that the image carries git, and a
+        # customer pinned to an image from before issue 1444 has none. Every
+        # key that can carry shell, not just `script:` — `_SHELL_KEYS`.
         for name, body in pipe.items():
-            if not isinstance(body, dict):
+            if name == _GL_BLAST_RADIUS_JOB or not isinstance(body, dict):
                 continue
             if not any(k in body for k in _SHELL_KEYS):
                 continue
-            # ⛔ Scalar-safe. `_shell_text`'s docstring records why
-            # `body.get(key, [])` was a bypass, and
-            # `test_the_shell_join_is_not_defeated_by_a_scalar_script` is the
-            # control that keeps it honest.
+            # Scalar-safe; see `_shell_text`.
             script = _shell_text(body)
             assert "config-diff" not in script, (
-                f"GitLab job {name!r} runs `config-diff` again. On this leg "
-                "the baseline cannot be taken — the image has no git — so the "
-                "report is computed against an empty directory (#1358)."
+                f"GitLab job {name!r} runs `config-diff`; the blast radius "
+                f"belongs to {_GL_BLAST_RADIUS_JOB!r}, which builds the baseline."
             )
-            # ⚠️ Word boundary, not `"git "`. The join leaves no trailing
-            # space on the final line, so a trailing-space test misses `git`
-            # as the last token — measured: `- apk add --no-cache git`
-            # appended as the last script line survived.
+            # ⚠️ Word boundary, not `"git "`: the join leaves no trailing
+            # space on the final line.
             assert not re.search(r"\bgit\b", script), (
-                f"GitLab job {name!r} shells out to git, which is absent from "
-                f"$DA_TOOLS_IMAGE. Whatever it guards will fail at runtime; on "
-                "the old blast-radius job the failure was swallowed by "
-                "`|| true` and the wrong answer shipped (#1358)."
+                f"GitLab job {name!r} shells out to git without the presence "
+                "check the blast-radius job carries; images from before issue "
+                "1444 have no git."
             )
 
         # Anti-vacuity: the loop above proves nothing if there are no jobs.
         scripted = [
             name for name, body in pipe.items()
             if isinstance(body, dict) and "script" in body
+            and name != _GL_BLAST_RADIUS_JOB
         ]
         assert len(scripted) >= 3, (
             f"expected the GitLab pipeline to still carry its validate and "
             f"apply jobs, found {scripted}"
-        )
-        assert _EXPECTED_GL_GENERATE == [], (
-            "_EXPECTED_GL_GENERATE is non-empty again but nothing pins it; "
-            "wire it back into an assertion or reset it to []."
         )
 
 

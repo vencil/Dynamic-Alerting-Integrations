@@ -453,16 +453,15 @@ function StepReview({ config, onChange }) {
                   </pre>
                 </li>
               )}
-              {/* ⛔ GitLab has no Generate stage (#1358): its image carries no
-                  `git`, so the blast-radius baseline cannot be taken and the
-                  job was removed rather than shipped computing a report from
-                  an empty baseline. Restoring it is tracked in #1444. This
-                  list said "Validate + Generate" for GitLab for two commits
-                  after the removal. */}
+              {/* GitLab's blast radius (issue 1444) runs in merge request
+                  pipelines only and publishes an artifact, not a comment. It
+                  was absent from #1358 until the image carried git; this list
+                  said "Validate + Generate" for GitLab for two commits after
+                  that removal, so it names what the pipeline actually does. */}
               <li>{config.ci === 'gitlab'
-                ? t('git commit → GitLab CI 執行 Validate（前提是上一步的 include 已就位）。GitLab 這一份沒有 Generate 階段——映像內沒有 git，blast radius 基準取不到，見 issue 1358', 'git commit → GitLab CI runs Validate (once the include above is in place). The GitLab artifact has no Generate stage — its image has no git, so the blast-radius baseline cannot be taken; see issue 1358')
+                ? t('git commit → GitLab CI 執行 Validate（前提是上一步的 include 已就位）；merge request pipeline 另外算 blast radius，報告在 job log 與 MR 頁面的 artifact 連結（不貼成 comment）', 'git commit → GitLab CI runs Validate (once the include above is in place); merge request pipelines also compute the blast radius, reported in the job log and an artifact linked from the MR page (not as a comment)')
                 : config.ci === 'both'
-                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後只執行 Validate（沒有 Generate，見 issue 1358）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate only once the include is in place (no Generate — see issue 1358)')
+                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後執行 Validate，merge request pipeline 另外算 blast radius（報告是 artifact，不貼成 comment）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate once the include is in place, and merge request pipelines also compute the blast radius (reported as an artifact, not a comment)')
                   : t('git commit → GitHub Actions 自動執行 Validate + Generate', 'git commit → GitHub Actions auto-runs Validate + Generate')}</li>
               <li>{t('PR 審核通過後手動觸發 Apply', 'After PR approval, manually trigger Apply')}</li>
             </ol>
