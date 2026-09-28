@@ -27,7 +27,7 @@ import signal
 import stat
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -397,6 +397,19 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
+#: Implicit tags of an unquoted scalar that JSON carries as a non-string
+#: (number / bool). `timestamp` is absent: JSON has no date type, so the
+#: API server receives the text.
+_NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
+                                  for t in ("int", "float", "bool"))
+
+
+def _plain_tag(text: str) -> str:
+    """The tag YAML gives *text* written unquoted."""
+    return yaml.resolver.Resolver().resolve(
+        yaml.ScalarNode, text, (True, False))
+
+
 def _keys_as_plain_text(obj: Any) -> Any:
     """*obj* with every mapping key a plain ``str`` (values untouched).
 
@@ -452,13 +465,19 @@ def render_cr_file(
     # renders as `spec: {}` did before.
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
-    # An unquoted `2024-01-01` is read as a `date`; it rendered to
-    # `2024-01-01.yaml` before this check, so it stays accepted. A
-    # `datetime` does not: its str() is not the text the CR wrote.
-    if isinstance(name, date) and not isinstance(name, datetime):
-        name = name.isoformat()
     if not isinstance(name, str) or not name:
         log.error("%s: metadata.name must be a non-empty string", cr_path)
+        return EXIT_CALLER_ERROR
+    # An unquoted name is RawPlain text; judge it as the API server does.
+    # sigs.k8s.io/yaml turns YAML into JSON: an unquoted date or datetime
+    # arrives as a string (accepted, kept as written), an unquoted `010` /
+    # `0x1F` / `1.5` / `yes` as a JSON number or bool, which the string
+    # field `metadata.name` rejects. So do we (null was refused above).
+    tag = _plain_tag(name) if isinstance(name, RawPlain) else None
+    if tag in _NON_STRING_NAME_TAGS:
+        log.error("%s: metadata.name must be a string, but unquoted %s is "
+                  "read as %s; quote it (name: \"%s\")", cr_path, name,
+                  tag.rsplit(":", 1)[-1], name)
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)

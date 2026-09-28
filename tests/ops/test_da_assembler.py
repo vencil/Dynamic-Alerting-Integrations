@@ -251,14 +251,12 @@ class TestRenderCrFile:
                      id="name-missing"),
         pytest.param(_K + 'metadata: {name: ""}\n' + _T, _BAD_NAME,
                      id="name-empty"),
-        pytest.param(_K + "metadata: {name: 42}\n" + _T, _BAD_NAME,
-                     id="name-int"),
         pytest.param(_K + "metadata: {name: [a]}\n" + _T, _BAD_NAME,
                      id="name-list"),
-        pytest.param(_K + "metadata: {name: 2024-01-01T10:20:30Z}\n" + _T,
-                     _BAD_NAME, id="name-datetime"),
-        pytest.param(_K + "metadata: {name: 2024-01-01 10:20:30}\n" + _T,
-                     _BAD_NAME, id="name-datetime-space"),
+        pytest.param(_K + "metadata: {name: null}\n" + _T, _BAD_NAME,
+                     id="name-null"),
+        pytest.param(_K + "metadata: {name: ~}\n" + _T, _BAD_NAME,
+                     id="name-tilde"),
         pytest.param(_K + "metadata: {name: ok}\nspec: [x]\n", _BAD_SPEC,
                      id="spec-list"),
         pytest.param(_K + "metadata: {name: ok}\nspec: hello\n", _BAD_SPEC,
@@ -285,6 +283,41 @@ class TestRenderCrFile:
         assert message in caplog.text
         assert list(out_dir.iterdir()) == []
 
+    # Unquoted names YAML types as int / float / bool (PyYAML 1.1 resolver,
+    # measured): sigs.k8s.io/yaml hands them to the API server as a JSON
+    # number or bool, which the string field `metadata.name` rejects.
+    @pytest.mark.parametrize("name, kind", [
+        pytest.param("42", "int", id="name-int"),
+        pytest.param("8", "int", id="name-int-8"),
+        pytest.param("010", "int", id="name-int-octal"),
+        pytest.param("0x1F", "int", id="name-int-hex"),
+        pytest.param("1:30", "int", id="name-int-sexagesimal"),
+        pytest.param("-5", "int", id="name-int-negative"),
+        pytest.param("1.5", "float", id="name-float"),
+        pytest.param(".inf", "float", id="name-float-inf"),
+        pytest.param("true", "bool", id="name-bool-true"),
+        pytest.param("yes", "bool", id="name-bool-yes"),
+        pytest.param("off", "bool", id="name-bool-off"),
+    ])
+    def test_non_string_name_is_caller_error(
+            self, name, kind, tmp_path, caplog):
+        """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
+
+        比照 Kubernetes：CR 經 YAML→JSON，`010` 是 JSON number，API server
+        拒收（`metadata.name` 是字串欄位）。訊息要指名型別並叫人加引號。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "metadata.name must be a string" in caplog.text
+        assert f"read as {kind}" in caplog.text
+        assert f'quote it (name: "{name}")' in caplog.text
+        assert list(out_dir.iterdir()) == []
+
     @pytest.mark.parametrize("spec", [
         pytest.param("", id="spec-missing"),
         pytest.param("spec: {}\n", id="spec-empty"),
@@ -303,18 +336,27 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == 0
         assert (out_dir / "ok.yaml").exists()
 
-    @pytest.mark.parametrize("name, filename", [
-        pytest.param("2024-01-01", "2024-01-01.yaml", id="date"),
+    @pytest.mark.parametrize("name, want", [
+        pytest.param("2024-01-01", "2024-01-01", id="date"),
         # PyYAML's date resolver needs two-digit month/day: this one stays str.
-        pytest.param("2024-1-1", "2024-1-1.yaml", id="date-short-is-str"),
-        pytest.param('"2024-01-01"', "2024-01-01.yaml", id="quoted-date"),
+        pytest.param("2024-1-1", "2024-1-1", id="date-short-is-str"),
+        pytest.param('"2024-01-01"', "2024-01-01", id="quoted-date"),
+        pytest.param("2024-01-01T10:20:30Z", "2024-01-01T10:20:30Z",
+                     id="name-datetime"),
+        pytest.param("2024-01-01 10:20:30", "2024-01-01 10:20:30",
+                     id="name-datetime-space"),
+        pytest.param('"010"', "010", id="quoted-int"),
+        pytest.param("'0x1F'", "0x1F", id="quoted-hex"),
+        pytest.param('"1.5"', "1.5", id="quoted-float"),
+        pytest.param('"yes"', "yes", id="quoted-bool"),
+        pytest.param('"null"', "null", id="quoted-null"),
+        pytest.param("!!str 010", "010", id="tagged-str-int"),
     ])
-    def test_yaml_date_name_renders_as_before(self, name, filename, tmp_path):
-        """#2371：未加引號的日期 name 被 PyYAML 讀成 `date`，維持修前行為。
+    def test_string_name_renders_as_written(self, name, want, tmp_path):
+        """#2371：name 經 YAML→JSON 是字串者照原文收，檔名與檔頭用原文。
 
-        修前檔名是 `str(date)`，rc 0；name 檢查不可把它變成 rc 2。帶時間的
-        `datetime` 不在此列：修前寫出 `2024-01-01 10:20:30+00:00.yaml`，
-        檔名已不是 CR 寫的字，歸入 caller error（見上方 name-datetime）。
+        未加引號的日期／日期時間在 JSON 沒有對應型別，Kubernetes API server
+        收到的是字串，所以照收；加了引號（或 `!!str`）的任何值同理。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -323,7 +365,10 @@ class TestRenderCrFile:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == 0
-        assert [p.name for p in out_dir.iterdir()] == [filename]
+        assert [p.name for p in out_dir.iterdir()] == [f"{want}.yaml"]
+        header = (out_dir / f"{want}.yaml").read_text(
+            encoding="utf-8").split("\n")[0]
+        assert header.endswith(f"/{want}"), header
 
 
 class TestSignalHandler:
