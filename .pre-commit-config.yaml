@@ -1861,7 +1861,9 @@ repos:
   # because anyone wants parse-error linting: with `--include=SC2006` alone, a
   # file ShellCheck goes quiet on yields NO output and exit 0, so the backtick
   # check is silently off for it. THREE such doors exist — each measured against
-  # the pinned 0.10.0 binary with a live `` `make …` `` in the file:
+  # the 0.10.0 binary with a live `` `make …` `` in the file, and re-measured
+  # identically (same rc per door, with and without these settings) against
+  # 0.11.0 when the rev below was bumped (#1337):
   #   1. it cannot PARSE the script (unterminated if/case/brace/quote) → SC1072 /
   #      SC1073 — closed by including those codes;
   #   2. it declines the SHEBANG (`#!/usr/bin/env zsh`, `#!…python3`) → SC1071
@@ -1895,7 +1897,7 @@ repos:
   # while still exiting 2 ("no rebuild"). Convention did not prevent it: three
   # other backticks in that same file were already escaped correctly.
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
         # ⚠️ Block sequence, NOT flow style: in `args: [a, --include=X,Y,Z]` the
