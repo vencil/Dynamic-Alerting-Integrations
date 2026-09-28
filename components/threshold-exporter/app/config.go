@@ -101,12 +101,21 @@ type hierarchyState struct {
 	// on /metrics (ApplyProfiles), so it is part of what merged_hash hashes.
 	profiles *config.PlatformProfiles
 	// mergeRetry is the tenants whose merged_hash recompute failed to READ
-	// a file on the last reload tick (#2100). Their mergedHashes entry is
-	// the last-known-good value, but hashes/graph/platform above already
-	// hold that tick's inputs — so the next tick would compare equal and
-	// never try again. classifyTenant recomputes every tenant in this set
-	// once per tick until a read succeeds. nil = none.
+	// a file on a reload tick (#2100). Their mergedHashes entry is the
+	// last-known-good value, but hashes/graph/platform above already hold
+	// that tick's inputs — so detectChange compares equal on the next tick
+	// and no reload runs. tickOnce retries these tenants on every tick that
+	// detects no change (retryFailedMergedHashes), and classifyTenant does
+	// on a tick that does reload. nil = none.
+	//
+	// ⛔ Every writer builds a new map (copy-on-write) — the same for
+	// mergedHashes — because snapshotPriorState hands both out to readers
+	// that use them after m.mu is released.
 	mergeRetry map[string]struct{}
+	// gen counts installs of this state (reload, cold load, merged_hash
+	// retry). retryFailedMergedHashes installs only if it is unchanged since
+	// its snapshot, so a result computed from a superseded state is dropped.
+	gen uint64
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
 	// subtree defaults chain supplies but that NO emitter can iterate
@@ -1699,9 +1708,13 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.hierarchy.tenantSources = tenants
 	m.hierarchy.hashes = scan.AbsHashes()
 	m.hierarchy.mergedHashes = newMergedHashes
-	// A cold load recomputes every tenant; one it could not is absent from
-	// newMergedHashes, which the next tick already recomputes (#2100).
+	// A cold load recomputes every tenant from this scan, so the previous
+	// state's retry set (#2100) no longer describes anything. A tenant the
+	// cold merge itself could not compute is absent from newMergedHashes
+	// and is NOT retried on an unchanged tree: it is recomputed on the
+	// next tick that reloads (classifyTenant finds no cached value).
 	m.hierarchy.mergeRetry = nil
+	m.hierarchy.gen++
 	m.hierarchy.graph = graph
 	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.hierarchy.platform = platform
@@ -1921,7 +1934,11 @@ func (m *ConfigManager) tickOnce() {
 			// ops tool that rapidly rewrites multiple files coalesces
 			// into a single reload.
 			m.triggerDebouncedReload(reason)
+			return
 		}
+		// #2100: nothing moved, so no reload will run — but a tenant whose
+		// merged_hash a previous reload could not read is still stale.
+		m.retryFailedMergedHashes()
 		return
 	}
 

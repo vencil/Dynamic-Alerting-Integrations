@@ -530,7 +530,8 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	if mergeErr != nil {
 		// #2100: a failed READ is not a fact about the inputs this tick
 		// commits (their hashes come from the scan), so the tenant is
-		// retried on the next tick even if nothing moves. A parse/merge
+		// marked for retry: by tickOnce's retryFailedMergedHashes on a
+		// tick that finds no change, or here on one that reloads. A parse/merge
 		// error is a fact about those bytes: retrying unchanged bytes
 		// fails the same way, so it is not retried (and its parse-failure
 		// signal is not re-emitted every tick). One attempt per tick; the
@@ -734,6 +735,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.platform = scan.platform
 	m.hierarchy.profiles = scan.profiles
 	m.hierarchy.mergeRetry = result.newMergeRetry
+	m.hierarchy.gen++
 	afterHierarchyInstall := m.afterHierarchyInstall
 	m.mu.Unlock()
 
@@ -858,6 +860,115 @@ func (m *ConfigManager) recomputeMergedHashWith(tenantID, tenantFile string, def
 		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
 	return h, mergeErr
+}
+
+// retryFailedMergedHashes recomputes the merged_hash of each tenant in
+// hierarchy.mergeRetry (#2100) and installs the ones that now succeed. It is
+// tickOnce's path for a tick whose detectChange found nothing: the failing
+// reload already committed that tick's inputs, so no reload will run again
+// until some other input moves, and this is the only thing that catches the
+// tenant up.
+//
+// Deliberately NOT a reload: no scan, no debounce, no commitFlatFrom (the
+// flat config was committed by the failing tick itself — only merged_hash
+// is behind), and none of the reload metrics (triggers, blast radius,
+// debounce batch / fired count, reload duration, last-reload stamp). While
+// the read keeps failing, a tick costs one recompute per marked tenant and
+// writes nothing to the log (the skip line was written when the failure
+// started); the tick that succeeds writes one INFO line per tenant.
+//
+// A reload in progress owns the retry set (classifyTenant retries it), so
+// this path runs only if it can take reloadMu without waiting, and installs
+// only if no reload or cold load installed in between (hierarchy.gen).
+func (m *ConfigManager) retryFailedMergedHashes() {
+	m.mu.RLock()
+	pending := len(m.hierarchy.mergeRetry)
+	m.mu.RUnlock()
+	if pending == 0 {
+		return
+	}
+	if !m.reloadMu.TryLock() {
+		return
+	}
+	defer m.reloadMu.Unlock()
+
+	m.mu.RLock()
+	gen := m.hierarchy.gen
+	retry := m.hierarchy.mergeRetry
+	sources := m.hierarchy.tenantSources
+	graph := m.hierarchy.graph
+	platform := m.hierarchy.platform
+	profiles := m.hierarchy.profiles
+	m.mu.RUnlock()
+
+	subset := make(map[string]string, len(retry))
+	for tid := range retry {
+		subset[tid] = sources[tid]
+	}
+	recovered := make(map[string]string, len(retry))
+	done := make(map[string]struct{}, len(retry)) // leaves the retry set
+	tenantFiles := &tenantFilesOnce{onParse: m.onReloadTenantParse, read: m.reloadMergeRead}
+	for _, tid := range tenantsByFile(subset) {
+		src, known := sources[tid]
+		if !known {
+			done[tid] = struct{}{}
+			continue
+		}
+		var chain []string
+		if graph != nil {
+			chain = graph.TenantDefaults[tid]
+		}
+		mh, err := m.recomputeMergedHashWith(tid, src, chain, config.TenantLayers{Overlay: config.PlatformOverlayFor(platform, tid), Profiles: profiles}, tenantFiles)
+		if err != nil {
+			if isMergeReadError(err) {
+				continue // still unreadable: stays marked, already logged
+			}
+			// Read now, but the bytes do not merge: retrying them again
+			// cannot change that. Same outcome as a reload's parse
+			// failure — last-known-good kept, not retried.
+			logMergeSkip(m.getLogger(), tid, "merged-hash-retry", err)
+			done[tid] = struct{}{}
+			continue
+		}
+		recovered[tid] = mh
+		done[tid] = struct{}{}
+	}
+	if len(done) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	if m.hierarchy.gen != gen {
+		// A reload or cold load installed meanwhile; its state (and its
+		// own retry set) supersedes what this was computed from.
+		m.mu.Unlock()
+		return
+	}
+	hashes := make(map[string]string, len(m.hierarchy.mergedHashes)+len(recovered))
+	for tid, h := range m.hierarchy.mergedHashes {
+		hashes[tid] = h
+	}
+	for tid, h := range recovered {
+		hashes[tid] = h
+	}
+	var next map[string]struct{}
+	for tid := range retry {
+		if _, ok := done[tid]; ok {
+			continue
+		}
+		if next == nil {
+			next = make(map[string]struct{})
+		}
+		next[tid] = struct{}{}
+	}
+	m.hierarchy.mergedHashes = hashes
+	m.hierarchy.mergeRetry = next
+	m.hierarchy.gen++
+	m.mu.Unlock()
+
+	for tid := range recovered {
+		m.getLogger().Printf("INFO: merged_hash for tenant=%s recomputed after an earlier read failure", tid)
+	}
 }
 
 // mergeReadError marks a recomputeMergedHashWith error as a failed file
