@@ -55,6 +55,10 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # tests/lint/test_check_doc_links.py::TestGithubSluggerFixtures).
 _GFM_KEEP_CATEGORIES = frozenset({"Nd", "Nl", "Pc"})
 
+# One blockquote marker: ≤3 spaces of indent, `>`, and one optional space
+# (CommonMark §5.1). Applied repeatedly for nested quotes.
+_BLOCKQUOTE_MARKER = re.compile(r" {0,3}> ?")
+
 
 def _gfm_slug(text: str) -> str:
     """Lowercase → drop non-word chars → each U+0020 becomes one `-`."""
@@ -375,8 +379,28 @@ class DocLinkChecker:
             # Page-scoped so repeated headings collect their GitHub `-1`/`-2`
             # variants (adds anchors, never removes any → cannot false-positive).
             slugger = _GfmSlugger()
+            # Blockquote depth the open fence belongs to. GitHub mints ids for
+            # headings inside `> ### x`, so markers are peeled before anything
+            # else — but a fence lives only inside the quote that opened it: a
+            # line with fewer `>` ends the quote and the fence with it, and at
+            # depth 0 a `> ### x` inside a fence is literal content (#2273).
+            fence_depth = 0
             for raw_line in lines:
                 line = raw_line
+                if not in_html_comment:
+                    depth, rest = 0, line
+                    while fence is None or depth < fence_depth:
+                        m_quote = _BLOCKQUOTE_MARKER.match(rest)
+                        if not m_quote:
+                            break
+                        depth, rest = depth + 1, rest[m_quote.end():]
+                    if fence is not None and depth < fence_depth:
+                        fence = None
+                        # The quote closed; re-read the line at its own depth.
+                        depth, rest = 0, line
+                        while (m_quote := _BLOCKQUOTE_MARKER.match(rest)):
+                            depth, rest = depth + 1, rest[m_quote.end():]
+                    line = rest
 
                 # ⛔ ORDER MATTERS, and the obvious order is wrong. Comments must
                 # be resolved INSIDE the fence state, never before it: a fenced
@@ -406,6 +430,7 @@ class DocLinkChecker:
                             # An opening fence's info string may not contain backticks.
                             if not (char == "`" and "`" in stripped[run:]):
                                 fence = (char, run)
+                                fence_depth = depth
                             continue
                         if (char == fence[0] and run >= fence[1]
                                 and not stripped[run:].strip()):

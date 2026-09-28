@@ -217,6 +217,31 @@ class TestBlockStructure:
         ("...and a three-space one still fences",
          "# Top\n\n   ```\n   # Phantom\n   ```\n\n## After\n",
          {"top", "after"}),
+        # ── blockquotes (#2273) ─────────────────────────────────────────────
+        # GitHub mints ids for headings inside a quote; missing them turned
+        # correct links into false reds.
+        ("a heading inside a blockquote counts",
+         "# T\n\n> ### Quoted heading\n\n## Normal heading\n",
+         {"t", "quoted-heading", "normal-heading"}),
+        ("nested quotes, with or without a space between markers",
+         ">> ## Deep\n\n> > ## Spaced\n", {"deep", "spaced"}),
+        ("a fence inside a quote hides its comments",
+         "> ```\n> # Phantom\n> ```\n## After\n", {"after"}),
+        ("four-space `>` is indented code, not a quote",
+         "# Top\n\n    > ## Code\n", {"top"}),
+        # ⛔ A fence lives only inside the quote that opened it. Stripping `>`
+        # everywhere without tracking depth fails the next two: an unclosed
+        # quoted fence swallows every heading to EOF.
+        ("the quote ending closes its fence",
+         "> ```\n> code\n\n## After\n", {"after"}),
+        ("a line without `>` ends the quote and its fence",
+         "> ```\n# After\n", {"after"}),
+        # ⛔ ...and the opposite mistake — closing the fence whenever depth
+        # CHANGES — fails these two: extra `>` inside a fence are content.
+        ("`> ###` inside a top-level fence is content",
+         "```\n> ### Phantom\n```\n## After\n", {"after"}),
+        ("a deeper quote inside a quoted fence is content",
+         "> ```\n>> # Phantom\n> ```\n## After\n", {"after"}),
     ])
     def test_heading_visibility(self, tmp_path, name, body, expected):
         checker = _make_checker(tmp_path)
