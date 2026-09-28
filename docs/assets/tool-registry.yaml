@@ -216,9 +216,10 @@ tools:
   - c-7b
   desc:
     en: Preview merged tenant config (effective_config + merged_hash) via POST
-      /api/v1/tenants/simulate; shipped portal deployments answer "not provided"
+      /api/v1/tenants/simulate; a payload the exporter would reject on load is a
+      400 naming the file; shipped portal deployments answer "not provided"
       — proxy that path to threshold-exporter yourself to use it
-    zh: 經 POST /api/v1/tenants/simulate 預覽合併後的 tenant 配置（effective_config + merged_hash）；出貨部署回「此部署不提供」，需自行把該路徑代理到
+    zh: 經 POST /api/v1/tenants/simulate 預覽合併後的 tenant 配置（effective_config + merged_hash）；exporter 載入時會拒收的內容回 400 並點名該檔；出貨部署回「此部署不提供」，需自行把該路徑代理到
       threshold-exporter 才能使用
   related:
   - tenant-manager

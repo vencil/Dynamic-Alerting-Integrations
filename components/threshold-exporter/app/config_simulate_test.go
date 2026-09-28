@@ -285,6 +285,61 @@ func TestSimulateHandler_MalformedDefaults(t *testing.T) {
 	}
 }
 
+// TestSimulateHandler_RejectsWhatTheExporterSkips: a payload the exporter
+// would drop on load (#1981) is a 400 whose {error} names the rejected
+// input — not a 200 previewing a commit that never takes effect.
+func TestSimulateHandler_RejectsWhatTheExporterSkips(t *testing.T) {
+	t.Parallel()
+	const (
+		l0     = "defaults:\n  mysql_connections: 80\n"
+		tenant = "tenants:\n  t1:\n    mysql_connections: \"90\"\n"
+	)
+	cases := []struct {
+		name     string
+		tenant   string
+		chain    []string
+		wantName string
+		tenantID string // "" = t1
+	}{
+		{"tenant body is a scalar", "tenants:\n  t1: 5\n", []string{l0}, "tenant_yaml", ""},
+		{"tenant file defaults value is a string", "defaults:\n  mysql_connections: abc\n" + tenant, []string{l0}, "tenant_yaml", ""},
+		{"tenant file max_metrics_per_tenant is not an int", "max_metrics_per_tenant: abc\n" + tenant, []string{l0}, "tenant_yaml", ""},
+		{"tenant file declares a non-UTF-8 tenant id", "tenants:\n  !!binary /w==: {}\n  t1: {}\n", []string{l0}, "tenant_yaml", ""},
+		{"L0 defaults value is a string", tenant, []string{"defaults:\n  mysql_connections: abc\n"}, "defaults_chain_yaml[0]", ""},
+		// Precedence (#1981 SF3): a file the exporter would drop is a 400
+		// even when tenant_id is also absent — before #1981 these were 404.
+		{"broken tenant file AND tenant_id absent", "defaults:\n  mysql_connections: abc\n" + tenant, []string{l0}, "tenant_yaml", "missing"},
+		{"broken L0 AND tenant_id absent", tenant, []string{"defaults:\n  mysql_connections: abc\n"}, "defaults_chain_yaml[0]", "missing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			id := tc.tenantID
+			if id == "" {
+				id = "t1"
+			}
+			body := config.SimulateRequest{TenantID: id, TenantYAML: []byte(tc.tenant)}
+			for _, c := range tc.chain {
+				body.DefaultsChainYAML = append(body.DefaultsChainYAML, []byte(c))
+			}
+			bodyBytes, _ := json.Marshal(body)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/simulate", bytes.NewReader(bodyBytes))
+			rec := httptest.NewRecorder()
+			simulateHandler()(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			var got map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body %q is not {error}: %v", rec.Body.String(), err)
+			}
+			if !strings.Contains(got["error"], tc.wantName) {
+				t.Errorf("error = %q, want it to name %q", got["error"], tc.wantName)
+			}
+		})
+	}
+}
+
 func TestSimulateHandler_UnknownField(t *testing.T) {
 	t.Parallel()
 	// DisallowUnknownFields surfaces typos in the request shape.

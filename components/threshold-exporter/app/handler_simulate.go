@@ -19,10 +19,18 @@ package main
 //     "defaults_chain_yaml": ["<b64 L0>", "<b64 L1>", ...]
 //   }
 //   200 → SimulateResponse JSON
-//   400 → {"error": "<msg>"}            // bad request shape / parse failure
+//   400 → {"error": "<msg>"}            // bad request shape / parse failure,
+//                                       // incl. a tenant_yaml or L0 the
+//                                       // exporter would skip on load (#1981)
 //   404 → {"error": "<msg>"}            // tenant_id not in tenant_yaml
 //   405 → {"error": "method not allowed"}
 //   413 → {"error": "request too large"}
+//
+// ⚠️ 400 BEFORE 404 (#1981): a tenant_yaml or L0 the exporter would skip
+// is a 400 even when tenant_id is also absent from the file — the whole
+// file is dropped, so its tenant set is not the thing to fix first. That
+// 400's {error} lists at most 10 decode errors plus "… and M more errors
+// (N total)".
 //
 // ⚠️ The request carries no platform files, so the root platform files'
 // per-tenant `tenants:` layer that /effective applies (#2019) is NOT
