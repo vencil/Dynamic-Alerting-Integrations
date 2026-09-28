@@ -361,14 +361,19 @@ class StrictExporterKeyLoader(RejectDuplicateKeys, ExporterKeyLoader):
 
 
 @functools.lru_cache(maxsize=None)
-def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]") -> type:
+def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]",
+                               raw_text_scalars: "frozenset[str]" = frozenset()
+                               ) -> type:
     """``StrictExporterKeyLoader``, or a subclass that also reads the lists
-    under *raw_text_sequences* as source text — a class, because the strict
-    entry points below build the loader themselves."""
-    if not raw_text_sequences:
+    under *raw_text_sequences* / the non-null scalars under
+    *raw_text_scalars* as source text (``ExporterKeyLoader``'s attributes of
+    the same names) — a class, because the strict entry points below build
+    the loader themselves. Both sets are part of the cache key."""
+    if not raw_text_sequences and not raw_text_scalars:
         return StrictExporterKeyLoader
     return type("StrictExporterKeyLoader_raw", (StrictExporterKeyLoader,),
-                {"raw_text_sequences": raw_text_sequences})
+                {"raw_text_sequences": raw_text_sequences,
+                 "raw_text_scalars": raw_text_scalars})
 
 
 # ⛔ The loader is DRIVEN here rather than passed as `yaml.load(..., Loader=)`:
@@ -442,22 +447,27 @@ def load_yaml_file_strict(path: Optional[str], default: Any = None) -> Any:
 
 
 def strict_load_exporter_keys(stream: Any, *,
-                              raw_text_sequences: "frozenset[str] | tuple[str, ...]" = ()
+                              raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
+                              raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()
                               ) -> Any:
     """:func:`strict_safe_load` whose mapping keys are the exporter's tenant
     ids (raw text, #2114). Same driver, same errors — only the loader class
-    differs (:class:`StrictExporterKeyLoader`)."""
+    differs (:class:`StrictExporterKeyLoader`). *raw_text_scalars* names the
+    keys whose non-null scalar value comes back as source text too — a value
+    that names a key (``_profile: 010``, #2216/#2237); a null stays None."""
     return strict_safe_load(stream, loader=_strict_exporter_key_class(
-        frozenset(raw_text_sequences)))
+        frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
 
 
 def strict_load_all_exporter_keys(stream: Any, *,
-                                  raw_text_sequences: "frozenset[str] | tuple[str, ...]" = ()
+                                  raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
+                                  raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()
                                   ) -> Iterator[Any]:
     """:func:`strict_safe_load_all` with exporter keys; lazy, so
-    ``next(...)`` reads — and checks — the first document only."""
+    ``next(...)`` reads — and checks — the first document only.
+    *raw_text_scalars* as in :func:`strict_load_exporter_keys`."""
     return strict_safe_load_all(stream, loader=_strict_exporter_key_class(
-        frozenset(raw_text_sequences)))
+        frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
 
 
 def load_yaml_file_strict_exporter_keys(

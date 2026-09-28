@@ -55,7 +55,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
-from _lib_io import find_duplicate_key  # noqa: E402  (#2123 shared check)
+from _lib_io import (  # noqa: E402
+    find_duplicate_key,         # #2123 shared check
+    strict_load_exporter_keys,  # #2216 / #2237: tenant ids as the exporter reads them
+)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
@@ -380,6 +383,21 @@ def _is_default(value):
     return str(value).lower() == "default"
 
 
+def _tenant_profiles_as_text(doc, text):
+    """Put back, in place, the source text of every `tenants.<id>._profile`
+    in `doc` (read from `text` without it). Only that level: `raw_text_scalars`
+    matches the key name at EVERY depth, and a `_profile:` elsewhere keeps its
+    YAML type — under `defaults:` the exporter decodes the map as float64, so
+    `'010'` written there would stop the whole config from loading."""
+    tenants = doc.get("tenants") if isinstance(doc, dict) else None
+    if not isinstance(tenants, dict):
+        return
+    raw = strict_load_exporter_keys(text, raw_text_scalars=("_profile",))
+    for tid, block in tenants.items():
+        if isinstance(block, dict) and "_profile" in block:
+            block["_profile"] = raw["tenants"][tid]["_profile"]
+
+
 def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
                    shared_key=None):
     """Patch the key declaring `tenant`. None = no-op: `default` with no value
@@ -401,9 +419,17 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
             f"{key} would declare tenants {sorted(declared | {tenant})}; "
             f"patch-config only writes a key that declares one. Edit {key} "
             f"by hand.")
-    # ⚠️ The rewrite re-serialises the key's other values with YAML 1.1 types
-    # and drops its comments.
-    doc = yaml.safe_load(old) or {}
+    # #2216 / #2237: keys are read as the exporter reads them — the scalar's
+    # source text (#2114) — so `010:` stays tenant "010" instead of being
+    # read as 8 (which renamed it, or folded it into a tenant `8:` next to
+    # it). `yaml.dump` quotes any text YAML would retype, so the ids written
+    # are the ids read. A tenant's `_profile` is the one VALUE that names a
+    # key (a profile): kept as source text too, or `_profile: 010` is written
+    # as 8 (`_tenant_profiles_as_text`).
+    # ⚠️ Every other value is still re-serialised with its YAML 1.1 type
+    # (#2220), and the rewrite drops the key's comments.
+    doc = strict_load_exporter_keys(old) or {}
+    _tenant_profiles_as_text(doc, old)
     tenants = doc.get("tenants") if isinstance(doc, dict) else []
     if tenants is None:
         tenants = doc["tenants"] = {}
