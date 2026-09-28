@@ -676,3 +676,14 @@ def test_at_default_says_raise_the_limit(capsys, monkeypatch, tmp_path, cli_argv
 def test_no_percent_data_explains_limits(capsys, monkeypatch, tmp_path, cli_argv):
     out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"connections": 10})
     assert out.count("沒有設 limit") == 2
+
+
+def test_unreadable_default_says_so_instead_of_judging(monkeypatch):
+    """讀不到平台預設時不下判定：沒有對照值就不能說「夠用」或「太緊」。"""
+    stats = {"p99": 99.0}
+    monkeypatch.setitem(sys.modules, "scaffold_tenant", None)  # import 失敗
+    assert baseline_discovery.platform_default("container_memory") is None
+    assert baseline_discovery.percent_verdict(stats, "container_memory") == (
+        "container_memory 的平台預設讀不到，無法對照", False, None)
+    monkeypatch.undo()
+    assert baseline_discovery.platform_default("no_such_key") is None
