@@ -76,7 +76,7 @@ permissions:
 jobs:
   record:
     name: Record workload-definition effect (never judges)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 與 bench-gate-pr.yaml 的 bench job 同一組參數（ROUNDS=6、BENCHTIME=1s），
     # 所以沿用它的 20 分鐘上限與理由（名目 ~8-10 分，約 2× 餘裕）。
     timeout-minutes: 20
