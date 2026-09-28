@@ -44,7 +44,7 @@ import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
 import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
 import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { ConfigDerivationBanner } from './tenant-manager/components/ConfigDerivationBanner.jsx';
-import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
+import { TenantCard, configErrorReason } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
 import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { AccessScopePanel } from './tenant-manager/components/AccessScopePanel.jsx';
@@ -175,6 +175,7 @@ export default function TenantManager() {
   const [selected, setSelected] = useState(new Set());
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState('');
+  const [modalExcluded, setModalExcluded] = useState([]); // #2068: [{name, code}] left out of the YAML
   // ADR-024 §S6b-2b: the live custom-alert editor opens for one tenant.
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
@@ -320,11 +321,18 @@ export default function TenantManager() {
   const stats = useMemo(() => {
     const envCounts = {};
     const modeCounts = {};
+    let configErrorCount = 0;
     Object.values(tenants).forEach(t => {
+      // #2068: a degraded row's environment / mode are placeholders, not
+      // "unlabeled" — count it on its own, not in the unknown buckets.
+      if (t.config_error) {
+        configErrorCount += 1;
+        return;
+      }
       envCounts[t.environment] = (envCounts[t.environment] || 0) + 1;
       modeCounts[t.operational_mode] = (modeCounts[t.operational_mode] || 0) + 1;
     });
-    return { envCounts, modeCounts };
+    return { envCounts, modeCounts, configErrorCount };
   }, [tenants]);
 
   // Collect unique filter values
@@ -361,15 +369,30 @@ export default function TenantManager() {
     setSelected(new Set());
   };
 
+  // #2068: a degraded row's file is unusable, so a fragment pasted into it
+  // would not take effect — leave it out and list it in the modal instead.
+  const splitSelectedByConfigError = () => {
+    const usable = [];
+    const excluded = [];
+    Array.from(selected).forEach(name => {
+      const code = tenants[name]?.config_error;
+      if (code) excluded.push({ name, code });
+      else usable.push(name);
+    });
+    return { usable, excluded };
+  };
+
   const openMaintenanceModal = () => {
-    const yaml = generateMaintenanceYaml(Array.from(selected));
-    setModalData(yaml);
+    const { usable, excluded } = splitSelectedByConfigError();
+    setModalData(generateMaintenanceYaml(usable));
+    setModalExcluded(excluded);
     setModalType('maintenance');
   };
 
   const openSilentModal = () => {
-    const yaml = generateSilentModeYaml(Array.from(selected));
-    setModalData(yaml);
+    const { usable, excluded } = splitSelectedByConfigError();
+    setModalData(generateSilentModeYaml(usable));
+    setModalExcluded(excluded);
     setModalType('silent');
   };
 
@@ -657,6 +680,13 @@ export default function TenantManager() {
               <div style={styles.statLabel}>{mode}</div>
             </div>
           ))}
+          {/* #2068: like the env / mode cards, shown only when non-zero. */}
+          {stats.configErrorCount > 0 && (
+            <div style={styles.statCard}>
+              <div style={{ ...styles.statValue, color: 'var(--da-color-error-text)' }}>{stats.configErrorCount}</div>
+              <div style={styles.statLabel}>{t('設定錯誤', 'Config errors')}</div>
+            </div>
+          )}
         </div>
 
         {/* Search-result overflow banner — extracted to OverflowBanner (PR-2d Phase 2 #153). */}
@@ -1086,6 +1116,21 @@ export default function TenantManager() {
                   `Each block is headed by # <id>. With several tenants selected, paste each block under tenants.<id>: in that tenant's own existing file. If the tenant already has ${key}, replace that block instead of adding a second one (a duplicate key makes the file fail to parse).`);
               })()}
             </p>
+            {modalExcluded.length > 0 && (
+              <div data-testid="modal-excluded" role="note" style={styles.configErrorBox}>
+                <div>
+                  {t('以下租戶的設定檔無法使用，已排除（片段貼上也不會生效）：',
+                    'These tenants were left out because their config file is unusable (a pasted block would not take effect):')}
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 'var(--da-space-5)' }}>
+                  {modalExcluded.map(({ name, code }) => (
+                    <li key={name}>
+                      <code>{name}</code>: {configErrorReason(code)} (<code>{code}</code>)
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div style={styles.codeBlock}>{modalData}</div>
             <div style={styles.buttonGroup2}>
               {/* Both outputs are per-tenant fragments, not a file (#1988, #2033): copy only. */}

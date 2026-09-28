@@ -266,4 +266,4 @@ function TenantCard({
   );
 }
 
-export { TenantCard };
+export { TenantCard, configErrorReason };
