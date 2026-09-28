@@ -124,7 +124,9 @@ def test_defines_done_and_done_err(bat_path: pathlib.Path) -> None:
     assert "done_err" in labels, f"{bat_path.name} missing :done_err label"
 
 
-def _wrapper_rc(tmp_path: pathlib.Path, wrapper: str, tool_rc: int) -> int:
+def _wrapper_rc(
+    tmp_path: pathlib.Path, wrapper: str, tool_rc: int, env: dict[str, str] | None = None
+) -> int:
     """Run `<wrapper> pr-preflight` against a stub pr_preflight.py; return its rc.
 
     ⛔ Behavioural on purpose (#1472): the syntax-scan version of this check was
@@ -144,7 +146,7 @@ def _wrapper_rc(tmp_path: pathlib.Path, wrapper: str, tool_rc: int) -> int:
     else:
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                "-File", str(target), "pr-preflight"]
-    return subprocess.run(cmd, cwd=tmp_path, capture_output=True, timeout=120).returncode
+    return subprocess.run(cmd, cwd=tmp_path, capture_output=True, timeout=120, env=env).returncode
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
@@ -162,6 +164,22 @@ def test_wrapper_pr_preflight_stays_zero_when_the_tool_passes(tmp_path, wrapper)
     """Must-ring control: `exit 1` everywhere would satisfy the check above."""
     assert _wrapper_rc(tmp_path, wrapper, tool_rc=0) == 0, (
         f"{wrapper} reports failure for a passing preflight"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.skipif(shutil.which("py") is None, reason="needs the py launcher to stand in for a real python")
+def test_bat_pr_preflight_does_not_trust_a_python_that_runs_nothing(tmp_path) -> None:
+    """#1918 — a `python` that exits 0 without running (the Store stub) is a false green.
+
+    The `python` stub goes first on PATH; the tool itself says BLOCKED.
+    """
+    stub_dir = tmp_path / "stub-bin"
+    stub_dir.mkdir()
+    (stub_dir / "python.bat").write_text("@exit /b 0\r\n", encoding="ascii")
+    env = {**os.environ, "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"}
+    assert _wrapper_rc(tmp_path, "win_git_escape.bat", tool_rc=1, env=env) != 0, (
+        "win_git_escape.bat pr-preflight ran the `python` on PATH instead of PY_CMD"
     )
 
 
@@ -719,3 +737,103 @@ def test_ops_bat_files_sees_the_real_wrappers() -> None:
     """Tripwire: an empty ALL_OPS_BAT_FILES would skip the three gates above."""
     missing = [p for p in BAT_FILES if p not in ALL_OPS_BAT_FILES]
     assert not missing, f"ALL_OPS_BAT_FILES lost {missing}"
+
+
+# ---------------------------------------------------------------------------
+# #1918 — every other subcommand's git failure must reach the caller too.
+#
+# One injection for all of them: GIT_DIR names a directory that does not
+# exist, so the real git call inside the subcommand fails. The control runs the
+# same subcommand in a healthy repo and checks that its effect landed, so
+# `exit /b 1` everywhere cannot pass and neither can a success that prints
+# FAILED (the old `branch <existing>` shape).
+# ---------------------------------------------------------------------------
+
+
+def _git_out(work: pathlib.Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=work, check=True, capture_output=True, text=True, timeout=60
+    ).stdout.strip()
+
+
+def _stage_b(work: pathlib.Path) -> None:
+    (work / "b.txt").write_text("b\n", encoding="utf-8")
+    _git(work, "add", "b.txt")
+
+
+# name -> (argv, prep in the healthy repo, effect that must have landed)
+_SUBCOMMANDS = {
+    "status": (("status",), None, None),
+    "add": (
+        ("add", "b.txt"),
+        lambda w: (w / "b.txt").write_text("b\n", encoding="utf-8"),
+        lambda w: _git_out(w, "diff", "--cached", "--name-only") == "b.txt",
+    ),
+    "commit": (("commit", "test: second"), _stage_b, lambda w: _git_out(w, "rev-list", "--count", "HEAD") == "2"),
+    "commit-file": (
+        ("commit-file", "msg.txt"),
+        lambda w: (_stage_b(w), (w / "msg.txt").write_text("test: from a file\n", encoding="utf-8")),
+        lambda w: _git_out(w, "log", "-1", "--format=%s") == "test: from a file",
+    ),
+    "tag": (("tag", "t-new"), None, lambda w: _git_out(w, "tag", "--list", "t-new") == "t-new"),
+    "branch-create": (
+        ("branch", "feat/new"), None, lambda w: _git_out(w, "branch", "--show-current") == "feat/new"
+    ),
+    # The second `checkout` used to be judged by the first one's rc.
+    "branch-existing": (
+        ("branch", "feat/exists"),
+        lambda w: _git(w, "branch", "feat/exists"),
+        lambda w: _git_out(w, "branch", "--show-current") == "feat/exists",
+    ),
+    "branch-list": (("branch",), None, None),
+    "log": (("log",), None, None),
+    "diff": (("diff",), None, None),
+    "preflight": (("preflight",), None, None),
+}
+
+
+def _run_subcommand(
+    tmp_path: pathlib.Path, name: str, git_dir: str | None
+) -> tuple[pathlib.Path, subprocess.CompletedProcess]:
+    argv, prep, _effect = _SUBCOMMANDS[name]
+    work, _bare = _wrapper_repo(
+        tmp_path, "feat/escape-hatch", ops_files=("win_git_escape.bat", "commit_helper.py")
+    )
+    if prep:
+        prep(work)
+    # ⛔ No inherited GIT_*: a pytest run from inside a git hook carries
+    # GIT_DIR / GIT_INDEX_FILE, which would point the wrapper at this repo.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
+    if git_dir:
+        env["GIT_DIR"] = git_dir
+    proc = subprocess.run(
+        ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), *argv],
+        cwd=work,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+    return work, proc
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("name", sorted(_SUBCOMMANDS))
+def test_a_failing_git_call_reaches_the_caller(tmp_path, name) -> None:
+    """#1918 — `FAILED:` followed by `goto :done` is `exit /b 0`."""
+    _work, proc = _run_subcommand(tmp_path, name, git_dir=str(tmp_path / "no-such-git-dir"))
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, f"`{name}` swallowed a git failure:\n{out}"
+    assert "FAILED" in out, f"`{name}` failed without saying so:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("name", sorted(_SUBCOMMANDS))
+def test_a_working_git_call_is_reported_as_success(tmp_path, name) -> None:
+    """Must-ring control for the test above."""
+    work, proc = _run_subcommand(tmp_path, name, git_dir=None)
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, f"`{name}` reported a working git call as failure:\n{out}"
+    assert "FAILED" not in out, f"`{name}` printed FAILED on success:\n{out}"
+    effect = _SUBCOMMANDS[name][2]
+    assert effect is None or effect(work), f"`{name}` returned 0 but its effect did not land:\n{out}"
