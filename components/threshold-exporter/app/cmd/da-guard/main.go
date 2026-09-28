@@ -334,14 +334,17 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 // (#2295): the exporter's merge decodes the file with yaml.v3, which keeps a
 // plain `on` a string that PyYAML reads as a boolean. Nothing else in the
 // block changes; ec.TenantOverridesRaw is not modified. pyRouting holds
-// routingpolicy.PyYAMLRoutingByTenant per source file.
+// routingpolicy.PyYAMLRoutingByTenant per source file (nil: unreadable).
+// ⛔ A `_routing` with no PyYAML counterpart (the file not re-read, the
+// tenant or its `_routing` not found there) is not judged as yaml.v3 read
+// it: WithPyYAMLReceivers(r, nil) makes each receiver Unmatched, refused.
 func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) map[string]any {
 	own := ec.TenantOverridesRaw
 	r, has := own["_routing"]
-	py, found := pyRouting[ec.SourceFile][ec.TenantID]
-	if !has || !found {
+	if !has {
 		return own
 	}
+	py := pyRouting[ec.SourceFile][ec.TenantID]
 	out := make(map[string]any, len(own))
 	for k, v := range own {
 		out[k] = v
@@ -407,6 +410,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	pyRouting := map[string]map[string]any{}
 	for _, ec := range scoped.Tenants {
 		if _, done := pyRouting[ec.SourceFile]; !done {
+			// A read error leaves nil: every receiver of the file's tenants
+			// is then Unmatched and refused (fail-closed), not judged as
+			// yaml.v3 read it.
 			data, err := os.ReadFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
 			if err == nil {
 				pyRouting[ec.SourceFile] = routingpolicy.PyYAMLRoutingByTenant(data)

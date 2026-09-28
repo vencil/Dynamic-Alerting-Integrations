@@ -336,3 +336,35 @@ func TestLoadRoot_ProblemsAndSkip(t *testing.T) {
 		t.Errorf("with skip: problems = %+v", probs)
 	}
 }
+
+// TestWithPyYAMLReceivers_NonStringKeysAndFailClosed (#2295 review): the
+// PyYAML side is read by its string key `receiver` even when another key is
+// not a string (map[any]any), and a receiver whose PyYAML reading is not
+// found is Unmatched — never the yaml.v3 value it had.
+func TestWithPyYAMLReceivers_NonStringKeysAndFailClosed(t *testing.T) {
+	v3 := map[string]any{"true": "x", "receiver": "v3", "overrides": []any{map[string]any{"1": "y", "receiver": "v3"}}}
+	cases := []struct {
+		name        string
+		py          any
+		main, over0 any
+	}{
+		{"non-string keys on the PyYAML side", map[any]any{true: "x", "receiver": "py",
+			"overrides": []any{map[any]any{1: "y", "receiver": "py"}}}, "py", "py"},
+		{"no PyYAML reading", nil, Unmatched, Unmatched},
+		{"PyYAML routing not a mapping", "no", Unmatched, Unmatched},
+		{"list of another length", map[string]any{"receiver": "py", "overrides": []any{}}, "py", Unmatched},
+		{"list not a list", map[string]any{"receiver": "py", "overrides": "no"}, "py", Unmatched},
+		{"entry not a mapping", map[string]any{"receiver": "py", "overrides": []any{"no"}}, "py", Unmatched},
+		{"receiver key missing", map[string]any{"overrides": []any{map[string]any{}}}, Unmatched, Unmatched},
+	}
+	for _, tc := range cases {
+		got, _ := WithPyYAMLReceivers(v3, tc.py).(map[string]any)
+		over0 := got["overrides"].([]any)[0].(map[string]any)["receiver"]
+		if !reflect.DeepEqual(got["receiver"], tc.main) || !reflect.DeepEqual(over0, tc.over0) {
+			t.Errorf("%s: receiver %#v, overrides[0].receiver %#v; want %#v, %#v", tc.name, got["receiver"], over0, tc.main, tc.over0)
+		}
+	}
+	if v3["receiver"] != "v3" || v3["overrides"].([]any)[0].(map[string]any)["receiver"] != "v3" {
+		t.Error("WithPyYAMLReceivers modified its routing argument")
+	}
+}

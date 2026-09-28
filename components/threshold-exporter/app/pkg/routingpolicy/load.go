@@ -120,7 +120,7 @@ func lookup(m *yaml.Node, key string) *yaml.Node {
 		return nil
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
+		if deref(m.Content[i]).Value == key { // an alias key: its anchor's text
 			return deref(m.Content[i+1])
 		}
 	}
@@ -455,9 +455,7 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 			continue
 		}
 		if r, has := body["_routing"]; has {
-			if n := routingNode(e.value); n != nil {
-				body["_routing"] = withPyYAMLReceiversFrom(r, n)
-			}
+			body["_routing"] = withPyYAMLReceiversFrom(r, routingNode(e.value))
 		}
 		tid := e.key
 		for _, k := range routingBlockKeys {
@@ -513,7 +511,7 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 			}
 			continue
 		}
-		own = append(own, mapEntry{key: k.Value, value: v})
+		own = append(own, mapEntry{key: deref(k).Value, value: v}) // an alias key: its anchor's text, as a decode reads it
 	}
 	written := map[string]bool{}
 	for _, e := range own {

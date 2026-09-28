@@ -492,6 +492,8 @@ func describe(v any) string {
 		return "a list"
 	case map[string]any:
 		return "a mapping"
+	case map[any]any: // a key PyYAML reads as a non-string (`1:`, `on:`, `~:`)
+		return "a mapping with a non-string key"
 	default:
 		return fmt.Sprintf("%T", v)
 	}

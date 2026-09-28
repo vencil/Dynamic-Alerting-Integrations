@@ -14,37 +14,50 @@ import (
 // carries (`receiver`, `overrides[i].receiver`, `routes[i].receiver`) is
 // replaced by the value pkg/pyyamlcompat builds from the same node, and
 // everything else in the routing stays the yaml.v3 value it was.
+//
+// ⛔ FAIL-CLOSED: a receiver whose PyYAML reading cannot be found (no such
+// node on the PyYAML side, a list of another length, an entry that is not a
+// mapping there) becomes Unmatched — never the yaml.v3 value, which would
+// judge a string the generator never sees. A mapping on the PyYAML side
+// whose other keys are not strings (`on:`, `1:`, `~:` are a boolean, an
+// integer and null to PyYAML) is still read by its string key `receiver`.
+
+// Unmatched is the receiver WithPyYAMLReceivers leaves where it cannot find
+// the one the route generator reads. It is not a mapping, so the receiver
+// check (pkg/receiverspec) refuses it.
+var Unmatched = pyyamlcompat.Unsupported{Tag: "receiver", Reason: "not found where the route generator reads it"}
 
 // WithPyYAMLReceivers returns routing with its receivers taken from py, the
-// same `_routing` decoded by pyyamlcompat. routing is not modified; a routing,
-// list or entry that is not the expected shape on either side is left as it
-// is.
+// same `_routing` decoded by pyyamlcompat (nil when it could not be found).
+// routing is not modified. A routing, list or entry that is not a
+// string-keyed mapping on the yaml.v3 side is left as it is: no receiver is
+// read from it downstream either. Every receiver the yaml.v3 side carries
+// and py does not is Unmatched (see the fail-closed note above).
 func WithPyYAMLReceivers(routing, py any) any {
 	r, ok := asStringMap(routing)
 	if !ok {
 		return routing
 	}
-	p, ok := asStringMap(py)
-	if !ok {
-		return routing
-	}
-	withReceiver := func(dst map[string]any, src map[string]any) {
+	withReceiver := func(dst map[string]any, src any) {
 		if _, has := dst["receiver"]; !has {
 			return
 		}
-		if v, has := src["receiver"]; has {
+		if v, has := stringKey(src, "receiver"); has {
 			dst["receiver"] = v
+		} else {
+			dst["receiver"] = Unmatched
 		}
 	}
-	withReceiver(r, p)
+	withReceiver(r, py)
 	for _, list := range []string{"overrides", "routes"} {
 		entries, ok := r[list].([]any)
 		if !ok {
 			continue
 		}
-		pyEntries, ok := p[list].([]any)
+		pyList, _ := stringKey(py, list)
+		pyEntries, ok := pyList.([]any)
 		if !ok || len(pyEntries) != len(entries) {
-			continue
+			pyEntries = make([]any, len(entries)) // nothing matches: every receiver Unmatched
 		}
 		out := make([]any, len(entries))
 		for i, e := range entries {
@@ -53,11 +66,7 @@ func WithPyYAMLReceivers(routing, py any) any {
 			if !ok {
 				continue
 			}
-			pm, ok := asStringMap(pyEntries[i])
-			if !ok {
-				continue
-			}
-			withReceiver(em, pm)
+			withReceiver(em, pyEntries[i])
 			out[i] = em
 		}
 		r[list] = out
@@ -65,8 +74,22 @@ func WithPyYAMLReceivers(routing, py any) any {
 	return r
 }
 
+// stringKey is the value under the string key k of a decoded mapping of
+// either type — map[any]any when some other key is not a string.
+func stringKey(m any, k string) (any, bool) {
+	switch t := m.(type) {
+	case map[string]any:
+		v, ok := t[k]
+		return v, ok
+	case map[any]any:
+		v, ok := t[k]
+		return v, ok
+	}
+	return nil, false
+}
+
 // withPyYAMLReceiversFrom is WithPyYAMLReceivers over the node the routing
-// was decoded from.
+// was decoded from (nil: not found, every receiver Unmatched).
 func withPyYAMLReceiversFrom(routing any, n *yaml.Node) any {
 	return WithPyYAMLReceivers(routing, pyyamlcompat.Decode(n))
 }
@@ -74,9 +97,9 @@ func withPyYAMLReceiversFrom(routing any, n *yaml.Node) any {
 // PyYAMLRoutingByTenant returns, per tenant id, the `_routing` of one tenant
 // file's `tenants:` entries decoded by pyyamlcompat — the value to hand
 // WithPyYAMLReceivers for that tenant's own routing. Tenant ids and the
-// `_routing` key are matched by source text, merge keys expanded, as the
-// exporter keys tenants. nil when the document does not parse or has no such
-// entries.
+// `_routing` key are matched by source text (an alias key by its anchor's),
+// merge keys expanded, as the exporter keys tenants. nil when the document
+// does not parse or has no such entries.
 func PyYAMLRoutingByTenant(data []byte) map[string]any {
 	top, err := parseDoc(data)
 	if err != nil || top == nil {

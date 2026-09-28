@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
@@ -98,16 +99,19 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	if yaml.Unmarshal([]byte(yamlContent), &doc) != nil {
 		return nil // validateBodyOnly owns every decode error
 	}
-	routing, ok := doc.Tenants[tenantID]["_routing"].(map[string]any)
+	// Keys made strings as the exporter's merge does, so a `1:` or `~:` key
+	// beside the receiver leaves `_routing` a mapping (da-guard reads it so).
+	routing, ok := cfg.NormalizeYAMLToJSON(doc.Tenants[tenantID]["_routing"]).(map[string]any)
 	if !ok {
 		return nil
 	}
 	// #2295: the receivers as the route generator's PyYAML reads them —
 	// plain `on` a boolean, quoted "on" a string (yaml.v3 alone makes both
-	// the string "on").
-	if py, found := routingpolicy.PyYAMLRoutingByTenant([]byte(yamlContent))[tenantID]; found {
-		routing, _ = routingpolicy.WithPyYAMLReceivers(routing, py).(map[string]any)
-	}
+	// the string "on"). ⛔ Fail-closed: a receiver with no PyYAML
+	// counterpart (the tenant or its `_routing` not found there) is
+	// routingpolicy.Unmatched and refused, never the yaml.v3 value.
+	py := routingpolicy.PyYAMLRoutingByTenant([]byte(yamlContent))[tenantID]
+	routing, _ = routingpolicy.WithPyYAMLReceivers(routing, py).(map[string]any)
 	base := fmt.Sprintf("tenants.%s._routing", tenantID)
 	var out []ReceiverViolation
 	check := func(path string, holder map[string]any) {

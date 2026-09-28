@@ -60,6 +60,15 @@ func putReceiverBody(t *testing.T, routing string, pr bool) (int, string, string
 
 const webhookOK = "      receiver:\n        type: webhook\n        url: https://hook.example.com/a\n"
 
+// Plain and quoted `on` as the bearer_token of the webhook receiver above;
+// bearerField is where the plain one is refused.
+const (
+	webhookOnPlain  = webhookOK + "        http_config:\n          bearer_token: on\n"
+	webhookOnQuoted = webhookOK + "        http_config:\n          bearer_token: \"on\"\n"
+)
+
+var bearerField = []string{"tenants.rs-t._routing.receiver.http_config.bearer_token"}
+
 func TestPutTenant_ReceiverShape(t *testing.T) {
 	cases := []struct {
 		name, routing string
@@ -105,6 +114,24 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 		{"override receiver bearer_token plain 1:30", webhookOK + "      overrides:\n      - alertname: X\n" +
 			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: 1:30}}\n",
 			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token"}},
+		// #2295 review: a key PyYAML reads as a non-string beside the
+		// receiver (`on:` a boolean, `1:` an integer, `~:` null, an alias to
+		// one) does not make the check fall back to the yaml.v3 reading, where
+		// plain `on` is a string. Quoted, it is taken, as the route generator
+		// takes it beside the same keys.
+		{"plain on beside an on: key", "      on: x\n" + webhookOnPlain, bearerField},
+		{"quoted on beside an on: key", "      on: x\n" + webhookOnQuoted, nil},
+		{"plain on beside a 1: key", "      1: x\n" + webhookOnPlain, bearerField},
+		{"quoted on beside a 1: key", "      1: x\n" + webhookOnQuoted, nil},
+		{"plain on beside a ~: key", "      ~: x\n" + webhookOnPlain, bearerField},
+		{"quoted on beside a ~: key", "      ~: x\n" + webhookOnQuoted, nil},
+		{"plain on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnPlain, bearerField},
+		{"quoted on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnQuoted, nil},
+		{"override plain on beside a 1: key", webhookOK + "      overrides:\n      - alertname: X\n        1: y\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: on}}\n",
+			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token"}},
+		{"override quoted on beside a 1: key", webhookOK + "      overrides:\n      - alertname: X\n        1: y\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: \"on\"}}\n", nil},
 		{"every receiver of the body, one violation each", "      receiver:\n        type: bogus\n" +
 			"      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n" +
 			"      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty, service_key: a, routing_key: b}\n",
