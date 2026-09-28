@@ -131,6 +131,8 @@ func TestRoutingGuardrails_PlatformProblemsAndUnknownProfile(t *testing.T) {
 				Field: "domain_policies.finance.tenants", Message: "tenants must be a list"},
 			{Kind: routingpolicy.ProblemRoutingProfilesUnusable, File: "_routing_profiles.yaml",
 				Field: "routing_profiles", Message: "must be a mapping"},
+			{Kind: routingpolicy.ProblemRoutingDefaultsRoutes, File: "_defaults.yaml",
+				Field: "_routing_defaults.routes", Message: "routes ignored"},
 		},
 	})
 	if err != nil {
@@ -141,6 +143,7 @@ func TestRoutingGuardrails_PlatformProblemsAndUnknownProfile(t *testing.T) {
 		got = append(got, string(f.Severity)+"/"+string(f.Kind)+"/"+f.TenantID+"/"+f.Field)
 	}
 	want := []string{
+		"error/routing_defaults_routes_ignored//_defaults.yaml:_routing_defaults.routes",
 		"error/domain_policy_unusable//_domain_policy.yaml:domain_policies.finance.tenants",
 		"warn/routing_profiles_unusable//_routing_profiles.yaml:routing_profiles",
 		"warn/unknown_routing_profile/t-b/_routing_profile",
@@ -149,7 +152,7 @@ func TestRoutingGuardrails_PlatformProblemsAndUnknownProfile(t *testing.T) {
 		t.Errorf("findings %v\nwant %v", got, want)
 	}
 	// A platform finding blocks the run but belongs to no tenant.
-	if r.Summary.Errors != 1 || r.Summary.PassedTenantCount != 2 {
+	if r.Summary.Errors != 2 || r.Summary.PassedTenantCount != 2 {
 		t.Errorf("summary = %+v", r.Summary)
 	}
 }

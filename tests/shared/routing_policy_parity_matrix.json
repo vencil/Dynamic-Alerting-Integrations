@@ -25,6 +25,10 @@
     "to the tenant's block on disk: verdict 'policy_violation' when the op is refused for domain",
     "policy, 'ok' otherwise; a patch that touches neither _routing_profile nor _routing is never",
     "refused for the routing already on disk.",
+    "platform (per tree): [kind, file, field] of every platform-file finding, file relative to the",
+    "conf.d root. routing_defaults_routes_ignored = a `_routing_defaults` carrying `routes`: both",
+    "readers drop them before any merge; Python records a blocking WARN (--validate fails),",
+    "da-guard an error finding with an empty tenant.",
     "python_differs: null, or the values the Python side produces where the YAML readers disagree",
     "(the Go columns above hold for every Go reader); `reason` says why."
   ],
@@ -36,6 +40,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: bogus\n          url: https://x.example/hook\n"
       },
+      "platform": [],
       "expect": {
         "tenant-x": {
           "targets": [
@@ -66,6 +71,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
       },
+      "platform": [],
       "expect": {
         "tenant-x": {
           "targets": [
@@ -102,6 +108,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: bogus\n          url: https://x.example/hook\n"
       },
+      "platform": [],
       "expect": {
         "tenant-x": {
           "targets": [
@@ -132,6 +139,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
       },
+      "platform": [],
       "expect": {
         "tenant-x": {
           "targets": [
@@ -173,6 +181,7 @@
         "t-ovr.yaml": "tenants:\n  t-ovr:\n    _routing_profile: team-sre-apac\n    _routing:\n      overrides:\n      - alertname: MariaDBDown\n        receiver:\n          type: email\n          to:\n          - dba@example.com\n          smarthost: smtp.example.com:587\n          from: am@example.com\n    cpu_usage_percent: '85'\n",
         "t-sre.yaml": "tenants:\n  t-sre:\n    _routing_profile: team-sre-apac\n    cpu_usage_percent: '85'\n"
       },
+      "platform": [],
       "expect": {
         "t-sre": {
           "targets": [
@@ -341,6 +350,7 @@
         "t-keep.yaml": "tenants:\n  t-keep:\n    cpu_usage_percent: '85'\n    _routing_profile: team-esc\n",
         "t-clear.yaml": "tenants:\n  t-clear:\n    cpu_usage_percent: '85'\n    _routing_profile: team-esc\n    _routing:\n      routes: []\n"
       },
+      "platform": [],
       "expect": {
         "t-keep": {
           "targets": [
@@ -396,6 +406,7 @@
         "t-ghost-own.yaml": "tenants:\n  t-ghost-own:\n    cpu_usage_percent: '85'\n    _routing_profile: team-missing\n    _routing:\n      receiver:\n        type: email\n        to:\n        - ops@example.com\n        smarthost: smtp.example.com:587\n        from: am@example.com\n",
         "t-known.yaml": "tenants:\n  t-known:\n    cpu_usage_percent: '85'\n    _routing_profile: team-a\n"
       },
+      "platform": [],
       "expect": {
         "t-ghost": {
           "targets": null,
@@ -457,6 +468,7 @@
         "t-off.yaml": "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n    _routing_profile: team-chat\n    _routing: disable\n",
         "t-on.yaml": "tenants:\n  t-on:\n    cpu_usage_percent: '85'\n    _routing_profile: team-chat\n"
       },
+      "platform": [],
       "expect": {
         "t-off": {
           "targets": null,
@@ -506,6 +518,7 @@
         "t-nomain.yaml": "tenants:\n  t-nomain:\n    cpu_usage_percent: '85'\n    _routing:\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n",
         "t-matcher.yaml": "tenants:\n  t-matcher:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      overrides:\n      - alertname: A\n        metric_group: B\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - alertname: ''\n        metric_group: mg\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - alertname: C\n"
       },
+      "platform": [],
       "expect": {
         "t-nomain": {
           "targets": [],
@@ -554,6 +567,7 @@
         "t-multi.yaml": "tenants:\n  t-multi:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
         "t-ops-only.yaml": "tenants:\n  t-ops-only:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: email\n        to:\n        - ops@example.com\n        smarthost: smtp.example.com:587\n        from: am@example.com\n"
       },
+      "platform": [],
       "expect": {
         "t-multi": {
           "targets": [
@@ -607,6 +621,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-both\n    constraints:\n      forbidden_receiver_types:\n      - slack\n      allowed_receiver_types:\n      - pagerduty\n",
         "t-both.yaml": "tenants:\n  t-both:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
+      "platform": [],
       "expect": {
         "t-both": {
           "targets": [
@@ -650,6 +665,13 @@
         "t-plain.yaml": "tenants:\n  t-plain:\n    cpu_usage_percent: '85'\n",
         "t-own.yaml": "tenants:\n  t-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
       },
+      "platform": [
+        [
+          "routing_defaults_routes_ignored",
+          "_defaults.yaml",
+          "_routing_defaults.routes"
+        ]
+      ],
       "expect": {
         "t-plain": {
           "targets": [
@@ -699,6 +721,7 @@
         "t-routes.yaml": "tenants:\n  t-routes:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes:\n      - just-a-string\n      - match:\n          severity: critical\n        continue: true\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match_re:\n          severity: crit.*\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match: {}\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: 1\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: ''\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          bad-label: x\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: warning\n      - match:\n          severity: critical\n          team: dba\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n",
         "t-routes-scalar.yaml": "tenants:\n  t-routes-scalar:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes: not-a-list\n"
       },
+      "platform": [],
       "expect": {
         "t-routes": {
           "targets": [
@@ -762,6 +785,7 @@
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-yes\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
         "t-yes.yaml": "tenants:\n  t-yes:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes:\n      - match:\n          paging: yes\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
       },
+      "platform": [],
       "expect": {
         "t-yes": {
           "targets": [
@@ -810,6 +834,7 @@
         "_domain_policy.yml": "domain_policies:\n  finance:\n    tenants:\n    - t-yml\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
         "t-yml.yaml": "tenants:\n  t-yml:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
+      "platform": [],
       "expect": {
         "t-yml": {
           "targets": [
@@ -825,6 +850,40 @@
               "forbidden_receiver_types"
             ]
           ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "routing-defaults-routes-in-other-platform-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform_routing.yaml": "_routing_defaults:\n  receiver:\n    type: pagerduty\n    service_key: platform-key\n  routes:\n  - match:\n      severity: critical\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-inherit\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-inherit.yaml": "tenants:\n  t-inherit:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_defaults_routes_ignored",
+          "_platform_routing.yaml",
+          "_routing_defaults.routes"
+        ]
+      ],
+      "expect": {
+        "t-inherit": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
           "rejected_routes": [],
           "unknown_profile": null,
           "tenant_api": {

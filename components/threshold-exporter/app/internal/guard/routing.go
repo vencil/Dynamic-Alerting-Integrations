@@ -73,7 +73,7 @@ package guard
 //     allowed_receiver_types, judged independently.
 //  8. Unknown routing profile (warn), and platform files the checks could
 //     not use (domain_policy_unusable error / routing_profiles_unusable
-//     warn, TenantID ""). Only the checks that need such a file are
+//     warn / routing_defaults_routes_ignored error, TenantID ""). Only the checks that need such a file are
 //     skipped; the run and its exit code are otherwise unchanged (#1654).
 //
 // Why these and not more:
@@ -266,13 +266,17 @@ func checkDomainPolicies(tenantID string, routing map[string]any, policies []rou
 // platformProblemFindings turns what routingpolicy.LoadRoot could not use
 // into findings with an empty TenantID. An unusable domain policy is an
 // error (a policy that is not enforced reads as a clean pass); an unusable
-// routing_profiles block is a warning, as in the Python reader.
+// routing_profiles block is a warning, as in the Python reader; ignored
+// `_routing_defaults.routes` is an error, as the generator's --validate.
 func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 	var out []Finding
 	for _, p := range problems {
 		f := Finding{Severity: SeverityError, Kind: FindingDomainPolicyUnusable, Message: p.Message}
-		if p.Kind == routingpolicy.ProblemRoutingProfilesUnusable {
+		switch p.Kind {
+		case routingpolicy.ProblemRoutingProfilesUnusable:
 			f.Severity, f.Kind = SeverityWarn, FindingRoutingProfilesUnusable
+		case routingpolicy.ProblemRoutingDefaultsRoutes:
+			f.Kind = FindingRoutingDefaultsRoutesIgnored
 		}
 		switch {
 		case p.File != "" && p.Field != "":

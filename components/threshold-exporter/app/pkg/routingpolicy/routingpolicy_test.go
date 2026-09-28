@@ -231,7 +231,10 @@ func TestLoadRoot_Layers(t *testing.T) {
 		".hidden.yaml":               "_routing_defaults: {receiver: {type: slack}}\n",
 	})
 	layers, pols, probs := LoadRoot(dir, nil)
-	if len(probs) != 0 {
+	// The stripped routes are named even though a later file replaces the
+	// whole block (the Python reader records the WARN per file too).
+	if len(probs) != 1 || probs[0].Kind != ProblemRoutingDefaultsRoutes || probs[0].File != "_defaults.yaml" ||
+		probs[0].Field != "_routing_defaults.routes" {
 		t.Fatalf("problems: %+v", probs)
 	}
 	if !reflect.DeepEqual(layers.Defaults, map[string]any{"group_wait": "5s"}) {
@@ -260,7 +263,10 @@ func TestLoadRoot_Layers(t *testing.T) {
 	dir2 := writeRoot(t, map[string]string{
 		"_defaults.yaml": "_routing_defaults:\n  receiver: {type: email}\n  routes: [{match: {a: b}, receiver: {type: slack}}]\n",
 	})
-	l2, _, _ := LoadRoot(dir2, nil)
+	l2, _, p2 := LoadRoot(dir2, nil)
+	if len(p2) != 1 || p2[0].Kind != ProblemRoutingDefaultsRoutes {
+		t.Errorf("stripped routes must be reported: %+v", p2)
+	}
 	if _, has := l2.Defaults["routes"]; has || ReceiverType(l2.Defaults["receiver"]) != "email" {
 		t.Errorf("defaults = %#v, want the receiver without routes", l2.Defaults)
 	}

@@ -134,6 +134,10 @@ const (
 	// FindingRoutingProfilesUnusable (warn, TenantID ""): a
 	// `routing_profiles:` block that cannot be read; no profile is applied.
 	FindingRoutingProfilesUnusable FindingKind = "routing_profiles_unusable"
+	// FindingRoutingDefaultsRoutesIgnored (error, TenantID ""): a
+	// `_routing_defaults` carrying `routes`, which the route generator drops
+	// with a blocking WARN (`--validate` fails) — so it blocks here too.
+	FindingRoutingDefaultsRoutesIgnored FindingKind = "routing_defaults_routes_ignored"
 )
 
 // Cardinality findings (PR-3; see cardinality.go).

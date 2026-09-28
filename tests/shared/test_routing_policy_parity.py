@@ -40,7 +40,8 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
-TREE_KEYS = {"name", "files", "expect"}
+TREE_KEYS = {"name", "files", "platform", "expect"}
+PLATFORM_KINDS = {"routing_defaults_routes_ignored"}
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "unknown_profile",
                "tenant_api", "python_differs"}
 TENANT_API_KEYS = {"put", "batch"}
@@ -54,6 +55,9 @@ _POLICY_LINE = re.compile(
     r"domain_policy '(?P<domain>[^']*)', tenant '(?P<tenant>[^']*)'"
     r"(?: (?P<ref>(?:override|routes)\[\d+\]) \(.*?\))?"
     r": receiver type '[^']*' (?P<kind>is forbidden|not in allowed types)")
+# The blocking WARN _grar_parse records when it drops `_routing_defaults.routes`.
+_DEFAULTS_ROUTES = re.compile(
+    r"WARN: _routing_defaults in (?P<file>\S+): 'routes' is not supported here")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 
@@ -73,6 +77,8 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
     assert set(MATRIX) == TOP_KEYS, set(MATRIX) ^ TOP_KEYS
     for tree in MATRIX["trees"]:
         assert set(tree) == TREE_KEYS, (tree.get("name"), set(tree) ^ TREE_KEYS)
+        for row in tree["platform"]:
+            assert len(row) == 3 and row[0] in PLATFORM_KINDS, (tree["name"], row)
         for tenant, want in tree["expect"].items():
             where = (tree["name"], tenant)
             assert set(want) == EXPECT_KEYS, (where, set(want) ^ EXPECT_KEYS)
@@ -162,6 +168,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
+
+    # Platform-file findings: the table's rows, and no other.
+    got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
+                          for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m)
+    assert got_platform == sorted(tree["platform"]), (tree["name"], got_platform)
 
     # Nothing the table does not name: every routed tenant and every policy
     # line belongs to a listed tenant, and the line count is the table's.

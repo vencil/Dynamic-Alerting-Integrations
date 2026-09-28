@@ -5,8 +5,8 @@ package main
 // through the CLI (run --format json); the findings must say what the table
 // says the route generator does: one domain_policy_violation per `policy`
 // row (Field <ref>.receiver.type), one invalid_route_entry per
-// `rejected_routes` ref, and unknown_routing_profile exactly when the table
-// names one. The Python half reads only the same table.
+// `rejected_routes` ref, unknown_routing_profile exactly when the table
+// names one, and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
 
 import (
 	"bytes"
@@ -28,9 +28,10 @@ type daGuardParityExpect struct {
 }
 
 type daGuardParityTree struct {
-	Name   string                         `json:"name"`
-	Files  map[string]string              `json:"files"`
-	Expect map[string]daGuardParityExpect `json:"expect"`
+	Name     string                         `json:"name"`
+	Files    map[string]string              `json:"files"`
+	Platform [][3]string                    `json:"platform"`
+	Expect   map[string]daGuardParityExpect `json:"expect"`
 }
 
 func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
@@ -113,10 +114,19 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			if code == exitCallerErr || code == exitParseFailed || len(parseFailed) > 0 {
 				t.Fatalf("exit %d, parse_failed %v: every matrix tree must be one the exporter reads whole", code, parseFailed)
 			}
+			gotPlatform, wantPlatform := []string{}, []string{}
 			for _, f := range findings {
 				if f.TenantID == "" {
-					t.Errorf("platform finding on a matrix tree: %+v", f)
+					gotPlatform = append(gotPlatform, f.Kind+" "+f.Field)
 				}
+			}
+			for _, row := range tree.Platform {
+				wantPlatform = append(wantPlatform, row[0]+" "+row[1]+":"+row[2])
+			}
+			sort.Strings(gotPlatform)
+			sort.Strings(wantPlatform)
+			if !equalStrings(gotPlatform, wantPlatform) {
+				t.Errorf("platform findings %v, table says %v", gotPlatform, wantPlatform)
 			}
 			for tenantID, want := range tree.Expect {
 				wantPolicy := []string{}

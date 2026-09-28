@@ -952,3 +952,24 @@ func TestRun_TenantPlaceholderSubstitutedBeforeShapeCheck(t *testing.T) {
 		t.Errorf("exit = %d findings %+v, want a clean run", code, findings)
 	}
 }
+
+// `_routing_defaults.routes` is dropped before any merge (ADR-007 routes
+// belong to a profile or the tenant). The route generator's --validate fails
+// on it, so da-guard blocks too: exit 1 from one TenantID "" finding, the
+// dropped route is not judged, and parse_failed stays the exporter's.
+func TestRun_RoutingDefaultsRoutes_BlockAndAreNotRendered(t *testing.T) {
+	t.Parallel()
+	code, findings, parseFailed := runTreeJSON(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
+			"  receiver: {type: pagerduty, service_key: k}\n" +
+			"  routes: [{match: {severity: critical}, receiver: {type: bogus}}]\n",
+		"t-a.yaml": "tenants:\n  t-a:\n    cpu: 80\n",
+	})
+	if code != exitFindings || len(parseFailed) != 0 {
+		t.Fatalf("exit = %d parse_failed = %v, want 1 and none", code, parseFailed)
+	}
+	if len(findings) != 1 || findings[0].Kind != "routing_defaults_routes_ignored" ||
+		findings[0].TenantID != "" || findings[0].Field != "_defaults.yaml:_routing_defaults.routes" {
+		t.Errorf("findings %+v, want only routing_defaults_routes_ignored on _defaults.yaml", findings)
+	}
+}

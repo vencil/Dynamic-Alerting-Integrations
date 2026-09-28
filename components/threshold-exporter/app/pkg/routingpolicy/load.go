@@ -33,11 +33,16 @@ const (
 	// ProblemRoutingProfilesUnusable: a `_routing_profiles.yaml` / `.yml`
 	// whose `routing_profiles:` cannot be read.
 	ProblemRoutingProfilesUnusable = "routing_profiles_unusable"
+	// ProblemRoutingDefaultsRoutes: a `_routing_defaults` carrying `routes`.
+	// ADR-007 routes belong to a routing profile or the tenant; the Python
+	// reader drops them before any merge and records a blocking WARN
+	// (`--validate` fails), so the Go side drops them too and says so.
+	ProblemRoutingDefaultsRoutes = "routing_defaults_routes_ignored"
 )
 
 // Problem is one platform-file structure LoadRoot could not use.
 type Problem struct {
-	Kind    string // ProblemDomainPolicyUnusable / ProblemRoutingProfilesUnusable
+	Kind    string // one of the Problem* kinds above
 	File    string // path relative to the conf.d root ("" = the root itself)
 	Field   string // dotted path inside the file, "" = the whole file
 	Message string
@@ -126,24 +131,28 @@ func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, er
 	if err != nil || top == nil {
 		return nil, false, err
 	}
-	return routingDefaultsFromNode(top)
+	d, present, _, err := routingDefaultsFromNode(top)
+	return d, present, err
 }
 
-func routingDefaultsFromNode(top *yaml.Node) (map[string]any, bool, error) {
+// routingDefaultsFromNode is RoutingDefaultsFrom over a parsed document;
+// stripped reports that the block carried `routes`, which were removed.
+func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, stripped bool, err error) {
 	n := lookup(top, "_routing_defaults")
 	if n == nil {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	var v any
 	if err := n.Decode(&v); err != nil {
-		return nil, true, err
+		return nil, true, false, err
 	}
 	m, ok := asStringMap(v)
 	if !ok {
-		return nil, true, nil
+		return nil, true, false, nil
 	}
+	_, stripped = m["routes"]
 	delete(m, "routes")
-	return m, true, nil
+	return m, true, stripped, nil
 }
 
 // ParseRoutingProfiles returns the `routing_profiles:` block of one
@@ -340,11 +349,17 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		if top == nil {
 			continue
 		}
-		if d, present, err := routingDefaultsFromNode(top); present {
+		if d, present, stripped, err := routingDefaultsFromNode(top); present {
 			if err != nil {
 				d = nil
 			}
 			layers.Defaults = d
+			if stripped {
+				probs = append(probs, Problem{Kind: ProblemRoutingDefaultsRoutes, File: f.Name,
+					Field: "_routing_defaults.routes",
+					Message: fmt.Sprintf("%s: _routing_defaults.routes is not supported (every tenant would inherit "+
+						"the escalation); it is ignored — define routes in a routing profile or the tenant's _routing", f.Name)})
+			}
 		}
 		if isProfiles {
 			p, present, err := profilesFromNode(top)

@@ -49,9 +49,10 @@ type parityExpect struct {
 }
 
 type parityTree struct {
-	Name   string                  `json:"name"`
-	Files  map[string]string       `json:"files"`
-	Expect map[string]parityExpect `json:"expect"`
+	Name     string                  `json:"name"`
+	Files    map[string]string       `json:"files"`
+	Platform [][3]string             `json:"platform"`
+	Expect   map[string]parityExpect `json:"expect"`
 }
 
 type parityMatrix struct {
@@ -184,9 +185,11 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 				}
 			}
 			layers, pols, probs := LoadRoot(dir, nil)
-			if len(probs) != 0 {
-				t.Fatalf("LoadRoot problems: %+v", probs)
+			gotPlatform := [][3]string{}
+			for _, p := range probs {
+				gotPlatform = append(gotPlatform, [3]string{p.Kind, p.File, p.Field})
 			}
+			jsonEq(t, "platform", sortRows(gotPlatform), sortRows(append([][3]string{}, tree.Platform...)))
 			for tenantID, want := range tree.Expect {
 				t.Run(tenantID, func(t *testing.T) {
 					block := tenantBlock(t, tree.Files, tenantID)
