@@ -104,8 +104,8 @@ def shared(tmp_path: Path) -> Path:
 
 def _run(*argv: object) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, *map(str, argv)],
-                          capture_output=True, text=True, check=False,
-                          timeout=120)
+                          capture_output=True, text=True, encoding="utf-8",
+                          check=False, timeout=120)
 
 
 # ── the listing ───────────────────────────────────────────────────────
