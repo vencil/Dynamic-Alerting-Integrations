@@ -107,6 +107,12 @@ domain_policies:
 - `--strict` mode: Error and abort
 - Default mode: Emit WARNING and flag
 
+**`require_critical_escalation` criterion** (#2244): the tenant must have at least one `severity=critical` path to PagerDuty; the check does not guarantee that every critical alert reaches PagerDuty. A tenant complies when its main receiver type is `pagerduty`, or when a rendered `routes` entry matches `severity: critical` and sends to a `pagerduty` receiver; switching to some other receiver type or target does not count as escalation.
+
+Once a tenant complies, two cases only produce WARNs, which never affect the exit code in either mode:
+- **Shadowing**: routing order is overrides → routes → main receiver. Each non-PagerDuty sub-route placed ahead of the escalation target that can catch a critical alert gets its own WARN. Every override counts, since it cannot match on severity; a route counts when it has no `severity` or has `severity: critical`.
+- **Partial coverage**: the escalating `routes` entry matches labels besides `severity` (e.g. `alertname`). The WARN lists the labels it covers and where the remaining critical alerts go: the first later route whose `match` is exactly `{severity: critical}`, otherwise the main receiver. No WARN when that destination is PagerDuty.
+
 ### Why Reject Three-Layer Contact Profile Model
 
 A three-layer model that surfaced during design discussion (Contact Profile → Routing Profile → Domain Policy) carries over-engineering risk:
@@ -276,6 +282,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
 - **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
 - **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
+- **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate

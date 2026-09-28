@@ -19,7 +19,11 @@ domain_policies:
       enforce_group_by: [tenant, alertname, severity]
       max_repeat_interval: 1h
       min_group_wait: 30s
-      # require_critical_escalation: true  # future: ensure critical → PagerDuty
+      # require_critical_escalation: true  # enforced: at least one severity=critical
+      #   path to PagerDuty — the main receiver is pagerduty, or a `routes` entry
+      #   with match {severity: critical} sends to pagerduty (ADR-007; shadowing
+      #   and partial coverage are WARN only). Left commented:
+      #   db-a / db-b have neither, so enabling it here would fail --strict.
 
   # E-commerce domain: standard SLA
   ecommerce:

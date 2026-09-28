@@ -105,7 +105,7 @@
         "require_critical_escalation": {
           "type": ["boolean", "null"],
           "title": "Require Critical Escalation",
-          "description": "Documented in ADR-007 and accepted by check_routing_profiles.py's valid_constraint_keys; the tenant-api Constraints struct does not yet consume it (lenient parse ignores it). Modelled here so a legitimate policy using it is not falsely rejected.",
+          "description": "When true, the tenant must have at least one severity=critical path to a PagerDuty receiver: its main receiver type is pagerduty, or a rendered routes entry whose match includes severity: critical sends to a pagerduty receiver. Violation otherwise. It does not guarantee every critical alert reaches PagerDuty; two cases are reported as non-blocking WARNs: a non-PagerDuty sub-route ahead of that target that can catch critical alerts (any override; a route without severity or with severity: critical), and an escalation route whose match has labels besides severity while the other critical alerts go to a non-PagerDuty receiver, naming that receiver. Enforced at assembly time by generate_alertmanager_routes.py's check_domain_policies() (--strict escalates a violation, or a non-boolean value, to a blocking ERROR; CI runs --strict). The tenant-api Constraints struct does not consume it (lenient parse ignores it).",
           "examples": [true]
         }
       },
