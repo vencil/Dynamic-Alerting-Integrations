@@ -581,6 +581,15 @@ repos:
         # "<source platform> ... <in-flight marker>" conjunction on one line.
         files: ^(CHANGELOG\.md|changelog\.d/.*\.md|README(\.en)?\.md|docs/.*\.md|rule-packs/.*\.ya?ml|tests/.*\.(ya?ml|py)|scripts/.*\.py)$
 
+      - id: image-caveat-check
+        name: "Image caveats expire with the da-tools version (image-caveat markers)"
+        entry: python3 -X utf8 scripts/tools/lint/check_image_caveats.py
+        language: python
+        pass_filenames: false
+        # Full scan, not diff-only: the finding this exists for is created by
+        # a VERSION bump, not by an edit to the doc that carries the caveat.
+        files: ^(README.*\.md|docs/.*\.md|components/.*\.md|components/da-tools/app/VERSION)$
+
       - id: commit-scope-doc-drift
         name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)
         entry: python3 -X utf8 scripts/tools/lint/check_commit_scope_doc.py --ci

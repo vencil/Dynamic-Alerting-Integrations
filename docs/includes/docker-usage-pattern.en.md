@@ -25,7 +25,7 @@
 > also pass `--config-dir /etc/config`, because keeping the relative path yields
 > `ERROR: config-dir not found: conf.d/` (exit 2). Commands that write with `-o`
 > also need that directory to exist outside the container.
-> ⚠️ The `v2.9.0` pinned above was the GA release when this was written. Any fix
+> ⚠️ The `v2.9.0` pinned above was the GA release when this was written. Any fix <!-- image-caveat: v2.9.0 -->
 > these docs describe as arriving "from the next image onward" — or as of a
 > named later version, e.g. "from v2.10.0" — requires changing that tag
 > (`latest` currently resolves to the same image).
