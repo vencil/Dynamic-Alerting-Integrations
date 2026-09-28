@@ -131,9 +131,10 @@ def _wrapper_rc(
 
     ⛔ Behavioural on purpose (#1472): the syntax-scan version of this check was
     walked through five different ways while the wrapper still returned 0.
-    Both wrappers resolve the repo root from their own location, so a temp tree
-    is a complete fixture.
+    Both wrappers resolve the repo root from their own location; the .bat also
+    refuses to run outside that tree's git work tree, hence the `git init`.
     """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True, timeout=60)
     (tmp_path / "scripts" / "ops").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scripts" / "tools" / "dx").mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO_ROOT / "scripts" / "ops" / wrapper, tmp_path / "scripts" / "ops" / wrapper)
@@ -146,6 +147,8 @@ def _wrapper_rc(
     else:
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                "-File", str(target), "pr-preflight"]
+    # The .bat writes to fixed %TEMP% paths (#2275): parallel tests must not share them.
+    env = {**(env or os.environ), "TEMP": str(tmp_path), "TMP": str(tmp_path)}
     return subprocess.run(cmd, cwd=tmp_path, capture_output=True, timeout=120, env=env).returncode
 
 
@@ -185,22 +188,32 @@ def test_bat_pr_preflight_does_not_trust_a_python_that_runs_nothing(tmp_path) ->
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
 def test_bat_pr_preflight_forwards_the_pr_number(tmp_path) -> None:
-    """`pr-preflight 123` must reach the tool as `--pr 123`."""
+    """`pr-preflight 123` must reach the tool as `--pr 123`, run from the tree root.
+
+    Called from a subdirectory: the other subcommands run in the caller's
+    directory (#1919), this one is the exception.
+    """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True, timeout=60)
     (tmp_path / "scripts" / "ops").mkdir(parents=True)
     (tmp_path / "scripts" / "tools" / "dx").mkdir(parents=True)
+    (tmp_path / "sub").mkdir()
     shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", tmp_path / "scripts" / "ops")
-    argv_log = tmp_path / "argv.txt"
+    log = tmp_path / "argv.txt"
     (tmp_path / "scripts" / "tools" / "dx" / "pr_preflight.py").write_text(
-        f"import sys\nopen({str(argv_log)!r}, 'w').write(' '.join(sys.argv[1:]))\n", encoding="utf-8"
+        f"import os, sys\nopen({str(log)!r}, 'w').write(os.getcwd() + '|' + ' '.join(sys.argv[1:]))\n",
+        encoding="utf-8",
     )
     proc = subprocess.run(
         ["cmd", "/c", str(tmp_path / "scripts" / "ops" / "win_git_escape.bat"), "pr-preflight", "123"],
-        cwd=tmp_path,
+        cwd=tmp_path / "sub",
         capture_output=True,
         timeout=120,
+        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},  # fixed output paths, #2275
     )
     assert proc.returncode == 0, proc.stdout
-    assert argv_log.read_text() == "--skip-hooks --pr 123"
+    cwd, _, argv = log.read_text().partition("|")
+    assert argv == "--skip-hooks --pr 123"
+    assert pathlib.Path(cwd) == tmp_path, f"the tool ran in {cwd}"
 
 
 def test_ps1_pr_preflight_case_runs_the_tool() -> None:
@@ -762,11 +775,11 @@ def test_ops_bat_files_sees_the_real_wrappers() -> None:
 # ---------------------------------------------------------------------------
 # #1918 — every other subcommand's git failure must reach the caller too.
 #
-# One injection for all of them: GIT_DIR names a directory that does not
-# exist, so the real git call inside the subcommand fails. The control runs the
-# same subcommand in a healthy repo and checks that its effect landed, so
-# `exit /b 1` everywhere cannot pass and neither can a success that prints
-# FAILED (the old `branch <existing>` shape).
+# One injection for all of them, `_break_git`: the repo stays discoverable, so
+# the wrapper's own tree check passes, but the git call inside each subcommand
+# fails. The control runs the same subcommand in a healthy repo and checks that
+# its effect landed, so `exit /b 1` everywhere cannot pass and neither can a
+# success that prints FAILED (the old `branch <existing>` shape).
 # ---------------------------------------------------------------------------
 
 
@@ -812,8 +825,18 @@ _SUBCOMMANDS = {
 }
 
 
+def _break_git(work: pathlib.Path) -> None:
+    """`rev-parse --show-toplevel` still answers; the subcommands' own calls fail.
+
+    A corrupt index and an unreadable packed-refs; neither alone breaks every
+    subcommand. GIT_DIR can't be used: the wrapper clears it (#1919).
+    """
+    (work / ".git" / "index").write_bytes(b"not an index")
+    (work / ".git" / "packed-refs").write_text("not a packed-refs line\n", encoding="ascii")
+
+
 def _run_subcommand(
-    tmp_path: pathlib.Path, name: str, git_dir: str | None
+    tmp_path: pathlib.Path, name: str, broken: bool
 ) -> tuple[pathlib.Path, subprocess.CompletedProcess]:
     argv, prep, _effect = _SUBCOMMANDS[name]
     work, _bare = _wrapper_repo(
@@ -821,12 +844,12 @@ def _run_subcommand(
     )
     if prep:
         prep(work)
+    if broken:
+        _break_git(work)
     # ⛔ No inherited GIT_*: a pytest run from inside a git hook carries
-    # GIT_DIR / GIT_INDEX_FILE, which would point the wrapper at this repo.
+    # GIT_DIR / GIT_INDEX_FILE, which would point the fixture's git at this repo.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
-    if git_dir:
-        env["GIT_DIR"] = git_dir
     proc = subprocess.run(
         ["cmd", "/c", str(work / "scripts" / "ops" / "win_git_escape.bat"), *argv],
         cwd=work,
@@ -841,13 +864,14 @@ def _run_subcommand(
 @pytest.mark.parametrize("name", sorted(_SUBCOMMANDS))
 def test_a_failing_git_call_reaches_the_caller(tmp_path, name) -> None:
     """#1918 — `FAILED:` followed by `goto :done` is `exit /b 0`."""
-    _work, proc = _run_subcommand(tmp_path, name, git_dir=str(tmp_path / "no-such-git-dir"))
+    _work, proc = _run_subcommand(tmp_path, name, broken=True)
     out = proc.stdout.decode("utf-8", "replace")
     assert proc.returncode != 0, f"`{name}` swallowed a git failure:\n{out}"
     assert "FAILED" in out, f"`{name}` failed without saying so:\n{out}"
-    # git's own reason, not just the wrapper's verdict. `preflight` lets git
-    # write to the console, so look at both streams.
-    assert "not a git repository" in (out + proc.stderr.decode("utf-8", "replace")).lower(), (
+    # git's own reason, not just the wrapper's verdict: git writes lower-case
+    # `fatal:` / `error:`, the wrapper's own messages are upper-case. `preflight`
+    # lets git write to the console, so look at both streams.
+    assert re.search(r"\b(fatal|error):", out + proc.stderr.decode("utf-8", "replace")), (
         f"`{name}` failed without git's reason:\n{out}"
     )
 
@@ -856,7 +880,7 @@ def test_a_failing_git_call_reaches_the_caller(tmp_path, name) -> None:
 @pytest.mark.parametrize("name", sorted(_SUBCOMMANDS))
 def test_a_working_git_call_is_reported_as_success(tmp_path, name) -> None:
     """Must-ring control for the test above."""
-    work, proc = _run_subcommand(tmp_path, name, git_dir=None)
+    work, proc = _run_subcommand(tmp_path, name, broken=False)
     out = proc.stdout.decode("utf-8", "replace")
     assert proc.returncode == 0, f"`{name}` reported a working git call as failure:\n{out}"
     assert "FAILED" not in out, f"`{name}` printed FAILED on success:\n{out}"
@@ -905,3 +929,217 @@ def test_branch_reports_a_refused_switch_to_an_existing_branch(tmp_path) -> None
     assert _git_out(work, "branch", "--show-current") == "feat/escape-hatch", out
     assert proc.returncode != 0, f"a refused switch reported success:\n{out}"
     assert "FAILED" in out, out
+
+
+# ---------------------------------------------------------------------------
+# #1919 — which tree the wrapper acts on, and which locks it touches.
+#
+# The wrapper refuses to run outside the tree its copy lives in, and runs in
+# the caller's directory, so relative arguments keep git's meaning. It deletes
+# no lock; preflight lists every one, wherever git keeps it (in a linked
+# worktree `.git` is a file and the locks live under the common git dir).
+# ---------------------------------------------------------------------------
+
+
+def _bat(tree: pathlib.Path, tmp_path: pathlib.Path, *argv: str,
+         cwd: pathlib.Path | None = None, env_extra: dict[str, str] | None = None):
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path), **(env_extra or {}))
+    return subprocess.run(
+        ["cmd", "/c", str(tree / "scripts" / "ops" / "win_git_escape.bat"), *argv],
+        cwd=cwd or tree,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+
+
+def _main_and_worktree(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Main repo + one linked worktree, each with its own copy of the wrapper,
+    on different commits (refs are shared, so the commit tells them apart)."""
+    ops = ("win_git_escape.bat", "commit_helper.py")
+    work, bare = _wrapper_repo(tmp_path, "feat/escape-hatch", ops_files=ops)
+    wt = tmp_path / "linked"
+    _git(work, "worktree", "add", "-q", "-b", "feat/linked", str(wt))
+    (wt / "scripts" / "ops").mkdir(parents=True)
+    for name in ops:
+        shutil.copy2(REPO_ROOT / "scripts" / "ops" / name, wt / "scripts" / "ops")
+    _git(wt, "commit", "-q", "--allow-empty", "-m", "test: linked only")
+    return {"main": work, "linked": wt, "bare": bare}
+
+
+def _git_path(tree: pathlib.Path, name: str) -> pathlib.Path:
+    p = pathlib.Path(_git_out(tree, "rev-parse", "--git-path", name))
+    return p if p.is_absolute() else tree / p
+
+
+def _state(trees: dict[str, pathlib.Path]) -> tuple[str, ...]:
+    """Every ref (both trees share them), both indexes, and the remote."""
+    return (
+        _git_out(trees["main"], "for-each-ref"),
+        _git_out(trees["main"], "diff", "--cached", "--name-only"),
+        _git_out(trees["linked"], "diff", "--cached", "--name-only"),
+        _git_out(trees["main"], "--git-dir", str(trees["bare"]), "for-each-ref"),
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize(
+    "argv",
+    [("status",), ("add", "a.txt"), ("commit", "test: x"), ("commit-file", "a.txt"),
+     ("tag", "t-x"), ("branch", "feat/x"), ("push",), ("preflight",)],
+    ids=lambda a: a[0],
+)
+def test_the_wrapper_refuses_a_caller_outside_its_tree(tmp_path, argv) -> None:
+    """Called from the main repo, the linked tree's copy must not act on either."""
+    trees = _main_and_worktree(tmp_path)
+    (trees["main"] / "a.txt").write_text("changed\n", encoding="utf-8")
+    _git(trees["main"], "add", "a.txt")
+    before = _state(trees)
+    proc = _bat(trees["linked"], tmp_path, *argv, cwd=trees["main"])
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, f"`{argv[0]}` ran from another tree:\n{out}"
+    assert "FAILED" in out, out
+    assert _state(trees) == before, f"`{argv[0]}` changed something:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_relative_arguments_resolve_against_the_callers_directory(tmp_path) -> None:
+    """Must-not-ring control for the refusal above: a subdirectory is inside."""
+    trees = _main_and_worktree(tmp_path)
+    tree = trees["linked"]
+    docs = tree / "docs"
+    docs.mkdir()
+    for d in (tree, docs):  # same names at the root, to catch root-relative resolution
+        (d / "README.md").write_text(f"{d.name}\n", encoding="utf-8")
+        (d / "msg.txt").write_text(f"test: message from {d.name}\n", encoding="utf-8")
+    proc = _bat(tree, tmp_path, "add", "README.md", cwd=docs)
+    assert proc.returncode == 0, proc.stdout
+    assert _git_out(tree, "diff", "--cached", "--name-only") == "docs/README.md"
+    proc = _bat(tree, tmp_path, "commit-file", "msg.txt", cwd=docs)
+    assert proc.returncode == 0, proc.stdout
+    assert _git_out(tree, "log", "-1", "--format=%s") == "test: message from docs"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_an_inherited_git_dir_does_not_redirect_the_wrapper(tmp_path) -> None:
+    """A git hook exports GIT_DIR; the wrapper must still act on its own tree."""
+    trees = _main_and_worktree(tmp_path)
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True, capture_output=True, timeout=60)
+    _git(other, "commit", "-q", "--allow-empty", "-m", "test: other")
+    proc = _bat(trees["linked"], tmp_path, "tag", "t-env", env_extra={"GIT_DIR": str(other / ".git")})
+    assert proc.returncode == 0, proc.stdout
+    assert _git_out(trees["linked"], "rev-parse", "t-env") == _git_out(trees["linked"], "rev-parse", "HEAD")
+    assert _git_out(other, "tag", "--list") == "", "the tag went to the repo GIT_DIR named"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_a_copy_outside_any_work_tree_refuses_instead_of_climbing(tmp_path) -> None:
+    """A tree whose .git is gone, nested in another repo: git would climb to it."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
+    inner = work / "inner"
+    (inner / "scripts" / "ops").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", inner / "scripts" / "ops")
+    proc = _bat(inner, tmp_path, "tag", "t-climb")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, out
+    assert _git_out(work, "tag", "--list") == "", f"the tag landed in the outer repo:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_a_copy_outside_any_repo_says_why(tmp_path) -> None:
+    """Not a repo at all: refused with git's own reason, not an empty tree name."""
+    tree = tmp_path / "loose"
+    (tree / "scripts" / "ops").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", tree / "scripts" / "ops")
+    proc = _bat(tree, tmp_path, "status", env_extra={"GIT_CEILING_DIRECTORIES": str(tmp_path)})
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, out
+    assert "not a git repository" in out.lower(), out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_an_inherited_work_tree_cannot_satisfy_the_tree_check(tmp_path) -> None:
+    """GIT_WORK_TREE naming the wrapper's tree, cwd in another repo: git would take
+    that repo's git dir while `--show-toplevel` answers with the wrapper's tree."""
+    trees = _main_and_worktree(tmp_path)
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True, capture_output=True, timeout=60)
+    _git(other, "commit", "-q", "--allow-empty", "-m", "test: other")
+    proc = _bat(trees["linked"], tmp_path, "tag", "t-wt", cwd=other,
+                env_extra={"GIT_WORK_TREE": str(trees["linked"])})
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, out
+    assert _git_out(other, "tag", "--list") == "", f"the tag landed in the caller's repo:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_an_inherited_index_file_does_not_redirect_the_wrapper(tmp_path) -> None:
+    """A pre-commit hook exports GIT_INDEX_FILE: staging must land in this tree's index."""
+    trees = _main_and_worktree(tmp_path)
+    tree = trees["linked"]
+    (tree / "new.txt").write_text("new\n", encoding="utf-8")
+    foreign = _git_path(trees["main"], "index")
+    before = foreign.read_bytes()
+    proc = _bat(tree, tmp_path, "add", "new.txt", env_extra={"GIT_INDEX_FILE": str(foreign)})
+    assert proc.returncode == 0, proc.stdout
+    assert _git_out(tree, "diff", "--cached", "--name-only") == "new.txt"
+    assert foreign.read_bytes() == before, "staged into the index GIT_INDEX_FILE named"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("bat_in", ["w!x!", "w"])
+def test_a_bang_in_either_path_fails_closed(tmp_path, bat_in) -> None:
+    """Delayed expansion turns `w!x!` into `w`, a tree that exists: whichever
+    side carries the `!`, the rewrite must not make the two trees look equal."""
+    trees = {}
+    for name in ("w!x!", "w"):
+        trees[name] = tmp_path / name
+        subprocess.run(["git", "init", "-q", str(trees[name])], check=True, capture_output=True, timeout=60)
+        _git(trees[name], "commit", "-q", "--allow-empty", "-m", "test: base")
+        (trees[name] / "scripts" / "ops").mkdir(parents=True)
+        shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", trees[name] / "scripts" / "ops")
+    caller = "w" if bat_in == "w!x!" else "w!x!"
+    proc = _bat(trees[bat_in], tmp_path, "tag", "t-bang", cwd=trees[caller])
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, out
+    assert [n for n in trees if _git_out(trees[n], "tag", "--list")] == [], f"a tag landed:\n{out}"
+    if bat_in == "w!x!":
+        assert 'contains "!"' in out, f"refused without saying why:\n{out}"
+
+
+def _plant_locks(trees: dict[str, pathlib.Path], layout: str) -> list[pathlib.Path]:
+    tree, other = trees[layout], trees["linked" if layout == "main" else "main"]
+    locks = [
+        _git_path(tree, "index.lock"),                         # this tree's own git dir
+        _git_path(tree, "HEAD.lock"),
+        _git_path(other, "index.lock"),                        # the other tree's
+        _git_path(tree, "refs/heads") / "feat" / "held.lock",  # common dir, nested
+        _git_path(tree, "packed-refs.lock"),                   # common dir
+    ]
+    for lock in locks:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("", encoding="utf-8")
+    return locks
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+@pytest.mark.parametrize("sub", ["status", "preflight"])
+def test_no_lock_is_ever_deleted(tmp_path, layout, sub) -> None:
+    """A lock a crashed git left and one a running git holds look the same."""
+    trees = _main_and_worktree(tmp_path)
+    locks = _plant_locks(trees, layout)
+    out = _bat(trees[layout], tmp_path, sub).stdout.decode("utf-8", "replace")
+    assert [str(p) for p in locks if not p.exists()] == [], f"`{sub}` deleted a lock:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_preflight_lists_every_lock_git_may_be_holding(tmp_path, layout) -> None:
+    trees = _main_and_worktree(tmp_path)
+    locks = _plant_locks(trees, layout)
+    out = _bat(trees[layout], tmp_path, "preflight").stdout.decode("utf-8", "replace")
+    missed = [str(p) for p in locks if str(p).lower() not in out.lower()]
+    assert missed == [], f"preflight missed locks in {layout}:\n{out}"

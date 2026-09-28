@@ -27,7 +27,7 @@ REM ============================================================================
 REM  Dogfooded pattern (PR #44 C5 close-loop). The naive `& this.bat` call
 REM  hangs the MCP because the transport inherits the child console handle.
 REM
-REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_gh.bat"
+REM    $bat  = "<tree>\scripts\ops\win_gh.bat"   # acts on <tree>
 REM    $t    = "$env:TEMP\vibe-gh-out.txt"
 REM    Remove-Item $t -ErrorAction SilentlyContinue
 REM    $args = '/s /c "' + '"' + $bat + '" pr-checks > "' + $t + '" 2>&1"'
@@ -36,7 +36,6 @@ REM    $psi.FileName         = "cmd.exe"
 REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- without it MCP hangs
-REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
 REM    $p = [Diagnostics.Process]::Start($psi)
 REM    [void]$p.WaitForExit(30000)
 REM    Get-Content $t -Raw

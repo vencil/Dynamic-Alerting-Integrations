@@ -187,7 +187,7 @@ if ($bytes | Where-Object { $_ -ge 0x80 }) { Write-Error "Non-ASCII byte present
 **唯一穩定的呼叫模板**（三個非可選要素：`CreateNoWindow=$true` + `cmd.exe /s /c` + `WaitForExit(ms)`）：
 
 ```powershell
-$bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_gh.bat"
+$bat  = "<tree>\scripts\ops\win_gh.bat"   # 操作的是 <tree> 這棵樹（腳本所在的樹），不是 cwd
 $t    = "$env:TEMP\vibe-gh-out.txt"
 Remove-Item $t -ErrorAction SilentlyContinue
 
@@ -201,7 +201,6 @@ $psi.FileName         = "cmd.exe"
 $psi.Arguments        = $args
 $psi.UseShellExecute  = $false
 $psi.CreateNoWindow   = $true     # CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang
-$psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
 $p = [Diagnostics.Process]::Start($psi)
 [void]$p.WaitForExit(30000)       # 給一個毫秒為單位的硬 timeout，避免萬一 hang
 Get-Content $t -Raw
@@ -221,7 +220,7 @@ Get-Content $t -Raw
 > - 缺 `/s` 用 `/c` only：`waited=True, exit=0, len=0`（cmd 把 `.bat` 路徑的外層引號剝掉之後、又把內層引號當內容）
 > - 三個都加：`waited=True, exit=0, len=39`（正常）
 
-`scripts/ops/win_git_escape.bat` 和 `scripts/ops/win_gh.bat` 的檔頭都嵌入了這段模板作為 in-tree 單一來源，並由 `tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented` 強制要求 header 包含 `Process.Start` / `WaitForExit` / `CreateNoWindow` / `/s /c` 四個關鍵字 — 任何未來改動都會擋 CI。
+`scripts/ops/win_git_escape.bat` 和 `scripts/ops/win_gh.bat` 的檔頭都嵌入了這段模板，`tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented` 要求 header 含 `Process.Start` / `WaitForExit` / `CreateNoWindow` / `/s /c` 四個關鍵字。除了檔名與子命令，兩份結構上只差一行：`win_git_escape.bat` 只在它所在的那棵樹裡執行（cwd 不在該樹就印 `FAILED` 回 1），所以它的樣板多了 `$psi.WorkingDirectory = "<tree>"`；`win_gh.bat` 看的是腳本自己的位置，不需要這行。
 
 ## 長時間操作 (>60s)
 

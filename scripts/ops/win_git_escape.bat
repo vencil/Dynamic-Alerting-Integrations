@@ -12,7 +12,7 @@ REM  naive `Process.Start("cmd.exe", "/c ...")` hangs because the MCP
 REM  transport inherits the child's console handle and buffers stdout across
 REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
 REM
-REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_git_escape.bat"
+REM    $bat  = "<tree>\scripts\ops\win_git_escape.bat"
 REM    $t    = "$env:TEMP\vibe-bat-out.txt"
 REM    Remove-Item $t -ErrorAction SilentlyContinue
 REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
@@ -21,7 +21,7 @@ REM    $psi.FileName         = "cmd.exe"
 REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
-REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
+REM    $psi.WorkingDirectory = "<tree>"   # must be inside the tree $bat is in
 REM    $p = [Diagnostics.Process]::Start($psi)
 REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
 REM    Get-Content $t -Raw
@@ -66,7 +66,16 @@ REM   - Contains no credentials (uses gh auth or ~/.git-credentials)
 REM   - Output redirected to %TEMP%\vibe-git-*.txt
 REM   - Auto-sets UTF-8 environment
 
-setlocal enabledelayedexpansion
+REM Delayed expansion (enabled below) rewrites every `!` in a path, and the
+REM rewritten path can name another tree. Refuse such a location first, while
+REM `!` is still an ordinary character.
+setlocal DisableDelayedExpansion
+set "SELF=%~dp0"
+if "%SELF:!=%"=="%SELF%" goto :self_ok
+echo ERROR: this script's path contains "!", which it cannot work with: "%SELF%"
+exit /b 1
+:self_ok
+setlocal EnableDelayedExpansion
 
 REM --- Environment setup ---
 set "PYTHONUTF8=1"
@@ -114,17 +123,10 @@ if "%PY_CMD%"=="" (
 REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
-REM --- Find Repo ---
-set "REPO_DIR="
-if exist "%~dp0..\..\..\.git" (
-    REM Navigate from scripts\ops\ up to repo root
-    pushd "%~dp0..\.."
-    set "REPO_DIR=!CD!"
-    popd
-) else (
-    REM fallback: current directory
-    set "REPO_DIR=%CD%"
-)
+REM --- Repo: the work tree this copy lives in (scripts\ops\..\..) ---
+pushd "%~dp0..\.."
+set "REPO_DIR=%CD%"
+popd
 
 REM --- Output files ---
 set "OUT=%TEMP%\vibe-git-out.txt"
@@ -134,11 +136,24 @@ REM --- Command dispatch ---
 set "CMD=%~1"
 if "%CMD%"=="" goto :usage
 
-pushd "%REPO_DIR%"
+REM --- Inherited repo-local variables (a git hook exports GIT_DIR and
+REM --- GIT_INDEX_FILE) would point the calls below at another repo or index,
+REM --- and some of them would also satisfy the tree check. Git lists them.
+for /f "delims=" %%v in ('"%GIT_CMD%" rev-parse --local-env-vars') do set "%%v="
 
-REM --- Auto-clean phantom locks (run before every operation) ---
-del /f /q "%REPO_DIR%\.git\index.lock" 2>nul
-del /f /q "%REPO_DIR%\.git\refs\heads\*.lock" 2>nul
+REM --- The caller must be inside the tree this copy lives in. Commands run in
+REM --- the caller's directory, so relative arguments (add's paths,
+REM --- commit-file's message file) resolve the way git resolves them.
+"%GIT_CMD%" rev-parse --show-toplevel >"%OUT%" 2>"%ERR%" || goto :failed
+set "CWD_TOP="
+set /p "CWD_TOP=" <"%OUT%"
+set "CWD_TOP=!CWD_TOP:/=\!"
+if /i not "!CWD_TOP!"=="!REPO_DIR!" (
+    echo FAILED: this copy of the script works on !REPO_DIR!
+    echo         but the current directory is in !CWD_TOP!
+    echo         Run it from inside that tree, or use the copy in the tree you mean.
+    goto :done_err
+)
 
 if /i "%CMD%"=="status"      goto :do_status
 if /i "%CMD%"=="add"         goto :do_add
@@ -304,12 +319,15 @@ goto :done
 echo === Windows Git Preflight ===
 echo.
 echo [1/3] Checking for .git lock files...
-dir /b "%REPO_DIR%\.git\*.lock" 2>nul
+REM The common git dir holds refs and packed-refs and, under worktrees\, every
+REM linked tree's own locks. Listed, never deleted: a lock left by a crashed
+REM (e.g. FUSE-side) git and one held by a running git look the same.
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-common-dir') do set "LOCK_DIR=%%~fp"
+dir /s /b "%LOCK_DIR%\*.lock" 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo   OK: no lock files
 ) else (
-    echo   WARNING: lock files found. Delete with:
-    echo   del "%REPO_DIR%\.git\*.lock"
+    echo   WARNING: lock files above. If no git process is using one, delete it with del.
 )
 echo.
 echo [2/3] Git status...
@@ -329,6 +347,7 @@ goto :done
 :do_pr_preflight
 REM pr-preflight: PR closing check -- calls pr_preflight.py
 echo === PR Preflight Check ===
+pushd "%REPO_DIR%"
 if "%PY_CMD%"=="" (
     echo ERROR: python not found. Install Python or the `py` launcher, then retry.
     goto :done_err
@@ -390,16 +409,14 @@ type "%ERR%"
 type "%OUT%"
 goto :done_err
 
-REM --- Exit label (success): restore cwd + return 0. ---
+REM --- Exit label (success): return 0 (endlocal also restores the cwd). ---
 REM Without this label cmd.exe returns errorlevel=1 silently, making
 REM successful commands look failed.
 :done
-popd
 endlocal
 exit /b 0
 
-REM --- Exit label (failure): restore cwd + return 1. ---
+REM --- Exit label (failure): return 1. ---
 :done_err
-popd
 endlocal
 exit /b 1
