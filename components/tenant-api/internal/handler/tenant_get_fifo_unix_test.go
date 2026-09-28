@@ -24,7 +24,9 @@ import (
 )
 
 func TestGetTenant_BlockedRootPlatformReadFailsAndRecovers(t *testing.T) {
-	for _, fifoName := range []string{"_x.yaml", "_defaults.yml"} {
+	// `_profiles.yaml` (#1385): the profiles GET expands come from the same
+	// bounded root read, not from a read of their own.
+	for _, fifoName := range []string{"_x.yaml", "_defaults.yml", "_profiles.yaml"} {
 		t.Run(fifoName, func(t *testing.T) {
 			configDir := setupConfigDir(t, map[string]string{
 				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",

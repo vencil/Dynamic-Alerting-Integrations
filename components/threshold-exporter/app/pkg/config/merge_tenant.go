@@ -55,16 +55,19 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // The embedded ThresholdConfig is the display merge — the root defaults
 // carrier's Defaults / OptionalOverrides / StateFilters, then per tenant the
 // root platform files' `tenants:` entries (the layer /metrics applies), then
-// the tenant body, key by key. ResolveAt on it serves what /metrics serves
-// for the tenant, profiles excepted (see mergeTenantConfig).
+// the tenant body, key by key, and finally the profile the tenant elects,
+// filling in only the keys neither of those sets (#1385). ResolveAt on it
+// serves what /metrics serves for the tenant (see mergeTenantConfig).
 //
 // ⛔ ValidateTenantKeys IS SHADOWED ON PURPOSE. TenantMerge.ValidateTenantKeys
 // judges the tenant layer (root defaults + the body — exactly the merge the
 // write gate always judged) for Errors, and reports problems in a platform
-// file's entry as Notices naming that file. Calling the EMBEDDED method
-// (m.ThresholdConfig.ValidateTenantKeys()) would judge the platform keys as
-// if the tenant had written them — a write refused for a key the tenant
-// cannot fix in its own file. Every caller goes through the TenantMerge one.
+// file's entry, or in the part of an elected profile that reaches the
+// tenant, as Notices naming the file. Calling the EMBEDDED method
+// (m.ThresholdConfig.ValidateTenantKeys()) would judge the platform and
+// profile keys as if the tenant had written them — a write refused for a
+// key the tenant cannot fix in its own file. Every caller goes through the
+// TenantMerge one.
 type TenantMerge struct {
 	ThresholdConfig
 
@@ -74,11 +77,12 @@ type TenantMerge struct {
 	// platform is, per tenant, the root platform files that supplied keys
 	// the display merge carries (merge order), each with those keys.
 	platform map[string][]platformSupply
-	// profileRefs holds the names of the profiles the root platform files
-	// define (nil values): the platform-side `_profile` check reads them.
-	// Deliberately NOT in ThresholdConfig.Profiles — this core does not
-	// expand profiles (#1385).
-	profileRefs map[string]map[string]ScheduledValue
+	// profileFiles is, per profile name, per key as the file spells it, the
+	// root platform file whose value ThresholdConfig.Profiles holds (the
+	// last one in merge order that sets it) — the attribution of a profile
+	// notice. profileFileOrder is those files in merge order.
+	profileFiles     map[string]map[string]string
+	profileFileOrder []string
 }
 
 // platformSupply is one root platform file's contribution to one tenant: the
@@ -104,7 +108,19 @@ type platformSupply struct {
 //     platform file's entry — every message ValidateTenantKeys would give
 //     had the tenant written those keys (unknown key, bad `expires:`,
 //     dangling `_critical`, unknown `_profile`, bad version label, renamed
-//     key), naming the file to fix.
+//     key), naming the file to fix — then the same for the keys the
+//     elected profile fills in for the tenant (profileLayerNotices),
+//     naming the profile and the file that defines each key. That part
+//     never carries a renamed-key notice: ApplyProfiles fills from
+//     canonicalView(profile), so a legacy spelling in a profile reaches
+//     the tenant under its canonical key (ApplyProfiles' #1231 F4 rule —
+//     the profile author's deprecation signal is deliberately not
+//     surfaced to the tenant).
+//   - The tenant's own `_profile` is judged against the profiles the root
+//     platform files define (ThresholdConfig.Profiles, the set /metrics
+//     expands from): a name no root platform file defines is still an
+//     Error, as it always was; a defined one is not (#1385 — before
+//     profiles were read here, every `_profile` was reported unknown).
 func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 	tenantLayer := ThresholdConfig{
 		Defaults:          m.Defaults,
@@ -114,31 +130,149 @@ func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 		Tenants:           m.own,
 	}
 	v := tenantLayer.validateTenantKeys(m.shadowingPlatformFile)
-	if len(m.platform) == 0 {
-		return v
-	}
-	tenants := make([]string, 0, len(m.platform))
-	for tid := range m.platform {
-		tenants = append(tenants, tid)
-	}
-	sort.Strings(tenants)
-	for _, tid := range tenants {
-		for _, sup := range m.platform[tid] {
-			layer := ThresholdConfig{
-				Defaults:          m.Defaults,
-				OptionalOverrides: m.OptionalOverrides,
-				Profiles:          m.profileRefs,
-				Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
-			}
-			pv := layer.validateOverrideKeys(nil)
-			msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
-			sort.Strings(msgs)
-			for _, msg := range msgs {
-				v.Notices = append(v.Notices, platformLayerNotice(sup.file, tid, msg))
+	if len(m.platform) > 0 {
+		tenants := make([]string, 0, len(m.platform))
+		for tid := range m.platform {
+			tenants = append(tenants, tid)
+		}
+		sort.Strings(tenants)
+		for _, tid := range tenants {
+			for _, sup := range m.platform[tid] {
+				layer := ThresholdConfig{
+					Defaults:          m.Defaults,
+					OptionalOverrides: m.OptionalOverrides,
+					Profiles:          m.Profiles,
+					Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
+				}
+				pv := layer.validateOverrideKeys(nil)
+				msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
+				sort.Strings(msgs)
+				for _, msg := range msgs {
+					v.Notices = append(v.Notices, platformLayerNotice(sup.file, tid, msg))
+				}
 			}
 		}
 	}
+	v.Notices = append(v.Notices, m.profileLayerNotices()...)
 	return v
+}
+
+// profileLayerNotices is one notice per problem in the part of an elected
+// profile that reaches a tenant — the keys ApplyProfiles fills in for it
+// (profileFill over the tenant layer plus the platform layer, the map
+// ApplyProfiles reads) — judged as validateOverrideKeys would judge them
+// had the tenant written them, and attributed to the root platform file
+// that defines each key. A key the profile supplies but may not fill in
+// (declared without a platform value) gets a notice too: /metrics drops it
+// with a WARN nobody authoring the tenant reads.
+//
+// Never an Error: the profile is platform-owned, the tenant cannot fix it
+// in its own file, and a key the tenant writes itself is never filled (so
+// never judged here). Keys the tenant or a platform entry sets are not the
+// profile's and are not reported.
+//
+// ⚠️ It judges what validateOverrideKeys judges — key names, `expires:`,
+// `_critical` bases, version labels — and nothing else. A value resolve
+// cannot parse (`mysql_connections: abc`) is not reported, for the profile
+// as for the tenant's own file: resolve falls back to the default with a
+// log line on both.
+func (m *TenantMerge) profileLayerNotices() []string {
+	if len(m.Profiles) == 0 || len(m.own) == 0 {
+		return nil
+	}
+	tenants := make([]string, 0, len(m.own))
+	for tid := range m.own {
+		tenants = append(tenants, tid)
+	}
+	sort.Strings(tenants)
+	canonDeclared := canonicalizeOptionalOverrides(m.OptionalOverrides)
+	var out []string
+	for _, tid := range tenants {
+		// The layer ApplyProfiles read: the tenant's own keys and what the
+		// platform files supply (never a key the tenant writes).
+		layer := make(map[string]ScheduledValue, len(m.own[tid]))
+		for k, v := range m.own[tid] {
+			layer[k] = v
+		}
+		for _, sup := range m.platform[tid] {
+			for k, v := range sup.keys {
+				layer[k] = v
+			}
+		}
+		sv, ok := layer["_profile"]
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(sv.Default)
+		profile, found := m.Profiles[name]
+		if name == "" || !found {
+			continue // unknown: the tenant layer's Error or a platform notice says so
+		}
+		byFile := make(map[string]map[string]ScheduledValue)
+		declaredBy := make(map[string][]string)
+		fileOf := m.profileKeyFiles(name)
+		fill := profileFill(canonicalView(profile), layer, canonDeclared, func(key string) {
+			f := fileOf[key]
+			declaredBy[f] = append(declaredBy[f], key)
+		})
+		for k, v := range fill {
+			f := fileOf[k]
+			if byFile[f] == nil {
+				byFile[f] = make(map[string]ScheduledValue)
+			}
+			byFile[f][k] = v
+		}
+		for _, f := range m.profileFileOrder {
+			var msgs []string
+			if keys := byFile[f]; len(keys) > 0 {
+				pl := ThresholdConfig{
+					Defaults:          m.Defaults,
+					OptionalOverrides: m.OptionalOverrides,
+					Profiles:          m.Profiles,
+					Tenants:           map[string]map[string]ScheduledValue{tid: keys},
+				}
+				pv := pl.validateOverrideKeys(nil)
+				msgs = append(append(msgs, pv.Errors...), pv.Notices...)
+			}
+			for _, k := range declaredBy[f] {
+				msgs = append(msgs, fmt.Sprintf(
+					"key %q is declared without a platform value (optional_overrides), which a profile cannot fill in — it is not applied", k))
+			}
+			sort.Strings(msgs)
+			for _, msg := range msgs {
+				out = append(out, profileLayerNotice(f, name, tid, msg))
+			}
+		}
+	}
+	return out
+}
+
+// profileKeyFiles maps each key of canonicalView(Profiles[name]) to the file
+// its value came from: the canonical spelling's file when the profile
+// writes it (canonicalView lets it win), else the legacy spelling's.
+func (m *TenantMerge) profileKeyFiles(name string) map[string]string {
+	raw := m.profileFiles[name]
+	out := make(map[string]string, len(raw))
+	for k, f := range raw {
+		if canon, alias := canonicalKeyFor(k); alias {
+			if _, set := out[canon]; !set {
+				out[canon] = f
+			}
+			continue
+		}
+		out[k] = f
+	}
+	return out
+}
+
+// profileLayerNotice rewrites one validateOverrideKeys message about the
+// part of profile `name` that file supplies to tenantID into a notice
+// attributed to the file and the profile.
+func profileLayerNotice(file, name, tenantID, msg string) string {
+	body := strings.TrimPrefix(strings.TrimPrefix(msg, "WARN: "), "NOTICE: ")
+	body = strings.TrimPrefix(body, "tenant="+tenantID+": ")
+	return fmt.Sprintf("NOTICE: platform file %s, profile %q (elected by tenant %s via _profile): %s — fix it in that file; "+
+		"it is not in this tenant's file and does not block writing it", file, name, tenantID, body)
 }
 
 // shadowingPlatformFile is the tenant layer's aliasShadow: the platform file
@@ -253,12 +387,20 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 	if _, exists := merged.Tenants[tenantID]; !exists {
 		var flatKV map[string]ScheduledValue
 		if err := yaml.Unmarshal(tenantData, &flatKV); err == nil && len(flatKV) > 0 {
-			merged.Tenants[tenantID] = flatKV
+			// ⛔ Two maps: ApplyProfiles below writes the profile's keys
+			// into the display one, and own must stay what the tenant wrote.
+			display := make(map[string]ScheduledValue, len(flatKV))
+			for k, v := range flatKV {
+				display[k] = v
+			}
+			merged.Tenants[tenantID] = display
 			merged.own[tenantID] = flatKV
 		}
 	}
 
-	merged.ApplyProfiles()
+	// Silent: ApplyProfiles' WARNs would be written on every request; the
+	// same facts reach the caller through ValidateTenantKeys.
+	merged.applyProfiles(nil)
 	return merged
 }
 
@@ -283,7 +425,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // returns the same result as the byte entry point.
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
 	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
-	merged.ApplyProfiles()
+	merged.applyProfiles(nil) // silent, as in MergeTenantOverRootPlatform
 	return merged
 }
 
@@ -316,10 +458,26 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 //     — never a round trip through an untyped `any` (which would turn
 //     `0x1F` into 31 while /metrics keeps the text).
 //
-// ⛔ PROFILES ARE NOT EXPANDED. The display merge carries no Profiles, so a
-// `_profile` — the tenant's own or one a platform entry elects — changes
-// nothing here, exactly as before this layer was read. /metrics does expand
-// them; closing that is #1385's step.
+// PROFILES (#1385) are /metrics', rule for rule — the entry points run
+// the flat plane's own expansion (ApplyProfiles' core, applyProfiles,
+// without its log lines: a GET must not write the exporter's WARNs to the
+// process log per request; the caller gets them as an Error / notices from
+// ValidateTenantKeys) on this merge:
+//
+//   - WHERE DEFINED: the `profiles:` block of every root platform file
+//     above (so `_profiles.yaml`, the root carrier, any other root `_`
+//     file); not a nested `_` file, not an unselected root carrier, not a
+//     file the flat decode rejects, not the tenant body (applyBoundaryRules
+//     strips a tenant file's). They come from the same read as the rest of
+//     the root surface — no file is read for them.
+//   - SEVERAL FILES: per profile name, per key, a later file (sort order)
+//     over an earlier one — mergePartialInto's rule.
+//   - WHICH NAME: the `_profile` in the tenant's layer after the platform
+//     layer — the body's, else a platform entry's. An unknown or empty name
+//     expands nothing.
+//   - WHICH KEYS: profileFill — never a key the body or a platform entry
+//     sets under any spelling, never one the root carrier declares in
+//     `optional_overrides` (except `_critical`).
 func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge {
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
@@ -401,7 +559,7 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 			out.platform[tenant] = supplies
 		}
 	}
-	out.profileRefs = root.profileRefs()
+	out.profileFiles, out.profileFileOrder = root.mergeProfilesInto(merged.Profiles)
 
 	out.ThresholdConfig = merged
 	return out
@@ -504,24 +662,42 @@ func (r rootPlatform) supplyFor(tenant string, own map[string]ScheduledValue) []
 	return out
 }
 
-// profileRefs is the set of profile names the root platform files define —
-// the set /metrics expands a `_profile` from (every platform file may carry
-// profiles; applyBoundaryRules strips them only from tenant files).
-func (r rootPlatform) profileRefs() map[string]map[string]ScheduledValue {
-	var out map[string]map[string]ScheduledValue
+// mergeProfilesInto merges the root platform files' `profiles:` blocks into
+// dst the way mergePartialInto does on /metrics — in merge order, per name,
+// per key, the later file over the earlier; a null body is a known, empty
+// profile (every platform file may carry profiles; applyBoundaryRules
+// strips them only from tenant files). It returns, per name and key, the
+// file whose value dst holds, and the files that define any profile.
+//
+// dst's inner maps are new: the decoded files are shared (the cache), and
+// nothing may write to them.
+func (r rootPlatform) mergeProfilesInto(dst map[string]map[string]ScheduledValue) (map[string]map[string]string, []string) {
+	var files map[string]map[string]string
+	var order []string
 	for i := range r.files {
 		pf := r.files[i].parsed
-		if pf.err != nil {
+		if pf.err != nil || len(pf.cfg.Profiles) == 0 {
 			continue
 		}
-		for name := range pf.cfg.Profiles {
-			if out == nil {
-				out = make(map[string]map[string]ScheduledValue)
+		key := r.files[i].key
+		order = append(order, key)
+		if files == nil {
+			files = make(map[string]map[string]string)
+		}
+		for name, values := range pf.cfg.Profiles {
+			if dst[name] == nil {
+				dst[name] = make(map[string]ScheduledValue, len(values))
 			}
-			out[name] = nil
+			if files[name] == nil {
+				files[name] = make(map[string]string, len(values))
+			}
+			for k, v := range values {
+				dst[name][k] = v
+				files[name][k] = key
+			}
 		}
 	}
-	return out
+	return files, order
 }
 
 // parsedPlatformFile is ParseConfigFile's verdict on one root platform

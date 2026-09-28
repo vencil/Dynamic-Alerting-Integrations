@@ -291,13 +291,10 @@ func assertTenantAPIRow(t *testing.T, dir, tree, tenant string, want *float64) {
 }
 
 // assertTenantAPIAgreesWithMetrics is the column's oracle: the tenant-api
-// core serves what /metrics serves, with exactly two sanctioned gaps.
-//
-//   - not reached (null) while /metrics serves the tenant: only for a
-//     tenant declared below the root (the walker column still resolves it);
-//   - a different value: only where /metrics expands a profile (the walker
-//     column's profile_overlay is set) — the core does not expand profiles
-//     yet (#1385).
+// core serves what /metrics serves, with exactly one sanctioned gap: not
+// reached (null) while /metrics serves the tenant, only for a tenant
+// declared below the root (the walker column still resolves it). A profile
+// /metrics expands, the core expands too (#1385) — no exception for it.
 func assertTenantAPIAgreesWithMetrics(t *testing.T, tree, tenant string, api, metric *float64, w *overlayWalker) {
 	t.Helper()
 	switch {
@@ -309,8 +306,8 @@ func assertTenantAPIAgreesWithMetrics(t *testing.T, tree, tenant string, api, me
 		}
 	case metric == nil:
 		t.Errorf("%s: %s tenant_api %v for a tenant /metrics does not serve", tree, tenant, *api)
-	case *api != *metric && (w == nil || w.ProfileOverlay == nil):
-		t.Errorf("%s: %s tenant_api %v differs from /metrics %v without a profile expansion to explain it", tree, tenant, *api, *metric)
+	case *api != *metric:
+		t.Errorf("%s: %s tenant_api %v differs from /metrics %v", tree, tenant, *api, *metric)
 	}
 }
 

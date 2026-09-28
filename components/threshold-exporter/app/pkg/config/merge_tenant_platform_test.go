@@ -247,41 +247,6 @@ func TestMergeTenantPlatformLayerMatchesMetrics(t *testing.T) {
 	}
 }
 
-// TestMergeTenantPlatformLayerDoesNotExpandProfiles pins S2: a platform
-// `tenants:` entry that elects a `_profile` for the tenant. /metrics expands
-// it; the tenant-api core does not expand profiles at all (neither for a
-// profile the tenant file elects), so after the platform layer is read GET
-// still serves what main served. Profile expansion is the next step (#1385).
-func TestMergeTenantPlatformLayerDoesNotExpandProfiles(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	writeMergeTree(t, dir, map[string]string{
-		"_defaults.yaml": platformMergeDefaults,
-		"_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 50\n",
-		"_platform.yaml": "tenants:\n  tx:\n    _profile: std\n",
-		"tx.yaml":        "tenants:\n  tx:\n    redis_memory: \"71\"\n",
-	})
-	oracle, _, err := LoadDir(dir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := resolvedRows(oracle, "tx"); !containsRow(got, "mysql_connections{}=50/warning") {
-		t.Fatalf("precondition: /metrics expands the platform-elected profile, rows %v", got)
-	}
-	body, _ := os.ReadFile(filepath.Join(dir, "tx.yaml"))
-	m := MergeTenantWithRootDefaults(dir, "tx", body)
-	got := resolvedRows(&m, "tx")
-	if !containsRow(got, "mysql_connections{}=80/warning") || containsRow(got, "mysql_connections{}=50/warning") {
-		t.Errorf("GET merge expanded the platform-elected profile (main did not): %v", got)
-	}
-	if main := mainMergeRows(t, dir, "tx", body); strings.Join(main, "\n") != strings.Join(got, "\n") {
-		t.Errorf("GET merge rows differ from main's\n got: %v\nmain: %v", got, main)
-	}
-	if len(m.Profiles) != 0 {
-		t.Errorf("merge carries profiles %v: expanding them is #1385's step, not this one", m.Profiles)
-	}
-}
-
 func containsRow(rows []string, want string) bool {
 	for _, r := range rows {
 		if r == want {
