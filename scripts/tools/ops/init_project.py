@@ -201,7 +201,15 @@ def _h(key: str) -> str:
 # A ref that 404s here is a broken pipeline in someone else's repo.
 
 # Chosen for what it CONTAINS, not only for how it can be pinned. Measured
-# (`docker run --entrypoint sh`): a shell, `kubectl` v1.34.9, and `kustomize`.
+# (`docker run --entrypoint sh`, on 1.34.9): a shell, `kubectl`, and
+# `kustomize`. Re-measured on the 1.34.12 bump (#1401) from the image's own
+# package inventory (`trivy image --list-all-pkgs`, no daemon): busybox + bash,
+# `usr/bin/kubectl` built from k8s.io/kubernetes v1.34.12, and
+# `usr/bin/kustomize`. ⚠️ A newer kubectl MINOR does not buy CVE headroom here:
+# 1.35.9 / 1.36.5 / 1.37.1 scanned the same fixable count as 1.34.12. The
+# residue sits mostly in side tools the image bundles (krew, kustomize,
+# kubeconform, eksctl, helm plugins) — kubectl itself carries only its Go
+# 1.26.5 stdlib findings, which the next upstream patch rebuild clears.
 # All three are load-bearing — the apply stage is a GitLab `script:`
 # block, which the runner executes through a shell inside this image, and the
 # first line of that block invokes standalone `kustomize`.
@@ -219,7 +227,7 @@ def _h(key: str) -> str:
 # GITLAB_HELM_IMAGE below — one trust decision, not two.
 # ⚠️ kubectl supports ±1 minor of skew from the cluster — override
 # DA_KUBECTL_IMAGE if the customer's control plane sits further back.
-GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.9'
+GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.12'
 
 # ⛔ Held on the Helm 3 line ON PURPOSE — pinned by
 # `test_helm_image_stays_on_the_helm_3_line`, because a comment alone did not
@@ -233,7 +241,7 @@ GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.9'
 # ⓘ Measured: ships a shell, but `ENTRYPOINT ["helm"]` — see the
 # `entrypoint: [""]` override in the emitted job, without which the job dies
 # before its first script line.
-GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
+GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
 
 # ⛔ There is deliberately no ARGOCD_CLI_IMAGE any more. `--deploy argocd` was
 # retired (#1351): it scaffolded no ArgoCD Application while its apply stage

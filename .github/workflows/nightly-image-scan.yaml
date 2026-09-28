@@ -387,9 +387,9 @@ jobs:
         # nothing here and are not free.
         include:
           - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py)
-            ref: "alpine/k8s:1.34.9"
+            ref: "alpine/k8s:1.34.12"
           - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py)
-            ref: "alpine/helm:3.21.3"
+            ref: "alpine/helm:3.22.0"
           # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
           # 100% of generated projects — measured across all 6 `--ci` x
           # `--deploy` combinations, while no single project carries more than
