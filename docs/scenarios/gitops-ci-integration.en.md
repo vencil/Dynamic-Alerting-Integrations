@@ -256,8 +256,8 @@ da-tools generate-routes --config-dir conf.d/ --validate
 # ⚠️ What -o writes is a fragment (not a complete config) and is not checked
 #    by Alertmanager's own parser; --validate hands the config, assembled on
 #    the BUILT-IN default base (not yours), to amtool (#2260). To check your
-#    own base use --output-configmap --base-config (#2219). The da-tools image
-#    bundles amtool (#2294), so inside it both checks run by default.
+#    own base use --output-configmap --base-config (#2219). amtool ships in
+#    the image (#2294), so inside it both checks run by default.
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/
