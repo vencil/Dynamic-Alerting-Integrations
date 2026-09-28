@@ -1,0 +1,839 @@
+{
+  "_comment": [
+    "Cross-language parity for #2280: how a tenant's routing is RESOLVED from the conf.d root",
+    "(_routing_defaults -> the referenced routing profile -> the tenant's _routing, shallow,",
+    "then {{tenant}} substitution; _routing_enforced takes no part) and how the ADR-007",
+    "domain policies judge its receiver TYPES. Only the root is read (the Python reader is flat).",
+    "Readers: tests/shared/test_routing_policy_parity.py (Python SSOT, _grar_parse.load_tenant_tree",
+    "strict_policies=True + _grar_validate), components/threshold-exporter/app/pkg/routingpolicy/",
+    "parity_test.go (the shared Go package), components/threshold-exporter/app/cmd/da-guard/",
+    "routing_policy_parity_test.go (da-guard findings) and tenant-api's",
+    "internal/handler/routing_policy_parity_test.go (the tenant_api column). Every reader reads",
+    "only this matrix, never another reader's source.",
+    "expect.<tenant>.targets: the routes that render a receiver, in render order: main route",
+    "(ref 'receiver'), overrides[i], routes[i]; type = receiver.type when it is a non-empty",
+    "string, else null. null = the tenant has no resolved routing (disabled, or no layer supplies",
+    "anything); [] = routing resolved but the main receiver is empty, so nothing renders.",
+    "policy: [domain, target ref, constraint] per receiver-type violation, domains in name order;",
+    "forbidden_receiver_types and allowed_receiver_types are judged independently.",
+    "rejected_routes: the refs of `routes` entries the generator skips (route_entry_matchers), or",
+    "['routes'] when `routes` is not a list; da-guard reports each as invalid_route_entry.",
+    "unknown_profile: the referenced routing profile no profile file defines (WARN), else null.",
+    "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
+    "with POLICY_VIOLATION, 'ok' = allowed. tenant-api reads only _domain_policy.yaml (not .yml),",
+    "and a PUT body carries no platform-file overlay. tenant_api.batch: null, or one patch applied",
+    "to the tenant's block on disk: verdict 'policy_violation' when the op is refused for domain",
+    "policy, 'ok' otherwise; a patch that touches neither _routing_profile nor _routing is never",
+    "refused for the routing already on disk.",
+    "python_differs: null, or the values the Python side produces where the YAML readers disagree",
+    "(the Go columns above hold for every Go reader); `reason` says why."
+  ],
+  "trees": [
+    {
+      "name": "i-routes-entry-unknown-receiver-type",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: bogus\n          url: https://x.example/hook\n"
+      },
+      "expect": {
+        "tenant-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "bogus"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "ii-routes-entry-forbidden-type",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: critical\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "expect": {
+        "tenant-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "routes[0]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "iii-override-unknown-receiver-type",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: bogus\n          url: https://x.example/hook\n"
+      },
+      "expect": {
+        "tenant-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "bogus"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "iv-override-forbidden-type",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - tenant-x\n",
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "expect": {
+        "tenant-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "overrides[0]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "adr007-five-tenants",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    description: ADR-007 finance example\n    tenants:\n    - t-sre\n    - t-dba\n    - t-fin\n    - t-ovr\n    - t-livedbb\n    constraints:\n      allowed_receiver_types:\n      - pagerduty\n      - email\n      - opsgenie\n      forbidden_receiver_types:\n      - slack\n      - webhook\n      enforce_group_by:\n      - tenant\n      - alertname\n      - severity\n      max_repeat_interval: 1h\n      min_group_wait: 30s\n      require_critical_escalation: true\n",
+        "_routing_profiles.yaml": "# _routing_profiles.yaml — Named Routing Configurations (ADR-007)\n#\n# Define reusable routing profiles that multiple tenants can reference\n# via _routing_profile: \"<name>\" in their tenant YAML.\n#\n# Merge order: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced\n#\n# Naming convention: team-{team}-{region} or domain-{domain}-{tier}\n#\n# Each profile has the same shape as a tenant's _routing\n# (routing-profiles.schema.json $refs tenant-config.schema.json#/definitions/routing).\n# The merge is shallow: a key the tenant's _routing sets replaces the\n# profile's value wholesale — including `routes` (write `routes: []` to drop\n# the profile's routes for one tenant).\n#\n# `routes` (ADR-007): label-equality sub-routes. Each entry becomes a child of\n# the tenant's main route, AFTER the tenant's `overrides`:\n#   overrides → routes → the main receiver (first match wins)\n# `match` is label: value equality only (no regex, no `continue`); the\n# tenant=\"<id>\" matcher stays on the parent route. Timing / group_by not set on\n# an entry are inherited from the tenant's main route. Domain policies and the\n# --policy webhook allowlist check these receivers too.\n\nrouting_profiles:\n  # SRE team in APAC region\n  team-sre-apac:\n    receiver:\n      type: slack\n      api_url: \"https://hooks.slack.com/services/T00/B00/sre-apac\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 4h\n    routes:\n      # severity=\"critical\" → PagerDuty, re-notify every 15m; other alerts\n      # stay on the Slack receiver above.\n      - match: { severity: critical }\n        receiver:\n          type: pagerduty\n          service_key: \"sre-apac-critical-key\"\n        repeat_interval: 15m\n\n  # Global DBA team\n  team-dba-global:\n    receiver:\n      type: webhook\n      url: \"https://alerting.internal/dba-global\"\n    group_by: [tenant, alertname, db_type]\n    group_wait: 1m\n    group_interval: 10m\n    repeat_interval: 8h\n\n  # Finance domain — strict compliance\n  domain-finance-tier1:\n    receiver:\n      type: pagerduty\n      service_key: \"finance-tier1-key\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 1h\n",
+        "t-dba.yaml": "tenants:\n  t-dba:\n    _routing_profile: team-dba-global\n    cpu_usage_percent: '85'\n",
+        "t-fin.yaml": "tenants:\n  t-fin:\n    _routing_profile: domain-finance-tier1\n    cpu_usage_percent: '85'\n",
+        "t-livedbb.yaml": "tenants:\n  t-livedbb:\n    _routing:\n      receiver:\n        type: webhook\n        url: https://webhook.db-b.example.com/alerts\n      group_by:\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 4h\n    cpu_usage_percent: '85'\n",
+        "t-ovr.yaml": "tenants:\n  t-ovr:\n    _routing_profile: team-sre-apac\n    _routing:\n      overrides:\n      - alertname: MariaDBDown\n        receiver:\n          type: email\n          to:\n          - dba@example.com\n          smarthost: smtp.example.com:587\n          from: am@example.com\n    cpu_usage_percent: '85'\n",
+        "t-sre.yaml": "tenants:\n  t-sre:\n    _routing_profile: team-sre-apac\n    cpu_usage_percent: '85'\n"
+      },
+      "expect": {
+        "t-sre": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": {
+              "patch": {
+                "_routing_profile": "domain-finance-tier1"
+              },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null
+        },
+        "t-dba": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": {
+              "patch": {
+                "cpu_usage_percent": "90"
+              },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null
+        },
+        "t-fin": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": {
+              "patch": {
+                "_routing_profile": "team-dba-global"
+              },
+              "verdict": "policy_violation"
+            }
+          },
+          "python_differs": null
+        },
+        "t-ovr": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "email"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": {
+              "patch": {
+                "_routing_profile": "domain-finance-tier1"
+              },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null
+        },
+        "t-livedbb": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "tenant-empty-routes-drops-profile-routes",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  team-esc:\n    receiver:\n      type: pagerduty\n      service_key: esc-key\n    routes:\n    - match:\n        severity: critical\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-keep\n    - t-clear\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-keep.yaml": "tenants:\n  t-keep:\n    cpu_usage_percent: '85'\n    _routing_profile: team-esc\n",
+        "t-clear.yaml": "tenants:\n  t-clear:\n    cpu_usage_percent: '85'\n    _routing_profile: team-esc\n    _routing:\n      routes: []\n"
+      },
+      "expect": {
+        "t-keep": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "routes[0]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-clear": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "unknown-routing-profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  team-a:\n    receiver:\n      type: webhook\n      url: https://alerting.example/team-a\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-ghost\n    - t-ghost-own\n    - t-known\n    constraints:\n      forbidden_receiver_types:\n      - webhook\n",
+        "t-ghost.yaml": "tenants:\n  t-ghost:\n    cpu_usage_percent: '85'\n    _routing_profile: team-missing\n",
+        "t-ghost-own.yaml": "tenants:\n  t-ghost-own:\n    cpu_usage_percent: '85'\n    _routing_profile: team-missing\n    _routing:\n      receiver:\n        type: email\n        to:\n        - ops@example.com\n        smarthost: smtp.example.com:587\n        from: am@example.com\n",
+        "t-known.yaml": "tenants:\n  t-known:\n    cpu_usage_percent: '85'\n    _routing_profile: team-a\n"
+      },
+      "expect": {
+        "t-ghost": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": "team-missing",
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-ghost-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": "team-missing",
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-known": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "routing-disable-with-profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  team-chat:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-off\n    - t-on\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-off.yaml": "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n    _routing_profile: team-chat\n    _routing: disable\n",
+        "t-on.yaml": "tenants:\n  t-on:\n    cpu_usage_percent: '85'\n    _routing_profile: team-chat\n"
+      },
+      "expect": {
+        "t-off": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-on": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": {
+              "patch": {
+                "_routing": "disable"
+              },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "main-receiver-empty-and-override-matchers",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-nomain\n    - t-matcher\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-nomain.yaml": "tenants:\n  t-nomain:\n    cpu_usage_percent: '85'\n    _routing:\n      overrides:\n      - alertname: HighCPU\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-matcher.yaml": "tenants:\n  t-matcher:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      overrides:\n      - alertname: A\n        metric_group: B\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - alertname: ''\n        metric_group: mg\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - alertname: C\n"
+      },
+      "expect": {
+        "t-nomain": {
+          "targets": [],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-matcher": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[2]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "overrides[2]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "tenant-in-two-domains",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-multi\n    constraints:\n      forbidden_receiver_types:\n      - slack\n  ops:\n    tenants:\n    - t-multi\n    - t-ops-only\n    constraints:\n      allowed_receiver_types:\n      - email\n      - pagerduty\n",
+        "t-multi.yaml": "tenants:\n  t-multi:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-ops-only.yaml": "tenants:\n  t-ops-only:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: email\n        to:\n        - ops@example.com\n        smarthost: smtp.example.com:587\n        from: am@example.com\n"
+      },
+      "expect": {
+        "t-multi": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "ops",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-ops-only": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "forbidden-and-allowed-both-fire",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-both\n    constraints:\n      forbidden_receiver_types:\n      - slack\n      allowed_receiver_types:\n      - pagerduty\n",
+        "t-both.yaml": "tenants:\n  t-both:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "expect": {
+        "t-both": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ],
+            [
+              "finance",
+              "receiver",
+              "allowed_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": {
+              "patch": {
+                "cpu_usage_percent": "90"
+              },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "routing-defaults-supply-receiver",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: slack\n    api_url: https://{{tenant}}.hooks.slack.example/services/x\n  group_wait: 30s\n  routes:\n  - match:\n      severity: critical\n    receiver:\n      type: webhook\n      url: https://alerting.example/esc\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-plain\n    - t-own\n    constraints:\n      forbidden_receiver_types:\n      - slack\n      - webhook\n",
+        "t-plain.yaml": "tenants:\n  t-plain:\n    cpu_usage_percent: '85'\n",
+        "t-own.yaml": "tenants:\n  t-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "expect": {
+        "t-plain": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "routes-entry-shapes",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-routes\n    - t-routes-scalar\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-routes.yaml": "tenants:\n  t-routes:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes:\n      - just-a-string\n      - match:\n          severity: critical\n        continue: true\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match_re:\n          severity: crit.*\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match: {}\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: 1\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: ''\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          bad-label: x\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n      - match:\n          severity: warning\n      - match:\n          severity: critical\n          team: dba\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-routes-scalar.yaml": "tenants:\n  t-routes-scalar:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes: not-a-list\n"
+      },
+      "expect": {
+        "t-routes": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[9]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "routes[9]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [
+            "routes[0]",
+            "routes[1]",
+            "routes[2]",
+            "routes[3]",
+            "routes[4]",
+            "routes[5]",
+            "routes[6]",
+            "routes[7]"
+          ],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-routes-scalar": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes"
+          ],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "yaml11-bool-match-value",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-yes\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-yes.yaml": "tenants:\n  t-yes:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      routes:\n      - match:\n          paging: yes\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "expect": {
+        "t-yes": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "routes[0]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": {
+            "reason": "PyYAML (YAML 1.1) reads the unquoted `yes` as the boolean True, so route_entry_matchers skips the entry; yaml.v3 reads it as the string \"yes\" and the Go side renders and judges it. Quote the value to make both agree.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [
+              "routes[0]"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "domain-policy-yml-spelling",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yml": "domain_policies:\n  finance:\n    tenants:\n    - t-yml\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-yml.yaml": "tenants:\n  t-yml:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "expect": {
+        "t-yml": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "finance",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    }
+  ]
+}
