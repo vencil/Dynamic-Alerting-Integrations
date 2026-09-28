@@ -1,23 +1,39 @@
 {
   "name": "Dynamic Alerting Integrations",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  // Base OS = the CI runner's (every workflow job is `runs-on: ubuntu-24.04`),
+  // so "passes in the container, fails on the runner" cannot be an OS delta.
+  // Asserted by tests/shared/test_toolchain_pin_parity.py (#1337).
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
     // 1. Docker-in-Docker (Kind 核心)
+    // Docker stays "latest" ON PURPOSE: the feature resolves a version against
+    // the moby apt repo of the base distro, so a pin is only valid for the
+    // versions that repo happens to carry, and CI's docker is whatever the
+    // runner image ships (we pin neither side). Nothing here is compared
+    // against CI; see docs/internal/toolchain-versions.md.
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "version": "latest",
       "enableNonRootDocker": "true",
       "moby": "true"
     },
-    // 2. K8s 工具 (kubectl, helm)
+    // 2. K8s 工具 (kubectl, helm) — PINNED, never "latest" (#1337).
+    // ⛔ In this feature `version` IS the kubectl version; there is no
+    // `kubectl` option (an earlier revision set one; the feature ignored it).
+    // kubectl tracks the node image of the pinned kind below (kind v0.33.0
+    // defaults to kindest/node v1.37.0) — kubectl supports ±1 minor of skew.
+    // helm == every setup-helm `version:` in .github/workflows (except the
+    // Container SAST job, see ci.yml). No `v` prefix needed: the feature adds it.
     "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
-      "version": "latest",
+      "version": "1.37.1",
       "minikube": "none",
-      "kubectl": "latest",
-      "helm": "latest"
+      "helm": "4.3.0"
     },
-    // 3. Node.js (很多 MCP connector 需要)
+    // 3. Node.js (很多 MCP connector 需要；portal build / Playwright)
+    // PINNED to the same major as every `node-version:` in .github/workflows.
+    // "lts" moved under us: it follows the Node release line, so the container
+    // silently changes major when a new line enters LTS, while CI stays put.
     "ghcr.io/devcontainers/features/node:1": {
-      "version": "lts"
+      "version": "24"
     },
     // 4. Go (threshold-exporter 開發用)
     // golangciLintVersion is PINNED, not "latest": components/tenant-api's
@@ -51,7 +67,9 @@
   //      `make lint-docs-mkdocs` 需要的三件組（dev-rules.md #4 Doc-as-Code
   //      要求 docs/**.md push 前必跑此 lint；缺它就只能等 CI 回報 site-root
   //      vs filesystem path 語意衝突）。PR #375 從踩到的痛中加進來。
-  // 2. 安裝 Kind
+  // 2. 安裝 Kind（pinned v0.33.0 + 上游 sha256sum 驗證；預設 node image 為
+  //    kindest/node v1.37.0，上方 kubectl 1.37.1 跟著它走。原本的 v0.20.0 預設
+  //    起 k8s 1.27 的叢集，早已 EOL，且與 "latest" kubectl 的版本差遠超 ±1。）
   // 3. 安裝 promtool（pinned，與 ci.yml 同版——手裝 2.x vs CI pin 3.x 的
   //    lookback 語意 skew 燒過 #1134；pin parity 由
   //    tests/preview/test_promtool_pin_parity.py 顧）
@@ -97,7 +115,7 @@
   // so git refuses to run as vscode ("detected dubious ownership"), which takes
   // out `go build` VCS stamping and every git-shelling lint. That is a separate
   // decision — see the issue linked from CHANGELOG.
-  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh",
+  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -fsSLo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 && echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  ./kind' | sha256sum -c - && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh",
 
   "customizations": {
     "vscode": {
