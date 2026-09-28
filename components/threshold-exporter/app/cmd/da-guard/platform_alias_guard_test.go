@@ -84,6 +84,22 @@ func TestGuard_RedundantOverrideAcrossAliasSpellings(t *testing.T) {
 			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n" +
 				"tenants:\n  tx:\n    mysql_threads_running: 70\n"},
 			"mysql_threads_running", "70", false, "    mysql_cpu: 99\n"},
+		// Round 3, B: chain and tenant both on the LEGACY spelling, equal
+		// values — redundant. Pins "a lone legacy spelling is not renamed"
+		// (dropShadowedSpellings): renaming it to the canonical key would
+		// hide this hint, and the product test's missed-hint count alone
+		// does not catch that (one lost, one gained).
+		aliasGuardCase{"control-chain-and-tenant-both-legacy-same-value",
+			map[string]string{"_defaults.yaml": "defaults:\n  mysql_cpu: 30\n  pg_connections: 100\n"},
+			"mysql_cpu", "30", true, ""},
+		// Round 3, C: a platform null on the canonical key drops nothing
+		// (mergeOverSpellings' nil skip): the tenant's legacy 30 wins over
+		// it, and deleting it falls back through the null to the chain's
+		// legacy 30 — redundant.
+		aliasGuardCase{"control-platform-null-canonical-keeps-chain-legacy",
+			map[string]string{"_defaults.yaml": "defaults:\n  mysql_cpu: 30\n  pg_connections: 100\n" +
+				"tenants:\n  tx:\n    mysql_threads_running: null\n"},
+			"mysql_cpu", "30", true, ""},
 	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

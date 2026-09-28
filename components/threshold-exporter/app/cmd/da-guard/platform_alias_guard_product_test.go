@@ -13,7 +13,16 @@ package main
 // spelling, and a threshold the tenant writes twice is not judged).
 //
 // Measured when written: 16128 cells; before round 2 (705c2045) 315 wrong,
-// on main 218; after it 0. `-short` keeps one value per cell family.
+// on main 218; after it 0.
+//
+// ⚠️ `-short` runs only the values 30 and 71, which cannot see the chain-
+// and profile-layer both-spellings cells (the losing spelling is 31 / 51, so
+// a tenant must write that value to be judged against it). The chain shape
+// is held in every mode by the unit row F1-chain-writes-both-spellings (and
+// the platform shape by F1-platform-entry-writes-both-spellings) in
+// platform_alias_guard_test.go; the profile layer never carries both
+// spellings (profileFor canonicalizes it — see the note in
+// pkg/config/hierarchy.go), so only the full run exercises those cells.
 //
 // Origin: the blind reviewer's combinatorial probe, kept as the regression
 // test it proved to be.

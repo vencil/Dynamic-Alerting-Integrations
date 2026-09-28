@@ -432,6 +432,13 @@ func computeEffectiveConfigDocDetailed(
 	// canonical-wins dedup (dropShadowedSpellings): a layer writing BOTH
 	// spellings serves only its canonical one on /metrics, so the losing
 	// spelling is no fallback either.
+	//
+	// ⚠️ On `pr` (the profile layer) the dedup is defensive and unreachable
+	// today: profileFor hands inherited a canonicalView of the profile, so
+	// `pr` never holds both spellings. Measured (#2368 round 3): passing `pr`
+	// through undeduped leaves every da-guard alias test — the 16128-cell
+	// product included — unchanged. Kept so this call site does not depend
+	// on that upstream detail.
 	chainD := dropShadowedSpellings(chain)
 	switch {
 	case pr == nil && pi == nil:
