@@ -14,12 +14,13 @@
 # #463 multi-arch: builder pinned to the native BUILDPLATFORM, cross-compiles
 # to TARGETARCH below (CGO_ENABLED=0 → no cross-toolchain, no QEMU for the Go
 # compile). The final alpine stage's `apk add` still runs under QEMU for arm64.
-# Go 1.26.5 clears CVE-2026-39822 in the SHIPPED binary (#1058): Trivy reads the
-# toolchain version embedded by the compiler, so the fix is purely which builder
-# compiles it. The alpine3.22 -> alpine3.23 move is forced (no 1.26.5-alpine3.22
-# tag exists upstream) and is INERT here: CGO_ENABLED=0 below, and this stage is
-# discarded — the runtime base stays `alpine:3.22` in the final stage.
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23 AS builder
+# Trivy reads the toolchain version embedded by the compiler, so a stdlib CVE in
+# the SHIPPED binary is fixed purely by which builder compiles it (#1058). The
+# builder's Go version MUST equal this module's go.mod `go` directive — go.mod is
+# the SSOT, and tests/ops/test_go_toolchain_parity.py fails on any skew (#1278:
+# 1.26.8 clears the 1.26.5 stdlib CVE set). The builder's alpine suffix is INERT
+# here: CGO_ENABLED=0 below, and this stage is discarded.
+FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS builder
 
 WORKDIR /src
 
@@ -46,10 +47,12 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 # ── Final stage ──────────────────────────────────────────────────────────────
 # alpine + git: required because gitops/writer.go shells out to `git`.
-FROM alpine:3.22
+# 3.23.6: ships libcrypto3/libssl3 3.5.8-r0 (#1278; CVE-2026-14456 is fixed in
+# 3.5.8, and 3.23.5 ships 3.5.7).
+FROM alpine:3.23.6
 
 # Install git and ca-certs (needed for git over HTTPS)
-# Note: alpine:3.22 already has nobody(65534); create nonroot with system-assigned IDs
+# Note: alpine already has nobody(65534); create nonroot with system-assigned IDs
 RUN apk add --no-cache git ca-certificates tzdata \
     && addgroup -S nonroot \
     && adduser  -S -G nonroot nonroot

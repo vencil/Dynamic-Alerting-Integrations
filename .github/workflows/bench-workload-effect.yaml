@@ -191,7 +191,7 @@ jobs:
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: components/threshold-exporter/app/go.mod
           cache: false
 
       # ⛔ 成本閘門 —— 把「燒滿 timeout 才死」換成「第一分鐘死掉並說清楚原因」。

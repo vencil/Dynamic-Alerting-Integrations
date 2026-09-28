@@ -197,8 +197,8 @@ _VALUES = "helm/federation-gateway/values.yaml"
 # Dockerfile's INSTRUCTION lines only (comments and blanks stripped, so prose
 # edits do not force a spurious bump). Change the recipe and this test fails; the
 # failure message is the reminder to bump the tag as well as this constant.
-_RECIPE_DIGEST = "eacaa2b4352b3acc34eeace00ec3c8cd9e3f231405c94c5955ea7d21a93ccddc"
-_EXPECTED_TAG = "3.0.8-2"
+_RECIPE_DIGEST = "522260ffe0a850ff122bdf863128ba800713f1fcf7cded162a1feea01a2cbc03"
+_EXPECTED_TAG = "3.0.8-3"
 
 
 def _one(pattern: str, text: str, what: str) -> str:

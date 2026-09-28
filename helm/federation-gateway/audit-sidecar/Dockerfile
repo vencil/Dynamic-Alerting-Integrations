@@ -10,7 +10,7 @@
 #                 platform log aggregation) — not this file.
 #
 # Build (from this directory):
-#   docker build -t <registry>/federation-audit-sidecar:3.0.8-2 .
+#   docker build -t <registry>/federation-audit-sidecar:3.0.8-3 .
 # ⛔ The tag is <mtail version>-<build revision>, and values.yaml pins the whole
 # string. Change anything in this file and you MUST bump the suffix: there is no
 # digest knob for this container and the pod template's checksum annotations hash
@@ -57,10 +57,14 @@
 #
 # ⚠️ Neither base below is visible to Renovate: renovate.json sets
 # `enabledManagers: ["custom.regex"]` and none of its managers matches a
-# Dockerfile, so `golang:1.26.5-alpine3.23` and `alpine:3.23.5` are bumped by
-# hand only. Detection still works (Trivy reads Go build info out of the shipped
+# Dockerfile, so the golang builder and the alpine runtime are bumped by hand
+# only. Detection still works (Trivy reads Go build info out of the shipped
 # binary — that is how the 20 stdlib findings surfaced); remediation does not.
-FROM golang:1.26.5-alpine3.23 AS build
+# The builder's Go version tracks the platform Go SSOT
+# (components/threshold-exporter/app/go.mod), asserted by
+# tests/ops/test_go_toolchain_parity.py — #1278 found this builder on 1.26.5
+# with 8 fixable stdlib CVEs while nothing flagged the skew.
+FROM golang:1.26.8-alpine3.23 AS build
 ARG MTAIL_VERSION=3.0.8
 ARG MTAIL_COMMIT=d4b8a7111c756f22f568f04c0d1ea3f3ec161494
 RUN apk add --no-cache git
@@ -81,7 +85,8 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -o /out/mtail ./cmd/mtail
 
 # --- Stage 2: runtime -------------------------------------------------
-FROM alpine:3.23.5
+# 3.23.6: libcrypto3 3.5.8-r0 (CVE-2026-14456; 3.23.5 ships 3.5.7-r0), #1278.
+FROM alpine:3.23.6
 # logrotate from the Alpine repo. busybox already supplies sh + wget
 # (wget --post-data is enough to POST Envoy's admin /reopen_logs), so the
 # runtime image carries no curl.

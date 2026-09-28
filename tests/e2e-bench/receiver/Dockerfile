@@ -4,7 +4,8 @@
 # Same distroless pattern as components/threshold-exporter/app/Dockerfile
 # for consistency: nonroot UID 65532, no shell, static binary.
 
-FROM golang:1.26.3-alpine3.22 AS builder
+# Builder Go version == go.mod `go` directive (tests/ops/test_go_toolchain_parity.py).
+FROM golang:1.26.8-alpine3.23 AS builder
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./

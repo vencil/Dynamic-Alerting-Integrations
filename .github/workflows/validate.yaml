@@ -239,7 +239,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: components/threshold-exporter/app/go.mod
       # golangci-lint, version pinned in GOLANGCI_VERSION below (kept equal to
       # the dev container's by tests/ops/test_go_lint_module_coverage.py).
       # Download the pinned install script and verify its SHA-256 BEFORE
