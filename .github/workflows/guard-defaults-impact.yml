@@ -106,6 +106,12 @@ on:
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"
+      # #2280: the routing checks resolve each tenant's routing and judge the
+      # domain policies through pkg/routingpolicy, which reads the conf.d
+      # root's platform files through RootPlatformFiles. A PR changing only
+      # them changes every guard verdict on routing.
+      - "components/threshold-exporter/app/pkg/routingpolicy/**"
+      - "components/threshold-exporter/app/pkg/config/root_platform_files.go"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:
     inputs:
