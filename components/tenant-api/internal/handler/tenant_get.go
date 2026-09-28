@@ -26,14 +26,17 @@ type TenantDetail struct {
 	// Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
 	// write of this exact file would be rejected on. It judges only the keys
 	// the tenant's own file writes: a problem in a root platform file's
-	// `tenants:` entry for this tenant is never here (#2208). Notices is the
-	// advisory set, which never blocks a write: deprecated-key alias notices
-	// (#1231 — the file keeps resolving and writing, but carries a spelling
-	// the author should migrate), and one notice per problem in a root
-	// platform file's entry for this tenant, naming that file ("platform file
-	// <name>, entry tenants.<id>: …") — the platform operator fixes those
-	// there. Split fields so a client never has to text-parse severity out
-	// of one list.
+	// `tenants:` entry for this tenant (#2208), or in the profile the tenant
+	// elects (#1385), is never here. Notices is the advisory set, which
+	// never blocks a write: deprecated-key alias notices (#1231 — the file
+	// keeps resolving and writing, but carries a spelling the author should
+	// migrate), one notice per problem in a root platform file's entry for
+	// this tenant, naming that file ("platform file <name>, entry
+	// tenants.<id>: …"), and one per problem in the part of the elected
+	// profile that reaches this tenant, naming the file and the profile
+	// ("platform file <name>, profile "<p>" …") — the platform operator
+	// fixes those there. Split fields so a client never has to text-parse
+	// severity out of one list.
 	Warnings []string `json:"validation_warnings,omitempty"`
 	Notices  []string `json:"validation_notices,omitempty"`
 	// SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
@@ -95,8 +98,9 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Merge over the root platform surface: the defaults carrier and
-		// the platform files' per-tenant `tenants:` layer (#2208).
+		// Merge over the root platform surface: the defaults carrier, the
+		// platform files' per-tenant `tenants:` layer (#2208) and the
+		// profile the tenant elects (#1385).
 		merged, err := d.loadMergedConfig(tenantID, data)
 		if err != nil {
 			slog.Error("tenant GET: conf.d root platform read failed", "tenant", tenantID, "error", err)
@@ -156,8 +160,10 @@ const msgRootPlatformRead = "cannot read the conf.d root platform files in time;
 var defaultRootReadGuard = &boundedcall.Guard{}
 
 // loadMergedConfig merges the tenant file over the conf.d root platform
-// surface — the defaults carrier and the root platform files' per-tenant
-// `tenants:` layer. Same merge core as validate and the write gate
+// surface — the defaults carrier, the root platform files' per-tenant
+// `tenants:` layer, and the profile the tenant elects from those files'
+// `profiles:` (#1385; read in the same bounded read — no other file is
+// opened for them). Same merge core as validate and the write gate
 // (cfg.MergeTenantWithRootDefaults is exactly these two halves), so GET /
 // validate / write all merge identically (the consolidation that closed the
 // ADR-024 PR4 / #704 write-vs-read asymmetry).

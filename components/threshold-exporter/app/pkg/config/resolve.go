@@ -1511,6 +1511,19 @@ func pilotVersionMetricList() string {
 // This approach ensures all existing Resolve* functions work unchanged —
 // they see a single merged overrides map without knowing about profiles.
 func (c *ThresholdConfig) ApplyProfiles() {
+	c.applyProfiles(log.Printf)
+}
+
+// applyProfiles is ApplyProfiles with its WARN sink as a parameter: logf
+// receives the two WARNs (unknown profile, declared-key fill) exactly as
+// ApplyProfiles writes them; nil = silent. The tenant-api merge core
+// (#1385) passes nil — it runs per request, and it hands both facts to its
+// caller as an Error / a notice (TenantMerge.ValidateTenantKeys) instead of
+// writing them to the process log on every GET.
+func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	if len(c.Profiles) == 0 {
 		return
 	}
@@ -1536,7 +1549,7 @@ func (c *ThresholdConfig) ApplyProfiles() {
 
 		profile, found := c.Profiles[profileName]
 		if !found {
-			log.Printf("WARN: tenant=%s references unknown profile %q, ignoring", tenant, profileName)
+			logf("WARN: tenant=%s references unknown profile %q, ignoring", tenant, profileName)
 			continue
 		}
 
@@ -1596,7 +1609,7 @@ func (c *ThresholdConfig) ApplyProfiles() {
 		fill := profileFill(canonicalView(profile), overrides, canonDeclared, func(key string) {
 			if _, seen := warnedProfileKeys[profileName+"\x00"+key]; !seen {
 				warnedProfileKeys[profileName+"\x00"+key] = struct{}{}
-				log.Printf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
+				logf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
 			}
 		})
 		for key, profileValue := range fill {

@@ -1676,17 +1676,22 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 //     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
 //     pass without the tenant having to inline `defaults:` into the body.
 //     The merge also carries the root platform files' `tenants:` entries for
-//     the tenant (#2208) — but only the tenant's OWN keys are judged for
-//     errs: a problem in a platform file's entry never blocks this write and
-//     comes back as a notice naming that file (cfg.TenantMerge).
+//     the tenant (#2208) and the profiles those files define, expanded for
+//     the tenant as /metrics does (#1385) — but only the tenant's OWN keys
+//     are judged for errs: a problem in a platform file's entry, or in the
+//     part of the elected profile that reaches the tenant, never blocks
+//     this write and comes back as a notice naming that file (and profile)
+//     (cfg.TenantMerge). A `_profile` no root platform file defines is
+//     still an err, as it always was.
 //
 // configDir == "" falls back to structural-only key validation (unit tests
 // that exercise YAML shape without a defaults fixture).
 //
 // Returns two channels (#1231 1b, mirroring cfg.KeyValidation): errs is the
 // blocking set every write gate turns into ErrValidation; notices is the
-// advisory set (deprecated-key alias advisories, and problems in a root
-// platform file's entry for the tenant, #2208) that must NEVER block a
+// advisory set (deprecated-key alias advisories, problems in a root
+// platform file's entry for the tenant, #2208, and in the part of its
+// elected profile that reaches it, #1385) that must NEVER block a
 // write — callers thread it up to the handler responses so the config author
 // sees the migration signal on the write path itself, not only via GET /
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant

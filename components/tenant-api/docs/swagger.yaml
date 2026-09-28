@@ -937,14 +937,17 @@ definitions:
           Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
           write of this exact file would be rejected on. It judges only the keys
           the tenant's own file writes: a problem in a root platform file's
-          `tenants:` entry for this tenant is never here (#2208). Notices is the
-          advisory set, which never blocks a write: deprecated-key alias notices
-          (#1231 — the file keeps resolving and writing, but carries a spelling
-          the author should migrate), and one notice per problem in a root
-          platform file's entry for this tenant, naming that file ("platform file
-          <name>, entry tenants.<id>: …") — the platform operator fixes those
-          there. Split fields so a client never has to text-parse severity out
-          of one list.
+          `tenants:` entry for this tenant (#2208), or in the profile the tenant
+          elects (#1385), is never here. Notices is the advisory set, which
+          never blocks a write: deprecated-key alias notices (#1231 — the file
+          keeps resolving and writing, but carries a spelling the author should
+          migrate), one notice per problem in a root platform file's entry for
+          this tenant, naming that file ("platform file <name>, entry
+          tenants.<id>: …"), and one per problem in the part of the elected
+          profile that reaches this tenant, naming the file and the profile
+          ("platform file <name>, profile "<p>" …") — the platform operator
+          fixes those there. Split fields so a client never has to text-parse
+          severity out of one list.
         items:
           type: string
         type: array

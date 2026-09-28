@@ -51,9 +51,8 @@
     "(tenant declared by no file, or only by one below the root: tenant-api serves",
     "top-level files). Which top-level file GET opens (confd's filename lookup) is",
     "tenant-api's own and not in this column. Go (config_platform_tenant_overlay_test.go)",
-    "asserts it, and that it equals metric except (a) null for a nested tenant and",
-    "(b) where walker.profile_overlay is set: the core does not expand profiles yet",
-    "(#1385; p1/p2/p6 serve 80 where /metrics serves 60).",
+    "asserts it, and that it equals metric except null for a nested tenant. Profiles",
+    "are expanded the /metrics way (ApplyProfiles, #1385; p1/p2/p6 served 80 before).",
     "tenant_api is a threshold column only: on platform-metadata-is-never-inherited-or-listed",
     "its 60 is mysql_connections. The core does NOT inherit the platform entry's _metadata",
     "(the walker rule), while /metrics' ResolveMetadata does - a deliberate divergence",
@@ -868,7 +867,7 @@
       "expect": {
         "tx": {
           "metric": 60,
-          "tenant_api": 80,
+          "tenant_api": 60,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -901,7 +900,7 @@
       "expect": {
         "tx": {
           "metric": 60,
-          "tenant_api": 80,
+          "tenant_api": 60,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
@@ -1029,7 +1028,7 @@
       "expect": {
         "tx": {
           "metric": 60,
-          "tenant_api": 80,
+          "tenant_api": 60,
           "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
