@@ -346,22 +346,38 @@ type Writer struct {
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
 	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
-	// stuckTreeScans counts walks that outlived it and are still running.
-	treeScanTimeout time.Duration
-	stuckTreeScans  atomic.Int32
+	// stuckTreeScans counts write-path walks that outlived it and are still
+	// running; stuckReadTreeScans does the same for the read path (#2153,
+	// see scanTreeForRead). Two counters so that a stuck read walk never
+	// fails a write.
+	treeScanTimeout    time.Duration
+	stuckTreeScans     atomic.Int32
+	stuckReadTreeScans atomic.Int32
+
+	// readScan is the read path's in-flight walk (#2153), nil when none is
+	// running; readScanMu guards it. See scanTreeForRead.
+	readScanMu sync.Mutex
+	readScan   *treeScanFlight
 
 	// treePrior is the last conf.d walk that COMPLETED and was handed back to
-	// its caller (#2153): scanTree passes it to the next cfg.ScanDirTree as
+	// its caller (#2153): walkTree passes it to the next cfg.ScanDirTree as
 	// the prior, so a file whose stat is unchanged is not read and parsed
-	// again. Only scanTree stores it (see there for which walks qualify);
-	// atomic because scanTree runs both under w.mu and without it (Diff,
-	// DryRunValidate).
+	// again. Only walkTree stores it (see scanTree for which walks qualify);
+	// atomic because walks run both under w.mu (scanTree) and without it
+	// (scanTreeForRead).
 	treePrior atomic.Pointer[cfg.TreeScan]
 
-	// onTreeScan is a TEST-ONLY seam (#2153): scanTree calls it, when
-	// non-nil, once per walk it starts. Per-Writer for the same reason as
+	// onTreeScan is a TEST-ONLY seam (#2153): walkTree calls it, when
+	// non-nil, once per walk it starts, on the walking goroutine inside the
+	// treeScanTimeout bound — so a test can hold a walk open, or make it
+	// outlive the bound, without a FIFO. Per-Writer for the same reason as
 	// beforeBaseRestore. Always nil in production.
 	onTreeScan func()
+
+	// onReadScanJoin is a TEST-ONLY seam (#2153): scanTreeForRead calls it,
+	// when non-nil, each time a caller joins a read walk already in flight
+	// instead of starting one. Always nil in production.
+	onReadScanJoin func()
 
 	// beforeBaseRestore is a TEST-ONLY seam (#2070): restoreBase calls it, when
 	// non-nil, right before each checkoutBaseClean attempt (attempt is 1-based).
@@ -786,12 +802,33 @@ type MergeFunc func(existing []byte) (string, error)
 // after the ops before it have written. (Since #2153 the walk takes the
 // previous one as its prior — see scanTree — so an unchanged file is not
 // parsed again; the verdict is still the walker's on the current tree.)
+//
+// This is the WRITE path's resolver, walking with scanTree. The read-only
+// callers use previewTenantFilePath.
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
+	return w.resolveTenantFilePath(tenantID, w.scanTree)
+}
+
+// previewTenantFilePath is tenantFilePath for the callers that only preview a
+// write and take no lock — Diff and DryRunValidate: the same resolution and
+// the same #2078 guard, but the walk comes from scanTreeForRead, shared with
+// concurrent readers and bounded by the read path's own breaker.
+//
+// ⛔ NEVER FROM A WRITE PATH. Its walk may have started before the caller
+// arrived (see scanTreeForRead), which a preview may accept and a write may
+// not.
+func (w *Writer) previewTenantFilePath(tenantID string) (string, error) {
+	return w.resolveTenantFilePath(tenantID, w.scanTreeForRead)
+}
+
+// resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath;
+// walk is the conf.d walk the #2078 guard judges.
+func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
 		return "", err
 	}
-	if err := w.ensureNotDeclaredElsewhere(tenantID, path); err != nil {
+	if err := w.ensureNotDeclaredElsewhereIn(walk, tenantID, path); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -809,28 +846,35 @@ var discardScanLogger = log.New(io.Discard, "", 0)
 // Measured on a 1000-file tree a walk takes ~20 ms.
 const defaultTreeScanTimeout = 5 * time.Second
 
-// errTreeScanTimeout / errTreeScanStuck are wrapped in ErrTenantTreeScan by
-// ensureNotDeclaredElsewhere: the guard fails closed on both. They reach the
-// server log only.
+// errTreeScanTimeout / errTreeScanStuck / errReadScanAborted are wrapped in
+// ErrTenantTreeScan by ensureNotDeclaredElsewhereIn: the guard fails closed
+// on all three. They reach the server log only. errReadScanAborted is what a
+// read caller gets if the shared walk it waited on ended without a result;
+// walkTree recovers the walker's panics, so it is a fail-closed default, not
+// an expected outcome.
 var (
 	errTreeScanTimeout = errors.New("conf.d walk timed out")
 	errTreeScanStuck   = errors.New("an earlier conf.d walk is still blocked; restart tenant-api to recover")
+	errReadScanAborted = errors.New("the shared conf.d walk ended without a result")
 )
 
-// scanTree is the one call site of cfg.ScanDirTree on the write path, bounded
-// by treeScanTimeout. A walk that outlives it cannot be cancelled (the walker
+// scanTree is the write path's conf.d walk (Write / WriteIfUnchanged,
+// WriteMerged, WritePR, WritePRBatch — all under w.mu), bounded by
+// treeScanTimeout. A walk that outlives it cannot be cancelled (the walker
 // takes no context), so it is left running and counted in stuckTreeScans
 // until it returns; while the count is non-zero, later calls fail at once.
 // The mechanism is boundedcall.Run, shared with the tenant GET's bounded
 // read of the root platform files (#2208).
 //
-// ⚠️ That bounds new walks only AFTER the first timeout. Callers that walk
-// without the writer lock — Diff — can each start a walk within the same
-// timeout window, and each of those can block too; walks under the lock
-// (Write / WriteIfUnchanged, WriteMerged, WritePR, WritePRBatch) are
-// serialised. A blocked walk ends
-// only when the file it is reading is opened for writing or the process
-// restarts: removing the file does not unblock a read already in progress.
+// ⚠️ That bounds new walks only AFTER the first timeout. The write path's
+// walks are serialised by w.mu, so it has at most one walk running. The
+// read-only callers (Diff, DryRunValidate) take no lock and do NOT come
+// here: they walk through scanTreeForRead, which shares one in-flight walk
+// between them and counts its stuck walks in stuckReadTreeScans — so a walk
+// a reader left blocked fails later reads only, never a write. A blocked
+// walk ends only when the file it is reading is opened for writing or the
+// process restarts: removing the file does not unblock a read already in
+// progress.
 //
 // #2153: each walk takes treePrior as its prior — the exporter's own mtime
 // fast-path, under ScanDirTree's contract unchanged: a file whose stat
@@ -853,7 +897,9 @@ var (
 // duplicate-tenant Conflict is a completed walk — its files are exactly what
 // the next walk's fast-path reads — so it does qualify.) The store is
 // last-writer-wins between concurrent callers; any completed walk is a valid
-// prior, an older one only costs reads.
+// prior, an older one only costs reads. The rule is the same on both paths:
+// a read walk (scanTreeForRead) that completes in time becomes the prior
+// too, and a read walk shared by several callers is one walk, stored once.
 //
 // ⛔ The prior is published only after ReleaseData, as ScanDirTree's
 // contract asks of a retained scan: the fast-path reads Hash, Stat,
@@ -862,11 +908,73 @@ var (
 // No caller of scanTree reads TreeFile.Data or Partials. Once published the
 // scan is never mutated again, so concurrent walks may read it as a prior.
 func (w *Writer) scanTree() (*cfg.TreeScan, error) {
-	if w.stuckTreeScans.Load() > 0 {
-		return nil, errTreeScanStuck
+	return w.walkTree(&w.stuckTreeScans)
+}
+
+// treeScanFlight is one read-path walk and the callers waiting on it (see
+// scanTreeForRead). scan and err are set once, before done is closed.
+type treeScanFlight struct {
+	done chan struct{}
+	scan *cfg.TreeScan
+	err  error
+}
+
+// scanTreeForRead is the read path's conf.d walk, for the callers that only
+// preview a write and take no lock (Diff, DryRunValidate — via
+// previewTenantFilePath). It is scanTree's bounded walk with two differences
+// (#2153):
+//
+//   - ONE WALK IN FLIGHT. A caller that arrives while a read walk is running
+//     does not start its own: it waits for that walk and gets its result —
+//     the same scan, or the same error (a timeout included), so it waits no
+//     longer than the walk's own bound. Without the writer lock nothing
+//     else serialises these callers, so without this each would start a
+//     walk of its own, and each could block on the same file before the
+//     first timeout trips the breaker.
+//   - ITS OWN BREAKER. The walk counts in stuckReadTreeScans, not
+//     stuckTreeScans: a read walk left blocked fails later reads at once
+//     (errTreeScanStuck, which ensureNotDeclaredElsewhereIn wraps in
+//     ErrTenantTreeScan) until it returns, and never fails a write.
+//
+// ⚠️ A caller may get a walk that started BEFORE it arrived, so a write that
+// landed in between may be missing from the verdict. That is acceptable for
+// a preview only: the write itself is judged again, under w.mu, on a walk of
+// its own (scanTree). ⛔ Which is why the write path must never join this
+// walk — a walk started before the previous write landed would judge the
+// next one against a tree that is already gone.
+//
+// The prior contract is walkTree's, unchanged: the shared walk commits once,
+// and only if it completed in time.
+func (w *Writer) scanTreeForRead() (*cfg.TreeScan, error) {
+	w.readScanMu.Lock()
+	if f := w.readScan; f != nil {
+		w.readScanMu.Unlock()
+		if w.onReadScanJoin != nil {
+			w.onReadScanJoin()
+		}
+		<-f.done
+		return f.scan, f.err
 	}
-	if w.onTreeScan != nil {
-		w.onTreeScan()
+	f := &treeScanFlight{done: make(chan struct{}), err: errReadScanAborted}
+	w.readScan = f
+	w.readScanMu.Unlock()
+	// Clear before close: a caller that arrives after the walk ended starts
+	// a new one rather than taking this finished result.
+	defer func() {
+		w.readScanMu.Lock()
+		w.readScan = nil
+		w.readScanMu.Unlock()
+		close(f.done)
+	}()
+	f.scan, f.err = w.walkTree(&w.stuckReadTreeScans)
+	return f.scan, f.err
+}
+
+// walkTree is the bounded walk behind scanTree and scanTreeForRead; stuck is
+// the breaker of the path it walks for.
+func (w *Writer) walkTree(stuck *atomic.Int32) (*cfg.TreeScan, error) {
+	if stuck.Load() > 0 {
+		return nil, errTreeScanStuck
 	}
 	timeout := w.treeScanTimeout
 	if timeout <= 0 {
@@ -882,7 +990,10 @@ func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 	// and only for a walk handed back to its caller (returned, not panicked,
 	// not abandoned) — so an errored, panicked or late walk never becomes the
 	// prior.
-	r, err := boundedcall.RunCommit(timeout, &w.stuckTreeScans, func() result {
+	r, err := boundedcall.RunCommit(timeout, stuck, func() result {
+		if w.onTreeScan != nil {
+			w.onTreeScan()
+		}
 		// obs is a literal nil interface on purpose — see cfg.ScanObserver's
 		// typed-nil trap.
 		s, err := cfg.ScanDirTree(w.configDir, prior, nil, discardScanLogger)
@@ -914,7 +1025,14 @@ func (w *Writer) scanTree() (*cfg.TreeScan, error) {
 // entries, `_` prefixes, symlinked roots) and what counts as a declaration (a
 // file the full decode accepts) cannot drift from what the exporter loads.
 func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
-	scan, err := w.scanTree()
+	return w.ensureNotDeclaredElsewhereIn(w.scanTree, tenantID, target)
+}
+
+// ensureNotDeclaredElsewhereIn is ensureNotDeclaredElsewhere judged on the
+// walk that walk returns — scanTree on the write path, scanTreeForRead on
+// the preview path (see previewTenantFilePath).
+func (w *Writer) ensureNotDeclaredElsewhereIn(walk func() (*cfg.TreeScan, error), tenantID, target string) error {
+	scan, err := walk()
 	if err != nil {
 		return fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
 	}
@@ -1062,8 +1180,11 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 
 // Diff returns the unified diff between the current file and proposed content.
 // Returns empty string if files are identical or no current file exists.
+//
+// It takes no lock, so it resolves the file through previewTenantFilePath:
+// its #2078 walk is shared with concurrent previews (see scanTreeForRead).
 func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
-	filePath, err := w.tenantFilePath(tenantID)
+	filePath, err := w.previewTenantFilePath(tenantID)
 	if err != nil {
 		return "", err
 	}
