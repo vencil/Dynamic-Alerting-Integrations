@@ -234,11 +234,11 @@ modules:
       - _extract_host
       - validate_receiver_domains
       - validate_tenant_keys
+      - _legacy_tenant_key
+      - _other_tenant_key_spellings
+      - overlay_across_spellings
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
-      _legacy_tenant_key: "#2368 inverse lookup over the one-entry DEPRECATED_KEY_ALIASES table (three shapes, mirror of Go legacySpellingFor); example-pinned through the shared overlay matrix's alias rows (tests/shared/test_platform_tenant_overlay_parity.py, Go half asserts the same rows)"
-      _other_tenant_key_spellings: "#2368 composition of _canonical_tenant_key and _legacy_tenant_key; example-pinned by the same alias rows"
-      overlay_across_spellings: "#2368 per-threshold dict overlay (mirror of Go overlayAcrossSpellings); example-pinned by the alias rows through describe_tenant and diagnose (tests/ops/test_diagnose_alias_spelling.py) against the /metrics column"
       _validate_profile_refs: "Covered by test_e2e_routing_profile.py integration"
       check_domain_policies: "Multi-branch policy validator; covered by test_e2e_routing_profile.py + test_domain_policy.py + test_grar_strict_hardening.py (strict fail-open closures)"
       list_tenant_subroutes: "#2243 sub-route lister feeding check_domain_policies (overrides, and since #2245 ADR-007 routes → (ref, match, effective config, inherited keys); #2252 back-fills undeclared timing/group_by from the tenant route); its skip rules mirror expand_routing_overrides' structural skips and share route_entry_matchers with expand_routing_routes, closed case lists example-pinned by test_generate_alertmanager_routes.py::TestDomainPolicyOverrideSubroutes + test_routing_profile_routes.py"

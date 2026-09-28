@@ -2264,3 +2264,100 @@ class TestValidateTenantKeysProperties:
             "t", {"oops_critical"}, {"latency"})
         assert len(warnings) == 1
         assert "oops_critical" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# #1231 alias spellings (#2368): _legacy_tenant_key / _other_tenant_key_spellings
+# / overlay_across_spellings
+# ---------------------------------------------------------------------------
+# Mirrors of Go legacySpellingFor / otherSpellings / overlayAcrossSpellings.
+# Drawn from the LIVE alias table, so a new alias entry is covered the day it
+# lands and a closed window leaves the tests vacuous-but-green only through
+# the explicit non-empty check below.
+
+_ALIAS_CANONICALS = sorted(set(gv.DEPRECATED_KEY_ALIASES.values()))
+_LABEL = st.text(alphabet=string.ascii_lowercase + "_=\",", min_size=0, max_size=12)
+
+
+def _alias_shape(draw_canon: str, shape: str, labels: str) -> str:
+    if shape == "exact":
+        return draw_canon
+    if shape == "critical":
+        return draw_canon + "_critical"
+    return draw_canon + "{" + labels + "}"
+
+
+_UNTOUCHED_KEY = st.text(alphabet=string.ascii_lowercase + "_{}=\"", min_size=1, max_size=16).filter(
+    lambda k: not gv._canonical_tenant_key(k)[1] and gv._legacy_tenant_key(k) is None)
+
+
+class TestAliasSpellingProperties:
+
+    def test_alias_table_is_not_empty(self):
+        # The properties below are vacuous without an alias; say so loudly.
+        assert _ALIAS_CANONICALS, "alias window closed — retire this class"
+
+    @given(st.sampled_from(_ALIAS_CANONICALS or ["_none_"]),
+           st.sampled_from(["exact", "critical", "dimensional"]), _LABEL)
+    @PILOT_SETTINGS
+    def test_legacy_tenant_key_round_trips_every_shape(self, canon, shape, labels):
+        # Law 1: for a canonical key k of any of the three shapes,
+        # _canonical_tenant_key(_legacy_tenant_key(k)) == (k, True).
+        assume(canon != "_none_")
+        k = _alias_shape(canon, shape, labels)
+        legacy = gv._legacy_tenant_key(k)
+        assert legacy is not None and legacy != k
+        assert gv._canonical_tenant_key(legacy) == (k, True)
+
+    @given(st.sampled_from(_ALIAS_CANONICALS or ["_none_"]),
+           st.sampled_from(["exact", "critical", "dimensional"]), _LABEL)
+    @PILOT_SETTINGS
+    def test_other_spellings_name_exactly_the_pair(self, canon, shape, labels):
+        # Each spelling's "other spellings" is exactly the other one.
+        assume(canon != "_none_")
+        k = _alias_shape(canon, shape, labels)
+        legacy = gv._legacy_tenant_key(k)
+        assert gv._other_tenant_key_spellings(k) == [legacy]
+        assert gv._other_tenant_key_spellings(legacy) == [k]
+
+    @given(_UNTOUCHED_KEY)
+    @PILOT_SETTINGS
+    def test_untouched_key_has_no_other_spelling(self, key):
+        assert gv._other_tenant_key_spellings(key) == []
+        assert gv._legacy_tenant_key(key) is None
+
+    @given(st.dictionaries(_UNTOUCHED_KEY, st.integers(), max_size=5),
+           st.dictionaries(_UNTOUCHED_KEY, st.integers(), max_size=5))
+    @PILOT_SETTINGS
+    def test_overlay_is_dict_update_off_the_alias_table(self, dst, src):
+        # Law 2: for keys no alias touches (every routing and reserved key),
+        # overlay_across_spellings is exactly dict.update.
+        want = dict(dst)
+        want.update(src)
+        got = dict(dst)
+        gv.overlay_across_spellings(got, src)
+        assert got == want
+
+    @given(st.sampled_from(_ALIAS_CANONICALS or ["_none_"]),
+           st.sampled_from(["exact", "critical", "dimensional"]), _LABEL,
+           st.booleans(), st.integers(), st.integers())
+    @PILOT_SETTINGS
+    def test_overlay_later_spelling_replaces_earlier(self, canon, shape, labels, src_legacy, a, b):
+        # The #2368 rule: whichever spelling the later map writes, the
+        # earlier map's other spelling is gone and the later value stands.
+        assume(canon != "_none_")
+        k = _alias_shape(canon, shape, labels)
+        legacy = gv._legacy_tenant_key(k)
+        earlier, later = (k, legacy) if src_legacy else (legacy, k)
+        dst = {earlier: a, "keep": 1}
+        gv.overlay_across_spellings(dst, {later: b})
+        assert dst == {later: b, "keep": 1}
+
+    def test_overlay_keeps_one_layers_own_pair(self):
+        # A map writing BOTH spellings removes neither (the canonical-wins
+        # dedup inside that layer decides, as on /metrics).
+        canon = _ALIAS_CANONICALS[0]
+        legacy = gv._legacy_tenant_key(canon)
+        dst = {"x": 0}
+        gv.overlay_across_spellings(dst, {canon: 1, legacy: 2})
+        assert dst == {"x": 0, canon: 1, legacy: 2}

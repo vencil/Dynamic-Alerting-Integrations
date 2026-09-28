@@ -346,6 +346,36 @@ func OverlayAcrossSpellings(dst, src map[string]ScheduledValue) {
 	overlayAcrossSpellings(dst, src)
 }
 
+// WithoutDoubleSpelledThresholds returns overrides without every key whose
+// threshold the same map also writes under another spelling (#2368) — m
+// itself when there is none. For da-guard's redundant-override input: with
+// a tenant writing both `mysql_threads_running` and `mysql_cpu`, deleting
+// either one serves the OTHER one's value (or, for the losing spelling,
+// nothing changes), and no "inherited value" MergedDefaults can hold
+// answers that — so neither key is judged.
+func WithoutDoubleSpelledThresholds(m map[string]any) map[string]any {
+	var drop []string
+	for k := range m {
+		for _, s := range otherSpellings(k) {
+			if _, both := m[s]; both {
+				drop = append(drop, k)
+				break
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
+}
+
 // hasAliasEquivalent reports whether overrides already contains key under ANY
 // spelling: the key itself, its canonical form, or the legacy form of that
 // canonical. The profile fill-in (profileFill, shared by ApplyProfiles and the

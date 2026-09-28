@@ -22,26 +22,27 @@ import (
 func TestGuard_RedundantOverrideAcrossAliasSpellings(t *testing.T) {
 	t.Parallel()
 	at := []time.Time{time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)}
-	const without = "tenants:\n  tx:\n    pg_connections: 100\n"
-	cases := []struct {
+	type aliasGuardCase struct {
 		name      string
 		files     map[string]string // platform files (tx.yaml is added)
 		field     string            // the key tx.yaml writes
 		value     string
 		redundant bool
-	}{
+		extra     string // more tx.yaml lines, kept on both sides of the oracle
+	}
+	cases := []aliasGuardCase{
 		// G1 (exposed by #2368's first commit): chain legacy 30, platform
 		// canonical 70, tenant legacy 30 — deleting it serves 70.
 		{"G1-chain-legacy-platform-canonical-tenant-legacy",
 			map[string]string{"_defaults.yaml": "defaults:\n  mysql_cpu: 30\n  pg_connections: 100\n" +
 				"tenants:\n  tx:\n    mysql_threads_running: 70\n"},
-			"mysql_cpu", "30", false},
+			"mysql_cpu", "30", false, ""},
 		// G2 (same shape, the other direction): chain canonical 30,
 		// platform legacy 70, tenant canonical 30 — deleting it serves 70.
 		{"G2-chain-canonical-platform-legacy-tenant-canonical",
 			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n" +
 				"tenants:\n  tx:\n    mysql_cpu: 70\n"},
-			"mysql_threads_running", "30", false},
+			"mysql_threads_running", "30", false, ""},
 		// Two platform files: the later one's legacy 70 beats the earlier
 		// one's canonical 60, so the tenant's canonical 60 is not the
 		// fallback (platformInherited's per-threshold layering).
@@ -51,20 +52,44 @@ func TestGuard_RedundantOverrideAcrossAliasSpellings(t *testing.T) {
 				"_a.yaml":        "tenants:\n  tx:\n    mysql_threads_running: 60\n",
 				"_b.yaml":        "tenants:\n  tx:\n    mysql_cpu: 70\n",
 			},
-			"mysql_threads_running", "60", false},
+			"mysql_threads_running", "60", false, ""},
 		// Controls, same spelling everywhere: still redundant.
 		{"control-chain-value-same-spelling",
 			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n"},
-			"mysql_threads_running", "30", true},
+			"mysql_threads_running", "30", true, ""},
 		{"control-platform-value-same-spelling",
 			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n" +
 				"tenants:\n  tx:\n    mysql_threads_running: 70\n"},
-			"mysql_threads_running", "70", true},
+			"mysql_threads_running", "70", true, ""},
 	}
+	cases = append(cases,
+		// #2368 round 2, F-1: ONE layer writes both spellings. Resolve
+		// serves only its canonical one, so the losing spelling is no
+		// fallback: platform entry 70 / 71, tenant legacy 71 → deleting it
+		// serves 70.
+		aliasGuardCase{"F1-platform-entry-writes-both-spellings",
+			map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n",
+				"_a.yaml":        "tenants:\n  tx:\n    mysql_threads_running: 70\n    mysql_cpu: 71\n",
+			},
+			"mysql_cpu", "71", false, ""},
+		// …and the chain writing both: tenant legacy 31 → deleting it
+		// serves the chain's canonical 30.
+		aliasGuardCase{"F1-chain-writes-both-spellings",
+			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  mysql_cpu: 31\n  pg_connections: 100\n"},
+			"mysql_cpu", "31", false, ""},
+		// F-2: the TENANT writes both spellings. Deleting its canonical 70
+		// serves its own legacy 99, whatever the inherited value is.
+		aliasGuardCase{"F2-tenant-writes-both-spellings",
+			map[string]string{"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n  pg_connections: 100\n" +
+				"tenants:\n  tx:\n    mysql_threads_running: 70\n"},
+			"mysql_threads_running", "70", false, "    mysql_cpu: 99\n"},
+	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tenant := "tenants:\n  tx:\n    pg_connections: 100\n    " + tc.field + ": " + tc.value + "\n"
+			without := "tenants:\n  tx:\n    pg_connections: 100\n" + tc.extra
+			tenant := without + "    " + tc.field + ": " + tc.value + "\n"
 			dir := t.TempDir()
 			testutil.WriteTree(t, dir, tc.files)
 

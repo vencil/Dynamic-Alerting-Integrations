@@ -45,6 +45,26 @@ def test_resolved_carries_the_served_value_once(tree: dict, tmp_path: Path) -> N
     assert float(next(iter(got.values()))) == tree["expect"]["tx"]["metric"], (tree["name"], got)
 
 
+def test_profile_layer_excludes_a_threshold_the_tenant_writes_in_the_other_spelling(
+        tmp_path: Path) -> None:
+    """The profile only fills keys the tenant does not set under ANY spelling
+    (Go profileFill / hasAliasEquivalent): with the tenant on the legacy
+    spelling, the profile's canonical value reaches neither the chain's
+    profile layer nor `resolved` (#2368 round 2, F-4)."""
+    legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    (tmp_path / "_defaults.yaml").write_text(f"defaults:\n  {canon}: 30\n", encoding="utf-8")
+    (tmp_path / "_profiles.yaml").write_text(
+        f"profiles:\n  std:\n    {canon}: 50\n    pg_connections: 7\n", encoding="utf-8")
+    (tmp_path / "tx.yaml").write_text(
+        f"tenants:\n  tx:\n    _profile: std\n    {legacy}: '90'\n", encoding="utf-8")
+    chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
+    profile = [layer for layer in chain["chain"] if layer["layer"] == "profile"]
+    assert len(profile) == 1, chain["chain"]
+    assert canon not in profile[0]["keys"], profile[0]
+    assert profile[0]["keys"] == {"pg_connections": 7}, profile[0]  # the fill-in still works
+    assert {k: v for k, v in chain["resolved"].items() if k in (canon, legacy)} == {legacy: "90"}
+
+
 def test_routing_readers_keep_literal_key_merge() -> None:
     """Without `merge=`, overlay_platform_tenants is the per-literal-key
     `dict.update` the routing readers (_grar_parse, check_routing_profiles)
