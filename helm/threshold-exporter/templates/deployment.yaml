@@ -87,6 +87,10 @@ spec:
         - name: config
           mountPath: /etc/threshold-exporter/conf.d
           readOnly: true
+        {{- with .Values.startupProbe }}
+        startupProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         livenessProbe:
           {{- toYaml .Values.livenessProbe | nindent 10 }}
         readinessProbe:

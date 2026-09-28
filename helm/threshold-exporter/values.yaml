@@ -203,6 +203,26 @@ resources:
     cpu: 200m
     memory: 128Mi
 
+# startupProbe covers the startup config load (#2153). The exporter loads
+# the whole conf.d tree BEFORE its HTTP server starts, so /health refuses
+# connections for as long as that load takes. Without a startupProbe the
+# livenessProbe below (10s delay, 10s period, 3 failures) restarts a Pod
+# whose load runs past roughly 30-40s, and every restart starts the load
+# over: a CrashLoop that never finishes loading. A single file declaring
+# 2000 tenants was measured at 30s to load, 4000 at about 3 minutes; the
+# load time is reported as da_config_initial_load_duration_seconds.
+# Liveness and readiness probes do not run until this probe succeeds.
+# Budget = periodSeconds × failureThreshold = 10s × 60 = 10 minutes: raise
+# failureThreshold if your trees load slower; a healthy small tree passes
+# on the first probe, so the budget costs nothing. Set `startupProbe: null`
+# to omit it.
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  failureThreshold: 60
+
 livenessProbe:
   httpGet:
     path: /health

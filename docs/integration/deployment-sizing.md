@@ -119,3 +119,18 @@ exporter:
 | reload 頻率高 + `sys_bytes` 逼近 limit | 設 `goMemLimit` ≈ `limits.memory` × 0.75 |
 | 設了 GOMEMLIMIT 仍逼近 limit + reload 稀疏 | 加開 `freeOsMemAfterReload: true` |
 | config 變更本就稀疏 | 調高 `reloadInterval`（例如 `5m`）|
+
+## 冷載入時間與 startupProbe
+
+exporter 啟動時先把整棵 conf.d 載入完，**才**啟動 HTTP server；載入期間 `/health`、`/ready`、`/metrics` 都連不上。載入時間主要花在 YAML 解析，而 YAML 解析器會對同一個 mapping 的鍵兩兩比對找重複鍵，所以**單一檔案宣告的租戶數**與**單一 mapping 的鍵數**越大，載入時間成長得比線性更快（[#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)）。
+
+chart 預設帶 `startupProbe`（打 `/health`，`periodSeconds: 10`、`failureThreshold: 60`，也就是最多等 10 分鐘）。startupProbe 成功之前，liveness 與 readiness probe 都不會執行，所以冷載入再久也不會被 liveness 重啟。樹很小的部署第一次 probe 就會成功，這個上限不會拖慢啟動。載入超過 10 分鐘時，調高 `startupProbe.failureThreshold`；也可以設 `startupProbe: null` 拿掉它。
+
+| 訊號 | 來源 | 用途 |
+|---|---|---|
+| `da_config_initial_load_duration_seconds` | exporter | 啟動時那一次載入花了幾秒。startupProbe 的上限（`periodSeconds × failureThreshold`）至少要大於這個值，並留餘裕給樹的成長 |
+| `da_config_max_tenants_per_file` | exporter | 所有檔案中，單一檔案 `tenants:` 底下宣告的租戶數的最大值。數值到上千時，建議把租戶拆到多個檔案 |
+| `da_config_max_mapping_keys` | exporter | 所有檔案中，單一 mapping（`defaults`、`state_filters`、`tenants`、單一租戶的覆寫、`profiles`、單一 profile）鍵數的最大值。只計 exporter 解碼進設定的 mapping |
+| `da_config_reload_duration_seconds` | exporter | 每次 reload 的耗時。bucket 上界延伸到 600s，分鐘級的 reload 不再全部落在 `+Inf` |
+
+兩個最大值 gauge 取的是整棵樹的最大值，沒有檔名 label，series 數不會隨檔案數增加。每次設定 commit 都會重新設定，把大檔拆開後數值會跟著下降。
