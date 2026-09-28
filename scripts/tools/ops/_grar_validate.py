@@ -1041,15 +1041,10 @@ def is_receiver_name_collision(line: str) -> bool:
 # pkg/config/tree_scan.go), and so does da-guard. This reader used to merge
 # the two blocks key by key and route on whichever file sorted last, rc 0 —
 # and da-guard does not run on a change to a tenant file, so nothing in CI
-# said so. Same reasoning as the receiver prefix above for not being
-# `POLICY_ERROR_PREFIX` (blocks without --strict) nor `WARN … skipping`
-# (nothing was skipped: both blocks were read and merged).
+# said so. Not a warning-stream line: the record travels on `TenantTree`, and
+# validate-config reports the same state through its own `tenant_uniqueness`
+# row (the same scan), so its output is unchanged.
 DUPLICATE_TENANT_PREFIX = "ERROR (duplicate tenant):"
-
-
-def is_duplicate_tenant(line: str) -> bool:
-    """True for a #2315 duplicate-tenant line in the warning stream."""
-    return line.lstrip().startswith(DUPLICATE_TENANT_PREFIX)
 
 
 def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
@@ -1066,7 +1061,9 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
         "loses alerting, not just this one. Which file owns the tenant is "
         "your decision (removing the wrong one drops its overrides "
-        "silently): keep the tenant in exactly one file."
+        "silently): keep the tenant in exactly one file. If one of these "
+        "files cannot be decoded by the threshold-exporter (da-guard exit 3), "
+        "fix that file first."
         for tenant, files in sorted(duplicates.items())
     ]
 
@@ -1079,11 +1076,10 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Three categories today:
+    reopens exactly that. Two categories today:
 
     * ``WARN … skipping`` — a config entry was dropped as unusable;
-    * a duplicate generated receiver name (#2279);
-    * one tenant id declared by two tenant files (#2315).
+    * a duplicate generated receiver name (#2279).
 
     ADR-007 ``--strict`` policy errors are NOT in here: they are blocking only
     under ``--strict`` and each caller already selects them by
@@ -1091,8 +1087,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     """
     return [w for w in warnings
             if ("WARN" in w and "skipping" in w)
-            or is_receiver_name_collision(w)
-            or is_duplicate_tenant(w)]
+            or is_receiver_name_collision(w)]
 
 
 def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:

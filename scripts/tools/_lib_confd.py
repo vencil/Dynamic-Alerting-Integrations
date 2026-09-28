@@ -1438,244 +1438,55 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     return ids
 
 
-# ── #2315: does the exporter's FULL decode accept this tenant file? ──────
-# yaml.v3's plain-scalar resolution for the targets below — not PyYAML's
-# YAML 1.1 resolver, which reads `1e3` as a string and `yes` as a bool.
-_V3_NULL = frozenset({"", "~", "null", "Null", "NULL"})
-_V3_INT = re.compile(r"[-+]?(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|0[bB][01]+|[0-9]+)")
-_V3_FLOAT = re.compile(r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?"
-                       r"|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)")
-_BINARY_TAG = "tag:yaml.org,2002:binary"
+def tenant_declarations(config_dir: "str | os.PathLike[str]"
+                        ) -> "tuple[dict[str, set[str]], list[str]]":
+    """``({tenant_id: {label, ...}}, unreadable)`` over the whole tree.
 
+    ⛔ THE one answer to "which files declare which tenant" — the scan
+    ``validate_config.check_tenant_uniqueness`` runs and the routing
+    generator's duplicate refusal reuses (#2315), so the two cannot disagree
+    about a duplicate. Feed the first element to ``duplicate_declarations``.
 
-def _is_scalar(node: Any) -> bool:
-    import yaml  # lazy: see declared_tenant_ids
-    return isinstance(node, yaml.ScalarNode)
-
-
-def _is_null(node: Any) -> bool:
-    return _is_scalar(node) and node.style is None and node.value in _V3_NULL
-
-
-def _decodes_as_float(node: Any) -> bool:
-    """yaml.v3 into ``float64``: a PLAIN int / float / null only — a quoted
-    string, a bool, any other plain text, a list or a mapping is an error."""
-    if not _is_scalar(node) or node.style is not None:
-        return False
-    if node.value in _V3_NULL:
-        return True
-    text = node.value.replace("_", "")
-    return bool(_V3_INT.fullmatch(text) or _V3_FLOAT.fullmatch(text))
-
-
-def _scalar_list(node: Any) -> bool:
-    """null, or a list whose items are all scalars (a ``[]string`` target)."""
-    import yaml  # lazy
-    return _is_null(node) or (isinstance(node, yaml.SequenceNode)
-                              and all(_is_scalar(i) for i in node.value))
-
-
-def _mapping_pairs(node: Any) -> "list | None":
-    """The (key, value) node pairs of a mapping; ``[]`` for null; None for
-    anything else — a decode error for a Go map or struct target. A key that
-    is not a scalar cannot decode into ``map[string]`` either: None."""
-    import yaml  # lazy
-    if _is_null(node):
-        return []
-    if not isinstance(node, yaml.MappingNode):
-        return None
-    if not all(_is_scalar(k) for k, _v in node.value):
-        return None
-    return node.value
-
-
-def _scheduled_value_problem(node: Any) -> "str | None":
-    """``ScheduledValue.UnmarshalYAML`` (pkg/config/parse.go): a scalar, a
-    sequence and a mapping WITHOUT a `default` key all decode; a mapping WITH
-    one decodes into {default, expires, reason string; overrides
-    []TimeWindowOverride{window, value string}}."""
-    import yaml  # lazy
-    if not isinstance(node, yaml.MappingNode):
-        return None
-    fields = {k.value: v for k, v in node.value if _is_scalar(k)}
-    if "default" not in fields:
-        return None
-    for key in ("default", "expires", "reason"):
-        if key in fields and not _is_scalar(fields[key]):
-            return f"`{key}:` of a scheduled value is not a scalar"
-    overrides = fields.get("overrides")
-    if overrides is None or _is_null(overrides):
-        return None
-    if not isinstance(overrides, yaml.SequenceNode):
-        return "`overrides:` of a scheduled value is not a list"
-    for item in overrides.value:
-        pairs = _mapping_pairs(item)
-        if pairs is None or any(k.value in ("window", "value") and not _is_scalar(v)
-                                for k, v in pairs):
-            return "an `overrides:` entry is not {window, value} scalars"
-    return None
-
-
-def _value_map_problem(node: Any, what: str) -> "str | None":
-    """``map[string]ScheduledValue`` — a tenant body or a profile body."""
-    pairs = _mapping_pairs(node)
-    if pairs is None:
-        return f"{what} is not a mapping"
-    for key, value in pairs:
-        problem = _scheduled_value_problem(value)
-        if problem:
-            return f"{what}, key '{key.value}': {problem}"
-    return None
-
-
-def _state_filters_problem(node: Any) -> "str | None":
-    """``map[string]StateFilter{reasons []string; severity, default_state string}``."""
-    filters = _mapping_pairs(node)
-    if filters is None:
-        return "`state_filters:` is not a mapping"
-    for key, body in filters:
-        entry = _mapping_pairs(body)
-        if entry is None:
-            return f"state filter '{key.value}' is not a mapping"
-        for field, value in entry:
-            if field.value in ("severity", "default_state") and not _is_scalar(value):
-                return f"state filter '{key.value}': `{field.value}` is not a scalar"
-            if field.value == "reasons" and not _scalar_list(value):
-                return f"state filter '{key.value}': `reasons` is not a list"
-    return None
-
-
-def _binary_id_problem(key: Any) -> "str | None":
-    """``ParseTenantFile``'s UTF-8 check, reachable only through ``!!binary``."""
-    import base64
-    import binascii
-    if key.tag != _BINARY_TAG:
-        return None
-    try:
-        base64.b64decode(key.value).decode("utf-8")
-    except (binascii.Error, ValueError):
-        return "a tenant id tagged !!binary is not valid UTF-8"
-    return None
-
-
-def exporter_tenant_file_problem(node: Any) -> "str | None":
-    """Why the exporter's full decode of this TENANT file fails, or None.
-
-    The walker judges a tenant file with ``ParseTenantFile`` (yaml.v3 into
-    ``ThresholdConfig``, then a UTF-8 check on tenant ids; pkg/config). A file
-    it rejects is skipped WHOLE and declares no tenant (``parseTenantDecls``
-    returns no ids), so a tenant it also names elsewhere is NOT a duplicate on
-    the Go side and the tree loads. A Python reader counting declarations must
-    ask this first — without it the generator refused, as "duplicate tenant",
-    trees the exporter accepts (#2315 blind review; da-guard: rc 3, not 2).
-
-    *node* is the composed root node of the first document
-    (``_lib_io.strict_load_exporter_keys_with_node``); ``None`` (an empty
-    document) decodes. Aligned with Go — each of these fails the whole file:
-
-    * the top level, ``tenants:``, ``profiles:``, ``defaults:`` or
-      ``state_filters:`` not a mapping (null is fine), or a non-scalar key in
-      one of those ``map[string]`` targets;
-    * a tenant or profile body that is not null / a mapping (a scalar or a
-      list body), or a structured scheduled value (``{default: …}``) whose
-      fields have the wrong shape;
-    * a tenant id tagged ``!!binary`` whose bytes are not valid UTF-8;
-    * a ``defaults:`` value yaml.v3 cannot put in a ``float64`` — a quoted
-      string, a bool, other plain text, a list or a mapping; the same for
-      ``max_metrics_per_tenant``;
-    * ``optional_overrides`` not a list of scalars; a ``state_filters`` entry
-      not a mapping, or its ``reasons`` not a list of scalars, or its
-      ``severity`` / ``default_state`` not a scalar.
-
-    ⚠️ NOT aligned (Go may decide differently): explicit tags other than
-    ``!!binary`` on a tenant id, and on values (``!!str 80`` under
-    ``defaults:`` is judged by its text); ``<<`` merge keys; integer overflow;
-    a fractional ``max_metrics_per_tenant`` (accepted here); a ``!!binary`` id
-    that IS valid UTF-8 is accepted, but keyed by its base64 text, not its
-    bytes.
+    Selection mirrors the exporter's walker: ``iter_config_files`` (recursive,
+    case-insensitive, both spellings) and ``is_reserved_name`` (a ``_`` file
+    is never read for tenants). A declaration is a key of a mapping-shaped
+    ``tenants:`` in a file that loads through the strict loader, keyed by its
+    raw text (#2114); a key repeated in one mapping (#2123) makes the file
+    unreadable. A label is the root-relative POSIX path (the file name when
+    it is not under the root). *unreadable* lists the labels of the files
+    that did not load, in walk order — a limit on the answer, which the
+    caller must name.
     """
-    if node is None:
-        return None
-    top = _mapping_pairs(node)
-    if top is None:
-        return "the top level is not a mapping"
-    fields = {k.value: v for k, v in top}
-
-    if "tenants" in fields:
-        tenants = _mapping_pairs(fields["tenants"])
-        if tenants is None:
-            return "`tenants:` is not a mapping"
-        for key, body in tenants:
-            problem = (_binary_id_problem(key)
-                       or _value_map_problem(body, f"tenant '{key.value}'"))
-            if problem:
-                return problem
-    if "profiles" in fields:
-        profiles = _mapping_pairs(fields["profiles"])
-        if profiles is None:
-            return "`profiles:` is not a mapping"
-        for key, body in profiles:
-            problem = _value_map_problem(body, f"profile '{key.value}'")
-            if problem:
-                return problem
-    if "defaults" in fields:
-        defaults = _mapping_pairs(fields["defaults"])
-        if defaults is None:
-            return "`defaults:` is not a mapping"
-        for key, value in defaults:
-            if not _decodes_as_float(value):
-                return f"`defaults.{key.value}` is not a number"
-    if "max_metrics_per_tenant" in fields and not _decodes_as_float(
-            fields["max_metrics_per_tenant"]):
-        return "`max_metrics_per_tenant` is not a number"
-    if "optional_overrides" in fields and not _scalar_list(
-            fields["optional_overrides"]):
-        return "`optional_overrides` is not a list of names"
-    if "state_filters" in fields:
-        return _state_filters_problem(fields["state_filters"])
-    return None
-
-
-def nested_tenant_declarations(config_dir: "str | os.PathLike[str]"
-                               ) -> "dict[str, list[str]]":
-    """``{tenant_id: [label, ...]}`` for the tenant files BELOW the root.
-
-    For a FLAT reader that must still answer the exporter's question "is this
-    tenant declared twice?" (#2315): the walker recurses, so ``tx`` in
-    ``tx.yaml`` and in ``team/tx.yaml`` makes the exporter reject the whole
-    tree even though a flat reader routes only the root. The flat reader
-    collects its own root declarations while it reads, adds these, and asks
-    ``duplicate_declarations``. Not a read of the nested files' CONTENT —
-    the flat reader still announces them with ``warn_nested``.
-
-    A file declares its ``tenants:`` keys (as text) only if it loads through
-    the strict loader AND ``exporter_tenant_file_problem`` finds nothing —
-    the walker's rule: a file the exporter's full decode rejects declares no
-    tenant. ⚠️ So this is narrower than
-    ``validate_config.check_tenant_uniqueness``, which still counts such a
-    file. A label is the root-relative POSIX path. A tree with no nested files
-    costs one listing.
-    """
-    from _lib_io import strict_load_exporter_keys_with_node  # lazy: see declared_tenant_ids
+    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
 
     root = Path(config_dir)
-    declared: dict[str, list[str]] = {}
-    for path in nested_yaml_files(root):
+    declared: dict[str, set[str]] = {}
+    unreadable: list[str] = []
+    for path in iter_config_files(root):
         if is_reserved_name(path.name):
             continue
         try:
+            label = path.relative_to(root).as_posix()
+        except ValueError:
+            label = path.name
+        try:
             with open(path, encoding="utf-8") as fh:
-                data, node = strict_load_exporter_keys_with_node(fh)
-        except Exception:  # noqa: BLE001 — declares nothing; see docstring
+                # #2114: tenant ids are the key's raw TEXT, as the exporter
+                # keys them — see `_lib_yaml_keys` for the measured table.
+                # #2123: a key repeated in one mapping (by that same
+                # identity) makes the file unreadable here, as in Go.
+                data = strict_load_exporter_keys(fh)
+        except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
+            unreadable.append(label)
             continue
-        if not (isinstance(data, dict) and isinstance(data.get("tenants"), dict)):
+        if not isinstance(data, dict):
             continue
-        if exporter_tenant_file_problem(node) is not None:
+        tenants = data.get("tenants")
+        if not isinstance(tenants, dict):
             continue
-        label = path.relative_to(root).as_posix()
-        for tenant in data["tenants"]:
-            declared.setdefault(tenant, []).append(label)
-    return declared
+        for tenant_id in tenants:
+            declared.setdefault(tenant_id, set()).add(label)
+    return declared, unreadable
 
 
 def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"

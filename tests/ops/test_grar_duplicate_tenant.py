@@ -13,11 +13,13 @@ PATH so no verdict can be amtool's:
 
 * two tenant files declaring one id → rc 1 in every mode, with or without
   ``--strict``, naming both files, nothing written;
-* the same predicate makes validate-config's ``schema`` row FAIL;
-* "declares" is the exporter's: any non-``_`` file, at any depth, keyed by the
-  ``tenants:`` key text (not the file name) — so ``x.yaml`` + ``x.yml`` and a
-  root + nested pair are duplicates, while a ``_``-prefixed platform file's
-  ``tenants.<id>`` overlay is NOT a second declaration.
+* validate-config's output is unchanged: its ``tenant_uniqueness`` row runs
+  the same scan and already FAILs on this state;
+* "declares" is validate-config's ``tenant_uniqueness`` definition, shared
+  (``_lib_confd.tenant_declarations``): any non-``_`` file, at any depth,
+  keyed by the ``tenants:`` key text (not the file name) — so ``x.yaml`` +
+  ``x.yml`` and a root + nested pair are duplicates, while a ``_``-prefixed
+  platform file's ``tenants.<id>`` overlay is NOT a second declaration.
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -95,13 +97,17 @@ def _gar(argv, tmp_path):
 
 class TestDuplicateTenantIsRefused:
 
-    def test_tree_carries_one_line_naming_every_file(self, dup):
+    def test_tree_carries_the_record_and_one_line_names_every_file(self, dup):
         d, labels = dup
         tree = gar.load_tenant_tree(str(d))
-        lines = [w for w in tree.schema_warnings if gv.is_duplicate_tenant(w)]
-        assert len(lines) == 1, tree.schema_warnings
+        assert tree.duplicate_tenants == {_T: labels}
+        lines = gv.duplicate_tenant_errors(tree.duplicate_tenants)
+        assert len(lines) == 1, lines
         assert f"tenant '{_T}'" in lines[0], lines[0]
         assert f"{len(labels)} files: {', '.join(labels)}" in lines[0], lines[0]
+        # Not a warning-stream line: validate-config's rows stay as on main.
+        assert not [w for w in tree.schema_warnings
+                    if gv.DUPLICATE_TENANT_PREFIX in w], tree.schema_warnings
 
     @pytest.mark.parametrize("extra", [[], ["--strict"]], ids=["plain", "strict"])
     def test_validate_exits_1(self, dup, tmp_path, extra):
@@ -128,12 +134,8 @@ class TestDuplicateTenantIsRefused:
         assert not out.exists(), "routes were written for a tree the exporter rejects"
         assert gv.DUPLICATE_TENANT_PREFIX in err, err
 
-    def test_validate_config_schema_row_fails(self, dup):
+    def test_validate_config_reports_it_through_tenant_uniqueness(self, dup):
         d, _labels = dup
-        row = vc.check_schema(str(d))
-        assert row["status"] == vc.FAIL, row
-        assert row["hint"] == vc.DUPLICATE_TENANT_SCHEMA_HINT, row
-        # The recursive row that already existed agrees.
         assert vc.check_tenant_uniqueness(str(d))["status"] == vc.FAIL
 
 
@@ -142,8 +144,7 @@ class TestNotADuplicate:
 
     def _assert_clean(self, d: Path, tmp_path: Path) -> None:
         tree = gar.load_tenant_tree(str(d))
-        assert not [w for w in tree.schema_warnings
-                    if gv.is_duplicate_tenant(w)], tree.schema_warnings
+        assert tree.duplicate_tenants == {}
         rc, out, err = _gar(["--config-dir", str(d), "--validate"], tmp_path)
         assert rc == 0, err
         assert "OK: all configs valid" in out
@@ -173,91 +174,35 @@ class TestNotADuplicate:
         d = _conf(tmp_path, {"t2.yaml": _tenant_body(_T)})
         self._assert_clean(d, tmp_path)
 
-    # #2315 blind review: a second file the exporter's FULL decode rejects is
-    # skipped whole by the walker and declares nothing, so the tree loads —
-    # da-guard answers rc 3 (cannot decode), not rc 2 (duplicate). Each shape
-    # is the second declaration of `_T`, at the root and one level down.
-    _UNDECODABLE = {
-        "scalar-body": f'tenants:\n  {_T}: "oops"\n',
-        "list-body": f"tenants:\n  {_T}: [1]\n",
-        "defaults-not-a-number":
-            f'defaults:\n  foo: bar\ntenants:\n  {_T}:\n    mysql_connections: "70"\n',
-        "binary-id-not-utf8":
-            f'tenants:\n  {_T}:\n    mysql_connections: "70"\n'
-            '  ? !!binary /w==\n  : {mysql_connections: "1"}\n',
-    }
-
-    @pytest.mark.parametrize("where", ["root", "nested"])
-    @pytest.mark.parametrize("shape", sorted(_UNDECODABLE))
-    def test_a_file_the_exporter_cannot_decode_declares_nothing(
-            self, tmp_path, shape, where):
-        rel = f"{_T}-2.yaml" if where == "root" else f"team/{_T}-2.yaml"
-        d = _conf(tmp_path, {f"{_T}.yaml": _tenant_body(_T),
-                             rel: self._UNDECODABLE[shape]})
-        self._assert_clean(d, tmp_path)
-        if where == "root":
-            _rc, _out, err = _gar(["--config-dir", str(d), "--validate"],
-                                  tmp_path)
-            assert "cannot decode this file" in err, err
-
-
-class TestExporterDecodePredicate:
-    """`_lib_confd.exporter_tenant_file_problem`: the Go full decode's verdict."""
-
-    @staticmethod
-    def _problem(text: str):
-        import io
-        from _lib_confd import exporter_tenant_file_problem
-        from _lib_io import strict_load_exporter_keys_with_node
-        _data, node = strict_load_exporter_keys_with_node(io.StringIO(text))
-        return exporter_tenant_file_problem(node)
-
-    @pytest.mark.parametrize("text", [
-        "",
-        "tenants:\n",
-        "tenants:\n  t1:\n",
-        'tenants:\n  t1:\n    k: "70"\n    _routing: {receiver: {type: webhook}}\n',
-        "tenants:\n  t1:\n    _custom_alerts: [{recipe: x}]\n",
-        'tenants:\n  t1:\n    k: {default: "70", overrides: '
-        '[{window: "01:00-02:00", value: "9"}]}\n',
-        "defaults:\n  a: 80\n  b: 1.5\n  c: 1e3\n  d: 0x10\n  e: ~\n  f: 1_000\n",
-        "max_metrics_per_tenant: 5\noptional_overrides: [a, 1]\n",
-        "state_filters:\n  f: {reasons: [A], severity: warning}\n",
-        'tenants:\n  ? !!binary YQ==\n  : {k: "1"}\n',
-    ], ids=["empty", "null-tenants", "null-body", "routing-mapping",
-            "list-value", "structured-default", "numeric-defaults",
-            "scalar-fields", "state-filter", "binary-id-utf8"])
-    def test_decodable(self, text):
-        assert self._problem(text) is None
-
-    @pytest.mark.parametrize("text", [
-        "- a\n",
-        "tenants: [t1]\n",
-        "tenants:\n  t1: oops\n",
-        "tenants:\n  t1: [1]\n",
-        "tenants:\n  t1:\n    k: {default: [1]}\n",
-        'tenants:\n  t1:\n    k: {default: "1", overrides: x}\n',
-        'tenants:\n  ? !!binary /w==\n  : {k: "1"}\n',
-        'defaults:\n  a: "80"\n',
-        "defaults:\n  a: true\n",
-        "defaults:\n  a: bar\n",
-        "defaults: [a]\n",
-        "max_metrics_per_tenant: many\n",
-        "optional_overrides: a\n",
-        "state_filters:\n  f: {reasons: a}\n",
-        "profiles:\n  p: oops\n",
-    ], ids=["top-list", "tenants-list", "scalar-body", "list-body",
-            "default-not-scalar", "overrides-not-list", "binary-id-not-utf8",
-            "defaults-quoted", "defaults-bool", "defaults-text",
-            "defaults-list", "max-metrics-text", "optional-overrides-scalar",
-            "reasons-scalar", "profile-scalar-body"])
-    def test_rejected(self, text):
-        assert self._problem(text), text
-
 
 class TestSharedPredicate:
 
-    def test_duplicate_line_blocks_without_strict(self):
+    def test_generator_and_validate_config_share_one_scan(self):
+        """#2315 round 4: ONE definition of "which files declare a tenant"."""
+        import inspect
+        import _grar_parse
+        assert "tenant_declarations(" in inspect.getsource(
+            _grar_parse._parse_config_files)
+        assert "tenant_declarations(" in inspect.getsource(
+            vc.check_tenant_uniqueness)
+
+    @pytest.mark.parametrize("second", [
+        f"tenants:\n  {_T}:\n    mysql_connections: \"70\"\n",
+        # The exporter cannot decode this file (da-guard exit 3); both tools
+        # still count it as a declaration — the line says to fix it first.
+        f"tenants:\n  {_T}: [1]\n",
+    ], ids=["decodable", "exporter-cannot-decode"])
+    def test_the_two_verdicts_agree(self, tmp_path, second):
+        d = _conf(tmp_path, {f"{_T}.yaml": _tenant_body(_T),
+                             f"{_T}-2.yaml": second})
+        tree = gar.load_tenant_tree(str(d))
+        lines = gv.duplicate_tenant_errors(tree.duplicate_tenants)
+        assert len(lines) == 1, lines
+        assert "da-guard exit 3" in lines[0], lines[0]
+        assert vc.check_tenant_uniqueness(str(d))["status"] == vc.FAIL
+
+    def test_duplicate_line_is_not_a_policy_error(self):
+        """Blocks WITHOUT --strict; the policy prefix means "escalated by
+        --strict", so the two must not overlap."""
         line = gv.duplicate_tenant_errors({"x": ["a.yaml", "b.yaml"]})[0]
         assert not line.lstrip().startswith(gv.POLICY_ERROR_PREFIX)
-        assert gv.blocking_generation_errors([line]) == [line]

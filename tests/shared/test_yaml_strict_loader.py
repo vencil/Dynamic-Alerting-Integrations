@@ -221,7 +221,6 @@ from _lib_io import (  # noqa: E402
     load_yaml_file_strict_exporter_keys,
     strict_load_all_exporter_keys,
     strict_load_exporter_keys,
-    strict_load_exporter_keys_with_node,
 )
 from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys  # noqa: E402
 
@@ -234,12 +233,6 @@ _EXPORTER_KEY_ENTRIES = {
         lambda d: strict_load_exporter_keys(d, raw_text_scalars=("_profile",)),
     "strict_load_all_exporter_keys+raw_text_scalars":
         lambda d: next(strict_load_all_exporter_keys(d, raw_text_scalars=("_profile",))),
-    # #2315: same loader, node kept — must be the same read in every respect.
-    "strict_load_exporter_keys_with_node":
-        lambda d: strict_load_exporter_keys_with_node(d)[0],
-    "strict_load_exporter_keys_with_node+raw_text_sequences":
-        lambda d: strict_load_exporter_keys_with_node(
-            d, raw_text_sequences=("x",))[0],
 }
 
 

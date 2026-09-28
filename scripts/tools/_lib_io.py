@@ -484,30 +484,6 @@ def strict_load_exporter_keys(stream: Any, *,
         frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
 
 
-def strict_load_exporter_keys_with_node(
-        stream: Any, *,
-        raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
-) -> "tuple[Any, Any]":
-    """:func:`strict_load_exporter_keys`, plus the composed root node.
-
-    ``(data, node)`` from ONE parse: the node is composed first and the data
-    constructed from it, exactly as ``get_single_data`` does, so the strict
-    duplicate-key refusal and the key text are unchanged. For a caller that
-    must judge the SOURCE shape — scalar style, an explicit ``!!binary``
-    tag — which the constructed data no longer carries (#2315: whether the
-    exporter's full decode accepts a tenant file). ``(None, None)`` for an
-    empty document."""
-    loader = _strict_loader_class(False, _strict_exporter_key_class(
-        frozenset(raw_text_sequences)))(stream)
-    try:
-        node = loader.get_single_node()
-        if node is None:
-            return None, None
-        return loader.construct_document(node), node
-    finally:
-        loader.dispose()
-
-
 def strict_load_for_rewrite(stream: Any) -> Any:
     """:func:`strict_load_exporter_keys` for a document the caller will dump
     back with ``_lib_yaml_keys.dump_for_rewrite`` (#2220): plain scalars —

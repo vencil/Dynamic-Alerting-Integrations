@@ -28,20 +28,16 @@ from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
-# #2315: the node too — whether the exporter's full decode accepts a tenant
-# file is a question about its source shape (see exporter_tenant_file_problem).
-from _lib_io import strict_load_exporter_keys_with_node  # noqa: E402
+from _lib_io import strict_load_exporter_keys  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     duplicate_declarations,
-    exporter_tenant_file_problem,
     is_defaults_name,
-    is_reserved_name,
     iter_config_files,
-    nested_tenant_declarations,
     overlay_platform_tenants,
     readable_carriers,
     select_defaults_carrier,
+    tenant_declarations,
     unusable_config_paths,
     unusable_reason,
     warn_multi_carrier,
@@ -56,7 +52,6 @@ from _grar_validate import (  # noqa: E402
     POLICY_ERROR_PREFIX,
     _validate_profile_refs,
     check_domain_policies,
-    duplicate_tenant_errors,
     validate_tenant_keys,
 )
 
@@ -493,8 +488,6 @@ def _parse_config_files(config_dir: str) -> dict:
     # #1982: every tenant entry of every root file, in read order, applied
     # AFTER the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
-    # #2315: tenant id -> the TENANT files (non-`_`) that declare it.
-    declared: dict[str, list[str]] = {}
     listed = list(iter_config_files(config_dir, recursive=False))
     readable, _unreadable = readable_carriers(
         p for p in listed if is_defaults_name(p.name))
@@ -528,7 +521,7 @@ def _parse_config_files(config_dir: str) -> dict:
                 # Strict (#2123): a key written twice in one mapping is a
                 # YAMLError naming the line — the exporter's yaml.v3 rejects
                 # the file, so it must not route on PyYAML's last value.
-                data, node = strict_load_exporter_keys_with_node(
+                data = strict_load_exporter_keys(
                     f, raw_text_sequences=("tenants",))
         except yaml.YAMLError as e:
             _drop_unreadable_file(
@@ -657,21 +650,6 @@ def _parse_config_files(config_dir: str) -> dict:
                 f"<tenant>: {{<key>: <value>}}",
                 result)
             continue
-        if not is_reserved_name(fname):
-            # #2315: a file the exporter's full decode rejects declares no
-            # tenant on the Go side (the walker skips it whole), so its ids
-            # do not make a duplicate there — nor here. Named, not refused:
-            # what happens to its entries below is unchanged.
-            problem = exporter_tenant_file_problem(node)
-            if problem is None:
-                for tenant in tenants:
-                    declared.setdefault(tenant, []).append(fname)
-            else:
-                print(f"  WARN: {safe_label(fname)}: the threshold-exporter "
-                      f"cannot decode this file ({safe_label(problem)}) and "
-                      f"ignores it whole, so its tenants are not counted when "
-                      f"looking for a tenant declared in two files",
-                      file=sys.stderr)
         for tenant, overrides in tenants.items():
             if not isinstance(overrides, dict):
                 # Per-ENTRY, not per-file: the other tenants in this file
@@ -685,11 +663,11 @@ def _parse_config_files(config_dir: str) -> dict:
                 continue
             tenant_entries.append((fname, tenant, overrides))
 
-    # The exporter walker recurses, so a nested file can be the second
-    # declaration even though this reader routes only the root.
-    for tenant, labels in nested_tenant_declarations(config_dir).items():
-        declared.setdefault(tenant, []).extend(labels)
-    result["duplicate_tenants"] = duplicate_declarations(declared)
+    # #2315: validate-config's `tenant_uniqueness` scan, called — not
+    # re-derived — so the two tools agree on every duplicate. It walks the
+    # whole tree, as the exporter does, although this reader routes the root.
+    result["duplicate_tenants"] = duplicate_declarations(
+        tenant_declarations(config_dir)[0])
     _apply_tenant_entries(config_dir, tenant_entries, result)
     return result
 
@@ -798,6 +776,9 @@ class TenantTree:
     files_read: int = 0
     files_skipped: list[tuple[str, str]] = field(default_factory=list)
     tenant_file_errors: list[tuple[str, str]] = field(default_factory=list)
+    # #2315: {tenant_id: [file, ...]} — ids two tenant files declare
+    # (`_lib_confd.tenant_declarations`, validate-config's own scan).
+    duplicate_tenants: dict[str, list[str]] = field(default_factory=dict)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -880,9 +861,6 @@ def load_tenant_tree(
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
-    # #2315: one tenant id, two tenant files — the exporter rejects the tree.
-    schema_warnings.extend(
-        duplicate_tenant_errors(parsed.get("duplicate_tenants", {})))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing
     if parsed["domain_policies"]:
@@ -913,4 +891,5 @@ def load_tenant_tree(
         parsed["enforced_routing"], parsed["metadata_configs"],
         files_read=parsed.get("files_read", 0),
         files_skipped=list(parsed.get("files_skipped", [])),
-        tenant_file_errors=list(parsed.get("tenant_file_errors", [])))
+        tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
+        duplicate_tenants=dict(parsed.get("duplicate_tenants", {})))
