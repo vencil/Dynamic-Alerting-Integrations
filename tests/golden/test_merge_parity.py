@@ -16,8 +16,8 @@ What the fixtures cover (NOT every ADR-017 clause; see "Known gaps" below):
 - array-replace:     arrays replaced (not concat)
 - opt-out-null:      null on a NON-reserved key (a scalar and a nested
                      threshold key) does not delete it: the inherited
-                     default survives. It does not exercise the "null
-                     deletes a reserved `_` key" branch; see gaps below.
+                     default survives. The "null deletes a reserved `_`
+                     key" branch is reserved-null-delete's, not this one's.
 - opt-out-null-threshold: real flat-metric-key shape — null keeps the
                      inherited default, "disable" is the opt-out (#1339)
 - null-body:         a tenant declared with a null body (`tenant-x:` and
@@ -32,21 +32,33 @@ What the fixtures cover (NOT every ADR-017 clause; see "Known gaps" below):
                      `.yaml` only, and a subtree `_DEFAULTS.YML` enters the
                      chain; two tenants in the mixed-mode tree's `carrier/`
                      subtree (no new conf.d root)
+- canonical-json-escaping: a tenant string with `<` `>` `&` and CJK, so
+                     the ensure_ascii=False (Python) and no-HTML-escape (Go)
+                     clauses of the canonical JSON move merged_hash (#1550)
+- routing-null:      null on `_routing.group_*`. At the MERGE plane these
+                     are non-reserved sub-keys: an inherited value is
+                     retained, an uninherited null is dropped (#1550)
+- reserved-null-delete: a `_` key inherited from L0 and nulled in an L1
+                     `_defaults.yaml` is deleted; a sibling `_` key survives
+                     (#1550)
+The last three are subtrees of the mixed-mode tree, like carrier-selection.
 
-Known gaps, measured and tracked in #1550 (a mutation there leaves this
-oracle green):
-- Reserved-key deletion: no scenario's effective_config holds a `_`-prefixed
-  key, so removing the "null deletes a reserved key" branch on either side
-  goes unnoticed here. Only single-language unit tests pin it.
-- `_routing` null opt-out (group_by / group_wait / group_interval /
-  repeat_interval): no fixture at all.
-- Chain discovery across languages: the Go legs that hash and merge read
-  the defaults chain out of golden.json, and the one Go leg that walks the
-  tree uses the exporter's scanDirHierarchical, not pkg/config's
-  ResolveEffective (the chain builder behind tenant-api `/effective`). A
-  Go-side chain-order bug there leaves this oracle green.
-- Canonical-JSON escaping: the corpus has no non-ASCII and no `<` `>` `&`,
-  so the ensure_ascii=False and no-HTML-escape clauses are vacuously true.
+Chain discovery is checked on both sides from the tree itself: here by
+describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
+(the exporter's /metrics chain) and TestGoldenParity_ResolveEffective
+(pkg/config ResolveEffective, behind tenant-api `/effective`).
+
+Known gaps (a mutation there leaves this oracle green):
+- Windows host: test_merge_parity_python is skipped wholesale for a
+  cosmetic path-separator field, taking the three hash / config assertions
+  with it, and nothing floors how many cases must run (#1550 item 2).
+- ADR-017's `_routing` null opt-out is enforced by the route generator
+  (_grar_merge.py over `_routing_defaults` + the tenant file's `_routing`),
+  which neither merge implementation runs. routing-null pins how the merge
+  plane REPRESENTS those nulls, not the route that is generated.
+- Go's EffectiveConfig leg compares Go canonicalJSON against Go
+  canonicalJSON, so it is blind to a Go-side escaping change; the hash legs
+  (MergedHash, ResolveEffective) are what catch that.
 
 What IS guarded beyond the hashes: test_fixture_trees_have_no_orphans
 fails on any yaml under a fixture conf.d tree that golden.json does not

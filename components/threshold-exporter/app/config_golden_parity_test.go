@@ -15,8 +15,8 @@ package main
 //   array-replace     — arrays replaced (not concat)
 //   opt-out-null      — null on a NON-reserved key (a scalar and a nested
 //                       threshold key) does not delete it; the inherited
-//                       default survives. It does not exercise the "null
-//                       deletes a reserved `_` key" branch (gap below)
+//                       default survives. The "null deletes a reserved `_`
+//                       key" branch is reserved-null-delete's
 //   opt-out-null-threshold — real flat-metric-key shape: null keeps the
 //                       inherited default, "disable" is the opt-out (#1339)
 //   null-body         — a tenant declared with a null body inherits every
@@ -30,21 +30,30 @@ package main
 //                       `.yaml`+`.yml` pair reads the `.yaml`, a subtree
 //                       `_DEFAULTS.YML` enters the chain (two tenants, in
 //                       the mixed-mode tree's `carrier/` subtree)
+//   canonical-json-escaping — a tenant string with < > & and CJK: the
+//                       no-HTML-escape and non-ASCII clauses of the canonical
+//                       JSON move merged_hash (#1550)
+//   routing-null      — null on `_routing.group_*`; at the merge plane those
+//                       are non-reserved sub-keys, so an inherited value is
+//                       retained and an uninherited null dropped (#1550)
+//   reserved-null-delete — a `_` key inherited from L0 and nulled in an L1
+//                       _defaults.yaml is deleted; a sibling `_` key survives
+//                       (#1550)
 //
-// Known gaps, measured and tracked in #1550 (a mutation there leaves this
-// oracle green):
-//   - Reserved-key deletion: no scenario's effective_config holds a
-//     `_`-prefixed key, so removing that branch goes unnoticed here; only
-//     single-language unit tests (TestDeepMerge_NullOnReservedKey_StillDeletes)
-//     pin it.
-//   - `_routing` null opt-out (group_by / group_wait / group_interval /
-//     repeat_interval): no fixture at all.
-//   - Chain discovery: the merged-hash and effective-config legs read the
-//     defaults chain out of golden.json; the one leg that walks the tree
-//     uses scanDirHierarchical, not pkg/config ResolveEffective (the chain
-//     builder behind tenant-api /effective).
-//   - Canonical-JSON escaping: the corpus has no non-ASCII and no < > &, so
-//     the no-HTML-escape and non-ASCII clauses are vacuously true.
+// Chain discovery: MergedHash / EffectiveConfig read the defaults chain out of
+// golden.json on purpose (they isolate the merge core). The chain itself is
+// derived from the tree, and compared with Python's, by ScannerChainOrder (the
+// exporter's /metrics chain, TreeScan.InheritanceGraph) and ResolveEffective
+// (pkg/config ResolveEffective, behind tenant-api /effective and da-guard).
+//
+// Known gaps (a mutation there leaves this oracle green):
+//   - ADR-017's `_routing` null opt-out is enforced by the Python route
+//     generator (_grar_merge.py), which neither merge implementation runs;
+//     routing-null pins how the merge plane represents those nulls only.
+//   - EffectiveConfig compares Go canonicalJSON with Go canonicalJSON, so it
+//     is blind to a Go-side escaping change; MergedHash / ResolveEffective
+//     catch that.
+//   - The Python leg is skipped wholesale on a Windows host (#1550 item 2).
 // Orphan files in the fixture trees are guarded on the Python side
 // (tests/golden/test_merge_parity.py::test_fixture_trees_have_no_orphans,
 // #1551).
@@ -59,8 +68,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 type goldenEntry struct {
@@ -296,6 +308,72 @@ func TestGoldenParity_ScannerChainOrder(t *testing.T) {
 							g.TenantID, i, relPosix, g.DefaultsChain[i])
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestGoldenParity_ResolveEffective derives everything from the fixture tree
+// through pkg/config.ResolveEffective — the resolver behind tenant-api
+// `/effective`, and (through the same effectiveResolver) da-guard's
+// ScopeEffective — and compares it with what Python describe_tenant.py
+// captured (#1550).
+//
+// Unlike the MergedHash / EffectiveConfig legs above, nothing is taken from
+// golden.json but the tenant id and the expectations: the tenant file is
+// located, the defaults chain discovered and ordered, and the merge run by
+// the Go code under test. So a chain-discovery divergence on this path (order,
+// a missing or extra level, the carrier picked in a directory) is red here;
+// before, it was red in no cross-language test. The exporter's own /metrics
+// chain (TreeScan.InheritanceGraph) is the one ScannerChainOrder above walks;
+// the two share chainFromCarriers but not the call site, so each keeps a leg.
+func TestGoldenParity_ResolveEffective(t *testing.T) {
+	t.Parallel()
+	entries := loadGolden(t)
+	root := goldenRepoRoot(t)
+
+	for _, g := range entries {
+		g := g
+		t.Run(fmt.Sprintf("%s_%s", g.Scenario, g.TenantID), func(t *testing.T) {
+			confD := filepath.Join(root, "tests", "golden", "fixtures", g.FixtureDir, "conf.d")
+			got, err := config.ResolveEffective(confD, g.TenantID)
+			if err != nil {
+				t.Fatalf("ResolveEffective(%s, %s): %v", confD, g.TenantID, err)
+			}
+
+			// nil and [] are the same chain; golden writes [] for "none".
+			gotChain, wantChain := got.DefaultsChain, g.DefaultsChain
+			if gotChain == nil {
+				gotChain = []string{}
+			}
+			if wantChain == nil {
+				wantChain = []string{}
+			}
+			if !reflect.DeepEqual(gotChain, wantChain) {
+				t.Errorf("defaults_chain drift for %s/%s:\n  got:  %q\n  want: %q",
+					g.Scenario, g.TenantID, gotChain, wantChain)
+			}
+			if got.SourceFile != g.SourceFile {
+				t.Errorf("source_file drift: got %q want %q", got.SourceFile, g.SourceFile)
+			}
+			if got.SourceHash != g.SourceHash {
+				t.Errorf("source_hash drift: got %q want %q", got.SourceHash, g.SourceHash)
+			}
+			if got.MergedHash != g.MergedHash {
+				t.Errorf("merged_hash drift for %s/%s: got %q want %q (chain %q)",
+					g.Scenario, g.TenantID, got.MergedHash, g.MergedHash, gotChain)
+			}
+			gotJSON, err := canonicalJSON(got.EffectiveConfig)
+			if err != nil {
+				t.Fatalf("canonicalJSON(got): %v", err)
+			}
+			wantJSON, err := canonicalJSON(g.EffectiveConfig)
+			if err != nil {
+				t.Fatalf("canonicalJSON(want): %v", err)
+			}
+			if string(gotJSON) != string(wantJSON) {
+				t.Errorf("effective_config drift for %s/%s:\n  got:  %s\n  want: %s",
+					g.Scenario, g.TenantID, gotJSON, wantJSON)
 			}
 		})
 	}

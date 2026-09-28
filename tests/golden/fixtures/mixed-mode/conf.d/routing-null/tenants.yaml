@@ -1,0 +1,10 @@
+tenants:
+  tenant-route:
+    _routing:
+      receiver:
+        type: "webhook"
+        url: "https://hooks.example.com/alerts"
+      group_by: ~
+      group_wait: ~
+      group_interval: ~
+      repeat_interval: ~

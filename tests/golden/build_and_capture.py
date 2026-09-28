@@ -5,9 +5,11 @@ capture expected source_hash + merged_hash, emit golden.json.
 
 The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
-byte-for-byte parity. They do NOT cover every ADR-017 clause; the known
-gaps (reserved-key null deletion, `_routing` null opt-out, chain discovery,
-canonical-JSON escaping) are tracked in #1550.
+byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
+reserved-key null deletion, `_routing` null and canonical-JSON escaping rows
+are scenarios 11-13 below; its chain-discovery gap is closed on the Go side
+(config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
+open is listed in test_merge_parity.py's "Known gaps".
 
 Exit status: 0 only when every scenario regenerated. If describe_tenant
 fails for a scenario, its entry is still written to golden.json (carrying
@@ -181,9 +183,11 @@ def s_array_replace():
 
 
 # -------------------------------------------------------------------------
-# Scenario 6: explicit null — deletes a reserved (`_`-prefixed) key only.
-# The non-reserved keys here (alert_group, threshold.memory) are RETAINED;
-# see s_opt_out_null_threshold below for the real-shape threshold case (#1339).
+# Scenario 6: explicit null on NON-reserved keys (alert_group,
+# threshold.memory): both are RETAINED. Null deletes a reserved (`_`-prefixed)
+# key only, and this tree has none — that branch is s_reserved_null_delete's
+# (#1550). See s_opt_out_null_threshold below for the real-shape threshold
+# case (#1339).
 # -------------------------------------------------------------------------
 def s_opt_out_null():
     d = reset("opt-out-null")
@@ -374,6 +378,92 @@ def s_carrier_selection():
 """)
 
 
+# -------------------------------------------------------------------------
+# Scenarios 11-13 (#1550): three shapes the oracle had no row for. All three
+# are SUBTREES of the mixed-mode tree, for the carrier-selection reason above
+# (its root has no defaults file, so no existing tenant's chain passes through
+# them and no existing golden row moves; no new conf.d root to pin). Their
+# `defaults:` keys are counted by check_threshold_reachability's artifact-key
+# floor, which moved with them.
+# -------------------------------------------------------------------------
+
+# Scenario 11: canonical-JSON escaping. A tenant string value carrying `<`,
+# `>`, `&` and CJK text. The merged hash is computed over canonical JSON, and
+# two of its clauses were vacuous while no value in the corpus had such
+# characters: Python `ensure_ascii=False` (flipping it rewrites the CJK as
+# \uXXXX) and Go `SetEscapeHTML(false)` (flipping it rewrites `<>&` as
+# <...). Either flip moves merged_hash on this row alone. No defaults
+# file: the value reaches the hash straight from the tenant file.
+def s_canonical_json_escaping():
+    d = reset("mixed-mode") / "escaping"
+    write(d / "tenants.yaml", """tenants:
+  tenant-escape:
+    _silent_mode:
+      target: "warning"
+      reason: "維護窗口：主庫 <primary> & 備庫 <replica> 切換"
+""")
+
+
+# Scenario 12: `_routing` group_* null (ADR-017 §Merge 語意). ⛔ What this
+# pins is the MERGE plane, and there the four routing fields are NOT special:
+# deep_merge deletes on null only when the key itself is `_`-prefixed
+# (ADR-017: 判準是「是否 `_` 前綴」，不是「是否路由欄位」), and `group_*` sit
+# one level under `_routing`. So:
+#   group_by / group_wait     inherited from `defaults:`, nulled here
+#                             -> the inherited value is RETAINED
+#   group_interval / repeat_interval  not inherited, nulled here
+#                             -> ABSENT from effective_config: the null is a
+#                                no-op, not copied through, because `_routing`
+#                                itself was inherited and so is merged key by
+#                                key rather than replaced
+# The ADR's "null 退出繼承 / 產出的 route 省略該欄位" is carried out by the
+# route generator (_grar_merge.py, a falsy check over `_routing_defaults` +
+# the tenant file's own `_routing`), which reads neither describe_tenant's
+# merge nor pkg/config's; the golden oracle does not cover that plane. This
+# row makes both merge implementations agree on the representation that
+# da-guard reads (`EffectiveConfig["_routing"]`), and turns red if either
+# side starts treating a nested routing null as a deletion.
+def s_routing_null():
+    d = reset("mixed-mode") / "routing-null"
+    write(d / "_defaults.yaml", """defaults:
+  _routing:
+    group_by: ["alertname"]
+    group_wait: "30s"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-route:
+    _routing:
+      receiver:
+        type: "webhook"
+        url: "https://hooks.example.com/alerts"
+      group_by: ~
+      group_wait: ~
+      group_interval: ~
+      repeat_interval: ~
+""")
+
+
+# Scenario 13: a RESERVED (`_`-prefixed) key deleted by an explicit null in
+# a child after it was inherited. Before this row no scenario's
+# effective_config held a `_` key at all, so removing the deletion branch on
+# either side left the oracle green (#1550 item 5). Written defaults ->
+# defaults, the path ADR-017 names as the reachable one (a tenant file's null
+# on these keys is rejected by check_confd_schema.py). `_silent_mode` is the
+# control: inherited and not nulled, so it must survive.
+def s_reserved_null_delete():
+    d = reset("mixed-mode") / "reserved-null"
+    write(d / "_defaults.yaml", """defaults:
+  _severity_dedup: "disable"
+  _silent_mode: "warning"
+""")
+    write(d / "child" / "_defaults.yaml", """defaults:
+  _severity_dedup: ~
+""")
+    write(d / "child" / "tenants.yaml", """tenants:
+  tenant-reserved: {}
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -388,6 +478,9 @@ SCENARIOS = [
     ("wrapper-siblings", "tenant-sib", s_wrapper_siblings),
     ("carrier-selection-pair", "tenant-pair", s_carrier_selection),  # 2 tenants, 1 tree
     ("carrier-selection-sub", "tenant-sub", None),
+    ("canonical-json-escaping", "tenant-escape", s_canonical_json_escaping),
+    ("routing-null", "tenant-route", s_routing_null),
+    ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
 ]
 
 
@@ -434,6 +527,9 @@ def main() -> int:
         "wrapper-siblings": "wrapper-siblings",
         "carrier-selection-pair": "mixed-mode",
         "carrier-selection-sub": "mixed-mode",
+        "canonical-json-escaping": "mixed-mode",
+        "routing-null": "mixed-mode",
+        "reserved-null-delete": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:

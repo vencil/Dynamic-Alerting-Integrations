@@ -21,11 +21,11 @@ package handler
 // pins hash stability and shape, not cross-language equality (it says so
 // itself); the byte-for-byte claim rests on threshold-exporter's
 // app/config_golden_parity_test.go, which exercises the same pkg/config this
-// handler imports. ⛔ That covers the MERGE CORE, not CHAIN DISCOVERY — the
-// golden legs are handed the defaults chain out of golden.json instead of
-// deriving it, so a Go-vs-Python divergence there is covered by nothing.
-// Measured: reversing the chain order in ResolveEffective moved the served
-// merged_hash and left every golden assertion green (#1516 follow-up).
+// handler imports. Chain discovery included: TestGoldenParity_ResolveEffective
+// calls the same config.ResolveEffective this handler does on every golden
+// fixture and compares chain, hashes and effective config with the Python
+// capture (#1550). Before it, reversing the chain order in ResolveEffective
+// moved the served merged_hash and left every golden assertion green.
 
 import (
 	"errors"

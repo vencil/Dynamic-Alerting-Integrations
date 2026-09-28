@@ -1,0 +1,3 @@
+defaults:
+  _severity_dedup: "disable"
+  _silent_mode: "warning"
