@@ -34,7 +34,9 @@ func isRoutingKey(k string) bool {
 // UnreadRouting reports the routing keys the route generator never reads
 // (#2291), in three places:
 //
-//  1. inside the `defaults:` block of a defaults carrier (root or nested);
+//  1. inside the `defaults:` block of a defaults carrier (root or nested —
+//     though a ROOT carrier whose block holds `_routing*` fails the
+//     exporter's decode, so da-guard skips it as parse_failed, exit 3);
 //  2. at the top level of a defaults carrier with no `defaults:` mapping —
 //     the exporter then takes the whole document as the defaults block —
 //     except `_routing_defaults` / `_routing_enforced` in the ROOT carrier,

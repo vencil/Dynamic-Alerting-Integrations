@@ -40,7 +40,8 @@
     "the whole top level of a defaults file without one) or in a threshold profile (`profiles:`)",
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
     "platform row, field = the key path in that file. The generator itself reports nothing there,",
-    "so the Python reader leaves that kind out of its platform comparison (its targets pin it)."
+    "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
+    "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first."
   ],
   "trees": [
     {
@@ -1095,6 +1096,80 @@
           "python_differs": null
         },
         "t-ovl-ref": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "platform-overlay-yaml-merge-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-mk\n    - t-mk-own\n    - t-mk-seq\n",
+        "_platform.yaml": "chat: &chat\n  _routing:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\nhook: &hook\n  _routing:\n    receiver:\n      type: webhook\n      url: https://w.example/hook\ntenants:\n  t-mk:\n    <<: *chat\n  t-mk-own:\n    <<: *chat\n    _routing:\n      receiver:\n        type: webhook\n        url: https://w.example/own\n  t-mk-seq:\n    <<: [*chat, *hook]\n",
+        "t-mk.yaml": "tenants:\n  t-mk:\n    cpu_usage_percent: '85'\n",
+        "t-mk-own.yaml": "tenants:\n  t-mk-own:\n    cpu_usage_percent: '85'\n",
+        "t-mk-seq.yaml": "tenants:\n  t-mk-seq:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-mk": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "chat-free",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-mk-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null
+        },
+        "t-mk-seq": {
           "targets": [
             {
               "ref": "receiver",

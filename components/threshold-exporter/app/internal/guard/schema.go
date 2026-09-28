@@ -57,7 +57,7 @@ func checkRequiredFields(input CheckInput) []Finding {
 		merged := input.EffectiveConfigs[tenantID]
 		for _, field := range input.RequiredFields {
 			if routingField(field) {
-				out = append(out, checkRequiredRoutingField(tenantID, field, input.RoutingByTenant)...)
+				out = append(out, checkRequiredRoutingField(tenantID, field, input.RoutingByTenant, input.RoutingDisabled[tenantID])...)
 				continue
 			}
 			value, found := resolvePath(merged, field)
@@ -102,8 +102,9 @@ func routingField(field string) bool {
 // config carries a `_routing` the generator never reads (a defaults block, a
 // threshold profile) and lacks the one `_routing_defaults` supplies, so it
 // was wrong in both directions. A tenant with no resolved routing is missing
-// every such field.
-func checkRequiredRoutingField(tenantID, field string, routing map[string]map[string]any) []Finding {
+// every such field; one whose routing is turned off (disabled) is told so,
+// since an explicit opt-out and an omission need different fixes.
+func checkRequiredRoutingField(tenantID, field string, routing map[string]map[string]any, disabled bool) []Finding {
 	resolved, routed := routing[tenantID]
 	var value any
 	found := false
@@ -111,6 +112,16 @@ func checkRequiredRoutingField(tenantID, field string, routing map[string]map[st
 		value, found = resolvePath(resolved, strings.TrimPrefix(strings.TrimPrefix(field, "_routing"), "."))
 	}
 	switch {
+	case !routed && disabled:
+		return []Finding{{
+			Severity: SeverityError,
+			Kind:     FindingMissingRequired,
+			TenantID: tenantID,
+			Field:    field,
+			Message: fmt.Sprintf(
+				"required field %q is missing because tenant %q's routing is disabled by `_routing: disable` (no route is rendered); drop the field from --required-fields for opted-out tenants, or re-enable the routing",
+				field, tenantID),
+		}}
 	case !found:
 		return []Finding{{
 			Severity: SeverityError,

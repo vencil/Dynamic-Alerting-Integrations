@@ -194,6 +194,20 @@ func TestRun_RoutingSource(t *testing.T) {
 			want:     []string{"error unknown_receiver_type tx receiver.type"},
 		},
 		{
+			// #2291 review: a `_routing` supplied through a YAML merge key
+			// is read — the generator's decoder expands `<<:` too.
+			name: "platform-overlay-routing-through-a-merge-key-is-judged",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults,
+				"_platform.yaml": "base: &b\n  _routing:" + strings.ReplaceAll(rsBadRoute, "\n  ", "\n") +
+					"tenants:\n  tx:\n    <<: *b\n",
+				"tx.yaml": rsTenant,
+			},
+			args:     []string{"--required-fields", "_routing.receiver.type"},
+			wantCode: exitFindings,
+			want:     []string{"error unknown_receiver_type tx receiver.type"},
+		},
+		{
 			// The tenant file's `_routing` replaces the platform's WHOLE.
 			name: "tenant-routing-replaces-the-platform-overlay",
 			files: map[string]string{
@@ -251,6 +265,17 @@ func TestRun_RoutingSource(t *testing.T) {
 				"error missing_required tx _routing.receiver.type",
 				"error routing_in_unread_location  _profiles.yaml:profiles.p1._routing",
 			},
+		},
+		{
+			// An opted-out tenant is still reported, as an opt-out.
+			name: "required-routing-field-on-a-disabled-tenant",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults + "_routing_defaults:" + rsOKRoute,
+				"tx.yaml":        "tenants:\n  tx:\n    _routing: disable\n",
+			},
+			args:     []string{"--required-fields", "_routing.receiver.type"},
+			wantCode: exitFindings,
+			want:     []string{"error missing_required tx _routing.receiver.type"},
 		},
 		{
 			// Control: a non-routing required field still reads the

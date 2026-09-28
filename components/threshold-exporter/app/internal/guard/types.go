@@ -288,6 +288,12 @@ type CheckInput struct {
 	// a tenant absent here reads as "the tenant's _routing".
 	RoutingProvenance map[string]routingpolicy.Provenance `json:"-"`
 
+	// RoutingDisabled holds the tenants whose routing is turned off by a
+	// disabling `_routing` string (`_routing: disable`). They are absent from
+	// RoutingByTenant; a required `_routing*` field names the opt-out instead
+	// of reading as an omission (#2291).
+	RoutingDisabled map[string]bool `json:"-"`
+
 	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
 	// references that no profile file defines (warn finding).
 	UnknownRoutingProfiles map[string]string `json:"-"`

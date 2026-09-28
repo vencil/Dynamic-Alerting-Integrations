@@ -2485,7 +2485,7 @@ da-tools guard <subcommand> [flags]
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 | `--scope <path>` | 整棵樹 | 限定子目錄（CI 由變更 `_defaults.yaml` 的 dirname 推算） |
-| `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV |
+| `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV；一般欄位對有效設定判定，`_routing` 與 `_routing.` 開頭的欄位改對解析後的 routing 判定（見下方 Routing 檢查） |
 | `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
 | `--baseline-config-dir <path>` | 空 | 變更前的同一棵 conf.d（CI 傳 PR 的 merge-base）；根 `_defaults.yaml` 的 `max_metrics_per_tenant` 被調高或關閉時，報告開頭加一則提示。不影響 exit code |
@@ -2514,7 +2514,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 | `domain_policy_unusable` | error | `_domain_policy.yaml` 的結構無法使用（例如 `tenants` 不是 list）；tenant 欄空白，只略過依賴它的檢查 |
 | `routing_profiles_unusable` | warn | `routing_profiles:` 不是 mapping；tenant 欄空白 |
 | `routing_defaults_routes_ignored` | error | `_routing_defaults` 帶了 `routes`（應放在 profile 或租戶）；兩端都在合併前丟掉，generator 的 `--validate` 同樣擋 |
-| `routing_in_unread_location` | error | `_routing` 或 `_routing_*` 寫在 generator 不讀的位置：任一層 `_defaults.yaml` 的 `defaults:` 區塊內、沒有 `defaults:` 包裝的 `_defaults.yaml` 頂層（根目錄頂層的 `_routing_defaults` / `_routing_enforced` 是合法寫法，不報）、根目錄平台檔 `profiles:` 的某個 profile 內。exporter 會把它併進有效設定，但不會產生任何 route。tenant 欄空白，Field 為 `<檔案>:<鍵路徑>`（例如 `_profiles.yaml:profiles.p1._routing`）；訊息指引改寫到根目錄的 `_routing_defaults`、`_routing_profiles.yaml` 或租戶自己的檔 |
+| `routing_in_unread_location` | error | `_routing` 或 `_routing_*` 寫在 generator 不讀的位置：任一層 `_defaults.yaml` 的 `defaults:` 區塊內、沒有 `defaults:` 包裝的 `_defaults.yaml` 頂層（根目錄頂層的 `_routing_defaults` / `_routing_enforced` 是合法寫法，不報）、根目錄平台檔 `profiles:` 的某個 profile 內。exporter 會把它併進有效設定，但不會產生任何 route。tenant 欄空白，Field 為 `<檔案>:<鍵路徑>`（例如 `_profiles.yaml:profiles.p1._routing`）；訊息指引改寫到根目錄的 `_routing_defaults`、`_routing_profiles.yaml` 或租戶自己的檔。⚠️ **根目錄** `_defaults.yaml` 的 `defaults:` 區塊帶 `_routing*` 時 exporter 會 decode 失敗、整份丟掉，這種寫法以 exit 3（`parse_failed`）呈現，不出本 finding；子目錄的 `defaults:` 區塊才會出本 finding。另外，`_routing: disable` 的租戶遇到 `--required-fields _routing*` 仍報 `missing_required`，訊息會註明是明示停用 |
 
 這些 finding 不會把檔案列進 exit 3；語法壞到 exporter 讀不了的平台檔仍只以 exit 3 點名一次。
 

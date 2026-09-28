@@ -56,6 +56,27 @@ func TestTenantBlock_OverlayThenTenantFilePerKey(t *testing.T) {
 	}
 }
 
+// YAML merge keys are expanded the decoder's way (#2291 review): inside an
+// entry (`<<: *base`) and at the `tenants:` level, an explicit key winning
+// over a merged one whole.
+func TestLoadRoot_OverlayExpandsMergeKeys(t *testing.T) {
+	t.Parallel()
+	dir := writeRoot(t, map[string]string{
+		"_platform.yaml": "base: &b {_routing: {receiver: {type: slack}}, _routing_profile: p}\n" +
+			"shared: &s {ta: {_routing_profile: from-merge}, tb: {_routing_profile: from-merge}}\n" +
+			"tenants:\n  <<: *s\n  tb: {<<: *b, _routing_profile: own}\n  tc: {<<: *b}\n",
+	})
+	layers, _, _ := LoadRoot(dir, nil)
+	want := map[string]map[string]any{
+		"ta": {"_routing_profile": "from-merge"},
+		"tb": {"_routing": map[string]any{"receiver": map[string]any{"type": "slack"}}, "_routing_profile": "own"},
+		"tc": {"_routing": map[string]any{"receiver": map[string]any{"type": "slack"}}, "_routing_profile": "p"},
+	}
+	if !reflect.DeepEqual(layers.Overlay, want) {
+		t.Errorf("overlay = %#v\nwant %#v", layers.Overlay, want)
+	}
+}
+
 func TestLoadRoot_SkippedFileContributesNoOverlay(t *testing.T) {
 	t.Parallel()
 	dir := writeRoot(t, map[string]string{
@@ -87,6 +108,10 @@ func TestUnreadRouting(t *testing.T) {
 		skip  string
 		want  []string
 	}{
+		// Function level only: the exporter's decode rejects a ROOT
+		// carrier whose `defaults:` holds a `_routing*` mapping, so da-guard
+		// ends such a tree in exit 3 (parse_failed) and skips this file —
+		// see routing_source_test.go parse-failed-defaults-gets-no-finding.
 		{"wrapped-root-block", map[string]string{
 			"_defaults.yaml": "defaults:\n  cpu: 1\n  _routing: {receiver: {type: slack}}\n  _routing_defaults: {}\n",
 		}, "", []string{"_defaults.yaml:defaults._routing", "_defaults.yaml:defaults._routing_defaults"}},
