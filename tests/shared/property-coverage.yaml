@@ -103,6 +103,18 @@ modules:
       strict_load_exporter_keys: "strict_safe_load driven with StrictExporterKeyLoader (#2114 × #2123); identity matrix, python/object refusal and parser pinned in tests/shared/test_yaml_strict_loader.py; key text pinned in tests/shared/test_tenant_id_yaml_spelling_parity.py"
       strict_load_all_exporter_keys: "strict_safe_load_all driven with StrictExporterKeyLoader (#2114 × #2123); same pins as strict_load_exporter_keys"
       load_yaml_file_strict_exporter_keys: "File-reading twin of load_yaml_file_strict with exporter keys (#2114 × #2123); I/O-bound, contract pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
+      # #2164 quoting of string fields. The verdict is PyYAML's resolver ×
+      # the repo's JSON Schemas; a generator would re-derive both from the
+      # code under test, so the tokens and schema shapes are example-pinned.
+      compose_all_nodes: "Thin driver over a strict loader's check_node/get_node (#2164); exercised by every pin in tests/shared/test_yaml_misread_scalars.py"
+      find_misread_scalars: "Node-tree × schema walk (#2164); token matrix (quoted controls, y/n, bool field, nullable field, enum, sequence, cross-file $ref, alias memo, schema-only verdict flip) pinned in tests/shared/test_yaml_misread_scalars.py"
+      schema_scalar_types: "Scalar-type union over schema branches (#2164); string / boolean / mixed verdicts pinned in tests/shared/test_yaml_misread_scalars.py"
+      MisreadScalar.message: "Operator-facing text (#2164); suggestion shapes (key / sequence item / null) pinned in tests/shared/test_yaml_misread_scalars.py"
+      _schema_expand: "$ref / allOf / anyOf / oneOf expansion (#2164); cross-file $ref and unloaded-ref KeyError pinned in tests/shared/test_yaml_misread_scalars.py"
+      _schema_key_children: "properties / patternProperties / additionalProperties child lookup (#2164); exercised through find_misread_scalars pins"
+      _schema_item_children: "items / additionalItems child lookup (#2164); sequence-item pin in tests/shared/test_yaml_misread_scalars.py"
+      _schema_pointer: "JSON-pointer fragment lookup (#2164); exercised through every $ref in the shipped schemas"
+      _json_type_of: "Python value → JSON type name for const/enum (#2164); enum pin (_severity_dedup) in tests/shared/test_yaml_misread_scalars.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:

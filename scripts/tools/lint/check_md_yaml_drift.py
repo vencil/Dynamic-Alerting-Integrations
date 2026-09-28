@@ -566,6 +566,13 @@ class MdYamlDriftChecker:
         issues = []
         checked = 0
         by_kind: Dict[str, int] = {}
+        # #2164: platform-defaults.schema.json `$ref`s the tenant schema's
+        # routing definitions; jsonschema does not fetch that file itself.
+        from referencing import Registry, Resource
+        from referencing.jsonschema import DRAFT7
+        registry = Registry().with_resources(
+            (s["$id"], Resource.from_contents(s, default_specification=DRAFT7))
+            for s in (self.schema, self.platform_schema) if s.get("$id"))
 
         for rel_path, line_num, data in self.iter_config_units():
             schema, doc, kind = self._route(data)
@@ -586,7 +593,8 @@ class MdYamlDriftChecker:
             checks.extend(self._receiver_checks(data, kind))
             for active_schema, active_doc, active_kind in checks:
                 try:
-                    jsonschema.validate(active_doc, active_schema)
+                    jsonschema.validate(active_doc, active_schema,
+                                        registry=registry)
                 except jsonschema.ValidationError as e:
                     issues.append({
                         "file": rel_path, "line": line_num, "kind": active_kind,

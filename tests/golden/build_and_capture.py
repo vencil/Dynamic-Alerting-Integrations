@@ -307,6 +307,8 @@ _routing_defaults:
   receiver:
     type: "email"
     to: ["dba-oncall@example.com"]
+    smarthost: "smtp.example.com:587"
+    from: "alertmanager@example.com"
   group_wait: "30s"
 """)
     write(d / "tenants.yaml", """tenants:

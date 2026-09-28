@@ -248,7 +248,11 @@ echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 # when the file is absent — every generate-routes run with such a receiver
 # would then stop — so the schema must ship beside it.
 REPO_DATA_FILES=(
+    # #2164 — validate-config's yaml_quoting row reads the conf.d JSON
+    # Schemas (which fields are strings) beside the tool; paired with
+    # validate_config.py by REQUIRED_DATA_FILES.
     docs/schemas/tenant-config.schema.json
+    docs/schemas/platform-defaults.schema.json
     k8s/03-monitoring/configmap-rules-platform.yaml
     rule-packs/rule-pack-clickhouse.yaml
     rule-packs/rule-pack-db2.yaml

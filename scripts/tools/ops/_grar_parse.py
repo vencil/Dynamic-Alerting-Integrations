@@ -257,10 +257,23 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     if "_routing_enforced" in data:
         if is_defaults_file:
             raw = data["_routing_enforced"]
-            if isinstance(raw, dict) and raw.get("enabled", False):
+            # ⛔ #2164: `is True`, never truthiness. PyYAML reads an unquoted
+            # `n` / `y` as the STRING 'n' / 'y', and `'n'` is truthy, so
+            # `enabled: n` used to switch NOC routing ON at rc 0. Anything
+            # that is not a YAML boolean is a configuration error: recorded in
+            # `enforced_errors` (→ schema_warnings, blocking under
+            # `--validate`) and NOT enabled. A missing key stays "disabled".
+            enabled = raw.get("enabled", False) if isinstance(raw, dict) else None
+            if isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
-            elif isinstance(raw, dict) and not raw.get("enabled", False):
+            elif isinstance(raw, dict) and enabled is False:
                 pass  # explicitly disabled → None
+            elif isinstance(raw, dict):
+                result.setdefault("enforced_errors", []).append(
+                    f"  WARN: _routing_enforced in {fname}: 'enabled' must be "
+                    f"a YAML boolean (true / false), got "
+                    f"{type(enabled).__name__} {enabled!r} — platform-enforced "
+                    f"(NOC) routing is NOT enabled, skipping")
             else:
                 print(f"  WARN: _routing_enforced in {_f} must be a dict "
                       "with 'enabled: true', ignoring", file=sys.stderr)
@@ -816,6 +829,11 @@ def load_tenant_tree(
 
     # v2.1.0 ADR-007: Validate profile references
     schema_warnings.extend(_validate_profile_refs(parsed))
+
+    # #2164: a `_routing_enforced.enabled` that is not a YAML boolean. The
+    # line carries "WARN … skipping", so `--validate` (and validate-config's
+    # schema row) fail on it; render mode prints it and renders without NOC.
+    schema_warnings.extend(parsed.get("enforced_errors", []))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing
     if parsed["domain_policies"]:

@@ -17,6 +17,11 @@ Checks:
                     named `x.yaml` is invisible to it while the routing
                     reader does see it, so that one shape is a stderr WARN
                     and a PASS row here. Tracked separately.)
+  1b. Quoting      — An unquoted value in a field the JSON Schema types as a
+                    string, that PyYAML reads as a boolean / number / null
+                    (`channel: yes` → True, while the Go readers and
+                    Alertmanager read "yes"). The resolver's verdict and the
+                    schema's types decide; no word list (#2164)
   2. Schema        — Tenant keys validated against known defaults + reserved keys
   3. Routes        — Alertmanager route generation with --validate semantics
   4. Policy        — Webhook domain allowlist (if --policy provided)
@@ -70,6 +75,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -190,6 +196,11 @@ POLICY_ONLY_SCHEMA_HINT = (
     "problems — no unknown key was reported in this run. \u26d4 Ignore the "
     "generic advice about removing keys: fix the domain policy file the "
     "error names, then re-run.")
+SKIPPED_ENTRY_SCHEMA_HINT = (
+    "A line above ends in 'skipping': that setting was dropped as unusable, "
+    "not merely flagged. Fix the value it names — e.g. "
+    "`_routing_enforced.enabled` must be the YAML boolean true or false — "
+    "then re-run.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unknown — that is the platform's side missing, not a "
@@ -479,6 +490,84 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
 
 
 # ============================================================
+# Check 1b: Quoting of string fields (#2164)
+# ============================================================
+_TENANT_SCHEMA = "tenant-config.schema.json"
+_PLATFORM_SCHEMA = "platform-defaults.schema.json"
+
+
+def _find_schema(name: str) -> Path | None:
+    """Flat first (the da-tools image ships the schemas beside the tools —
+    build.sh REPO_DATA_FILES), then `docs/schemas/` under the project root.
+    Same lookup shape as `_grar_validate._find_platform_rules_configmap`."""
+    from _lib_compat import PROJECT_ROOT_MARKERS
+    here = Path(__file__).resolve().parent
+    if (here / name).is_file():
+        return here / name
+    for base in (here, *here.parents):
+        if any((base / m).exists() for m in PROJECT_ROOT_MARKERS):
+            candidate = base / "docs" / "schemas" / name
+            return candidate if candidate.is_file() else None
+    return None
+
+
+def check_yaml_quoting(config_dir: str) -> dict[str, object]:
+    """An UNQUOTED scalar in a string-typed field that PyYAML reads as
+    something else — `channel: yes` is True here, "yes" to the Go readers
+    and to Alertmanager (#2164). Tenant files are held to
+    tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
+    (the same selection `check_confd_schema` makes); other `_*` files have
+    no schema and are not read. Which words are ambiguous is PyYAML's own
+    resolver's verdict and which fields are strings is the schema's — see
+    `_lib_io.find_misread_scalars`; nothing is listed here.
+
+    A file that cannot be read is skipped: `yaml_syntax` already names it.
+    """
+    from _lib_io import compose_all_nodes, find_misread_scalars
+    from _lib_confd import is_defaults_document_name
+    schemas: dict[str, object] = {}
+    for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA):
+        path = _find_schema(name)
+        if path is None:
+            return _make_result(
+                "yaml_quoting", FAIL,
+                [f"{name} not found beside this tool or under docs/schemas/ "
+                 f"— the quoting check cannot run"], caller_error=True)
+        with open(path, encoding="utf-8") as fh:
+            schemas[name] = json.load(fh)
+    errors: list[str] = []
+    checked = 0
+    for fpath in iter_config_files(config_dir):
+        name = fpath.name
+        if is_defaults_document_name(name):
+            schema_name = _PLATFORM_SCHEMA
+        elif is_reserved_name(name):
+            continue
+        else:
+            schema_name = _TENANT_SCHEMA
+        try:
+            label = fpath.relative_to(Path(config_dir)).as_posix()
+        except ValueError:
+            label = name
+        try:
+            text = fpath.read_text(encoding="utf-8")
+            roots = list(compose_all_nodes(io.StringIO(text)))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError):
+            continue
+        checked += 1
+        for root in roots:
+            for hit in find_misread_scalars(root, schemas[schema_name],
+                                            schemas, schema_name):
+                errors.append(f"{label}:{hit.line}: {hit.message()}")
+    if errors:
+        return _make_result("yaml_quoting", FAIL, errors)
+    return _make_result(
+        "yaml_quoting", PASS,
+        [f"{checked} files checked: no unquoted value in a string field "
+         f"is read as a non-string"])
+
+
+# ============================================================
 # Check 2: Schema validation
 # ============================================================
 def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
@@ -499,6 +588,11 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
 
     policy_errors = [w for w in schema_warnings
                      if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)]
+    # #2164: the `--validate` predicate for "an entry was dropped as
+    # unusable" (`generate_alertmanager_routes._validate_mode`). Today only
+    # a non-boolean `_routing_enforced.enabled` puts one in schema_warnings;
+    # without this it was a WARN row at exit 0 while `--validate` failed.
+    skipped = [w for w in schema_warnings if "WARN" in w and "skipping" in w]
     if not schema_warnings:
         return _make_result("schema", PASS, ["No schema warnings"])
     # ⛔ Computed once, for BOTH exits. The first version wired it only to
@@ -519,6 +613,9 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
         if not [w for w in schema_warnings if w not in policy_errors]:
             hint = POLICY_ONLY_SCHEMA_HINT
         return _make_result("schema", FAIL, schema_warnings, hint=hint)
+    if skipped:
+        return _make_result("schema", FAIL, schema_warnings,
+                            hint=hint or SKIPPED_ENTRY_SCHEMA_HINT)
     return _make_result("schema", WARN, schema_warnings, hint=hint)
 
 
@@ -1144,6 +1241,13 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "quoting, colons), file encoding, or top-level shape.",
         "docs/getting-started/for-platform-engineers.md",
     ),
+    "yaml_quoting": (
+        "Quote each value listed above as it says. A plain yes / no / on / "
+        "off / true / 123 in a field the schema types as a string is read "
+        "as a boolean or number by PyYAML but as text by the exporter and "
+        "Alertmanager, so the tools disagree about your config.",
+        "docs/cli-reference.md#validate-config",
+    ),
     "schema": (
         "Remove unknown keys or add them to the schema. "
         "Run: da-tools explain-route --tenant <id> to inspect resolved config.",
@@ -1653,6 +1757,10 @@ def main() -> None:
 
     # 1. YAML syntax
     results.append(_run_check("yaml_syntax", check_yaml_syntax,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 1b. Quoting of string-typed fields (#2164)
+    results.append(_run_check("yaml_quoting", check_yaml_quoting,
                               args.config_dir, _config_dir=args.config_dir))
 
     # 2. Schema validation (--strict: domain-policy violations → FAIL)

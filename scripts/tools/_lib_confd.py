@@ -246,11 +246,24 @@ def is_defaults_name(name: str) -> bool:
     work exists to stop.
 
     ⛔ Do NOT reuse this for "is this a platform-defaults DOCUMENT to
-    schema-validate". That is a prefix question and keeps its own predicate
-    in `check_confd_schema`. Two questions that share a word are not one
-    predicate.
+    schema-validate". That is a prefix question and has its own predicate,
+    `is_defaults_document_name` below. Two questions that share a word are
+    not one predicate.
     """
     return name.lower() in ("_defaults.yaml", "_defaults.yml")
+
+
+def is_defaults_document_name(name: str) -> bool:
+    """A platform-defaults DOCUMENT — judged by platform-defaults.schema.json.
+
+    PREFIX, any casing (`_defaults.yaml`, `_defaults-multidb.yaml`,
+    `_DEFAULTS.YML` …): the answer to "which schema is this file held to",
+    not to "does the exporter merge it" (that is `is_defaults_name`). Moved
+    here from `check_confd_schema._is_defaults_file` (#2164) so the shipped
+    `validate-config` selects the same files that lint does without a second
+    copy of the rule; see that function for why it is not the exact match.
+    """
+    return has_yaml_extension(name) and name.lower().startswith("_defaults")
 
 
 def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":

@@ -85,7 +85,13 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 #     （不猜）；但少出貨「某一個」pack 時不會 unknown，而是該 pack 的 key 被
 #     報成「沒有告警讀它」——那是 fail-OPEN，所以逐檔列管。清單＝repo 裡引用
 #     alert_threshold: 的 pack，由 tests/ops/test_threshold_alerts.py 對帳。
+#   - validate_config.py: _find_schema() 先找 <module 同目錄>/<name>.schema.json
+#     （映像 flat layout），找不到才找 repo 的 docs/schemas/。缺檔時
+#     yaml_quoting 列 FAIL + caller_error（exit 2），不靜默略過（#2164）；
+#     platform-defaults 以 $ref 引用 tenant-config，所以兩份必須同船。
 REQUIRED_DATA_FILES: dict = {
+    "validate_config.py": ("tenant-config.schema.json",
+                           "platform-defaults.schema.json"),
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
     "_grar_validate.py": ("configmap-rules-platform.yaml",),

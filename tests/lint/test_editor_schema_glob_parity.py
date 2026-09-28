@@ -274,7 +274,8 @@ class _RecordingValidator:
     def __init__(self) -> None:
         self.seen: dict[str, str] = {}
 
-    def validate(self, doc, schema) -> None:
+    def validate(self, doc, schema, **_kwargs) -> None:
+        # **_kwargs: #2164 passes `registry=` (cross-file $ref resolution).
         self.seen[doc["rel"]] = schema["id"]
 
 
