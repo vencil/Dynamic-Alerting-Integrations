@@ -6,6 +6,12 @@ purpose: |
   db_type + owner + routing + metric_count rows, and an optional
   config-commit short-SHA footer.
 
+  #2068: a DEGRADED row (tenant-api #1680 — `data.config_error` set)
+  renders a "config file unusable" box with the reason INSTEAD of the
+  badges / pills / metadata rows: those fields are placeholders the
+  hook filled in (the file could not be loaded), not the tenant's
+  metadata, so showing them would read as an ordinary tenant.
+
   Originally inline in tenant-manager.jsx orchestrator's render
   (lines 615-711 pre-extraction). Was explicitly DEFERRED in PR #158
   Phase 2 because the props surface is wider than the other
@@ -51,62 +57,44 @@ function buildToolUrl(toolKey, tenantName) {
   return '?' + params.toString();
 }
 
-function TenantCard({
-  name,
-  data,
-  isSelected,
-  isHovered,
-  pendingPR,
-  modeColors,
-  onToggleSelect,
-  onHoverEnter,
-  onHoverLeave,
-}) {
+// #2068: tenant-api TenantSummary.config_error values (#1680). An
+// unrecognised value still renders — the raw code is always shown.
+function configErrorReason(code) {
+  switch (code) {
+    case 'unreadable':
+      return t('檔案無法讀取（例如斷掉的 symlink 或權限不足）', 'The file could not be read (e.g. a dangling symlink or a permission error)');
+    case 'not_regular_file':
+      return t('不是一般檔案（例如指向目錄的 symlink）', 'Not a regular file (e.g. a symlink to a directory)');
+    case 'malformed_yaml':
+      return t('內容不是合法的 YAML', 'The content is not valid YAML');
+    case 'invalid_config':
+      return t('YAML 語法可解析，但不是有效的租戶設定（例如結構不對或鍵重複）', 'Parses as YAML but is not a valid tenant config (e.g. wrong shape or duplicate keys)');
+    default:
+      return t('未知原因', 'Unknown reason');
+  }
+}
+
+// #2068: the "config file unusable" box on a degraded row.
+function ConfigErrorNotice({ name, code }) {
   return (
-    <article
-      tabIndex={0}
-      style={{
-        ...styles.card,
-        ...(isHovered ? styles.cardHover : {}),
-      }}
-      onMouseEnter={onHoverEnter}
-      onMouseLeave={onHoverLeave}
-      onFocus={onHoverEnter}
-      onBlur={onHoverLeave}
-      aria-label={`Tenant: ${name} — ${data.environment} ${data.operational_mode}`}
-    >
-      <input
-        type="checkbox"
-        checked={isSelected}
-        onChange={onToggleSelect}
-        style={styles.cardCheckbox}
-        aria-label={`Select ${name}`}
-      />
-      <div style={styles.cardTitle}>{name}</div>
-
-      <div>
-        <span style={{ ...styles.badge, ...styles.environmentBadge[data.environment] }}>
-          {data.environment.toUpperCase()}
-        </span>
-        <span style={{ ...styles.badge, ...styles.tierBadge[data.tier] }}>
-          {data.tier.toUpperCase()}
-        </span>
-        {/* v2.6.0: Pending PR indicator (ADR-011) */}
-        {pendingPR && (
-          <a href={pendingPR.html_url} target="_blank" rel="noopener noreferrer"
-            title={t('有待審核的 PR', 'Pending PR')}
-            style={{
-              ...styles.badge,
-              backgroundColor: 'var(--da-color-warning)',
-              color: 'white',
-              textDecoration: 'none',
-              fontSize: 'var(--da-font-size-xs)',
-            }}>
-            PR #{pendingPR.number}
-          </a>
-        )}
+    <div role="note" style={styles.configErrorBox} data-testid={`tenant-card-${name}-config-error`}>
+      <div style={{ fontWeight: 'var(--da-font-weight-semibold)' }}>
+        <span aria-hidden="true">⚠️ </span>{t('設定檔無法使用', 'Config file unusable')}
       </div>
+      <div>
+        {configErrorReason(code)} (<code>{code}</code>)
+      </div>
+      <div style={{ fontSize: 'var(--da-font-size-xs)' }}>
+        {t('環境、網域、模式等欄位無法得知。', 'Environment, domain, mode and the other fields are unknown.')}
+      </div>
+    </div>
+  );
+}
 
+// Rule-pack pills + metadata rows of a healthy card.
+function TenantMetadataRows({ data, modeColors }) {
+  return (
+    <>
       <div style={styles.pills}>
         {data.rule_packs?.map(pack => (
           <div key={pack} style={styles.pill}>{pack}</div>
@@ -151,8 +139,77 @@ function TenantCard({
         <span style={styles.rowLabel}>{t('指標數', 'Metrics')}</span>
         <span style={styles.rowValue}>{data.metric_count}</span>
       </div>
+    </>
+  );
+}
 
-      {data.last_config_commit && (
+function TenantCard({
+  name,
+  data,
+  isSelected,
+  isHovered,
+  pendingPR,
+  modeColors,
+  onToggleSelect,
+  onHoverEnter,
+  onHoverLeave,
+}) {
+  return (
+    <article
+      tabIndex={0}
+      style={{
+        ...styles.card,
+        ...(isHovered ? styles.cardHover : {}),
+      }}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      onFocus={onHoverEnter}
+      onBlur={onHoverLeave}
+      aria-label={data.config_error
+        ? `Tenant: ${name} — config error: ${data.config_error}`
+        : `Tenant: ${name} — ${data.environment} ${data.operational_mode}`}
+    >
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onChange={onToggleSelect}
+        style={styles.cardCheckbox}
+        aria-label={`Select ${name}`}
+      />
+      <div style={styles.cardTitle}>{name}</div>
+
+      {data.config_error && <ConfigErrorNotice name={name} code={data.config_error} />}
+
+      <div>
+        {!data.config_error && (
+          <>
+            <span style={{ ...styles.badge, ...styles.environmentBadge[data.environment] }}>
+              {data.environment.toUpperCase()}
+            </span>
+            <span style={{ ...styles.badge, ...styles.tierBadge[data.tier] }}>
+              {data.tier.toUpperCase()}
+            </span>
+          </>
+        )}
+        {/* v2.6.0: Pending PR indicator (ADR-011) */}
+        {pendingPR && (
+          <a href={pendingPR.html_url} target="_blank" rel="noopener noreferrer"
+            title={t('有待審核的 PR', 'Pending PR')}
+            style={{
+              ...styles.badge,
+              backgroundColor: 'var(--da-color-warning)',
+              color: 'white',
+              textDecoration: 'none',
+              fontSize: 'var(--da-font-size-xs)',
+            }}>
+            PR #{pendingPR.number}
+          </a>
+        )}
+      </div>
+
+      {!data.config_error && <TenantMetadataRows data={data} modeColors={modeColors} />}
+
+      {!data.config_error && data.last_config_commit && (
         <div style={{ ...styles.row, borderTop: 'none' }}>
           <span style={styles.rowLabel}>{t('提交哈希', 'Config')}</span>
           <span style={{ ...styles.rowValue, fontSize: 'var(--da-font-size-xs)', fontFamily: 'monospace' }}>

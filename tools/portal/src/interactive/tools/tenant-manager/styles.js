@@ -313,6 +313,16 @@ const styles = {
     staging: { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
     development: { backgroundColor: 'var(--da-color-success-soft)', color: 'var(--da-color-success)' },
   },
+  // #2068: a degraded row's "config file unusable" state (TenantCard).
+  configErrorBox: {
+    backgroundColor: 'var(--da-color-error-soft)',
+    border: '1px solid var(--da-color-error)',
+    borderRadius: 'var(--da-radius-md)',
+    color: 'var(--da-color-error-text)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    marginBottom: 'var(--da-space-3)',
+    fontSize: 'var(--da-font-size-sm)',
+  },
   tierBadge: {
     'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
     'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
