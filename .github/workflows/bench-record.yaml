@@ -35,7 +35,7 @@ permissions:
 jobs:
   bench-record:
     name: 1000-tenant baseline (informational)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
     # 45, not 30: the paired run measures two versions instead of one (ADR-032),
     # so the bench time roughly doubles and two more test binaries get compiled.
@@ -497,7 +497,7 @@ jobs:
     name: Nightly sustained-trend watchdog
     needs: bench-record
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -547,7 +547,7 @@ jobs:
     name: Paired trend verdict (summary only — opens/closes nothing)
     needs: bench-record
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # ⛔ THE JOB MUST NOT BE ABLE TO FAIL THE RUN, and this is not tidiness.
     # A watchdog finds prior nights with `gh run list --status <s>`, and

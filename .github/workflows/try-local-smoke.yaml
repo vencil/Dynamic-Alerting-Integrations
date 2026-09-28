@@ -16,7 +16,7 @@ permissions:
 jobs:
   smoke:
     name: try-local stack smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -65,7 +65,7 @@ jobs:
     name: file issue on 3+ consecutive failures
     needs: smoke
     if: failure() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check failure streak and open issue
         env:

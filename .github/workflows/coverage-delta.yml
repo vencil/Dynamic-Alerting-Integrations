@@ -40,7 +40,7 @@ permissions:
 jobs:
   delta:
     name: Post coverage delta comment
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Only proceed when the triggering CI run was on a pull_request and
     # actually finished (success OR failure — not cancelled/skipped).
     # `failure` is included on purpose since coverage moved to the

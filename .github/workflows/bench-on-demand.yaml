@@ -73,7 +73,7 @@ jobs:
       github.event.issue.pull_request
       && startsWith(github.event.comment.body, '/bench')
       && contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -153,7 +153,7 @@ jobs:
   bench:
     name: Interleaved bench vs merge-base (unprivileged, runs PR code)
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same budget as bench-gate-pr (identical workload; ~8-10 min nominal).
     timeout-minutes: 20
     permissions:
@@ -250,7 +250,7 @@ jobs:
     # Run even when bench failed (fail-visible reporting), but only for runs
     # the gate actually approved (gate skipped/failed ⇒ nothing to report).
     if: always() && needs.gate.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read        # default-branch checkout for the reporter script

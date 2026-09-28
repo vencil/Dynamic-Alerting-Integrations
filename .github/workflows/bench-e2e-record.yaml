@@ -80,7 +80,7 @@ jobs:
     # `inputs.*` are empty on `schedule:` — fall back to the dispatch
     # defaults everywhere they're consumed (here, env, summary, artifact).
     name: e2e harness (${{ inputs.fixture_kind || 'synthetic-v2' }} × ${{ inputs.count || '30' }} runs)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
     # 60 min budget: 1000-tenant typically finishes in ~5-8 min after the
     # bench-trigger sentinel fix, but 5000-tenant has not been measured

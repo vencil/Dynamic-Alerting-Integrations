@@ -54,7 +54,7 @@ jobs:
   # Job 1: Build & push threshold-exporter image + Helm chart
   # ----------------------------------------------------------------
   release-exporter:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/exporter/')
     steps:
       - uses: actions/checkout@v6
@@ -173,7 +173,7 @@ jobs:
   # Customer chooses install path at the GitHub Release page; see
   # docs/migration-toolkit-installation.md for the install matrix.
   release-da-tools:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/tools/')
     permissions:
       contents: write   # gh release create / upload
@@ -496,7 +496,7 @@ jobs:
   # Job 3: Build & push da-portal image (Interactive Tools Portal)
   # ----------------------------------------------------------------
   release-portal:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/portal/')
     steps:
       - uses: actions/checkout@v6
@@ -612,7 +612,7 @@ jobs:
   # format is version-bound; PROM_VERSION + amd64 digest == ci.yml's promtool gate
   # is CI-enforced (tests/preview/test_promtool_pin_parity.py).
   release-recipe-preview:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/recipe-preview/')
     permissions:
       contents: read
@@ -753,7 +753,7 @@ jobs:
   # Job 5: Build & push tenant-api image + Helm chart
   # ----------------------------------------------------------------
   release-tenant-api:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/tenant-api/')
     steps:
       - uses: actions/checkout@v6

@@ -38,7 +38,7 @@ jobs:
     # check by that exact name, so the PR checks list had two identically
     # named entries and a reviewer could not tell which one had failed.
     name: Config Diff (flat conf.d)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:

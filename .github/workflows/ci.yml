@@ -40,7 +40,7 @@ jobs:
   # runs everything.
   detect-changes:
     name: Detect CI Path Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # pull-requests: read is for dorny/paths-filter@v3 REST-API mode
     # (same grant + rationale as validate.yaml's detect job).
     permissions:
@@ -444,7 +444,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -779,7 +779,7 @@ jobs:
     # land on a watched path. Add "Lint Rule Packs" to branch protection
     # required checks to lock it in.
     name: Lint Rule Packs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1123,7 +1123,7 @@ jobs:
     # AC5: this job is the Critical->BLOCK gate for L2+L4 — add it to branch
     # protection required checks (see docs/internal/iac-lint-baseline.md).
     name: Container SAST (Helm L2 + raw k8s L4)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1207,7 +1207,7 @@ jobs:
     # gate job below (same pattern as go-tests), so this job can be
     # path-skipped without ever leaving the required check un-reported.
     name: Python Tests — run (${{ matrix.python }}, ${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions, same
@@ -1603,7 +1603,7 @@ jobs:
     # a verbatim copy of python-tests-run on purpose — every guard that reads
     # ci.yml (pinned versions, path filter, dep parity) keeps seeing them.
     name: Python Coverage (${{ matrix.python }}, ${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions, same
@@ -1960,7 +1960,7 @@ jobs:
     # that coverage-delta.yml turns into the PR comment, and the fail_under
     # floor from pyproject.toml [tool.coverage.report].
     name: Python Coverage (3.13)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [detect-changes, python-coverage]
     # `always()` so a shard whose tests failed still gets a combined report
     # (the shards upload `if: always()` for the same reason); skipped with
@@ -2043,7 +2043,7 @@ jobs:
     # If the Python matrix ever grows beyond 3.13, update this static
     # name together with the branch-protection entry (owner action).
     name: Python Tests (3.13)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
     needs: [detect-changes, python-tests-run]
@@ -2083,7 +2083,7 @@ jobs:
   # "Go Tests (1.26)" check name for branch protection.
   go-tests-threshold-exporter:
     name: Go Tests — threshold-exporter (${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated — the go-tests aggregate gate below (the
     # required check) treats this skip as PASS only when detect-changes
     # said Go was not needed.
@@ -2164,7 +2164,7 @@ jobs:
 
   go-tests-tenant-api:
     name: Go Tests — tenant-api (${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note).
     needs: detect-changes
     if: needs.detect-changes.outputs.go_changed == 'true'
@@ -2295,7 +2295,7 @@ jobs:
 
   go-tests-am-inhibit:
     name: Go Tests — alertmanager inhibit semantics
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). The
     # go filter includes k8s/03-monitoring/** + try-local/** because this
     # leg parses both hand-written Alertmanager configs.
@@ -2346,7 +2346,7 @@ jobs:
 
   go-tests-e2e-bench-receiver:
     name: Go Tests — e2e-bench receiver
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # #1280: the receiver's unit tests had no runner at all — the module is a
     # live service in tests/e2e-bench/docker-compose.yml, `Go Lint` type-checks
     # its _test.go since #1751, but nothing ever RAN them. Path-gated like the
@@ -2386,7 +2386,7 @@ jobs:
 
   go-tests-bench-filter:
     name: Go Tests — bench-filter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # #1873: scripts/tools/ops/bench_filter.go had no runner on any PR path —
     # on CI it runs only in bench-gate-release.yaml (release /
     # workflow_dispatch) and, on a night whose paired reference is unusable,
@@ -2441,7 +2441,7 @@ jobs:
     # permanently pending until the owner adds it. Aggregating keeps the gate
     # enforcing from the first green run.
     name: Go Tests (1.26)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
     needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-e2e-bench-receiver, go-tests-bench-filter]
@@ -2500,7 +2500,7 @@ jobs:
     # job — a required check matched to a path-gated job would sit permanently
     # pending whenever it path-skips.
     name: Portal Tests Run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
     # local npm build/test/dist-diff only — no writes, no PR/API access.
     permissions:
@@ -2518,7 +2518,7 @@ jobs:
         # a variable in the dist-reproducibility gate below — a fresh
         # `npm ci` under a different npm major can resolve a transitive dep
         # differently and re-hash a shared chunk, false-redding the gate.
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
@@ -2570,7 +2570,7 @@ jobs:
     # (owner action). New portal test jobs should join HERE (add to needs +
     # the loop) rather than each getting their own required check.
     name: Portal Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
     needs: [detect-changes, portal-tests-run]
@@ -2610,7 +2610,7 @@ jobs:
 
   lint-docs:
     name: Lint Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # No `needs: lint` (#1398): this is a required check, and a job whose
     # dependency failed reports `skipped`, which branch protection counts as a
     # pass — so while `Lint` was red, `make lint-docs` had no CI run at all.
@@ -2665,7 +2665,7 @@ jobs:
 
   federation-e2e:
     name: Federation E2E (ADR-020 IV-2j)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Dedicated job — the docker-compose federation request-path E2E
     # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
     # `make test` / pre-commit and is excluded from the coverage gate.
