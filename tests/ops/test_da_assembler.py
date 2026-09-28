@@ -283,9 +283,18 @@ class TestRenderCrFile:
         assert message in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    # Unquoted names YAML types as int / float / bool (PyYAML 1.1 resolver,
-    # measured): sigs.k8s.io/yaml hands them to the API server as a JSON
-    # number or bool, which the string field `metadata.name` rejects.
+    # Unquoted names YAML 1.1 (PyYAML resolver, measured) types as int /
+    # float / bool are a caller error. This is CLOSE TO, not the same as,
+    # what Kubernetes sees after YAML→JSON (sigs.k8s.io/yaml, go-yaml v2).
+    # Known differences, deliberately NOT asserted (the #2371 contract is
+    # "YAML 1.1 as PyYAML reads it", not "as Kubernetes reads it"):
+    #   `0o17`  PyYAML str (1.1 has no 0o)       go-yaml int
+    #   `1e3`   PyYAML str (1.1 float needs `.`) go-yaml float
+    #   `08`    PyYAML str (not valid octal)     go-yaml differs
+    #   `y`/`n` PyYAML str                       go-yaml v2 bool
+    #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
+    # Shapes let through here cannot be created in a cluster anyway (not a
+    # DNS-1123 name), and the name format itself is not checked.
     @pytest.mark.parametrize("name, kind", [
         pytest.param("42", "int", id="name-int"),
         pytest.param("8", "int", id="name-int-8"),
@@ -303,8 +312,9 @@ class TestRenderCrFile:
             self, name, kind, tmp_path, caplog):
         """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
 
-        比照 Kubernetes：CR 經 YAML→JSON，`010` 是 JSON number，API server
-        拒收（`metadata.name` 是字串欄位）。訊息要指名型別並叫人加引號。
+        以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
+        後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
+        加引號只讓它變成字串，名稱格式（DNS-1123）本工具不檢查。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -315,7 +325,8 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "metadata.name must be a string" in caplog.text
         assert f"read as {kind}" in caplog.text
-        assert f'quote it (name: "{name}")' in caplog.text
+        assert "Quoting makes it a string" in caplog.text
+        assert "DNS-1123" in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("spec", [
@@ -351,12 +362,16 @@ class TestRenderCrFile:
         pytest.param('"yes"', "yes", id="quoted-bool"),
         pytest.param('"null"', "null", id="quoted-null"),
         pytest.param("!!str 010", "010", id="tagged-str-int"),
+        # Only a PLAIN scalar is RawPlain: an explicit tag still builds a
+        # `date` object. Rendered `2024-01-01.yaml` before #2371 (rc 0).
+        pytest.param('!!timestamp "2024-01-01"', "2024-01-01",
+                     id="tagged-timestamp-date"),
     ])
     def test_string_name_renders_as_written(self, name, want, tmp_path):
-        """#2371：name 經 YAML→JSON 是字串者照原文收，檔名與檔頭用原文。
+        """#2371：字串 name 照原文收，檔名與檔頭用原文。
 
-        未加引號的日期／日期時間在 JSON 沒有對應型別，Kubernetes API server
-        收到的是字串，所以照收；加了引號（或 `!!str`）的任何值同理。
+        未加引號的日期／日期時間照原文收；加了引號（或 `!!str`）的任何值
+        同理。明示 `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(

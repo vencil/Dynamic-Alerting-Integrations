@@ -27,7 +27,7 @@ import signal
 import stat
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -397,9 +397,12 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
-#: Implicit tags of an unquoted scalar that JSON carries as a non-string
-#: (number / bool). `timestamp` is absent: JSON has no date type, so the
-#: API server receives the text.
+#: YAML 1.1 (PyYAML) implicit tags that make an unquoted name a caller
+#: error: int / float / bool. `timestamp` is absent — an unquoted date is
+#: kept as written. Close to what Kubernetes sees after YAML→JSON, NOT the
+#: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
+#: differently (#2371 review). Kubernetes' name format (DNS-1123) is not
+#: checked either.
 _NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
                                   for t in ("int", "float", "bool"))
 
@@ -465,19 +468,26 @@ def render_cr_file(
     # renders as `spec: {}` did before.
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
+    # An explicitly tagged `!!timestamp "2024-01-01"` is still a `date`
+    # object (only a plain scalar is RawPlain); it rendered to
+    # `2024-01-01.yaml` before #2371, so it stays accepted. A `datetime`
+    # does not: its str() is not the text the CR wrote.
+    if isinstance(name, date) and not isinstance(name, datetime):
+        name = name.isoformat()
     if not isinstance(name, str) or not name:
         log.error("%s: metadata.name must be a non-empty string", cr_path)
         return EXIT_CALLER_ERROR
-    # An unquoted name is RawPlain text; judge it as the API server does.
-    # sigs.k8s.io/yaml turns YAML into JSON: an unquoted date or datetime
-    # arrives as a string (accepted, kept as written), an unquoted `010` /
-    # `0x1F` / `1.5` / `yes` as a JSON number or bool, which the string
-    # field `metadata.name` rejects. So do we (null was refused above).
+    # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
+    # implicit typing: one read as int / float / bool is a caller error;
+    # a date / datetime is kept as written (see _NON_STRING_NAME_TAGS for
+    # where this differs from Kubernetes). Null was refused above.
     tag = _plain_tag(name) if isinstance(name, RawPlain) else None
     if tag in _NON_STRING_NAME_TAGS:
         log.error("%s: metadata.name must be a string, but unquoted %s is "
-                  "read as %s; quote it (name: \"%s\")", cr_path, name,
-                  tag.rsplit(":", 1)[-1], name)
+                  "read as %s (YAML 1.1). Quoting makes it a string; it "
+                  "must still be a valid Kubernetes object name (DNS-1123), "
+                  "which this tool does not check", cr_path, name,
+                  tag.rsplit(":", 1)[-1])
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)

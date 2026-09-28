@@ -588,10 +588,9 @@ def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
     `True.yaml`; the header named the same wrong CR.
 
-    #2371: as the API server does (YAML → JSON), an unquoted name YAML types
-    as a number / bool is refused (rc 2, nothing written: `want` None); a
-    quoted one, and an unquoted date / datetime (JSON has no date type, so
-    it arrives as a string), names the file as written."""
+    #2371: an unquoted name YAML 1.1 (PyYAML) types as a number / bool is
+    refused (rc 2, nothing written: `want` None); a quoted one, and an
+    unquoted date / datetime, names the file as written."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr(name, '    "010":\n      mysql_connections: "70"\n'),
                   encoding="utf-8")
