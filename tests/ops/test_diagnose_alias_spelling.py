@@ -95,6 +95,20 @@ def _cr_trees() -> "list[tuple[str, dict, dict]]":
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {legacy}: 40\n    {canon}: 50\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
          {canon: 50}),
+        # #2420 round 4: canonical null + legacy value in ONE tenant layer —
+        # the canonical null wins inside the layer, so /metrics falls back to
+        # the defaults (Go measured: 10), not the legacy 51.
+        ("tenant-writes-canonical-null-and-legacy-value",
+         {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: 10\n",
+          "tx.yaml": f"tenants:\n  tx:\n    redis_x: '1'\n    {canon}: null\n    {legacy}: '51'\n"},
+         {canon: 10, "mysql_connections": 80}),
+        # #2420 round 4: the elected profile writes both spellings — its
+        # canonical value is filled (Go measured: 20), not the legacy 21.
+        ("profile-writes-both-spellings",
+         {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: 10\n",
+          "_profiles.yaml": f"profiles:\n  p:\n    {canon}: '20'\n    {legacy}: '21'\n",
+          "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n    _profile: p\n"},
+         {canon: "20", "mysql_connections": 80}),
         # Not an alias shape: a tenant null on a plain threshold also falls
         # back to the defaults on /metrics.
         ("tenant-null-plain-threshold",

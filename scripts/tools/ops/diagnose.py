@@ -538,8 +538,13 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         overlay_across_spellings(resolved, drop_shadowed_spellings({
             k: v for k, v in profile_keys.items()
             if not k.startswith("_") and not _tenant_sets(k)}))
-    overlay_across_spellings(resolved, drop_shadowed_spellings(
-        {k: v for k, v in tenant_metric_keys.items() if v is not None}))
+    # Dedup BEFORE dropping nulls: a canonical null still shadows the legacy
+    # spelling in the same layer (canonical wins, then "" → defaults on
+    # /metrics); filtering first would let the legacy value through (#2420
+    # round 4).
+    overlay_across_spellings(resolved, {
+        k: v for k, v in drop_shadowed_spellings(tenant_metric_keys).items()
+        if v is not None})
 
     out: dict[str, object] = {
         "chain": chain,
