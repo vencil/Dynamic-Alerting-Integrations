@@ -2231,11 +2231,11 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
 #   * that `jsonschema` and `check_confd_schema` stay LAZY, in-function imports.
 #     Hoisting either to module level is invisible to this module, and it is
 #     what keeps `--help` working in an environment with no jsonschema.
-#   * the `files:` filter's `check_confd_schema.py` entry — hand-added, because
-#     the gate reaches that sibling by `import` and the filter test derives its
-#     inputs from imports, path constants and the pack roster within
-#     `search_dirs`, which has no `scripts/tools/lint` entry (#1413).
-#     ⚠️ NOT the schema JSON, which is still covered. Measured — deleting
+#   * (formerly listed here: the `files:` filter's `check_confd_schema.py`
+#     entry. #1413 closed that — the filter test now derives the gate's
+#     transitive import closure from a real `--ci` run, so deleting
+#     `confd_schema` from `files:` reddens it, naming that path.)
+#     ⚠️ The schema JSON was never in that gap. Measured — deleting
 #     `docs/schemas/platform-defaults\.schema\.json` from `files:` reddens
 #     `test_precommit_filter_covers_every_input_this_gate_reads`, naming that
 #     exact path, because `_PLATFORM_DEFAULTS_SCHEMA` is a module-level `Path`
@@ -4399,15 +4399,110 @@ def test_every_exempted_artifact_carries_a_reason_and_still_exists():
         assert reason and len(reason) > 20, (rel, reason)
 
 
-def test_precommit_filter_covers_every_input_this_gate_reads():
+_IMPORT_CLOSURE_DRIVER = r'''
+import ast, contextlib, importlib.util, io, json, runpy, sys
+from pathlib import Path
+
+script, repo, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+_FOREIGN = {"site-packages", "dist-packages", ".venv", "venv", "node_modules"}
+
+
+def in_repo(f):
+    try:
+        p = Path(f).resolve()
+        rel = p.relative_to(repo)
+    except (TypeError, ValueError, OSError):
+        return None
+    return None if _FOREIGN & set(rel.parts) else p
+
+
+# 1. Run it the way the hook runs it: `python3 <script> --ci`, so sys.path[0]
+#    is the script's directory and every insert the gate makes happens, and the
+#    lazy, in-function imports on the `--ci` path actually execute.
+sys.argv = [str(script), "--ci"]
+sys.path[0] = str(script.parent)
+rc = "no SystemExit"
+with contextlib.redirect_stdout(io.StringIO()), \
+        contextlib.redirect_stderr(io.StringIO()):
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        rc = exc.code
+executed = {p for m in list(sys.modules.values())
+            if (p := in_repo(getattr(m, "__file__", None)))}
+
+# 2. …then close over imports that did NOT execute on this run (a branch not
+#    taken today), resolved against the sys.path the gate left behind. Every
+#    import statement in every repo module reached so far, at any nesting
+#    depth, is resolved with find_spec — the interpreter's answer to "where
+#    would this come from", not a list of places to look.
+closure, frontier = set(executed), list(executed)
+while frontier:
+    tree = ast.parse(frontier.pop().read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names = [node.module]
+        else:
+            continue
+        for name in names:
+            try:
+                spec = importlib.util.find_spec(name.split(".")[0])
+            except (ImportError, ValueError):
+                continue
+            p = in_repo(spec and spec.origin)
+            if p and p.suffix == ".py" and p not in closure:
+                closure.add(p)
+                frontier.append(p)
+
+out.write_text(json.dumps({
+    "rc": rc,
+    "executed": sorted(p.relative_to(repo).as_posix() for p in executed),
+    "closure": sorted(p.relative_to(repo).as_posix() for p in closure),
+}))
+'''
+
+
+def _gate_repo_import_closure(tmp_path) -> set[str]:
+    """Every in-repo module the gate can reach by `import`, transitively.
+
+    Measured in a SUBPROCESS, not in this process: this module has already
+    imported the gate by spec and pytest has its own sys.path, so this
+    process's `sys.modules` answers a different question. The subprocess runs
+    the gate exactly as the hook's `entry:` does, collects every loaded module
+    whose `__file__` is inside the repo (site-packages / venvs excluded), then
+    closes over import statements that did not execute on that run.
+    """
+    import json
+
+    out = tmp_path / "closure.json"
+    subprocess.run(
+        [sys.executable, "-X", "utf8", "-c", _IMPORT_CLOSURE_DRIVER,
+         str(_SCRIPT), str(REPO_ROOT), str(out)],
+        cwd=REPO_ROOT, check=True, timeout=120)
+    got = json.loads(out.read_text(encoding="utf-8"))
+    # the gate must have actually RUN, or the lazy imports never fired and the
+    # executed set is only the module-level half
+    assert got["rc"] in (0, 1), got["rc"]
+    executed, closure = set(got["executed"]), set(got["closure"])
+    assert executed <= closure, sorted(executed - closure)
+    # the lazy, in-function import #1413's live instance is about: proof the
+    # run went down the `--ci` path rather than dying at argparse
+    assert "scripts/tools/lint/check_confd_schema.py" in executed, sorted(executed)
+    return closure
+
+
+def test_precommit_filter_covers_every_input_this_gate_reads(tmp_path):
     """⛔ A gate that reads an input its trigger filter does not cover does not
     run on the change that matters. This hook's own comment said exactly that
     about values.yaml while omitting `init_project.py` — a declared face since
     #1310 — so `da-tools init` shipped 16 misplaced keys while the gate that
     reads it never fired on the commit that changed them (#1218).
 
-    Derived, not restated: the inputs come from the module's own imports, its
-    path constants, AND the demand-side pack roster.
+    Derived, not restated: the inputs come from the gate's transitive in-repo
+    import closure (measured by the interpreter, #1413), its path constants,
+    the demand-side pack roster, AND the defaults-artifact scan.
 
     ⛔ That third source is not decoration. The first version of this test read
     only imports and module-level `Path` constants — and the DEMAND side is
@@ -4419,16 +4514,13 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
     the original TRK-337 failure shape (a new alert's commit not triggering the
     reachability gate) walked straight through it. Found by blind review.
 
-    A literal floor plus four named members keeps an empty or collapsed
+    A literal floor plus named members keeps an empty or collapsed
     derivation from satisfying this vacuously.
     """
-    import ast
     import pathlib
     import re
 
     import yaml
-
-    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
 
     inputs: set[str] = {"scripts/tools/lint/check_threshold_reachability.py"}
 
@@ -4436,34 +4528,18 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
     for p in gate.observed_map_lib.default_pack_paths():
         inputs.add(pathlib.Path(p).resolve().relative_to(REPO_ROOT).as_posix())
 
-    # every module it imports that lives in scripts/tools/ops — module level OR
-    # inside a function, since two of these faces import lazily
-    # ⛔ BOTH sibling directories the module puts on sys.path, not just `ops/`.
-    # The first version mapped import names against `scripts/tools/ops/` alone,
-    # so `_lib_compat` / `_lib_exitcodes` / `_lib_validation` — imported at
-    # module level from `scripts/tools/` via the `os.path.join(_THIS_DIR, "..")`
-    # insert — were invisible to a test whose name says "every input this gate
-    # reads" (blind review, round 2). `_lib_exitcodes` in particular owns the
-    # gate's exit-code contract, which is the whole meaning of `--ci`.
-    # ⛔ Hand-maintained, and that is the defect tracked as #1413: an import from
-    # anywhere else is invisible to all three derivations below, so the gate can
-    # grow an input that this pin cannot see. #1411 added exactly such an import
-    # (`scripts/ops/guard_defaults_scopes`) and had to extend this list by hand —
-    # which is the evidence #1413 was opened on, now with a live instance.
-    search_dirs = [REPO_ROOT / "scripts" / "tools" / "ops",
-                   REPO_ROOT / "scripts" / "tools",
-                   REPO_ROOT / "scripts" / "ops"]
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            names.add(node.module.split(".")[0])
-    for name in names:
-        for d in search_dirs:
-            if (d / f"{name}.py").is_file():
-                inputs.add((d / f"{name}.py").relative_to(REPO_ROOT).as_posix())
-                break
+    # every repo module the gate imports — TRANSITIVELY, from the interpreter's
+    # own import resolution, not from a list of directories to look in (#1413).
+    # ⛔ The previous derivation mapped the gate's import NAMES onto a
+    # hand-maintained `search_dirs` list. Each directory in it was added after a
+    # miss (`scripts/tools/` in blind review round 2, `scripts/ops/` by #1411),
+    # and the list was already stale again: `check_confd_schema` lives in
+    # `scripts/tools/lint/`, which it never named, so the one sibling lint the
+    # #1443 witness delegates to was covered only because someone hand-added it
+    # to `files:`. Removing it there left this test green. It also only read the
+    # gate's OWN imports — a module those modules import was invisible at any
+    # depth. See `_gate_repo_import_closure` for how the set is measured now.
+    inputs.update(_gate_repo_import_closure(tmp_path))
 
     # every repo file it reads through a module-level Path constant
     for value in vars(gate).values():
@@ -4489,6 +4565,8 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
                      "scripts/tools/ops/_registry_lib.py",
                      "scripts/tools/ops/onboard_platform.py",
                      "scripts/tools/_lib_exitcodes.py",
+                     "scripts/ops/guard_defaults_scopes.py",
+                     "scripts/tools/lint/check_confd_schema.py",
                      "helm/threshold-exporter/values.yaml"):
         assert expected in inputs, (expected, sorted(inputs))
     assert any(p.startswith("rule-packs/") for p in inputs), sorted(inputs)
