@@ -31,10 +31,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -168,9 +170,29 @@ func (f *mergeRetryFixture) attribution(t *testing.T) string {
 	return strings.Join(out, "\n")
 }
 
+// reloadStampSentinel is what armReloadStamp puts in the last-reload gauge.
+// The gauge holds whole unix SECONDS (SetLastReloadComplete stores
+// t.Unix()), and these tests run in milliseconds, so comparing the stamp
+// before and after a tick cannot see a reload that stamps within the same
+// second. A value no clock can produce can: any SetLastReloadComplete call
+// replaces it.
+const reloadStampSentinel = -1
+
+// armReloadStamp sets the last-reload gauge to reloadStampSentinel.
+func (f *mergeRetryFixture) armReloadStamp() {
+	f.m.getMetrics().lastReloadComplete.Set(reloadStampSentinel)
+}
+
+// reloadStamp is the last-reload gauge's value.
+func (f *mergeRetryFixture) reloadStamp() float64 {
+	return testutil.ToFloat64(f.m.getMetrics().lastReloadComplete)
+}
+
 // reloadActivity is what a reload run leaves in the metrics besides
 // attribution: reload duration and debounce batch samples, the debounce
-// fired count and the last-reload stamp. Two equal snapshots = no reload ran.
+// fired count and the last-reload stamp. Two equal snapshots = no reload ran
+// — for the stamp only if armReloadStamp ran before the first snapshot
+// (see reloadStampSentinel).
 func (f *mergeRetryFixture) reloadActivity(t *testing.T) string {
 	t.Helper()
 	keep := map[string]bool{
@@ -229,6 +251,7 @@ func TestReload_MergeReadFailure_RetriedOnNextEmptyTick(t *testing.T) {
 					r2, n2, counted := f.tick(t)
 					h2 := cachedMergedHash(f.m, mergeRetryTenant)
 					afterEdit := f.attribution(t)
+					f.armReloadStamp()
 					activity := f.reloadActivity(t)
 					f.failNested = false
 
@@ -251,6 +274,9 @@ func TestReload_MergeReadFailure_RetriedOnNextEmptyTick(t *testing.T) {
 					if entry == "tickOnce" {
 						if got := f.reloadActivity(t); got != activity {
 							t.Errorf("the empty tick ran a reload:\nbefore:\n%s\nafter:\n%s", activity, got)
+						}
+						if got := f.reloadStamp(); got != reloadStampSentinel {
+							t.Errorf("the empty tick stamped last-reload (%v), want the sentinel %v", got, reloadStampSentinel)
 						}
 					}
 
@@ -308,6 +334,7 @@ func TestReload_MergeReadFailure_PersistentRetriesOncePerTickLogsOnce(t *testing
 				f.failNested = true
 				f.tick(t)
 				afterEdit := f.attribution(t)
+				f.armReloadStamp()
 				activity := f.reloadActivity(t)
 				const failingTicks = 4
 				for i := 0; i < failingTicks; i++ {
@@ -340,6 +367,9 @@ func TestReload_MergeReadFailure_PersistentRetriesOncePerTickLogsOnce(t *testing
 				if entry == "tickOnce" {
 					if got := f.reloadActivity(t); got != activity {
 						t.Errorf("retry ticks ran a reload:\nbefore:\n%s\nafter:\n%s", activity, got)
+					}
+					if got := f.reloadStamp(); got != reloadStampSentinel {
+						t.Errorf("retry ticks stamped last-reload (%v), want the sentinel %v", got, reloadStampSentinel)
 					}
 				}
 
@@ -392,5 +422,117 @@ func TestReload_MergeParseFailure_NotRetried(t *testing.T) {
 				t.Errorf("empty tick re-ran the failing merge:\n%s", tail)
 			}
 		})
+	}
+}
+
+// parkedRetry marks tx for retry (a tenant-file edit whose recompute cannot
+// read the chain file), then starts the retry — a tickOnce on the unchanged
+// tree — on another goroutine and returns once it is parked inside its read
+// of the chain file. release lets it finish; done closes when it has.
+//
+// It replaces the fixture's read seam with one safe across goroutines
+// (atomics, a parking channel) before any goroutine starts.
+func parkedRetry(t *testing.T, f *mergeRetryFixture) (release func(), done <-chan struct{}) {
+	t.Helper()
+	var fail, park atomic.Bool
+	parked := make(chan struct{}, 1)
+	gate := make(chan struct{})
+	f.m.reloadMergeRead = func(p string) ([]byte, error) {
+		if p == f.nested {
+			if fail.Load() {
+				return nil, f.injected
+			}
+			if park.CompareAndSwap(true, false) {
+				parked <- struct{}{}
+				<-gate
+			}
+		}
+		return os.ReadFile(p)
+	}
+
+	f.edit(t, "chain")
+	fail.Store(true)
+	f.m.tickOnce()
+	fail.Store(false)
+	f.m.mu.RLock()
+	_, marked := f.m.hierarchy.mergeRetry[mergeRetryTenant]
+	f.m.mu.RUnlock()
+	if !marked {
+		t.Fatalf("fixture: tx is not marked for retry after the failing tick")
+	}
+
+	park.Store(true)
+	retried := make(chan struct{})
+	go func() { f.m.tickOnce(); close(retried) }()
+	<-parked
+	return func() { close(gate) }, retried
+}
+
+// TestReload_MergeRetry_ParkedAcrossReload: the retry and a reload must not
+// interleave. Deterministic: while the retry is parked inside its read, the
+// root platform file's entry for tx is edited and a second tickOnce starts
+// the reload that edit calls for; then the retry is released.
+//
+// Were the two to interleave, the reload would install the new merged_hash
+// and the released retry would then install the one it computed from the
+// OLD platform entry over it — and clear the retry mark, so no later tick
+// repairs it. What prevents it on this path is reloadMu: the retry takes it
+// (TryLock) for its whole run, so the reload waits behind it. The side
+// assertions pin exactly that. (hierarchy.gen would also catch this
+// interleaving if reloadMu did not; that guard is pinned by
+// TestReload_MergeRetry_ParkedAcrossDirectLoad.)
+func TestReload_MergeRetry_ParkedAcrossReload(t *testing.T) {
+	t.Parallel()
+	f := newMergeRetryFixture(t, "tickOnce")
+	release, retried := parkedRetry(t, f)
+	if f.m.reloadMu.TryLock() {
+		f.m.reloadMu.Unlock()
+		t.Errorf("the parked retry does not hold reloadMu")
+	}
+
+	f.edit(t, "platform")
+	reloaded := make(chan struct{})
+	go func() { f.m.tickOnce(); close(reloaded) }()
+	select {
+	case <-reloaded:
+		t.Errorf("the reload completed while the retry was parked (not excluded by reloadMu)")
+	case <-time.After(200 * time.Millisecond):
+		// Still waiting behind the retry, as it must be. (A reload that is
+		// NOT excluded completes in milliseconds; this wait can only miss a
+		// broken exclusion on a machine slower than that, never flag a
+		// working one.)
+	}
+	release()
+	<-retried
+	<-reloaded
+
+	f.m.tickOnce() // one more production tick: nothing may be left to repair
+	if got, want := cachedMergedHash(f.m, mergeRetryTenant), f.effectiveHash(t); got != want {
+		t.Errorf("merged_hash %.12s, /effective %.12s — the retry installed over a newer reload", got, want)
+	}
+}
+
+// TestReload_MergeRetry_ParkedAcrossDirectLoad pins the second guard,
+// hierarchy.gen. Load (the cold path) installs the hierarchy WITHOUT
+// reloadMu — in production only at startup, before WatchLoop starts, so no
+// production path reaches this interleaving today. The test calls Load
+// directly while the retry is parked: the retry, computed from the state
+// Load replaced, must then drop its result instead of installing it over
+// Load's.
+func TestReload_MergeRetry_ParkedAcrossDirectLoad(t *testing.T) {
+	t.Parallel()
+	f := newMergeRetryFixture(t, "tickOnce")
+	release, retried := parkedRetry(t, f)
+
+	f.edit(t, "platform")
+	if err := f.m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	release()
+	<-retried
+
+	f.m.tickOnce() // one more production tick: nothing may be left to repair
+	if got, want := cachedMergedHash(f.m, mergeRetryTenant), f.effectiveHash(t); got != want {
+		t.Errorf("merged_hash %.12s, /effective %.12s — the retry installed over a newer load", got, want)
 	}
 }

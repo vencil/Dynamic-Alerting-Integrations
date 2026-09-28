@@ -878,8 +878,12 @@ func (m *ConfigManager) recomputeMergedHashWith(tenantID, tenantFile string, def
 // started); the tick that succeeds writes one INFO line per tenant.
 //
 // A reload in progress owns the retry set (classifyTenant retries it), so
-// this path runs only if it can take reloadMu without waiting, and installs
-// only if no reload or cold load installed in between (hierarchy.gen).
+// this path runs only if it can take reloadMu without waiting — the guard
+// that keeps it from interleaving with a reload (pinned by
+// TestReload_MergeRetry_ParkedAcrossReload). It also installs only if
+// hierarchy.gen is unchanged since its snapshot: a second guard, for an
+// install that takes no reloadMu (a direct Load); see the gen field for why
+// no production path reaches it today and why it is kept.
 func (m *ConfigManager) retryFailedMergedHashes() {
 	m.mu.RLock()
 	pending := len(m.hierarchy.mergeRetry)
@@ -939,8 +943,9 @@ func (m *ConfigManager) retryFailedMergedHashes() {
 
 	m.mu.Lock()
 	if m.hierarchy.gen != gen {
-		// A reload or cold load installed meanwhile; its state (and its
-		// own retry set) supersedes what this was computed from.
+		// Something installed meanwhile without reloadMu (a direct Load —
+		// see hierarchyState.gen); its state, and its own retry set,
+		// supersede what this was computed from.
 		m.mu.Unlock()
 		return
 	}

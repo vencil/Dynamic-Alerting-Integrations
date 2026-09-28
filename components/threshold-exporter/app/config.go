@@ -115,6 +115,17 @@ type hierarchyState struct {
 	// gen counts installs of this state (reload, cold load, merged_hash
 	// retry). retryFailedMergedHashes installs only if it is unchanged since
 	// its snapshot, so a result computed from a superseded state is dropped.
+	//
+	// It is the SECOND guard, behind reloadMu: every reload holds reloadMu,
+	// and so does the retry, so under today's lock order the only install
+	// that can land between the retry's snapshot and its install is a
+	// direct Load (the cold path takes no reloadMu) — which production runs
+	// only at startup, before WatchLoop. No production path reaches it
+	// today. It stays because it is what keeps a retry from overwriting a
+	// newer state if an install ever runs outside reloadMu (a future caller
+	// of Load, or a change to the lock order). Pinned by
+	// TestReload_MergeRetry_ParkedAcrossDirectLoad, which calls Load
+	// directly; not exercised by any production-path test.
 	gen uint64
 
 	// unreachableInherited is tenantID → sorted keys that the tenant's
