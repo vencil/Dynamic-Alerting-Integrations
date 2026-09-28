@@ -24,7 +24,9 @@ What is deliberately not caught
 -------------------------------
 * ``subprocess`` with ``text=True`` and no encoding (owner ruling, #2005). The
   warning's filename is the product caller, so it is told apart by the stack:
-  any frame running in the ``subprocess`` module exempts it.
+  any frame running in the ``subprocess`` module exempts it. That class is
+  held statically instead, by ``check_open_encoding.py``'s subprocess rule
+  and its shrink-only ledger (#1374).
 * Warnings under ``tests/`` — test code, not product code.
 * Code running in a child process: a tool run via ``subprocess``, or a
   ``multiprocessing`` fork. The child's warning never reaches this process.

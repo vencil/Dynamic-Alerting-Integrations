@@ -958,15 +958,18 @@ repos:
         # motivation and cleanup arc.
 
       - id: open-encoding-audit
-        name: open() encoding= kwarg audit (PR-2.5 portability, FATAL)
+        name: open() / subprocess encoding= kwarg audit (PR-2.5 portability + #1374 ledger, FATAL)
         entry: python3 -X utf8 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding scripts components/da-tools tests
         language: python
         pass_filenames: false
-        files: ^(scripts|components/da-tools|tests)/.*\.py$
+        files: ^((scripts|components/da-tools|tests)/.*\.py|docs/internal/subprocess-encoding-baseline\.json)$
         # The scan roots in `entry` and the `files:` filter must name the
         # same trees. Without roots the tool falls back to its own
         # DEFAULT_PATHS, which leave out scripts/ outside scripts/tools/ —
         # edits there would trigger this hook and never be scanned.
+        # The subprocess ledger is in `files:` too: an edit to it alone must
+        # re-run the equality check, or a raised count would sit unnoticed
+        # until the next .py commit.
 
       - id: path-metadata-consistency-check
         name: Path/metadata consistency (warning-only)
