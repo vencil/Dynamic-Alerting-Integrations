@@ -39,7 +39,13 @@ type: application
 #         value keys, no container added or removed. ⚠️ REQUIRES ACTION: rebuild
 #         audit-sidecar/Dockerfile and push it as 3.0.8-2 BEFORE upgrading, or
 #         the mtail/logrotate containers hit ImagePullBackOff.
-version: 0.5.1
+# 0.5.2 — #1278: auditLog.image.tag 3.0.8-2 -> 3.0.8-3. mtail version unchanged;
+#         the BUILD changed again (Go 1.26.8 builder clears 8 stdlib CVEs,
+#         Alpine 3.23.6 runtime carries libcrypto3 3.5.8). Same reasoning as
+#         0.5.1: no digest knob, so only a tag change rolls the pods. PATCH.
+#         ⚠️ REQUIRES ACTION: rebuild audit-sidecar/Dockerfile and push it as
+#         3.0.8-3 BEFORE upgrading, or mtail/logrotate hit ImagePullBackOff.
+version: 0.5.2
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
