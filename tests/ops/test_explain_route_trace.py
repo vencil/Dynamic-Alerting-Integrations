@@ -503,6 +503,31 @@ class TestInhibitRulesStep:
             assert note in out and "TenantSilentWarning" in out
             assert "Inhibited:" not in out and "抑制:" not in out
 
+    def test_non_json_yaml_values_do_not_crash(self, capsys, tmp_path,
+                                               monkeypatch):
+        """An unquoted date loads as ``datetime.date``: both renderers must
+        still print the rule (rc 0), not raise ``TypeError``."""
+        base = tmp_path / "base.yml"
+        base.write_text(
+            "route: {receiver: ops}\nreceivers: [{name: ops}]\n"
+            "inhibit_rules:\n"
+            "- source_match: {severity: critical, since: 2020-01-01,"
+            " retries: 3, paged: true}\n"
+            "  target_match: {severity: info}\n"
+            "  equal: [tenant]\n", encoding="utf-8")
+        monkeypatch.setattr(er, "run_amtool_trace",
+                            lambda *_a, **_k: (None, "stubbed"))
+        conf = _tree(tmp_path)
+        args = ["--base-config", str(base)]
+        [rule] = [r for r in _trace(capsys, conf, *args)["steps"][3]
+                  ["inhibit_rules"] if "source_match" in r]
+        assert rule["source_match"] == {"severity": "critical",
+                                        "since": "2020-01-01",
+                                        "retries": 3, "paged": True}
+        assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+                        "--trace", *args]) == 0
+        assert '"since": "2020-01-01"' in capsys.readouterr().out
+
 
 @needs_amtool
 def test_ambiguous_route_path_does_not_guess_timing():

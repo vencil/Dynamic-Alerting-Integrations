@@ -940,10 +940,14 @@ def trace_alert_routing(
                                  f"({unknown})"),
                       "inhibit_rules": None})
     else:
+        # yaml.safe_load can yield non-JSON types (an unquoted date becomes
+        # datetime.date); normalise once here so the text and --json
+        # renderers both get JSON-safe values.
+        rules = yaml.safe_load(am_yml).get("inhibit_rules") or []
         steps.append({
             "step": 4, "action": "inhibit_rules",
             "detail": INHIBIT_NOTE,
-            "inhibit_rules": yaml.safe_load(am_yml).get("inhibit_rules") or [],
+            "inhibit_rules": json.loads(json.dumps(rules, default=str)),
         })
 
     # Step 5: receiver-type constraints, scoped like the generator's check

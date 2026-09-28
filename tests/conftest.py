@@ -243,9 +243,10 @@ def amtool_accepts(monkeypatch, tmp_path):
     """Put a fake ``amtool`` that accepts every config first on ``PATH``.
 
     #2311: validate-config's ``routes`` row reports WARN ("Not validated by
-    Alertmanager") when no amtool is on PATH, which is the state of every CI
-    runner. A test whose point is "a healthy tree is all PASS" uses this so
-    the assertion keeps its meaning. It sets the process ``PATH``, so an
+    Alertmanager") when no amtool is on PATH, as on a dev machine without it
+    (the CI Python Tests jobs install a real one). A test whose point is "a
+    healthy tree is all PASS" uses this so the assertion never depends on
+    which amtool, if any, is installed. It sets the process ``PATH``, so an
     in-process ``shutil.which`` and a child process both see it; a test that
     builds its own child ``env`` must prepend the returned directory itself.
     Returns that directory.
