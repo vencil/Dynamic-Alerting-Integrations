@@ -1510,7 +1510,7 @@ jobs:
         # installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit -c requirements/ci-constraints.txt
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -1895,7 +1895,7 @@ jobs:
         # installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit -c requirements/ci-constraints.txt
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
