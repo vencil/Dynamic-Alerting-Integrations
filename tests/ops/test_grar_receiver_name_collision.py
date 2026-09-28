@@ -145,7 +145,7 @@ class TestGeneratedNameCollision:
         assert row["status"] == vc.FAIL, row
         assert row["hint"] == vc.RECEIVER_COLLISION_ROUTES_HINT, row
 
-    def test_control_no_collision_is_unaffected(self, tmp_path):
+    def test_control_no_collision_is_unaffected(self, tmp_path, amtool_accepts):
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""
         d = tmp_path / "conf.d"
         d.mkdir()
@@ -167,8 +167,12 @@ class TestSharedPredicate:
 
     def test_both_callers_use_the_shared_function(self):
         import inspect
-        assert "blocking_generation_errors(" in inspect.getsource(gar._validate_mode)
-        assert "gen.blocking_generation_errors(" in inspect.getsource(vc.check_routes)
+        # #2311: the routes verdict moved one level up — both callers call the
+        # shared `evaluate_generated_config`, which calls the predicate.
+        assert "evaluate_generated_config(" in inspect.getsource(gar._validate_mode)
+        assert "gen.evaluate_generated_config(" in inspect.getsource(vc.check_routes)
+        assert "blocking_generation_errors(" in inspect.getsource(
+            gar.evaluate_generated_config)
         assert "gen.blocking_generation_errors(" in inspect.getsource(vc.check_schema)
 
     def test_collision_line_is_not_a_policy_error(self):

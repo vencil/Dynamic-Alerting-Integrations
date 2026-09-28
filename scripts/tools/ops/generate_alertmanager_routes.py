@@ -131,12 +131,21 @@ from _grar_render import (  # noqa: E402, F401
 from _grar_render import (  # noqa: E402
     AlertmanagerConfigRejected, amtool_gate,
 )
-# #2279: the shared "is this generation result unusable" predicate — used
-# here AND by validate_config (as `gen.blocking_generation_errors`), so the two
-# verdicts cannot drift apart (#2164). Used, so no F401 marker.
-from _grar_validate import (  # noqa: E402
-    blocking_generation_errors, is_receiver_name_collision,
+# #2311: the whole --validate verdict, shared with validate-config's routes
+# row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
+from _grar_render import evaluate_generated_config  # noqa: E402
+from _grar_render import (  # noqa: E402, F401  (read as `gen.…` by validate_config)
+    AMTOOL_ACCEPTED, AMTOOL_NOT_FOUND, AMTOOL_REJECTED, AMTOOL_UNUSABLE,
 )
+# Re-exported only (tests and callers read it as `gar.…`); the --validate
+# wording moved into _grar_render with the verdict it belongs to (#2311).
+from _grar_render import VALIDATE_AMTOOL_NOT_FOUND_NOTICE  # noqa: E402, F401
+# #2279: the shared "is this generation result unusable" predicate.
+# validate_config reads it as `gen.blocking_generation_errors`; --validate now
+# reaches it through `evaluate_generated_config` (#2311), so here it is a
+# re-export and carries the F401 marker.
+from _grar_validate import blocking_generation_errors  # noqa: E402, F401
+from _grar_validate import is_receiver_name_collision  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -156,17 +165,6 @@ def _policy_errors(all_warnings: list[str]) -> list[str]:
             if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
 
 
-# #2260: what --validate hands to amtool is assembled on the BUILT-IN base
-# (`--validate --base-config` stays a caller error, #1616), so a pass says
-# nothing about the operator's own base — the NOTICE / result lines say so.
-_VALIDATE_AMTOOL_WHAT = ("the generated config (assembled on the built-in "
-                         "default base, never on a --base-config)")
-VALIDATE_AMTOOL_NOT_FOUND_NOTICE = (
-    "NOTICE: amtool not found on PATH; --validate did NOT check the generated "
-    "config with Alertmanager's parser (that check assembles it on the "
-    "built-in default base, never on a --base-config)")
-
-
 def _assembly_failed(exc: ValueError, refusing: str) -> None:
     """A platform invariant refused the assembled config (#2260 / #2279).
 
@@ -181,61 +179,42 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     sys.exit(EXIT_VIOLATION)
 
 
-def _validate_with_amtool(routes: list[dict], receivers: list[dict],
-                          inhibit_rules: list[dict]) -> None:
-    """#2260: the last step of --validate — Alertmanager's own parser.
-
-    The generator's Python checks accept values Alertmanager refuses at load
-    time (a webhook URL ``http://[1]/``); before this, --validate said OK to a
-    tree that --output-configmap then refused. Same gate and same verdicts as
-    the write paths (#2219): rejected → rc 1, amtool unusable → rc 2, amtool
-    absent → a NOTICE and the rc is unchanged. Returns only when the run may
-    go on to print OK.
-    """
-    try:
-        cm_yaml = assemble_configmap(load_base_config(None), routes, receivers,
-                                     inhibit_rules)
-    except ValueError as exc:
-        _assembly_failed(exc, "validation cannot pass")
-    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
-    rc = amtool_gate(am_yml, what=_VALIDATE_AMTOOL_WHAT,
-                     refusing="report the config as valid",
-                     not_found_notice=VALIDATE_AMTOOL_NOT_FOUND_NOTICE)
-    if rc is not None:
-        sys.exit(rc)
-
-
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str]) -> None:
-    """Handle --validate mode: check for errors and exit."""
-    # Entries skipped as unusable + duplicate receiver names (#2279). ⛔ The
-    # predicate lives in _grar_validate and validate-config calls the same
-    # one: two copies of it drifted apart once already (#2164).
-    errors = blocking_generation_errors(all_warnings)
-    # ADR-007 --strict: domain-policy violations escalated to ERROR are
-    # blocking. (Without --strict these surface as WARN and never fail.)
-    errors.extend(_policy_errors(all_warnings))
-    # ADR-025 D1 regression tripwire: a generated inhibit rule must never target
-    # the Watchdog heartbeat. (The full base+generated set is enforced fail-closed
-    # at the render paths; this catches a generator-side regression early.)
-    for idx, _rule in find_watchdog_suppressing_inhibits(inhibit_rules):
-        errors.append(f"  WARN: generated inhibit_rules[{idx}] would suppress the "
-                      "Watchdog heartbeat (ADR-025) — skipping forbidden rule")
-    # Same early tripwire for the tenant-cannot-silence-platform invariant.
-    for idx, _rule, _lbls in find_tenant_silenceable_platform_inhibits(inhibit_rules):
-        errors.append(f"  WARN: generated inhibit_rules[{idx}] is tenant-triggered "
-                      f"and would suppress platform alert {_lbls.get('alertname')} "
-                      "— skipping forbidden rule")
+    """Handle --validate mode: check for errors and exit.
+
+    #2311: every verdict comes from ``evaluate_generated_config`` — the SAME
+    function validate-config's ``routes`` row calls, so the two cannot drift
+    apart (#2164 was two copies of one predicate doing exactly that). This
+    function only prints and exits; it decides nothing. The one input that
+    stays here is ``--strict``: its ADR-007 policy errors are blocking only
+    for this CLI's flag, and are handed in as ``extra_errors``.
+    """
+    verdict = evaluate_generated_config(
+        routes, receivers, inhibit_rules, all_warnings,
+        extra_errors=_policy_errors(all_warnings))
+    # Non-blocking lines the checks' helpers used to print directly (an
+    # un-gated equal-label, a degraded probe set): same stream, same text.
+    for w in verdict.warnings:
+        print(w, file=sys.stderr)
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
     print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "
           f"{inhibit_count} inhibit rule(s)")
-    if errors:
-        print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
-        for e in errors:
+    if verdict.errors:
+        print(f"FAIL: {len(verdict.errors)} error(s) found:", file=sys.stderr)
+        for e in verdict.errors:
             print(e, file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
-    _validate_with_amtool(routes, receivers, inhibit_rules)
+    if verdict.assembly_error is not None:
+        _assembly_failed(ValueError(verdict.assembly_error),
+                         "validation cannot pass")
+    # #2260: Alertmanager's own parser, same verdicts as the write paths
+    # (#2219): rejected → rc 1, amtool unusable → rc 2, amtool absent → a
+    # NOTICE and the rc is unchanged.
+    print(verdict.amtool.message, file=sys.stderr)
+    if verdict.exit_code is not None:
+        sys.exit(verdict.exit_code)
     print("OK: all configs valid")
     sys.exit(EXIT_OK)
 
