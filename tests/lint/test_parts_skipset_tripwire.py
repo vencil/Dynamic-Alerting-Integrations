@@ -66,7 +66,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._tree import REPO_ROOT, repo_files
+from _tree import REPO_ROOT, repo_files
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Exception table — exit-locked
