@@ -506,7 +506,10 @@ jobs:
 
       # Render the GitOps ConfigMap and validate it with Alertmanager's OWN
       # parser (amtool). The --validate step above only checks the assembled
-      # config as a Python dict — it cannot catch defects AM rejects at load
+      # config as a Python dict here (#2260 has it run amtool too, but amtool
+      # is not on this runner's PATH, so it prints a NOTICE and skips that,
+      # and it assembles on the built-in base, not the k8s one) — it cannot
+      # catch defects AM rejects at load
       # (e.g. email `to` as a YAML seq → "unmarshal !!seq into string", or a
       # missing SMTP `from` → "no global SMTP from set"). #838.
       # The amtool image is DERIVED from the deployment manifest (single source

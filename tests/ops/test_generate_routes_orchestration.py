@@ -1074,16 +1074,15 @@ class TestAssembleConfigmap:
         assert parsed["metadata"]["namespace"] == "custom-ns"
         assert parsed["metadata"]["name"] == "my-config"
 
-    def test_dedup_receivers(self):
-        """Tenant receivers with same name as base are not duplicated."""
+    def test_base_receiver_shadowing_a_generated_one_is_refused(self):
+        """#2279: this test used to pin the silent de-duplication — the base
+        receiver kept, the generated one of the same name DROPPED, rc 0. That
+        is the defect (alerts went to the base's stale endpoint), so the pin is
+        reversed: the shadow is a ValueError naming the receiver."""
         base = load_base_config(None)
-        # Add a receiver with the same name as in base
         receivers = [{"name": "default", "webhook_configs": [{"url": "https://x.com"}]}]
-        cm_yaml = assemble_configmap(base, [], receivers, [])
-        parsed = yaml.safe_load(cm_yaml)
-        am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
-        default_count = sum(1 for r in am_config["receivers"] if r["name"] == "default")
-        assert default_count == 1
+        with pytest.raises(ValueError, match=r"same name.*'default'"):
+            assemble_configmap(base, [], receivers, [])
 
 
 # ============================================================

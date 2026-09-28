@@ -131,6 +131,12 @@ from _grar_render import (  # noqa: E402, F401
 from _grar_render import (  # noqa: E402
     AlertmanagerConfigRejected, amtool_gate,
 )
+# #2279: the shared "is this generation result unusable" predicate — used
+# here AND by validate_config (as `gen.blocking_generation_errors`), so the two
+# verdicts cannot drift apart (#2164). Used, so no F401 marker.
+from _grar_validate import (  # noqa: E402
+    blocking_generation_errors, is_receiver_name_collision,
+)
 import yaml  # noqa: E402
 
 
@@ -150,11 +156,62 @@ def _policy_errors(all_warnings: list[str]) -> list[str]:
             if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
 
 
+# #2260: what --validate hands to amtool is assembled on the BUILT-IN base
+# (`--validate --base-config` stays a caller error, #1616), so a pass says
+# nothing about the operator's own base — the NOTICE / result lines say so.
+_VALIDATE_AMTOOL_WHAT = ("the generated config (assembled on the built-in "
+                         "default base, never on a --base-config)")
+VALIDATE_AMTOOL_NOT_FOUND_NOTICE = (
+    "NOTICE: amtool not found on PATH; --validate did NOT check the generated "
+    "config with Alertmanager's parser (that check assembles it on the "
+    "built-in default base, never on a --base-config)")
+
+
+def _assembly_failed(exc: ValueError, refusing: str) -> None:
+    """A platform invariant refused the assembled config (#2260 / #2279).
+
+    ``assemble_configmap`` raises ``ValueError`` for a CONFIG that must not
+    ship — a base receiver shadowing a generated one, an inhibit rule that
+    would silence a platform alert, … That is a verdict on the config (rc 1),
+    and it must read as one: before this it escaped as a traceback, which
+    reads as the tool having crashed.
+    """
+    print(f"FAIL: the assembled Alertmanager config was refused — {refusing}:"
+          f"\n  {safe_label(str(exc))}", file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+def _validate_with_amtool(routes: list[dict], receivers: list[dict],
+                          inhibit_rules: list[dict]) -> None:
+    """#2260: the last step of --validate — Alertmanager's own parser.
+
+    The generator's Python checks accept values Alertmanager refuses at load
+    time (a webhook URL ``http://[1]/``); before this, --validate said OK to a
+    tree that --output-configmap then refused. Same gate and same verdicts as
+    the write paths (#2219): rejected → rc 1, amtool unusable → rc 2, amtool
+    absent → a NOTICE and the rc is unchanged. Returns only when the run may
+    go on to print OK.
+    """
+    try:
+        cm_yaml = assemble_configmap(load_base_config(None), routes, receivers,
+                                     inhibit_rules)
+    except ValueError as exc:
+        _assembly_failed(exc, "validation cannot pass")
+    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    rc = amtool_gate(am_yml, what=_VALIDATE_AMTOOL_WHAT,
+                     refusing="report the config as valid",
+                     not_found_notice=VALIDATE_AMTOOL_NOT_FOUND_NOTICE)
+    if rc is not None:
+        sys.exit(rc)
+
+
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str]) -> None:
     """Handle --validate mode: check for errors and exit."""
-    # Legacy fail category: config entries that were skipped as unusable.
-    errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
+    # Entries skipped as unusable + duplicate receiver names (#2279). ⛔ The
+    # predicate lives in _grar_validate and validate-config calls the same
+    # one: two copies of it drifted apart once already (#2164).
+    errors = blocking_generation_errors(all_warnings)
     # ADR-007 --strict: domain-policy violations escalated to ERROR are
     # blocking. (Without --strict these surface as WARN and never fail.)
     errors.extend(_policy_errors(all_warnings))
@@ -178,6 +235,7 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
         for e in errors:
             print(e, file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
+    _validate_with_amtool(routes, receivers, inhibit_rules)
     print("OK: all configs valid")
     sys.exit(EXIT_OK)
 
@@ -308,9 +366,13 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     supplied-but-unusable check to happen before the tenant scan, and a
     parameter that cannot be a path is the structural way to keep it there.
     """
-    cm_yaml = assemble_configmap(
-        base, routes, receivers, inhibit_rules,
-        namespace=namespace, configmap_name=configmap_name, strict=strict)
+    target = safe_label(output) if (output and not dry_run) else "stdout"
+    try:
+        cm_yaml = assemble_configmap(
+            base, routes, receivers, inhibit_rules,
+            namespace=namespace, configmap_name=configmap_name, strict=strict)
+    except ValueError as exc:
+        _assembly_failed(exc, f"nothing was written to {target}")
 
     # #2219: validate what Alertmanager will LOAD from what this run EMITS.
     # `cm_yaml` is the string that goes to -o / stdout below, unchanged; the
@@ -320,7 +382,6 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # text sees what the cluster will see. Gated before every emission
     # (file, stdout, dry-run preview): a rejected config is not written.
     am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
-    target = safe_label(output) if (output and not dry_run) else "stdout"
     rc = amtool_gate(am_yml,
                      what="the ConfigMap's alertmanager.yml",
                      refusing=f"write it to {target} (nothing was written)")
@@ -798,6 +859,19 @@ def main() -> None:
     # Validate mode
     if args.validate:
         _validate_mode(routes, receivers, inhibit_rules, all_warnings)
+
+    # #2279: two generated receivers with one name. Blocking in EVERY mode and
+    # with or without --strict — Alertmanager refuses such a config, and a
+    # merge that de-duplicates by name would silently keep only one of them.
+    # Decided before render / --apply's prompt / --output-configmap, so
+    # nothing is written or applied.
+    collisions = [w for w in all_warnings if is_receiver_name_collision(w)]
+    if collisions:
+        print(f"FAIL: {len(collisions)} duplicate receiver name(s) — nothing "
+              "was written or applied:", file=sys.stderr)
+        for e in collisions:
+            print(safe_label(e), file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
 
     # ADR-007 --strict outside --validate: abort before rendering/applying a
     # config that violates a domain policy ("--strict 模式：報錯終止").

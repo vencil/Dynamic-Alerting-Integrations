@@ -1739,7 +1739,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--output-configmap` | 產出完整 Kubernetes ConfigMap YAML | false |
 | `--base-config <FILE>` | 自訂 Alertmanager 基礎配置。**僅 `--output-configmap` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略 | 內建預設（**僅在未提供本旗標時**；供了但讀不到／不是合法 YAML／頂層不是 mapping 一律結束碼 2，不會退回預設） |
 | `--dry-run` | 僅輸出預覽，不寫入檔案。**`--validate` / `--apply` 不讀它**（結束碼 2） | false |
-| `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460） | false |
+| `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460）。其餘檢查都通過後，還會以**內建預設 base** 組出完整設定交給 `amtool`（見下方「Alertmanager 驗證」；#2260） | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
@@ -1756,7 +1756,9 @@ YAML 片段，包含 route、receivers、inhibit_rules。
 **ConfigMap 模式** (`--output-configmap`)：
 完整 Kubernetes ConfigMap YAML，含 global、route、receivers、inhibit_rules，可直接 `kubectl apply`。
 
-**Alertmanager 驗證（#2219）**：PATH 上有 `amtool` 時，`--output-configmap` 與 `--apply` 會對「實際要寫出／套用的那份」`alertmanager.yml` 跑 `amtool check-config`，被拒收就不寫檔、不 apply；沒有 `amtool` 則在 stderr 印 `NOTICE: ... was NOT validated by Alertmanager`，其餘行為不變。Fragment 模式（不是完整設定）與 `--validate` 不做這項驗證。
+**Alertmanager 驗證（#2219、#2260）**：PATH 上有 `amtool` 時，`--output-configmap` 與 `--apply` 會對「實際要寫出／套用的那份」`alertmanager.yml` 跑 `amtool check-config`，被拒收就不寫檔、不 apply；沒有 `amtool` 則在 stderr 印 `NOTICE: ... was NOT validated by Alertmanager`，其餘行為不變。`--validate` 在其餘檢查都通過、印出 `OK` 之前，也會把產生的設定組進**內建預設 base**（不是你的 `--base-config`——`--validate` 從不讀它）交給 `amtool check-config`：拒收回 1、`amtool` 自身出錯回 2；沒有 `amtool` 時印一行 NOTICE 註明這件事，結束碼不變。所以 `--validate` 通過不代表你自己的 base 組出來也會通過，那要跑 `--output-configmap --base-config`。Fragment 模式（不是完整設定）不做這項驗證。⚠️ v2.9.0 映像的 `--validate` 不經 `amtool` <!-- image-caveat: v2.9.0 -->
+
+**Receiver 名稱不可重複（#2279）**：租戶 id 沒有字元限制，所以租戶 `<t>` 的 `routes[0]` receiver（`tenant-<t>-route-0`）可能和另一個叫 `<t>-route-0` 的租戶的主 receiver 同名（`-override-<n>` 同理）。兩個來源產生同名 receiver 時，所有模式都回 1、不寫檔、不 apply，不分 `--strict`，訊息點名雙方來源。`--output-configmap --base-config` 的 base 若有 receiver 和產生的 receiver 同名，也回 1、不寫檔（否則 base 那份會蓋掉 conf.d 那份）；平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 本來就讓 base 定義優先，不算在內。`--apply` 則照舊以這次產生的覆蓋叢集裡同名的 receiver。⚠️ v2.9.0 映像兩種情況都回 0 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
@@ -1772,7 +1774,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219） |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——印 `FAIL:`，不再噴 traceback（#2260） |
 | `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
@@ -1994,7 +1996,7 @@ da-tools validate-config --config-dir <path> [options]
 - YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組 <!-- image-caveat: v2.9.0 -->
 - **字串欄位的引號**（`yaml_quoting`）：JSON Schema 標為字串（含 enum）的欄位，值未加引號、而 PyYAML 把它讀成布林、數字或 null 時 FAIL——`channel: yes` 在 PyYAML 是 `True`，在 exporter 與 Alertmanager 是字串 `"yes"`，同一份檔各工具讀到不同的值。每筆列出檔案、行號與欄位路徑；解法是加引號（`channel: "yes"`）。租戶閾值也是字串欄位，所以 `mysql_connections: 70` 會被列出——寫成 `"70"`。租戶檔對照 `tenant-config.schema.json`，`_defaults*` 對照 `platform-defaults.schema.json`（其中 `_routing_defaults`／`_routing_enforced` 沿用租戶 schema 的 routing 定義）；其餘 `_*` 檔不讀。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定（所以 PyYAML 讀成字串的 `y`／`n` 不會被列出），哪些欄位是字串由 schema 決定（#2164）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - Schema 驗證（必需的 key、類型正確）。`_routing_enforced.enabled` 不是 YAML 布林（`n`、`'yes'`、`~` 等）時 FAIL：平台強制（NOC）路由**不會**啟用，`generate-routes --validate` 也對同一行回 1（#2164）。⚠️ v2.9.0 映像遇到非空字串會**啟用** NOC 路由 <!-- image-caveat: v2.9.0 -->
-- 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）
+- 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）。兩個來源產生同名 receiver 時 FAIL，與 `generate-routes --validate` 用同一個判定（#2279）。⚠️ v2.9.0 映像對同名 receiver 回報 PASS <!-- image-caveat: v2.9.0 -->
 - Policy 檢查（webhook 域名）——**只在給了 `--policy` 時才會出現這一列**
 - 自訂規則 lint（`rule-packs/` 的 deny-list）——**只在給了 `--rule-packs` 時**
 - Profile 參照（租戶的 `_profile` 指向的 profile 有沒有定義）

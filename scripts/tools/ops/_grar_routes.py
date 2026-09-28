@@ -39,6 +39,7 @@ from _grar_merge import (  # noqa: E402
     build_receiver_config,
 )
 from _grar_validate import (  # noqa: E402
+    receiver_name_collisions,
     route_entry_matchers,
     validate_receiver_domains,
 )
@@ -462,7 +463,8 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 # Main Route Generation (Tenant routing + inhibit rules)
 # ============================================================
 
-def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
+def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
+                         sources: list[tuple[str, str]] | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate tenant-specific Alertmanager routes and receivers.
 
     Iterates over all tenants and produces their main routing configuration,
@@ -482,6 +484,10 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
     Args:
         routing_configs: {tenant_name: routing_config_dict} resolved from defaults and overrides
         allowed_domains: optional fnmatch domain patterns for webhook URL validation (SSRF protection)
+        sources: when given, one ``(receiver_name, source)`` pair is appended
+          per receiver emitted, in the same order (#2279: the duplicate-name
+          check names where each receiver came from — the name alone is the
+          ambiguous thing).
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
@@ -525,6 +531,8 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains)
         warnings.extend(override_warnings)
         receivers.extend(override_receivers)
+        _record_sources(sources, override_receivers, tenant, "overrides",
+                        f"tenant-{tenant}-override-")
 
         # #2245：ADR-007 的 label 等值子路由（profile 或 tenant 的 `routes`），
         # 同樣掛在主 route 底下，排在 overrides 之後。
@@ -532,6 +540,8 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             expand_routing_routes(tenant, cfg, allowed_domains=allowed_domains)
         warnings.extend(label_warnings)
         receivers.extend(label_receivers)
+        _record_sources(sources, label_receivers, tenant, "routes",
+                        _route_receiver_name(tenant, ""))
 
         # Receiver name 由 tenant 推導
         receiver_name = f"tenant-{tenant}"
@@ -565,8 +575,26 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         receiver = {"name": receiver_name}
         receiver.update(am_config)
         receivers.append(receiver)
+        if sources is not None:
+            sources.append((receiver_name, f"tenant '{tenant}' main receiver"))
 
     return routes, receivers, warnings
+
+
+def _record_sources(sources: list[tuple[str, str]] | None, receivers: list[dict],
+                    tenant: str, field: str, prefix: str) -> None:
+    """Append ``(name, "tenant '<t>' <field>[<idx>]")`` per child receiver.
+
+    The index is read back from the name by stripping *prefix*, which is
+    unambiguous HERE because the tenant and the field are known — unlike
+    parsing a bare ``tenant-…-route-0`` name, which is what #2279 is about.
+    """
+    if sources is None:
+        return
+    for r in receivers:
+        name = r["name"]
+        idx = name[len(prefix):] if name.startswith(prefix) else "?"
+        sources.append((name, f"tenant '{tenant}' {field}[{idx}]"))
 
 
 def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[list[dict], list[dict]]:
@@ -769,6 +797,7 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     routes = []
     receivers = []
     all_warnings = []
+    sources: list[tuple[str, str]] = []
 
     # Platform Enforced Routing — NOC 永遠收到通知
     enf_routes, enf_receivers, enf_warnings = _build_enforced_routes(
@@ -776,13 +805,23 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     routes.extend(enf_routes)
     receivers.extend(enf_receivers)
     all_warnings.extend(enf_warnings)
+    for r in enf_receivers:
+        per_tenant = r["name"][len("platform-enforced-"):]
+        sources.append((r["name"], "_routing_enforced" if not per_tenant else
+                        f"_routing_enforced ({{{{tenant}}}} = '{per_tenant}')"))
 
     # Tenant routes（在 enforced route 之後）
     t_routes, t_receivers, t_warnings = _build_tenant_routes(
-        routing_configs, allowed_domains)
+        routing_configs, allowed_domains, sources=sources)
     routes.extend(t_routes)
     receivers.extend(t_receivers)
     all_warnings.extend(t_warnings)
+
+    # #2279：tenant id 沒有字元集限制，所以 `tenant-<t>` 可以等於另一個 tenant
+    # 的 `tenant-<t>-route-<i>`／`-override-<i>`。這裡是所有模式（含
+    # validate-config）唯一的組合點，所以在這裡檢查；阻擋判定見
+    # _grar_validate.blocking_generation_errors。
+    all_warnings.extend(receiver_name_collisions(sources))
 
     return routes, receivers, all_warnings
 

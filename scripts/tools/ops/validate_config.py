@@ -201,6 +201,13 @@ SKIPPED_ENTRY_SCHEMA_HINT = (
     "not merely flagged. Fix the value it names — e.g. "
     "`_routing_enforced.enabled` must be the YAML boolean true or false — "
     "then re-run.")
+# #2279: the generic routes advice ("check _routing … for invalid receiver
+# types") points at a receiver that is fine; what is wrong is its NAME.
+RECEIVER_COLLISION_ROUTES_HINT = (
+    "Two sources above generate a receiver of the same name — usually a "
+    "tenant whose id ends in -route-<n> or -override-<n> next to the tenant "
+    "it extends. Rename one of the tenants (or remove one of the entries); "
+    "the receivers themselves are not invalid.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unknown — that is the platform's side missing, not a "
@@ -599,7 +606,8 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     # unusable" (`generate_alertmanager_routes._validate_mode`). Today only
     # a non-boolean `_routing_enforced.enabled` puts one in schema_warnings;
     # without this it was a WARN row at exit 0 while `--validate` failed.
-    skipped = [w for w in schema_warnings if "WARN" in w and "skipping" in w]
+    # #2279: called, not re-spelled — the same function `_validate_mode` uses.
+    skipped = gen.blocking_generation_errors(schema_warnings)
     if not schema_warnings:
         return _make_result("schema", PASS, ["No schema warnings"])
     # ⛔ Computed once, for BOTH exits. The first version wired it only to
@@ -672,11 +680,15 @@ def check_routes(
     if captured_output:
         all_issues.extend(captured_output.split("\n"))
 
-    # Match --validate semantics: errors are WARNs with "skipping"
-    errors = [w for w in all_issues if "WARN" in w and "skipping" in w]
+    # --validate semantics, by calling the SAME predicate `_validate_mode`
+    # calls (#2164 / #2279): skipped entries and duplicate receiver names.
+    errors = gen.blocking_generation_errors(all_issues)
 
     if errors:
-        return _make_result("routes", FAIL, all_issues)
+        only_collisions = all(gen.is_receiver_name_collision(e) for e in errors)
+        return _make_result("routes", FAIL, all_issues,
+                            hint=RECEIVER_COLLISION_ROUTES_HINT
+                            if only_collisions else None)
     if all_issues:
         return _make_result("routes", WARN, all_issues)
     return _make_result("routes", PASS,
