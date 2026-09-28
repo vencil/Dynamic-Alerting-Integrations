@@ -5,7 +5,8 @@ Shows the four-layer merge expansion for each tenant's routing config:
   1. _routing_defaults  → global defaults
   2. routing_profiles[ref] → team/domain shared config
   3. tenant _routing → per-tenant overrides
-  4. _routing_enforced → NOC immutable override
+  4. _routing_enforced → NOC route rendered BESIDE the tenant's
+     (continue: true); shown as its own layer, never merged into the result
 
 Usage:
     explain_route.py --config-dir conf.d
@@ -35,11 +36,17 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from generate_alertmanager_routes import (  # noqa: E402
+    BaseConfigInputError,
     _build_tenant_routes,
+    _contains_tenant_placeholder,
+    _merge_tenant_routing,
     _parse_config_files,
+    _substitute_tenant,
+    generate_routes,
+    load_base_config,
     merge_routing_with_defaults,
 )
-from _grar_validate import _matcher_matches_labels  # noqa: E402
+from _grar_render import _inject_custom_alert_isolation  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
@@ -155,10 +162,10 @@ def explain_tenant_routing(
         "config": enforced_cfg,
     })
 
-    # Apply enforced on top
+    # G2 (#2293): the enforced route is an ADDITIONAL route (continue: true)
+    # the generator renders beside the tenant's, not an override of it — so
+    # its keys never replace the tenant's receiver / timing here.
     final = dict(merged)
-    for k, v in enforced_cfg.items():
-        final[k] = v
 
     # #2245: what the generator actually renders from `overrides` / `routes`.
     sub_routes, skipped = effective_sub_routes(tenant, merged)
@@ -357,25 +364,326 @@ def parse_label_args(raw: list[str] | None) -> dict[str, str]:
     return labels
 
 
+# ---------------------------------------------------------------------------
+# Alertmanager route-tree walk (#2293)
+# ---------------------------------------------------------------------------
+# The trace walks the tree the generator actually renders — platform top-level
+# routes, enforced NOC routes, tenant routes and their children — with
+# Alertmanager's own semantics, instead of first-matching the tenant's
+# children only. The matcher parser below is deliberately NOT
+# `_grar_validate._matcher_matches_labels`: that one serves the inhibit guards,
+# reads one matcher per string and answers True when it cannot parse, which is
+# the safe direction there and the wrong one for a routing verdict.
+
+# Alertmanager's built-in route defaults (config/config.go DefaultRouteOpts),
+# used only when the root route itself leaves a value unset.
+AM_DEFAULT_TIMING = {"group_wait": "30s", "group_interval": "5m",
+                     "repeat_interval": "4h"}
+_TIMING_KEYS = tuple(AM_DEFAULT_TIMING)
+_MATCHER_OPS = ("=~", "!~", "!=", "=")  # longest first: "=~" before "="
+_MATCHER_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+
+
+class MatcherParseError(ValueError):
+    """A matcher string Alertmanager's syntax does not allow."""
+
+
+def _read_quoted(text: str, start: int) -> tuple[str, int]:
+    """Read the double-quoted string at ``text[start]``.
+
+    Escapes as Alertmanager's matcher parser reads them: ``\\"`` → ``"``,
+    ``\\\\`` → ``\\``, ``\\n`` → newline; any other backslash stays literal.
+    Returns (value, index just past the closing quote).
+    """
+    out: list[str] = []
+    i = start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            out.append({"n": "\n", '"': '"', "\\": "\\"}.get(nxt, "\\" + nxt))
+            i += 2
+            continue
+        if ch == '"':
+            return "".join(out), i + 1
+        out.append(ch)
+        i += 1
+    raise MatcherParseError(f"unterminated quoted string in {text!r}")
+
+
+def _split_matcher_list(text: str) -> list[str]:
+    """Split ``a="x", b=~"y"`` / ``{a="x", b=~"y"}`` on the commas outside quotes."""
+    body = text.strip()
+    if body.startswith("{") or body.endswith("}"):
+        if not (body.startswith("{") and body.endswith("}")):
+            raise MatcherParseError(f"unbalanced braces in {text!r}")
+        body = body[1:-1]
+    parts: list[str] = []
+    buf: list[str] = []
+    quoted = False
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if quoted and ch == "\\" and i + 1 < len(body):
+            buf.append(body[i:i + 2])
+            i += 2
+            continue
+        if ch == '"':
+            quoted = not quoted
+        if ch == "," and not quoted:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    if quoted:
+        raise MatcherParseError(f"unterminated quoted string in {text!r}")
+    parts.append("".join(buf).strip())
+    if parts and parts[-1] == "":
+        parts.pop()  # a trailing comma is allowed
+    if any(p == "" for p in parts):
+        raise MatcherParseError(f"empty matcher in {text!r}")
+    return parts
+
+
+def _parse_one_matcher(text: str) -> tuple[str, str, str]:
+    """``name<op>value`` → (name, op, value), value unescaped."""
+    if text.startswith('"'):
+        name, i = _read_quoted(text, 0)
+    else:
+        m = _MATCHER_NAME_RE.match(text)
+        if not m:
+            raise MatcherParseError(f"invalid label name in {text!r}")
+        name, i = m.group(0), m.end()
+    rest = text[i:].lstrip()
+    op = next((o for o in _MATCHER_OPS if rest.startswith(o)), None)
+    if op is None:
+        raise MatcherParseError(
+            f"expected one of = != =~ !~ after the label name in {text!r}")
+    raw = rest[len(op):].strip()
+    if raw.startswith('"'):
+        value, end = _read_quoted(raw, 0)
+        if raw[end:].strip():
+            raise MatcherParseError(f"text after the quoted value in {text!r}")
+    elif '"' in raw:
+        raise MatcherParseError(f"unescaped double quote in {text!r}")
+    else:
+        value = raw
+    return name, op, value
+
+
+def parse_matchers(text: str) -> list[tuple[str, str, str]]:
+    """Parse one Alertmanager ``matchers:`` entry — possibly several matchers.
+
+    Raises MatcherParseError (or re.error for a bad regex value).
+    """
+    out = []
+    for part in _split_matcher_list(text):
+        name, op, value = _parse_one_matcher(part)
+        if op in ("=~", "!~"):
+            re.compile(f"(?:{value})")  # fail here, not at match time
+        out.append((name, op, value))
+    return out
+
+
+def _matcher_holds(name: str, op: str, value: str, labels: dict) -> bool:
+    """AM semantics: an absent label reads as ""; regexes are anchored."""
+    have = labels.get(name, "")
+    if op == "=":
+        return have == value
+    if op == "!=":
+        return have != value
+    hit = re.fullmatch(f"(?:{value})", have) is not None
+    return hit if op == "=~" else not hit
+
+
+def _route_matchers(node: dict) -> list[tuple[str, str, str]]:
+    """Every matcher of a route node: ``matchers`` plus legacy ``match`` /
+    ``match_re``. Raises MatcherParseError / re.error when one cannot be read."""
+    out: list[tuple[str, str, str]] = []
+    for entry in node.get("matchers") or []:
+        if not isinstance(entry, str):
+            raise MatcherParseError(f"matcher is not a string: {entry!r}")
+        out.extend(parse_matchers(entry))
+    for key, op in (("match", "="), ("match_re", "=~")):
+        for name, value in (node.get(key) or {}).items():
+            if op == "=~":
+                re.compile(f"(?:{value})")
+            out.append((str(name), op, str(value)))
+    return out
+
+
+def walk_route_tree(root: dict, labels: dict, *,
+                    warn=None) -> list[dict]:
+    """Every route an alert with *labels* is delivered through, in AM order.
+
+    Alertmanager's dispatch semantics (dispatch/route.go ``Route.Match``): a
+    node that matches tries its children in order; a matching child ends the
+    scan unless it sets ``continue: true``; a node none of whose children
+    match delivers the alert itself. The root always matches. ``receiver``,
+    ``group_by`` and the three timings are inherited from the parent unless a
+    node sets its own.
+
+    A matcher that cannot be parsed makes its route NOT match, and *warn* is
+    called once with a message (fail closed: the trace must not claim a
+    delivery the real Alertmanager would refuse to load).
+
+    Returns one dict per delivery: ``receiver``, ``group_by``, the timings,
+    ``path`` (child indices from the root) and ``nodes`` (the route dicts
+    along that path, root excluded).
+    """
+    seen_warn: set[str] = set()
+
+    def _matches(node: dict) -> bool:
+        try:
+            matchers = _route_matchers(node)
+        except (MatcherParseError, re.error) as exc:
+            msg = f"cannot parse a matcher of route {node.get('matchers')!r}: {exc}"
+            if warn and msg not in seen_warn:
+                seen_warn.add(msg)
+                warn(msg)
+            return False
+        return all(_matcher_holds(n, o, v, labels) for n, o, v in matchers)
+
+    def _opts(node: dict, parent: dict) -> dict:
+        opts = dict(parent)
+        if node.get("receiver"):
+            opts["receiver"] = node["receiver"]
+        if isinstance(node.get("group_by"), list):
+            opts["group_by"] = list(node["group_by"])
+        for key in _TIMING_KEYS:
+            if node.get(key):
+                opts[key] = str(node[key])
+        return opts
+
+    def _visit(node: dict, parent: dict, path: list[int],
+               nodes: list[dict]) -> list[dict]:
+        if nodes and not _matches(node):
+            return []
+        opts = _opts(node, parent)
+        hits: list[dict] = []
+        for idx, child in enumerate(node.get("routes") or []):
+            sub = _visit(child, opts, path + [idx], nodes + [child])
+            hits.extend(sub)
+            if sub and not child.get("continue", False):
+                break
+        if not hits:
+            hits = [dict(opts, path=path, nodes=nodes)]
+        return hits
+
+    start = {"receiver": None, "group_by": []}
+    start.update(AM_DEFAULT_TIMING)
+    return _visit(root, start, [], [])
+
+
+def _conf_receiver_types(routing_configs: dict[str, dict],
+                         enforced: dict | None) -> dict[str, str]:
+    """Receiver name → the ``receiver.type`` it was generated from (G1).
+
+    The rendered ``*_configs`` key cannot stand in for it: ``rocketchat``
+    renders to ``webhook_configs``, ``teams`` to ``msteams_configs``.
+    """
+    def _t(obj) -> str | None:
+        rtype = obj.get("type") if isinstance(obj, dict) else None
+        return rtype if isinstance(rtype, str) else None
+
+    types: dict[str, str | None] = {}
+    for tenant, cfg in routing_configs.items():
+        types[f"tenant-{tenant}"] = _t(cfg.get("receiver"))
+        for field, kind in (("overrides", "override"), ("routes", "route")):
+            entries = cfg.get(field)
+            for idx, entry in enumerate(entries if isinstance(entries, list) else []):
+                if isinstance(entry, dict):
+                    types[f"tenant-{tenant}-{kind}-{idx}"] = _t(entry.get("receiver"))
+    if enforced:
+        if _contains_tenant_placeholder(enforced):
+            for tenant in routing_configs:
+                sub = _substitute_tenant(enforced, tenant)
+                types[f"platform-enforced-{tenant}"] = _t(sub.get("receiver"))
+        else:
+            types["platform-enforced"] = _t(enforced.get("receiver"))
+    return {k: v for k, v in types.items() if v}
+
+
+def _receiver_type(name: str, receivers: dict[str, dict],
+                   conf_types: dict[str, str]) -> str:
+    """conf.d ``receiver.type``; for a receiver not generated from conf.d (the
+    base config's, the platform placeholders) the AM integration it carries,
+    or ``none`` for a name-only receiver."""
+    if name in conf_types:
+        return conf_types[name]
+    kinds = [k[:-len("_configs")] for k in receivers.get(name, {})
+             if k.endswith("_configs")]
+    return "+".join(kinds) if kinds else "none"
+
+
+def build_trace_tree(parsed: dict, base: dict | None = None
+                     ) -> tuple[dict, dict[str, dict], dict[str, str]]:
+    """The routing tree ``--output-configmap`` would render, minus the wrapping.
+
+    Same pipeline as the generator — the four-layer merge, ``generate_routes``
+    with the enforced routing, then ``_inject_custom_alert_isolation`` — hung
+    under the root of *base* (the built-in base when None, as ``--validate``
+    uses). Like ``assemble_configmap``, the base's own ``route.routes`` is
+    replaced; only its root receiver / group_by / timings are kept.
+
+    Returns (root route, receivers by name, conf.d receiver types by name).
+    """
+    routing_configs = _merge_tenant_routing(
+        parsed, parsed.get("routing_defaults") or {})
+    enforced = parsed.get("enforced_routing")
+    if not (isinstance(enforced, dict) and enforced.get("enabled") is not False):
+        enforced = None
+    routes, receivers, _warnings = generate_routes(
+        routing_configs, None, enforced_routing=enforced)
+    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
+    base = base if base is not None else load_base_config(None)
+    root = {k: v for k, v in (base.get("route") or {}).items() if k != "routes"}
+    root["routes"] = routes
+    by_name: dict[str, dict] = {}
+    for recv in list(base.get("receivers") or []) + receivers:
+        if isinstance(recv, dict) and recv.get("name"):
+            by_name.setdefault(recv["name"], recv)  # base wins, as in assembly
+    return root, by_name, _conf_receiver_types(routing_configs, enforced)
+
+
+def _describe_path(hit: dict) -> str:
+    """``route.routes[4] {tenant="<t>"} → routes[0] {team="x"}``; the root
+    when no route matched."""
+    if not hit["nodes"]:
+        return "root (no route matched)"
+    parts = []
+    for depth, (idx, node) in enumerate(zip(hit["path"], hit["nodes"])):
+        head = "route.routes" if depth == 0 else "routes"
+        matchers = ", ".join(str(m) for m in node.get("matchers") or [])
+        parts.append(f"{head}[{idx}] {{{matchers}}}")
+    return " → ".join(parts)
+
+
 def trace_alert_routing(
     parsed: dict,
     tenant: str,
     alertname: str,
     severity: str = "warning",
     extra_labels: dict | None = None,
+    *,
+    base_config: dict | None = None,
 ) -> dict:
     """Simulate how a specific alert would be routed through the pipeline.
 
-    Given a tenant + alert labels, traces the full decision path:
-      1. Which route node matches
-      2. Which receiver the alert lands on
-      3. Whether any inhibit rules would suppress it
-      4. Timing parameters applied
+    Given a tenant + alert labels, walks the WHOLE rendered route tree
+    (``build_trace_tree``) with Alertmanager's semantics (#2293):
+      1. The tenant's merged routing config
+      2. The route(s) the alert is delivered through, and their receiver
+      3. Whether the enforced NOC route takes a copy (only when it matches)
+      4. Whether any inhibit rules would suppress it
+      5. Domain policy against the receiver type actually reached
 
     ``extra_labels`` adds labels to the alert (e.g. ``metric_group`` for an
     ``overrides`` entry, or a ``routes`` match key). A key the trace sets
     itself (``alertname`` / ``severity`` / ``tenant``) raises ValueError
     rather than silently replacing the dedicated argument (#2264).
+    ``base_config`` is the loaded ``--base-config`` (None → built-in base).
 
     Returns dict with keys:
         tenant, alertname, severity, labels, steps, final_receiver,
@@ -409,50 +717,86 @@ def trace_alert_routing(
         "result": final_routing,
     })
 
-    # Step 2: Determine receiver
-    receiver_type = final_routing.get("receiver_type", "webhook")
-    receiver_url = final_routing.get("receiver_url", "")
-    channel = final_routing.get("channel", "")
-    receiver_desc = f"{receiver_type}"
-    if channel:
-        receiver_desc += f" → {channel}"
-    elif receiver_url:
-        receiver_desc += f" → {receiver_url}"
+    # Step 2: walk the rendered tree (#2293)
+    root, receivers, conf_types = build_trace_tree(parsed, base_config)
 
-    # #2245: the first rendered sub-route (overrides, then `routes`) whose
-    # matchers all hold takes the alert — Alertmanager's first-match rule
-    # among the children of the tenant's main route.
-    matched_sub = next(
-        (sub for sub in explanation.get("sub_routes", [])
-         if all(_matcher_matches_labels(m, alert_labels)
-                for m in sub.get("matchers", []))), None)
+    def _warn(msg: str) -> None:
+        print(f"  WARN: {safe_label(msg)} — treated as not matching",
+              file=sys.stderr)
+
+    hits = walk_route_tree(root, alert_labels, warn=_warn)
+    for hit in hits:
+        hit["receiver_type"] = _receiver_type(hit["receiver"] or "", receivers,
+                                              conf_types)
+        hit["route_path"] = _describe_path(hit)
+
+    def _is_enforced(hit: dict) -> bool:
+        return str(hit["receiver"] or "").startswith("platform-enforced")
+
+    enforced_hits = [h for h in hits if _is_enforced(h)]
+    primary = [h for h in hits if not _is_enforced(h)]
+
+    main_prefix = f"tenant-{tenant}"
+    matched_sub = None
+    if primary:
+        top = primary[0]
+        where = top["route_path"]
+        # A child of the tenant's main route: name it by its conf.d source.
+        nodes = top["nodes"]
+        if (len(nodes) == 2 and nodes[0].get("receiver") == main_prefix
+                and f'tenant="{tenant}"' in (nodes[0].get("matchers") or [])):
+            name = top["receiver"] or ""
+            for kind, field in (("override", "overrides"), ("route", "routes")):
+                head = f"{main_prefix}-{kind}-"
+                if name.startswith(head) and name[len(head):].isdigit():
+                    matched_sub = f"{field}[{name[len(head):]}]"
+            if matched_sub:
+                where = f"sub-route {matched_sub}"
+        receiver_type = top["receiver_type"]
+        receiver_desc = f"{receiver_type} → {top['receiver']} ({where})"
+        timing_src = top
+    else:
+        # Only continue:true routes matched: Alertmanager does NOT fall back
+        # to the root receiver then.
+        receiver_type = ""
+        receiver_desc = ("(none: only the enforced route matched; Alertmanager "
+                         "does not fall back to the root receiver)")
+        timing_src = enforced_hits[0]
+
     step2 = {
         "step": 2,
         "action": "match_receiver",
         "detail": f"Alert labels: {alert_labels}",
         "receiver_type": receiver_type,
         "receiver_desc": receiver_desc,
+        "route_path": primary[0]["route_path"] if primary else "",
+        "matched_routes": [
+            {"receiver": h["receiver"], "receiver_type": h["receiver_type"],
+             "route_path": h["route_path"]} for h in hits],
     }
     if matched_sub is not None:
-        receiver_type = matched_sub.get("receiver_type") or receiver_type
-        receiver_desc = (f"{receiver_type} → {matched_sub['receiver']} "
-                         f"(sub-route {matched_sub['source']})")
-        step2.update(receiver_type=receiver_type, receiver_desc=receiver_desc,
-                     matched_sub_route=matched_sub["source"])
+        step2["matched_sub_route"] = matched_sub
     steps.append(step2)
 
-    # Step 3: Check enforced routing (NOC override)
+    # Step 3: enforced routing (NOC) — shown only when it takes the alert
     enforced = parsed.get("enforced_routing")
     has_enforced = bool(enforced and isinstance(enforced, dict)
                         and enforced.get("enabled") is not False)
-    if has_enforced:
-        enforced_type = enforced.get("receiver_type", "webhook")
-        enforced_channel = enforced.get("channel", "")
+    if enforced_hits:
         steps.append({
             "step": 3,
             "action": "enforced_routing",
-            "detail": "NOC enforced route active — additional notification",
-            "enforced_receiver": f"{enforced_type} → {enforced_channel or '(default)'}",
+            "detail": "NOC enforced route matches — additional notification",
+            "enforced_receiver": ", ".join(
+                f"{h['receiver_type']} → {h['receiver']}" for h in enforced_hits),
+        })
+    elif has_enforced:
+        steps.append({
+            "step": 3,
+            "action": "enforced_routing",
+            "detail": ("NOC enforced route configured but not reached by this "
+                       "alert (its matchers exclude it, or an earlier "
+                       "continue:false route took the alert)"),
         })
     else:
         steps.append({
@@ -487,21 +831,24 @@ def trace_alert_routing(
             "inhibited": False,
         })
 
-    # Step 5: Domain policy check
+    # Step 5: Domain policy check — against the type of the tenant receiver
+    # the alert actually reaches (G1: `receiver.type`, not a legacy key).
+    tenant_types = [h["receiver_type"] for h in primary
+                    if str(h["receiver"] or "") == main_prefix
+                    or str(h["receiver"] or "").startswith(main_prefix + "-")]
     domain_policies = parsed.get("domain_policies", {})
     policy_issues: list[str] = []
     for domain_name, policy in domain_policies.items():
         constraints = policy.get("constraints", {})
         forbidden = constraints.get("forbidden_receiver_types", [])
         allowed = constraints.get("allowed_receiver_types", [])
-        if forbidden and receiver_type in forbidden:
-            policy_issues.append(
-                f"Domain '{domain_name}' forbids receiver type '{receiver_type}'"
-            )
-        if allowed and receiver_type not in allowed:
-            policy_issues.append(
-                f"Domain '{domain_name}' only allows {allowed}, got '{receiver_type}'"
-            )
+        for rtype in tenant_types:
+            if forbidden and rtype in forbidden:
+                policy_issues.append(
+                    f"Domain '{domain_name}' forbids receiver type '{rtype}'")
+            if allowed and rtype not in allowed:
+                policy_issues.append(
+                    f"Domain '{domain_name}' only allows {allowed}, got '{rtype}'")
 
     if policy_issues:
         steps.append({
@@ -511,6 +858,14 @@ def trace_alert_routing(
             "violations": policy_issues,
             "passed": False,
         })
+    elif domain_policies and not tenant_types:
+        steps.append({
+            "step": 5,
+            "action": "policy_check",
+            "detail": ("No tenant receiver on the alert's path — domain "
+                       "policies do not apply"),
+            "passed": True,
+        })
     else:
         steps.append({
             "step": 5,
@@ -519,17 +874,8 @@ def trace_alert_routing(
             "passed": True,
         })
 
-    # Timing — a matched sub-route's own values win; the rest are inherited
-    # from the tenant's main route (#2252 / #2245).
-    timing = {
-        "group_wait": final_routing.get("group_wait", "30s"),
-        "group_interval": final_routing.get("group_interval", "5m"),
-        "repeat_interval": final_routing.get("repeat_interval", "4h"),
-    }
-    if matched_sub is not None:
-        for key in timing:
-            if key in matched_sub:
-                timing[key] = matched_sub[key]
+    # Timing — what the delivering route ends up with after inheritance.
+    timing = {key: timing_src[key] for key in _TIMING_KEYS}
 
     return {
         "tenant": tenant,
@@ -569,26 +915,30 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
         icon = step_icons.get(step["action"], "▸")
         action_label = step["action"].replace("_", " ").title()
         lines.append(f"  {icon} Step {step['step']}: {action_label}")
-        lines.append(f"     {step['detail']}")
+        lines.append(f"     {safe_label(step['detail'])}")
+        if step.get("route_path"):
+            label = "路徑:" if lang == "zh" else "Path:"
+            lines.append(f"     {label} {safe_label(step['route_path'])}")
         if "receiver_desc" in step:
             label = "接收者:" if lang == "zh" else "Receiver:"
-            lines.append(f"     {label} {step['receiver_desc']}")
+            lines.append(f"     {label} {safe_label(step['receiver_desc'])}")
         if "enforced_receiver" in step:
             label = "強制接收者:" if lang == "zh" else "Enforced:"
-            lines.append(f"     {label} {step['enforced_receiver']}")
+            lines.append(f"     {label} {safe_label(step['enforced_receiver'])}")
         if step.get("violations"):
             for v in step["violations"]:
-                lines.append(f"     ⚠ {v}")
+                lines.append(f"     ⚠ {safe_label(v)}")
         lines.append("")
 
     # Final summary
+    receiver = safe_label(trace["final_receiver"])
     if lang == "zh":
-        lines.append(f"── 最終結果 ──")
-        lines.append(f"  接收者: {trace['final_receiver']}")
+        lines.append("── 最終結果 ──")
+        lines.append(f"  接收者: {receiver}")
         lines.append(f"  抑制: {'可能' if trace['inhibit_reason'] else '否'}")
     else:
-        lines.append(f"── Final Result ──")
-        lines.append(f"  Receiver: {trace['final_receiver']}")
+        lines.append("── Final Result ──")
+        lines.append(f"  Receiver: {receiver}")
         lines.append(f"  Inhibited: {'possible' if trace['inhibit_reason'] else 'no'}")
 
     t_info = trace["timing"]
@@ -633,6 +983,15 @@ _HELP = {
         "zh": "Alert 嚴重度（預設 warning）",
         "en": "Alert severity (default: warning)",
     },
+    "base_config": {
+        "zh": "追蹤用的 base Alertmanager YAML（只取 root 的 receiver／group_by／"
+              "timing；route.routes 會被產生的路由整份取代）。只在 --trace 下讀取；"
+              "未給時用內建 base（與 generate_alertmanager_routes --validate 相同）",
+        "en": "Base Alertmanager YAML for the trace (only the root receiver / "
+              "group_by / timings are used; route.routes is replaced by the "
+              "generated routes). Read only with --trace; omitted → the built-in "
+              "base (same as generate_alertmanager_routes --validate)",
+    },
     "label": {
         "zh": "追蹤用的額外 alert label，格式 KEY=VALUE（可多次指定；"
               "只在 --trace 下讀取；alertname/severity/tenant 請用各自的旗標）",
@@ -664,6 +1023,8 @@ def main(argv: list[str] | None = None) -> int:
                         help=_h("severity"))
     parser.add_argument("--label", action="append", dest="labels",
                         metavar="KEY=VALUE", help=_h("label"))
+    parser.add_argument("--base-config", default=None, metavar="PATH",
+                        help=_h("base_config"))
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
@@ -672,6 +1033,8 @@ def main(argv: list[str] | None = None) -> int:
     # silently ignored, so refuse it (argparse caller error → rc 2).
     if args.labels and not args.trace:
         parser.error("--label is read only with --trace")
+    if args.base_config is not None and not args.trace:
+        parser.error("--base-config is read only with --trace")
     try:
         extra_labels = parse_label_args(args.labels)
     except ValueError as exc:
@@ -689,6 +1052,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.tenants:
             print("ERROR: --trace requires --tenant", file=sys.stderr)
             return EXIT_CALLER_ERROR
+        try:
+            base_config = load_base_config(args.base_config)
+        except BaseConfigInputError as exc:
+            print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
         all_tenants = sorted(set(parsed["all_tenants"]))
         traces = []
         for t in args.tenants:
@@ -697,7 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity,
-                extra_labels=extra_labels)
+                extra_labels=extra_labels, base_config=base_config)
             traces.append(trace)
         if args.json:
             print(format_json_report(traces))

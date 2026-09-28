@@ -2912,13 +2912,13 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 路由合併管線除錯器 — 顯示每個 tenant 的四層路由合併展開（ADR-007），包括 `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`。
 
-`overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。
+`overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。`_routing_enforced` 只列在第 4 層、不併進 `final`：它在產出的設定裡是 tenant 路由之外**另一條** `continue: true` 路由，不會取代 tenant 自己的 receiver 或 timing（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。
 
 **用法**
 
 ```bash
 da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
 ```
 
 **參數**
@@ -2932,9 +2932,14 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--alertname` | 追蹤的 alert 名稱（搭配 `--trace`） | `GenericAlert` |
 | `--severity` | 追蹤的 alert 嚴重度（搭配 `--trace`） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
+| `--base-config` | 追蹤用的 base Alertmanager YAML：只取 root 的 receiver／`group_by`／timing，`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
+
+`--trace` 走的是 `--output-configmap` 會產出的**整棵**路由樹（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）：平台頂層路由（Watchdog、`component="custom"`、`component="synthetic-probe"`、`component="sentinel"`，皆 `continue: false`）、`_routing_enforced` 的 NOC 路由（`continue: true`）、tenant 主路由與其子路由，掛在 base 的 root 之下。比對照 Alertmanager 的規則：同層第一個命中者取走 alert，除非它設了 `continue: true`；子路由都沒命中就由父節點投遞；`receiver`、`group_by` 與三個 timing 沒寫就沿用父節點。matcher 支援 `=`、`!=`、`=~`、`!~`（正規式整串錨定）、值的跳脫（`\"`、`\\`、`\n`）與一個字串裡的多個 matcher（`a="x", b=~"y"` 或 `{…}`）；解析不了的 matcher 視為**不命中**，並在 stderr 印 `WARN`。
+
+輸出的 `Receiver:` 是實際投遞的 receiver，類型取自設定的 `receiver.type`（`Path:` 列出命中的路由）；`Enforced:` 只在 NOC 路由命中這則 alert 時出現；`Timing:` 是投遞那條路由繼承後的值；domain policy 以實際到達的 tenant receiver 類型判斷。`--json` 的第 2 步另有 `route_path` 與 `matched_routes`（依 Alertmanager 順序列出每一個投遞點）。⚠️ 正規式以 Python `re` 求值，與 Alertmanager 的 Go RE2 在少數語法上可能不同。
 
 **範例**
 
@@ -2953,6 +2958,9 @@ da-tools explain-route --config-dir conf.d/ --json
 
 # 追蹤一則帶 metric_group 的 alert 會落到哪個 receiver（overrides 的 metric_group、routes 的 match key 都用 --label 帶）
 da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alertname HighConnectionCount --label metric_group=connections
+
+# 用自己的 base Alertmanager 設定當 root（root 的 timing 會被沒寫 timing 的路由繼承）
+da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --severity critical --base-config base-alertmanager.yaml
 ```
 
 ---

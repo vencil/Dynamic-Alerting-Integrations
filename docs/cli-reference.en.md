@@ -2926,13 +2926,13 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
 
-`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config.
+`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
 
 **Usage**
 
 ```bash
 da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
 ```
 
 **Parameters**
@@ -2946,9 +2946,14 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--alertname` | Alert name to trace (with `--trace`) | `GenericAlert` |
 | `--severity` | Alert severity to trace (with `--trace`) | `warning` |
 | `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
+| `--base-config` | Base Alertmanager YAML for the trace: only the root receiver / `group_by` / timings are used, `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
 | `--json` | Output in JSON format | `false` |
 
 The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group` or a `routes` `match` key can only be supplied through `--label`, otherwise the trace always lands on the main receiver. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).
+
+`--trace` walks the **whole** route tree `--output-configmap` would render ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)): the platform top-level routes (Watchdog, `component="custom"`, `component="synthetic-probe"`, `component="sentinel"`, all `continue: false`), the `_routing_enforced` NOC route (`continue: true`), and the tenant's main route with its children, under the base's root. Matching follows Alertmanager: the first matching sibling takes the alert unless it sets `continue: true`; when no child matches, the parent delivers; `receiver`, `group_by` and the three timings are inherited from the parent unless set. Matchers support `=`, `!=`, `=~`, `!~` (regexes anchored to the whole value), value escapes (`\"`, `\\`, `\n`) and several matchers in one string (`a="x", b=~"y"` or `{…}`); a matcher that cannot be parsed is treated as **not matching** and a `WARN` is printed to stderr.
+
+In the output, `Receiver:` is the receiver the alert is delivered to, typed from the configured `receiver.type` (`Path:` lists the matched routes); `Enforced:` appears only when the NOC route matches this alert; `Timing:` is the delivering route's values after inheritance; the domain policy check uses the type of the tenant receiver actually reached. Step 2 in `--json` also carries `route_path` and `matched_routes` (every delivery, in Alertmanager order). ⚠️ Regexes are evaluated with Python `re`, which can differ from Alertmanager's Go RE2 on a few constructs.
 
 **Examples**
 
@@ -2967,6 +2972,9 @@ da-tools explain-route --config-dir conf.d/ --json
 
 # Trace which receiver an alert carrying metric_group lands on (pass an overrides metric_group or a routes match key via --label)
 da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alertname HighConnectionCount --label metric_group=connections
+
+# Use your own base Alertmanager config as the root (routes without timings inherit the root's)
+da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --severity critical --base-config base-alertmanager.yaml
 ```
 
 ---
