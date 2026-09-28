@@ -110,10 +110,13 @@ def _jobs_without_monitoring_ns():
 # provenance — the threshold-exporter Service in ns `monitoring`. Two DIFFERENT
 # declaration sites feed that one registry, and both must be named here so
 # verify_diff's text_map schedules this test when either moves:
-#   components/threshold-exporter/app/collector.go       — user_* + the two
-#       tenant_* info metrics + da_config_event (per-scrape ConstMetric)
-#   components/threshold-exporter/app/config_metrics.go  — the other 6 da_*
-#       (cumulative package-level collectors, registered onto the same registry)
+#   components/threshold-exporter/app/internal/scrape/collector.go — user_* +
+#       the two tenant_* info metrics + da_config_event +
+#       da_tenant_metrics_over_limit (per-scrape ConstMetric); wired in by
+#       components/threshold-exporter/app/collector.go
+#   components/threshold-exporter/app/internal/scrape/config_metrics.go — the
+#       other 5 da_* (cumulative collectors, registered onto the same registry);
+#       mutated through components/threshold-exporter/app/config_metrics.go
 #   components/threshold-exporter/app/main.go            — mounts the handler
 _THRESHOLD_EXPORTER_METRICS = (
     "da_config_blast_radius_tenants_affected_bucket",

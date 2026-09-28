@@ -18,14 +18,6 @@ type ConfigMetrics struct {
 	LastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful conf.d tree scan completion (e2e harness anchor T1; production stuck-detection)
 	LastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
 	FreeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
-	// #652: state-coded gauge for per-tenant cardinality cap-hit
-	// observability. Magnitude = max(0, count - effective_limit), so a
-	// tenant stuck 100-over-limit reports 100 (NOT a counter that
-	// scrape-frequency-couples to ~12,000/hour at 30s scrape interval).
-	// Reset+Set per scrape inside ThresholdCollector.Collect so vanished
-	// tenants are evicted automatically. See pkg/config/resolve.go
-	// ResolveAtWithStats for the producer side.
-	TenantMetricsOverLimit *prometheus.GaugeVec
 	// State-coded gauge: tenants that inherit a key existing ONLY in a
 	// subtree `_defaults.yaml`, which /effective reports and the collector
 	// cannot emit (#1976; was the #1521 divergence gauge until #1957 removed
@@ -126,10 +118,6 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_free_os_memory_total",
 			Help: "Count of explicit runtime/debug.FreeOSMemory() calls issued after a reload cycle (#459). Stays 0 unless the -free-os-mem-after-reload lever is enabled. Each increment is one forced GC + return-to-OS; correlate with go_memstats_heap_released_bytes to confirm the lever is reclaiming idle heap under sustained reload pressure.",
 		}),
-		TenantMetricsOverLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "da_tenant_metrics_over_limit",
-			Help: "State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
-		}, []string{"tenant"}),
 		SubtreeUndeliverableTenants: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_subtree_undeliverable_tenants",
 			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — one file decoded into different tenant sets by the two planes — is gone because both planes now judge a file with one decode. Known tenant-set exceptions that are NOT counted here: the incremental tenant-only reload keeping a broken file's last good tenants (#1980) and tenants declared in a _-prefixed file (#1982). SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
@@ -163,20 +151,9 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.LastScanComplete,
 		s.LastReloadComplete,
 		s.FreeOSMemory,
-		s.TenantMetricsOverLimit,
 		s.SubtreeUndeliverableTenants,
 		s.MaxTenantsPerFile,
 		s.MaxMappingKeys,
 		s.InitialLoadDuration,
-	}
-}
-
-// PublishTenantMetricsOverLimit is the per-scrape Reset + Set of
-// da_tenant_metrics_over_limit (#652): vanished tenants are evicted, and a
-// tenant back under the cap reads 0.
-func (s *ConfigMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
-	s.TenantMetricsOverLimit.Reset()
-	for tenant, magnitude := range perTenant {
-		s.TenantMetricsOverLimit.WithLabelValues(tenant).Set(float64(magnitude))
 	}
 }

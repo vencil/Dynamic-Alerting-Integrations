@@ -547,10 +547,9 @@ func TestCardinalityGuard(t *testing.T) {
 // MaxMetricsPerTenant override and falls back to
 // DefaultMaxMetricsPerTenant when zero, mirroring ResolveAt's truncation
 // logic. Compliant tenants MUST appear in the map with value 0 so the
-// collector's Reset+Set loop in PublishTenantMetricsOverLimit can clear
-// stale gauges when a tenant drops back below the cap; an absent entry
-// (which would also work in steady state) would leak across the
-// just-dropped-below-cap transition.
+// collector reports a tenant that just dropped back below the cap as 0;
+// an absent entry would drop that tenant's series instead, which reads
+// as "tenant gone" rather than "tenant compliant".
 
 func TestResolveAtWithStats_PerTenantOverLimitMagnitude(t *testing.T) {
 	t.Parallel()

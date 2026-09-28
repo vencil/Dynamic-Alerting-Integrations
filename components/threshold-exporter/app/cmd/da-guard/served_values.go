@@ -397,9 +397,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 // row the collector reports on carries its key.
 //
 // Not registered: the Go runtime collector the exporter adds — it reads no
-// config, so no tree can make it fail. The config metrics are a fresh set:
-// what can fail in them per scrape is the over-limit gauge the collector
-// publishes, and that goes through the set registered here.
+// config, so no tree can make it fail. The config metrics are a fresh set,
+// registered so a name the collector emits that collides with one of them
+// fails here as it would on /metrics; the collector writes nothing to them.
 func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string, err error,
 ) {
@@ -407,7 +407,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	var keyErr error
 	var results []emitResult
 	metrics := scrape.NewConfigMetrics()
-	collector := scrape.NewCollectorWithHooks(staticSource{cfg}, metrics.PublishTenantMetricsOverLimit, scrape.Hooks{
+	collector := scrape.NewCollectorWithHooks(staticSource{cfg}, scrape.Hooks{
 		Now: func() time.Time { return at },
 		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
 			var stats config.ResolveStats

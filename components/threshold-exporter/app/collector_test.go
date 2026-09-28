@@ -448,23 +448,42 @@ func TestCollector_Collect_ConfigInfo(t *testing.T) {
 }
 
 // ============================================================
-// Collect publishes da_tenant_metrics_over_limit through manager
-// metrics (#652)
+// Collect emits da_tenant_metrics_over_limit (#652)
 // ============================================================
 //
-// Routes through c.manager.getMetrics().PublishTenantMetricsOverLimit
-// rather than the package-level singleton helper. Verifies the
-// test-injection contract: a fresh configMetrics injected via
-// ConfigManager.SetMetrics must receive the per-tenant gauge writes,
-// AND the Reset()+Set() loop must clear vanished tenants and clamp
-// just-dropped-below-the-cap tenants to 0.
-//
-// Originally caught during adversarial self-review: the first cut
-// called the package-level PublishTenantMetricsOverLimit helper which
-// routes through the global getConfigMetrics(), bypassing the
-// injected instance. This test would have failed under that bug —
-// the fresh GaugeVec would have stayed empty while the global one
-// got the writes.
+// The gauge is a per-scrape ConstMetric built from ResolveAtWithStats
+// (no longer a registered GaugeVec — see collectTenantMetricsOverLimit in
+// internal/scrape), so these read it straight off the collector: over-limit
+// tenants report their magnitude, compliant tenants report 0 (not
+// absent), and a tenant deleted from config is gone on the next scrape.
+// Completeness across repeated / concurrent gathers is covered in
+// collector_over_limit_gather_test.go.
+
+// overLimitSeries collects c once and returns da_tenant_metrics_over_limit
+// by tenant.
+func overLimitSeries(t *testing.T, c prometheus.Collector) map[string]float64 {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(c)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "da_tenant_metrics_over_limit" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "tenant" {
+					got[lp.GetValue()] = m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return got
+}
 
 func TestCollector_Collect_PublishesOverLimitGauge(t *testing.T) {
 	t.Parallel()
@@ -481,21 +500,14 @@ func TestCollector_Collect_PublishesOverLimitGauge(t *testing.T) {
 		},
 		MaxMetricsPerTenant: 500,
 	}
-	manager := newTestManager(cfg)
-	fresh, _ := freshMetrics(t)
-	manager.SetMetrics(fresh)
+	collector := NewThresholdCollector(newTestManager(cfg))
+	got := overLimitSeries(t, collector)
 
-	collector := NewThresholdCollector(manager)
-	// CollectAndCount triggers the full Collect path on the fresh registry.
-	_ = testutil.CollectAndCount(collector)
-
-	overVal := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("tenant-over"))
-	if overVal != 100 {
-		t.Errorf("over-limit tenant gauge = %v, want 100 (count=600, limit=500)", overVal)
+	if v, ok := got["tenant-over"]; !ok || v != 100 {
+		t.Errorf("over-limit tenant gauge = %v (present=%v), want 100 (count=600, limit=500)", v, ok)
 	}
-	compVal := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("tenant-compliant"))
-	if compVal != 0 {
-		t.Errorf("compliant tenant gauge = %v, want 0 (state-coded contract — compliant tenants must Set 0, not omit)", compVal)
+	if v, ok := got["tenant-compliant"]; !ok || v != 0 {
+		t.Errorf("compliant tenant gauge = %v (present=%v), want 0 (state-coded contract — compliant tenants must report 0, not be omitted)", v, ok)
 	}
 }
 
@@ -514,15 +526,11 @@ func TestCollector_Collect_OverLimitGaugeEvictsVanishedTenant(t *testing.T) {
 		MaxMetricsPerTenant: 500,
 	}
 	manager := newTestManager(cfg)
-	fresh, _ := freshMetrics(t)
-	manager.SetMetrics(fresh)
-
 	collector := NewThresholdCollector(manager)
 
 	// First scrape — tenant exists, gauge populated.
-	_ = testutil.CollectAndCount(collector)
-	if got := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("to-be-deleted")); got != 100 {
-		t.Fatalf("first scrape over-limit = %v, want 100", got)
+	if got := overLimitSeries(t, collector); got["to-be-deleted"] != 100 {
+		t.Fatalf("first scrape over-limit = %v, want to-be-deleted=100", got)
 	}
 
 	// Tenant disappears from config — simulate a deletion between scrapes.
@@ -530,18 +538,10 @@ func TestCollector_Collect_OverLimitGaugeEvictsVanishedTenant(t *testing.T) {
 		"another-tenant": {},
 	}
 
-	// Second scrape — Reset+Set must evict the deleted tenant's series.
-	_ = testutil.CollectAndCount(collector)
-	// CollectAndCount on the gaugevec series families: after the second
-	// scrape, only "another-tenant" should remain. Use ToFloat64 with
-	// a brand-new label value to confirm the deleted tenant is gone.
-	// (ToFloat64 on a vanished series returns 0 because WithLabelValues
-	// recreates the cell — what we actually want to check is whether
-	// the deleted series is absent from the registry's exposition. We
-	// do that by counting tenantMetricsOverLimit families directly.)
-	count := testutil.CollectAndCount(fresh.tenantMetricsOverLimit)
-	if count != 1 {
-		t.Errorf("tenantMetricsOverLimit has %d series after deletion, want 1 (Reset() must evict vanished tenants on the next scrape)", count)
+	// Second scrape — only the surviving tenant may remain.
+	got := overLimitSeries(t, collector)
+	if _, stale := got["to-be-deleted"]; stale || len(got) != 1 {
+		t.Errorf("series after deletion = %v, want only another-tenant (a deleted tenant must be gone on the next scrape)", got)
 	}
 }
 

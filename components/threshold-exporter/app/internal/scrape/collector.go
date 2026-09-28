@@ -31,8 +31,7 @@ type Source interface {
 // introduced in Phase 2B. This is the standard Prometheus Go client pattern when
 // the label set varies per metric (e.g., custom dimensional labels from config).
 type Collector struct {
-	src     Source
-	publish func(perTenantOverLimit map[string]int)
+	src Source
 
 	// Set only by a reader outside the exporter (served-values); nil on the
 	// exporter, which resolves at time.Now() with ResolveAtWithStats and logs
@@ -42,10 +41,9 @@ type Collector struct {
 	report  func(i int, m prometheus.Metric, err error)
 }
 
-// NewCollector is the exporter's collector over src. publish receives each
-// scrape's per-tenant over-limit magnitudes (da_tenant_metrics_over_limit).
-func NewCollector(src Source, publish func(perTenantOverLimit map[string]int)) *Collector {
-	return &Collector{src: src, publish: publish}
+// NewCollector is the exporter's collector over src.
+func NewCollector(src Source) *Collector {
+	return &Collector{src: src}
 }
 
 // Hooks are the three seams a reader outside the exporter sets. All three
@@ -61,8 +59,8 @@ type Hooks struct {
 }
 
 // NewCollectorWithHooks is NewCollector with the Hooks set.
-func NewCollectorWithHooks(src Source, publish func(map[string]int), h Hooks) *Collector {
-	return &Collector{src: src, publish: publish, now: h.Now, resolve: h.Resolve, report: h.Report}
+func NewCollectorWithHooks(src Source, h Hooks) *Collector {
+	return &Collector{src: src, now: h.Now, resolve: h.Resolve, report: h.Report}
 }
 
 // Describe sends no descriptors — opts into unchecked collector mode.
@@ -82,16 +80,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	// Scenario A + Phase 2B: numeric thresholds (with optional dimensional labels).
 	// ResolveAtWithStats (#652) returns the same resolved-thresholds slice as
-	// the legacy Resolve(), plus per-tenant cap-hit magnitudes used to publish
-	// the da_tenant_metrics_over_limit gauge. PublishTenantMetricsOverLimit
-	// Reset()s the GaugeVec then per-tenant Set()s in one pass so vanished
-	// tenants are evicted automatically and just-dropped-below-the-cap tenants
-	// clamp to 0 instead of carrying their stale over-limit value forward.
-	//
-	// Published through c.publish, which the exporter wires to
-	// c.manager.getMetrics() (package main) — NOT a package-level helper — so
-	// tests that inject a fresh configMetrics via ConfigManager.SetMetrics
-	// observe the gauge writes on their own instance.
+	// the legacy Resolve(), plus per-tenant cap-hit magnitudes that
+	// collectTenantMetricsOverLimit emits as da_tenant_metrics_over_limit.
 	// One timestamp for the whole scrape so threshold values and expiry events
 	// resolve consistently — a separate time.Now() per resolver could straddle an
 	// `expires:` boundary and emit a one-scrape value/event mismatch (CodeRabbit).
@@ -106,11 +96,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	} else {
 		resolved, stats = cfg.ResolveAtWithStats(now)
 	}
-	c.publish(stats.PerTenantOverLimit)
 
 	// Each metric family is emitted by a focused collector method; order is
 	// irrelevant (Prometheus sorts on Gather) but kept stable for diff clarity.
 	c.collectThresholds(ch, resolved)
+	c.collectTenantMetricsOverLimit(ch, stats.PerTenantOverLimit)
 	c.collectCustomAlertErrors(ch, stats.PerTenantCustomAlertErrors)
 	c.collectDeprecatedKeys(ch, stats.PerTenantDeprecatedKeys)
 	c.collectSloObjectives(ch, stats.SloObjectives)
@@ -130,6 +120,42 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	metadata := cfg.ResolveMetadata()
 	c.collectMetadata(ch, metadata)
 	c.collectTenantExpectedExporter(ch, metadata)
+}
+
+// tenantMetricsOverLimitDesc describes da_tenant_metrics_over_limit (#652).
+// Name, help text and label are the exposition contract and stay as they
+// were when this was a GaugeVec. The help's "evicted by Reset()" wording
+// describes that old mechanism; what it promises a reader still holds —
+// a vanished tenant's series is gone from the next scrape.
+var tenantMetricsOverLimitDesc = prometheus.NewDesc(
+	"da_tenant_metrics_over_limit",
+	"State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
+	[]string{"tenant"},
+	nil,
+)
+
+// collectTenantMetricsOverLimit emits da_tenant_metrics_over_limit (#652)
+// as const metrics built from this scrape's ResolveStats: one series per
+// tenant, 0 for a compliant tenant (so a tenant that just dropped back
+// below the cap reads 0 rather than keeping its old value). A tenant
+// deleted from config is not in perTenant, so its series is gone from the
+// next scrape with no eviction step.
+//
+// ⛔ Do not turn this back into a registered GaugeVec that Collect
+// Reset()s and Set()s. Registry.Gather collects every registered Collector
+// on its own goroutine, so the GaugeVec's own Collect is not ordered after
+// the Reset+Set, and registration order does not change that: a scrape
+// read the family missing, or with only some tenants (seen while dumping
+// /metrics for #2266). Two overlapping scrapes also shared that one
+// GaugeVec. A const metric is built from the stats of the Collect that
+// sends it, so neither can happen.
+func (c *Collector) collectTenantMetricsOverLimit(ch chan<- prometheus.Metric, perTenant map[string]int) {
+	for tenant, magnitude := range perTenant {
+		if m, err := prometheus.NewConstMetric(tenantMetricsOverLimitDesc, prometheus.GaugeValue,
+			float64(magnitude), tenant); err == nil {
+			ch <- m
+		}
+	}
 }
 
 // collectThresholds emits the user_threshold gauge for every resolved
