@@ -289,6 +289,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 - **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 - **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
+- **#2280**：da-guard 與 tenant-api 改判**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，與產生器同一套合併，共用 `pkg/routingpolicy`，以跨語言 parity 矩陣對齊）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；da-guard 另檢查 `routes` 條目形狀與 `_routing_defaults.routes`；tenant-api batch 只在 patch 碰到 `_routing_profile` / `_routing` 時判 routing
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

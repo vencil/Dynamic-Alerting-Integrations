@@ -39,6 +39,7 @@ import (
 var logicPackages = []string{
 	"internal/guard",
 	"internal/parser",
+	"pkg/routingpolicy", // #2280: shared with tenant-api and da-guard
 }
 
 const netHTTPImportPath = "net/http"

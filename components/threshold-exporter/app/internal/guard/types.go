@@ -41,7 +41,12 @@
 //     override matcher contract — exactly one of alertname/
 //     metric_group, so both empty (error) and both set (error) are
 //     blocked — duplicate override matcher (warn), redundant
-//     override receiver (warn).
+//     override receiver (warn). Since #2280 the block checked is the
+//     RESOLVED routing (`_routing_defaults` → routing profile → the
+//     tenant's `_routing`), its ADR-007 `routes` entries are checked too
+//     (invalid_route_entry + the same receiver checks), and every
+//     receiver type is judged against the domain policies
+//     (domain_policy_violation).
 //     Note: the planning row originally said "routing tree cycle
 //     detection" — the codebase's routing model is a flat
 //     per-tenant block with no cross-references, so cycles are
@@ -70,6 +75,8 @@
 // overrides itself (it already needs that path for the YAML
 // emitter), then hands the merged maps to CheckDefaultsImpact.
 package guard
+
+import "github.com/vencil/threshold-exporter/pkg/routingpolicy"
 
 // Severity classifies a Finding. Two tiers in PR-1; PR-2/3 may add
 // "info" for the routing/cardinality layers if useful.
@@ -107,6 +114,30 @@ const (
 	FindingConflictingOverrideMatcher FindingKind = "conflicting_override_matcher"
 	FindingDuplicateOverrideMatcher   FindingKind = "duplicate_override_matcher"
 	FindingRedundantOverrideReceiver  FindingKind = "redundant_override_receiver"
+)
+
+// Routing-resolution and domain-policy findings (#2280; see routing.go).
+const (
+	// FindingInvalidRouteEntry: a `routes` value the route generator does
+	// not render — `routes` not a list, or an entry that is not a mapping,
+	// carries an unsupported key, or has a missing / malformed `match`.
+	FindingInvalidRouteEntry FindingKind = "invalid_route_entry"
+	// FindingDomainPolicyViolation: a receiver type an ADR-007 domain
+	// policy forbids, or leaves out of its allowed list.
+	FindingDomainPolicyViolation FindingKind = "domain_policy_violation"
+	// FindingUnknownRoutingProfile (warn): `_routing_profile` names a
+	// profile no `_routing_profiles.yaml` defines; nothing is merged.
+	FindingUnknownRoutingProfile FindingKind = "unknown_routing_profile"
+	// FindingDomainPolicyUnusable (TenantID ""): a `_domain_policy.yaml`
+	// structure the policy check cannot use, so it is not enforced.
+	FindingDomainPolicyUnusable FindingKind = "domain_policy_unusable"
+	// FindingRoutingProfilesUnusable (warn, TenantID ""): a
+	// `routing_profiles:` block that cannot be read; no profile is applied.
+	FindingRoutingProfilesUnusable FindingKind = "routing_profiles_unusable"
+	// FindingRoutingDefaultsRoutesIgnored (error, TenantID ""): a
+	// `_routing_defaults` carrying `routes`, which the route generator drops
+	// with a blocking WARN (`--validate` fails) — so it blocks here too.
+	FindingRoutingDefaultsRoutesIgnored FindingKind = "routing_defaults_routes_ignored"
 )
 
 // Cardinality findings (PR-3; see cardinality.go).
@@ -241,6 +272,25 @@ type CheckInput struct {
 	// stays YAML-agnostic; the CLI wrapper (deferred PR-4) does the
 	// extraction before invoking CheckDefaultsImpact.
 	RoutingByTenant map[string]map[string]any `json:"routing_by_tenant,omitempty"`
+
+	// RoutingProvenance maps tenant ID → which layer each top-level key of
+	// its RoutingByTenant entry came from (#2280): the tenant's `_routing`,
+	// a routing profile, or `_routing_defaults`. Used in messages only;
+	// a tenant absent here reads as "the tenant's _routing".
+	RoutingProvenance map[string]routingpolicy.Provenance `json:"-"`
+
+	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
+	// references that no profile file defines (warn finding).
+	UnknownRoutingProfiles map[string]string `json:"-"`
+
+	// DomainPolicies are the ADR-007 receiver-type policies, checked against
+	// every tenant in RoutingByTenant. nil disables the check.
+	DomainPolicies []routingpolicy.Policy `json:"-"`
+
+	// PlatformProblems are the platform-file structures the routing checks
+	// could not use (routingpolicy.LoadRoot). Each becomes one finding with
+	// an empty TenantID; the checks that do not depend on it still run.
+	PlatformProblems []routingpolicy.Problem `json:"-"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality
 	// check (PR-3) compares each tenant's predicted metric count

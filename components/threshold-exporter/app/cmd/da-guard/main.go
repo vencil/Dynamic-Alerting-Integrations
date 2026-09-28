@@ -68,6 +68,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // Version is overridden at build time via `-ldflags "-X main.Version=..."`.
@@ -329,7 +330,10 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
 //   - EffectiveConfigs[id]      ← ec.EffectiveConfig
-//   - RoutingByTenant[id]       ← ec.EffectiveConfig["_routing"] (when nested map)
+//   - RoutingByTenant[id]       ← the tenant's RESOLVED routing (#2280):
+//     routingpolicy.Resolve over ec.EffectiveConfig's `_routing` /
+//     `_routing_profile` and the conf.d root's `_routing_defaults` and
+//     routing profiles — the same three layers the route generator merges
 //   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
 //   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
 //
@@ -348,18 +352,37 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	effective := make(map[string]map[string]any, len(scoped.Tenants))
 	routing := make(map[string]map[string]any)
+	provenance := make(map[string]routingpolicy.Provenance)
+	unknownProfiles := make(map[string]string)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
+
+	// #2280: the routing layers and the domain policies come from the conf.d
+	// ROOT (--config-dir, never --scope), as the route generator reads them.
+	// A file the exporter already fails is skipped so it is named once, by
+	// exit 3; what the loader cannot use comes back as PlatformProblems —
+	// findings that skip only the checks depending on them (#1654), never
+	// entries in ParseFailed.
+	failed := make(map[string]bool, len(scoped.ParseFailed))
+	for _, pf := range scoped.ParseFailed {
+		failed[pf] = true
+	}
+	layers, policies, problems := routingpolicy.LoadRoot(f.configDir, func(rel string) bool { return failed[rel] })
+
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.EffectiveConfig
-		// _routing is stored as a nested map inside the merged
-		// effective config — see config_inheritance.go and the
-		// db-b.yaml example. The guard's RoutingByTenant just
-		// wants that nested block. Tenants without routing are
-		// simply absent from the map (no finding emitted, per
-		// guard/types.go documentation).
-		if r, ok := ec.EffectiveConfig["_routing"].(map[string]any); ok {
-			routing[ec.TenantID] = r
+		// The tenant's routing as the generator renders it: its own
+		// `_routing` laid over the referenced profile over
+		// `_routing_defaults`, `{{tenant}}` substituted. Tenants with no
+		// routing (disabled, or no layer supplies anything) are absent from
+		// the map — no finding, per guard/types.go.
+		resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, ec.EffectiveConfig, layers)
+		if ok {
+			routing[ec.TenantID] = resolved
+			provenance[ec.TenantID] = prov
+		}
+		if unknown != nil {
+			unknownProfiles[ec.TenantID] = *unknown
 		}
 		// PR-5: redundant-override warn-tier inputs. We populate
 		// both fields as soon as the resolver hands them to us; an
@@ -378,13 +401,17 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	required := splitNonEmpty(f.requiredFields)
 
 	return guard.CheckInput{
-		EffectiveConfigs:     effective,
-		RequiredFields:       required,
-		RoutingByTenant:      routing,
-		TenantOverrides:      tenantOverrides,
-		NewDefaultsByTenant:  newDefaultsByTenant,
-		CardinalityLimit:     f.cardinalityLimit,
-		CardinalityWarnRatio: f.cardinalityWarnRatio,
+		EffectiveConfigs:       effective,
+		RequiredFields:         required,
+		RoutingByTenant:        routing,
+		RoutingProvenance:      provenance,
+		UnknownRoutingProfiles: unknownProfiles,
+		DomainPolicies:         policies,
+		PlatformProblems:       problems,
+		TenantOverrides:        tenantOverrides,
+		NewDefaultsByTenant:    newDefaultsByTenant,
+		CardinalityLimit:       f.cardinalityLimit,
+		CardinalityWarnRatio:   f.cardinalityWarnRatio,
 	}
 }
 

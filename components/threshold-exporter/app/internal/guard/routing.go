@@ -60,6 +60,22 @@ package guard
 //      An override whose receiver is structurally identical to
 //      the main tenant receiver has no effect. Warning.
 //
+// #2280 — the routing checked is the RESOLVED one, not the raw `_routing`:
+// cmd/da-guard resolves `_routing_defaults` → routing profile → the tenant's
+// `_routing` (pkg/routingpolicy, pinned to the Python generator by
+// tests/shared/routing_policy_parity_matrix.json) before calling the guard.
+// On top of the five checks:
+//
+//  6. ADR-007 `routes` (error): an entry the generator skips is
+//     invalid_route_entry; a renderable entry's receiver gets checks 1 + 2.
+//  7. Domain policies (error): every rendered receiver type (main,
+//     overrides, routes) against forbidden_receiver_types and
+//     allowed_receiver_types, judged independently.
+//  8. Unknown routing profile (warn), and platform files the checks could
+//     not use (domain_policy_unusable error / routing_profiles_unusable
+//     warn / routing_defaults_routes_ignored error, TenantID ""). Only the checks that need such a file are
+//     skipped; the run and its exit code are otherwise unchanged (#1654).
+//
 // Why these and not more:
 //   - Field-by-field receiver validation against type-specific
 //     constraints (URL allowlist, timing bounds, etc.) is
@@ -78,6 +94,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // receiverTypeSpec is the field-presence contract of one receiver
@@ -168,9 +186,26 @@ var matcherKeys = map[string]struct{}{
 // No-op when input.RoutingByTenant is empty — absent routing is a
 // valid configuration (some tenants intentionally disable
 // alerting), and silence here matches that intent.
+//
+// #2280: also reports the platform files the routing checks could not use
+// (PlatformProblems), the unknown routing profiles, and — per tenant — the
+// domain-policy verdict on every receiver type (checkDomainPolicies).
 func checkRoutingGuardrails(input CheckInput) []Finding {
+	out := platformProblemFindings(input.PlatformProblems)
+	for _, tenantID := range sortedStringKeys(input.UnknownRoutingProfiles) {
+		name := input.UnknownRoutingProfiles[tenantID]
+		out = append(out, Finding{
+			Severity: SeverityWarn,
+			Kind:     FindingUnknownRoutingProfile,
+			TenantID: tenantID,
+			Field:    "_routing_profile",
+			Message: fmt.Sprintf(
+				"tenant %q: _routing_profile references unknown profile %q (no _routing_profiles.yaml at the conf.d root defines it); nothing from it is applied",
+				tenantID, name),
+		})
+	}
 	if len(input.RoutingByTenant) == 0 {
-		return nil
+		return out
 	}
 	tenants := make([]string, 0, len(input.RoutingByTenant))
 	for t := range input.RoutingByTenant {
@@ -178,14 +213,90 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 	}
 	sort.Strings(tenants)
 
-	var out []Finding
 	for _, tenantID := range tenants {
 		routing := input.RoutingByTenant[tenantID]
 		if routing == nil {
 			continue
 		}
 		out = append(out, checkOneTenantRouting(tenantID, routing)...)
+		out = append(out, checkDomainPolicies(tenantID, routing, input.DomainPolicies, input.RoutingProvenance[tenantID])...)
 	}
+	return out
+}
+
+// checkDomainPolicies judges every receiver the resolved routing renders
+// (main route, overrides, routes — routingpolicy.Targets) against the
+// ADR-007 domain policies that list the tenant. forbidden_receiver_types and
+// allowed_receiver_types are independent tests, so one receiver can yield
+// two findings (the Python generator's --strict semantics).
+func checkDomainPolicies(tenantID string, routing map[string]any, policies []routingpolicy.Policy, prov routingpolicy.Provenance) []Finding {
+	if len(policies) == 0 {
+		return nil
+	}
+	var out []Finding
+	for _, v := range routingpolicy.CheckReceiverTypes(tenantID, routing, policies) {
+		field := v.Target + ".receiver.type"
+		if v.Target == "receiver" {
+			field = "receiver.type"
+		}
+		topKey := v.Target
+		if i := strings.IndexByte(topKey, '['); i >= 0 {
+			topKey = topKey[:i]
+		}
+		source := routingpolicy.SourceTenant
+		if s, ok := prov[topKey]; ok {
+			source = s
+		}
+		verdict := fmt.Sprintf("is forbidden by domain policy %q (forbidden_receiver_types)", v.Domain)
+		if v.Constraint == routingpolicy.ConstraintAllowed {
+			verdict = fmt.Sprintf("is not in domain policy %q allowed_receiver_types", v.Domain)
+		}
+		out = append(out, Finding{
+			Severity: SeverityError,
+			Kind:     FindingDomainPolicyViolation,
+			TenantID: tenantID,
+			Field:    field,
+			Message: fmt.Sprintf("tenant %q: %s receiver type %q %s; %s comes from %s",
+				tenantID, v.Target, v.ReceiverType, verdict, topKey, routingpolicy.Describe(source)),
+		})
+	}
+	return out
+}
+
+// platformProblemFindings turns what routingpolicy.LoadRoot could not use
+// into findings with an empty TenantID. An unusable domain policy is an
+// error (a policy that is not enforced reads as a clean pass); an unusable
+// routing_profiles block is a warning, as in the Python reader; ignored
+// `_routing_defaults.routes` is an error, as the generator's --validate.
+func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
+	var out []Finding
+	for _, p := range problems {
+		f := Finding{Severity: SeverityError, Kind: FindingDomainPolicyUnusable, Message: p.Message}
+		switch p.Kind {
+		case routingpolicy.ProblemRoutingProfilesUnusable:
+			f.Severity, f.Kind = SeverityWarn, FindingRoutingProfilesUnusable
+		case routingpolicy.ProblemRoutingDefaultsRoutes:
+			f.Kind = FindingRoutingDefaultsRoutesIgnored
+		}
+		switch {
+		case p.File != "" && p.Field != "":
+			f.Field = p.File + ":" + p.Field
+		case p.File != "":
+			f.Field = p.File
+		default:
+			f.Field = p.Field
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func sortedStringKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -203,12 +314,14 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 	// the right `receiver` field path.
 	out = append(out, checkReceiverShape(tenantID, "receiver", mainReceiver)...)
 
+	// ADR-007 label-match `routes` (#2280): checked whether or not the
+	// tenant has overrides — they used to sit behind an "no overrides,
+	// return" and were never looked at.
+	out = append(out, checkRoutes(tenantID, routing)...)
+
 	// Checks 3 + 4 + 5 walk the overrides list. Missing overrides
 	// list is fine — most tenants have only the main receiver.
 	overrides, _ := routing["overrides"].([]any)
-	if len(overrides) == 0 {
-		return out
-	}
 
 	// Stable order: preserve the YAML list order but track
 	// duplicate signatures by canonical hash.
@@ -301,6 +414,50 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 					tenantID, fieldPath),
 			})
 		}
+	}
+	return out
+}
+
+// checkRoutes walks the ADR-007 `routes` list of a resolved routing. An
+// entry the route generator would skip (routingpolicy.RouteEntryProblem, the
+// one predicate shared with the Python generator's route_entry_matchers) is
+// invalid_route_entry and nothing else; a renderable entry gets the same
+// receiver checks (1 + 2) as the main receiver and the overrides. Duplicate
+// matches are not reported.
+func checkRoutes(tenantID string, routing map[string]any) []Finding {
+	raw, present := routing["routes"]
+	if !present || raw == nil {
+		return nil
+	}
+	routes, ok := raw.([]any)
+	if !ok {
+		return []Finding{{
+			Severity: SeverityError,
+			Kind:     FindingInvalidRouteEntry,
+			TenantID: tenantID,
+			Field:    "routes",
+			Message: fmt.Sprintf(
+				"tenant %q: routes must be a list of {match, receiver} entries (got %T); the route generator renders none of it",
+				tenantID, raw),
+		}}
+	}
+	var out []Finding
+	for i, entry := range routes {
+		fieldPath := fmt.Sprintf("routes[%d]", i)
+		if reason, bad := routingpolicy.RouteEntryProblem(entry); bad {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     FindingInvalidRouteEntry,
+				TenantID: tenantID,
+				Field:    fieldPath,
+				Message: fmt.Sprintf("tenant %q: %s %s; the route generator skips this entry",
+					tenantID, fieldPath, reason),
+			})
+			continue
+		}
+		m, _ := entry.(map[string]any)
+		recv, _ := m["receiver"].(map[string]any)
+		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", recv)...)
 	}
 	return out
 }

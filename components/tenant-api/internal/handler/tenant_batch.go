@@ -185,6 +185,10 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// Pre-validate all ops (RBAC + policy) before creating any branch
 	var batchOps []gitops.PRBatchOp
 	var batchResults []BatchResult
+	// included[t]: the patches of t's ops already taken into this PR, in
+	// order. WritePRBatch merges them all onto one base in that order, so a
+	// routing check must see them stacked (batchRoutingViolations).
+	included := map[string][]map[string]string{}
 	for _, op := range req.Operations {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
@@ -195,7 +199,13 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			continue
 		}
 		if d.Policy != nil {
-			if violations := d.Policy.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+			// #2280: an op that sets `_routing_profile` / `_routing` is judged
+			// on the routing it produces; see batchRoutingViolations. Checked
+			// here, not inside the merge closure, so one refused op is left out
+			// instead of aborting the whole PR.
+			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
+			violations = append(violations, batchRoutingViolations(d.ConfigDir, d.Policy, op.TenantID, included[op.TenantID], op.Patch)...)
+			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
 					msgs[i] = v.Message
@@ -216,6 +226,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			},
 		})
 		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
+		included[op.TenantID] = append(included[op.TenantID], op.Patch)
 	}
 
 	if len(batchOps) == 0 {
@@ -317,7 +328,11 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 			continue
 		}
 		if policyMgr != nil {
-			if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
+			// nil prior: each op is written before the next one is judged,
+			// and the next one reads the file back.
+			violations = append(violations, batchRoutingViolations(configDir, policyMgr, op.TenantID, nil, op.Patch)...)
+			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
 				for i, v := range violations {
 					msgs[i] = v.Message

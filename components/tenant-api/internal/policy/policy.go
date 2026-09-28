@@ -25,8 +25,11 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,7 +58,11 @@ type DomainPolicyConfig struct {
 type Violation struct {
 	Domain     string `json:"domain"`
 	Constraint string `json:"constraint"`
-	Message    string `json:"message"`
+	// Target is the route whose receiver breaks the constraint: `receiver`
+	// (the tenant's main route), `overrides[i]` or `routes[i]`. Omitted for
+	// the flat batch key `_routing_receiver_type`.
+	Target  string `json:"target,omitempty"`
+	Message string `json:"message"`
 }
 
 // Manager holds the hot-reloadable domain policy config. The
@@ -98,39 +105,94 @@ func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	return &cfg, nil
 }
 
-// CheckWrite validates a tenant config patch against applicable domain policies.
+// CheckWrite validates a flat batch patch against applicable domain policies.
 // Returns violations (empty if the write is allowed).
 //
 // tenantID: the target tenant.
 // patch: the key-value pairs being written.
 //
-// Currently enforces:
-//   - forbidden_receiver_types: rejects writes that set _routing.receiver.type to a forbidden value.
-//   - allowed_receiver_types: rejects writes that set _routing.receiver.type to a non-allowed value.
+// It judges the flat `_routing_receiver_type` key only. A tenant's routing as
+// the generator renders it — `_routing_defaults`, the referenced routing
+// profile and the tenant's `_routing`, main receiver, overrides and routes —
+// is CheckTenantRouting's (#2280); the nested `_routing.receiver.type` key
+// this used to read saw the tenant's own main receiver only, and PUT now goes
+// through CheckTenantRouting instead.
 func (m *Manager) CheckWrite(tenantID string, patch map[string]string) []Violation {
-	cfg := m.Get()
-	if len(cfg.DomainPolicies) == 0 {
+	receiverType, ok := patch["_routing_receiver_type"]
+	if !ok {
 		return nil
 	}
-
+	cfg := m.Get()
 	var violations []Violation
-
-	for domainName, dp := range cfg.DomainPolicies {
+	for _, domainName := range sortedDomains(cfg) {
+		dp := cfg.DomainPolicies[domainName]
 		if !isTenantInPolicy(dp.Tenants, tenantID) {
 			continue
 		}
-
-		// Check receiver type constraints
-		if receiverType, ok := patch["_routing_receiver_type"]; ok {
-			violations = append(violations, checkReceiverType(domainName, dp.Constraints, receiverType)...)
-		}
-		// Also check nested routing patch format
-		if receiverType, ok := patch["_routing.receiver.type"]; ok {
-			violations = append(violations, checkReceiverType(domainName, dp.Constraints, receiverType)...)
-		}
+		violations = append(violations, checkReceiverType(domainName, dp.Constraints, receiverType, "", "")...)
 	}
-
 	return violations
+}
+
+// RoutingPolicies is the receiver-type part of the loaded domain policies, in
+// the shape pkg/routingpolicy judges.
+func (m *Manager) RoutingPolicies() []routingpolicy.Policy {
+	cfg := m.Get()
+	out := make([]routingpolicy.Policy, 0, len(cfg.DomainPolicies))
+	for _, name := range sortedDomains(cfg) {
+		dp := cfg.DomainPolicies[name]
+		out = append(out, routingpolicy.Policy{
+			Domain:                 name,
+			Tenants:                dp.Tenants,
+			ForbiddenReceiverTypes: dp.Constraints.ForbiddenReceiverTypes,
+			AllowedReceiverTypes:   dp.Constraints.AllowedReceiverTypes,
+			AllowedListNonEmpty:    len(dp.Constraints.AllowedReceiverTypes) > 0,
+		})
+	}
+	return out
+}
+
+// CheckTenantRouting judges one tenant's routing as the route generator
+// renders it (#2280): block is the tenant's config block (its `_routing` and
+// `_routing_profile`), resolved over layers (`_routing_defaults` → profile →
+// the tenant's `_routing`, `{{tenant}}` substituted), and every receiver the
+// result renders — main route, overrides, routes — is judged against the
+// receiver-type constraints of each policy that lists the tenant.
+// forbidden_receiver_types and allowed_receiver_types are independent tests,
+// so one receiver can yield two violations (the generator's --strict
+// semantics). A tenant with no resolved routing yields none.
+func (m *Manager) CheckTenantRouting(tenantID string, block map[string]any, layers routingpolicy.Layers) []Violation {
+	pols := m.RoutingPolicies()
+	if len(pols) == 0 {
+		return nil
+	}
+	resolved, ok, prov, _ := routingpolicy.Resolve(tenantID, block, layers)
+	if !ok {
+		return nil
+	}
+	var out []Violation
+	for _, v := range routingpolicy.CheckReceiverTypes(tenantID, resolved, pols) {
+		topKey := v.Target
+		if i := strings.IndexByte(topKey, '['); i >= 0 {
+			topKey = topKey[:i]
+		}
+		source := routingpolicy.SourceTenant
+		if s, found := prov[topKey]; found {
+			source = s
+		}
+		where := fmt.Sprintf("%s (from %s)", v.Target, routingpolicy.Describe(source))
+		out = append(out, violation(v.Domain, v.Constraint, v.ReceiverType, v.Target, where))
+	}
+	return out
+}
+
+func sortedDomains(cfg *DomainPolicyConfig) []string {
+	names := make([]string, 0, len(cfg.DomainPolicies))
+	for name := range cfg.DomainPolicies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // PolicyForTenant returns the domain name and policy for a tenant, or empty if none applies.
@@ -153,23 +215,20 @@ func isTenantInPolicy(tenants []string, tenantID string) bool {
 	return false
 }
 
-func checkReceiverType(domain string, c Constraints, receiverType string) []Violation {
+// checkReceiverType judges one receiver type against one domain's
+// constraints. forbidden_receiver_types and allowed_receiver_types are
+// INDEPENDENT tests (#2280, the route generator's semantics): a type on the
+// forbidden list that is also missing from the allowed list is two
+// violations. target / where name the route in the violation ("" for the
+// flat batch key).
+func checkReceiverType(domain string, c Constraints, receiverType, target, where string) []Violation {
 	var violations []Violation
-
-	// Check forbidden list first (takes precedence)
 	for _, forbidden := range c.ForbiddenReceiverTypes {
 		if receiverType == forbidden {
-			violations = append(violations, Violation{
-				Domain:     domain,
-				Constraint: "forbidden_receiver_types",
-				Message:    fmt.Sprintf("receiver type '%s' is forbidden by domain policy '%s'", receiverType, domain),
-			})
-			// If forbidden, don't check allowed list - forbidden takes precedence
-			return violations
+			violations = append(violations, violation(domain, "forbidden_receiver_types", receiverType, target, where))
+			break
 		}
 	}
-
-	// Check allowed list only if not forbidden (if specified, receiver must be in the list)
 	if len(c.AllowedReceiverTypes) > 0 {
 		allowed := false
 		for _, a := range c.AllowedReceiverTypes {
@@ -179,13 +238,21 @@ func checkReceiverType(domain string, c Constraints, receiverType string) []Viol
 			}
 		}
 		if !allowed {
-			violations = append(violations, Violation{
-				Domain:     domain,
-				Constraint: "allowed_receiver_types",
-				Message:    fmt.Sprintf("receiver type '%s' is not in the allowed list for domain policy '%s'", receiverType, domain),
-			})
+			violations = append(violations, violation(domain, "allowed_receiver_types", receiverType, target, where))
 		}
 	}
-
 	return violations
+}
+
+// violation is one Violation with its operator message.
+func violation(domain, constraint, receiverType, target, where string) Violation {
+	subject := fmt.Sprintf("receiver type '%s'", receiverType)
+	if where != "" {
+		subject += " at " + where
+	}
+	msg := fmt.Sprintf("%s is forbidden by domain policy '%s'", subject, domain)
+	if constraint == "allowed_receiver_types" {
+		msg = fmt.Sprintf("%s is not in the allowed list for domain policy '%s'", subject, domain)
+	}
+	return Violation{Domain: domain, Constraint: constraint, Target: target, Message: msg}
 }

@@ -43,6 +43,7 @@ linters:
           files:
             - "**/internal/parser/**"
             - "**/internal/guard/**"
+            - "**/pkg/routingpolicy/**"
           deny:
             - pkg: net/http
               desc: pure logic packages (CLI-reusable) must not import net/http

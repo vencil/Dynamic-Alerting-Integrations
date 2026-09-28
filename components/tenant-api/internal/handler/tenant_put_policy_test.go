@@ -2,14 +2,14 @@ package handler
 
 // Coverage for the PUT/batch domain-policy gate (ROI refactor R3, E1).
 //
-// Highest-risk gap this file closes: extractPatchKeys is what feeds the
-// domain-policy check on PUT — if the per-key extraction or the nested-map
-// flattening (flattenMap / flattenMapDepth, previously 0% covered) breaks, a
-// policy-violating write is SILENTLY WAVED THROUGH (the policy manager never
-// sees the key it should match). The positive assertions here therefore pin:
-//   1. a NESTED `_routing.receiver.type` in the PUT body is flattened to the
-//      exact dot-key the policy manager matches, and a forbidden value is
-//      BLOCKED (403, nothing written to disk);
+// Highest-risk gap this file closes: a policy-violating PUT that is SILENTLY
+// WAVED THROUGH. Since #2280 the PUT body's routing reaches the policy as a
+// block (extractTenantBlock → policy.CheckTenantRouting, which resolves it
+// and judges every receiver; routing_policy_test.go covers routes, overrides
+// and profiles); extractPatchKeys still feeds the flat CheckWrite keys. The
+// positive assertions here pin:
+//   1. a NESTED `_routing.receiver.type` in the PUT body with a forbidden
+//      value is BLOCKED (403, nothing written to disk);
 //   2. the same nested shape with a non-forbidden value passes the gate and
 //      actually commits;
 //   3. the batch execution path (executeBatchOps) rejects a violating op
