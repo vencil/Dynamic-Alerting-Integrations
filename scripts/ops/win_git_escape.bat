@@ -281,7 +281,7 @@ if "%BR%"=="" (
 )
 REM switch, not checkout: `checkout <name>` also takes a path and would
 REM discard that path's uncommitted changes (`branch .`).
-"%GIT_CMD%" show-ref --verify --quiet "refs/heads/%BR%" && goto :branch_switch
+"%GIT_CMD%" show-ref --verify --quiet "refs/heads/%BR%" >nul 2>&1 && goto :branch_switch
 "%GIT_CMD%" switch -c "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
 echo OK: created and switched to %BR%
 goto :done

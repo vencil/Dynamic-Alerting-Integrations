@@ -183,6 +183,26 @@ def test_bat_pr_preflight_does_not_trust_a_python_that_runs_nothing(tmp_path) ->
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_bat_pr_preflight_forwards_the_pr_number(tmp_path) -> None:
+    """`pr-preflight 123` must reach the tool as `--pr 123`."""
+    (tmp_path / "scripts" / "ops").mkdir(parents=True)
+    (tmp_path / "scripts" / "tools" / "dx").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", tmp_path / "scripts" / "ops")
+    argv_log = tmp_path / "argv.txt"
+    (tmp_path / "scripts" / "tools" / "dx" / "pr_preflight.py").write_text(
+        f"import sys\nopen({str(argv_log)!r}, 'w').write(' '.join(sys.argv[1:]))\n", encoding="utf-8"
+    )
+    proc = subprocess.run(
+        ["cmd", "/c", str(tmp_path / "scripts" / "ops" / "win_git_escape.bat"), "pr-preflight", "123"],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout
+    assert argv_log.read_text() == "--skip-hooks --pr 123"
+
+
 def test_ps1_pr_preflight_case_runs_the_tool() -> None:
     """Cross-platform smoke — the rc predicate above is Windows-only.
 
