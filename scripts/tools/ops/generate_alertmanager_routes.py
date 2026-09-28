@@ -125,6 +125,12 @@ from _grar_render import (  # noqa: E402, F401
     load_base_config,
     render_output,
 )
+# #2219: used here, not re-exported — hence no `# noqa: F401` (see the
+# `_lib_io` block above for why that marker must stay off used imports).
+from _grar_render import (  # noqa: E402
+    AlertmanagerConfigRejected, amtool_gate,
+)
+import yaml  # noqa: E402
 
 
 # ============================================================
@@ -268,17 +274,23 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         if confirm not in ("y", "yes"):
             print("Aborted.")
             sys.exit(EXIT_OK)
-    success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name, strict=strict)
+    try:
+        success = apply_to_configmap(routes, receivers, inhibit_rules, namespace,
+                                     configmap_name, strict=strict)
+    except AlertmanagerConfigRejected as exc:
+        # #2219: amtool refused the merged config BEFORE kubectl was called.
+        sys.exit(exc.exit_code)
     # #1617: this was EXIT_VIOLATION (1) while docs/cli-reference.{md,en.md}
     # documented 2 — the code and the shipped table said opposite things.
     # `_lib_exitcodes` settles it: "cannot reach Prometheus / API" is
     # EXIT_CALLER_ERROR. Nothing that makes `apply_to_configmap` return False
     # is a CONFIG violation — the failures are the cluster being unreachable
     # or its ConfigMap being unusable — so the CODE was wrong, not the table.
-    # ⛔ Two earlier versions of this comment were more specific and wrong.
-    # It is NOT true that `/-/reload` is one of those paths
-    # (`_reload_alertmanager` returns True on both branches; a failed reload
-    # is deliberately warning-level, #1243), and it is NOT true that every
+    # #2219: a failed `/-/reload` IS one of those paths now — it used to be
+    # warning-level (#1243) and exited 0 while the running Alertmanager stayed
+    # on the old config. Unreachable is environment, so 2 fits; a reload the
+    # new config made fail is prevented earlier by the amtool gate when amtool
+    # is on PATH. ⛔ And it is NOT true that every
     # such path is a kubectl invocation failing: with kubectl returning 0,
     # a ConfigMap missing `alertmanager.yml` — or holding a value that is
     # not a mapping — also returns False. Measured; each of those now emits
@@ -298,6 +310,21 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     cm_yaml = assemble_configmap(
         base, routes, receivers, inhibit_rules,
         namespace=namespace, configmap_name=configmap_name, strict=strict)
+
+    # #2219: validate what Alertmanager will LOAD from what this run EMITS.
+    # `cm_yaml` is the string that goes to -o / stdout below, unchanged; the
+    # alertmanager.yml handed to amtool is parsed back OUT of it, not taken
+    # from the dict or the inner dump — the outer dump is where a U+0085 in a
+    # value got folded into a line break, so only a round trip of the emitted
+    # text sees what the cluster will see. Gated before every emission
+    # (file, stdout, dry-run preview): a rejected config is not written.
+    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    target = safe_label(output) if (output and not dry_run) else "stdout"
+    rc = amtool_gate(am_yml,
+                     what="the ConfigMap's alertmanager.yml",
+                     refusing=f"write it to {target} (nothing was written)")
+    if rc is not None:
+        sys.exit(rc)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
@@ -332,6 +359,18 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
     )
     body = render_output(routes, receivers, inhibit_rules)
     content = header + body
+
+    # #2219: a fragment is not a complete Alertmanager config (no root
+    # receiver), and `amtool check-config` refuses it for that alone
+    # ("root route must specify a default receiver", measured with amtool
+    # 0.33.1). So this mode is NOT validated whether or not amtool is on PATH
+    # — say so, rather than let rc 0 read as "Alertmanager accepts this".
+    print("NOTICE: routing fragment mode; generated output was NOT validated "
+          "by Alertmanager (a fragment is not a complete Alertmanager config — "
+          "it has no root receiver, which amtool check-config rejects on its "
+          "own). Use --output-configmap to validate the merged config when "
+          "amtool is on PATH.",
+          file=sys.stderr)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)

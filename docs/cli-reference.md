@@ -1756,6 +1756,8 @@ YAML 片段，包含 route、receivers、inhibit_rules。
 **ConfigMap 模式** (`--output-configmap`)：
 完整 Kubernetes ConfigMap YAML，含 global、route、receivers、inhibit_rules，可直接 `kubectl apply`。
 
+**Alertmanager 驗證（#2219）**：PATH 上有 `amtool` 時，`--output-configmap` 與 `--apply` 會對「實際要寫出／套用的那份」`alertmanager.yml` 跑 `amtool check-config`，被拒收就不寫檔、不 apply；沒有 `amtool` 則在 stderr 印 `NOTICE: ... was NOT validated by Alertmanager`，其餘行為不變。Fragment 模式（不是完整設定）與 `--validate` 不做這項驗證。
+
 **範例**
 
 ```bash
@@ -1770,8 +1772,8 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219） |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 

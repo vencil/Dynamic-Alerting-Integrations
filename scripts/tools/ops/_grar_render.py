@@ -16,8 +16,13 @@ Functions:
     _read_existing_configmap(...)         → kubectl get + parse
     _merge_routes_receivers_inhibits(...) → merge generated into existing
     _apply_merged_configmap(...)          → kubectl apply via stdin
-    _reload_alertmanager(namespace)       → curl POST /-/reload
-    apply_to_configmap(...)              → orchestrate read → merge → apply → reload
+    _reload_alertmanager(namespace)       → curl POST /-/reload (False on failure, #2219)
+    apply_to_configmap(...)              → orchestrate read → merge → amtool gate
+                                           → apply → reload
+
+  Alertmanager's own parser (#2219):
+    amtool_gate(am_yml, what=, refusing=) → `amtool check-config` on the exact
+                                           text; None = go on, int = exit code
 """
 from __future__ import annotations
 
@@ -25,8 +30,10 @@ import copy
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -38,6 +45,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route)
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_io import safe_label  # noqa: E402
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -409,6 +418,82 @@ def _run_binary(argv: list[str], *, timeout: int,
             stderr=f"cannot run {argv[0]!r}: {exc}")
 
 
+# ── #2219: Alertmanager's own parser as the last gate ───────────────
+# The JSON schema and this generator's Python checks accept values that
+# Alertmanager refuses at load time (measured: a webhook URL `http://[1]/`, and
+# a host carrying U+0085 that the YAML emitter folds into a line break, which
+# Alertmanager then reads back as a space). Only Alertmanager's parser is the
+# authority on that, so when `amtool` is on PATH it gets the final say — on the
+# SAME text that is about to be written or applied, never on a re-render.
+# ⛔ Not shipped in the da-tools image (owner decision on #2219): without amtool
+# the run is unchanged EXCEPT that it says, every time, that nothing validated it.
+AMTOOL_NOT_FOUND_NOTICE = (
+    "NOTICE: amtool not found on PATH; generated Alertmanager config was NOT "
+    "validated by Alertmanager")
+
+
+
+def amtool_gate(am_yml: str, *, what: str, refusing: str) -> int | None:
+    """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
+    will load. Returns ``None`` to go on, or the exit code to stop with.
+
+    * amtool absent → print ``AMTOOL_NOT_FOUND_NOTICE``, return None (rc
+      unchanged, but never silent — the run must not read as validated);
+    * amtool accepts → one stderr line saying so, return None;
+    * amtool rejects (rc 1 with its ``FAILED:`` verdict) → its output on
+      stderr, return EXIT_VIOLATION (the CONFIG is wrong: the tool ran and
+      found something the user must fix);
+    * anything else non-zero — could not run, timed out, crashed (a Go panic
+      exits 2), a wrapper that fails → EXIT_CALLER_ERROR: no verdict on the
+      config, so it must not read as one.
+
+    *what* names the text for the operator; *refusing* is what the caller will
+    NOT do because of a failure ("write -o …", "apply …"). Everything goes to
+    stderr: in some modes stdout IS the generated config.
+
+    ⛔ The temp file is written with ``newline=""`` so amtool reads the same
+    characters the caller holds; universal-newline translation would hand it
+    a different text than the one that ships.
+    """
+    amtool = shutil.which("amtool")
+    if amtool is None:
+        print(AMTOOL_NOT_FOUND_NOTICE, file=sys.stderr)
+        return None
+    with tempfile.TemporaryDirectory(prefix="grar-amtool-") as tmp:
+        path = Path(tmp) / "alertmanager.yml"
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(am_yml)
+        # receiver URLs / keys live in here; the 0700 temp dir already fences
+        # it, this keeps the file itself owner-only too (SAST write gate).
+        os.chmod(path, 0o600)
+        result = _run_binary([amtool, "check-config", str(path)], timeout=60)
+    output = "\n".join(safe_label(ln) for ln in
+                       (result.stdout + result.stderr).strip().splitlines())
+    if result.returncode == 0:
+        print(f"amtool check-config: {what} accepted by Alertmanager's parser "
+              f"({safe_label(amtool)})", file=sys.stderr)
+        return None
+    if not (result.returncode == 1 and "FAILED:" in output):
+        print(f"ERROR: amtool check-config could not validate {what} "
+              f"(rc={result.returncode}) — refusing to {refusing}:\n{output}",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    print(f"FAIL: amtool check-config rejected {what} (rc={result.returncode}) "
+          f"— refusing to {refusing}. Alertmanager would refuse to load it:\n"
+          f"{output}", file=sys.stderr)
+    return EXIT_VIOLATION
+
+
+class AlertmanagerConfigRejected(Exception):
+    """``amtool_gate`` stopped ``apply_to_configmap`` before anything reached
+    the cluster. Carries the exit code, which is NOT the ``False`` return's 2:
+    a rejected config is the operator's CONFIG being wrong (1)."""
+
+    def __init__(self, exit_code: int):
+        super().__init__(exit_code)
+        self.exit_code = exit_code
+
+
 def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict | None, list[str]]:
     """Read existing Alertmanager ConfigMap from K8s cluster.
 
@@ -591,7 +676,10 @@ def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str
 def _reload_alertmanager(namespace: str) -> bool:
     """Reload Alertmanager configuration via HTTP POST.
 
-    Returns True on success (or if warning-level failure), False on critical error.
+    Returns True on success, False when the reload failed (#2219). It used to
+    return True on both branches (#1243 made the failure warning-level), so an
+    --apply whose new config Alertmanager REJECTED exited 0 — the running
+    Alertmanager was still on the old config and the tool said "done".
     """
     svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
     reload_result = _run_binary(
@@ -601,16 +689,18 @@ def _reload_alertmanager(namespace: str) -> bool:
         # NOT a missing flag: Alertmanager's /-/reload is unconditional (it has no
         # --web.enable-lifecycle — that is Prometheus'). A failure here is network
         # reachability, a NetworkPolicy, or a rejected config. (#1243)
-        print("WARN: Alertmanager reload failed (service unreachable, blocked by "
-              "NetworkPolicy, or the new config was rejected)",
+        print(f"ERROR: Alertmanager reload failed (rc={reload_result.returncode}; "
+              "service unreachable, blocked by NetworkPolicy, or the new config "
+              "was rejected)",
               file=sys.stderr)
         # ⚠️ Only true for the reachability failures: if the reload was refused
         # because the NEW CONFIG IS INVALID, a restart will not save you either —
         # Alertmanager will fail to start on it. Verify before relying on a restart.
         print("ConfigMap was updated. If Alertmanager was merely unreachable it will "
               "load the new config on next restart; if the config was REJECTED, fix or "
-              "roll it back first — a restart would fail too.")
-        return True
+              "roll it back first — a restart would fail too.",
+              file=sys.stderr)
+        return False
 
     print("Alertmanager reloaded")
     return True
@@ -625,8 +715,9 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     Process:
       1. kubectl get configmap → extract alertmanager.yml
       2. Merge generated routes, receivers, inhibit_rules into existing config
-      3. kubectl apply ConfigMap with merged config
-      4. curl POST /-/reload to trigger Alertmanager configuration reload
+      3. amtool check-config on the merged text, when amtool is on PATH (#2219)
+      4. kubectl apply ConfigMap with merged config
+      5. curl POST /-/reload to trigger Alertmanager configuration reload
 
     Notes:
       - Keeps existing base routes/receivers, appends tenant-generated ones
@@ -641,7 +732,11 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         configmap_name: ConfigMap name (typically alertmanager-config)
 
     Returns:
-        True if merge and reload succeeded, False otherwise.
+        True if merge, apply and reload all succeeded, False otherwise.
+
+    Raises:
+        AlertmanagerConfigRejected: amtool refused the merged config (or could
+        not run); nothing was sent to the cluster. #2219.
     """
     # 1. Read existing ConfigMap
     existing, read_warnings = _read_existing_configmap(namespace, configmap_name)
@@ -655,9 +750,18 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     merged_yml = yaml.dump(existing, default_flow_style=False,
                            allow_unicode=True, sort_keys=False)
 
-    # 3. Apply updated ConfigMap
+    # 3. #2219: Alertmanager's parser gets the final say BEFORE the cluster is
+    # touched. `merged_yml` is the exact string handed to
+    # `--from-literal=alertmanager.yml=` below, i.e. the text Alertmanager loads.
+    rc = amtool_gate(merged_yml,
+                     what=f"the merged alertmanager.yml for {namespace}/{configmap_name}",
+                     refusing="apply it to the cluster (nothing was applied)")
+    if rc is not None:
+        raise AlertmanagerConfigRejected(rc)
+
+    # 4. Apply updated ConfigMap
     if not _apply_merged_configmap(merged_yml, namespace, configmap_name):
         return False
 
-    # 4. Reload Alertmanager
+    # 5. Reload Alertmanager
     return _reload_alertmanager(namespace)

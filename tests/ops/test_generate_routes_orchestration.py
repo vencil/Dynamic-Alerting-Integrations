@@ -3332,8 +3332,12 @@ class TestApplyToConfigmap:
         result = apply_to_configmap([], [], [], "monitoring", "am-config")
         assert result is False
 
-    def test_reload_fails_still_returns_true(self, monkeypatch):
-        """If curl reload fails, apply still returns True (ConfigMap was updated)."""
+    def test_reload_fails_returns_false(self, monkeypatch):
+        """#2219: a failed curl reload makes apply return False (→ exit 2).
+
+        It used to return True — the ConfigMap was updated — so an --apply
+        whose reload failed exited 0 while the running Alertmanager stayed on
+        the old config."""
         existing_cm = {
             "data": {
                 "alertmanager.yml": yaml.dump({
@@ -3343,9 +3347,11 @@ class TestApplyToConfigmap:
                 })
             }
         }
-        self._mock_subprocess(monkeypatch, json.dumps(existing_cm), curl_rc=1)
+        calls = self._mock_subprocess(monkeypatch, json.dumps(existing_cm), curl_rc=1)
         result = apply_to_configmap([], [], [], "monitoring", "am-config")
-        assert result is True
+        assert result is False
+        # the reload really was reached — False is not an earlier failure
+        assert any("curl" in c for c in calls), calls
 
 
 # ============================================================
