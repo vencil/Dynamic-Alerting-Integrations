@@ -25,6 +25,13 @@ null key would count as "given" in the schema only, and
 
 Shared case table (also read by the Go guard's TestReceiverPresenceCases):
 components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+Its `am` column is Alertmanager's own verdict, asserted by
+tests/alertmanager-inhibit/receiver_cases_test.go with config.Load (#2180).
+
+Value shapes of required fields (#2180) follow the schema's type: a string
+field must be a string and match the schema `pattern` when there is one (URL
+and smarthost formats, written once as schema definitions and read by Python
+at run time); email `to` given as a list needs non-empty string items.
 
 It also pins the ACCEPTED field set (schema `properties` vs Python
 required + optional + metadata): the schema is `additionalProperties: false`,
@@ -154,6 +161,32 @@ def test_group_fields_are_listed_optional():
 
 with open(_SCHEMA, encoding="utf-8") as _fh:
     _VALIDATOR = jsonschema.Draft7Validator(json.load(_fh))
+
+
+def test_url_fields_carry_a_schema_pattern():
+    """#2180: every URL / smarthost field has a `pattern` in the schema.
+
+    Python reads the pattern from the schema at run time
+    (_lib_validation.receiver_required_problem) instead of holding a copy, so
+    dropping it from the schema would silently switch the format check off.
+    """
+    from _lib_constants import RECEIVER_URL_FIELDS
+    from _lib_validation import _receiver_field_schemas
+
+    fields = _receiver_field_schemas()
+    missing = [f"{rtype}.{f}" for rtype, fs in RECEIVER_URL_FIELDS.items() for f in fs
+               if not fields[rtype][f].get("pattern")]
+    assert not missing, f"no schema pattern for {missing}"
+
+
+def test_shared_case_table_am_column():
+    """Each row's `am` is Alertmanager's verdict on the receiver the pipeline
+    emits; tests/alertmanager-inhibit asserts it against config.Load. A row AM
+    rejects must be invalid: one receiver AM cannot load fails the whole reload."""
+    bad = [c["name"] for c in CASES if c.get("am") not in ("accept", "reject", "n/a")]
+    assert not bad, f"rows without a valid `am`: {bad}"
+    loose = [c["name"] for c in CASES if c["am"] == "reject" and c["valid"]]
+    assert not loose, f"Alertmanager rejects these but the table says valid: {loose}"
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])

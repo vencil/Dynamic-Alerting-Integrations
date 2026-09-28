@@ -104,6 +104,11 @@ dir_rules:
     suite: tests/alertmanager-inhibit
     runner: "make test-am-inhibit"
     justification: harness_test.go 明列的受測輸入②——手貼 generator 輸出的 checked-in 結果（外審 F1）
+  - name: am-inhibit-input-receiver-cases
+    source: "components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: receiver_cases_test.go 的受測輸入——共享表的 am 欄須與 Alertmanager config.Load 實跑一致（#2180）
   - name: k8s-manifest-guards
     source: "k8s/**"
     suite: tests/k8s

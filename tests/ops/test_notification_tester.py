@@ -323,6 +323,16 @@ class TestEdgeCases:
         result = nt.test_receiver(recv)
         assert result.status == nt.STATUS_INVALID_CONFIG
 
+    @pytest.mark.parametrize("rtype", ["Webhook", "WEBHOOK", " webhook", "webhook "])
+    def test_type_is_matched_exactly(self, rtype):
+        """type 不做大小寫或前後空白正規化，與路由產生器、schema `const` 及 Go guard 一致（#2180）。"""
+        recv = {"type": rtype, "url": "https://hooks.example.com/alert", "_label": "t"}
+        result = nt.test_receiver(recv, dry_run=True)
+        assert result.status == nt.STATUS_INVALID_CONFIG
+        assert "unknown receiver type" in result.detail
+        _, err = nt.validate_receiver_url(recv)
+        assert err is not None and "unknown receiver type" in err
+
     @pytest.mark.parametrize("keys,expect", [
         ({"routing_key": "r"}, None),
         ({}, "none is set"),
