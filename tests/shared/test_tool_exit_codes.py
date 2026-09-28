@@ -1,8 +1,32 @@
-"""Exit code contract tests for da-tools CLI tools.
+"""Exit code tests for da-tools CLI tools: ``--help`` and an unknown flag.
 
 Verifies that every registered tool:
   - exits 0 on --help
-  - exits non-zero on invalid arguments
+  - exits 2 (EXIT_CALLER_ERROR) on one unrecognised flag,
+    ``--this-flag-does-not-exist-xyz`` (non-zero for the argparse-exempt
+    tools in INVALID_ARG_EXIT2_EXEMPT)
+
+⚠️ Scope, stated so nobody reads more into a green run than it earns:
+
+  COVERED    ``--help`` → rc 0, and an unrecognised flag → rc 2 (non-zero for
+             the exempt tools). That second path is the one argparse hands
+             every tool for free — ``_lib_exitcodes.py`` says so itself — so a
+             green run says little about the tools' own exit-code handling.
+  NOT COVERED  a recognised flag with an unusable value: a path that does not
+             exist, an invalid value, an unreachable environment (Prometheus /
+             API), an IO failure. ``_lib_exitcodes.py`` files all of these
+             under EXIT_CALLER_ERROR (2), and none of them is fed here. #1642
+             found five such defects live (rc 0 or 1) while this file was green.
+  WEAK       even the unknown-flag case, for two kinds of tool, because rc 2
+             can come from a reason unrelated to the flag:
+             - tools that declare a required argument: argparse's
+               missing-required error exits 2 whether or not the unknown flag
+               is rejected;
+             - tools whose clean run already fails to reach their environment
+               (e.g. backtest_threshold without Prometheus exits 2): a tool
+               that swallowed unknown flags would still pass.
+             The assertion only discriminates for tools whose bare run would
+             exit 0. See #1642 for the measurement.
 """
 import subprocess
 import sys
@@ -117,11 +141,14 @@ def test_invalid_args_exits_nonzero(tool_path):
 # ── #452 Track A: 0/1/2 exit-code contract ────────────────────────────
 # The shared contract lives in scripts/tools/_lib_exitcodes.py:
 #   0 = EXIT_OK, 1 = EXIT_VIOLATION (finding), 2 = EXIT_CALLER_ERROR.
-# Below tightens the "invalid args" gate from "non-zero" to "exactly 2"
-# (caller error), which is the observable boundary of the convention every
-# tool must honour. Tools with a documented richer scheme (diag_pr_ci's
-# 0/1/2/3, tenant_verify's inverted contract) still exit 2 on bad *flags*
-# because argparse owns that path — so this holds for all of them.
+# Below tightens the unknown-flag check from "non-zero" to "exactly 2"
+# (caller error). That is ONE of the EXIT_CALLER_ERROR triggers the contract
+# lists — the one argparse owns — not the contract's boundary: bad values for
+# recognised flags, missing paths, unreachable environments and IO failures
+# are not exercised (see the Scope block in the module docstring, #1642).
+# Tools with a documented richer scheme (diag_pr_ci's 0/1/2/3,
+# tenant_verify's inverted contract) still exit 2 on bad *flags* because
+# argparse owns that path — so this holds for all of them.
 
 
 def test_lib_exitcodes_constants_are_canonical():
@@ -134,7 +161,9 @@ def test_lib_exitcodes_constants_are_canonical():
 @pytest.mark.parametrize("tool_path", ALL_TOOLS, ids=[t.name for t in ALL_TOOLS])
 def test_invalid_args_exits_caller_error(tool_path):
     """Unrecognised flags must exit exactly 2 (EXIT_CALLER_ERROR), not just
-    any non-zero — the convention's observable boundary (#452 Track A)."""
+    any non-zero (#452 Track A). Only the unknown-flag path; for tools with
+    a required argument or an unreachable environment, rc 2 may come from
+    that instead (see the module docstring's Scope block, #1642)."""
     if tool_path.name in INVALID_ARG_EXIT2_EXEMPT:
         pytest.skip(f"{tool_path.name} documented exempt")
     result = subprocess.run(
