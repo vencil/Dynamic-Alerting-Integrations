@@ -57,8 +57,10 @@ REM   win_git_escape.bat diff
 REM   win_git_escape.bat preflight
 REM   win_git_escape.bat fix-hooks                       (fix CRLF hooks)
 REM
-REM WARNING: For CJK/em-dash/special chars in commit message, always use commit-file:
-REM   echo feat: my message > _msg.txt
+REM WARNING: For CJK/em-dash/special chars in commit message, always use commit-file.
+REM   The file must be UTF-8. cmd's echo writes the console codepage (cp950 on
+REM   zh-TW), so write non-ASCII messages from PowerShell:
+REM   [IO.File]::WriteAllText("_msg.txt", $msg, [Text.UTF8Encoding]::new($false))
 REM   win_git_escape.bat commit-file _msg.txt
 REM
 REM Safety:
@@ -225,7 +227,8 @@ if "%MSGFILE%"=="" (
     echo ERROR: message file required
     echo Usage: win_git_escape.bat commit-file msg.txt
     echo.
-    echo Create msg.txt first:
+    echo Create msg.txt first, as UTF-8. cmd echo writes the console codepage,
+    echo so use it only for an ASCII-only message:
     echo   echo feat: my change description ^> msg.txt
     goto :done_err
 )
@@ -395,8 +398,9 @@ echo   preflight           Quick 3-point preflight (locks/status/remote)
 echo   pr-preflight [N]    PR closing check
 echo   fix-hooks           Fix CRLF/shebang issues in .git/hooks/*
 echo.
-echo Tip: For commit messages with CJK, em-dash, or other non-ASCII:
-echo   echo feat: my msg ^> _msg.txt
+echo Tip: For commit messages with CJK, em-dash, or other non-ASCII, write the
+echo file as UTF-8 from PowerShell - cmd echo writes the console codepage:
+echo   [IO.File]::WriteAllText^("_msg.txt", $msg, [Text.UTF8Encoding]::new^($false^)^)
 echo   win_git_escape.bat commit-file _msg.txt
 echo.
 goto :done
