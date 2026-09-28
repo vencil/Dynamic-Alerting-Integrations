@@ -2392,3 +2392,153 @@ class TestRootDefaultsRouting:
         assert exc.value.code == 1, out
         assert "[FAIL] root_defaults" in out, out
         assert "_routing_defaults" in out, out
+
+
+_CARRIER_ORACLE = json.loads(pathlib.Path(
+    _REPO_ROOT, "tests", "golden", "fixtures",
+    "defaults-carrier-oracle.json").read_text(encoding="utf-8"))["cases"]
+
+#: Oracle rows where this row's verdict differs from the exporter's, each for
+#: a reason that is not the value rule (#1414) and predates it.
+#:   * top level not a mapping — `yaml_syntax` owns that finding; this row
+#:     says "no `defaults:` mapping" rather than repeat it.
+#:   * the rest FAIL here while the exporter accepts: conf.d is read with the
+#:     strict pure-Python loader (#2123 duplicate keys anywhere; one document;
+#:     no tab where libyaml tolerates one), which fails the file before the
+#:     value rule runs — through `_run_check`'s input-error row, as before.
+_ORACLE_ROW_DEVIATIONS = {
+    "top-level-list": vc.PASS,
+    "top-level-scalar": vc.PASS,
+    "multi-document": vc.FAIL,
+    "dup-in-unknown-section": vc.FAIL,
+    "dup-under-unknown-nested-field": vc.FAIL,
+    "dup-in-custom-alerts-recipe": vc.FAIL,
+    "trailing-tab": vc.FAIL,
+    "tab-after-key-colon": vc.FAIL,
+    "tab-in-flow": vc.FAIL,
+}
+
+
+class TestRootDefaultsValues:
+    """Check 10 (#1414): a root `defaults:` value the exporter drops the whole
+    block over, or decodes to 0, is a FAIL.
+
+    Measured before this rule: `"70"`, `disable`, `{default: 30}` and an empty
+    value under the root `defaults:` each printed `Result: PASS`, rc 0 — while
+    the exporter dropped every platform threshold for the first three and
+    served a 0 threshold to every tenant for the fourth.
+    """
+
+    _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
+
+    @classmethod
+    def _tree(cls, tmp_path, defaults_body):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
+        (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
+        return d
+
+    @pytest.mark.parametrize("value, shown", [
+        ('"70"', '`"70"`'),
+        ("disable", "`disable`"),
+        ("\n    default: 30", "a mapping"),
+        ("\n    - 30", "a list"),
+        ("true", "`true`"),
+        ("2026-01-01", "`2026-01-01`"),
+    ])
+    def test_a_value_the_exporter_cannot_decode_fails(self, tmp_path, value,
+                                                      shown):
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
+                       f"  mysql_connections: {value}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        detail = r["details"][0]
+        assert f"`defaults.mysql_connections` is {shown}" in detail, detail
+        # The consequence is the whole block, not the one key.
+        assert "drops ALL of it" in detail, detail
+
+    @pytest.mark.parametrize("value", ["", " ~", " null"])
+    def test_an_empty_value_fails_as_a_zero_threshold(self, tmp_path, value):
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
+                       f"  mysql_connections:{value}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "`defaults.mysql_connections` has no value" in detail, detail
+        assert "0 threshold" in detail, detail
+        assert "optional_overrides" in detail, detail
+        # Not the whole block: the exporter keeps the other thresholds.
+        assert "drops ALL of it" not in detail, detail
+
+    @pytest.mark.parametrize("value", ["80", "0", "-5", "1.5", "1e3", "0x10",
+                                       ".inf", "!!float 80"])
+    def test_numbers_the_exporter_decodes_pass(self, tmp_path, value):
+        """Must-stay-green: every spelling here decodes in yaml.v3."""
+        d = self._tree(tmp_path, f"defaults:\n  mysql_connections: {value}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_defaults_that_is_not_a_mapping_fails(self, tmp_path):
+        """`defaults: 80` loads in PyYAML and is dropped whole by the exporter;
+        before #1414 this row read it as "nothing to check"."""
+        d = self._tree(tmp_path, "defaults: 80\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "drops ALL of it" in " ".join(r["details"]), r
+
+    def test_a_routing_key_gets_one_line_not_two(self, tmp_path):
+        """`_routing: {…}` is also a value the exporter cannot decode; the
+        #2291 line already says so, and the value rule must not repeat it."""
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
+                       "  _routing:\n    group_wait: \"30s\"\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        assert "_routing_defaults" in r["details"][0], r
+
+    def test_routing_sentence_follows_the_exporter_not_pyyaml(self, tmp_path):
+        """`1:30` is an int to PyYAML (YAML 1.1 sexagesimal) and not a number
+        to yaml.v3, which drops the block over it."""
+        d = self._tree(tmp_path, "defaults:\n  _routing_x: 1:30\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "drops ALL of it" in r["details"][0], r
+
+    def test_subtree_defaults_are_out_of_scope(self, tmp_path):
+        """A subtree `_defaults.yaml` is merged by the hierarchical plane,
+        whose decoding of `defaults:` is not `map[string]float64` (the golden
+        merge fixtures hold mappings there by design)."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        sub = d / "team"
+        sub.mkdir()
+        (sub / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: disable\n", encoding="utf-8")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    @pytest.mark.parametrize(
+        "case", _CARRIER_ORACLE, ids=[c["name"] for c in _CARRIER_ORACLE])
+    def test_row_verdict_matches_the_go_judged_oracle(self, tmp_path, case):
+        """The same truth table the Go test `TestDefaultsCarrierOracle`
+        judges against the exporter's own `parsePartialConfig`: this row
+        FAILs exactly where the exporter drops the carrier or decodes a 0,
+        save the listed deviations — so the row cannot drift from the
+        exporter without this going red."""
+        d = self._tree(tmp_path, case["doc"])
+        r = vc._run_check("root_defaults", vc.check_root_defaults, str(d),
+                          _config_dir=str(d))
+        want = _ORACLE_ROW_DEVIATIONS.get(
+            case["name"],
+            vc.PASS if case["exporter"] == "accepted" else vc.FAIL)
+        assert r["status"] == want, (case, r)
+
+    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: disable\n")
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] root_defaults" in out, out

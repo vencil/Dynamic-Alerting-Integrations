@@ -32,10 +32,13 @@ Checks:
   9. Tenant uniqueness — one tenant id declared by two files makes the exporter
                     reject the ENTIRE config dir (`DuplicateTenantError`), so
                     this one FAIL is about every tenant in the tree (#1577)
-  10. Root defaults — no `_routing*` key under `defaults:` in the root
-                    _defaults.yaml: a mapping there makes the exporter drop
-                    every platform threshold, and the route generator reads
-                    routing only from top-level `_routing_defaults` (#2291)
+  10. Root defaults — `defaults:` in the root _defaults.yaml, as the
+                    exporter decodes it: a value that is not a number
+                    (`"70"`, `disable`, a mapping) makes the exporter drop
+                    every platform threshold, and an empty value becomes a 0
+                    threshold for every tenant (#1414); and no `_routing*`
+                    key there — the route generator reads routing only from
+                    top-level `_routing_defaults` (#2291)
 
 Hierarchical trees: several rows (today schema, routes, policy and
 policy_dsl) get their tenants from a reader that is FLAT — it reads only the
@@ -1225,7 +1228,7 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
 
 
 # ============================================================
-# Check 10: Root `defaults:` block (#2291)
+# Check 10: Root `defaults:` block (#2291, #1414)
 # ============================================================
 #: Top-level keys of a `_defaults.yaml` that the routing generator reads. A
 #: `_routing*` key written one level too deep, under `defaults:`, is reached by
@@ -1233,8 +1236,13 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
 _TOP_LEVEL_ROUTING_KEYS = frozenset({"_routing_defaults", "_routing_enforced"})
 
 
-def _root_defaults_routing_detail(rel: str, key: str, value: object) -> str:
-    """One FAIL line for a `_routing*` key under the root `defaults:`."""
+def _root_defaults_routing_detail(rel: str, key: str, value: object,
+                                  dropped_raw: str | None) -> str:
+    """One FAIL line for a `_routing*` key under the root `defaults:`.
+
+    *dropped_raw* is the value's source text when the exporter's decoder
+    (``deprecate_rule.exporter_verdicts``) rejects it, None when it decodes.
+    """
     if key == "_routing":
         move = ("move its contents to a top-level `_routing_defaults:` block "
                 "in the same file — that is where platform routing defaults "
@@ -1254,19 +1262,18 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object) -> str:
     # rows, one `ERROR: skip unparseable defaults/profiles file` log line).
     # A number or null decodes and is skipped as a threshold; it is still a
     # routing setting nothing applies.
-    # ⚠️ Judged by PyYAML's type, not yaml.v3's: a plain scalar the two read
-    # differently (`1e3` is a string to PyYAML, a float to yaml.v3) gets the
-    # louder sentence. The FAIL itself does not depend on it.
-    decodes = value is None or (isinstance(value, (int, float))
-                                and not isinstance(value, bool))
-    if decodes:
+    # #1414: which of the two is yaml.v3's verdict (the same one the check's
+    # value rule uses), not PyYAML's type — they disagree on plain scalars
+    # (`1e3` is a string to PyYAML and a float to yaml.v3; `1:30` the other
+    # way round), and a sentence chosen by PyYAML could contradict the verdict.
+    if dropped_raw is None:
         effect = ("threshold-exporter skips it as a threshold and the route "
                   "generator never reads `defaults:`, so this routing setting "
                   "is applied by nothing")
     else:
-        kind = {dict: "mapping", list: "list", str: "string",
-                bool: "boolean"}.get(type(value), type(value).__name__)
-        effect = (f"its value is a {kind}, and the root "
+        kind = {dict: "a mapping", list: "a list"}.get(
+            type(value), f"`{dropped_raw}`, which is not a number")
+        effect = (f"its value is {kind}, and the root "
                   f"`defaults:` holds numbers only: threshold-exporter cannot "
                   f"decode this file's `defaults:` block and drops ALL of it — "
                   f"every platform threshold, not just this key. The route "
@@ -1274,8 +1281,62 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object) -> str:
     return f"{rel}: `defaults.{key}` — {effect}; {move}."
 
 
+def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
+                                zero: bool) -> str:
+    """One FAIL line for a value the exporter drops or decodes to 0 (#1414).
+
+    *key* and *raw* are one item of ``deprecate_rule.exporter_verdicts`` (key
+    None = the whole document); *zero* is whether its kind is
+    ``DECODES_TO_ZERO`` rather than a blocking one.
+    """
+    if zero:
+        return (f"{rel}: `defaults.{key}` has no value — threshold-exporter "
+                f"decodes it as 0 and sends a 0 threshold for this metric to "
+                f"every tenant that does not set its own value. Give it a "
+                f"number; to declare the key without a platform value, list "
+                f"it under `optional_overrides:` instead.")
+    if key is None:
+        # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
+        # words it in Chinese, this tool's operator strings are English, and
+        # every structural reason that reaches here (a `defaults:` that is a
+        # scalar or list, a bad `<<` merge, a non-scalar key) has one remedy.
+        return (f"{rel}: threshold-exporter cannot decode this file's "
+                f"`defaults:` as a mapping of metric names to numbers and "
+                f"drops ALL of it — every platform threshold. Write the root "
+                f"`defaults:` as `metric_name: <number>` lines.")
+    shown = {"<mapping>": "a mapping", "<list>": "a list"}.get(
+        raw, f"`{raw}`, which is not a number")
+    return (f"{rel}: `defaults.{key}` is {shown} — the "
+            f"root `defaults:` holds numbers only, so threshold-exporter "
+            f"cannot decode this file's `defaults:` block and drops ALL of "
+            f"it: every platform threshold, not just this key. Write a plain, "
+            f"unquoted number.")
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
-    """No `_routing*` key under the ROOT `_defaults.yaml`'s `defaults:` (#2291).
+    """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
+
+    Two rules, one row:
+
+    * #1414 — every value must decode as a number. The exporter decodes the
+      root ``defaults:`` as ``map[string]float64`` with yaml.v3: a value it
+      cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
+      the exporter drops the root file's whole ``defaults:`` — every platform
+      threshold, while the load is reported as successful; a null / empty
+      value decodes as 0 and becomes a 0 threshold for every tenant that does
+      not override it. Both FAIL. The verdict is
+      ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
+      table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
+      by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
+      Every kind in its ``BLOCKING_KINDS`` is a FAIL here too.
+    * #2291 — no ``_routing*`` key, whatever its value (below). A
+      ``_routing*`` key gets that rule's line only, never a second one from
+      the value rule.
+
+    ⚠️ A file PyYAML cannot read at all still fails through
+    ``load_yaml_file_strict`` and ``_run_check``'s input-error row, as before;
+    a top level that is not a mapping stays ``yaml_syntax``'s finding. The
+    value rule speaks about files that load.
 
     ``defaults:`` holds platform thresholds. Routing defaults live in the
     top-level ``_routing_defaults:`` block, and a ``_routing`` written under
@@ -1321,17 +1382,36 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                             ["no root _defaults.yaml — nothing to check"])
     rel = carrier.name
     raw = load_yaml_file_strict(str(carrier), default={})
-    block = raw.get("defaults") if isinstance(raw, dict) else None
-    if not isinstance(block, dict):
+    if not isinstance(raw, dict):
         return _make_result("root_defaults", PASS,
                             [f"{rel}: no `defaults:` mapping — nothing to check"])
-    details = [_root_defaults_routing_detail(rel, str(k), v)
-               for k, v in block.items()
-               if isinstance(k, str) and k.startswith("_routing")]
+    # #1414: the one yaml.v3 mirror, imported in-process like
+    # `generate_alertmanager_routes` above — a sibling tool shipped beside
+    # this one in both layouts, not a second copy of the decode rules.
+    import deprecate_rule as dr
+    verdicts = dr.exporter_verdicts(carrier.read_bytes())
+    dropped = {k: r for k, r, kind in verdicts
+               if k is not None and kind in dr.BLOCKING_KINDS}
+    details = [_root_defaults_value_detail(rel, k, r,
+                                           kind == dr.DECODES_TO_ZERO)
+               for k, r, kind in verdicts
+               if not (k is not None and k.startswith("_routing"))
+               and (kind in dr.BLOCKING_KINDS or kind == dr.DECODES_TO_ZERO)]
+    block = raw.get("defaults")
+    if not isinstance(block, dict):
+        if details:
+            return _make_result("root_defaults", FAIL, details)
+        return _make_result("root_defaults", PASS,
+                            [f"{rel}: no `defaults:` mapping — nothing to check"])
+    details += [_root_defaults_routing_detail(rel, str(k), v,
+                                              dropped.get(str(k)))
+                for k, v in block.items()
+                if isinstance(k, str) and k.startswith("_routing")]
     if details:
         return _make_result("root_defaults", FAIL, details)
     return _make_result("root_defaults", PASS, [
-        f"{rel}: {len(block)} key(s) under `defaults:`, no `_routing*` key"])
+        f"{rel}: {len(block)} key(s) under `defaults:`, every value a number "
+        f"threshold-exporter decodes, no `_routing*` key"])
 
 
 # ============================================================
@@ -1444,13 +1524,16 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "twice.",
         "docs/scenarios/multi-domain-conf-layout.md",
     ),
-    # #2291: `defaults:` is for thresholds; routing defaults are a sibling
-    # block. Each row above already says which key and what to do with it.
+    # #2291 / #1414: `defaults:` is for numeric thresholds; routing defaults
+    # are a sibling block. Each row above already says which key and what to
+    # do with it.
     "root_defaults": (
-        "Move routing settings out of `defaults:` in the root _defaults.yaml: "
-        "`_routing` becomes a top-level `_routing_defaults:` block (the only "
-        "place platform routing defaults are read from); `defaults:` keeps "
-        "numeric thresholds only.",
+        "`defaults:` in the root _defaults.yaml holds plain numbers only: "
+        "write each threshold as an unquoted number; declare a key without a "
+        "platform value under `optional_overrides:` rather than leaving it "
+        "empty; and move routing settings to a top-level "
+        "`_routing_defaults:` block (the only place platform routing "
+        "defaults are read from).",
         "docs/cli-reference.md#validate-config",
     ),
     # #1653: not a check — the one row `main()` emits under --json when
