@@ -320,15 +320,50 @@ def all_threshold_keys(pack_paths: list[str]) -> set[str]:
 # ---------------------------------------------------------------------------
 # Shared paths / loading / known-deferred (used by recommend + drift-guard)
 # ---------------------------------------------------------------------------
+import glob  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-# scripts/tools/ops/ -> repo root is three levels up.
-_REPO_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
+from _lib_compat import find_project_root  # noqa: E402
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
-DEFAULT_RULE_PACKS_DIR = os.path.join(_REPO_ROOT, "rule-packs")
+
+_PACK_GLOB = "rule-pack-*.yaml"
+
+
+class RulePacksNotFoundError(FileNotFoundError):
+    """No rule pack is reachable from this module's location (#1501)."""
+
+
+def _find_rule_packs_dir() -> Optional[str]:
+    """The directory holding the rule packs in THIS layout, or None.
+
+    ⛔ Found, not counted (#1501). This used to be ``_THIS_DIR`` + three
+    ``".."`` — right in the repo (``scripts/tools/ops/``), and ``/`` in the
+    image, where build.sh flattens every tool into ``/opt/da-tools/``. The
+    glob under ``/rule-packs`` then matched nothing, ``build_map([])`` returned
+    ``{}``, and ``--generate-observed-map`` merged that over the committed map
+    as "every key DROPPED" — a silent wipe to zero entries.
+
+    Flat first: build.sh ``REPO_DATA_FILES`` copies every pack that references
+    ``alert_threshold:`` beside this module (the set ``build_map`` can extract
+    from at all; ``tests/ops/test_threshold_alerts.py`` pins that roster). The
+    repo branch walks up to a ``PROJECT_ROOT_MARKERS`` entry and stops there —
+    same shape as ``_threshold_alerts.find_rule_pack_paths``.
+    """
+    if glob.glob(os.path.join(_THIS_DIR, _PACK_GLOB)):
+        return _THIS_DIR
+    root = find_project_root(_THIS_DIR)
+    if root is not None and (root / "rule-packs").is_dir():
+        return str(root / "rule-packs")
+    return None
+
+
+# None when no layout carries the packs — default_pack_paths() turns that into
+# a loud RulePacksNotFoundError instead of an empty list.
+DEFAULT_RULE_PACKS_DIR = _find_rule_packs_dir()
 
 # Keys deliberately NOT in the observed-map: their threshold comparison lives in
 # a recording rule (`:core`), not a `- alert:`, so the alert-based extractor
@@ -343,9 +378,25 @@ KNOWN_DEFERRED: dict[str, str] = {
 
 
 def default_pack_paths() -> list[str]:
-    """Sorted list of rule-pack YAML paths under the repo's rule-packs/ dir."""
-    import glob
-    return sorted(glob.glob(os.path.join(DEFAULT_RULE_PACKS_DIR, "rule-pack-*.yaml")))
+    """Sorted rule-pack YAML paths for this layout; raises when there are none.
+
+    ⛔ Never returns ``[]``. An empty pack list is not "nothing to extract" —
+    every caller would read it as "no key is referenced anywhere", and
+    ``write_observed_map`` would then drop every committed entry (#1501).
+    """
+    if DEFAULT_RULE_PACKS_DIR is None:
+        raise RulePacksNotFoundError(
+            f"no rule packs reachable from {_THIS_DIR}: none beside this "
+            f"module ({_PACK_GLOB}) and no project root "
+            f"(.git / Makefile / pyproject.toml) above it with a rule-packs/ "
+            f"directory"
+        )
+    paths = sorted(glob.glob(os.path.join(DEFAULT_RULE_PACKS_DIR, _PACK_GLOB)))
+    if not paths:
+        raise RulePacksNotFoundError(
+            f"{DEFAULT_RULE_PACKS_DIR} holds no {_PACK_GLOB}"
+        )
+    return paths
 
 
 _MAP_HEADER = (

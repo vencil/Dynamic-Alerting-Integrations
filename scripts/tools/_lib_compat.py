@@ -188,3 +188,25 @@ harden_stdout_errors()
 # error. All three entries are tracked at the repository root, so `git archive`
 # carries them; the image carries none, which is the intended answer there.
 PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
+
+
+def find_project_root(start) -> "Path | None":
+    """Nearest ancestor of *start* (inclusive) holding a PROJECT_ROOT_MARKERS entry.
+
+    Returns None when no ancestor has one — which is the CORRECT answer inside
+    the da-tools image (``/opt/da-tools/`` carries no marker and no repo tree),
+    so callers must treat None as "there is no repo here", never as a path to
+    join onto. The first marker found is the bound: the walk stops there
+    instead of climbing past the checkout into somebody else's files.
+
+    ``.git`` is a directory in a clone and a FILE in a worktree, hence
+    ``exists()`` rather than ``is_dir()``.
+    """
+    from pathlib import Path
+
+    here = Path(start).resolve()
+    return next(
+        (base for base in (here, *here.parents)
+         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
+        None,
+    )

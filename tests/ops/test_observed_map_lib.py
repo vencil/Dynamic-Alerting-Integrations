@@ -816,3 +816,22 @@ class TestModeMembershipDriftGuard:
         m = L.build_map([p])
         res = L.check_consistency(m, [p])
         assert res["errors"] == []
+
+
+class TestDefaultPackPathsNeverEmpty:
+    """#1501: an empty pack list must be an error, not "no keys anywhere"."""
+
+    def test_repo_layout_finds_the_repo_packs(self):
+        paths = L.default_pack_paths()
+        assert paths and all(
+            os.path.basename(os.path.dirname(p)) == "rule-packs" for p in paths)
+
+    def test_no_reachable_dir_raises(self, monkeypatch):
+        monkeypatch.setattr(L, "DEFAULT_RULE_PACKS_DIR", None)
+        with pytest.raises(L.RulePacksNotFoundError, match="no rule packs reachable"):
+            L.default_pack_paths()
+
+    def test_dir_without_packs_raises(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(L, "DEFAULT_RULE_PACKS_DIR", str(tmp_path))
+        with pytest.raises(L.RulePacksNotFoundError, match="holds no"):
+            L.default_pack_paths()
