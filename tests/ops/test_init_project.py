@@ -2249,12 +2249,13 @@ class TestGenDaInitMarker:
         config = yaml.safe_load(yaml_str)
         assert config is not None
 
-    def test_version_field(self):
-        """Marker includes version field."""
+    def test_no_version_field(self):
+        """#1424: no `version` key. It was a hard-coded 2.2.0 that nothing
+        reads — init only checks that the marker exists — so it could only
+        ever mislead a reader about which release wrote the repo."""
         yaml_str = ip._gen_da_init_marker('github', 'kustomize', ['mariadb'], ['db-a'])
         config = yaml.safe_load(yaml_str)
-        assert 'version' in config
-        assert config['version'].startswith('v') or config['version'] == '2.2.0'
+        assert 'version' not in config
 
     def test_generated_at_field(self):
         """Marker includes generated_at timestamp."""
@@ -2292,7 +2293,9 @@ class TestGenDaInitMarker:
         """Header warns not to edit manually."""
         yaml_str = ip._gen_da_init_marker('github', 'kustomize', ['mariadb'], ['db-a'])
         assert 'Do not edit manually' in yaml_str
-        assert 'upgrade detection' in yaml_str
+        # #1424: say what the marker really does — nothing detects upgrades.
+        assert 'upgrade' not in yaml_str
+        assert '--force' in yaml_str
 
 
 # ============================================================
@@ -3396,7 +3399,6 @@ class TestMarkerFileDetection:
             # but we verify the marker file is readable
             with open(marker_path, 'r', encoding='utf-8') as f:
                 marker_data = yaml.safe_load(f)
-            assert 'version' in marker_data
             assert 'generated_at' in marker_data
 
     def test_marker_preserves_initialization_context(self):
