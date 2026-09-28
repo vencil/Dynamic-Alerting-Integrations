@@ -2951,6 +2951,8 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 
 The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group` or a `routes` `match` key can only be supplied through `--label`, otherwise the trace always lands on the main receiver. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).
 
+Step 4 of `--trace` lists the effective inhibit rules (verbatim from the assembled config, including the `--base-config`'s own rules) and does not evaluate whether the alert would be inhibited — that depends on which alerts are firing at the same time.
+
 `--trace` needs `amtool`; the da-tools image bundles it since [#2294](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2294) (the v2.9.0 image does not). <!-- image-caveat: v2.9.0 -->
 
 **Examples**

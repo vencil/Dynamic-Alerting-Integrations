@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -609,6 +610,13 @@ def _receiver_type(name: str, receivers: dict[str, dict],
     return "+".join(kinds) if kinds else "none"
 
 
+INHIBIT_NOTE = ("Inhibit rules of the assembled config, verbatim; whether one "
+                "suppresses this alert depends on which alerts are firing at "
+                "the same time, which the trace does not evaluate")
+INHIBIT_NOTE_ZH = ("組好設定裡的 inhibit rules（原文）；是否抑制取決於執行時同時 "
+                   "firing 的告警，trace 不評估")
+
+
 class UnassemblableBase(ValueError):
     """``assemble_configmap`` crashed on the --base-config (not a refusal)."""
 
@@ -770,7 +778,8 @@ def trace_alert_routing(
       1. The tenant's merged routing config
       2. The route path(s) and receiver(s) Alertmanager delivers to
       3. Whether the enforced NOC route takes a copy (only when it matches)
-      4. Whether any inhibit rules would suppress it
+      4. The inhibit rules of the assembled config, verbatim (not evaluated:
+         suppression depends on which alerts fire at runtime)
       5. Receiver-type constraints of the domain policies listing the tenant
 
     Without ``amtool`` on PATH the delivery is unknown: a WARN is printed,
@@ -784,8 +793,7 @@ def trace_alert_routing(
     ``base_config`` is the loaded ``--base-config`` (None → built-in base).
 
     Returns dict with keys:
-        tenant, alertname, severity, labels, steps, final_receiver,
-        inhibited, inhibit_reason, timing
+        tenant, alertname, severity, labels, steps, final_receiver, timing
     """
     reserved = sorted(set(extra_labels or {}) & set(RESERVED_TRACE_LABELS))
     if reserved:
@@ -923,37 +931,19 @@ def trace_alert_routing(
             opts = _inherited(top["nodes"])
             timing = {key: opts[key] for key in _TIMING_KEYS}
 
-    # Step 4: Check inhibition (severity dedup)
-    inhibited = False
-    inhibit_reason = ""
-    dedup_enabled = (parsed.get("dedup_configs") or {}).get(tenant) == "enable"
-    # The generated rule's target also needs metric_group=~".+" (and
-    # equal: [metric_group]); re's `.` excludes \n as RE2's does.
-    has_group = re.fullmatch(".+", alert_labels.get("metric_group", ""))
+    # Step 4: the inhibit rules Alertmanager would load, verbatim (#2293).
+    # Whether one suppresses this alert depends on which alerts are firing
+    # at the same time — the trace does not evaluate it.
     if not assembled:
-        steps.append({"step": 4, "action": "inhibit_check",
-                      "detail": f"Unknown: {unknown}",
-                      "inhibited": "unknown"})
-    elif dedup_enabled and severity == "warning" and has_group:
-        # If tenant has severity dedup enabled, warning alerts may be
-        # inhibited when a critical alert is also firing
-        inhibited = False  # can't know at config time; mark as "possible"
-        inhibit_reason = (
-            f"Severity dedup active for '{tenant}': warning may be "
-            f"inhibited if critical alert is also firing"
-        )
-        steps.append({
-            "step": 4,
-            "action": "inhibit_check",
-            "detail": inhibit_reason,
-            "inhibited": "possible",
-        })
+        steps.append({"step": 4, "action": "inhibit_rules",
+                      "detail": ("Unknown: inhibit rules not available "
+                                 f"({unknown})"),
+                      "inhibit_rules": None})
     else:
         steps.append({
-            "step": 4,
-            "action": "inhibit_check",
-            "detail": "No inhibition applies",
-            "inhibited": False,
+            "step": 4, "action": "inhibit_rules",
+            "detail": INHIBIT_NOTE,
+            "inhibit_rules": yaml.safe_load(am_yml).get("inhibit_rules") or [],
         })
 
     # Step 5: receiver-type constraints, scoped like the generator's check
@@ -966,8 +956,6 @@ def trace_alert_routing(
         "labels": alert_labels,
         "steps": steps,
         "final_receiver": steps[1]["receiver_desc"],
-        "inhibited": inhibited,
-        "inhibit_reason": inhibit_reason,
         "timing": timing,
     }
 
@@ -989,7 +977,7 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
         "resolve_routing_config": "📋",
         "match_receiver": "📡",
         "enforced_routing": "🛡️",
-        "inhibit_check": "🚫",
+        "inhibit_rules": "🚫",
         "policy_check": "✅",
     }
 
@@ -997,7 +985,10 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
         icon = step_icons.get(step["action"], "▸")
         action_label = step["action"].replace("_", " ").title()
         lines.append(f"  {icon} Step {step['step']}: {action_label}")
-        lines.append(f"     {safe_label(step['detail'])}")
+        detail = step["detail"]
+        if detail == INHIBIT_NOTE and lang == "zh":
+            detail = INHIBIT_NOTE_ZH
+        lines.append(f"     {safe_label(detail)}")
         if step.get("route_path"):
             label = "路徑:" if lang == "zh" else "Path:"
             lines.append(f"     {label} {safe_label(step['route_path'])}")
@@ -1010,6 +1001,15 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
             lines.append(f"     {label}")
             for row in step["rendered_tree"]:
                 lines.append(f"       {safe_label(row)}")
+        if step.get("inhibit_rules") is not None:
+            label = ("生效的 inhibit rules:" if lang == "zh"
+                     else "Effective inhibit rules:")
+            lines.append(f"     {label}")
+            if not step["inhibit_rules"]:
+                lines.append("       (none)")
+            for rule in step["inhibit_rules"]:
+                text = json.dumps(rule, ensure_ascii=False)
+                lines.append(f"       - {safe_label(text)}")
         if "enforced_receiver" in step:
             label = "強制接收者:" if lang == "zh" else "Enforced:"
             lines.append(f"     {label} {safe_label(step['enforced_receiver'])}")
@@ -1022,18 +1022,12 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
 
     # Final summary
     receiver = safe_label(trace["final_receiver"])
-    inhibited = trace["steps"][3]["inhibited"]
     if lang == "zh":
         lines.append("── 最終結果 ──")
         lines.append(f"  接收者: {receiver}")
-        lines.append("  抑制: " + {"possible": "可能", "unknown": "(未知)"}
-                     .get(inhibited, "否"))
     else:
         lines.append("── Final Result ──")
         lines.append(f"  Receiver: {receiver}")
-        lines.append("  Inhibited: " + {"possible": "possible",
-                                        "unknown": "(unknown)"}
-                     .get(inhibited, "no"))
 
     t_info = {k: ("(unknown)" if v is None else v)
               for k, v in trace["timing"].items()}

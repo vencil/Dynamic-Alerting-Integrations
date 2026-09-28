@@ -2937,6 +2937,8 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
 
+`--trace` 的 step 4 列出生效的 inhibit rules（組好的設定裡的原文，含 `--base-config` 自帶的規則），不評估告警是否會被抑制——那取決於執行時同時 firing 的告警。
+
 `--trace` 需要 `amtool`；da-tools 映像自 [#2294](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2294) 起內含，v2.9.0 映像不含。 <!-- image-caveat: v2.9.0 -->
 
 **範例**

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +15,6 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import explain_route as er  # noqa: E402
-import generate_alertmanager_routes as gar  # noqa: E402
 
 # #2293: --trace asks Alertmanager (`amtool config routes test --tree`) where
 # an alert goes. Tests about THAT verdict need a real amtool: they skip without
@@ -113,30 +111,6 @@ class TestTraceAlertRouting:
         trace = er.trace_alert_routing(parsed, "db-a", "Test")
         enforced_step = trace["steps"][2]
         assert "No enforced" in enforced_step["detail"]
-
-    def test_severity_dedup_inhibition(self):
-        parsed = _make_parsed(
-            routing_defaults={"receiver": _WEBHOOK},
-            dedup_configs={"db-a": "enable"},
-            all_tenants=["db-a"],
-        )
-        # Warning with dedup enabled → possible inhibition
-        trace = er.trace_alert_routing(parsed, "db-a", "HighMem", "warning",
-                                       {"metric_group": "mem"})
-        inhibit_step = trace["steps"][3]
-        assert inhibit_step["action"] == "inhibit_check"
-        assert inhibit_step["inhibited"] == "possible"
-
-    def test_no_inhibition_for_critical(self):
-        parsed = _make_parsed(
-            routing_defaults={"receiver": _WEBHOOK},
-            dedup_configs={"db-a": "enable"},
-            all_tenants=["db-a"],
-        )
-        # Critical alerts are never inhibited by dedup
-        trace = er.trace_alert_routing(parsed, "db-a", "HighMem", "critical")
-        inhibit_step = trace["steps"][3]
-        assert inhibit_step["inhibited"] is False
 
     @needs_amtool
     def test_domain_policy_violation(self):
@@ -472,8 +446,10 @@ class TestBaseConfigFlag:
         assert "Traceback" not in err
         assert trace["final_receiver"] == \
             "(unknown: the generator refuses this config)"
-        # No config, no inhibit rules: step 4 cannot say "possible" either.
-        assert trace["steps"][3]["inhibited"] == "unknown"
+        # No config, no inhibit rules to list.
+        step4 = trace["steps"][3]
+        assert step4["inhibit_rules"] is None
+        assert step4["detail"].startswith("Unknown: inhibit rules not available")
 
     def test_trace_own_bug_is_not_swallowed(self, monkeypatch, tmp_path):
         """Only assemble_configmap's crash reads as a malformed base; a
@@ -486,47 +462,46 @@ class TestBaseConfigFlag:
                      "--trace", "--json"])
 
 
-class TestInhibitStepFromConfd:
-    """Step 4 reads the ``dedup_configs`` that ``_parse_config_files``
-    produces from a real conf.d (default enable, ``_severity_dedup: disable``
-    opts out)."""
+_SILENT_MODE_RULE = {
+    "source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+    "target_matchers": ['severity="warning"', 'tenant=~".+"',
+                        'alert_source=""'],
+    "equal": ["tenant"]}
 
-    @staticmethod
-    def _rule_can_inhibit(conf, labels):
-        """The generator's own inhibit rules for this conf.d: does one whose
-        target_matchers (``k="v"`` / ``k=~"re"``) match *labels* exist?"""
-        rules, _ = gar.generate_inhibit_rules(
-            gar._parse_config_files(str(conf))["dedup_configs"])
 
-        def _matches(matcher):
-            key, op, val = re.fullmatch(r'(\w+)(=~|=)"(.*)"', matcher).groups()
-            got = labels.get(key, "")
-            return re.fullmatch(val, got) if op == "=~" else got == val
-        return any(all(_matches(m) for m in r["target_matchers"])
-                   for r in rules)
+class TestInhibitRulesStep:
+    """#2293: step 4 lists the inhibit rules verbatim and concludes nothing —
+    suppression depends on which alerts fire at runtime."""
 
-    @pytest.mark.parametrize("group", [None, "mem"])
-    @pytest.mark.parametrize("dedup", [None, "enable", "disable"])
-    @pytest.mark.parametrize("severity", ["warning", "critical"])
-    def test_dedup_from_confd(self, capsys, tmp_path, dedup, severity, group):
-        """Step 4 says ``possible`` exactly when the generator emits a rule
-        that can inhibit this alert (the rule's target needs a non-empty
-        ``metric_group``), ``False`` otherwise."""
+    def test_lists_the_rules_handed_to_amtool(self, capsys, tmp_path,
+                                               monkeypatch):
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({
+            "route": {"receiver": "ops"}, "receivers": [{"name": "ops"}],
+            "inhibit_rules": [_SILENT_MODE_RULE]}), encoding="utf-8")
+        handed: list[str] = []
+
+        def _stub(am_yml, *_a, **_k):
+            handed.append(am_yml)
+            return None, "stubbed"
+        monkeypatch.setattr(er, "run_amtool_trace", _stub)
         conf = _tree(tmp_path)
-        if dedup is not None:
-            tenant_file = conf / f"{_TT}.yaml"
-            doc = yaml.safe_load(tenant_file.read_text(encoding="utf-8"))
-            doc["tenants"][_TT]["_severity_dedup"] = dedup
-            tenant_file.write_text(yaml.safe_dump(doc), encoding="utf-8")
-        args = ["--severity", severity]
-        if group is not None:
-            args += ["--label", f"metric_group={group}"]
-        trace, _ = _trace_err(capsys, conf, *args)
+        args = ["--base-config", str(base), "--label", "metric_group=mem"]
+        trace = _trace(capsys, conf, *args)
+        [am_yml] = handed
+        rules = yaml.safe_load(am_yml)["inhibit_rules"]
+        assert _SILENT_MODE_RULE in rules  # the base's own rule is kept
         step4 = trace["steps"][3]
-        assert step4["action"] == "inhibit_check"
-        expected = ("possible" if self._rule_can_inhibit(conf, trace["labels"])
-                    else False)
-        assert step4["inhibited"] == expected
+        assert step4["inhibit_rules"] == rules
+        assert "not evaluate" in step4["detail"]
+        assert not {"inhibited", "inhibit_reason"} & (set(trace) | set(step4))
+        for lang, note in (("en", "does not evaluate"), ("zh", "不評估")):
+            monkeypatch.setenv("DA_LANG", lang)
+            assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+                            "--trace", *args]) == 0
+            out = capsys.readouterr().out
+            assert note in out and "TenantSilentWarning" in out
+            assert "Inhibited:" not in out and "抑制:" not in out
 
 
 @needs_amtool
@@ -839,8 +814,7 @@ class TestWithoutAmtool:
             in captured.err
         [trace] = json.loads(captured.out)
         assert set(trace) == {"tenant", "alertname", "severity", "labels",
-                              "steps", "final_receiver", "inhibited",
-                              "inhibit_reason", "timing"}
+                              "steps", "final_receiver", "timing"}
         assert trace["final_receiver"] == "(unknown: amtool not found)"
         step2 = trace["steps"][1]
         assert step2["matched_routes"] == []
