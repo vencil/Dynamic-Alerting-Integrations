@@ -475,6 +475,89 @@ def s_reserved_null_delete():
 """)
 
 
+# -------------------------------------------------------------------------
+# Scenarios 14-16 (#2387): trees the exporter SERVES.
+#
+# ⛔ Five of the trees above (l0-only, full-l0-l3, array-replace,
+# opt-out-null, metadata-skipped) carry a ROOT `_defaults.yaml` the exporter
+# drops whole: a root `defaults:` value that is not a number (a nested
+# `threshold:` map, `_metadata`, an array) fails to decode, the file lands in
+# parse_failed and /metrics serves none of it (#1957). They stay, because the
+# deep-merge core they pin (nested maps, array replace, null on a nested
+# non-reserved key, `_metadata` not inherited) cannot be written in a root
+# shape the exporter accepts — but parity on them proves only that the two
+# readers agree with each other, not that they describe what is served. They
+# are listed, with that reason, in tests/golden/not_served.json, and
+# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs
+# `da-guard served-values` over every fixture tree: a tree must exit 0 unless
+# it is listed, and a listed tree must exit 3 (so the list cannot go stale).
+#
+# These two trees are the served counterpart for what CAN be written in the
+# accepted shape: numeric root defaults (the shipped platform shape), subtree
+# `_defaults.yaml` overriding them, quoted-string tenant values. Two new conf.d
+# roots, pinned in check_threshold_reachability's `_DEFAULTS_CONFD_ROOTS`;
+# their 8 `defaults:` keys raised the artifact-key floor by 8 (the #1674 /
+# #1550 remedy).
+#
+# ⚠️ "Served" is da-guard's rc 0 — nothing in the tree is dropped. It is NOT
+# "every golden value equals what /metrics serves", and two shapes that pass
+# rc 0 are kept out of these trees on purpose because /metrics disagrees with
+# both merge readers on them (measured with `da-guard served-values`, #2296):
+#   * null on a threshold key a subtree `_defaults.yaml` overrides: the
+#     readers resolve the L1 value, /metrics falls back to the ROOT default;
+#   * a key that only a subtree `_defaults.yaml` declares: the readers merge
+#     it in, /metrics serves no row for it.
+# A row pinning either would record the readers' answer as if it were the
+# served one.
+# -------------------------------------------------------------------------
+
+# Scenario 14 + 15: L0 -> L1 -> L2 chain, and a root-level sibling tenant.
+#   tenant-served-chain  mysql_connections        tenant "60" beats L1's 70
+#                        container_memory         L2's 90 beats L0's 85
+#                        redis_connected_clients  L0's 5000, through 2 levels
+#   tenant-served-root   chain is the root file only: L0's 80 / 85 / 5000,
+#                        so neither subtree carrier leaks into a sibling
+def s_served_chain():
+    d = reset("served-chain")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+  redis_connected_clients: 5000
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  mysql_connections: 70
+""")
+    write(d / "db" / "mariadb" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "mariadb" / "tenants.yaml", """tenants:
+  tenant-served-chain:
+    mysql_connections: "60"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-served-root: {}
+""")
+
+
+# Scenario 16: "disable" through a subtree chain. The tenant turns off a key
+# it inherits from L0, while L1 overrides the other one:
+#   mysql_connections   tenant "disable" beats L0's 80 (the sanctioned opt-out)
+#   container_memory    L1's 90 beats L0's 85
+def s_served_disable():
+    d = reset("served-disable")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "tenants.yaml", """tenants:
+  tenant-served-disable:
+    mysql_connections: "disable"
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -492,6 +575,9 @@ SCENARIOS = [
     ("canonical-json-escaping", "tenant-escape", s_canonical_json_escaping),
     ("reserved-nested-null", "tenant-nested", s_reserved_nested_null),
     ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
+    ("served-chain", "tenant-served-chain", s_served_chain),  # 2 tenants, 1 tree
+    ("served-root", "tenant-served-root", None),
+    ("served-disable", "tenant-served-disable", s_served_disable),
 ]
 
 
@@ -541,6 +627,9 @@ def main() -> int:
         "canonical-json-escaping": "mixed-mode",
         "reserved-nested-null": "mixed-mode",
         "reserved-null-delete": "mixed-mode",
+        "served-chain": "served-chain",
+        "served-root": "served-chain",
+        "served-disable": "served-disable",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:

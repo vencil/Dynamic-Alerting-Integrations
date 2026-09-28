@@ -1,0 +1,2 @@
+defaults:
+  container_memory: 90

@@ -162,6 +162,11 @@ def exit_code(result: dict) -> int:
 query_prometheus = query_prometheus_instant
 
 
+# #2297: a tenant's `_profile:` value is read as its source text, as the
+# exporter reads it (precedent: `deprecate_rule._read_yaml`, #2216).
+_PROFILE_AS_TEXT = ("_profile",)
+
+
 def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
     """The tenant's own block, read the way the exporter reads it (#1982).
 
@@ -218,7 +223,9 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
                 # #2114: tenant keys as source TEXT — the exporter's id, and
                 # what the CLI's `tenant` argument is. `123:` in a platform
                 # file used to be the int 123 and never matched "123".
-                raw = strict_load_exporter_keys(f)
+                # #2297: `_profile: 010` is profile "010" (PyYAML's 8 named
+                # none) — `_PROFILE_AS_TEXT`.
+                raw = strict_load_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT)
         except (OSError, yaml.YAMLError):
             # ⛔ Still silent, deliberately — see #1522. `check()` calls this
             # AND `resolve_inheritance_chain` over the same directory, so
@@ -417,8 +424,10 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             continue
         try:
             with open(entry, encoding="utf-8") as f:
-                # #2114: tenant keys as source TEXT (see lookup_tenant_profile).
-                raw = strict_load_exporter_keys(f) or {}
+                # #2114: tenant keys as source TEXT, #2297: `_profile` too
+                # (see lookup_tenant_profile).
+                raw = strict_load_exporter_keys(
+                    f, raw_text_scalars=_PROFILE_AS_TEXT) or {}
         except (OSError, yaml.YAMLError) as e:
             _skip_read_failure(fname, e)
             continue
@@ -445,7 +454,9 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         profiles_path = base / "_profiles.yaml"
         try:
             with open(profiles_path, encoding="utf-8") as f:
-                raw = strict_safe_load(f)
+                # #2297: profile names as source text, as the exporter keys
+                # them — `010:` is "010", the name `_profile: 010` reads as.
+                raw = strict_load_exporter_keys(f)
             # ⛔ NOT `or {}`. That coerces every FALSY document — `[]`, `0`,
             # `false` — into an empty mapping, so a `_profiles.yaml` whose
             # whole body is `[]` loses the profile layer with zero signal:
