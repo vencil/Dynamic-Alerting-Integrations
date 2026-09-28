@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
+    is_dir_symlink,
     is_reserved_name,
     list_config_tree,
     unusable_reason,
@@ -341,8 +342,10 @@ def main() -> int:
         # The `_` name filter is for ENTRIES only. A directory the walk could
         # not read is named whatever it is called: the exporter descends
         # `_`-prefixed directories, so a locked `_arch/` hides tenants too
-        # (same rule as `describe_tenant`, #2054).
-        if bad in listing.unscannable or not is_reserved_name(bad.name):
+        # (same rule as `describe_tenant`, #2054). A directory SYMLINK too
+        # (#1972): `_shared -> .payload/_shared` hides a subtree as well.
+        if (bad in listing.unscannable or is_dir_symlink(bad)
+                or not is_reserved_name(bad.name)):
             print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
                   file=sys.stderr)
 

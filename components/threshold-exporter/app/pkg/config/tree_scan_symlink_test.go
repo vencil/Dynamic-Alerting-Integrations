@@ -320,3 +320,157 @@ func testDanglingSymlinkedCarrier(t *testing.T, collide bool) {
 		t.Errorf("root-only carrier = %q, want _defaults.yml", got)
 	}
 }
+
+// TestScanDirTree_KubeletDirSymlinkIsAudible (#1972): the two layouts
+// kubelet's AtomicWriter actually produces for a ConfigMap volume.
+//
+//   - nested: an `items[].path` with a sub-directory (`team-a/x.yaml`) is
+//     projected as ONE top-level DIRECTORY link, `team-a -> ..data/team-a`
+//     — not as a real `team-a/` holding file links. The walker does not
+//     follow it (by design), so the tenant under it is not loaded; before
+//     #1972 that happened with no log line at all. It must now WARN, and
+//     the WARN must name `team-a`.
+//   - flat: every key is a FILE link `key -> ..data/key` next to `..data`.
+//     The baseline that must not move: every tenant loads and the logger
+//     stays EMPTY — in particular `..data` (itself a directory link) must
+//     not trip the new WARN.
+//
+// Plus the two rows of the target rule (dirLinkTargetIsWalked): a link to a
+// real directory INSIDE the root (`alias/current -> team-b`) is silent —
+// its tenant loads through the real path — and a link to a directory
+// OUTSIDE the root warns.
+//
+// Seams: the scan logger is a local buffer passed to ScanDirTree.
+func TestScanDirTree_KubeletDirSymlinkIsAudible(t *testing.T) {
+	t.Parallel()
+	const (
+		defaults = "defaults:\n  cpu_pct: 50\n"
+		tenant   = "tenants:\n  t-sym: {}\n"
+	)
+	link := func(t *testing.T, target, at string) {
+		t.Helper()
+		if err := os.Symlink(target, at); err != nil {
+			t.Skipf("os.Symlink unavailable here (%v) — symlinked rows cannot be built on this platform "+
+				"(Windows without the symlink privilege); CI measures them on ubuntu-latest, its only runner", err)
+		}
+	}
+
+	t.Run("nested items[].path: directory link warns and names it", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		agedWrite(t, filepath.Join(root, "..v1", "_defaults.yaml"), defaults, 0)
+		agedWrite(t, filepath.Join(root, "..v1", "team-a", "x.yaml"), tenant, 0)
+		link(t, "..v1", filepath.Join(root, "..data"))
+		link(t, filepath.Join("..data", "_defaults.yaml"), filepath.Join(root, "_defaults.yaml"))
+		link(t, filepath.Join("..data", "team-a"), filepath.Join(root, "team-a"))
+
+		var logBuf bytes.Buffer
+		scan, err := ScanDirTree(root, nil, nil, log.New(&logBuf, "", 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The design is unchanged: the link is still not walked.
+		if _, ok := scan.Files["team-a/x.yaml"]; ok {
+			t.Fatalf("team-a/x.yaml was loaded: the walker followed the directory link (keys=%v)", scan.Keys)
+		}
+		out := logBuf.String()
+		want := filepath.Join(root, "team-a") + " is a symlink to a directory and is not followed"
+		if !strings.Contains(out, "WARN: "+want) {
+			t.Errorf("no WARN naming the team-a directory link; want a line containing %q, log:\n%s", want, out)
+		}
+		if strings.Contains(out, "..data") {
+			t.Errorf("the ..data link must not be reported (it is how every ConfigMap volume looks); log:\n%s", out)
+		}
+		if n := strings.Count(out, "\n"); n != 1 {
+			t.Errorf("log has %d lines, want exactly 1 (the team-a WARN); log:\n%s", n, out)
+		}
+	})
+
+	// A link to a real directory INSIDE the root that the walk reaches by
+	// itself: its tenants load through the real path, nothing is lost, so
+	// a "NOT loaded" WARN would be false (#1972 blind review F1).
+	t.Run("alias to an in-root directory: silent, tenant loads", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		agedWrite(t, filepath.Join(root, "alias", "team-b", "x.yaml"), tenant, 0)
+		link(t, "team-b", filepath.Join(root, "alias", "current"))
+
+		var logBuf bytes.Buffer
+		scan, err := ScanDirTree(root, nil, nil, log.New(&logBuf, "", 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f := scan.Files["alias/team-b/x.yaml"]; f == nil || len(f.TenantIDs) != 1 {
+			t.Fatalf("alias/team-b/x.yaml not loaded (keys=%v)", scan.Keys)
+		}
+		if logBuf.Len() != 0 {
+			t.Errorf("a link to a directory the walk reaches anyway must not warn; log:\n%s", logBuf.String())
+		}
+	})
+
+	// A link to a directory OUTSIDE the root: nothing reaches it, warn.
+	t.Run("link to a directory outside the root warns", func(t *testing.T) {
+		t.Parallel()
+		base := t.TempDir()
+		root := filepath.Join(base, "root")
+		agedWrite(t, filepath.Join(base, "elsewhere", "x.yaml"), tenant, 0)
+		agedWrite(t, filepath.Join(root, "_defaults.yaml"), defaults, 0)
+		link(t, filepath.Join(base, "elsewhere"), filepath.Join(root, "ext"))
+
+		var logBuf bytes.Buffer
+		if _, err := ScanDirTree(root, nil, nil, log.New(&logBuf, "", 0)); err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(root, "ext") + " is a symlink to a directory and is not followed"
+		if !strings.Contains(logBuf.String(), "WARN: "+want) {
+			t.Errorf("no WARN for the out-of-root directory link; want %q, log:\n%s", want, logBuf.String())
+		}
+	})
+
+	// A CONFIG-NAMED directory link never reaches the new branch: it is an
+	// entry, and phase 2's read fails. docs/troubleshooting names this WARN.
+	t.Run("config-named directory link keeps the read-failure WARN", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		agedWrite(t, filepath.Join(root, "real", "x.yaml"), tenant, 0)
+		link(t, "real", filepath.Join(root, "t.YAML"))
+
+		var logBuf bytes.Buffer
+		if _, err := ScanDirTree(root, nil, nil, log.New(&logBuf, "", 0)); err != nil {
+			t.Fatal(err)
+		}
+		out := logBuf.String()
+		if !strings.Contains(out, "WARN: cannot read "+filepath.Join(root, "t.YAML")) || !strings.Contains(out, "is a directory") {
+			t.Errorf("want the read-failure WARN for t.YAML; log:\n%s", out)
+		}
+		if strings.Contains(out, "is not followed") {
+			t.Errorf("a config-named link must not get the #1972 line too; log:\n%s", out)
+		}
+	})
+
+	t.Run("flat keys: file links and ..data load silently", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		agedWrite(t, filepath.Join(root, "..v1", "_defaults.yaml"), defaults, 0)
+		agedWrite(t, filepath.Join(root, "..v1", "x.yaml"), tenant, 0)
+		link(t, "..v1", filepath.Join(root, "..data"))
+		link(t, filepath.Join("..data", "_defaults.yaml"), filepath.Join(root, "_defaults.yaml"))
+		link(t, filepath.Join("..data", "x.yaml"), filepath.Join(root, "x.yaml"))
+
+		var logBuf bytes.Buffer
+		scan, err := ScanDirTree(root, nil, nil, log.New(&logBuf, "", 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if logBuf.Len() != 0 {
+			t.Errorf("the kubelet flat layout must scan without a single log line; log:\n%s", logBuf.String())
+		}
+		f := scan.Files["x.yaml"]
+		if f == nil || len(f.TenantIDs) != 1 || f.TenantIDs[0] != "t-sym" {
+			t.Errorf("x.yaml = %+v, want TenantIDs [t-sym] (keys=%v)", f, scan.Keys)
+		}
+		if d := scan.Files["_defaults.yaml"]; d == nil || !d.IsDefaults {
+			t.Errorf("_defaults.yaml not kept as a defaults carrier (keys=%v)", scan.Keys)
+		}
+	})
+}

@@ -457,6 +457,39 @@ func scanRootPlatform(root string) (*TreeScan, error) {
 	return walkDirTree(root, nil, nil, discardLogger, walkRootPlatform)
 }
 
+// dirLinkTargetIsWalked reports whether the directory symlink at linkPath
+// resolves to a directory the walk from absRoot (already symlink-resolved,
+// see AbsScanRoot) reaches by itself: inside absRoot, with no `.`-prefixed
+// segment on the way (walkFull SkipDirs those). Then nothing under the link
+// is lost — the same files are loaded through their real path — and #1972's
+// WARN would be a false alarm. The root itself counts as reached.
+//
+// Anything else — a target outside the root, one whose path passes a hidden
+// segment (kubelet's `team-a -> ..data/team-a` resolves into `..<ts>/`), or
+// one that cannot be resolved — is NOT walked, and the caller warns.
+//
+// ⛔ Python twin: `_lib_confd.dir_link_target_is_walked`. Same rule, or one
+// plane names a loss the other calls clean.
+func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
+	real, err := filepath.EvalSymlinks(linkPath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, real)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasPrefix(seg, ".") { // also catches ".." (outside the root)
+			return false
+		}
+	}
+	return true
+}
+
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
 // hash, the classification and the hierarchy products. mode is walkFull for
 // every production caller except scanRootDefaults and scanRootPlatform.
@@ -496,6 +529,35 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			return nil
 		}
 		if !IsScannedFileName(name) {
+			// ⛔ A DIRECTORY SYMLINK IS NOT FOLLOWED — SAY SO (#1972).
+			// WalkDir lstat's every entry, so a symlink to a directory is a
+			// non-dir leaf here and, lacking a config name, used to be dropped
+			// in silence. kubelet's AtomicWriter projects a ConfigMap
+			// `items[].path` with a sub-directory (`team-a/x.yaml`) as ONE
+			// top-level directory link, `team-a -> ..data/team-a`: every
+			// tenant under it vanished with no log and no WARN. Not followed
+			// on purpose (a loop, or a tree seen twice through two names), so
+			// the fix is to make the loss audible, not to walk it.
+			//
+			// `.`-prefixed names are excluded or every ConfigMap volume's own
+			// `..data` link would fire. A link whose final target is a
+			// directory this same walk reaches on its own (inside the root,
+			// no `.`-prefixed segment — see dirLinkTargetIsWalked) loses
+			// nothing and stays silent: `current -> team-b` next to a real
+			// `team-b/` must not be reported as unloaded.
+			//
+			// Cost: every non-config-named, non-hidden symlink pays one extra
+			// os.Stat per tick (a config-named one is statted below anyway).
+			// In the kubelet flat layout that is zero for `.yaml` keys, but a
+			// ConfigMap with other keys (`README.md -> ..data/README.md`)
+			// pays it once per such key on every tick. Only a directory link
+			// additionally pays EvalSymlinks. Repeats on every tick while the
+			// link exists, the same cadence as the dangling-target WARN below.
+			if mode == walkFull && d.Type()&fs.ModeSymlink != 0 && !strings.HasPrefix(name, ".") {
+				if ti, terr := os.Stat(path); terr == nil && ti.IsDir() && !dirLinkTargetIsWalked(absRoot, path) {
+					logger.Printf("WARN: %s is a symlink to a directory and is not followed; config files under it are NOT loaded", path)
+				}
+			}
 			return nil
 		}
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
