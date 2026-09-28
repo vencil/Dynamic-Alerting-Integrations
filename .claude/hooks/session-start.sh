@@ -7,9 +7,11 @@
 #   *silently or misleadingly* without these things. Each was added because a
 #   session actually lost time to it:
 #
-#   1. pre-commit missing        → `.git/hooks/` is empty, so every hook is
-#                                  simply not run at commit time. Nothing warns
-#                                  you; commits just sail through ungated.
+#   1. pre-commit missing        → `.git/hooks/` has no pre-commit hook (a
+#                                  fresh clone only carries git-lfs's), so
+#                                  every hook is simply not run at commit
+#                                  time. Nothing warns you; commits just
+#                                  sail through ungated.
 #   2. shallow clone has no tags → `image-pin-capability-check` aborts with
 #                                  "git tag 'tools/vX.Y.Z' does not resolve",
 #                                  which reads like a bad pin rather than a
@@ -20,7 +22,7 @@
 #   4. pytest & friends missing  → every tests/**/*.py suite is uncollectable
 #                                  (ModuleNotFoundError), so "no failures" is
 #                                  indistinguishable from "nothing ran".
-#   5. mkdocs missing            → the mkdocs strict guard (installed by step 2
+#   5. mkdocs missing            → the mkdocs strict guard (installed by step 3
 #                                  below, via scripts/ops/install_prepush_hook.sh
 #                                  — it is not a pre-commit hook id any more,
 #                                  #1689) degrades to a warn-only Tier 2 and
@@ -35,7 +37,7 @@
 #   In a multi-repo web session the project root is the PARENT of this repo
 #   (`/home/user`), so Claude Code reads `/home/user/.claude/settings.json` and
 #   this repo's `.claude/settings.json` is never loaded at all. Measured: the
-#   two PreToolUse session-guards declared in the same file have zero effect
+#   PreToolUse session-guards declared in the same file have zero effect
 #   there. That is why the last thing this script does is drop a marker: the
 #   session bootstrap in CLAUDE.md checks for it, so "the hook did not run" is
 #   VISIBLE instead of silent. Do not remove the marker to tidy up.

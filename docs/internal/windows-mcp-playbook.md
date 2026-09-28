@@ -843,7 +843,7 @@ Start-Process -FilePath $git -ArgumentList 'ls-remote','origin','HEAD' `
 
 ```batch
 git remote set-url origin https://github.com/<owner>/<repo>.git
-git push origin main
+git push origin <branch>
 git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 

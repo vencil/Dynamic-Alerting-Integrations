@@ -309,7 +309,7 @@ SKIP=head-blob-hygiene PRECOMMIT_LOG=_sandbox_hooks_<n>.log \
 
 # Step 2 — Windows native commit
 # 寫 _msg.txt（UTF-8 without BOM；多行 / CJK / em-dash 都 OK，commit-file 走
-# Python pipe 進 git commit -F -，不會被 cmd codepage 吃掉，見陷阱 #58）
+# Python pipe 進 git commit -F -，不會被 cmd codepage 吃掉，見 windows-mcp-playbook 陷阱 #46）
 # 推薦用 Write tool / heredoc 而非 echo（echo 對特殊字元不安全）
 scripts/ops/win_git_escape.bat commit-file _msg.txt
 

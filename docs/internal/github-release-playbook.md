@@ -98,13 +98,17 @@ make version-check        # 確認全 repo 版號一致
 
 > **Release-time L3 digest verification（#445 AC iii）**：tag push 後 `release.yaml` 的 5 個 release job 各會自動跑一個 `Verify image digest` step（共用 `scripts/ops/verify_release_digest.sh`）— `skopeo inspect` 確認剛 push 的 image 在 GHCR 真的存在，並比對 Chart.yaml `appVersion`。silent push 失敗 / Chart.yaml appVersion claim 無對應 image → release job fail。此步驟在 CI 自動執行，**不需手動跑**；本地 `make version-check` 仍是打 tag 前的必要前置。
 
-### Step 2: Commit & Push
+### Step 2: Commit → PR → merge
 
 ```bash
+git switch -c chore/vX.Y.Z-release-wrapup
 git add <files>
 git commit -m "..."
-git push origin main
+git push -u origin chore/vX.Y.Z-release-wrapup
+# 開 PR → owner 明示後 merge；Step 3 的 tag 打在 merge 後的 main HEAD 上
 ```
+
+⛔ **不能直接 `git push origin main`**：pre-push 的 `protect_main_push.sh` 會擋下任何推往 main 的 push，而且沒有繞過旗標。
 
 ### Step 2.5: ⛔ Pre-tag 品質閘門（硬性要求）
 
@@ -113,15 +117,15 @@ git push origin main
 ```bash
 make version-check              # 版號一致性 — 必須 ✅
 make lint-docs                  # 文件 lint — 必須 0 failed
-pre-commit run --all-files      # auto hooks — 必須全過
-make pre-tag                    # 一鍵整合（含以上 + changelog-fragments-consumed + draft-advisory-check + docker-build-all + trivy-scan-all）
+pre-commit run --all-files      # auto hooks — 必須全過（⚠️ pre-tag 不含這一項，要另外跑）
+make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 Makefile 的 `pre-tag:` 依賴清單為準
 ```
 
 任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
 
-**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 **7** 個 self-built image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。⚠️ 其中 **2 個隨 chart 出貨、從不發布**（`federation-audit-sidecar` / `vector-projection-gate`，#1337）——`release.yaml` 完全不會 build 它們。兩者的其餘覆蓋**不對稱**：`vector-projection-gate` 只有 pre-tag、夜掃與 PR 期 `component-docker-build.yaml` 三處會 build 它；`federation-audit-sidecar` 另有 `federation-e2e` job 每次 CI 都以 compose `--build` 建它。`audit-sidecar` 會從 pinned commit 編譯 mtail（約 25 秒，需 Go module proxy）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy + `gh` 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
+**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建全部 self-built image，清單見 Makefile 的 `docker-build-all`；**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。⚠️ 其中 **2 個隨 chart 出貨、從不發布**（`federation-audit-sidecar` / `vector-projection-gate`，#1337）——`release.yaml` 完全不會 build 它們。兩者的其餘覆蓋**不對稱**：`vector-projection-gate` 只有 pre-tag、夜掃與 PR 期 `component-docker-build.yaml` 三處會 build 它；`federation-audit-sidecar` 另有 `federation-e2e` job 每次 CI 都以 compose `--build` 建它。`audit-sidecar` 會從 pinned commit 編譯 mtail（約 25 秒，需 Go module proxy）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy + `gh` 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
 
-**#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（`gh` 是它的依賴，所以上面那行多了一項）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
+**#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（它要呼叫 `gh`，所以 PATH 上必須有 `gh`）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
 
 > **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 draft-advisory-check + docker-build-all + trivy-scan-all），或手動等價指令。⛔ **這條 discipline 沒有因為 #1295 把 advisory 檢查機械化而變得可省**——那道 gate 掛在 `make pre-tag` 上，而沒有任何東西強制 tag push 前一定要跑過它；**跳過 pre-tag 直接 push tag，等於同時跳過那道 gate**。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
 
@@ -440,7 +444,7 @@ bash smoke.sh   # 需 curl + jq
 | 11 | Release `already_exists`（tag 已被 CI 或先前操作建立） | 先 GET `/releases/tags/<tag>` 取 `id`，再 PATCH `/releases/<id>` 更新 name + body |
 | 12 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
 | 13 | 刪除遠端 tag 會連帶刪除關聯 Release | `git push origin :refs/tags/v*` 刪除 tag 後，GitHub 自動刪除該 tag 的 Release；重推 tag 後須重新 `POST /releases` 建立 |
-| 14 | Re-tag 完整 SOP（同版號新 commit） | ① push main → ② 逐一刪遠端 tag → ③ 刪本地 tag → ④ 建新 tag on HEAD → ⑤ **逐一** push tag → ⑥ 重建 Release（因 #13 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
+| 14 | Re-tag 完整 SOP（同版號新 commit） | ① 修正經 PR merge 進 main → ② 逐一刪遠端 tag → ③ 刪本地 tag → ④ 建新 tag on HEAD → ⑤ **逐一** push tag → ⑥ 重建 Release（因 #13 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
 | 15 | ~~`mkdocs gh-deploy` 連續失敗~~ | 🗄️ 已歸檔（workaround 已轉移至 Windows-MCP #29-30）。詳見 [archive/lessons-learned.md](archive/lessons-learned.md) |
 | 16 | `bump_docs.py` 漏網規則 | 每次 release 前先跑 `bump_docs.py --what-if` 審計所有規則。新增 component 時須同步加入版號線（`--tenant-api` 等） |
 | 17 | Rule Pack 計數混淆 | `rule-packs/` yaml 檔案數 ≠ pack 總數（後者另含 platform / liveness 等 ConfigMap-only pack）。**一律以 `platform-data.json` 的 `totals.packs` 為準，勿在文件寫死數字**（曾寫死 15，liveness 加入後即過期） |
@@ -614,11 +618,11 @@ foreach ($r in $fails) {
 
 ### Phase 4: 版號 + 品質閘門
 
-10. 🛡️ **版號治理**（⛔ 硬性要求）`[已自動化於 hook: version-consistency + check_frontmatter_versions]`
+10. 🛡️ **版號治理**（⛔ 硬性要求）`[已自動化於 hook: version-consistency]`（frontmatter 版號不在 hook 裡，由 `make lint-docs` 檢查，pre-tag 會跑）
     ```bash
     make version-check              # 全 repo 版號一致性 — 必須 ✅
     make bump-docs                  # 若需更新 — 必須完全覆蓋
-    check_frontmatter_versions.py --fix   # frontmatter 批次更新 — 必須 0 failed
+    python3 scripts/tools/lint/check_frontmatter_versions.py --fix   # frontmatter 批次更新 — 必須 0 failed
     ```
     **任何版號不一致進入下一步都是致命風險。必須全數修正才能推送。**
 
@@ -626,13 +630,13 @@ foreach ($r in $fails) {
     ```bash
     pre-commit run --all-files                           # auto stage
     pre-commit run --hook-stage manual --all-files        # manual stage
-    python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
+    python -m pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py -q
     ```
 
 ### Phase 5: 收尾
 
-12. **Rebase 為單一 commit**
-    將本版所有 WIP commit 合併為一個語義完整的 release commit。CHANGELOG 以全局角度更新，不囉嗦不遺漏。
+12. **收尾改動走一支 release PR**
+    本版的收尾改動（CHANGELOG distill、版號）放在同一支 PR，以 squash merge 進 main，讓 main 上是一個語義完整的 release commit。CHANGELOG 以全局角度更新，不囉嗦不遺漏。
 
 13. **CHANGELOG 真實性檢查**
     逐條確認 CHANGELOG 提到的功能確實存在、數字準確、檔案路徑可訪問。
@@ -649,9 +653,9 @@ foreach ($r in $fails) {
     ```
 
 16. **推送 + 等 CI 全綠 + Release**
-    - `git push origin main` + 推對應 tag
+    - release PR merge 進 main 後，對 main HEAD 推對應 tag
     - **等所有 Release workflow 完成並 success 後**才建 GitHub Release
-    - 若 CI 失敗：修正 → amend → force-push → 刪遠端 tag → 重推 tag
+    - 若 CI 失敗：修正走新的 PR merge 進 main → 依本檔「Release 流程陷阱」表的 #14 re-tag
     - GitHub Pages 部署確認
     - 建立 GitHub Release（英文敘述）
 
