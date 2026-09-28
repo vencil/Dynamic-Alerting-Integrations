@@ -5,7 +5,7 @@
 
 > 💡 **只想把元件跑起來看看？** → **[QUICKSTART.md](QUICKSTART.md)**（`docker run` 一行、≤ 2 分鐘看到一整套互動工具）。本篇 README 是給**部署 / 維運 portal 的人**看的進階配置與 packaging **參考**。
 
-把 Dynamic Alerting 的 **44 個瀏覽器互動工具**（Hub + Wizard + Tenant Manager + Self-Service Portal）封進一顆 nginx-alpine image，供內網 / air-gapped 環境離線使用。工具在 CI 端用 **esbuild 預先 build 成 ESM bundle**，image 只負責靜態服務——不在 runtime 做任何 build。
+把 Dynamic Alerting 的 **瀏覽器互動工具**（Hub + Wizard + Tenant Manager + Self-Service Portal）封進一顆 nginx-alpine image，供內網 / air-gapped 環境離線使用。工具在 CI 端用 **esbuild 預先 build 成 ESM bundle**，image 只負責靜態服務——不在 runtime 做任何 build。
 
 **Companion 文件：** [helm chart](../../helm/da-portal/) · [Interactive Tools Hub](../../docs/interactive-tools.md) · [tool-registry.yaml（工具 SSOT）](../../docs/assets/tool-registry.yaml) · [architecture-and-design](../../docs/architecture-and-design.md)
 
@@ -34,7 +34,7 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 - **vendor probe（離線優先）** — `make vendor-download` 把 React 18.3 / ReactDOM / Tailwind / Lucide 抓進 `docs/assets/vendor/`；瀏覽器啟動先 probe local，找不到才 fallback CDN（每個工具 bundle 透過頁面提供的這些 global 執行）
 - **不做的事** — 不在 runtime build；不持久化（無 state，資料來自 mount 的 JSON 或 tenant-api proxy）；不直連 Prometheus（CORS-free 查詢走 tenant-api 或自訂 nginx proxy）
 
-> **Hub UX 細節**（44 工具的分類、journey-phase、related-tool 圖、search）見 [docs/interactive-tools.md](../../docs/interactive-tools.md)。本 README 只負責 operator quick-reference。
+> **Hub UX 細節**（工具的分類、journey-phase、related-tool 圖、search）見 [docs/interactive-tools.md](../../docs/interactive-tools.md)。本 README 只負責 operator quick-reference。
 
 ---
 
@@ -107,7 +107,7 @@ helm install da-portal \
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Browser                                                             │
-│  ├─ /interactive/index.html     ── Hub（44 工具卡片 + search）       │
+│  ├─ /interactive/index.html     ── Hub（工具卡片 + search）          │
 │  ├─ /assets/jsx-loader.html     ── 載入工具 + vendor probe + theme   │
 │  └─ /assets/dist/<tool>.js      ── 預先 build 的 ESM bundle（esbuild）│
 └─────────────────────────────────────────────────────────────────────┘
@@ -149,7 +149,7 @@ docker run -p 8080:80 \
 |----------|------|------|
 | `platform-data.json` | Rule Pack catalog（DB / 中介軟體 / runtime defaults） | `make platform-data` 產 |
 | `flows.json` | Guided Flows（onboarding 等順序步驟） | hand-edited |
-| `tool-registry.yaml` | 44 工具的 metadata SSOT（title / audience / journey_phase / related） | hand-edited |
+| `tool-registry.yaml` | 工具的 metadata SSOT（title / audience / journey_phase / related） | hand-edited |
 | `design-tokens.css` | 主題 CSS 變數（色 / 間距 / 字 / 明暗主題） | hand-edited，CI 跑 `check_undefined_tokens.py` |
 
 ### 改 nginx.conf（換 tenant-api upstream / 加 Prometheus proxy）
@@ -240,7 +240,7 @@ docker run -p 8080:80 \
 ## 10. Related Documentation
 
 - [Interactive Tools Hub 使用指南](../../docs/interactive-tools.md)
-- [Tool Registry SSOT](../../docs/assets/tool-registry.yaml) — 44 工具 metadata
+- [Tool Registry SSOT](../../docs/assets/tool-registry.yaml) — 工具 metadata
 - [Design Tokens](../../docs/assets/design-tokens.css) — 主題系統 CSS 變數
 - [Helm Chart README](../../helm/da-portal/README.md) — 三個 profile 細節
 - [架構深度](../../docs/architecture-and-design.md) — 9 個核心設計概念
