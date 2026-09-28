@@ -34,9 +34,9 @@ cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-start.sh
 ```
 
-⚠️ **在那之前 `.git/hooks/` 可能是空的——commit 不受任何閘門保護**，且 `dev-rules #11` 的 `sed -i` 攔截也不存在。
+⚠️ **在那之前 `.git/hooks/` 可能沒有 pre-commit hook——commit 不受任何閘門保護**，且 `dev-rules #11` 的 `sed -i` 攔截也不存在。
 
-**為什麼非跑不可**：remote session 每次都從全新 shallow clone 起，前一個 session 裝的東西不存活。而缺件的失敗方向**一律是靜默或誤導**，不是明顯的紅——沒有 `pre-commit` 則 `.git/hooks/` 全空且無提示；shallow clone 無 tag 會讓 image-pin 檢查報「git tag 不 resolve」，讀起來像 pin 打錯；沒有 `pytest` 則整族測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分。`session-start.sh` 補齊這些，版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT）。
+**為什麼非跑不可**：remote session 每次都從全新 shallow clone 起，前一個 session 裝的東西不存活。而缺件的失敗方向**一律是靜默或誤導**，不是明顯的紅——沒有 `pre-commit` 則 `.git/hooks/` 裡沒有任何 commit 閘門（全新 clone 只有 git-lfs 的 pre-push）且無提示；shallow clone 無 tag 會讓 image-pin 檢查報「git tag 不 resolve」，讀起來像 pin 打錯；沒有 `pytest` 則整族測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分。`session-start.sh` 補齊這些，版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT）。
 
 ⚠️ shallow clone 會讓 `tests/lint/` 的凍結量測 error，`git fetch --depth=1000 origin main` 後就過。
 
