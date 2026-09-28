@@ -101,6 +101,7 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 		return nil, nil
 	}
 	top := doc.Content[0]
+	normalizeTaggedBools(top)
 	var probe any
 	if err := top.Decode(&probe); err != nil {
 		return nil, err
@@ -148,16 +149,55 @@ var yaml11Bools = map[string]bool{
 	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
 }
 
+// taggedBoolWords is what PyYAML's construct_yaml_bool accepts for a scalar
+// TAGGED `!!bool` (any style), looked up by value.lower() — not the plain set
+// above: `!!bool yEs` is True (PyYAML 6.0.3), and `!!bool y` / `!!bool 1`
+// raise, failing the whole safe_load.
+var taggedBoolWords = map[string]bool{"yes": true, "no": false, "true": true, "false": false, "on": true, "off": false}
+
+// taggedBool reports whether n is a scalar explicitly tagged `!!bool` (or
+// `!<tag:yaml.org,2002:bool>`) and, if so, the boolean PyYAML reads (ok false
+// = PyYAML refuses it). yaml.v3 decodes only true/false under that tag.
+func taggedBool(n *yaml.Node) (b, tagged, ok bool) {
+	if n.Kind != yaml.ScalarNode || n.Style&yaml.TaggedStyle == 0 || n.ShortTag() != "!!bool" {
+		return false, false, false
+	}
+	b, ok = taggedBoolWords[strings.ToLower(n.Value)]
+	return b, true, ok
+}
+
+// normalizeTaggedBools rewrites every `!!bool` scalar PyYAML reads to the
+// plain `true` / `false` yaml.v3 decodes, so that a file the generator reads
+// is not refused whole here (#2325). One PyYAML refuses is left as is, and
+// yaml.v3 refuses the file as PyYAML does.
+func normalizeTaggedBools(n *yaml.Node) {
+	if b, tagged, ok := taggedBool(n); tagged {
+		if ok {
+			n.Tag, n.Style, n.Value = "!!bool", 0, fmt.Sprint(b)
+		}
+		return
+	}
+	for _, c := range n.Content {
+		normalizeTaggedBools(c)
+	}
+}
+
 // DecodePyYAML decodes n as yaml.v3 does, except that a scalar PyYAML's
 // safe_load reads as a boolean decodes to that boolean (#2325): a PLAIN
-// (unquoted, untagged) scalar in the YAML 1.1 set (`yes`, `On`, `OFF`, …).
-// A quoted `"yes"` or `!!str yes` stays a string, as in PyYAML. (An explicit
-// `!!bool yes` is not handled: yaml.v3 refuses it, and the whole document
-// with it, before any field is read.) Use it where the Python generator's
+// (unquoted, untagged) scalar in the YAML 1.1 set (`yes`, `On`, `OFF`, …), or
+// a `!!bool`-tagged one in construct_yaml_bool's set (`!!bool yEs`). A quoted
+// `"yes"` or `!!str yes` stays a string, as in PyYAML; a `!!bool` PyYAML
+// refuses (`!!bool y`) is an error. Use it where the Python generator's
 // reading of a boolean decides the outcome, so both sides see the same value.
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
+	}
+	if b, tagged, ok := taggedBool(n); tagged {
+		if !ok {
+			return nil, fmt.Errorf("!!bool %q is not a boolean PyYAML reads", n.Value)
+		}
+		return b, nil
 	}
 	if n.Kind == yaml.ScalarNode && n.Style == 0 {
 		if b, ok := yaml11Bools[n.Value]; ok {
@@ -170,14 +210,21 @@ func DecodePyYAML(n *yaml.Node) (any, error) {
 }
 
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
-// value leaves Value nil).
+// value leaves Value nil). A value DecodePyYAML cannot decode is kept as an
+// Undecodable, which is not a boolean: the field is unusable, but the rest of
+// the document still decodes.
 type PyYAMLValue struct{ Value any }
+
+// Undecodable is the PyYAMLValue of a value that could not be decoded.
+type Undecodable struct{ Err error }
+
+func (u Undecodable) String() string { return "undecodable: " + u.Err.Error() }
 
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) error {
 	v, err := DecodePyYAML(n)
 	if err != nil {
-		return err
+		v = Undecodable{Err: err}
 	}
 	p.Value = v
 	return nil
@@ -382,14 +429,13 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 		// `is True` and --strict reports any other non-null value. Booleans
 		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
 		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
-			if v, err := DecodePyYAML(e); err == nil {
-				if b, ok := v.(bool); ok {
-					p.RequireCriticalEscalation = b
-				} else {
-					bad(field+".constraints."+ConstraintRequireCriticalEscalation,
-						"domain policy %q: constraint '%s' must be a boolean, got %s %q — the constraint cannot be enforced; set it to true or false (unquoted)",
-						name, ConstraintRequireCriticalEscalation, kindName(e), e.Value)
-				}
+			v, _ := DecodePyYAML(e)
+			if b, ok := v.(bool); ok {
+				p.RequireCriticalEscalation = b
+			} else {
+				bad(field+".constraints."+ConstraintRequireCriticalEscalation,
+					"domain policy %q: constraint '%s' must be a boolean, got %s %q — the constraint cannot be enforced; set it to true or false (unquoted)",
+					name, ConstraintRequireCriticalEscalation, kindName(e), e.Value)
 			}
 		}
 		pols = append(pols, p)

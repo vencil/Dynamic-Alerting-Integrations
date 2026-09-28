@@ -8,6 +8,8 @@ package routingpolicy
 import (
 	"reflect"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
@@ -36,6 +38,11 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 		// Not in PyYAML's set: a string.
 		{"yEs", false, true},
 		{"y", false, true},
+		// Tagged !!bool: PyYAML's construct_yaml_bool reads value.lower().
+		{"!!bool yes", true, false},
+		{"!!bool yEs", true, false},
+		{"!!bool 'no'", false, false},
+		{"!<tag:yaml.org,2002:bool> on", true, false},
 	}
 	for _, tc := range cases {
 		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " + tc.value + "\n"
@@ -53,6 +60,30 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 			if p.Kind != ProblemDomainPolicyUnusable || p.Field != "domain_policies.d.constraints.require_critical_escalation" {
 				t.Errorf("%s: problem %+v", tc.value, p)
 			}
+		}
+	}
+}
+
+// A `!!bool` PyYAML refuses (`!!bool y`) fails PyYAML's whole safe_load;
+// da-guard refuses the whole document too, and a PyYAMLValue field keeps a
+// non-boolean marker instead of failing the struct it sits in.
+func TestTaggedBoolPyYAMLRefuses(t *testing.T) {
+	t.Parallel()
+	src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: !!bool y\n"
+	if _, _, err := ParseDomainPolicies([]byte(src)); err == nil {
+		t.Errorf("ParseDomainPolicies(!!bool y): want the document refused")
+	}
+	for _, v := range []string{"!!bool y", "!!bool 1", "!!int x"} {
+		var doc struct {
+			E PyYAMLValue `yaml:"e"`
+			S []string    `yaml:"s"`
+		}
+		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &doc); err != nil {
+			t.Errorf("%s: %v, want the other fields still decoded", v, err)
+			continue
+		}
+		if _, ok := doc.E.Value.(Undecodable); !ok || !reflect.DeepEqual(doc.S, []string{"webhook"}) {
+			t.Errorf("%s: got %#v / %v, want Undecodable and [webhook]", v, doc.E.Value, doc.S)
 		}
 	}
 }

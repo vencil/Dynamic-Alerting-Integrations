@@ -602,3 +602,26 @@ func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
 		t.Errorf("leak: violations %+v, advisories %v", v, adv)
 	}
 }
+
+// #2325: a require_critical_escalation value that cannot be decoded (a
+// `!!bool` PyYAML refuses) leaves that constraint off but must not fail the
+// file — every other constraint in it is still enforced.
+func TestParseConfig_UndecodableEscalationKeepsOtherConstraints(t *testing.T) {
+	t.Parallel()
+	cfg, err := parseConfig([]byte("domain_policies:\n" +
+		"  fin:\n    tenants: [t1]\n    constraints:\n      forbidden_receiver_types: [webhook]\n" +
+		"      require_critical_escalation: !!bool y\n"))
+	if err != nil {
+		t.Fatalf("an undecodable value must not fail the whole file: %v", err)
+	}
+	m := NewForTest(cfg)
+	pols := m.RoutingPolicies()
+	if len(pols) != 1 || pols[0].RequireCriticalEscalation {
+		t.Fatalf("policies %+v, want one with the escalation constraint off", pols)
+	}
+	v := m.CheckTenantRouting("t1", map[string]any{"_routing": map[string]any{
+		"receiver": map[string]any{"type": "webhook", "url": "https://x.example/h"}}}, routingpolicy.Layers{})
+	if len(v) != 1 || v[0].Constraint != "forbidden_receiver_types" {
+		t.Errorf("forbidden_receiver_types must still be enforced: %+v", v)
+	}
+}

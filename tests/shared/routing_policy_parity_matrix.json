@@ -58,7 +58,10 @@
     "no/No/NO/off/Off/OFF false in every reader (yaml.v3 alone reads them as strings); a quoted \"yes\" stays a",
     "string, so the constraint is off and the value is a platform row: domain_policy_unusable, field",
     "domain_policies.<domain>.constraints.require_critical_escalation (the generator's --strict non-boolean",
-    "line, which names no file; the Python half compares kind and field only)."
+    "line, which names no file; the Python half compares kind and field only).",
+    "An explicitly tagged `!!bool` value is read as PyYAML's construct_yaml_bool reads it: value.lower() in",
+    "yes/no/true/false/on/off (so `!!bool yEs` is true); a file that carries one is not refused whole, and its",
+    "other constraints (forbidden_receiver_types) are enforced alongside it."
   ],
   "trees": [
     {
@@ -1710,6 +1713,128 @@
           },
           "python_differs": null,
           "escalation": null
+        }
+      }
+    },
+    {
+      "name": "require-critical-escalation-explicit-bool-tag",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  tag-yes:\n    tenants:\n    - t-tag-yes\n    constraints:\n      require_critical_escalation: !!bool yes\n  tag-mixed-case:\n    tenants:\n    - t-tag-mixed\n    constraints:\n      require_critical_escalation: !!bool yEs\n  tag-long-form:\n    tenants:\n    - t-tag-long\n    constraints:\n      require_critical_escalation: !<tag:yaml.org,2002:bool> on\n  tag-quoted-no:\n    tenants:\n    - t-tag-no\n    constraints:\n      require_critical_escalation: !!bool 'no'\n  tag-forbid:\n    tenants:\n    - t-tag-forbid\n    constraints:\n      forbidden_receiver_types:\n      - webhook\n      require_critical_escalation: !!bool yes\n",
+        "t-tag-yes.yaml": "tenants:\n  t-tag-yes:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-tag-mixed.yaml": "tenants:\n  t-tag-mixed:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-tag-long.yaml": "tenants:\n  t-tag-long:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-tag-no.yaml": "tenants:\n  t-tag-no:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
+        "t-tag-forbid.yaml": "tenants:\n  t-tag-forbid:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: warning\n        receiver:\n          type: webhook\n          url: https://hook.example.com/alerts\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-tag-yes": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-tag-mixed": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-tag-long": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-tag-no": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-tag-forbid": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "tag-forbid",
+              "routes[0]",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "compliant",
+            "leaks": []
+          }
         }
       }
     }

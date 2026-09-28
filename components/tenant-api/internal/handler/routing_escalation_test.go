@@ -4,7 +4,7 @@ package handler
 // into the write paths the parity matrix does not reach: the matrix drives
 // PUT and the direct batch refusal only, so the PR-mode batch refusal and
 // the advisories on every success path (direct batch op, PR-mode batch,
-// PR-mode PUT) are pinned here.
+// PR-mode PUT, and the PR-mode no-changes PUT and batch) are pinned here.
 
 import (
 	"bytes"
@@ -121,5 +121,49 @@ func TestPutTenant_EscalationAdvisory_PRMode(t *testing.T) {
 	}
 	if resp.Status != "pending_review" || !hasAdvisory(resp.Warnings) {
 		t.Errorf("response = %+v, want pending_review with the %q advisory", resp, escalationAdvisory)
+	}
+}
+
+// ErrNoChanges success paths (PR-mode PUT `no_changes`, PR-mode batch
+// `completed`): the write changes nothing, yet the routing on disk is judged,
+// so the leak advisory still rides on the response's warnings.
+const escalationLeakTenant = "tenants:\n  t-leak:\n    cpu_usage_percent: '85'\n    _routing_profile: esc-leak\n"
+
+func escalationTreeLeakOnDisk() map[string]string {
+	tree := escalationTree()
+	tree["t-leak.yaml"] = escalationLeakTenant
+	return tree
+}
+
+func TestPutTenant_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
+	configDir := seedGitTree(t, escalationTreeLeakOnDisk())
+	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	h := PutTenant(&Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: rbacMgr,
+		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
+		PRTracker: &mockPlatformTracker{}})
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/t-leak", "id", "t-leak", bytes.NewBufferString(escalationLeakTenant))
+	policyTestIdentity(req)
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp PutTenantResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Status != "no_changes" || !hasAdvisory(resp.Warnings) {
+		t.Errorf("response = %+v, want no_changes with the %q advisory", resp, escalationAdvisory)
+	}
+}
+
+func TestBatchTenants_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
+	configDir := seedGitTree(t, escalationTreeLeakOnDisk())
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
+		PRTracker: &mockPlatformTracker{}}
+	resp := runBatch(t, configDir, d, `[{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}]`)
+	if resp.Status != "completed" || !hasAdvisory(resp.Warnings) {
+		t.Errorf("response = %+v, want completed with the %q advisory", resp, escalationAdvisory)
 	}
 }
