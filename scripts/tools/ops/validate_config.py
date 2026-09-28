@@ -728,7 +728,12 @@ def check_routes(
                f"{len(inhibit_rules)} inhibit_rules")
     if not routes and not inhibit_rules:
         # Nothing was generated, so there is nothing to assemble or hand to
-        # amtool — `--validate` stops before either step on such a tree too.
+        # amtool. ⚠️ This is where the row and `--validate` DISAGREE, and did
+        # before #2311 too: on a tree whose tenants generate nothing (e.g.
+        # only `_severity_dedup: disable`) `--validate` exits 1 with "No valid
+        # routes or inhibit rules generated.", while this row is WARN/PASS at
+        # exit 0. (A tree with no tenants at all is rc 0 on both sides.) Kept
+        # as is: turning it into FAIL would change an existing exit code.
         errors = gen.blocking_generation_errors(all_issues)
         if errors:
             return _make_result("routes", FAIL, all_issues,
