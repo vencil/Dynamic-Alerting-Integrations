@@ -275,7 +275,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.5.0** (completed): receiver-type constraints moved forward to API-time enforcement (tenant-api 403 responses); timing (`max_repeat_interval` / `min_group_wait`) and `enforce_group_by` constraints remain validated at assembly time
 - **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
 - **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
-- **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` and `validate-config` now check `_routing_profiles.yaml`
+- **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate

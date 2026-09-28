@@ -1141,6 +1141,13 @@ def route_entry_matchers(entry: object, idx: int,
             return None, [f"  WARN: {ctx}: match value for '{label}' must be "
                           f"a string, got {type(value).__name__} {value!r} "
                           "(quote it in YAML), skipping"]
+        if value == "":
+            # AM reads label="" as "label absent", so this child would take
+            # nearly every alert of the tenant — the same shadowing an empty
+            # `match` causes.
+            return None, [f"  WARN: {ctx}: match value for '{label}' is "
+                          "empty (it would match every alert without that "
+                          "label), skipping"]
         matchers.append(f"{label}={_quote_matcher_value(value)}")
     return matchers, []
 

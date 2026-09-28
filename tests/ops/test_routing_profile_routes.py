@@ -151,6 +151,8 @@ class TestRoutesRenderAsChildren:
         ({"match": "severity=critical", "receiver": _PD}, "non-empty 'match'"),
         ({"match": {"severity": True}, "receiver": _PD},
          "match value for 'severity' must be a string"),
+        ({"match": {"severity": ""}, "receiver": _PD},
+         "match value for 'severity' is empty"),
         ({"match": {"bad-label": "x"}, "receiver": _PD}, "not a valid label name"),
         ({"match": {"severity": "critical"}, "receiver": _PD, "continue": True},
          "unsupported key(s) ['continue']"),
@@ -367,6 +369,7 @@ class TestSchemaConsolidation:
         {"match": {"severity": "critical"}, "receiver": _PD, "continue": True},
         {"match_re": {"severity": ".*"}, "receiver": _PD},
         {"match": {"severity": True}, "receiver": _PD},
+        {"match": {"severity": ""}, "receiver": _PD},
         {"match": {"bad-label": "x"}, "receiver": _PD},
         {"match": {"severity": "critical"}},
     ])

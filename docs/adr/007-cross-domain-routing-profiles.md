@@ -281,7 +281,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **v2.6.0**（已完成）：`generate_alertmanager_routes.py` 重構（21 helpers extracted），`_build_receiver_config()` 改為 strategy pattern
 - **v2.10.0**（開發中）：`--strict` 接線至 CLI 與 CI——組譯期 domain-policy 違規由 WARN 轉 ERROR 並 blocking（`--validate --strict` exit 1，違規訊息含實際值 vs 域限制 + 修法提示）
 
-- **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 與 `validate-config` 開始檢查 `_routing_profiles.yaml`
+- **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選
