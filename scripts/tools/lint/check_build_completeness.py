@@ -88,10 +88,12 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 #   - validate_config.py: _find_schema() 先找 <module 同目錄>/<name>.schema.json
 #     （映像 flat layout），找不到才找 repo 的 docs/schemas/。缺檔時
 #     yaml_quoting 列 FAIL + caller_error（exit 2），不靜默略過（#2164）；
-#     platform-defaults 以 $ref 引用 tenant-config，所以兩份必須同船。
+#     platform-defaults 以 $ref 引用 tenant-config，所以兩份必須同船；
+#     routing-profiles（#2245）同理，也以 $ref 引用 tenant-config。
 REQUIRED_DATA_FILES: dict = {
     "validate_config.py": ("tenant-config.schema.json",
-                           "platform-defaults.schema.json"),
+                           "platform-defaults.schema.json",
+                           "routing-profiles.schema.json"),
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
     "_grar_validate.py": ("configmap-rules-platform.yaml",),

@@ -109,6 +109,7 @@ from _grar_routes import (  # noqa: E402, F401
     _process_override_receiver,
     _validate_override_matcher,
     expand_routing_overrides,
+    expand_routing_routes,
     generate_inhibit_rules,
     generate_routes,
 )

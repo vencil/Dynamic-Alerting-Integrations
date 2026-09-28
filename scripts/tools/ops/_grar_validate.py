@@ -1077,6 +1077,74 @@ def _parse_policy_duration(value: object) -> float | None:
                for num, unit in _POLICY_DURATION_TOKEN_RE.findall(s))
 
 
+# ── ADR-007 label-match `routes` entries (#2245) ──
+# Keys a `routes` entry may carry. Anything else (`continue`, `match_re`,
+# `matchers`, a typo) changes what the author expects the route to do, and
+# the generator does not render it — so the entry is skipped LOUDLY instead
+# of being rendered as something narrower or broader than written.
+ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
+                              "group_interval", "repeat_interval"})
+
+# Prometheus / Alertmanager classic label-name grammar — the same pattern as
+# the schema's `routingRoute.match.propertyNames`.
+_LABEL_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _quote_matcher_value(value: str) -> str:
+    """Double-quote *value* for an Alertmanager matcher string.
+
+    AM parses ``label="value"`` with Go-style escapes, so a backslash, a
+    double quote or a newline inside the value must be escaped or the
+    matcher either fails to parse or matches a different string.
+    """
+    escaped = (value.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("\n", "\\n"))
+    return f'"{escaped}"'
+
+
+def route_entry_matchers(entry: object, idx: int,
+                         tenant: str) -> tuple[list[str] | None, list[str]]:
+    """Equality matchers for one ``routes[idx]`` entry; ``None`` if unusable.
+
+    The ONE structural predicate for a ``routes`` entry: the generator
+    (``_grar_routes.expand_routing_routes``) renders exactly the entries this
+    accepts (receiver content aside), and ``list_tenant_subroutes`` lists
+    exactly those for the domain-policy checks — so the two cannot disagree
+    about which sub-routes exist.
+
+    Only ``{label: value}`` equality is supported (#2245). The list carries
+    ONLY this entry's own labels — the ``tenant="<id>"`` matcher stays on the
+    parent route (the tenant's main route), exactly as for overrides (#2252).
+    Returns ``(None, [WARN … skipping])`` for a non-mapping entry, an
+    unsupported key, or a missing / empty / malformed ``match``.
+    """
+    ctx = f"{tenant}: routes[{idx}]"
+    if not isinstance(entry, dict):
+        return None, [f"  WARN: {ctx} must be a dict, skipping"]
+    unsupported = sorted(str(k) for k in entry if k not in ROUTE_ENTRY_KEYS)
+    if unsupported:
+        return None, [
+            f"  WARN: {ctx} has unsupported key(s) {unsupported} (supported: "
+            f"{sorted(ROUTE_ENTRY_KEYS)}; label equality only — no regex, no "
+            "continue), skipping"]
+    match = entry.get("match")
+    if not isinstance(match, dict) or not match:
+        return None, [f"  WARN: {ctx} needs a non-empty 'match' mapping of "
+                      "label: value (an empty match would take every alert "
+                      "of the tenant), skipping"]
+    matchers = []
+    for label, value in match.items():
+        if not isinstance(label, str) or not _LABEL_NAME_RE.match(label):
+            return None, [f"  WARN: {ctx}: match label {label!r} is not a "
+                          "valid label name, skipping"]
+        if not isinstance(value, str):
+            return None, [f"  WARN: {ctx}: match value for '{label}' must be "
+                          f"a string, got {type(value).__name__} {value!r} "
+                          "(quote it in YAML), skipping"]
+        matchers.append(f"{label}={_quote_matcher_value(value)}")
+    return matchers, []
+
+
 # Keys an override route inherits from the tenant's main route when it does
 # not declare them itself (#2252): the generator nests every override route
 # under the tenant route, and Alertmanager's ``dispatch/route.go`` ``newRoute``
@@ -1113,23 +1181,29 @@ def list_tenant_subroutes(
     keys in ``config`` that came from the tenant's main routing rather than
     from the sub-route itself, so a message can say where to fix the value.
 
-    Today the only source is ``_routing.overrides``
-    (``_grar_routes.expand_routing_overrides``). Any other kind of sub-route
-    that renders its own Alertmanager receiver belongs here too.
+    Two sources, in the generator's render order: ``_routing.overrides``
+    (``_grar_routes.expand_routing_overrides``, ref ``override[<i>]``), then
+    the ADR-007 label-match ``routes`` (``expand_routing_routes``, ref
+    ``routes[<i>]``, #2245) — whether they came from a routing profile or
+    the tenant. Any other kind of sub-route that renders its own
+    Alertmanager receiver belongs here too.
 
-    Only overrides that can render a route are listed, mirroring the
+    Only entries that can render a route are listed, mirroring the
     generator's structural skips: none when the tenant has no main
-    ``receiver`` (the whole tenant is skipped), a non-list ``overrides``, a
-    non-mapping entry, one without exactly one of ``alertname`` /
-    ``metric_group``, or one without a ``receiver``. Receiver *content*
-    (unknown type, missing fields, domain allowlist) is not pre-judged —
-    the main route's check does not pre-judge it either.
+    ``receiver`` (the whole tenant is skipped), a non-list ``overrides`` /
+    ``routes``, a non-mapping entry, an override without exactly one of
+    ``alertname`` / ``metric_group``, a ``routes`` entry
+    ``route_entry_matchers`` rejects, or either kind without a
+    ``receiver``. Receiver *content* (unknown type, missing fields, domain
+    allowlist) is not pre-judged — the main route's check does not
+    pre-judge it either.
 
     #2252: a value the sub-route does NOT declare is back-filled from the
     tenant's main routing, because that is what Alertmanager uses — the
-    generator renders every override route as a CHILD of the tenant's main
-    route, and a child inherits its parent's timing and ``group_by``. A key
-    counts as declared when it is truthy (the generator's own emit test).
+    generator renders every override and ``routes`` entry as a CHILD of the
+    tenant's main route, and a child inherits its parent's timing and
+    ``group_by``. A key counts as declared when it is truthy (the
+    generator's own emit test).
     A truthy but malformed value (e.g. a non-list ``group_by``, which the
     generator drops) is still treated as the sub-route's own, so strict mode
     reports it instead of the tenant's value papering over it. The tenant's
@@ -1139,11 +1213,24 @@ def list_tenant_subroutes(
     """
     if not isinstance(routing_config, dict) or not routing_config.get("receiver"):
         return []
-    overrides = routing_config.get("overrides")
-    if not isinstance(overrides, list):
-        return []
+
+    def _effective(sub: dict) -> tuple[dict, frozenset[str]]:
+        """*sub* with undeclared inheritable keys back-filled (#2252)."""
+        effective = dict(sub)
+        inherited = set()
+        for key in SUBROUTE_INHERITED_KEYS:
+            if sub.get(key):
+                continue  # declared: the sub-route's own value, even malformed
+            main_value = routing_config.get(key)
+            if _renders_on_route(key, main_value):
+                effective[key] = main_value
+                inherited.add(key)
+        return effective, frozenset(inherited)
+
     subroutes: list[tuple[str, str, dict, frozenset[str]]] = []
-    for idx, override in enumerate(overrides):
+    overrides = routing_config.get("overrides")
+    for idx, override in enumerate(
+            overrides if isinstance(overrides, list) else []):
         if not isinstance(override, dict):
             continue
         alertname = override.get("alertname")
@@ -1154,17 +1241,17 @@ def list_tenant_subroutes(
             continue
         match = (f"alertname={alertname}" if alertname
                  else f"metric_group={metric_group}")
-        effective = dict(override)
-        inherited = set()
-        for key in SUBROUTE_INHERITED_KEYS:
-            if override.get(key):
-                continue  # declared: the sub-route's own value, even malformed
-            main_value = routing_config.get(key)
-            if _renders_on_route(key, main_value):
-                effective[key] = main_value
-                inherited.add(key)
-        subroutes.append((f"override[{idx}]", match, effective,
-                          frozenset(inherited)))
+        subroutes.append((f"override[{idx}]", match, *_effective(override)))
+
+    # #2245: ADR-007 label-match `routes`, rendered after the overrides.
+    # Same structural predicate as the generator (route_entry_matchers).
+    routes = routing_config.get("routes")
+    for idx, entry in enumerate(routes if isinstance(routes, list) else []):
+        matchers, _warnings = route_entry_matchers(entry, idx, "")
+        if matchers is None or not entry.get("receiver"):
+            continue
+        match = ",".join(f"{k}={v}" for k, v in entry["match"].items())
+        subroutes.append((f"routes[{idx}]", match, *_effective(entry)))
     return subroutes
 
 
@@ -1292,8 +1379,8 @@ def check_domain_policies(
         for tenant in tenants:
             if tenant not in routing_configs:
                 continue
-            # #2243: a sub-route that renders its own AM receiver (today:
-            # `_routing.overrides`) is held to the same constraints as the
+            # #2243: a sub-route that renders its own AM receiver
+            # (`_routing.overrides`, and since #2245 `routes`) is held to the same constraints as the
             # main route. #2252: read from the sub-route's EFFECTIVE values —
             # what it declares, plus what it inherits from the tenant's main
             # route (see list_tenant_subroutes()).

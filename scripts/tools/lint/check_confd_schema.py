@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_confd_schema.py — validate conf.d tenant YAML + _defaults.yaml against their JSON Schemas (#880).
+"""check_confd_schema.py — validate conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml against their JSON Schemas (#880).
 
 WHY (the silent-failure this shifts left):
   The threshold-exporter opts a tenant INTO per-tenant exporter liveness only when
@@ -16,10 +16,13 @@ SCOPE:
   tenant file that forgot its `tenants:` wrapper. _defaults*.yaml validate against
   platform-defaults.schema.json (top-level-key guard — a typo like `state_flters`
   silently drops the whole platform-default block, the highest-blast-radius config;
-  #658 fast-follow / Gemini #911 對抗3). All OTHER meta-files (_routing_profiles /
-  _domain_policy / _instance_mapping / _rbac ... — basename starts with "_") have their
-  own shapes and validators (check_routing_profiles.py); they are SKIPPED and listed
-  explicitly so coverage is never silently capped.
+  #658 fast-follow / Gemini #911 對抗3). `_routing_profiles.yaml` validates against
+  routing-profiles.schema.json, which `$ref`s the tenant `routing` definition (#2245 /
+  #2232 item 3) — so a profile is held to the same shape, and the same #2164 quoting
+  check, as a tenant's `_routing`. All OTHER meta-files (_domain_policy /
+  _instance_mapping / _rbac ... — basename starts with "_") have their own shapes and
+  validators; they are SKIPPED and listed explicitly so coverage is never silently
+  capped.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
@@ -67,6 +70,15 @@ _DEFAULT_SCHEMA = os.path.normpath(
 _DEFAULT_PLATFORM_SCHEMA = os.path.normpath(
     os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "platform-defaults.schema.json")
 )
+# #2245 / #2232 item 3: `_routing_profiles.yaml` — each profile `$ref`s the
+# tenant schema's `routing` definition.
+_DEFAULT_PROFILES_SCHEMA = os.path.normpath(
+    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "routing-profiles.schema.json")
+)
+
+# The file names the route generator reads routing profiles from
+# (`_grar_parse._parse_platform_config`), matched the same way: exact.
+ROUTING_PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
 
 
 def _is_defaults_file(basename: str) -> bool:
@@ -98,6 +110,7 @@ class _CallerError(Exception):
 # with — also the keys `find_misread_scalars` looks them up by.
 TENANT_SCHEMA_NAME = "tenant-config.schema.json"
 PLATFORM_SCHEMA_NAME = "platform-defaults.schema.json"
+PROFILES_SCHEMA_NAME = "routing-profiles.schema.json"
 
 
 def schema_registry(*schemas: dict):
@@ -138,9 +151,12 @@ def _cross_file_refs(node, path: str = "") -> list[tuple[str, str]]:
     return out
 
 
-def checked_schema_registry(schema: dict, platform_schema: dict):
-    """`schema_registry(schema, platform_schema)`, after proving every
-    cross-file `$ref` in *platform_schema* resolves through it (#2232).
+def checked_schema_registry(schema: dict, platform_schema: dict,
+                            *more_schemas: dict):
+    """`schema_registry(schema, platform_schema, *more_schemas)`, after
+    proving every cross-file `$ref` in *platform_schema* (and in each of
+    *more_schemas*, e.g. the routing-profiles schema, #2245) resolves
+    through it (#2232).
 
     ⛔ Checked up front, not left to validation: jsonschema only follows a
     `$ref` when an instance reaches it, so a tree without `_defaults*` (or
@@ -151,20 +167,24 @@ def checked_schema_registry(schema: dict, platform_schema: dict):
     """
     from jsonschema_specifications import REGISTRY as SPECIFICATIONS
     from referencing.exceptions import Unresolvable
-    registry = schema_registry(schema, platform_schema)
+    registry = schema_registry(schema, platform_schema, *more_schemas)
     # Looked up with the standard metaschemas combined in, as jsonschema's
     # validation does — a `$ref` to e.g. the draft-07 metaschema resolves
     # there and must not be a caller error here.
-    resolver = SPECIFICATIONS.combine(registry).resolver(
-        base_uri=platform_schema.get("$id", ""))
-    for where, ref in _cross_file_refs(platform_schema):
-        try:
-            resolver.lookup(ref)
-        except Unresolvable as exc:
-            raise UnresolvableSchemaRef(
-                f"cannot resolve $ref {ref!r} at {where} in the platform schema "
-                f"({type(exc).__name__}); the tenant schema must carry the "
-                f"`$id` that $ref resolves to (see docs/schemas/README.md)") from exc
+    combined = SPECIFICATIONS.combine(registry)
+    referrers = [("platform schema", platform_schema)]
+    referrers.extend((f"schema {s.get('$id', '(no $id)')}", s)
+                     for s in more_schemas)
+    for label, referrer in referrers:
+        resolver = combined.resolver(base_uri=referrer.get("$id", ""))
+        for where, ref in _cross_file_refs(referrer):
+            try:
+                resolver.lookup(ref)
+            except Unresolvable as exc:
+                raise UnresolvableSchemaRef(
+                    f"cannot resolve $ref {ref!r} at {where} in the {label} "
+                    f"({type(exc).__name__}); the tenant schema must carry the "
+                    f"`$id` that $ref resolves to (see docs/schemas/README.md)") from exc
     return registry
 
 
@@ -278,7 +298,8 @@ def misread_scalar_violations(rel: str, text: str, schema: dict,
 
 
 def validate_dir(config_dir: str, schema: dict, validator,
-                 platform_schema: dict | None = None) -> tuple[int, list[str], list[str]]:
+                 platform_schema: dict | None = None,
+                 profiles_schema: dict | None = None) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
 
     `validator` is the jsonschema module (injected so the import stays lazy — the
@@ -287,7 +308,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
 
     Tenant files (no `_` prefix) validate against `schema`; `_defaults*.yaml`
     validate against `platform_schema` (top-level-key guard, #658 fast-follow)
-    when provided; all other `_*` meta-files are skipped (own validators).
+    when provided; `_routing_profiles.y(a)ml` against `profiles_schema` when
+    provided (#2245); all other `_*` meta-files are skipped (own validators).
     """
     violations: list[str] = []
     skipped: list[str] = []
@@ -295,12 +317,17 @@ def validate_dir(config_dir: str, schema: dict, validator,
     schemas = {TENANT_SCHEMA_NAME: schema}
     if platform_schema is not None:
         schemas[PLATFORM_SCHEMA_NAME] = platform_schema
-    registry = schema_registry(schema, platform_schema) if platform_schema else None
+    if profiles_schema is not None:
+        schemas[PROFILES_SCHEMA_NAME] = profiles_schema
+    extra = [s for s in (platform_schema, profiles_schema) if s is not None]
+    registry = schema_registry(schema, *extra) if extra else None
     for path in _iter_yaml_files(config_dir):
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
         basename = os.path.basename(path)
         is_defaults = platform_schema is not None and _is_defaults_file(basename)
-        if basename.startswith("_") and not is_defaults:
+        is_profiles = (profiles_schema is not None
+                       and basename in ROUTING_PROFILES_NAMES)
+        if basename.startswith("_") and not is_defaults and not is_profiles:
             skipped.append(rel)
             continue
         try:
@@ -317,10 +344,35 @@ def validate_dir(config_dir: str, schema: dict, validator,
         # #2164: quoting, judged on the node tree (the only place a plain
         # `yes` and a quoted "yes" still differ). Tenant files AND
         # `_defaults*` — the latter is where `_routing_defaults` lives.
+        if is_profiles:
+            file_schema, file_schema_name = profiles_schema, PROFILES_SCHEMA_NAME
+        elif is_defaults:
+            file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
+        else:
+            file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
         violations.extend(misread_scalar_violations(
-            rel, text, platform_schema if is_defaults else schema, schemas,
-            PLATFORM_SCHEMA_NAME if is_defaults else TENANT_SCHEMA_NAME))
+            rel, text, file_schema, schemas, file_schema_name))
         for doc in docs:
+            if is_profiles:
+                # #2245: an empty / comment-only `_routing_profiles.yaml` is a
+                # placeholder (the generator reads no profile from it), same
+                # rule as `_defaults*`; anything else must be the mapping the
+                # schema describes.
+                if doc is None:
+                    continue
+                checked += 1
+                if not isinstance(doc, dict):
+                    violations.append(
+                        f"ERROR: {rel}: top-level YAML document must be a "
+                        f"mapping (`routing_profiles:`; got {type(doc).__name__})")
+                    continue
+                try:
+                    validator.validate(doc, profiles_schema, registry=registry)
+                except validator.ValidationError as exc:
+                    loc = "/".join(str(p) for p in exc.absolute_path)
+                    violations.append(
+                        f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}")
+                continue
             if is_defaults:
                 # ⛔ Delegated, not duplicated — `defaults_doc_violations` is the
                 # one implementation, and the reachability gate calls the SAME
@@ -365,6 +417,9 @@ def main() -> int:
     parser.add_argument("--platform-schema", default=_DEFAULT_PLATFORM_SCHEMA,
                         help="_defaults.yaml JSON Schema path "
                              "(default: docs/schemas/platform-defaults.schema.json)")
+    parser.add_argument("--routing-profiles-schema", default=_DEFAULT_PROFILES_SCHEMA,
+                        help="_routing_profiles.yaml JSON Schema path "
+                             "(default: docs/schemas/routing-profiles.schema.json)")
     parser.add_argument("--ci", action="store_true",
                         help="CI mode (accepted for symmetry with sibling lints; no behaviour change)")
     args = parser.parse_args()
@@ -392,6 +447,15 @@ def main() -> int:
               file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    try:
+        with open(args.routing_profiles_schema, encoding="utf-8") as fh:
+            profiles_schema = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: cannot load routing-profiles schema "
+              f"{safe_label(args.routing_profiles_schema)}: {safe_label(exc)}",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     # Lazy import: keep --help / invalid-args (the exit-code gate) working in a
     # jsonschema-less env.
     try:
@@ -405,7 +469,7 @@ def main() -> int:
     # so a --schema they cannot reach is rc 2 whether or not any file walks
     # into them.
     try:
-        checked_schema_registry(schema, platform_schema)
+        checked_schema_registry(schema, platform_schema, profiles_schema)
     except UnresolvableSchemaRef as exc:
         print(f"ERROR: platform schema {safe_label(args.platform_schema)} with "
               f"--schema {safe_label(args.schema)}: {safe_label(exc)}",
@@ -423,7 +487,7 @@ def main() -> int:
     for config_dir in args.config_dir:
         try:
             d_checked, d_violations, d_skipped = validate_dir(
-                config_dir, schema, jsonschema, platform_schema)
+                config_dir, schema, jsonschema, platform_schema, profiles_schema)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -433,15 +497,16 @@ def main() -> int:
         skipped.extend(f"{prefix}{s}" for s in d_skipped)
 
     if skipped:
-        print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config "
-              f"or platform-defaults schema (own shape/validator): "
+        print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config, "
+              f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
     if violations:
         for msg in violations:
             print(safe_label(msg), file=sys.stderr)
         print(f"\n{len(violations)} schema violation(s) across {checked} conf.d file(s). "
               f"Fix the conf.d YAML, or the schema (docs/schemas/tenant-config.schema.json "
-              f"/ platform-defaults.schema.json) if the schema is wrong.", file=sys.stderr)
+              f"/ platform-defaults.schema.json / routing-profiles.schema.json) if the "
+              f"schema is wrong.", file=sys.stderr)
         return EXIT_VIOLATION
 
     print(f"OK: {checked} tenant conf.d file(s) valid against tenant-config.schema.json")

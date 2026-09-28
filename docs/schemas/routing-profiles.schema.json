@@ -4,114 +4,19 @@
   "title": "Dynamic Alerting Platform — Routing Profiles Schema (ADR-007)",
   "description": "JSON Schema (draft-07) for validating _routing_profiles.yaml. Defines reusable named routing configurations that tenants reference via _routing_profile.",
   "version": "v2.1.0",
-  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/routing-profiles.schema.json\": \"conf.d/_routing_profiles.yaml\" }",
+  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/routing-profiles.schema.json\": \"conf.d/_routing_profiles.yaml\" }. #2245: a profile is shallow-merged into the tenant's _routing and rendered by the same route generator, so its shape IS the tenant routing definition — referenced, not copied (the copy that lived here had drifted and described `routes` the generator never rendered). Resolves against this file's $id, which shares its base with tenant-config.schema.json's $id — so a validator must load BOTH schemas into its registry / schema store (e.g. jsonschema's referencing.Registry keyed by each $id); loading this file alone leaves the $ref unresolvable.",
   "type": "object",
   "required": ["routing_profiles"],
   "properties": {
     "routing_profiles": {
       "type": "object",
       "title": "Routing Profiles Map",
-      "description": "Mapping of profile-name to routing configuration. Naming convention: team-{team}-{region} or domain-{domain}-{tier}.",
+      "description": "Mapping of profile-name to routing configuration. Naming convention: team-{team}-{region} or domain-{domain}-{tier}. Each profile is Layer 2 of the four-layer merge: it overrides _routing_defaults and is overridden key by key (shallow) by the tenant's _routing.",
       "additionalProperties": {
-        "$ref": "#/definitions/routingProfile"
+        "$ref": "tenant-config.schema.json#/definitions/routing"
       },
       "minProperties": 1
     }
   },
-  "additionalProperties": false,
-  "definitions": {
-    "routingProfile": {
-      "type": "object",
-      "title": "Named Routing Profile",
-      "description": "Reusable routing configuration applied as Layer 2 in the four-layer merge pipeline. Profile values override _routing_defaults but are overridden by tenant _routing.",
-      "properties": {
-        "receiver": {
-          "$ref": "#/definitions/receiver",
-          "title": "Profile Receiver",
-          "description": "Default receiver for tenants using this profile."
-        },
-        "group_by": {
-          "type": "array",
-          "title": "Group By Labels",
-          "description": "Alertmanager grouping labels.",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "examples": [["tenant", "alertname", "severity"]]
-        },
-        "group_wait": {
-          "type": "string",
-          "title": "Group Wait Duration",
-          "description": "Wait time before sending initial notification (Go duration). Guardrail: 5s–5m.",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
-          "examples": ["30s", "1m"]
-        },
-        "group_interval": {
-          "type": "string",
-          "title": "Group Interval Duration",
-          "description": "Interval between notifications for same group (Go duration). Guardrail: 5s–5m.",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
-          "examples": ["5m", "10m"]
-        },
-        "repeat_interval": {
-          "type": "string",
-          "title": "Repeat Interval Duration",
-          "description": "Interval for re-sending unresolved alerts (Go duration). Guardrail: 1m–72h.",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
-          "examples": ["1h", "4h", "8h"]
-        },
-        "routes": {
-          "type": "array",
-          "title": "Sub-Routes",
-          "description": "Optional sub-routes for severity-based or label-based routing within this profile.",
-          "items": {
-            "$ref": "#/definitions/profileSubRoute"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "profileSubRoute": {
-      "type": "object",
-      "title": "Profile Sub-Route",
-      "description": "A sub-route within a profile for conditional routing (e.g., severity-based escalation).",
-      "required": ["match", "receiver"],
-      "properties": {
-        "match": {
-          "type": "object",
-          "title": "Match Labels",
-          "description": "Label matchers for this sub-route (e.g., {severity: critical}).",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "receiver": {
-          "$ref": "#/definitions/receiver",
-          "title": "Sub-Route Receiver"
-        },
-        "group_wait": {
-          "type": "string",
-          "title": "Group Wait Override",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
-        },
-        "group_interval": {
-          "type": "string",
-          "title": "Group Interval Override",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
-        },
-        "repeat_interval": {
-          "type": "string",
-          "title": "Repeat Interval Override",
-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
-        }
-      },
-      "additionalProperties": false
-    },
-    "receiver": {
-      "$ref": "tenant-config.schema.json#/definitions/receiver",
-      "title": "Receiver Configuration",
-      "$comment": "#2137: a profile receiver is merged into the tenant's _routing and goes through the same route generator, so it uses the tenant schema's receiver definition instead of a second copy (the copy that lived here had drifted). Resolves against this file's $id, which shares its base with tenant-config.schema.json's $id — so a validator must load BOTH schemas into its registry / schema store (e.g. jsonschema's referencing.Registry keyed by each $id); loading this file alone leaves the $ref unresolvable."
-    }
-  }
+  "additionalProperties": false
 }

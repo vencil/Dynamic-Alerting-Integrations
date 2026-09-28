@@ -736,11 +736,11 @@ repos:
       # degrade) so it is in additional_dependencies. Also wired into ci.yml's Lint
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
-        name: conf.d tenant YAML + _defaults.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard)
+        name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard + #2245)
         entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Same gate, every OTHER shipped conf.d tree. The hook above is pinned to the
@@ -775,7 +775,7 @@ repos:
           --config-dir components/da-tools/app/examples/cardinality-demo/conf.d
         language: python
         pass_filenames: false
-        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
+        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Gemini #1056 disposition 3b: pre-merge structural validation for the

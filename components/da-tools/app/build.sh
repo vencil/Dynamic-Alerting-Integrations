@@ -253,6 +253,8 @@ REPO_DATA_FILES=(
     # validate_config.py by REQUIRED_DATA_FILES.
     docs/schemas/tenant-config.schema.json
     docs/schemas/platform-defaults.schema.json
+    # #2245 — and _routing_profiles.yaml's schema ($refs the tenant one).
+    docs/schemas/routing-profiles.schema.json
     k8s/03-monitoring/configmap-rules-platform.yaml
     rule-packs/rule-pack-clickhouse.yaml
     rule-packs/rule-pack-db2.yaml

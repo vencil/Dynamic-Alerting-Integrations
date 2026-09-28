@@ -160,6 +160,8 @@ def extract_receivers(
     Handles:
       - _routing.receiver (single receiver)
       - _routing.overrides[].receiver (per-rule overrides)
+      - _routing.routes[].receiver (ADR-007 label-match sub-routes, #2245;
+        only the tenant's own — a routing profile's routes are not read here)
 
     Args:
         tenant_name: Tenant identifier (for labeling).
@@ -190,6 +192,18 @@ def extract_receivers(
             if isinstance(recv, dict) and recv.get("type"):
                 r = dict(recv)
                 r.setdefault("_label", f"{tenant_name}-override-{idx}")
+                receivers.append(r)
+
+    # ADR-007 label-match sub-route receivers (#2245)
+    routes = routing.get("routes")
+    if isinstance(routes, list):
+        for idx, entry in enumerate(routes):
+            if not isinstance(entry, dict):
+                continue
+            recv = entry.get("receiver")
+            if isinstance(recv, dict) and recv.get("type"):
+                r = dict(recv)
+                r.setdefault("_label", f"{tenant_name}-route-{idx}")
                 receivers.append(r)
 
     return receivers

@@ -3143,6 +3143,8 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
 
+`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config.
+
 **Usage**
 
 ```bash

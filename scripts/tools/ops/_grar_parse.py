@@ -248,7 +248,20 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     # Extract _routing_defaults (only from _ prefixed files)
     if "_routing_defaults" in data:
         if is_defaults_file:
-            result["routing_defaults"] = data["_routing_defaults"]
+            rd = data["_routing_defaults"]
+            # #2245: ADR-007 `routes` belong to a routing profile or the
+            # tenant, never to the platform-wide defaults (every tenant would
+            # inherit the escalation). Dropped HERE, before any merge, so
+            # neither the generator nor explain_route renders it; recorded
+            # as a `WARN … skipping` line (→ schema_warnings, blocking under
+            # `--validate`), like a non-boolean `_routing_enforced.enabled`.
+            if isinstance(rd, dict) and "routes" in rd:
+                rd = {k: v for k, v in rd.items() if k != "routes"}
+                result.setdefault("routing_defaults_errors", []).append(
+                    f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                    "supported here (define it in a routing profile or the "
+                    "tenant's _routing), skipping")
+            result["routing_defaults"] = rd
         else:
             print(f"  WARN: _routing_defaults in {_f} ignored "
                   "(only allowed in _ prefixed files)", file=sys.stderr)
@@ -834,6 +847,8 @@ def load_tenant_tree(
     # line carries "WARN … skipping", so `--validate` (and validate-config's
     # schema row) fail on it; render mode prints it and renders without NOC.
     schema_warnings.extend(parsed.get("enforced_errors", []))
+    # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
+    schema_warnings.extend(parsed.get("routing_defaults_errors", []))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing
     if parsed["domain_policies"]:

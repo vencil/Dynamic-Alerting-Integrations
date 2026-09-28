@@ -32,9 +32,11 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from generate_alertmanager_routes import (  # noqa: E402
+    _build_tenant_routes,
     _parse_config_files,
     merge_routing_with_defaults,
 )
+from _grar_validate import _matcher_matches_labels  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
@@ -43,6 +45,52 @@ from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
+
+# Keys of the merged routing config that the generator turns into CHILD
+# routes rather than settings of the tenant's main route (#2245). The text
+# report shows them as rendered sub-routes, not as merged config, so an
+# entry the generator skips is never presented as if it were in effect.
+SUB_ROUTE_SOURCE_KEYS = ("overrides", "routes")
+
+
+def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[str]]:
+    """The child routes the generator renders under the tenant's main route.
+
+    Computed by the generator itself (``_build_tenant_routes``) from the
+    merged config, so this is what Alertmanager receives, in match order:
+    overrides first, then the ADR-007 label-match ``routes`` (#2245). Each
+    entry is the rendered child route plus ``source`` (``overrides[i]`` /
+    ``routes[i]``) and ``receiver_type``. Returns (sub_routes, skipped) —
+    ``skipped`` is every ``… skipping`` line the generator emitted for an
+    override / ``routes`` entry. No domain allowlist is applied here
+    (explain has no ``--policy``).
+    """
+    if not isinstance(merged, dict) or not merged.get("receiver"):
+        return [], []
+    routes, receivers, warnings = _build_tenant_routes({tenant: merged})
+    types: dict[str, str] = {}
+    for recv in receivers:
+        for key in recv:
+            if key.endswith("_configs"):
+                types[recv["name"]] = key[:-len("_configs")]
+    prefix = f"tenant-{tenant}-"
+    out: list[dict] = []
+    for parent in routes:
+        for child in parent.get("routes", []):
+            name = child.get("receiver", "")
+            kind, _, idx = name[len(prefix):].rpartition("-")
+            source = {"override": "overrides", "route": "routes"}.get(kind, kind)
+            entry = {"source": f"{source}[{idx}]"}
+            entry.update(child)
+            entry["receiver_type"] = types.get(name, "")
+            out.append(entry)
+    # Skipped sub-route entries only: the main receiver's own problems are
+    # the tenant route's, and a timing clamp is not a skip.
+    markers = ("override[", "routes[", "'overrides'", "'routes'",
+               f"{tenant}-override-", f"{tenant}-route-")
+    skipped = [w for w in warnings
+               if "skipping" in w and any(m in w for m in markers)]
+    return out, skipped
 
 def explain_tenant_routing(
     parsed: dict,
@@ -109,11 +157,16 @@ def explain_tenant_routing(
     for k, v in enforced_cfg.items():
         final[k] = v
 
+    # #2245: what the generator actually renders from `overrides` / `routes`.
+    sub_routes, skipped = effective_sub_routes(tenant, merged)
+
     return {
         "tenant": tenant,
         "profile_ref": profile_ref,
         "layers": layers,
         "final": final,
+        "sub_routes": sub_routes,
+        "skipped_sub_routes": skipped,
     }
 
 
@@ -189,9 +242,39 @@ def format_explanation(explanation: dict, *, lang: str = "en") -> str:
 
     header = "最終合併結果:" if lang == "zh" else "Final merged result:"
     lines.append(f"── {header} ──")
-    for line in _fmt_yaml(explanation["final"]).splitlines():
+    # #2245: `overrides` / `routes` are listed below as the sub-routes the
+    # generator renders — an entry it skips must not read as in effect.
+    final = {k: v for k, v in explanation["final"].items()
+             if k not in SUB_ROUTE_SOURCE_KEYS}
+    for line in _fmt_yaml(final).splitlines():
         lines.append(f"   {line}")
     lines.append("")
+
+    sub_routes = explanation.get("sub_routes", [])
+    skipped = explanation.get("skipped_sub_routes", [])
+    if sub_routes or skipped:
+        header = ("生效的子路由（依比對順序，都沒命中則用主 receiver）:"
+                  if lang == "zh" else
+                  "Effective sub-routes (match order; no match → main receiver):")
+        lines.append(f"── {header} ──")
+        for i, sub in enumerate(sub_routes, 1):
+            matchers = ", ".join(sub.get("matchers", []))
+            lines.append(f"   {i}. {safe_label(sub['source'])}: "
+                         f"{safe_label(matchers)} → {safe_label(sub['receiver'])}"
+                         f" ({safe_label(sub.get('receiver_type') or '?')})")
+            own = {k: sub[k] for k in ("group_by", "group_wait",
+                                       "group_interval", "repeat_interval")
+                   if k in sub}
+            if own:
+                lines.append(f"      {safe_label(own)}")
+        if not sub_routes:
+            lines.append("   (none)")
+        if skipped:
+            lines.append("   未生效（產生器略過）:" if lang == "zh"
+                         else "   Not in effect (skipped by the generator):")
+            for w in skipped:
+                lines.append(f"     {safe_label(w.strip())}")
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -281,13 +364,27 @@ def trace_alert_routing(
     elif receiver_url:
         receiver_desc += f" → {receiver_url}"
 
-    steps.append({
+    # #2245: the first rendered sub-route (overrides, then `routes`) whose
+    # matchers all hold takes the alert — Alertmanager's first-match rule
+    # among the children of the tenant's main route.
+    matched_sub = next(
+        (sub for sub in explanation.get("sub_routes", [])
+         if all(_matcher_matches_labels(m, alert_labels)
+                for m in sub.get("matchers", []))), None)
+    step2 = {
         "step": 2,
         "action": "match_receiver",
         "detail": f"Alert labels: {alert_labels}",
         "receiver_type": receiver_type,
         "receiver_desc": receiver_desc,
-    })
+    }
+    if matched_sub is not None:
+        receiver_type = matched_sub.get("receiver_type") or receiver_type
+        receiver_desc = (f"{receiver_type} → {matched_sub['receiver']} "
+                         f"(sub-route {matched_sub['source']})")
+        step2.update(receiver_type=receiver_type, receiver_desc=receiver_desc,
+                     matched_sub_route=matched_sub["source"])
+    steps.append(step2)
 
     # Step 3: Check enforced routing (NOC override)
     enforced = parsed.get("enforced_routing")
@@ -367,12 +464,17 @@ def trace_alert_routing(
             "passed": True,
         })
 
-    # Timing
+    # Timing — a matched sub-route's own values win; the rest are inherited
+    # from the tenant's main route (#2252 / #2245).
     timing = {
         "group_wait": final_routing.get("group_wait", "30s"),
         "group_interval": final_routing.get("group_interval", "5m"),
         "repeat_interval": final_routing.get("repeat_interval", "4h"),
     }
+    if matched_sub is not None:
+        for key in timing:
+            if key in matched_sub:
+                timing[key] = matched_sub[key]
 
     return {
         "tenant": tenant,

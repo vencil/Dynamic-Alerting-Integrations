@@ -38,6 +38,7 @@ _grar_routes.py 的產生邏輯、_grar_render.py 的注入順序）時，下表
 哪條路由分支。
 """
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -439,3 +440,69 @@ class TestEnforcedRoutingGuardrails:
             "alertname": "Watchdog",
             "severity": "critical",
         }, "watchdog-heartbeat")
+
+
+# ============================================================
+# 3. ADR-007 routing profile `routes`（#2245；synthetic）
+# ============================================================
+
+_PROFILE_TENANT = "demo-apac"
+_PROFILE_OVERRIDE_ALERTNAME = "DemoProfileOverride"
+
+
+def _build_profile_routes_am_yml(conf_d) -> str:
+    """範例 `_routing_profiles.yaml`（team-sre-apac 帶 `routes:
+    match {severity: critical}`）+ 一個引用它、另帶一條 override 的 demo
+    tenant，走 load_tenant_configs → generate_routes → assemble_configmap。"""
+    shutil.copy(os.path.join(_CONF_D, "examples", "_routing_profiles.yaml"),
+                conf_d / "_routing_profiles.yaml")
+    (conf_d / f"{_PROFILE_TENANT}.yaml").write_text(yaml.safe_dump({
+        "tenants": {_PROFILE_TENANT: {
+            "_routing_profile": "team-sre-apac",
+            "_routing": {"overrides": [{
+                "alertname": _PROFILE_OVERRIDE_ALERTNAME,
+                "receiver": {"type": "webhook",
+                             "url": "https://hooks.example.com/override-sink"},
+            }]},
+        }}}), encoding="utf-8")
+    routing, dedup, _sw, enforced, _mc = load_tenant_configs(str(conf_d))
+    routes, receivers, warnings = generate_routes(
+        routing, enforced_routing=enforced)
+    blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
+    assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
+    inhibit_rules, _ = generate_inhibit_rules(dedup)
+    cm_yaml = assemble_configmap(
+        load_base_config(None), routes, receivers, inhibit_rules)
+    return yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+
+
+@pytest.fixture(scope="module")
+def profile_routes_etc(tmp_path_factory):
+    ensure_am_image()
+    conf_d = tmp_path_factory.mktemp("profile-routes-confd")
+    return _write_etc(tmp_path_factory, "am-profile-routes-etc",
+                      _build_profile_routes_am_yml(conf_d))
+
+
+@_needs_docker
+class TestProfileRoutesRouting:
+    """分支：tenant 主 route 的子路由，順序 overrides → routes → 主 receiver。"""
+
+    def test_critical_hits_the_profile_route(self, profile_routes_etc):
+        _assert_routed(profile_routes_etc, {
+            "alertname": "DemoCoreAlert", "tenant": _PROFILE_TENANT,
+            "severity": "critical",
+        }, f"tenant-{_PROFILE_TENANT}-route-0")
+
+    def test_warning_stays_on_the_main_receiver(self, profile_routes_etc):
+        _assert_routed(profile_routes_etc, {
+            "alertname": "DemoCoreAlert", "tenant": _PROFILE_TENANT,
+            "severity": "warning",
+        }, f"tenant-{_PROFILE_TENANT}")
+
+    def test_override_is_matched_before_routes(self, profile_routes_etc):
+        """critical 且命中 override 的 alertname → override 先比對、先命中。"""
+        _assert_routed(profile_routes_etc, {
+            "alertname": _PROFILE_OVERRIDE_ALERTNAME,
+            "tenant": _PROFILE_TENANT, "severity": "critical",
+        }, f"tenant-{_PROFILE_TENANT}-override-0")

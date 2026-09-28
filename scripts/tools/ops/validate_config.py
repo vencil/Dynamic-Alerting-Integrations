@@ -494,6 +494,10 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
 # ============================================================
 _TENANT_SCHEMA = "tenant-config.schema.json"
 _PLATFORM_SCHEMA = "platform-defaults.schema.json"
+# #2245 / #2232 item 3: `_routing_profiles.yaml` — each profile `$ref`s the
+# tenant `routing` definition, so the quoting check reaches profiles too.
+_PROFILES_SCHEMA = "routing-profiles.schema.json"
+_PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
 
 
 def _find_schema(name: str) -> Path | None:
@@ -516,7 +520,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     something else — `channel: yes` is True here, "yes" to the Go readers
     and to Alertmanager (#2164). Tenant files are held to
     tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
-    (the same selection `check_confd_schema` makes); other `_*` files have
+    and `_routing_profiles.y(a)ml` to routing-profiles.schema.json (#2245;
+    the same selection `check_confd_schema` makes); other `_*` files have
     no schema and are not read. Which words are ambiguous is PyYAML's own
     resolver's verdict and which fields are strings is the schema's — see
     `_lib_io.find_misread_scalars`; nothing is listed here.
@@ -526,7 +531,7 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     from _lib_io import compose_all_nodes, find_misread_scalars
     from _lib_confd import is_defaults_document_name
     schemas: dict[str, object] = {}
-    for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA):
+    for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
         if path is None:
             return _make_result(
@@ -541,6 +546,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         name = fpath.name
         if is_defaults_document_name(name):
             schema_name = _PLATFORM_SCHEMA
+        elif name in _PROFILES_NAMES:
+            schema_name = _PROFILES_SCHEMA
         elif is_reserved_name(name):
             continue
         else:
