@@ -1296,6 +1296,9 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # live heading), the first pytest read under `.agents/`. Recorded per this
     # test's own instruction.
     ".agents/**",
+    # GAINED by #1471: tests/ops/test_bench_workload_record_trigger.py reads the
+    # workload-closure SSOT to pin bench-workload-record.yaml's literal trigger.
+    ".github/bench-reference.yaml",
 }
 
 

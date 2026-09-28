@@ -300,6 +300,10 @@ jobs:
               - "Makefile"
               - ".pre-commit-config.yaml"
               - ".github/custom-rule-policy.yaml"
+              # tests/ops/test_bench_workload_record_trigger.py reads the
+              # workload-closure SSOT to pin bench-workload-record.yaml's
+              # literal trigger against it (#1471).
+              - ".github/bench-reference.yaml"
               # ⛔ ALL of docs/, not a hand-picked few. Python tests read
               # documentation files as CONTRACT inputs (the
               # for-tenants key-group counts, the ADR planning index, the
