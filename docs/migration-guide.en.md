@@ -17,7 +17,7 @@ lang: en
 >
 > **Alerts wired to automation (webhooks)?** Re-sends, replays, and dual-running during migration are double-execution risks for the **action layer** — read [Beyond Actionable §4–§5](alerting-best-practices.en.md) (idempotency gates and irreversible-action defenses) first.
 >
-> **Tip:** All `da-tools` commands can run directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 <cmd>`); examples below use the shorthand `da-tools <cmd>`.
+> **Tip:** Examples below use the shorthand `da-tools <cmd>`. Before copying them, define the shell function from the [CLI Reference Docker Usage Pattern](cli-reference.en.md#docker-usage-pattern) and run from your repository root.
 
 > **Audience**: tenant tech leads, Platform Engineers / DevOps / SREs, Domain Experts (DBAs)
 

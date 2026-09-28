@@ -293,18 +293,7 @@ A tenant in maintenance or silent mode gets an extra `operational_mode`; with `-
 **Examples**
 
 ```bash
-# Basic check
-docker run --rm --network=host \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  diagnose db-a
-
-# With local config directory
-docker run --rm --network=host \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  diagnose db-a --config-dir /etc/config
+da-tools diagnose db-a --config-dir ./conf.d
 ```
 
 **Exit Codes**
@@ -354,7 +343,7 @@ Unified JSON report with summary of all tenant checks. `unchecked` tenants are c
 
 ```bash
 da-tools batch-diagnose --workers 10
-da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
+da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 ```
 
 **Exit Codes**
@@ -414,11 +403,7 @@ Metrics observed and the tenant key each suggestion goes to:
 **Examples**
 
 ```bash
-# 30-minute observation with 30-second sampling
-docker run --rm --network=host \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
+da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 ```
 
 **Exit Codes**
@@ -484,30 +469,9 @@ With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additional
 **Examples**
 
 ```bash
-# One-time comparison
-docker run --rm --network=host \
-  -v $(pwd)/migration_output/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/prefix-mapping.yaml
-
-# Continuous monitoring (every 60 seconds for 24 hours)
-docker run --rm --network=host \
-  -v $(pwd)/migration_output/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/prefix-mapping.yaml --watch --interval 60 --rounds 1440
-
-# Auto-detect convergence
-docker run --rm --network=host \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/migration_output/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
-  -v $(pwd)/output:/data/output \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/prefix-mapping.yaml \
-    --watch --auto-detect-convergence \
-    --output-dir /data/output
+da-tools validate --mapping migration_output/prefix-mapping.yaml
+da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --interval 60 --rounds 1440
+da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **Exit Codes**
@@ -564,29 +528,9 @@ There is no rollback option; when a step fails the tool points to the manual rol
 **Examples**
 
 ```bash
-# Dry run — preview cutover
-docker run --rm --network=host \
-  -v $(pwd)/output:/data:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  cutover --readiness-json /data/cutover-readiness.json \
-    --tenant db-a --dry-run
-
-# Execute cutover
-docker run --rm --network=host \
-  -v $(pwd)/output:/data:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  cutover --readiness-json /data/cutover-readiness.json \
-    --tenant db-a
-
-# Force cutover even though the readiness JSON says not ready
-docker run --rm --network=host \
-  -v $(pwd)/output:/data:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  cutover --readiness-json /data/cutover-readiness.json \
-    --tenant db-a --force
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --dry-run
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a
+da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 ```
 
 **Exit Codes**
@@ -634,27 +578,9 @@ Presented in three sections:
 **Examples**
 
 ```bash
-# Basic scan
-docker run --rm --network=host \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  blind-spot --config-dir /etc/config
-
-# Exclude infrastructure jobs
-docker run --rm --network=host \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  blind-spot --config-dir /etc/config \
-    --exclude-jobs node-exporter,kube-state-metrics
-
-# JSON output (for CI consumption)
-docker run --rm --network=host \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  blind-spot --config-dir /etc/config --json-output > /tmp/blind-spots.json
+da-tools blind-spot --config-dir ./conf.d
+da-tools blind-spot --config-dir ./conf.d --exclude-jobs node-exporter,kube-state-metrics
+da-tools blind-spot --config-dir ./conf.d --json-output
 ```
 
 **Exit Codes**
@@ -703,18 +629,8 @@ stderr lists whether each schedule is currently inside its window and ends with 
 **Examples**
 
 ```bash
-# Preview which silences would be created
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  maintenance-scheduler --config-dir /etc/config --dry-run
-
-# Create the silences (CronJob use)
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  maintenance-scheduler --config-dir /etc/config \
-    --alertmanager http://alertmanager.monitoring.svc.cluster.local:9093
+da-tools maintenance-scheduler --config-dir ./conf.d --dry-run
+da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alertmanager:9093
 ```
 
 **Exit Codes**
@@ -736,12 +652,7 @@ Execute historical backtest of PR threshold changes.
 **Syntax**
 
 ```bash
-docker run --rm --network=host \
-  [-v <config_dir>:/etc/config:ro] \
-  [-v <baseline_dir>:/data/baseline:ro] \
-  -e PROMETHEUS_URL=<url> \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
+da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 ```
 
 **Required Parameters**
@@ -777,12 +688,7 @@ python3 scripts/tools/ops/backtest_threshold.py --git-diff \
   --lookback 7d --skip-if-unavailable
 
 # Directory comparison mode
-docker run --rm --network=host \
-  -v $(pwd)/conf.d-old:/data/old:ro \
-  -v $(pwd)/conf.d-new:/data/new:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  backtest --config-dir /data/new --baseline /data/old --lookback 7d
+da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7d
 ```
 
 **Exit Codes**
@@ -1328,7 +1234,7 @@ da-tools gitops-check <subcommand> [options]
 da-tools gitops-check repo --url git@github.com:example/configs.git
 
 # Validate local config structure
-da-tools gitops-check local --dir /data/config/conf.d
+da-tools gitops-check local --dir conf.d
 
 # Check sidecar deployment
 da-tools gitops-check sidecar --namespace monitoring --json
@@ -1420,15 +1326,15 @@ da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
 
 ```bash
 # Compare two versions extracted from git
-git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
-git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > v1.yaml
+git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > v2.yaml
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml
 
 # CI gate: block merge on breaking changes
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --ci
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml --ci
 
 # Automation-friendly JSON
-da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
+da-tools rule-pack-diff --from v1.yaml --to v2.yaml --json
 ```
 
 **Exit codes**
@@ -1828,13 +1734,7 @@ Generate Alertmanager route + receiver + inhibit_rules fragment (or complete Con
 **Syntax**
 
 ```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v <config_dir>:/etc/config:ro \
-  [-v <output>:/data/output] \
-  [-v <base_config>:/data/base.yaml:ro] \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir <path> [options]
+da-tools generate-routes --config-dir <path> [options]
 ```
 
 **Required Parameters**
@@ -1873,46 +1773,10 @@ Complete Kubernetes ConfigMap YAML with global, route, receivers, inhibit_rules,
 **Examples**
 
 ```bash
-# Generate fragment (preview)
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir /etc/config --dry-run
-
-# Generate fragment to file
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir /etc/config \
-    -o /data/output/alertmanager-routes.yaml
-
-# Generate complete ConfigMap
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir /etc/config --output-configmap \
-    -o /data/output/alertmanager-configmap.yaml
-
-# With custom base config
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -v $(pwd)/base-alertmanager.yaml:/data/base.yaml:ro \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir /etc/config --output-configmap \
-    --base-config /data/base.yaml \
-    -o /data/output/alertmanager-configmap.yaml
-
-# Direct kubectl apply
-docker run --rm --kubeconfig=$HOME/.kube/config \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  generate-routes --config-dir /etc/config --apply --yes
+da-tools generate-routes --config-dir ./conf.d --dry-run
+da-tools generate-routes --config-dir ./conf.d -o alertmanager-routes.yaml
+da-tools generate-routes --config-dir ./conf.d --output-configmap -o alertmanager-configmap.yaml
+da-tools generate-routes --config-dir ./conf.d --apply --yes
 ```
 
 **Exit Codes**
@@ -1998,11 +1862,7 @@ Generate new tenant configuration (interactive or non-interactive).
 **Syntax**
 
 ```bash
-docker run --rm -it \
-  --user $(id -u):$(id -g) \
-  -v <output_dir>:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  scaffold [options]
+da-tools scaffold [options]
 ```
 
 **Options**
@@ -2035,23 +1895,8 @@ docker run --rm -it \
 **Examples**
 
 ```bash
-# Interactive generation
-docker run --rm -it \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  scaffold --output-dir /data/output
-
-# Non-interactive generation (CI/CD)
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  scaffold --non-interactive \
-    --tenant db-c \
-    --db mariadb,redis \
-    --namespaces ns-db-c \
-    --output-dir /data/output
+da-tools scaffold                                     # interactive
+da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 ```
 
 **Exit Codes**
@@ -2073,12 +1918,7 @@ Convert legacy Prometheus rules to dynamic format (AST engine).
 **Syntax**
 
 ```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v <input_file>:/data/input.yml:ro \
-  [-v <output_dir>:/data/output] \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  migrate <input_file> [options]
+da-tools migrate <input_file> [options]
 ```
 
 **Required Parameters**
@@ -2117,27 +1957,9 @@ docker run --rm \
 **Examples**
 
 ```bash
-# Preview report (dry run)
-docker run --rm \
-  -v $(pwd)/my-rules.yml:/data/input.yml:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  migrate /data/input.yml --dry-run
-
-# Convert and output triage report
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/my-rules.yml:/data/input.yml:ro \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  migrate /data/input.yml --triage -o /data/output
-
-# Complete conversion (with manual review)
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/my-rules.yml:/data/input.yml:ro \
-  -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  migrate /data/input.yml -o /data/output
+da-tools migrate ./my-rules.yml --dry-run
+da-tools migrate ./my-rules.yml --triage
+da-tools migrate ./my-rules.yml -o migration_output/
 ```
 
 **Exit Codes**
@@ -2159,10 +1981,7 @@ One-stop configuration validation: YAML format, schema, routing, policy, version
 **Syntax**
 
 ```bash
-docker run --rm \
-  -v <config_dir>:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate-config --config-dir <path> [options]
+da-tools validate-config --config-dir <path> [options]
 ```
 
 **Required Parameters**
@@ -2204,19 +2023,8 @@ Validation result summary (pass/fail list).
 **Examples**
 
 ```bash
-# Basic validation
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate-config --config-dir /etc/config
-
-# Check webhook domain allowlist
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  -v $(pwd)/policy.yaml:/etc/policy.yaml:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate-config --config-dir /etc/config \
-    --policy /etc/policy.yaml
+da-tools validate-config --config-dir ./conf.d
+da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 ```
 
 **Exit Codes**
@@ -2242,11 +2050,7 @@ Offboard tenant configuration and related resources.
 **Syntax**
 
 ```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v <config_dir>:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  offboard <tenant> [options]
+da-tools offboard <tenant> [options]
 ```
 
 **Required Parameters**
@@ -2271,18 +2075,10 @@ A pre-check report: where the tenant file is, whether any other file references 
 **Examples**
 
 ```bash
-# Pre-check only (the default; nothing is written)
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  offboard db-old --config-dir /etc/config
-
+# Pre-check only by default (writes nothing)
+da-tools offboard db-old --config-dir ./conf.d
 # Actually offboard
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  offboard db-old --config-dir /etc/config --execute
+da-tools offboard db-old --config-dir ./conf.d --execute
 ```
 
 **Exit Codes**
@@ -2304,11 +2100,7 @@ Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_criti
 **Syntax**
 
 ```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v <config_dir>:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  deprecate <metric_keys...> --config-dir /etc/config [options]
+da-tools deprecate <metric_keys...> [options]
 ```
 
 **Required Parameters**
@@ -2332,7 +2124,7 @@ Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier
 **Examples**
 
 ```bash
-# Deprecate multiple metrics
+# Deprecate several metrics
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2361,10 +2153,7 @@ Check tenant-authored Prometheus rule files against the platform governance poli
 **Syntax**
 
 ```bash
-docker run --rm \
-  -v <rules_dir>:/data/rules:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  lint <path...> [options]
+da-tools lint <path...> [options]
 ```
 
 **Required Parameters**
@@ -2393,18 +2182,9 @@ WARNs are never escalated to ERRORs, and JSON output is not implemented yet; in 
 **Examples**
 
 ```bash
-# Check single file
-docker run --rm \
-  -v $(pwd)/my-custom-rules.yaml:/data/rules/my-rules.yaml:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  lint /data/rules/my-rules.yaml
-
-# Check entire directory. In CI always pass --ci: without it, ERROR-level
-# violations still exit 0
-docker run --rm \
-  -v $(pwd)/rule-packs:/data/rules:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  lint /data/rules --ci
+da-tools lint ./my-custom-rules.yaml
+# In CI always pass --ci: without it, even ERROR-level violations exit 0
+da-tools lint ./rule-packs --ci
 ```
 
 **Exit Codes**
@@ -2426,11 +2206,7 @@ Reverse-analyze an existing Alertmanager config, Prometheus rule files and scrap
 **Syntax**
 
 ```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd):/data \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
+da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
   [--scrape-config <FILE>] [options]
 ```
 
@@ -2463,19 +2239,11 @@ Progress and the `Found N tenant route(s)` / `SKIP` lines go to stderr. Under `-
 
 ```bash
 # Alertmanager only
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd):/data \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  onboard --alertmanager-config /data/alertmanager.yaml -o /data/onboard_output
+da-tools onboard --alertmanager-config ./alertmanager.yaml -o onboard_output
 
 # Alertmanager plus rule files; quote the glob
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd):/data \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  onboard --alertmanager-config /data/alertmanager.yaml \
-  --rule-files '/data/rules/*.yaml' -o /data/onboard_output
+da-tools onboard --alertmanager-config ./alertmanager.yaml \
+  --rule-files './rules/*.yaml' -o onboard_output
 ```
 
 **Exit Codes**
@@ -2497,10 +2265,7 @@ Compare custom rules with Rule Pack, find duplicates/gaps.
 **Syntax**
 
 ```bash
-docker run --rm \
-  -v <config_dir>:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
+da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 ```
 
 **Required Parameters**
@@ -2526,11 +2291,7 @@ A text report grouped by Rule Pack, listing which raw metric each `custom_` metr
 **Examples**
 
 ```bash
-# Analyze coverage gaps
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --tenant-config /etc/config/db-a.yaml
+da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 ```
 
 **Exit Codes**
@@ -2551,11 +2312,7 @@ Compare two config directories (conf.d), output blast radius report.
 **Syntax**
 
 ```bash
-docker run --rm \
-  -v <old_dir>:/data/old:ro \
-  -v <new_dir>:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  config-diff --old-dir <path> --new-dir <path> [options]
+da-tools config-diff --old-dir <path> --new-dir <path> [options]
 ```
 
 **Required Parameters**
@@ -2592,19 +2349,8 @@ Markdown format report with per-tenant change tables and summary statistics.
 **Examples**
 
 ```bash
-# Compare two directories
-docker run --rm \
-  -v $(pwd)/conf.d-old:/data/old:ro \
-  -v $(pwd)/conf.d-new:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  config-diff --old-dir /data/old --new-dir /data/new
-
-# JSON output (for CI consumption)
-docker run --rm \
-  -v $(pwd)/conf.d-old:/data/old:ro \
-  -v $(pwd)/conf.d-new:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  config-diff --old-dir /data/old --new-dir /data/new --json-output
+da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new
+da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 ```
 
 **Exit Codes**
@@ -2684,7 +2430,7 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 |-----------|-------------|---------|
 | `--config-dir` | Path to conf.d/ directory (required) | - |
 | `--opa-url` | OPA REST API endpoint | - |
-| `--opa-binary` | Local OPA binary path | `opa` |
+| `--opa-binary` | Local OPA binary path (the da-tools image has no `opa`; inside the container use `--opa-url`) | `opa` |
 | `--policy-path` | Path to .rego policy file(s) | - |
 | `--dry-run` | Show input JSON without calling OPA | - |
 | `--json` | JSON format output | - |
@@ -2694,9 +2440,6 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 ```bash
 # Evaluate via OPA REST API
 da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
-
-# Use local OPA binary
-da-tools opa-evaluate --config-dir conf.d/ --opa-binary /usr/local/bin/opa --policy-path policies/
 
 # Dry-run: show OPA input JSON only
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
@@ -3044,6 +2787,9 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 
 # Dry-run: show PromQL only
 da-tools threshold-recommend --config-dir conf.d/ --dry-run
+
+# JSON output
+da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus:9090 --json
 ```
 
 ---
