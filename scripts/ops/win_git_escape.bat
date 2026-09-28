@@ -66,7 +66,16 @@ REM   - Contains no credentials (uses gh auth or ~/.git-credentials)
 REM   - Output redirected to %TEMP%\vibe-git-*.txt
 REM   - Auto-sets UTF-8 environment
 
-setlocal enabledelayedexpansion
+REM Delayed expansion (enabled below) rewrites every `!` in a path, and the
+REM rewritten path can name another tree. Refuse such a location first, while
+REM `!` is still an ordinary character.
+setlocal DisableDelayedExpansion
+set "SELF=%~dp0"
+if "%SELF:!=%"=="%SELF%" goto :self_ok
+echo ERROR: this script's path contains "!", which it cannot work with: "%SELF%"
+exit /b 1
+:self_ok
+setlocal EnableDelayedExpansion
 
 REM --- Environment setup ---
 set "PYTHONUTF8=1"
@@ -115,13 +124,9 @@ REM If still unset, commit/commit-file/pr-preflight fail with a clear error belo
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
 REM --- Repo: the work tree this copy lives in (scripts\ops\..\..) ---
-REM Set only if pushd got there: a path cmd mangles (a `!` under delayed
-REM expansion) fails the pushd, and %CD% would then be the caller's tree.
-set "REPO_DIR="
-pushd "%~dp0..\.." && (
-    set "REPO_DIR=!CD!"
-    popd
-)
+pushd "%~dp0..\.."
+set "REPO_DIR=%CD%"
+popd
 
 REM --- Output files ---
 set "OUT=%TEMP%\vibe-git-out.txt"
@@ -142,8 +147,8 @@ REM --- commit-file's message file) resolve the way git resolves them.
 "%GIT_CMD%" rev-parse --show-toplevel >"%OUT%" 2>"%ERR%" || goto :failed
 set "CWD_TOP="
 set /p "CWD_TOP=" <"%OUT%"
-for %%p in ("%CWD_TOP%") do set "CWD_TOP=%%~fp"
-if /i not "%CWD_TOP%"=="%REPO_DIR%" (
+set "CWD_TOP=!CWD_TOP:/=\!"
+if /i not "!CWD_TOP!"=="!REPO_DIR!" (
     echo FAILED: this copy of the script works on !REPO_DIR!
     echo         but the current directory is in !CWD_TOP!
     echo         Run it from inside that tree, or use the copy in the tree you mean.

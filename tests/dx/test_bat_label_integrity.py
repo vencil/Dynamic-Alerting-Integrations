@@ -1089,17 +1089,24 @@ def test_an_inherited_index_file_does_not_redirect_the_wrapper(tmp_path) -> None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
-def test_a_tree_path_with_a_bang_fails_closed(tmp_path) -> None:
-    """Delayed expansion eats `!`: the tree check must still refuse, not fall open."""
-    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
-    bang = tmp_path / "b!x"
-    subprocess.run(["git", "init", "-q", str(bang)], check=True, capture_output=True, timeout=60)
-    (bang / "scripts" / "ops").mkdir(parents=True)
-    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", bang / "scripts" / "ops")
-    proc = _bat(bang, tmp_path, "tag", "t-bang", cwd=work)
+@pytest.mark.parametrize("bat_in", ["w!x!", "w"])
+def test_a_bang_in_either_path_fails_closed(tmp_path, bat_in) -> None:
+    """Delayed expansion turns `w!x!` into `w`, a tree that exists: whichever
+    side carries the `!`, the rewrite must not make the two trees look equal."""
+    trees = {}
+    for name in ("w!x!", "w"):
+        trees[name] = tmp_path / name
+        subprocess.run(["git", "init", "-q", str(trees[name])], check=True, capture_output=True, timeout=60)
+        _git(trees[name], "commit", "-q", "--allow-empty", "-m", "test: base")
+        (trees[name] / "scripts" / "ops").mkdir(parents=True)
+        shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", trees[name] / "scripts" / "ops")
+    caller = "w" if bat_in == "w!x!" else "w!x!"
+    proc = _bat(trees[bat_in], tmp_path, "tag", "t-bang", cwd=trees[caller])
     out = proc.stdout.decode("utf-8", "replace")
     assert proc.returncode != 0, out
-    assert _git_out(work, "tag", "--list") == "", f"the tag landed in the caller's tree:\n{out}"
+    assert [n for n in trees if _git_out(trees[n], "tag", "--list")] == [], f"a tag landed:\n{out}"
+    if bat_in == "w!x!":
+        assert 'contains "!"' in out, f"refused without saying why:\n{out}"
 
 
 def _plant_locks(trees: dict[str, pathlib.Path], layout: str) -> list[pathlib.Path]:
