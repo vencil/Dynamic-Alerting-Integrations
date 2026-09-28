@@ -339,6 +339,22 @@ class TestGatherReferencers:
         assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == \
             ["check_a.py"]
 
+    @pytest.mark.parametrize(
+        "root_parts", [("venv", "repo"), ("plain",)],
+        ids=["under-venv", "plain"])
+    def test_checkout_path_does_not_decide_skip(self, tmp_path, root_parts):
+        """A repo checked out under a dir named like a black hole (e.g.
+        ``.../venv/repo/``) keeps its scripts/ runners (#1810)."""
+        root = tmp_path.joinpath(*root_parts)
+        lint_dir = self._scaffold(root)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        dx = root / "scripts" / "tools" / "dx"
+        dx.mkdir(parents=True)
+        (dx / "runner.py").write_text("run('check_a.py')\n", encoding="utf-8")
+        refs = ol.gather_referencers(root, lint_dir)
+        assert (dx / "runner.py") in refs
+        assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == []
+
     def test_gitlab_ci_reference_rescues(self, tmp_path):
         """A lint wired only into GitLab CI must not be false-flagged."""
         lint_dir = self._scaffold(tmp_path)

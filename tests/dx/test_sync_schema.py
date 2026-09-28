@@ -50,6 +50,26 @@ class TestExtractGoKeys:
         assert {"_silent_mode", "_severity_dedup", "_metadata"} <= keys
         assert set(prefixes) == {"_state_", "_routing"}
 
+    @pytest.mark.parametrize(
+        "root_parts", [("vendor", "app"), ("plain",)],
+        ids=["under-vendor", "plain"])
+    def test_fallback_glob_ignores_checkout_path(self, tmp_path, root_parts):
+        """The glob fallback's vendor/testdata/mocks skip is relative to the Go
+        tree: a tree checked out under ``.../vendor/`` still resolves (#1810),
+        while a decoy inside the tree's own mocks/ (sorts before pkg/, so the
+        glob reaches it first) stays excluded."""
+        go_dir = tmp_path.joinpath(*root_parts)
+        decoy = go_dir / "mocks" / "a.go"
+        real = go_dir / "pkg" / "moved" / "keys.go"
+        for f, key in ((decoy, "_decoy"), (real, "_real")):
+            f.parent.mkdir(parents=True)
+            f.write_text(
+                "package x\n"
+                f'var validReservedKeys = map[string]bool{{"{key}": true}}\n',
+                encoding="utf-8")
+        keys, _prefixes = ss.extract_go_keys(str(go_dir))
+        assert keys == {"_real"}
+
 
 class TestSchemaInSync:
     """The committed schema must match the Go reserved keys — the gate that

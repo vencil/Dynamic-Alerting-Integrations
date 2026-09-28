@@ -20,6 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "tools" / "lint"))
 import check_bilingual_content as cbc  # noqa: E402
 
+_UNTRANSLATED = ("This is all English content without any CJK "
+                 "characters whatsoever. " * 15) + "中"
+
+
+def _seed_clean_doc(docs_dir: Path) -> None:
+    """main() 對空 docs 樹回 rc 2（#1810），CLI 測試需先放一份文件。"""
+    (docs_dir / "readme.md").write_text("# 說明\n\n一般中文文件。\n",
+                                        encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # TestCountCjkRatio
@@ -153,6 +162,35 @@ class TestScanZhDocs:
             findings = cbc.scan_zh_docs(tmp_path)
         assert len(findings) == 0
 
+    @pytest.mark.parametrize(
+        "root_parts",
+        [("includes", "repo"), ("plain",)],
+        ids=["under-includes", "plain"],
+    )
+    def test_checkout_path_does_not_decide_includes_skip(
+        self, tmp_path, root_parts
+    ):
+        """docs 樹上層路徑含 includes 時照樣掃描（#1810）。"""
+        docs = tmp_path.joinpath(*root_parts) / "docs"
+        docs.mkdir(parents=True)
+        (docs / "guide.md").write_text(_UNTRANSLATED, encoding="utf-8")
+        (docs / "guide.en.md").write_text("English.", encoding="utf-8")
+        with patch.object(cbc, "PROJECT_ROOT", docs.parent):
+            findings = cbc.scan_zh_docs(docs)
+        assert [p for _s, _m, p, _r in findings] == [
+            str(Path("docs") / "guide.md")
+        ]
+
+    def test_includes_inside_docs_dir_still_skipped(self, tmp_path):
+        """docs 內的 includes/ 仍跳過（有 .en.md 兄弟，確實是 zh 文件）。"""
+        inc = tmp_path / "docs" / "includes"
+        inc.mkdir(parents=True)
+        (inc / "guide.md").write_text(_UNTRANSLATED, encoding="utf-8")
+        (inc / "guide.en.md").write_text("English.", encoding="utf-8")
+        with patch.object(cbc, "PROJECT_ROOT", tmp_path):
+            findings = cbc.scan_zh_docs(tmp_path / "docs")
+        assert findings == []
+
 
 # ---------------------------------------------------------------------------
 # TestRunAllChecks
@@ -235,6 +273,7 @@ class TestCLI:
 
     def test_main_no_findings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """無 findings 時正常退出。"""
+        _seed_clean_doc(tmp_path)
         cli_argv("check_bilingual_content")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -244,6 +283,7 @@ class TestCLI:
 
     def test_main_json_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON。"""
+        _seed_clean_doc(tmp_path)
         cli_argv("check_bilingual_content", "--json")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -266,9 +306,28 @@ class TestCLI:
 
     def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--threshold 參數生效。"""
+        _seed_clean_doc(tmp_path)
         cli_argv("check_bilingual_content", "--threshold", "0.99")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()
         out = capsys.readouterr().out
         assert "passed" in out
+
+    @pytest.mark.parametrize("make_dir", [True, False],
+                             ids=["empty-dir", "missing-dir"])
+    def test_main_empty_docs_exits_2(self, tmp_path, monkeypatch, capsys,
+                                     cli_argv, make_dir):
+        """docs 樹沒有任何 .md 時 rc 2，不印 passed（#1810）。"""
+        docs = tmp_path / "docs"
+        if make_dir:
+            docs.mkdir()
+        cli_argv("check_bilingual_content", "--ci")
+        monkeypatch.setattr(cbc, "DOCS_DIR", docs)
+        monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            cbc.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "passed" not in captured.out
+        assert "no Markdown files" in captured.err

@@ -19,6 +19,7 @@ Usage:
 Exit codes:
     0 = all checks passed
     1 = errors found
+    2 = no Markdown files under the docs dir (nothing was checked)
 """
 
 import argparse
@@ -31,7 +32,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -134,8 +135,11 @@ def scan_zh_docs(
     for f in sorted(docs_dir.rglob("*.md")):
         if not _is_chinese_doc(f):
             continue
-        # Skip internal/generated files
-        if "includes" in f.parts:
+        # Skip internal/generated files. Match on the path relative to
+        # docs_dir: an absolute path would let the checkout location
+        # decide (a repo cloned under ``.../includes/`` skipped every
+        # doc, #1810).
+        if "includes" in f.relative_to(docs_dir).parts:
             continue
         try:
             text = f.read_text(encoding="utf-8")
@@ -224,6 +228,16 @@ def main():
                         help=f"CJK ratio threshold for .en.md files "
                              f"(default: {DEFAULT_CJK_THRESHOLD})")
     args = parser.parse_args()
+
+    # A docs tree with no Markdown means the lint would check nothing and
+    # still print "passed" — wrong DOCS_DIR or empty checkout (#1810).
+    if not DOCS_DIR.is_dir() or next(DOCS_DIR.rglob("*.md"), None) is None:
+        print(
+            f"✗ no Markdown files found under {DOCS_DIR}; "
+            "refusing to report a pass that checked nothing",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_CALLER_ERROR)
 
     findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold)
 
