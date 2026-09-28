@@ -7,7 +7,7 @@
 檢查項目:
   1. da-tools image tag 是否與 VERSION 檔一致
   2. exporter image tag / OCI chart version 是否與 Chart.yaml 一致
-  3. 平台版號（frontmatter、header、footer）是否與 CLAUDE.md 一致
+  3. 平台版號（docs 與 portal JSX 的 frontmatter、tests/e2e/package.json）是否與 CLAUDE.md 一致
   4. Rule Pack／alert badge 計數是否與實際 YAML 一致；手寫散文不得寫 Rule Pack 數字
   5. 雙語文件配對數量是否與 badge 一致
 
@@ -36,7 +36,6 @@ from _version_patterns import (
     K8S_RULES_DIR,
     DOCS_DIR,
     SCANNABLE_EXTENSIONS,
-    SCAN_DIRECTORIES,
     ROOT_FILES,
     DA_TOOLS_TAG_PATTERN,
     EXPORTER_VERSION_PATTERNS,
@@ -51,9 +50,6 @@ from _version_patterns import (
     RULE_PACK_BADGE_PATTERNS,
     RULE_PACK_PROSE_COUNT_PATTERN,
     TOOL_COUNT_PATTERNS,
-    ADR_COUNT_PATTERNS,
-    DOC_FILE_COUNT_PATTERNS,
-    SCENARIO_COUNT_PATTERNS,
     BILINGUAL_PAIR_PATTERN,
     BILINGUAL_NUMBER_PATTERNS,
     TOOL_COUNT_SCOPE_ANCHOR,
@@ -68,7 +64,6 @@ from _version_patterns import (
     DOC_MAP_SKIP_NAMES,
     DOC_MAP_SKIP_NAME_PATTERNS,
     TOOL_COUNT_CHECK_FILES,
-    ADR_COUNT_CHECK_FILES,
     RULE_PACK_COUNT_CHECK_FILES,
     BILINGUAL_BADGE_CHECK_FILES,
     AUTO_FIX_PATTERNS,
@@ -278,18 +273,6 @@ class Issue:
         }
 
 
-def _scan_file(filepath: Path, pattern: str, flags: int = 0) -> List[Tuple[int, str]]:
-    """Scan a file for regex pattern matches. Returns [(line_num, match_text)]."""
-    if not filepath.exists():
-        return []
-    matches = []
-    content = filepath.read_text(encoding="utf-8")
-    for i, line in enumerate(content.splitlines(), 1):
-        if re.search(pattern, line, flags):
-            matches.append((i, line.strip()))
-    return matches
-
-
 # ---------------------------------------------------------------------------
 # File collection cache — avoids repeated rglob + read_text across checks
 # ---------------------------------------------------------------------------
@@ -462,8 +445,11 @@ def check_release_tag_currency(tools_expected: str,
 
 
 def check_platform_version(expected: str) -> List[Issue]:
-    """Check the platform version in `docs/**/*.md` and `docs/**/*.jsx`
-    frontmatter.
+    """Check the platform version in `docs/**/*.md` frontmatter.
+
+    ⚠️ #1611: a `docs/**/*.jsx` half used to follow. `docs/` has held no
+    `.jsx` since the portal moved to `tools/portal/src`, so it read nothing;
+    that tree is `check_e2e_and_jsx_versions`' job.
 
     ⚠️ The old one-liner ("and inline version references") over-stated
     the scope: both scans are `re.match` on
@@ -493,20 +479,6 @@ def check_platform_version(expected: str) -> List[Issue]:
                             "platform-version", "error", str(rel), i,
                             f"frontmatter version {found_ver} should be {expected}",
                         ))
-
-    # Also scan .jsx files
-    for f in sorted(_cached_rglob(DOCS_DIR,"*.jsx")):
-        content = _read_cached(f)
-        for i, line in enumerate(content.splitlines(), 1):
-            m = re.match(PLATFORM_VERSION_FRONTMATTER_PATTERN, line)
-            if m:
-                found_ver = m.group(1)
-                if found_ver != expected:
-                    rel = f.relative_to(REPO_ROOT)
-                    issues.append(Issue(
-                        "platform-version", "error", str(rel), i,
-                        f"frontmatter version {found_ver} should be {expected}",
-                    ))
 
     return issues
 
@@ -909,119 +881,6 @@ def _tool_count_occurrences(line: str) -> List[Tuple[str, int]]:
     return found
 
 
-def check_adr_count_in_docs() -> List[Issue]:
-    """Check that ADR count references in docs match actual docs/adr/ files.
-
-    Scans CLAUDE.md and README files for patterns like '5 ADRs' and
-    compares against the actual number of ADR .md files (excluding README).
-    """
-    issues = []
-    adr_dir = REPO_ROOT / "docs" / "adr"
-    if not adr_dir.exists():
-        return issues
-
-    actual_count = sum(
-        1 for f in adr_dir.glob("*.md")
-        if f.name != "README.md" and not f.name.endswith(".en.md")
-    )
-
-    files_to_check = ADR_COUNT_CHECK_FILES.copy()
-    files_to_check.extend([
-        adr_dir / "README.md",
-        adr_dir / "README.en.md",
-    ])
-
-    for fpath in files_to_check:
-        if not fpath.exists():
-            continue
-        content = _read_cached(fpath)
-        rel = str(fpath.relative_to(REPO_ROOT))
-
-        for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in ADR_COUNT_PATTERNS:
-                for m in re.finditer(pat, line, re.IGNORECASE):
-                    found = int(m.group(1))
-                    if found != actual_count:
-                        issues.append(Issue(
-                            "adr-count", "warn", rel, i,
-                            f"{desc}: found {found}, actual is {actual_count}",
-                        ))
-
-    return issues
-
-
-def check_doc_file_count_in_docs() -> List[Issue]:
-    """Check that doc file count in CLAUDE.md matches doc-map.md row count.
-
-    CLAUDE.md references '43 個文件' — this must match the actual entry
-    count in docs/internal/doc-map.md (table rows minus header/separator).
-    """
-    issues = []
-    doc_map = REPO_ROOT / "docs" / "internal" / "doc-map.md"
-    if not doc_map.exists():
-        return issues
-
-    # Count actual entries: table rows starting with | minus header + separator
-    map_content = doc_map.read_text(encoding="utf-8")
-    table_rows = sum(1 for line in map_content.splitlines()
-                     if line.startswith("|"))
-    actual_count = max(0, table_rows - 2)  # subtract header + separator
-
-    files_to_check = [REPO_ROOT / "CLAUDE.md"]
-
-    for fpath in files_to_check:
-        if not fpath.exists():
-            continue
-        content = _read_cached(fpath)
-        rel = str(fpath.relative_to(REPO_ROOT))
-
-        for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in DOC_FILE_COUNT_PATTERNS:
-                for m in re.finditer(pat, line):
-                    found = int(m.group(1))
-                    if found != actual_count:
-                        issues.append(Issue(
-                            "doc-file-count", "warn", rel, i,
-                            f"{desc}: found {found}, actual is "
-                            f"{actual_count}",
-                        ))
-
-    return issues
-
-
-def check_scenario_count_in_docs() -> List[Issue]:
-    """Check that scenario count references match actual docs/scenarios/ files."""
-    issues = []
-    scenarios_dir = REPO_ROOT / "docs" / "scenarios"
-    if not scenarios_dir.exists():
-        return issues
-
-    actual_count = sum(
-        1 for f in scenarios_dir.glob("*.md")
-        if not f.name.endswith(".en.md")
-    )
-
-    files_to_check = [REPO_ROOT / "CLAUDE.md"]
-
-    for fpath in files_to_check:
-        if not fpath.exists():
-            continue
-        content = _read_cached(fpath)
-        rel = str(fpath.relative_to(REPO_ROOT))
-
-        for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in SCENARIO_COUNT_PATTERNS:
-                for m in re.finditer(pat, line):
-                    found = int(m.group(1))
-                    if found != actual_count:
-                        issues.append(Issue(
-                            "scenario-count", "warn", rel, i,
-                            f"{desc}: found {found}, actual is {actual_count}",
-                        ))
-
-    return issues
-
-
 def _auto_fix(issues: List[Issue], bilingual_pairs: int,
               rule_counts: dict, quiet: bool = False) -> List[Issue]:
     """Repair what can be repaired; return the issues actually repaired.
@@ -1095,39 +954,6 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                                    fixed, flags=re.IGNORECASE)
                 lines[idx] = fixed
                 new_content = "".join(lines)
-
-        elif issue.check == "doc-file-count":
-            # Fix "XX 個文件" count from doc-map.md row count.
-            #
-            # ⛔ Line-scoped for the same reason `tool-count` is: the check is
-            # per line (`finditer`), this repair was per FILE (`re.sub`), and
-            # `(\d+)(\s*個文件)`'s `\s*` matches a newline. Measured on this
-            # branch by blind review, before this: a true sentence about a
-            # different directory was rewritten to the doc-map count and
-            # reported as fixed, and a WRAPPED occurrence the per-line check
-            # can never report was rewritten too.
-            #
-            # ⚠️ Unlike `tool-count` there is no scope anchor to lean on —
-            # `個文件` names no scope — so the guard here is only "the line the
-            # check named". A second `個文件` on that same line would still be
-            # rewritten; `check_doc_file_count_in_docs` has no ambiguity
-            # refusal because it has no anchor to hang one on. Disclosed, not
-            # fixed: CLAUDE.md carries no `個文件` sentence at all today, so
-            # this whole branch is dormant, and giving it an anchor is the
-            # same documentation decision as #1540's gap 1.
-            doc_map = REPO_ROOT / "docs" / "internal" / "doc-map.md"
-            if doc_map.exists():
-                map_text = doc_map.read_text(encoding="utf-8")
-                rows = sum(1 for ln in map_text.splitlines()
-                           if ln.startswith("|"))
-                doc_count = max(0, rows - 2)
-                pattern = AUTO_FIX_PATTERNS["doc-file-count"]["pattern"]
-                replacement = AUTO_FIX_PATTERNS["doc-file-count"]["replacement_template"].format(value=doc_count)
-                lines = new_content.splitlines(keepends=True)
-                idx = issue.line - 1
-                if 0 <= idx < len(lines):
-                    lines[idx] = re.sub(pattern, replacement, lines[idx])
-                    new_content = "".join(lines)
 
         elif issue.check == "rule-pack-count":
             # Badges only — prose counts are `rule-pack-count-prose`, which
@@ -1461,9 +1287,6 @@ def main():
     all_issues.extend(check_doc_map_coverage())
     all_issues.extend(check_tool_map_coverage())
     all_issues.extend(check_tool_count_in_docs())
-    all_issues.extend(check_adr_count_in_docs())
-    all_issues.extend(check_doc_file_count_in_docs())
-    all_issues.extend(check_scenario_count_in_docs())
     all_issues.extend(check_image_tag_v_prefix())
     all_issues.extend(check_mkdocs_extra_versions(versions))
     if "platform" in versions:
