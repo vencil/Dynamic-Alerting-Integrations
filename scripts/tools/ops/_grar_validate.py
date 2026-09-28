@@ -1355,14 +1355,17 @@ class EscalationFindings(NamedTuple):
 def _subroute_match(ref: str, routing_config: dict) -> dict:
     """The equality ``match`` a rendered sub-route adds under the tenant route.
 
-    ``override[<i>]`` → ``{alertname|metric_group: value}``;
-    ``routes[<i>]`` → its raw ``match``. Only call it with refs from
+    ``override[<i>]`` → ``{alertname|metric_group: str(value)}`` — the
+    generator formats the value into the matcher, so ``alertname: 123``
+    renders as ``"123"`` and must compare equal to a route's ``"123"``;
+    ``routes[<i>]`` → its raw ``match`` (``route_entry_matchers`` already
+    requires string values). Only call it with refs from
     ``list_tenant_subroutes`` (they are already structurally valid).
     """
     if ref.startswith("override["):
         override = routing_config["overrides"][int(ref[len("override["):-1])]
         key = "alertname" if override.get("alertname") else "metric_group"
-        return {key: override[key]}
+        return {key: str(override[key])}
     return dict(routing_config["routes"][int(ref[len("routes["):-1])]["match"])
 
 
@@ -1374,11 +1377,12 @@ def critical_escalation_findings(routing_config: dict,
     rendered ``routes[j]`` (same list as ``list_tenant_subroutes``) matches
     ``severity: critical`` and sends to an ``ESCALATION_TYPES`` receiver.
 
-    When compliant, ``leaks`` is exact for equality matchers (#2312): the
-    tenant route's children are tried in render order (overrides, then
-    routes), first match wins, and what no child takes stays on the main
+    When compliant, ``leaks`` (#2312) is exact only inside the tenant
+    route's sub-tree and only for equality matchers: the tenant route's
+    children are tried in render order (overrides, then routes), first
+    match wins, and what no child takes stays on the main
     receiver. For each destination N whose receiver type is not in
-    ``ESCALATION_TYPES`` — every rendered sub-route, then the main receiver
+    ``ESCALATION_TYPES`` — every listed sub-route, then the main receiver
     with an empty match — let ``C_N = match(N) ∪ {severity: critical}``:
 
     * N's match has a ``severity`` other than ``critical`` → N never
@@ -1394,6 +1398,15 @@ def critical_escalation_findings(routing_config: dict,
     <tenant>}`` takes everything — and a sub-route matching another tenant
     receives nothing. Without it that label is left unknown, which can only
     list a destination too many.
+
+    Outside that model: platform routes rendered AHEAD of the tenant route
+    (e.g. ``alertname="Watchdog"``, ``component=custom`` and the other
+    ``continue: false`` platform routes) are not considered, so a sub-route
+    whose match names their values is listed although it never receives an
+    alert — this side can only over-report. And a listed sub-route the
+    generator does not render (invalid receiver content) is still treated as
+    present: it may be listed itself, and as an earlier P it may hide a
+    later N (under-report).
 
     Whether the main receiver escalates does not change whether a sub-route
     is listed: a sub-route that catches critical alerts takes them away from

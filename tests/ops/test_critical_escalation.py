@@ -292,6 +292,11 @@ _LEAK_TABLE = [
      [("routes[1]", f"severity=critical, tenant={_T}")]),
     ("other-tenant-route", "pd", None,
      [{"match": {"tenant": "t-other"}, "receiver": _SLACK}], []),
+    # override 的值 render 成字串：alertname: 123 與 route 的 "123" 是同一個
+    # matcher，後面的 route 被 PD override 攔走、不報。
+    ("int-override-value", "pd",
+     [{"alertname": 123, "receiver": _PD}],
+     [{"match": {"alertname": "123"}, "receiver": _SLACK}], []),
 ]
 
 

@@ -119,7 +119,7 @@ domain_policies:
 - N 之前有任何子路由 P 的 `match` 是 `C_N` 的子集（P 是不是 PagerDuty 都算，tenant route 自帶的 `tenant=<租戶>` 也算進 `C_N`）：P 先攔走，N 收不到，不報。
 - 其餘情況報 WARN，點名 N 與它攔走的條件，例如 `severity=critical, team=app`。
 
-主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。`routes[].match` 只支援等值比對，所以這個判定是精確的：報了就有一組 label 真的會落到 N，沒報就沒有。這項檢查不看 custom 子樹（#2342）。
+主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或特定 `component` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。這項檢查不看 custom 子樹（#2342）。
 
 ### 為何拒絕三層 Contact Profile 模型
 
