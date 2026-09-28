@@ -228,7 +228,7 @@ from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 > upgrade the chart, or the gateway pods will not start.** The mtail *version* is
 > unchanged; the *build* is not: mtail is now compiled from its pinned upstream
 > commit with a current Go toolchain instead of upstream's 2024 prebuilt binary,
-> and the runtime base moved to Alpine 3.23.5. Measured on the built image, that
+> and the runtime base moved to Alpine 3.23.6. Measured on the built image, that
 > takes it from **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned
 > by mtail's own `go.mod`).
 >
