@@ -847,7 +847,7 @@ class TestLinkTargetOutsideConfD:
         self._link(tmp_path / "tg.yaml", "sub/_real.txt")
         r = self._run(tmp_path, "tg", "--show-sources")
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["source_file"] == os.path.join("sub", "_real.txt")
+        assert json.loads(r.stdout)["source_file"] == "sub/_real.txt"
 
 
 # ---------------------------------------------------------------------------

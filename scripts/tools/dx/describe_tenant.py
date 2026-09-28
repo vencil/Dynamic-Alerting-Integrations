@@ -726,11 +726,15 @@ class ConfDScanner:
         died with a traceback; such an entry is reported by the entry (the
         link) itself, which always lives under conf.d because `_scan` lists
         entries from `self.conf_d`.
+
+        ⛔ Always `/`-joined (#1550): the Go side and golden.json both use `/`,
+        so a host-separator path made the same tree report differently on
+        Windows. Same rule as `_entry_label`.
         """
         try:
-            return str(resolved.relative_to(self.conf_d))
+            return resolved.relative_to(self.conf_d).as_posix()
         except ValueError:
-            return str(entry.relative_to(self.conf_d))
+            return entry.relative_to(self.conf_d).as_posix()
 
     def entry_level(self, entry: Path) -> int | None:
         """The chain level of conf.d entry `entry`, or None outside conf.d.
