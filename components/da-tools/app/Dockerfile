@@ -74,6 +74,24 @@ RUN chmod +x /usr/local/bin/da-batchpr
 COPY da-parser.${TARGETARCH} /usr/local/bin/da-parser
 RUN chmod +x /usr/local/bin/da-parser
 
+# ── Bundle amtool (issue 2294) ────────────────────────────────────
+# `generate-routes` hands the config it writes / applies / --validates to
+# `amtool check-config` when amtool is on PATH (#2219 / #2260). Every CI
+# template `da-tools init --ci` generates runs inside THIS image, so without
+# amtool here customers are not validated by Alertmanager's parser by default.
+#
+# ⛔ The ref below must stay byte-identical to the Alertmanager image in
+# k8s/03-monitoring/deployment-alertmanager.yaml (the version SSOT): amtool
+# must be the parser production runs. Enforced by
+# tests/ops/test_da_tools_amtool_pin_parity.py; renovate.json bumps both.
+# buildx resolves this ref per TARGETPLATFORM, which relies on the digest
+# being the multi-arch index (the form Renovate pins). Upstream's Dockerfile
+# puts amtool at /bin/amtool; it is a static Go binary, so musl is fine.
+COPY --from=prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a /bin/amtool /usr/local/bin/amtool
+# Apache-2.0 §4: the upstream image carries no LICENSE / NOTICE, so they are
+# vendored verbatim from the same release (prometheus/alertmanager v0.34.1).
+COPY third_party/alertmanager/LICENSE third_party/alertmanager/NOTICE /usr/share/doc/amtool/
+
 # ── Entrypoint ────────────────────────────────────────────────────
 # Create a symlink so 'da-tools' works as a command
 RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \

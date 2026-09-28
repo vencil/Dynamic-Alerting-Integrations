@@ -41,7 +41,7 @@ lang: zh
 | pint | `scripts/tools/lint/check_pint.py` `PINT_VERSION`（+ digest） | ci.yml pint 下載步驟 + cache key | `tests/lint/test_check_pint.py` |
 | promtool（rule-pack gate） | `.devcontainer/install-promtool.sh` | ci.yml、nightly-vm-replay.yaml | `tests/preview/test_promtool_pin_parity.py` |
 | promtool（docs-ci I-4） | docs-ci.yaml `PROMTOOL_VERSION` | 目前與 rule-pack gate 同版；major 須等於部署的 Prometheus image | `tests/ops/test_docs_ci_promtool_major.py`（只守 major） |
-| amtool | docs-ci.yaml `AMTOOL_VERSION` | 刻意等於部署的 alertmanager image（`k8s/03-monitoring/deployment-alertmanager.yaml`） | 無 |
+| amtool | 無自有 pin：docs-ci 與 da-tools image 都從 `k8s/03-monitoring/deployment-alertmanager.yaml` 的 alertmanager image 取出 | 與部署同一個 image（#2294） | `tests/ops/test_da_tools_amtool_pin_parity.py` |
 | yq | docs-ci.yaml `YQ_VERSION` | 無其他消費端 | 無 |
 | Vector | ci.yml `VECTOR_VERSION` | `.devcontainer/install-vector.sh`、`helm/vector` image tag / appVersion | `tests/shared/test_vector_pin_parity.py` |
 | GitHub Actions | 無單一 SSOT：同一個 action 在全部 workflow 必須同一個 ref | `.github/workflows/**` | `test_toolchain_pin_parity.py`（single version） |

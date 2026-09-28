@@ -22,14 +22,16 @@
     },
     {
       "customType": "regex",
-      "description": "#902 L3 — single-line 'image: repo:tag@sha256:...' refs: mariadb-instance Helm values, raw k8s manifests, and the tenant-api alpine/git init template. Only refs that already carry an @sha256 digest match — first-party tag-only images (handled by the release flow) are skipped.",
+      "description": "#902 L3 — single-line 'image: repo:tag@sha256:...' refs: mariadb-instance Helm values, raw k8s manifests, and the tenant-api alpine/git init template. Only refs that already carry an @sha256 digest match — first-party tag-only images (handled by the release flow) are skipped. #2294: also the da-tools Dockerfile's 'COPY --from=prom/alertmanager:<tag>@sha256:...' (bundled amtool), so it moves in the SAME grouped PR as the Alertmanager manifest ref and tests/ops/test_da_tools_amtool_pin_parity.py stays green.",
       "managerFilePatterns": [
         "/^helm/mariadb-instance/values\\.yaml$/",
         "/^k8s/.+\\.yaml$/",
-        "/^helm/tenant-api/templates/deployment\\.yaml$/"
+        "/^helm/tenant-api/templates/deployment\\.yaml$/",
+        "/^components/da-tools/app/Dockerfile$/"
       ],
       "matchStrings": [
-        "image:[ \\t]+[\"']?(?<depName>[^\\s:\"']+(?:/[^\\s:\"']+)*):(?<currentValue>[^\\s\"'@]+)@(?<currentDigest>sha256:[0-9a-f]+)[\"']?"
+        "image:[ \\t]+[\"']?(?<depName>[^\\s:\"']+(?:/[^\\s:\"']+)*):(?<currentValue>[^\\s\"'@]+)@(?<currentDigest>sha256:[0-9a-f]+)[\"']?",
+        "COPY[ \\t]+--from=(?<depName>[^\\s:\"']+(?:/[^\\s:\"']+)*):(?<currentValue>[^\\s\"'@]+)@(?<currentDigest>sha256:[0-9a-f]+)"
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"

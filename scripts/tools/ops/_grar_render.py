@@ -474,8 +474,10 @@ def _run_binary(argv: list[str], *, timeout: int,
 # Alertmanager then reads back as a space). Only Alertmanager's parser is the
 # authority on that, so when `amtool` is on PATH it gets the final say — on the
 # SAME text that is about to be written or applied, never on a re-render.
-# ⛔ Not shipped in the da-tools image (owner decision on #2219): without amtool
-# the run is unchanged EXCEPT that it says, every time, that nothing validated it.
+# The da-tools image bundles amtool from the deployed Alertmanager image (#2294;
+# parity with the manifest is tests/ops/test_da_tools_amtool_pin_parity.py).
+# Outside the image, without amtool the run is unchanged EXCEPT that it says,
+# every time, that nothing validated it.
 AMTOOL_NOT_FOUND_NOTICE = (
     "NOTICE: amtool not found on PATH; generated Alertmanager config was NOT "
     "validated by Alertmanager")

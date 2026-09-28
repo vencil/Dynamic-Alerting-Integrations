@@ -230,8 +230,10 @@ da-tools generate-routes --config-dir conf.d/ \
 # 而工具現在會直接拒絕這個組合（結束碼 2；#1650）。要驗證就另外跑一次
 # （--validate 也不讀 --dry-run，同樣結束碼 2）：
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ 這兩支都不經 Alertmanager 自己的 parser 驗證（fragment 不是完整設定）；
-#    要它把關就改用 --output-configmap，PATH 上有 amtool 時會自動驗證（#2219）。
+# ⚠️ -o 寫出的是 fragment（不是完整設定），不經 Alertmanager 自己的 parser 驗證；
+#    --validate 會把設定組進「內建預設 base」交給 amtool（#2260），不是你的 base。
+#    要驗你自己的 base 就改用 --output-configmap --base-config（#2219）。
+#    da-tools 映像內含 amtool（#2294），在映像裡跑這兩道驗證預設就會執行。
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）
 # CI 中先把 base branch 的 conf.d/ 取出到 conf.d.base/

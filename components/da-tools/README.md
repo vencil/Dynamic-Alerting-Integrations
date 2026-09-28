@@ -351,6 +351,8 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 
 > Binary 解析順序（每個 dispatcher 都遵循）：`--<name>-binary <path>` → `$<NAME>_BINARY` env → `$PATH`。Image 內第三層永遠命中 `/usr/local/bin/`。
 
+另外內含 `/usr/local/bin/amtool`（上游 Alertmanager 的 CLI，不是本 repo 編的）：取自 `k8s/03-monitoring/deployment-alertmanager.yaml` 釘住的同一個 Alertmanager image（tag 與 digest 皆同），讓 `generate-routes` 在 image 裡預設就經 Alertmanager 自己的 parser 驗證（#2294）；上游 Apache-2.0 LICENSE／NOTICE 在 `/usr/share/doc/amtool/`。⚠️ v2.9.0 映像不內含 `amtool` <!-- image-caveat: v2.9.0 -->
+
 ### 6.3 Exit Codes
 
 | Code | 含義 |

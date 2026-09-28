@@ -182,6 +182,23 @@ def test_busybox_is_matched_in_both_consumer_charts():
     }, f"busybox is not matched in both consumer charts, only: {sorted(files)}"
 
 
+def test_alertmanager_is_matched_in_manifest_and_da_tools_dockerfile():
+    """#2294: the da-tools image bundles amtool via `COPY --from=<the deployed
+    Alertmanager ref>`, and test_da_tools_amtool_pin_parity.py requires the two
+    refs to be identical. Renovate has to bump BOTH in one PR or every
+    Alertmanager bump turns that guard red. Asserted per FILE for the same
+    reason as busybox: `prom/alertmanager` is in the depName set either way."""
+    cfg = _load_config()
+    matrix_mgr = _matrix_manager(cfg)
+    hits = [d for m in cfg["customManagers"] if m is not matrix_mgr
+            for d in _extract(m) if d.get("depName") == "prom/alertmanager"]
+    assert {d["file"] for d in hits} == {
+        "k8s/03-monitoring/deployment-alertmanager.yaml",
+        "components/da-tools/app/Dockerfile",
+    }, f"prom/alertmanager is not matched in both files, only: {sorted(d['file'] for d in hits)}"
+    assert len({(d["currentValue"], d["currentDigest"]) for d in hits}) == 1, hits
+
+
 def test_renovate_config_validator_if_available():
     """If the official validator is installed, the config must pass its schema check.
     Skipped where renovate isn't available (e.g. the Python Tests CI lane has no node)."""
