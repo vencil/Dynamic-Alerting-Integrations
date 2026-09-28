@@ -12,7 +12,7 @@ REM  naive `Process.Start("cmd.exe", "/c ...")` hangs because the MCP
 REM  transport inherits the child's console handle and buffers stdout across
 REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
 REM
-REM    $bat  = "<tree>\scripts\ops\win_git_escape.bat"   # acts on <tree>
+REM    $bat  = "<tree>\scripts\ops\win_git_escape.bat"
 REM    $t    = "$env:TEMP\vibe-bat-out.txt"
 REM    Remove-Item $t -ErrorAction SilentlyContinue
 REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
@@ -21,6 +21,7 @@ REM    $psi.FileName         = "cmd.exe"
 REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
+REM    $psi.WorkingDirectory = "<tree>"   # must be inside the tree $bat is in
 REM    $p = [Diagnostics.Process]::Start($psi)
 REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
 REM    Get-Content $t -Raw
@@ -113,8 +114,7 @@ if "%PY_CMD%"=="" (
 REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
-REM --- Repo: the work tree this copy lives in (scripts\ops\..\..), never %CD% ---
-REM A caller sitting in another tree would otherwise commit/push that one.
+REM --- Repo: the work tree this copy lives in (scripts\ops\..\..) ---
 pushd "%~dp0..\.."
 set "REPO_DIR=%CD%"
 popd
@@ -127,13 +127,28 @@ REM --- Command dispatch ---
 set "CMD=%~1"
 if "%CMD%"=="" goto :usage
 
-pushd "%REPO_DIR%"
+REM --- An inherited GIT_DIR (a git hook sets it) would point every call below
+REM --- at that repo while the tree check below still passes. (An inherited
+REM --- GIT_WORK_TREE needs no clearing: the tree check refuses it.)
+set "GIT_DIR="
 
-REM --- Auto-clean phantom locks (run before every operation) ---
-REM Paths come from git: in a linked worktree .git is a file, and the locks
-REM live under the common git dir.
+REM --- The caller must be inside the tree this copy lives in. Commands run in
+REM --- the caller's directory, so relative arguments (add's paths,
+REM --- commit-file's message file) resolve the way git resolves them.
+"%GIT_CMD%" rev-parse --show-toplevel >"%OUT%" 2>"%ERR%" || goto :failed
+set "CWD_TOP="
+set /p "CWD_TOP=" <"%OUT%"
+for %%p in ("%CWD_TOP%") do set "CWD_TOP=%%~fp"
+if /i not "%CWD_TOP%"=="%REPO_DIR%" (
+    echo FAILED: this copy of the script works on !REPO_DIR!
+    echo         but the current directory is in !CWD_TOP!
+    echo         Run it from inside that tree, or use the copy in the tree you mean.
+    goto :done_err
+)
+
+REM --- Auto-clean a phantom index.lock: this tree's only. Locks that other
+REM --- trees or ref updates may be holding are listed by preflight, not deleted.
 for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path index.lock 2^>nul') do del /f /q "%%~fp" 2>nul
-for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path refs/heads 2^>nul') do del /f /q "%%~fp\*.lock" 2>nul
 
 if /i "%CMD%"=="status"      goto :do_status
 if /i "%CMD%"=="add"         goto :do_add
@@ -299,14 +314,14 @@ goto :done
 echo === Windows Git Preflight ===
 echo.
 echo [1/3] Checking for .git lock files...
-set "LOCK_DIR=%REPO_DIR%\.git"
-for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-dir 2^>nul') do set "LOCK_DIR=%%~fp"
-dir /b "%LOCK_DIR%\*.lock" 2>nul
+REM The common git dir holds refs and packed-refs and, under worktrees\, every
+REM linked tree's own locks. Listed, not deleted: git may still be using one.
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-common-dir') do set "LOCK_DIR=%%~fp"
+dir /s /b "%LOCK_DIR%\*.lock" 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo   OK: no lock files
 ) else (
-    echo   WARNING: lock files found. Delete with:
-    echo   del "%LOCK_DIR%\*.lock"
+    echo   WARNING: lock files above. If no git process is using one, delete it with del.
 )
 echo.
 echo [2/3] Git status...
@@ -326,6 +341,7 @@ goto :done
 :do_pr_preflight
 REM pr-preflight: PR closing check -- calls pr_preflight.py
 echo === PR Preflight Check ===
+pushd "%REPO_DIR%"
 if "%PY_CMD%"=="" (
     echo ERROR: python not found. Install Python or the `py` launcher, then retry.
     goto :done_err
@@ -387,16 +403,14 @@ type "%ERR%"
 type "%OUT%"
 goto :done_err
 
-REM --- Exit label (success): restore cwd + return 0. ---
+REM --- Exit label (success): return 0 (endlocal also restores the cwd). ---
 REM Without this label cmd.exe returns errorlevel=1 silently, making
 REM successful commands look failed.
 :done
-popd
 endlocal
 exit /b 0
 
-REM --- Exit label (failure): restore cwd + return 1. ---
+REM --- Exit label (failure): return 1. ---
 :done_err
-popd
 endlocal
 exit /b 1
