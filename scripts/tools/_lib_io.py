@@ -139,6 +139,7 @@ def load_yaml_file_exporter_keys(
     default: Any = None,
     *,
     raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
+    raw_text_scalars: "tuple[str, ...] | frozenset[str]" = (),
 ) -> Any:
     """:func:`load_yaml_file`, except every mapping KEY is the scalar's raw
     TEXT — the tenant id the exporter reads (#2114; ``_lib_yaml_keys``).
@@ -149,7 +150,8 @@ def load_yaml_file_exporter_keys(
     file this refuses is exactly a file :func:`load_yaml_file` refuses (its
     callers route those limits, see ``SAFE_LOADER``). Values stay
     PyYAML-typed; *raw_text_sequences* names the keys whose list value is a
-    list of tenant ids and comes back as source text too.
+    list of tenant ids and comes back as source text too; *raw_text_scalars*
+    names the keys whose scalar value names a key (``_profile``, #2216).
 
     ⚠️ NOT strict: a duplicate key keeps the last value, like
     :func:`load_yaml_file`. The strict sibling is
@@ -169,7 +171,8 @@ def load_yaml_file_exporter_keys(
         stream = io.StringIO(file.read_bytes().decode("utf-8"))
         stream.name = str(path)   # PyYAML marks keep naming the real file
         data = load_exporter_keys(stream,
-                                  raw_text_sequences=raw_text_sequences)
+                                  raw_text_sequences=raw_text_sequences,
+                                  raw_text_scalars=raw_text_scalars)
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return default if data is None else data
