@@ -8,7 +8,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/vencil/threshold-exporter/internal/scrape"
-	"github.com/vencil/threshold-exporter/internal/thresholdmetric"
 )
 
 // ThresholdCollector implements prometheus.Collector.
@@ -47,12 +46,6 @@ func (c *ThresholdCollector) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements prometheus.Collector: internal/scrape.Collector.
 func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	c.inner.Collect(ch)
-}
-
-// collectThresholds emits the user_threshold gauge for resolved rows exactly
-// as a scrape does (internal/thresholdmetric, nothing reported).
-func (c *ThresholdCollector) collectThresholds(ch chan<- prometheus.Metric, resolved []ResolvedThreshold) {
-	thresholdmetric.Emit(ch, resolved, nil)
 }
 
 // MetricsHandler returns an HTTP handler that serves /metrics

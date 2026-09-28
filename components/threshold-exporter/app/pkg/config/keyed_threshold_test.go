@@ -142,8 +142,8 @@ func TestResolveAtWithKeys_EveryKeyDescribesItsRow(t *testing.T) {
 				}
 				component, metric = parseMetricKey(legacy)
 			}
-			switch {
-			case k.Key == customAlertsKey:
+			switch k.Key {
+			case customAlertsKey:
 				if k.Component != "custom" {
 					t.Errorf("%s: %q paired with a non-custom row %+v", at, k.Key, k.ResolvedThreshold)
 				}
