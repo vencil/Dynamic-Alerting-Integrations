@@ -43,7 +43,7 @@ Vibe 專案有五份 Playbook（`docs/internal/*-playbook.md`），每份數千�
 Playbook 是 **living documents**，跟隨專案演進持續更新：
 
 1. **Lesson Learned 回寫**：每次遇到新陷阱或發現更好做法，立即更新對應 Playbook（不是下次再說）
-2. **知識退火**：LL 跨越兩個 minor 版本時強制三選一——固化為正式規範 / 標記 🛡️ 已自動化 / 歸檔至 `archive/`。`make playbook-freshness` 自動檢查各 Playbook 的 `verified-at-version` 欄位
+2. **知識退火**：LL 跨越兩個 minor 版本時三選一——固化為正式規範 / 標記 🛡️ 已自動化 / 歸檔至 `archive/`。`make playbook-freshness-ll` 列出落後的 Playbook 與 LL 條目；pre-tag 會跑它，但**只提醒、不擋**，三選一要自己做
 3. **交叉引用**：Playbook 之間用相對連結互相引用，避免重複內容。環境層陷阱統一在 windows-mcp-playbook 維護
 4. **全局 vs 領域**：CLAUDE.md 只放指引級摘要（指向哪個 Playbook），詳細步驟和陷阱清單放 Playbook 內
 5. **驗證更新**：Playbook 內的數字（Rule Pack 數量、工具數量等）在版本升級時一併更新
