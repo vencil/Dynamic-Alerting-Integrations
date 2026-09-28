@@ -120,5 +120,5 @@ lang: en
 | `docs/internal/tool-map.en.md` | AI Agent | Tool map (auto-generated) |
 | `docs/schemas/tenant-config.schema.json` | All | Tenant YAML JSON Schema (VS Code autocomplete) |
 | `rule-packs/README.md` | All | 16 Rule Packs + optional unload |
-| `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | 96 Alert definitions + recommended actions |
+| `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | Alert definitions + recommended actions |
 | `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |

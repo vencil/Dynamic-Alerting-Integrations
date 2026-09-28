@@ -455,8 +455,11 @@ Choose one mode:
      alert_name: MySQLTooManyConnections
      golden_match: null
      golden_rule: null
+     old_query: max by(tenant) (mysql_global_status_threads_connected)
+     new_query: tenant:custom_mysql_global_status_threads_connected:max
    ```
-   Each entry becomes one comparison pair: the old query is `original_metric`, and the new query is always `tenant:<key>:max`. For rate-style rules, migrate generates a recording rule that is not `:max` (for example `tenant:custom_mysql_global_status_slow_queries:sum`). Those pairs find no new value; compare them one by one in Query mode instead.
+   Each entry becomes one comparison pair. The new query `new_query` is the recording rule migrate generated. The old query `old_query` is the original rule's left-hand side, aggregated per tenant the same way; rate-style rules keep their `rate()` (for example `sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))` against `tenant:custom_mysql_global_status_slow_queries:sum`). Both sides have the same units, so the values agree once the recording rule is loaded and evaluating. If the raw series carry no `tenant` label, the old query yields an extra group with no tenant, reported as missing on the new side. Entries the dictionary sends to a golden rule (those with `golden_rule`) get no recording rule from migrate and no such fields; validate skips them and lists them on stderr.
+   Files from an older migrate have no `old_query`/`new_query`. validate then warns on stderr and falls back to "raw metric vs `tenant:<key>:max`"; rate-style and `:sum` pairs cannot be compared from such a file, so regenerate it with a current migrate. ⚠️ The v2.9.0 image still ships the old migrate and validate behavior.
 
 2. **Query Mode**: `--old <query> --new <query>`
    Directly specify two PromQL expressions.
@@ -2099,7 +2102,7 @@ docker run --rm \
 
 - `migration_output/tenant-config.yaml` — Extracted thresholds
 - `migration_output/platform-recording-rules.yaml` — Recording rules
-- `migration_output/platform-alert-rules.yaml` — Alert rules
+- `migration_output/platform-alert-rules.yaml` — Alert rules. The alerts read per-tenant recording rules, so `$labels` only carries `tenant`. A label the original annotations or labels reference is replaced by its value when the original expression pins it to one value with `=` (for example `queue="order-processing"`). Any other label (for example `instance`) is rewritten to `$labels.tenant`; annotations add "（原為 instance，已依租戶聚合）", and a comment above the alert plus the report list the rewritten labels. (The v2.9.0 image does not rewrite them; those references render as empty strings.)
 - `migration_output/migration-report.txt` — Detailed report
 - `migration_output/triage-report.csv` — Rules requiring manual review
 - `migration_output/prefix-mapping.yaml` — Metric prefix mapping

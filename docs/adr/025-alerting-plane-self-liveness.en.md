@@ -153,7 +153,7 @@ The engine-death blind spot is closed and the **design-readiness half of every d
 
 ## Postscript: how platform alerts actually get delivered (decisions above unchanged)
 
-The decision sections of this ADR only cover the dedicated lane for `Watchdog`; **how the remaining platform self-monitoring alerts reach a human** was out of scope at the time, and the shipped state is "they land in the root `default` receiver, which has no notifier". That leaves a practical gap: an operator who reads this ADR learns how to configure the heartbeat but finds no answer to "so how do I receive the other 40?".
+The decision sections of this ADR only cover the dedicated lane for `Watchdog`; **how the remaining platform self-monitoring alerts reach a human** was out of scope at the time, and the shipped state is "they land in the root `default` receiver, which has no notifier". That leaves a practical gap: an operator who reads this ADR learns how to configure the heartbeat but finds no answer to "so how do I receive the rest?".
 
 Supplementary notes (**none of the decisions above are modified**):
 

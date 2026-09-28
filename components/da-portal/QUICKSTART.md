@@ -5,7 +5,7 @@
 
 |  |  |
 |---|---|
-| **是什麼** | 一個 self-service portal，內含 44 個互動工具：alert builder / PromQL tester / threshold calculator / cost estimator / routing trace / config lint…（完整清單見 [Interactive Tools Hub](../../docs/interactive-tools.md)） |
+| **是什麼** | 一個 self-service portal，內含瀏覽器互動工具：alert builder / PromQL tester / threshold calculator / cost estimator / routing trace / config lint…（完整清單見 [Interactive Tools Hub](../../docs/interactive-tools.md)） |
 | **解決什麼** | 不用先讀懂 PromQL、不用裝任何工具，就能試算閾值、預覽告警、驗證設定 |
 | **怎麼跑** | 一顆 nginx 靜態 image，`docker run` 一行即起；工具是**預先 build 好的**，你這端不需要 npm、不需要 build |
 | **打開會看到** | 一個互動工具的儀表板，**立即可玩** |

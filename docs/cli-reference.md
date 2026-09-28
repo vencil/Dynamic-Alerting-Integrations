@@ -437,8 +437,11 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
      alert_name: MySQLTooManyConnections
      golden_match: null
      golden_rule: null
+     old_query: max by(tenant) (mysql_global_status_threads_connected)
+     new_query: tenant:custom_mysql_global_status_threads_connected:max
    ```
-   每一項產生一組比對：舊查詢是 `original_metric`，新查詢固定組成 `tenant:<key>:max`。migrate 對 rate 類規則產生的 recording rule 不是 `:max`（例如 `tenant:custom_mysql_global_status_slow_queries:sum`），這類比對組查不到新值，要改用 Query 模式逐條比對。
+   每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式依租戶聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
+   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。
 
 2. **Query 模式**：`--old <query> --new <query>`
    直接指定兩組 PromQL
@@ -1927,7 +1930,7 @@ da-tools migrate <input_file> [options]
 
 - `migration_output/tenant-config.yaml` — 提取出的 threshold
 - `migration_output/platform-recording-rules.yaml` — Recording rules
-- `migration_output/platform-alert-rules.yaml` — Alert rules
+- `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串）
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/prefix-mapping.yaml` — Metric 前綴對應表

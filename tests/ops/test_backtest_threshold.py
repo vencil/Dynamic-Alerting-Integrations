@@ -748,6 +748,14 @@ class TestCustomAlertDetection:
                             lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
         assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_threads_running"}
 
+    def test_flat_keys_at_head1_duplicate_key_is_like_bad_syntax(self, monkeypatch):
+        """#2231：HEAD~1 的檔有重複鍵時，exporter 整份丟掉，比照語法錯回空集合。"""
+        yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '5'\n"
+                     b"    mysql_connections: '6'\n    mysql_threads_running: '1'\n")
+        monkeypatch.setattr(subprocess, "run",
+                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
+        assert bt._flat_keys_at_head1("db-b") == set()
+
     def test_notice_empty_when_no_recipes(self):
         """無 recipe 租戶 → notice 為空字串。"""
         assert bt.custom_alert_notice([]) == ""

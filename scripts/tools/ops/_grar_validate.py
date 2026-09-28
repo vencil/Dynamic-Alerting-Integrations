@@ -1077,6 +1077,57 @@ def _parse_policy_duration(value: object) -> float | None:
                for num, unit in _POLICY_DURATION_TOKEN_RE.findall(s))
 
 
+def list_tenant_subroutes(routing_config: dict) -> list[tuple[str, str, dict]]:
+    """List the sub-routes a tenant's resolved routing emits besides its main route.
+
+    Each entry is ``(ref, match, config)``: ``ref`` / ``match`` name the
+    sub-route in operator messages (``override[0]`` / ``alertname=X``), and
+    ``config`` is the mapping that carries that sub-route's OWN ``receiver``,
+    ``group_wait`` / ``group_interval`` / ``repeat_interval`` and
+    ``group_by`` — the same keys, in the same shape, as the tenant's main
+    routing config, so a check written against the main route applies to a
+    sub-route unchanged (#2243).
+
+    Today the only source is ``_routing.overrides``
+    (``_grar_routes.expand_routing_overrides``). Any other kind of sub-route
+    that renders its own Alertmanager receiver belongs here too.
+
+    Only overrides that can render a route are listed, mirroring the
+    generator's structural skips: none when the tenant has no main
+    ``receiver`` (the whole tenant is skipped), a non-list ``overrides``, a
+    non-mapping entry, one without exactly one of ``alertname`` /
+    ``metric_group``, or one without a ``receiver``. Receiver *content*
+    (unknown type, missing fields, domain allowlist) is not pre-judged —
+    the main route's check does not pre-judge it either.
+
+    ⚠ Values a sub-route does NOT declare are returned as absent, never
+    back-filled from the tenant's main routing: the generator emits every
+    override route as a SIBLING of the tenant's main route directly under
+    the root ``route.routes``, so in Alertmanager an undeclared timing /
+    ``group_by`` is inherited from the ROOT route (the platform base
+    config), not from the tenant.
+    """
+    if not isinstance(routing_config, dict) or not routing_config.get("receiver"):
+        return []
+    overrides = routing_config.get("overrides")
+    if not isinstance(overrides, list):
+        return []
+    subroutes: list[tuple[str, str, dict]] = []
+    for idx, override in enumerate(overrides):
+        if not isinstance(override, dict):
+            continue
+        alertname = override.get("alertname")
+        metric_group = override.get("metric_group")
+        if bool(alertname) == bool(metric_group):
+            continue
+        if not override.get("receiver"):
+            continue
+        match = (f"alertname={alertname}" if alertname
+                 else f"metric_group={metric_group}")
+        subroutes.append((f"override[{idx}]", match, override))
+    return subroutes
+
+
 def check_domain_policies(
     routing_configs: dict[str, dict],
     domain_policies: dict[str, dict],
@@ -1201,126 +1252,136 @@ def check_domain_policies(
         for tenant in tenants:
             if tenant not in routing_configs:
                 continue
-            rc = routing_configs[tenant]
+            # #2243: a sub-route that renders its own AM receiver (today:
+            # `_routing.overrides`) is held to the same constraints as the
+            # main route, read from the values that sub-route itself
+            # declares — see list_tenant_subroutes() for why an undeclared
+            # value is NOT back-filled from the tenant's main routing.
+            tenant_rc = routing_configs[tenant]
+            targets = [(f"tenant '{tenant}'", "the tenant's", tenant_rc)]
+            targets.extend(
+                (f"tenant '{tenant}' {ref} ({match})", f"{ref}'s", sub_rc)
+                for ref, match, sub_rc in list_tenant_subroutes(tenant_rc))
+            for subject, whose, rc in targets:
 
-            # Check receiver type constraints
-            recv = rc.get("receiver", {})
-            recv_type = recv.get("type", "") if isinstance(recv, dict) else ""
-            if recv_type:
-                if forbidden_types and recv_type in forbidden_types:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}', "
-                        f"tenant '{tenant}': receiver type '{recv_type}' "
-                        f"is forbidden",
-                        f"domain forbids {sorted(forbidden_types)}; switch "
-                        f"the tenant's receiver.type to a compliant type "
-                        f"or amend the domain policy"))
-                if allowed_types and recv_type not in allowed_types:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}', "
-                        f"tenant '{tenant}': receiver type '{recv_type}' "
-                        f"not in allowed types {sorted(allowed_types)}",
-                        f"switch the tenant's receiver.type to one of "
-                        f"{sorted(allowed_types)} or amend the domain policy"))
-
-            # Check max_repeat_interval
-            if strict:
-                if max_sec is not None:
-                    tenant_repeat = rc.get("repeat_interval")
-                    if tenant_repeat is not None:
-                        tenant_sec = _parse_policy_duration(tenant_repeat)
-                        if tenant_sec is None:
-                            messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
-                                f"tenant '{tenant}': repeat_interval "
-                                f"'{tenant_repeat}' is not a valid duration "
-                                f"— cannot check against max '{max_repeat}'",
-                                "use duration syntax such as '30m' or "
-                                "'1h30m'; negative values are not allowed"))
-                        elif tenant_sec > max_sec:
-                            messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
-                                f"tenant '{tenant}': repeat_interval "
-                                f"'{tenant_repeat}' exceeds max "
-                                f"'{max_repeat}'",
-                                f"lower the tenant's repeat_interval to "
-                                f"'{max_repeat}' or less, or raise the "
-                                f"policy's max_repeat_interval"))
-            elif max_repeat:
-                # Legacy lenient path — deliberately verbatim (truthiness
-                # skips and single-unit parser included) so non-strict
-                # output stays byte-identical.
-                tenant_repeat = rc.get("repeat_interval")
-                if tenant_repeat:
-                    legacy_max = parse_duration_seconds(max_repeat)
-                    legacy_val = parse_duration_seconds(tenant_repeat)
-                    if legacy_max and legacy_val and legacy_val > legacy_max:
+                # Check receiver type constraints
+                recv = rc.get("receiver", {})
+                recv_type = recv.get("type", "") if isinstance(recv, dict) else ""
+                if recv_type:
+                    if forbidden_types and recv_type in forbidden_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
-                            f"tenant '{tenant}': repeat_interval "
-                            f"'{tenant_repeat}' exceeds max '{max_repeat}'",
-                            f"lower the tenant's repeat_interval to "
-                            f"'{max_repeat}' or less, or raise the policy's "
-                            f"max_repeat_interval"))
+                            f"{subject}: receiver type '{recv_type}' "
+                            f"is forbidden",
+                            f"domain forbids {sorted(forbidden_types)}; switch "
+                            f"{whose} receiver.type to a compliant type "
+                            f"or amend the domain policy"))
+                    if allowed_types and recv_type not in allowed_types:
+                        messages.append(_fmt(
+                            f"domain_policy '{policy_name}', "
+                            f"{subject}: receiver type '{recv_type}' "
+                            f"not in allowed types {sorted(allowed_types)}",
+                            f"switch {whose} receiver.type to one of "
+                            f"{sorted(allowed_types)} or amend the domain policy"))
 
-            # Check min_group_wait
-            if strict:
-                if min_sec is not None:
+                # Check max_repeat_interval
+                if strict:
+                    if max_sec is not None:
+                        tenant_repeat = rc.get("repeat_interval")
+                        if tenant_repeat is not None:
+                            tenant_sec = _parse_policy_duration(tenant_repeat)
+                            if tenant_sec is None:
+                                messages.append(_fmt(
+                                    f"domain_policy '{policy_name}', "
+                                    f"{subject}: repeat_interval "
+                                    f"'{tenant_repeat}' is not a valid duration "
+                                    f"— cannot check against max '{max_repeat}'",
+                                    "use duration syntax such as '30m' or "
+                                    "'1h30m'; negative values are not allowed"))
+                            elif tenant_sec > max_sec:
+                                messages.append(_fmt(
+                                    f"domain_policy '{policy_name}', "
+                                    f"{subject}: repeat_interval "
+                                    f"'{tenant_repeat}' exceeds max "
+                                    f"'{max_repeat}'",
+                                    f"lower {whose} repeat_interval to "
+                                    f"'{max_repeat}' or less, or raise the "
+                                    f"policy's max_repeat_interval"))
+                elif max_repeat:
+                    # Legacy lenient path — deliberately verbatim (truthiness
+                    # skips and single-unit parser included) so non-strict
+                    # output stays byte-identical.
+                    tenant_repeat = rc.get("repeat_interval")
+                    if tenant_repeat:
+                        legacy_max = parse_duration_seconds(max_repeat)
+                        legacy_val = parse_duration_seconds(tenant_repeat)
+                        if legacy_max and legacy_val and legacy_val > legacy_max:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"{subject}: repeat_interval "
+                                f"'{tenant_repeat}' exceeds max '{max_repeat}'",
+                                f"lower {whose} repeat_interval to "
+                                f"'{max_repeat}' or less, or raise the policy's "
+                                f"max_repeat_interval"))
+
+                # Check min_group_wait
+                if strict:
+                    if min_sec is not None:
+                        tenant_gw = rc.get("group_wait")
+                        if tenant_gw is not None:
+                            tenant_sec = _parse_policy_duration(tenant_gw)
+                            if tenant_sec is None:
+                                messages.append(_fmt(
+                                    f"domain_policy '{policy_name}', "
+                                    f"{subject}: group_wait "
+                                    f"'{tenant_gw}' is not a valid duration "
+                                    f"— cannot check against minimum "
+                                    f"'{min_group_wait}'",
+                                    "use duration syntax such as '30s' or "
+                                    "'1m30s'; negative values are not allowed"))
+                            elif tenant_sec < min_sec:
+                                messages.append(_fmt(
+                                    f"domain_policy '{policy_name}', "
+                                    f"{subject}: group_wait "
+                                    f"'{tenant_gw}' below minimum "
+                                    f"'{min_group_wait}'",
+                                    f"raise {whose} group_wait to "
+                                    f"'{min_group_wait}' or more, or lower the "
+                                    f"policy's min_group_wait"))
+                elif min_group_wait:
+                    # Legacy lenient path — deliberately verbatim (see above).
                     tenant_gw = rc.get("group_wait")
-                    if tenant_gw is not None:
-                        tenant_sec = _parse_policy_duration(tenant_gw)
-                        if tenant_sec is None:
+                    if tenant_gw:
+                        legacy_min = parse_duration_seconds(min_group_wait)
+                        legacy_val = parse_duration_seconds(tenant_gw)
+                        if legacy_min and legacy_val and legacy_val < legacy_min:
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "
-                                f"tenant '{tenant}': group_wait "
-                                f"'{tenant_gw}' is not a valid duration "
-                                f"— cannot check against minimum "
-                                f"'{min_group_wait}'",
-                                "use duration syntax such as '30s' or "
-                                "'1m30s'; negative values are not allowed"))
-                        elif tenant_sec < min_sec:
-                            messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
-                                f"tenant '{tenant}': group_wait "
-                                f"'{tenant_gw}' below minimum "
-                                f"'{min_group_wait}'",
-                                f"raise the tenant's group_wait to "
+                                f"{subject}: group_wait "
+                                f"'{tenant_gw}' below minimum '{min_group_wait}'",
+                                f"raise {whose} group_wait to "
                                 f"'{min_group_wait}' or more, or lower the "
                                 f"policy's min_group_wait"))
-            elif min_group_wait:
-                # Legacy lenient path — deliberately verbatim (see above).
-                tenant_gw = rc.get("group_wait")
-                if tenant_gw:
-                    legacy_min = parse_duration_seconds(min_group_wait)
-                    legacy_val = parse_duration_seconds(tenant_gw)
-                    if legacy_min and legacy_val and legacy_val < legacy_min:
-                        messages.append(_fmt(
-                            f"domain_policy '{policy_name}', "
-                            f"tenant '{tenant}': group_wait "
-                            f"'{tenant_gw}' below minimum '{min_group_wait}'",
-                            f"raise the tenant's group_wait to "
-                            f"'{min_group_wait}' or more, or lower the "
-                            f"policy's min_group_wait"))
 
-            # Check enforce_group_by
-            if enforce_group_by:
-                tenant_gb = rc.get("group_by", [])
-                if isinstance(tenant_gb, list):
-                    missing = set(enforce_group_by) - set(tenant_gb)
-                    if missing:
+                # Check enforce_group_by
+                if enforce_group_by:
+                    tenant_gb = rc.get("group_by", [])
+                    if isinstance(tenant_gb, list):
+                        missing = set(enforce_group_by) - set(tenant_gb)
+                        if missing:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"{subject}: group_by missing required "
+                                f"labels: {sorted(missing)}",
+                                f"add {sorted(missing)} to {whose} group_by "
+                                f"(policy requires {sorted(enforce_group_by)})"))
+                    elif strict:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
-                            f"tenant '{tenant}': group_by missing required "
-                            f"labels: {sorted(missing)}",
-                            f"add {sorted(missing)} to the tenant's group_by "
-                            f"(policy requires {sorted(enforce_group_by)})"))
-                elif strict:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}', "
-                        f"tenant '{tenant}': group_by must be a list, got "
-                        f"{type(tenant_gb).__name__} — cannot check "
-                        f"enforce_group_by",
-                        "define the tenant's group_by as a YAML list of "
-                        "label names"))
+                            f"{subject}: group_by must be a list, got "
+                            f"{type(tenant_gb).__name__} — cannot check "
+                            f"enforce_group_by",
+                            f"define {whose} group_by as a YAML list of "
+                            "label names"))
 
     return messages

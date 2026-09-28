@@ -74,11 +74,6 @@ LENIENT_BY_DESIGN: dict[str, str] = {
     "_lib_confd.py":
         "declared_tenant_ids: documented to declare a file's tenants even when the "
         "exporter's decode rejects that file (its docstring); an existence lookup, not a verdict",
-    "dx/generate_tenant_metadata.py":
-        "generator of portal metadata, gives no pass/fail on the config; "
-        "⚠️ a repeated key reads last-wins here (not migrated in #2123)",
-    "dx/migrate_conf_d.py":
-        "migration generator (flat → hierarchical layout), not a verdict",
     "lint/_rule_tree.py":
         "reads rule-pack trees, not a tenant conf.d",
     "lint/check_k8s_manifests.py":
@@ -94,17 +89,10 @@ LENIENT_BY_DESIGN: dict[str, str] = {
     "lint/check_threshold_unit_sanity.py":
         "\"unparseable YAML is another gate's job\" (its own comment) — that gate is "
         "check_confd_schema (strict)",
-    "ops/backtest_threshold.py":
-        "replays threshold changes against Prometheus; the verdict is about alert "
-        "behaviour, not the file. ⚠️ a repeated key reads last-wins here (not migrated in #2123)",
     "ops/deprecate_rule.py":
         "its verdict on a repeated key is exporter_verdicts' (compose + the shared "
         "duplicate_in_mapping): such a tenant file is named and never rewritten — "
         "tests/ops/test_deprecate_rule_carriers.py",
-    "ops/diagnose.py":
-        "runtime diagnostic lookup of one tenant's profile, no verdict about the file",
-    "ops/generate_tenant_mapping_rules.py":
-        "generator of mapping rules from tenant ids, not a verdict",
     "ops/migrate_to_operator.py":
         "parse_configmap_rules reads rule files for CRD generation, not a tenant conf.d",
 }

@@ -55,7 +55,7 @@ Degradation does not affect output format — both paths produce the same three-
 The complete migration path integrates the AST engine, Shadow Monitoring, and Triage mode:
 
 1. **Triage**: `migrate_rule.py --triage` produces a CSV inventory, categorizing each rule's migration strategy (direct / prefix / skip)
-2. **Migration execution**: the AST engine injects the tenant label. The `custom_` prefix goes only on threshold keys and recording rule names, not on source metric names: the source series come from the customer's existing exporters, so renaming them would leave the recording rule empty (issue 1818)
+2. **Migration execution**: the AST engine injects the tenant label. The `custom_` prefix goes only on threshold keys and recording rule names, not on source metric names: the source series come from the customer's existing exporters, so renaming them would leave the recording rule empty (issue 1818). Because the alerts read `by(tenant)` recording rules, `$labels` only carries `tenant`, so other labels the original annotations reference are rewritten: a label the original expression pins to one value with `=` gets that value, and the rest read `$labels.tenant` and are listed in the report
 3. **Shadow Monitoring**: `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%)
 4. **Go-live**: `scaffold_tenant.py` generates the complete tenant configuration package
 

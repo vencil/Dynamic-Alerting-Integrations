@@ -64,7 +64,8 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			// Production always wires d.Writer (cmd/server/main.go builds it on
 			// the same configDir). The fallback serves handler-test literals
 			// that set only ConfigDir: same checks, without the production
-			// Writer's shared stuck-walk breaker (see DryRunValidate).
+			// Writer's shared read walk and its stuck-walk breaker (see
+			// DryRunValidate).
 			wr := d.Writer
 			if wr == nil {
 				wr = gitops.NewWriter(d.ConfigDir, "")

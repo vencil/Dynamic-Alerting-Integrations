@@ -89,7 +89,7 @@ func main() {
 	// Load initial config
 	manager := NewConfigManagerWithDebounce(resolvedPath, scanDebounce)
 	manager.SetFreeOSMemAfterReload(freeOSMemAfterReload)
-	if err := manager.Load(); err != nil {
+	if err := manager.LoadInitial(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 

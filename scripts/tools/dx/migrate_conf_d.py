@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_yaml_file_error, load_yaml_file_strict  # noqa: E402  (#2231)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
@@ -48,11 +49,14 @@ except ImportError:
 
 
 def _load_yaml(path: Path) -> dict:
-    """Load a YAML file."""
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
+    """Load a YAML file.
+
+    Strict (#2231): a key written twice is a file the exporter drops whole,
+    so it raises YamlFileError like bad syntax — main() exits 2, named —
+    instead of planning a move from whichever value PyYAML kept last.
+    """
     if yaml:
-        return yaml.safe_load(content) or {}
+        return load_yaml_file_strict(str(path)) or {}
     raise RuntimeError("PyYAML is required. Install: pip install pyyaml")
 
 
@@ -191,6 +195,7 @@ def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
 
 
 @exit_on_output_write_error
+@exit_on_yaml_file_error  # #2231: bad syntax / duplicate key → rc 2, named
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

@@ -237,7 +237,7 @@ Debounce 可透過 `--scan-debounce=<duration>` 調整；壓測建議 100ms-500m
 
 | Metric | Type | 說明 |
 |--------|------|------|
-| `da_config_scan_duration_seconds` | histogram | 單次 directory scan + merge 的延遲分佈（`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`） |
+| `da_config_scan_duration_seconds` | histogram | 單次 directory scan + merge 的延遲分佈（`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`；[#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153) 起追加 `10, 30, 60, 120`） |
 | `da_config_reload_trigger_total{reason}` | counter | Reload 觸發原因統計，`reason ∈ {source, defaults, new_tenant, delete, forced}` |
 | `da_config_defaults_change_noop_total` | counter | `_defaults.yaml` 變更但 merged_hash 未變的次數。**v2.8.0 (Issue #61) 起語義收窄為 cosmetic-only**（comment-only / reorder / whitespace） |
 | `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults 變更被 tenant override 擋下的次數（從 `noop_total` 拆出） |
