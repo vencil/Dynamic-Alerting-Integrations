@@ -235,3 +235,18 @@ def test_dropped_rows_are_reported_apart(tmp_path, da_guard):
     assert got.unserved[key] == "5"
     assert got.dropped[key] and "not a valid label name" in got.dropped[key][0]
     assert got.values["mysql_connections"] == 80.0
+
+
+def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
+    """被丟的列只進 JSON 的 dropped，不該在 da-guard 的 stderr 印出 WARN。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__name__=\"x\"}: 5\n"
+                         "    mysql_connections{__x=\"y\"}: 4\n    mysql_connections{q=\"ok\"}: 6\n",
+    })
+    proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
+                          capture_output=True, text=True, check=False, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert "WARN" not in proc.stderr, proc.stderr
+    got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
+    assert set(got.dropped) == {'mysql_connections{__name__="x"}', 'mysql_connections{__x="y"}'}

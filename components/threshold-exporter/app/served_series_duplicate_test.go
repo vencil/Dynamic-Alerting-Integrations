@@ -18,9 +18,14 @@ import (
 
 func scrapeTree(t *testing.T, tenantYAML string) (int, string) {
 	t.Helper()
+	return scrapeTreeWith(t, "defaults:\n  mysql_connections: 80\n", tenantYAML)
+}
+
+func scrapeTreeWith(t *testing.T, defaultsYAML, tenantYAML string) (int, string) {
+	t.Helper()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
-		"conf.d/_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"conf.d/_defaults.yaml": defaultsYAML,
 		"conf.d/tenant-a.yaml":  tenantYAML,
 	})
 	cfg, _, err := config.LoadDir(filepath.Join(tmp, "conf.d"), nil)
@@ -69,5 +74,18 @@ func TestMetrics_Control_NoDuplicate_Serves(t *testing.T) {
 		"    mysql_connections: \"70:critical\"\n    redis_queue_length{q=~\"a\"}: 2\n")
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body:\n%s", code, body)
+	}
+}
+
+// A family other than user_threshold failing Gather fails the scrape too:
+// two expired overrides whose da_config_event reasons render alike.
+func TestMetrics_ConfigEventCollision_FailsTheScrape(t *testing.T) {
+	t.Parallel()
+	code, body := scrapeTreeWith(t,
+		"defaults:\n  mysql_connections: 80\n  container_cpu: 75\n  \"container_cpu: a\": 50\n",
+		"tenants:\n  tenant-a:\n    container_cpu:\n      default: \"95\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"a: b\"\n"+
+			"    \"container_cpu: a\":\n      default: \"96\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"b\"\n")
+	if code != http.StatusInternalServerError || !strings.Contains(body, "da_config_event") {
+		t.Fatalf("status = %d, want 500 naming da_config_event; body:\n%s", code, body)
 	}
 }

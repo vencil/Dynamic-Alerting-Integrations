@@ -9,9 +9,9 @@ package main
 // functions over the exporter's own load: config.LoadDir (the tree the
 // collector serves), ThresholdConfig.ResolveAtWithKeys (the user_threshold
 // rows, each paired by the resolver itself with the tenant-config key it
-// serves), the collector's own series code run through a private
-// prometheus.Registry (which of those rows /metrics really carries —
-// internal/thresholdmetric) and the reserved-key resolvers the collector and the
+// serves), the exporter's own /metrics registry gathered privately (which of
+// those rows /metrics really carries, and whether it serves at all —
+// internal/scrape) and the reserved-key resolvers the collector and the
 // routing tooling read. Nothing here decides which key a row belongs to.
 // TestServedValues_MatchesResolveAt is the guard that keeps it so.
 
@@ -27,11 +27,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/vencil/threshold-exporter/internal/thresholdmetric"
+	"github.com/vencil/threshold-exporter/internal/scrape"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -89,8 +90,11 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
-			"     or two keys producing one user_threshold series (/metrics would fail whole)\n"+
-			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n")
+			"     a tenant id or key that is not valid UTF-8, or a Gather failure of the same\n"+
+			"     collectors production /metrics serves (e.g. two keys producing one series)\n"+
+			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n\n"+
+			"Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with\n"+
+			"legacy or underscores escaping may see labels such as {a-b} and {a.b} collide.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -131,6 +135,10 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
 	}
+	if err := checkUTF8(cfg); err != nil {
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+		return exitCallerErr
+	}
 	tenants, err := servedValues(cfg, at)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
@@ -158,6 +166,40 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		return exitParseFailed
 	}
 	return exitOK
+}
+
+// checkUTF8 refuses a tree whose tenant ids or keys are not valid UTF-8.
+// JSON cannot carry such a string: encoding/json writes U+FFFD for the bad
+// bytes, so two distinct keys can come out as one and a reader silently loses
+// one of them. (The exporter itself fails on such a tenant id at scrape time,
+// #2266.)
+func checkUTF8(cfg *config.ThresholdConfig) error {
+	for tenant, overrides := range cfg.Tenants {
+		if !utf8.ValidString(tenant) {
+			return fmt.Errorf("tenant %q: the tenant id is not valid UTF-8; JSON cannot carry it", tenant)
+		}
+		for k := range overrides {
+			if !utf8.ValidString(k) {
+				return fmt.Errorf("tenant %q: key %q is not valid UTF-8; JSON cannot carry it", tenant, k)
+			}
+		}
+	}
+	for k := range cfg.Defaults {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("defaults: key %q is not valid UTF-8; JSON cannot carry it", k)
+		}
+	}
+	for _, k := range cfg.OptionalOverrides {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("optional_overrides: key %q is not valid UTF-8; JSON cannot carry it", k)
+		}
+	}
+	for name := range cfg.StateFilters {
+		if !utf8.ValidString(name) {
+			return fmt.Errorf("state_filters: name %q is not valid UTF-8; JSON cannot carry it", name)
+		}
+	}
+	return nil
 }
 
 // servedValues reads every tenant of cfg at `at`.
@@ -271,42 +313,62 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 	return out, nil
 }
 
-// keyedRows resolves cfg once at `at` with ResolveAtWithKeys, runs the rows
-// through the collector's own series code on a private registry, and groups
-// the rows /metrics keeps by tenant and key. Rows the collector drops are
-// returned apart, with client_golang's reason.
+// keyedRows gathers, at `at`, the registry the exporter's /metrics serves —
+// the same collector and config metrics, wired by the same scrape.Register —
+// and groups the user_threshold rows it keeps by tenant and key. Rows the
+// collector drops are returned apart, with client_golang's reason.
 //
-// ⛔ /metrics decides, not this file. Which label sets client_golang accepts,
-// and which rows collide as one series, is asked of client_golang itself
-// (NewConstMetric via thresholdmetric.Emit, then Registry.Gather) rather
-// than re-derived here. A Gather error means the exporter's scrape fails as a
-// whole (HTTP 500) and nothing is served, so it is an error here too, with
-// client_golang's text.
+// ⛔ /metrics decides, not this file. A Gather error in any family means the
+// exporter's scrape fails as a whole (HTTP 500) and nothing is served, so it
+// is an error here too, with client_golang's text. The user_threshold rows
+// are resolved with ResolveAtWithKeys (the collector's Resolve hook), so each
+// row the collector reports on carries its key.
+//
+// Not registered: the Go runtime collector the exporter adds — it reads no
+// config, so no tree can make it fail. The config metrics are a fresh set:
+// what can fail in them per scrape is the over-limit gauge the collector
+// publishes, and that goes through the set registered here.
 func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string, err error,
 ) {
-	keyed, _, err := cfg.ResolveAtWithKeys(at)
-	if err != nil {
-		return nil, nil, err
-	}
-	sc := &servedCollector{rows: make([]config.ResolvedThreshold, len(keyed))}
-	for i, k := range keyed {
-		sc.rows[i] = k.ResolvedThreshold
-	}
-	sc.results = make([]emitResult, len(keyed))
+	var keyed []config.KeyedThreshold
+	var keyErr error
+	var results []emitResult
+	metrics := scrape.NewConfigMetrics()
+	collector := scrape.NewCollectorWithHooks(staticSource{cfg}, metrics.PublishTenantMetricsOverLimit, scrape.Hooks{
+		Now: func() time.Time { return at },
+		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
+			var stats config.ResolveStats
+			keyed, stats, keyErr = c.ResolveAtWithKeys(now)
+			rows := make([]config.ResolvedThreshold, len(keyed))
+			for i, k := range keyed {
+				rows[i] = k.ResolvedThreshold
+			}
+			results = make([]emitResult, len(rows))
+			return rows, stats
+		},
+		Report: func(i int, m prometheus.Metric, err error) {
+			results[i] = emitResult{reported: true, metric: m, err: err}
+		},
+	})
 	reg := prometheus.NewRegistry()
-	if err := reg.Register(sc); err != nil {
-		return nil, nil, fmt.Errorf("internal: register the series check: %w", err)
+	scrape.Register(reg, collector, metrics)
+	_, gerr := reg.Gather()
+	if keyErr != nil {
+		return nil, nil, keyErr
 	}
-	if _, gerr := reg.Gather(); gerr != nil {
+	if gerr != nil {
 		return nil, nil, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sc.sameSeriesKeys(keyed), gerr)
+			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr)
+	}
+	if len(results) != len(keyed) {
+		return nil, nil, fmt.Errorf("internal: the collector resolved %d rows, %d have a verdict", len(keyed), len(results))
 	}
 
 	served = map[string]map[string][]config.ResolvedThreshold{}
 	dropped = map[string]map[string][]string{}
 	for i, k := range keyed {
-		switch r := sc.results[i]; {
+		switch r := results[i]; {
 		case !r.reported:
 			return nil, nil, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
 		case r.err != nil:
@@ -324,6 +386,14 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	return served, dropped, nil
 }
 
+// staticSource serves one loaded config to the collector. ConfigInfo is the
+// zero value: the exporter fills it from its deployment (flags / git), not
+// from the tree.
+type staticSource struct{ cfg *config.ThresholdConfig }
+
+func (s staticSource) GetConfig() *config.ThresholdConfig { return s.cfg }
+func (s staticSource) GetConfigInfo() config.ConfigInfo   { return config.ConfigInfo{} }
+
 // emitResult is the collector's verdict on one row.
 type emitResult struct {
 	reported bool
@@ -331,29 +401,13 @@ type emitResult struct {
 	err      error
 }
 
-// servedCollector is an unchecked prometheus.Collector (empty Describe, as
-// the exporter's ThresholdCollector) that emits user_threshold for rows with
-// the exporter's code and records the verdict on each row.
-type servedCollector struct {
-	rows    []config.ResolvedThreshold
-	results []emitResult
-}
-
-func (s *servedCollector) Describe(chan<- *prometheus.Desc) {}
-
-func (s *servedCollector) Collect(ch chan<- prometheus.Metric) {
-	thresholdmetric.Emit(ch, s.rows, func(i int, m prometheus.Metric, err error) {
-		s.results[i] = emitResult{reported: true, metric: m, err: err}
-	})
-}
-
 // sameSeriesKeys names, for the Gather error message only, the keys of rows
 // whose built metrics carry the same label set. Gather has already decided
 // the tree fails; this just points at the config keys behind it.
-func (s *servedCollector) sameSeriesKeys(keyed []config.KeyedThreshold) string {
+func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string {
 	seen := map[string]string{}
 	var named []string
-	for i, r := range s.results {
+	for i, r := range results {
 		if r.metric == nil {
 			continue
 		}

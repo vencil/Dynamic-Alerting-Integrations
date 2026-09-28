@@ -13,7 +13,13 @@ subcommand and parses its JSON; it decides nothing about the values itself.
 * `unserved` — keys the tenant's merged config carries with no entry in
   `values` (switched off included), value as written.
 * `dropped` — keys whose row /metrics drops because the exporter cannot build
-  its series; key → the reason for each dropped row.
+  its series; key → the reason for each dropped row. `dropped` is keyed by the
+  canonical spelling, `unserved` by the spelling as written.
+
+Whether /metrics serves at all follows Gather over the same collectors
+production /metrics serves. A tree with a tenant id or key that is not valid
+UTF-8 is refused (JSON cannot carry it), even where the exporter only drops
+that row and /metrics still serves.
 
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).

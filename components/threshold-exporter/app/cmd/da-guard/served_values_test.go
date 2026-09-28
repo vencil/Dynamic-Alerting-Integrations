@@ -692,3 +692,77 @@ func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
 		t.Errorf("dropped must be {} when nothing is dropped:\n%s", stdout)
 	}
 }
+
+// --- strings JSON cannot carry ----------------------------------------------------
+
+// A tenant id or key that is not valid UTF-8 would reach JSON as U+FFFD, so
+// two distinct keys could come out as one; it is refused and named instead.
+func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ tenants, want string }{
+		// `dP8=` is "t\xff"
+		"tenant id": {"tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n",
+			`tenant "t\xff"`},
+		// mysql_connections{q="\xff"} and mysql_connections{q="\xfe"}: both become {q="\ufffd"} in JSON.
+		"key": {"tenants:\n  tenant-a:\n    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n    : 5\n" +
+			"    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n    : 6\n",
+			`is not valid UTF-8`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, _, _, stderr := served(t, map[string]string{
+				"_defaults.yaml": defaultsOnly,
+				"tenant-a.yaml":  tc.tenants,
+			}, "")
+			if code != exitCallerErr {
+				t.Fatalf("exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
+			}
+			if !strings.Contains(stderr, tc.want) || !strings.Contains(stderr, "not valid UTF-8") {
+				t.Errorf("stderr should name it with %%q: %q", stderr)
+			}
+		})
+	}
+	// Control: the same shapes spelled in UTF-8 serve.
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml": "tenants:\n  tenant-ü:\n    mysql_connections: 5\n  tenant-a:\n" +
+			"    mysql_connections{q=\"é\"}: 5\n    mysql_connections{q=\"è\"}: 6\n",
+	}, "")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-ü", "mysql_connections", 5)
+	wantValue(t, doc, "tenant-a", `mysql_connections{q="é"}`, 5)
+	wantValue(t, doc, "tenant-a", `mysql_connections{q="è"}`, 6)
+}
+
+// A key whose row AND its #1231 legacy twin are both dropped has two reasons,
+// one per row.
+func TestServedValues_DroppedKeepsEveryRowsReason(t *testing.T) {
+	t.Parallel()
+	code, doc, stderr := servedTree(t, "    mysql_cpu{__x=\"y\"}: 5\n    mysql_cpu: 9\n")
+	mustOK(t, code, stderr)
+	got := doc.Tenants["tenant-a"].Dropped[`mysql_threads_running{__x="y"}`]
+	if len(got) != 2 {
+		t.Errorf("dropped reasons = %q, want 2 (the row and its legacy twin)", got)
+	}
+}
+
+// --- families other than user_threshold ----------------------------------------------
+
+// Two expired overrides whose da_config_event reasons render alike
+// ("container_cpu: a: b") collide in that family: production /metrics answers
+// 500 (pinned in the app package), so served-values must refuse too even
+// though every user_threshold row is fine.
+func TestServedValues_OtherFamilyFailsGather_ExitsTwo(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  container_cpu: 75\n  \"container_cpu: a\": 50\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    container_cpu:\n      default: \"95\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"a: b\"\n" +
+			"    \"container_cpu: a\":\n      default: \"96\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"b\"\n",
+	}, "2026-07-01T00:00:00Z")
+	if code != exitCallerErr {
+		t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
+	}
+	if !strings.Contains(stderr, "da_config_event") || !strings.Contains(stderr, "HTTP 500") {
+		t.Errorf("stderr should carry client_golang's error: %q", stderr)
+	}
+}
