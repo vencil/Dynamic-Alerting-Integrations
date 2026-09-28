@@ -147,7 +147,8 @@ def _wrapper_rc(
     else:
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                "-File", str(target), "pr-preflight"]
-    # The .bat writes to fixed %TEMP% paths (#2275): parallel tests must not share them.
+    # Hermetic TEMP per test. The .bat itself writes no temp file since #2275;
+    # test_two_calls_sharing_temp_* below is what pins that.
     env = {**(env or os.environ), "TEMP": str(tmp_path), "TMP": str(tmp_path)}
     return subprocess.run(cmd, cwd=tmp_path, capture_output=True, timeout=120, env=env).returncode
 
@@ -208,7 +209,7 @@ def test_bat_pr_preflight_forwards_the_pr_number(tmp_path) -> None:
         cwd=tmp_path / "sub",
         capture_output=True,
         timeout=120,
-        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},  # fixed output paths, #2275
+        env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},  # hermetic TEMP
     )
     assert proc.returncode == 0, proc.stdout
     cwd, _, argv = log.read_text().partition("|")
@@ -483,9 +484,7 @@ def _push_through_wrapper(
         cwd=work,
         capture_output=True,
         timeout=180,
-        # ⛔ The wrapper writes %TEMP%\vibe-git-out.txt / -err.txt at a FIXED
-        # path, so a suite run on a Windows host would otherwise overwrite the
-        # output an operator is reading from their own escape-hatch run.
+        # Hermetic TEMP per test (the wrapper writes no temp file since #2275).
         env={**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)},
     )
     recorded: dict[str, str] = {}
@@ -929,6 +928,77 @@ def test_branch_reports_a_refused_switch_to_an_existing_branch(tmp_path) -> None
     assert _git_out(work, "branch", "--show-current") == "feat/escape-hatch", out
     assert proc.returncode != 0, f"a refused switch reported success:\n{out}"
     assert "FAILED" in out, out
+
+
+# ---------------------------------------------------------------------------
+# #2275 — two calls at once, one %TEMP%.
+#
+# The wrapper used to send every git call to %TEMP%\vibe-git-out.txt /
+# -err.txt: two calls sharing TEMP (two worktrees, one operator) raced for
+# those files — measured 9 rounds in 10 with one side failing — and
+# `:failed` printed whatever the other call had last written. Every other
+# test here gives each call its own TEMP, so only these two can see it.
+# ---------------------------------------------------------------------------
+
+_ROUNDS = 10
+
+
+def _two_trees(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
+    trees = {}
+    for name in ("a", "b"):
+        work, _bare = _wrapper_repo(tmp_path / name, "feat/escape-hatch")
+        _git(work, "commit", "-q", "--allow-empty", "-m", f"test: only in {name}")
+        trees[name] = work
+    return trees
+
+
+def _run_together(trees: dict[str, pathlib.Path], temp: pathlib.Path,
+                  *argv: str) -> dict[str, tuple[int, str]]:
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(temp), TMP=str(temp))
+    procs = {
+        name: subprocess.Popen(
+            ["cmd", "/c", str(tree / "scripts" / "ops" / "win_git_escape.bat"), *argv],
+            cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        for name, tree in trees.items()
+    }
+    out = {}
+    for name, proc in procs.items():
+        stdout, stderr = proc.communicate(timeout=120)
+        out[name] = (proc.returncode, (stdout + stderr).decode("utf-8", "replace"))
+    return out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_two_calls_sharing_temp_each_get_their_own_output(tmp_path) -> None:
+    trees = _two_trees(tmp_path)
+    shared = tmp_path / "shared-temp"
+    shared.mkdir()
+    for n in range(_ROUNDS):
+        results = _run_together(trees, shared, "log")
+        for name, other in (("a", "b"), ("b", "a")):
+            rc, out = results[name]
+            assert rc == 0, f"round {n}: `{name}` failed:\n{out}"
+            assert f"test: only in {name}" in out, f"round {n}: `{name}` lost its log:\n{out}"
+            assert f"test: only in {other}" not in out, f"round {n}: `{name}` printed {other}'s log:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_two_calls_sharing_temp_a_failure_reports_its_own_error(tmp_path) -> None:
+    """The broken side must say FAILED with git's reason, not the healthy side's log."""
+    trees = _two_trees(tmp_path)
+    _break_git(trees["b"])
+    shared = tmp_path / "shared-temp"
+    shared.mkdir()
+    for n in range(_ROUNDS):
+        results = _run_together(trees, shared, "log")
+        rc, out = results["a"]
+        assert rc == 0 and "FAILED" not in out, f"round {n}: healthy `a` failed:\n{out}"
+        rc, out = results["b"]
+        assert rc != 0 and "FAILED" in out, f"round {n}: broken `b` did not fail:\n{out}"
+        assert re.search(r"\b(fatal|error):", out), f"round {n}: `b` failed without git's reason:\n{out}"
+        assert "test: only in a" not in out, f"round {n}: `b` printed a's log as its error:\n{out}"
 
 
 # ---------------------------------------------------------------------------

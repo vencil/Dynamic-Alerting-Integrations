@@ -13,8 +13,7 @@ REM  transport inherits the child's console handle and buffers stdout across
 REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
 REM
 REM    $bat  = "<tree>\scripts\ops\win_git_escape.bat"
-REM    $t    = "$env:TEMP\vibe-bat-out.txt"
-REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $t    = Join-Path $env:TEMP ("vibe-bat-out-" + [guid]::NewGuid() + ".txt")
 REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
 REM    $psi = New-Object Diagnostics.ProcessStartInfo
 REM    $psi.FileName         = "cmd.exe"
@@ -25,6 +24,10 @@ REM    $psi.WorkingDirectory = "<tree>"   # must be inside the tree $bat is in
 REM    $p = [Diagnostics.Process]::Start($psi)
 REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
 REM    Get-Content $t -Raw
+REM    Remove-Item $t
+REM
+REM  One file per call (the GUID): two calls sharing a fixed name overwrite
+REM  each other's output (#2275).
 REM
 REM  Three things matter, and the first TWO are not optional:
 REM    1) CreateNoWindow = $true     -- without it MCP still inherits the
@@ -65,7 +68,8 @@ REM   win_git_escape.bat commit-file _msg.txt
 REM
 REM Safety:
 REM   - Contains no credentials (uses gh auth or ~/.git-credentials)
-REM   - Output redirected to %TEMP%\vibe-git-*.txt
+REM   - Writes no files of its own: git prints straight to stdout (2>&1), so
+REM     two calls at once cannot read each other's output (#2275)
 REM   - Auto-sets UTF-8 environment
 
 REM Delayed expansion (enabled below) rewrites every `!` in a path, and the
@@ -82,6 +86,9 @@ setlocal EnableDelayedExpansion
 REM --- Environment setup ---
 set "PYTHONUTF8=1"
 chcp 65001 >nul 2>&1
+REM git prints to the console now (no output file), so log/diff/branch would
+REM start a pager and wait for a key.
+set "GIT_PAGER=cat"
 
 REM --- PATHEXT guard: some user profiles have PATHEXT=.CPL only (missing .EXE etc.),
 REM --- which breaks cmd.exe's extension-less command resolution (e.g. `git`, `where`).
@@ -130,10 +137,6 @@ pushd "%~dp0..\.."
 set "REPO_DIR=%CD%"
 popd
 
-REM --- Output files ---
-set "OUT=%TEMP%\vibe-git-out.txt"
-set "ERR=%TEMP%\vibe-git-err.txt"
-
 REM --- Command dispatch ---
 set "CMD=%~1"
 if "%CMD%"=="" goto :usage
@@ -146,9 +149,24 @@ for /f "delims=" %%v in ('"%GIT_CMD%" rev-parse --local-env-vars') do set "%%v="
 REM --- The caller must be inside the tree this copy lives in. Commands run in
 REM --- the caller's directory, so relative arguments (add's paths,
 REM --- commit-file's message file) resolve the way git resolves them.
-"%GIT_CMD%" rev-parse --show-toplevel >"%OUT%" 2>"%ERR%" || goto :failed
+REM --- Read with delayed expansion off: it rewrites every `!` in the path, and
+REM --- the rewritten name can be another tree (`w!x!` becomes `w`). A location
+REM --- with a `!` is refused outright.
+setlocal DisableDelayedExpansion
 set "CWD_TOP="
-set /p "CWD_TOP=" <"%OUT%"
+for /f "delims=" %%t in ('"%GIT_CMD%" rev-parse --show-toplevel 2^>nul') do set "CWD_TOP=%%t"
+if not defined CWD_TOP (
+    "%GIT_CMD%" rev-parse --show-toplevel 2>&1
+    endlocal
+    echo FAILED: the current directory is not in a git work tree
+    goto :done_err
+)
+if not "%CWD_TOP:!=%"=="%CWD_TOP%" (
+    endlocal
+    echo FAILED: the current directory's tree path contains "!", which this script cannot work with
+    goto :done_err
+)
+endlocal & set "CWD_TOP=%CWD_TOP%"
 set "CWD_TOP=!CWD_TOP:/=\!"
 if /i not "!CWD_TOP!"=="!REPO_DIR!" (
     echo FAILED: this copy of the script works on !REPO_DIR!
@@ -172,8 +190,7 @@ if /i "%CMD%"=="fix-hooks"   goto :do_fix_hooks
 goto :usage
 
 :do_status
-"%GIT_CMD%" status -sb >"%OUT%" 2>"%ERR%" || goto :failed
-type "%OUT%"
+"%GIT_CMD%" status -sb 2>&1 || goto :failed
 goto :done
 
 :do_add
@@ -190,9 +207,8 @@ if "!FILES!"=="" (
     echo Usage: win_git_escape.bat add file1 [file2...]
     goto :done_err
 )
-"%GIT_CMD%" add !FILES! >"%OUT%" 2>"%ERR%" || goto :failed
+"%GIT_CMD%" add !FILES! 2>&1 || goto :failed
 echo OK: staged files
-type "%OUT%"
 goto :done
 
 :do_commit
@@ -214,9 +230,8 @@ if "%PY_CMD%"=="" (
 "%PY_CMD%" "%~dp0commit_helper.py" check-ascii "%MSG%"
 if %ERRORLEVEL% NEQ 0 goto :done_err
 REM Use %~2 not %2 -- batch auto-handles quotes
-"%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%" || goto :failed
+"%GIT_CMD%" commit -m "%MSG%" 2>&1 || goto :failed
 echo OK: committed
-type "%OUT%"
 goto :done
 
 :do_commit_file
@@ -244,9 +259,8 @@ if "%PY_CMD%"=="" (
     echo Looked in PATH, py launcher, and %%LOCALAPPDATA%%\Programs\Python\*
     goto :done_err
 )
-"%PY_CMD%" "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%" || goto :failed
+"%PY_CMD%" "%~dp0commit_helper.py" commit-file "%MSGFILE%" 2>&1 || goto :failed
 echo OK: committed
-type "%OUT%"
 goto :done
 
 :do_push
@@ -265,18 +279,14 @@ REM are plain bash, not a pre-commit-generated hook with a Linux python
 REM path. Scoped by the setlocal at the top of this file.
 set "MKDOCS_STRICT_BYPASS=1"
 set "GIT_PREFLIGHT_BYPASS=1"
-"%GIT_CMD%" push "%REMOTE%" "%BRANCH%" >"%OUT%" 2>"%ERR%"
-if %ERRORLEVEL% EQU 0 (
-    echo OK: pushed
-    type "%OUT%"
-    type "%ERR%"
-) else (
+"%GIT_CMD%" push "%REMOTE%" "%BRANCH%" 2>&1
+if errorlevel 1 (
     echo FAILED:
-    type "%ERR%"
     REM A rejecting guard must reach the caller (#1472 shape): a bare
     REM `goto :done` is `exit /b 0`.
     goto :done_err
 )
+echo OK: pushed
 goto :done
 
 :do_tag
@@ -286,36 +296,33 @@ if "%TAG%"=="" (
     echo Usage: win_git_escape.bat tag v1.0.0
     goto :done_err
 )
-"%GIT_CMD%" tag "%TAG%" >"%OUT%" 2>"%ERR%" || goto :failed
+"%GIT_CMD%" tag "%TAG%" 2>&1 || goto :failed
 echo OK: tagged %TAG%
 goto :done
 
 :do_branch
 set "BR=%~2"
 if "%BR%"=="" (
-    "%GIT_CMD%" branch -a >"%OUT%" 2>"%ERR%" || goto :failed
-    type "%OUT%"
+    "%GIT_CMD%" branch -a 2>&1 || goto :failed
     goto :done
 )
 REM switch, not checkout: `checkout <name>` also takes a path and would
 REM discard that path's uncommitted changes (`branch .`).
 "%GIT_CMD%" show-ref --verify --quiet "refs/heads/%BR%" >nul 2>&1 && goto :branch_switch
-"%GIT_CMD%" switch -c "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+"%GIT_CMD%" switch -c "%BR%" 2>&1 || goto :failed
 echo OK: created and switched to %BR%
 goto :done
 :branch_switch
-"%GIT_CMD%" switch "%BR%" >"%OUT%" 2>"%ERR%" || goto :failed
+"%GIT_CMD%" switch "%BR%" 2>&1 || goto :failed
 echo OK: switched to %BR%
 goto :done
 
 :do_log
-"%GIT_CMD%" log --oneline -20 >"%OUT%" 2>"%ERR%" || goto :failed
-type "%OUT%"
+"%GIT_CMD%" log --oneline -20 2>&1 || goto :failed
 goto :done
 
 :do_diff
-"%GIT_CMD%" diff --stat >"%OUT%" 2>"%ERR%" || goto :failed
-type "%OUT%"
+"%GIT_CMD%" diff --stat 2>&1 || goto :failed
 goto :done
 
 :do_preflight
@@ -405,12 +412,11 @@ echo   win_git_escape.bat commit-file _msg.txt
 echo.
 goto :done
 
-REM --- A git (or commit_helper) call failed: show why, then return 1. ---
+REM --- A git (or commit_helper) call failed: return 1. ---
+REM Its reason is already on stdout: each call runs with 2>&1.
 REM A bare `goto :done` here is `exit /b 0` -- the #1472 / #1918 shape.
 :failed
 echo FAILED:
-type "%ERR%"
-type "%OUT%"
 goto :done_err
 
 REM --- Exit label (success): return 0 (endlocal also restores the cwd). ---
