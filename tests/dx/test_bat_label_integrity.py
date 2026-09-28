@@ -905,3 +905,75 @@ def test_branch_reports_a_refused_switch_to_an_existing_branch(tmp_path) -> None
     assert _git_out(work, "branch", "--show-current") == "feat/escape-hatch", out
     assert proc.returncode != 0, f"a refused switch reported success:\n{out}"
     assert "FAILED" in out, out
+
+
+# ---------------------------------------------------------------------------
+# #1919 — the tree the wrapper acts on, and the locks it cleans there.
+#
+# In a linked worktree `.git` is a file and the locks live under the common
+# git dir, so a hard-coded `.git\index.lock` never exists there. The main-repo
+# leg of each test is the control: the old paths were right in that layout.
+# ---------------------------------------------------------------------------
+
+
+def _bat(tree: pathlib.Path, tmp_path: pathlib.Path, *argv: str, cwd: pathlib.Path | None = None):
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
+    return subprocess.run(
+        ["cmd", "/c", str(tree / "scripts" / "ops" / "win_git_escape.bat"), *argv],
+        cwd=cwd or tree,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+
+
+def _main_and_worktree(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
+    wt = tmp_path / "linked"
+    _git(work, "worktree", "add", "-q", "-b", "feat/linked", str(wt))
+    (wt / "scripts" / "ops").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", wt / "scripts" / "ops")
+    return {"main": work, "linked": wt}
+
+
+def _git_path(tree: pathlib.Path, name: str) -> pathlib.Path:
+    p = pathlib.Path(_git_out(tree, "rev-parse", "--git-path", name))
+    return p if p.is_absolute() else tree / p
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_phantom_locks_are_cleaned_where_git_keeps_them(tmp_path, layout) -> None:
+    tree = _main_and_worktree(tmp_path)[layout]
+    locks = [_git_path(tree, "index.lock"), _git_path(tree, "refs/heads") / "phantom.lock"]
+    for lock in locks:
+        lock.write_text("", encoding="utf-8")
+    proc = _bat(tree, tmp_path, "status")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert [str(p) for p in locks if p.exists()] == [], f"lock left behind in {layout}:\n{out}"
+    assert proc.returncode == 0, out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_preflight_lists_the_locks_of_its_own_git_dir(tmp_path, layout) -> None:
+    tree = _main_and_worktree(tmp_path)[layout]
+    # HEAD.lock is not auto-cleaned, so preflight is the only thing reporting it.
+    _git_path(tree, "HEAD.lock").write_text("", encoding="utf-8")
+    out = _bat(tree, tmp_path, "preflight").stdout.decode("utf-8", "replace")
+    assert "HEAD.lock" in out, f"preflight missed the lock in {layout}:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_the_wrapper_acts_on_its_own_tree_not_the_callers_cwd(tmp_path) -> None:
+    trees = _main_and_worktree(tmp_path)
+    # Put the two trees on different commits: tags are shared across
+    # worktrees, so the commit the tag lands on is what tells them apart.
+    _git(trees["linked"], "commit", "-q", "--allow-empty", "-m", "test: linked only")
+    proc = _bat(trees["linked"], tmp_path, "tag", "t-where", cwd=trees["main"])
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert _git_out(trees["main"], "rev-parse", "t-where") == _git_out(trees["linked"], "rev-parse", "HEAD"), (
+        f"the tag landed on the caller's tree, not the wrapper's:\n{out}"
+    )

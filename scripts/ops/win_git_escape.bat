@@ -12,7 +12,7 @@ REM  naive `Process.Start("cmd.exe", "/c ...")` hangs because the MCP
 REM  transport inherits the child's console handle and buffers stdout across
 REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
 REM
-REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_git_escape.bat"
+REM    $bat  = "<tree>\scripts\ops\win_git_escape.bat"   # acts on <tree>
 REM    $t    = "$env:TEMP\vibe-bat-out.txt"
 REM    Remove-Item $t -ErrorAction SilentlyContinue
 REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
@@ -21,7 +21,6 @@ REM    $psi.FileName         = "cmd.exe"
 REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
-REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
 REM    $p = [Diagnostics.Process]::Start($psi)
 REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
 REM    Get-Content $t -Raw
@@ -114,17 +113,11 @@ if "%PY_CMD%"=="" (
 REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
-REM --- Find Repo ---
-set "REPO_DIR="
-if exist "%~dp0..\..\..\.git" (
-    REM Navigate from scripts\ops\ up to repo root
-    pushd "%~dp0..\.."
-    set "REPO_DIR=!CD!"
-    popd
-) else (
-    REM fallback: current directory
-    set "REPO_DIR=%CD%"
-)
+REM --- Repo: the work tree this copy lives in (scripts\ops\..\..), never %CD% ---
+REM A caller sitting in another tree would otherwise commit/push that one.
+pushd "%~dp0..\.."
+set "REPO_DIR=%CD%"
+popd
 
 REM --- Output files ---
 set "OUT=%TEMP%\vibe-git-out.txt"
@@ -137,8 +130,10 @@ if "%CMD%"=="" goto :usage
 pushd "%REPO_DIR%"
 
 REM --- Auto-clean phantom locks (run before every operation) ---
-del /f /q "%REPO_DIR%\.git\index.lock" 2>nul
-del /f /q "%REPO_DIR%\.git\refs\heads\*.lock" 2>nul
+REM Paths come from git: in a linked worktree .git is a file, and the locks
+REM live under the common git dir.
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path index.lock 2^>nul') do del /f /q "%%~fp" 2>nul
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path refs/heads 2^>nul') do del /f /q "%%~fp\*.lock" 2>nul
 
 if /i "%CMD%"=="status"      goto :do_status
 if /i "%CMD%"=="add"         goto :do_add
@@ -304,12 +299,14 @@ goto :done
 echo === Windows Git Preflight ===
 echo.
 echo [1/3] Checking for .git lock files...
-dir /b "%REPO_DIR%\.git\*.lock" 2>nul
+set "LOCK_DIR=%REPO_DIR%\.git"
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-dir 2^>nul') do set "LOCK_DIR=%%~fp"
+dir /b "%LOCK_DIR%\*.lock" 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo   OK: no lock files
 ) else (
     echo   WARNING: lock files found. Delete with:
-    echo   del "%REPO_DIR%\.git\*.lock"
+    echo   del "%LOCK_DIR%\*.lock"
 )
 echo.
 echo [2/3] Git status...

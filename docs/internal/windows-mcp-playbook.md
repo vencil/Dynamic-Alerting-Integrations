@@ -187,7 +187,7 @@ if ($bytes | Where-Object { $_ -ge 0x80 }) { Write-Error "Non-ASCII byte present
 **唯一穩定的呼叫模板**（三個非可選要素：`CreateNoWindow=$true` + `cmd.exe /s /c` + `WaitForExit(ms)`）：
 
 ```powershell
-$bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_gh.bat"
+$bat  = "<tree>\scripts\ops\win_gh.bat"   # 操作的是 <tree> 這棵樹（腳本所在的樹），不是 cwd
 $t    = "$env:TEMP\vibe-gh-out.txt"
 Remove-Item $t -ErrorAction SilentlyContinue
 
@@ -201,7 +201,6 @@ $psi.FileName         = "cmd.exe"
 $psi.Arguments        = $args
 $psi.UseShellExecute  = $false
 $psi.CreateNoWindow   = $true     # CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang
-$psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
 $p = [Diagnostics.Process]::Start($psi)
 [void]$p.WaitForExit(30000)       # 給一個毫秒為單位的硬 timeout，避免萬一 hang
 Get-Content $t -Raw
