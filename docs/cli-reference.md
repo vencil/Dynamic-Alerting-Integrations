@@ -2881,6 +2881,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 ```bash
 da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--json]
 ```
 
 **參數**
@@ -2890,7 +2891,13 @@ da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-
 | `--config-dir` | 設定目錄路徑 | (必填) |
 | `--tenant` | 只顯示指定 tenant（可多次指定） | (全部) |
 | `--show-profile-expansion` | 顯示所有路由設定檔的展開與引用關係 | `false` |
+| `--trace` | 追蹤模式：模擬一則 alert 的路由路徑（需搭配 `--tenant`） | `false` |
+| `--alertname` | 追蹤的 alert 名稱（搭配 `--trace`） | `GenericAlert` |
+| `--severity` | 追蹤的 alert 嚴重度（搭配 `--trace`） | `warning` |
+| `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
 | `--json` | 以 JSON 格式輸出 | `false` |
+
+`--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
 
 **範例**
 
@@ -2906,6 +2913,9 @@ da-tools explain-route --config-dir conf.d/ --show-profile-expansion
 
 # JSON 輸出（適合管線整合）
 da-tools explain-route --config-dir conf.d/ --json
+
+# 追蹤一則帶 metric_group 的 alert 會落到哪個 receiver（overrides 的 metric_group、routes 的 match key 都用 --label 帶）
+da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alertname HighConnectionCount --label metric_group=connections
 ```
 
 ---

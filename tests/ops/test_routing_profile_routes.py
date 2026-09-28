@@ -38,6 +38,7 @@ from _grar_validate import list_tenant_subroutes, route_entry_matchers
 
 REPO = Path(__file__).resolve().parents[2]
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
+_EXPLAIN = REPO / "scripts" / "tools" / "ops" / "explain_route.py"
 _EXAMPLE_PROFILES = (REPO / "components" / "threshold-exporter" / "config"
                      / "conf.d" / "examples" / "_routing_profiles.yaml")
 _SCHEMAS = REPO / "docs" / "schemas"
@@ -517,3 +518,38 @@ class TestAmtoolAcceptance:
                 + [f"{k}={v}" for k, v in sorted(labels.items())],
                 capture_output=True, text=True, timeout=300)
             assert t.returncode == 0, (labels, t.stdout + t.stderr)
+
+    @pytest.mark.parametrize("label, expected", [
+        ("metric_group=mg-conn", f"tenant-{_T}-override-0"),
+        ("team=x", f"tenant-{_T}-route-0"),
+    ])
+    def test_trace_label_agrees_with_amtool(self, tmp_path, label, expected):
+        """#2264：`explain_route --trace --label` 選到的 receiver 與 amtool
+        對同一組 label 的判定一致（override 的 metric_group、routes 的 match key）。"""
+        d = _profiles_tree(tmp_path, {
+            "overrides": [{"metric_group": "mg-conn", "receiver": _HOOK}],
+            "routes": [_route(match={"team": "x"})]})
+        out = tmp_path / "cm.yaml"
+        r = subprocess.run(
+            [sys.executable, str(_GAR), "--config-dir", str(d),
+             "--output-configmap", "-o", str(out)],
+            capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        am_yml = tmp_path / "alertmanager.yml"
+        am_yml.write_text(
+            yaml.safe_load(out.read_text(encoding="utf-8"))["data"]["alertmanager.yml"],
+            encoding="utf-8")
+        tr = subprocess.run(
+            [sys.executable, str(_EXPLAIN), "--config-dir", str(d),
+             "--tenant", _T, "--trace", "--alertname", "X",
+             "--label", label, "--json"],
+            capture_output=True, text=True, timeout=300)
+        assert tr.returncode == 0, tr.stdout + tr.stderr
+        [trace] = json.loads(tr.stdout)
+        assert f"{expected} " in trace["final_receiver"]
+        am = subprocess.run(
+            [_AMTOOL, "config", "routes", "test", f"--config.file={am_yml}",
+             f"--verify.receivers={expected}"]
+            + [f"{k}={v}" for k, v in sorted(trace["labels"].items())],
+            capture_output=True, text=True, timeout=300)
+        assert am.returncode == 0, (trace["labels"], am.stdout + am.stderr)

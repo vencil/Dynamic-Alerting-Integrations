@@ -854,6 +854,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "db-demo",
                     "--trace", "--alertname", "HighConnectionCount",
                     "--severity", "critical", "--json"]),
+    R("explain_route", "trace-label",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "db-demo",
+                    "--trace", "--alertname", "HighConnectionCount",
+                    "--label", "metric_group=connections",
+                    "--label", "team=dba", "--json"]),
 
     # ── federation_check ───────────────────────────────────────────────────
     R("federation_check", "edge",

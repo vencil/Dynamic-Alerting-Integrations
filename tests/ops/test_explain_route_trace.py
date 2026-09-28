@@ -1,10 +1,12 @@
 """Tests for explain_route.py --trace mode (v2.1.0 route tracing)."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 
 import pytest
+import yaml
 
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops')
 sys.path.insert(0, _TOOLS_DIR)
@@ -186,3 +188,113 @@ class TestFormatTrace:
         output = er.format_trace(trace, lang="zh")
         assert "路由追蹤" in output
         assert "最終結果" in output
+
+
+# ---------------------------------------------------------------------------
+# --label KEY=VALUE (#2264)：讓 trace 能帶 metric_group / routes 的 match key
+# ---------------------------------------------------------------------------
+_DEMO = "demo-label"
+
+_LABEL_TREE = {"tenants": {_DEMO: {"_routing": {
+    "receiver": {"type": "webhook", "url": "https://hooks.example.com/main"},
+    "overrides": [{"metric_group": "mg-conn",
+                   "receiver": {"type": "webhook",
+                                "url": "https://hooks.example.com/mg"}}],
+    "routes": [{"match": {"team": "x"},
+                "receiver": {"type": "webhook",
+                             "url": "https://hooks.example.com/teamx"}}],
+}}}}
+
+
+@pytest.fixture
+def label_conf(tmp_path):
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / f"{_DEMO}.yaml").write_text(yaml.safe_dump(_LABEL_TREE),
+                                     encoding="utf-8")
+    return d
+
+
+def _run_trace(capsys, conf, *extra):
+    rc = er.main(["--config-dir", str(conf), "--tenant", _DEMO, "--trace",
+                  "--json", *extra])
+    out = capsys.readouterr().out
+    assert rc == 0
+    [trace] = json.loads(out)
+    return trace
+
+
+class TestTraceLabelCli:
+    def test_metric_group_hits_override(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf, "--label", "metric_group=mg-conn")
+        assert trace["steps"][1]["matched_sub_route"] == "overrides[0]"
+        assert f"tenant-{_DEMO}-override-0" in trace["final_receiver"]
+
+    def test_routes_match_key_hits_route(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf, "--label", "team=x")
+        assert trace["steps"][1]["matched_sub_route"] == "routes[0]"
+        assert f"tenant-{_DEMO}-route-0" in trace["final_receiver"]
+
+    def test_override_wins_over_routes(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf, "--label", "team=x",
+                           "--label", "metric_group=mg-conn")
+        assert trace["steps"][1]["matched_sub_route"] == "overrides[0]"
+
+    def test_without_label_stays_on_main_receiver(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf)
+        assert "matched_sub_route" not in trace["steps"][1]
+
+    def test_repeatable_value_with_equals_and_empty(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf, "--label", "q=a=b",
+                           "--label", "empty=", "--label", "team=y")
+        assert trace["labels"]["q"] == "a=b"
+        assert trace["labels"]["empty"] == ""
+        assert trace["labels"]["team"] == "y"
+        assert "matched_sub_route" not in trace["steps"][1]
+
+    def test_json_labels_include_extra_and_dedicated(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf, "--alertname", "A",
+                           "--severity", "critical", "--label", "team=x")
+        assert trace["labels"] == {"alertname": "A", "tenant": _DEMO,
+                                   "severity": "critical", "team": "x"}
+
+    @pytest.mark.parametrize("args, needle", [
+        (["--label", "novalue"], "KEY=VALUE"),
+        (["--label", "=v"], "invalid label name"),
+        (["--label", "1bad=v"], "invalid label name"),
+        (["--label", "bad-key=v"], "invalid label name"),
+        (["--label", "team\n=x"], "invalid label name"),
+        (["--label", "alertname=X"], "--alertname"),
+        (["--label", "severity=critical"], "--severity"),
+        (["--label", "tenant=other"], "--tenant"),
+        (["--label", "team=x", "--label", "team=y"], "more than once"),
+    ])
+    def test_invalid_label_is_caller_error(self, capsys, label_conf, args, needle):
+        with pytest.raises(SystemExit) as exc:
+            er.main(["--config-dir", str(label_conf), "--tenant", _DEMO,
+                     "--trace", *args])
+        assert exc.value.code == 2
+        captured = capsys.readouterr()
+        assert needle in captured.err
+        assert captured.out == ""
+
+    def test_label_without_trace_is_caller_error(self, capsys, label_conf):
+        with pytest.raises(SystemExit) as exc:
+            er.main(["--config-dir", str(label_conf), "--label", "team=x"])
+        assert exc.value.code == 2
+        assert "only with --trace" in capsys.readouterr().err
+
+    def test_control_chars_in_bad_label_are_escaped(self, capsys, label_conf):
+        with pytest.raises(SystemExit):
+            er.main(["--config-dir", str(label_conf), "--tenant", _DEMO,
+                     "--trace", "--label", "evil\n[PASS] ok"])
+        assert "\n[PASS] ok" not in capsys.readouterr().err
+
+
+class TestTraceExtraLabelsReserved:
+    @pytest.mark.parametrize("key", ["alertname", "severity", "tenant"])
+    def test_reserved_key_raises(self, key):
+        parsed = _make_parsed(all_tenants=[_DEMO])
+        with pytest.raises(ValueError, match=key):
+            er.trace_alert_routing(parsed, _DEMO, "A", "warning",
+                                   extra_labels={key: "v"})
