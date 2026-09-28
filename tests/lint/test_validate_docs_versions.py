@@ -2445,3 +2445,80 @@ class TestBilingualNumbersReadsRealCounts:
         self._pair(tmp_path, monkeypatch,
                    "這一節沒有計數。\n", "Measured: all 122 alerts in rule-packs/.\n")
         assert mod.check_bilingual_number_consistency() == []
+
+
+class TestRulePackCountBadgesAndProse:
+    """#1613 — badges are checked and repaired the same way; prose carries no
+    Rule Pack count at all.
+
+    Before: the checker read prose AND badges with `re.IGNORECASE`, while the
+    repair rewrote two badge patterns WITHOUT it. A prose count or an
+    upper-case badge was an error `--fix` could never clear. Prose now has its
+    own id, and the fix for it is to reword, not to write a new number.
+    """
+
+    COUNTS = {"pack_count": 16, "alert": 161}
+
+    def _doc(self, tmp_path, monkeypatch, text):
+        docs = tmp_path / "docs"
+        docs.mkdir(exist_ok=True)
+        _write(docs / "page.md", text)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "RULE_PACK_COUNT_CHECK_FILES", [])
+        mod._RGLOB_CACHE.clear()
+        mod._CONTENT_CACHE.clear()
+        return docs / "page.md"
+
+    def test_checker_and_repair_agree_on_case(self, tmp_path, monkeypatch):
+        """⛔ Must-fire then must-clear: an upper-case badge the checker
+        reports is one `_auto_fix` rewrites."""
+        page = self._doc(tmp_path, monkeypatch,
+                         "![a](badge/Rule%20Packs-99-orange) "
+                         "![b](badge/Alerts-1-red)\n")
+        issues = mod.check_rule_pack_counts(self.COUNTS)
+        assert [i.check for i in issues] == ["rule-pack-count"] * 2, issues
+        got = mod._auto_fix(issues, 0, self.COUNTS)
+        text = page.read_text(encoding="utf-8")
+        assert len(got) == 2, [i.message for i in got]
+        assert "Rule%20Packs-16-" in text and "Alerts-161-" in text, text
+        mod._CONTENT_CACHE.clear()
+        assert mod.check_rule_pack_counts(self.COUNTS) == []
+
+    @pytest.mark.parametrize("line", [
+        "平台預載 16 個 Rule Pack。",
+        "The platform ships 16 Rule Packs.",
+        "mount 16 Rule Pack ConfigMaps",
+        "（共 99 個 rule pack）",
+        "3 rule-pack source YAMLs",
+    ])
+    def test_any_prose_count_is_flagged_even_when_correct(
+            self, tmp_path, monkeypatch, line):
+        """⛔ Not compared with the real count: `16` is flagged too, because
+        a correct number today is the one that goes stale next release."""
+        self._doc(tmp_path, monkeypatch, line + "\n")
+        issues = mod.check_rule_pack_counts(self.COUNTS)
+        assert [i.check for i in issues] == ["rule-pack-count-prose"], issues
+        assert issues[0].severity == "error"
+
+    @pytest.mark.parametrize("line", [
+        "### 4.4 Rule Pack 部署",
+        "Q1 --> A[§4 Rule Pack on vmalert]",
+        "v2.6.0 時累積到 14 個 rule-pack 缺 `tenant`",
+        "每個 Rule Pack 透過 Projected Volume 掛載。",
+        "![a](badge/rule%20packs-16-orange)",
+    ])
+    def test_non_counts_are_not_flagged(self, tmp_path, monkeypatch, line):
+        """Must-not-fire: section numbers, a line citing a release, prose
+        without a number, and a correct badge."""
+        self._doc(tmp_path, monkeypatch, line + "\n")
+        assert mod.check_rule_pack_counts(self.COUNTS) == []
+
+    def test_prose_findings_are_not_reported_as_repaired(
+            self, tmp_path, monkeypatch):
+        """`--fix` must not claim a prose finding: rewording is a human's job,
+        and a reported repair would drop the error out of `--ci --fix`."""
+        page = self._doc(tmp_path, monkeypatch, "共 99 個 Rule Pack。\n")
+        issues = mod.check_rule_pack_counts(self.COUNTS)
+        assert mod._auto_fix(issues, 0, self.COUNTS) == []
+        assert page.read_text(encoding="utf-8") == "共 99 個 Rule Pack。\n"

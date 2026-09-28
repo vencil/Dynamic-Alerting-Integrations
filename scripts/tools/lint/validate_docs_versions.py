@@ -8,7 +8,7 @@
   1. da-tools image tag 是否與 VERSION 檔一致
   2. exporter image tag / OCI chart version 是否與 Chart.yaml 一致
   3. 平台版號（frontmatter、header、footer）是否與 CLAUDE.md 一致
-  4. Rule Pack 計數（pack 數量、recording/alert 數量）是否與實際 YAML 一致
+  4. Rule Pack／alert badge 計數是否與實際 YAML 一致；手寫散文不得寫 Rule Pack 數字
   5. 雙語文件配對數量是否與 badge 一致
 
 用法:
@@ -48,7 +48,8 @@ from _version_patterns import (
     SET_IMAGE_TAG_PATTERN,
     VERSION_HISTORICAL_LINE_MARKERS,
     VERSION_CURRENCY_IGNORE,
-    RULE_PACK_COUNT_PATTERNS,
+    RULE_PACK_BADGE_PATTERNS,
+    RULE_PACK_PROSE_COUNT_PATTERN,
     TOOL_COUNT_PATTERNS,
     ADR_COUNT_PATTERNS,
     DOC_FILE_COUNT_PATTERNS,
@@ -511,10 +512,18 @@ def check_platform_version(expected: str) -> List[Issue]:
 
 
 def check_rule_pack_counts(actual: Dict) -> List[Issue]:
-    """Check Rule Pack counts in documentation match actual YAML counts."""
+    """Check the Rule Pack / alert badges, and keep counts out of prose.
+
+    Two checks, two ids:
+      - `rule-pack-count`: a badge number that differs from the real count.
+        `--fix` rewrites it, using the same patterns and flags.
+      - `rule-pack-count-prose`: ANY number written next to "Rule Pack" in
+        hand-written prose (#1613). Not compared, not auto-fixed — reword the
+        sentence. See RULE_PACK_PROSE_COUNT_PATTERN for why.
+    """
     issues = []
-    pack_count = actual["pack_count"]
-    alert_count = actual["alert"]
+    expected_by_key = {"pack_count": str(actual["pack_count"]),
+                       "alert": str(actual["alert"])}
 
     files_to_scan = list(_cached_rglob(DOCS_DIR,"*.md"))
     files_to_scan.extend(RULE_PACK_COUNT_CHECK_FILES)
@@ -528,24 +537,27 @@ def check_rule_pack_counts(actual: Dict) -> List[Issue]:
         rel = str(f.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            # Check pack count patterns
-            for pat, grp, _, desc in RULE_PACK_COUNT_PATTERNS[:4]:
+            for pat, key, desc in RULE_PACK_BADGE_PATTERNS:
                 for m in re.finditer(pat, line, re.IGNORECASE):
-                    found = m.group(grp)
-                    # Determine expected value based on pattern
-                    if "alert" in desc.lower():
-                        expected = str(alert_count)
-                    else:
-                        expected = str(pack_count)
-
+                    found = m.group(2)
+                    expected = expected_by_key[key]
                     if found != expected:
-                        # Skip historical references (v1.x.y context)
-                        if re.search(r"v1\.[0-9]+\.[0-9]+", line):
-                            continue
                         issues.append(Issue(
                             "rule-pack-count", "error", rel, i,
                             f"{desc}: found {found}, expected {expected}",
                         ))
+            # A line citing a release (`v2.6.0 時累積到 14 個 rule-pack`) is
+            # a historical measurement, not a claim about today.
+            if re.search(r"\bv[0-9]+\.[0-9]+\.[0-9]+", line):
+                continue
+            for m in re.finditer(RULE_PACK_PROSE_COUNT_PATTERN, line,
+                                 re.IGNORECASE):
+                issues.append(Issue(
+                    "rule-pack-count-prose", "error", rel, i,
+                    f"'{m.group(0)}': don't write the Rule Pack count in "
+                    f"prose — reword without the number (the README badge "
+                    f"and rule-packs/README.md carry it)",
+                ))
 
     return issues
 
@@ -1045,6 +1057,7 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
 
         content = fpath.read_text(encoding="utf-8")
         new_content = content
+        already_fixed = False
 
         if issue.check == "bilingual-count":
             # Fix badge count using pattern from AUTO_FIX_PATTERNS
@@ -1117,17 +1130,26 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                     new_content = "".join(lines)
 
         elif issue.check == "rule-pack-count":
-            # These are trickier — only fix clear badge patterns
-            # (avoid modifying prose where context might differ)
-            pack_count = rule_counts["pack_count"]
-            alert_count = rule_counts["alert"]
-            # Fix badge patterns using AUTO_FIX_PATTERNS
-            for pat, repl_template in AUTO_FIX_PATTERNS["rule-pack-count"]["patterns"]:
-                if "pack_count" in repl_template:
-                    repl = repl_template.format(pack_count=pack_count)
-                else:
-                    repl = repl_template.format(alert_count=alert_count)
-                new_content = re.sub(pat, repl, new_content)
+            # Badges only — prose counts are `rule-pack-count-prose`, which
+            # is fixed by rewording, not by a number. ⛔ Same patterns and
+            # flags as `check_rule_pack_counts` (#1613): a repair stricter
+            # than its checker leaves an error nobody can clear.
+            for pat, key, _desc in RULE_PACK_BADGE_PATTERNS:
+                value = rule_counts[key]
+                new_content = re.sub(
+                    pat, lambda m, v=value: f"{m.group(1)}{v}{m.group(3)}",
+                    new_content, flags=re.IGNORECASE)
+            # ⚠️ The sub is whole-file, so the first issue on a file repairs
+            # its siblings too and they see no change. Count an issue as
+            # repaired when its line now carries badges and all are right —
+            # otherwise `--ci --fix` lists a fixed badge as still standing.
+            lines = new_content.splitlines()
+            target = (lines[issue.line - 1] if 0 < issue.line <= len(lines)
+                      else new_content)
+            found = [(m.group(2), str(rule_counts[key]))
+                     for pat, key, _desc in RULE_PACK_BADGE_PATTERNS
+                     for m in re.finditer(pat, target, re.IGNORECASE)]
+            already_fixed = bool(found) and all(a == b for a, b in found)
 
         if new_content != content:
             fpath.write_text(new_content, encoding="utf-8", newline="\n")
@@ -1140,6 +1162,8 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                      | stat.S_IROTH)
             if not quiet:
                 print(f"  🔧 Fixed {issue.check} in {issue.file}")
+            repaired.append(issue)
+        elif already_fixed:
             repaired.append(issue)
 
     return repaired

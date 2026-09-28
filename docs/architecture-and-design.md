@@ -64,7 +64,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 16 Rule Packs"]
+        PM["Prometheus<br/>+ Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 

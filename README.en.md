@@ -57,7 +57,7 @@ graph TD
 
     subgraph PL["Platform Layer"]
         TE["threshold-exporter ×2 HA<br/>conf.d/ Hierarchy / Dual-Hash Hot-Reload<br/>(ADR-016/017, v2.7.0)"]
-        RP["Projected Volume<br/>16 Rule Packs"]
+        RP["Projected Volume<br/>Rule Packs"]
     end
 
     subgraph PE["Prometheus + Alertmanager"]
@@ -74,7 +74,7 @@ graph TD
     PROM --> AM
 ```
 
-16 Rule Packs covering MySQL, PostgreSQL, Redis, Kafka, and 9 other tech stacks, deployed independently via Projected Volume (`optional: true`). Unused packs cost near-zero evaluation. See [Rule Packs Directory](rule-packs/README.md) · [Alert Reference](rule-packs/ALERT-REFERENCE.en.md)
+Rule Packs cover MySQL, PostgreSQL, Redis, Kafka, and other tech stacks, one pack each, deployed independently via Projected Volume (`optional: true`). Unused packs cost near-zero evaluation. See [Rule Packs Directory](rule-packs/README.md) · [Alert Reference](rule-packs/ALERT-REFERENCE.en.md)
 
 ---
 
@@ -124,7 +124,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`components/`](components/) | Component sources: `threshold-exporter` (Go), `tenant-api` (Go), `da-tools` (Python CLI), `da-portal` (frontend container) | Application logic changes |
 | [`helm/`](helm/) | Helm charts: `da-portal`, `tenant-api`, `mariadb-instance`; plus `values-db-*.yaml` | Deployment / chart templates |
 | [`k8s/`](k8s/) | Raw K8s manifests: namespaces, monitoring (Prometheus/Alertmanager/Grafana), tenant-api, CRD | Spin up the demo environment |
-| [`rule-packs/`](rule-packs/) | 16 rule-pack source YAMLs (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
+| [`rule-packs/`](rule-packs/) | Rule-pack source YAMLs, one per pack (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
 | [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
 | [`scripts/`](scripts/) | Shell entrypoints + 224 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
@@ -212,7 +212,7 @@ Two management models, incrementally upgradable (both share one YAML source of t
 
 ### Rule Engine
 
-O(M) complexity (`group_left` vector matching) · 16 Rule Pack Projected Volumes independently deployed · Severity Dedup via Alertmanager Inhibit ([ADR-001](docs/adr/001-severity-dedup-via-inhibit.en.md)) · Sentinel Alert tri-state control ([ADR-003](docs/adr/003-sentinel-alert-pattern.en.md))
+O(M) complexity (`group_left` vector matching) · each Rule Pack deployed independently via Projected Volume · Severity Dedup via Alertmanager Inhibit ([ADR-001](docs/adr/001-severity-dedup-via-inhibit.en.md)) · Sentinel Alert tri-state control ([ADR-003](docs/adr/003-sentinel-alert-pattern.en.md))
 
 ### Tenant Management
 

@@ -125,7 +125,7 @@ def detect_deployment_mode(kubeconfig=None):
 ### 為什麼不只提供文件指引（而是建工具）？
 
 v2.2.0 BYO 文件的 Operator Appendix 僅是 CRD 範例翻譯，用戶反映：
-- 手工轉換 16 個 Rule Pack ConfigMap → PrometheusRule 耗時且易錯
+- 逐一手工把每個 Rule Pack ConfigMap 轉成 PrometheusRule 耗時且易錯
 - AlertmanagerConfig API 版本差異容易踩坑
 - GitOps pipeline 需要 deterministic 輸出
 

@@ -90,17 +90,30 @@ BARE_TAG_PATTERN = (
     r":(\d+\.\d+\.\d+)"
 )
 
-# Rule Pack count patterns: (regex, group_index, expected_value, description)
-# Note: group_index=None means special handling (multi-group)
-RULE_PACK_COUNT_PATTERNS: List[Tuple[str, Any, Any, str]] = [
-    (r"(\d+)\s*個\s*Rule\s*Pack", 1, None, "Rule Pack count (zh)"),
-    (r"(\d+)\s*Rule\s*Pack\s*ConfigMap", 1, None,
-     "Rule Pack ConfigMap count"),
-    (r"rule%20packs-(\d+)-", 1, None, "Rule Pack badge"),
-    (r"alerts-(\d+)-", 1, None, "Alert badge"),
-    (r"\*\*合計\*\*.*\*\*(\d+)\*\*.*\*\*(\d+)\*\*", None, None,
-     "Rule Pack total row"),
+# Rule Pack badges: (regex, rule_counts key, description).
+#
+# ⛔ #1613: ONE list, read by both the checker (`check_rule_pack_counts`) and
+# the repair (`_auto_fix`), with the same `re.IGNORECASE`. They used to be two
+# lists and only the checker ignored case, so a form it reported could be one
+# `--fix` never rewrote — an error nobody could clear. Groups 1 and 3 are the
+# fixed text around the number, so the repair keeps them as written.
+RULE_PACK_BADGE_PATTERNS: List[Tuple[str, str, str]] = [
+    (r"(rule%20packs-)(\d+)(-)", "pack_count", "Rule Pack badge"),
+    (r"(alerts-)(\d+)(-)", "alert", "Alert badge"),
 ]
+
+# A number written next to "Rule Pack" in hand-written prose (#1613).
+#
+# ⛔ Prose does not carry the Rule Pack count at all — it is the kind of
+# number that drifts in dozens of places at once. Readers get it from the
+# README badges (checked and `--fix`ed here) and the generated
+# `rule-packs/README.md`. So this pattern is not compared against the real
+# count: ANY match is a finding, and the fix is to reword the sentence.
+# The lookbehind skips section numbers (`### 4.4 Rule Pack`, `§4 Rule Pack`).
+RULE_PACK_PROSE_COUNT_PATTERN = (
+    r"(?<![\d.§])\b(\d+)\s*(?:個\s*)?"
+    r"(?:optional\s+|pre-?loaded\s+|預載\s*)?Rule[\s-]*Packs?\b"
+)
 
 # The scope the counted sentence states, verbatim and in both languages.
 #
@@ -440,12 +453,7 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
         "pattern": r"(\d+)(\s*個文件)",
         "replacement_template": "{value}\\2",
     },
-    "rule-pack-count": {
-        "patterns": [
-            (r"rule%20packs-\d+-", "rule%20packs-{pack_count}-"),
-            (r"alerts-\d+-", "alerts-{alert_count}-"),
-        ],
-    },
+    # `rule-pack-count` has no entry: it repairs with RULE_PACK_BADGE_PATTERNS.
 }
 
 # ============================================================================
