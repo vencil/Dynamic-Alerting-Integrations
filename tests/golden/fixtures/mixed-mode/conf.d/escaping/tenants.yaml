@@ -1,0 +1,5 @@
+tenants:
+  tenant-escape:
+    _silent_mode:
+      target: "warning"
+      reason: "維護窗口：主庫 <primary> & 備庫 <replica> 切換"

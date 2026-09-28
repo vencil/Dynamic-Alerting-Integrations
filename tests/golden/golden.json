@@ -220,5 +220,58 @@
     "source_file": "carrier/sub2/tenants.yaml",
     "source_hash": "5b7cedf58a0f498a",
     "tenant_id": "tenant-sub"
+  },
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "_silent_mode": {
+        "reason": "\u7dad\u8b77\u7a97\u53e3\uff1a\u4e3b\u5eab <primary> & \u5099\u5eab <replica> \u5207\u63db",
+        "target": "warning"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "b785fc5b3a4a128b",
+    "scenario": "canonical-json-escaping",
+    "source_file": "escaping/tenants.yaml",
+    "source_hash": "950305aa4b20c106",
+    "tenant_id": "tenant-escape"
+  },
+  {
+    "defaults_chain": [
+      "routing-null/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_routing": {
+        "group_by": [
+          "alertname"
+        ],
+        "group_wait": "30s",
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/alerts"
+        }
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "583df9210d3ac3de",
+    "scenario": "routing-null",
+    "source_file": "routing-null/tenants.yaml",
+    "source_hash": "5ec5e65107a1daf0",
+    "tenant_id": "tenant-route"
+  },
+  {
+    "defaults_chain": [
+      "reserved-null/_defaults.yaml",
+      "reserved-null/child/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_silent_mode": "warning"
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "9998c1033c4d2c19",
+    "scenario": "reserved-null-delete",
+    "source_file": "reserved-null/child/tenants.yaml",
+    "source_hash": "8a3e644e7b760369",
+    "tenant_id": "tenant-reserved"
   }
 ]
