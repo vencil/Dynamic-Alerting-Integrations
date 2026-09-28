@@ -62,7 +62,7 @@
 
 | Path | Method | 用途 |
 |------|--------|------|
-| `/metrics` | GET | Prometheus scrape（Go runtime metrics + 本 exporter 自訂 collector） |
+| `/metrics` | GET | Prometheus scrape（Go runtime metrics + 本 exporter 自訂 collector + promhttp handler 自身的錯誤計數）。gather 失敗（例如兩個 key 產生同一條 series）時整次回 500、`up` 歸 0（`ThresholdExporterDown` 會 fire）；成因看 exporter log 裡 `error gathering metrics:` 那一行（#2032） |
 | `/health` | GET | Liveness probe（process 起來即 200） |
 | `/ready` | GET | Readiness probe（config 載入完成才回 200，否則 503） |
 | `/api/v1/config` | GET | Resolved config + 租戶清單（debug；支援 `?at=<RFC3339>` 模擬未來時間點） |
@@ -117,6 +117,7 @@
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
 | `da_config_subtree_undeliverable_tenants` | Gauge | 繼承了「只存在於子目錄 `_defaults.yaml`」之 key 的租戶數。`/effective` 會列出該 key 的值，但 collector 不會為它產生 `user_threshold`——collector 只走 conf.d **根目錄** `_defaults.yaml` 與宣告面（`optional_overrides:`），巢狀 `_defaults.yaml` 兩者都不餵——所以該租戶在這個 key 上的告警永遠不會觸發；租戶的其他 key 照常送出。暫行解法：把 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`；根本解（交付子目錄範圍，或在驗證時拒收）追蹤於 [#1976](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976)。每次 config commit 重設；ERROR log 點名租戶、來源檔與 key，**只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**，`> 0 for 10m` 是合理起點。⚠️ **BREAKING（#1957）**：取代舊的 conf.d 掃描器分歧 gauge（舊名見 CHANGELOG）；舊 gauge 的另一成因（同一個檔被兩平面解析出不同租戶）已因共用同一份完整解析而消失，故移除；兩平面租戶集合仍有一個已知例外——增量 tenant-only reload 對壞檔保留最後正確值而 tenant-api／da-guard 回 404（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）；根目錄 `_` 開頭檔案裡 `tenants:` 給既有租戶的值兩平面都套用（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)、[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)） |
+| `promhttp_metric_handler_errors_total{cause}` | Counter | `/metrics` handler 失敗次數，cause: `gathering` / `encoding`（兩條皆從 0 起）。gather 失敗時整次 scrape 回 500，所以這個值**只在恢復後第一次成功 scrape 才看得到**——供事後回溯，不拿來告警；即時訊號是 `up == 0`（#2032） |
 
 ### 3.4 Exit Codes（CLI binaries）
 
