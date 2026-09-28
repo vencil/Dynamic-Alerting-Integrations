@@ -1037,7 +1037,7 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20，排除 @visual)
+test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
 	@cd tests/e2e && npm test -- $(ARGS)
 
 .PHONY: test-e2e-visual

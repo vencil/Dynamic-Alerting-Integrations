@@ -73,7 +73,7 @@ concurrency:
 jobs:
   resolve:
     name: resolve chart/manifest image refs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -84,7 +84,7 @@ jobs:
       - name: Install skopeo
         run: sudo apt-get update && sudo apt-get install -y skopeo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 

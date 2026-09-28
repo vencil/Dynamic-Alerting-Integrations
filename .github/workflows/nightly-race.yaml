@@ -56,7 +56,7 @@ concurrency:
 jobs:
   race:
     name: Race Detector (${{ matrix.module }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
@@ -138,7 +138,7 @@ jobs:
       # parsed fragment is deliberately lossy; this is the evidence behind it.
       - name: Upload raw go test -json stream
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: race-raw-${{ matrix.module }}
           path: |
@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: race-frag-${{ matrix.module }}
           path: frag-${{ matrix.module }}.json
@@ -180,7 +180,7 @@ jobs:
     # issue when the operator ticks `file_issue`. Same shape as
     # nightly-image-scan.yaml.
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

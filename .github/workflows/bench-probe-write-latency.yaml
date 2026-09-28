@@ -74,7 +74,7 @@ permissions:
 jobs:
   probe:
     name: Write vs load latency probe
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # ⛔ 三元式一律寫成 `是不是 self-test && '字面值' || 使用者輸入`，理由與
     #    `bench-workload-effect.yaml` 相同：`使用者輸入 || '預設值'` 在使用者

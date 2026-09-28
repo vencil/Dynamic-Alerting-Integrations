@@ -26,7 +26,7 @@ permissions:
 jobs:
   self-review-pass2:
     name: Validate Self-Review-Pass-2 trailer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bot-authored PRs (Renovate #902 L3 image-digest auto-bumps) legitimately
     # carry no Self-Review-Pass-2 trailer — they're machine-generated dependency
     # bumps, not human changes that dogfood the intentional-break self-review. Skip

@@ -53,7 +53,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect Documentation Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Runs on every event so its result is `success` on push too — the
     # `*-gate` jobs refuse anything else (#1398). Only the filter STEP is
     # PR-only; off a PR the output is forced 'true', so on a push to main
@@ -161,7 +161,7 @@ jobs:
 
   validate-mermaid:
     name: Validate Mermaid Diagrams — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
@@ -171,7 +171,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "18"
+          node-version: "24"
           # NOTE: cache: "npm" is intentionally omitted — this repo has no
           # root-level package-lock.json.
           # Enabling cache without a lockfile makes setup-node fail with
@@ -217,7 +217,7 @@ jobs:
 
   check-links:
     name: Check Documentation Links
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ⛔ Unconditional on purpose (#2107), and it reports the required name
     # itself — no gate job. Its input set is every Markdown file plus every
     # link target, wherever it lives; no path filter can express that, so a
@@ -270,7 +270,7 @@ jobs:
     #   - Missing EOF newlines — detected but NOT failed (~40 pre-existing
     #     drift files as of the harness-hardening PR; needs a separate
     #     cleanup pass before we can enable --strict in CI).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -288,7 +288,7 @@ jobs:
 
   check-frontmatter:
     name: Check Documentation Front Matter — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
@@ -322,7 +322,7 @@ jobs:
 
   check-coverage:
     name: Check Documentation Coverage — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
@@ -360,7 +360,7 @@ jobs:
 
   mkdocs-build:
     name: MkDocs Build Verification — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
@@ -394,7 +394,7 @@ jobs:
 
   doc-line-count:
     name: Documentation Line Count Monitor — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     # On a push `pull_request.base.sha` is empty, so `base` checks out the
     # pushed commit itself and the delta is 0 — a no-op, not a failure.
@@ -423,7 +423,7 @@ jobs:
 
   drift-checks:
     name: Drift Detection (validate_all.py) — run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
@@ -502,7 +502,7 @@ jobs:
     # manual scripts bit-rot regardless of churn rate". Tool downloads
     # are ~10s total on ubuntu-latest (jq/curl already built-in).
     name: I-4 Runbook Smoke Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: detect-changes
     # Not a required status check, but without this gate it would now run
     # (downloading amtool/promtool/yq) on every PR once the workflow-level
@@ -559,7 +559,7 @@ jobs:
 
   validate-mermaid-gate:
     name: Validate Mermaid Diagrams
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, validate-mermaid]
     # The REQUIRED check (#1398). `validate-mermaid` is path-gated, and a skipped
@@ -591,7 +591,7 @@ jobs:
 
   check-frontmatter-gate:
     name: Check Documentation Front Matter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, check-frontmatter]
     # The REQUIRED check (#1398). `check-frontmatter` is path-gated, and a skipped
@@ -623,7 +623,7 @@ jobs:
 
   check-coverage-gate:
     name: Check Documentation Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, check-coverage]
     # The REQUIRED check (#1398). `check-coverage` is path-gated, and a skipped
@@ -655,7 +655,7 @@ jobs:
 
   mkdocs-build-gate:
     name: MkDocs Build Verification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, mkdocs-build]
     # The REQUIRED check (#1398). `mkdocs-build` is path-gated, and a skipped
@@ -687,7 +687,7 @@ jobs:
 
   doc-line-count-gate:
     name: Documentation Line Count Monitor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, doc-line-count]
     # The REQUIRED check (#1398). `doc-line-count` is path-gated, and a skipped
@@ -719,7 +719,7 @@ jobs:
 
   drift-checks-gate:
     name: Drift Detection (validate_all.py)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     needs: [detect-changes, drift-checks]
     # The REQUIRED check (#1398). `drift-checks` is path-gated, and a skipped

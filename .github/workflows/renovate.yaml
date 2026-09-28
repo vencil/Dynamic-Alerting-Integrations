@@ -59,7 +59,7 @@ jobs:
   renovate:
     # Don't run on forks (the token + repo are the upstream's).
     if: ${{ github.repository == 'vencil/Dynamic-Alerting-Integrations' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       # secrets can't be used in a step `if:` — mirror presence to a job env var.
@@ -78,7 +78,7 @@ jobs:
         # floating @v46 major alias (unlike actions/checkout@v6), so a bare @v46 fails to
         # resolve ("unable to find version v46"). Pin the full version. Renovate won't
         # self-bump this (enabledManagers is images-only), so it's manually maintained.
-        uses: renovatebot/github-action@v46.1.16
+        uses: renovatebot/github-action@v46.3.5
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}

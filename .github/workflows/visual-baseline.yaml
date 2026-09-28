@@ -33,7 +33,7 @@ permissions:
 jobs:
   regenerate-baselines:
     name: Regenerate visual baselines
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -45,10 +45,10 @@ jobs:
           # rewrite, even for unchanged visuals.
           lfs: true
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v5
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install Playwright + dependencies
         working-directory: tests/e2e

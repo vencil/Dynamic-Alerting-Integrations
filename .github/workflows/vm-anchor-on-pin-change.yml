@@ -40,7 +40,7 @@ permissions:
 jobs:
   vm-anchor-gate:
     name: VM Anchor Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15   # cheap always-run gate — a hang in gh pr diff / docker pull /
                           # health-check must fail fast, not burn the 6h default (CodeRabbit #959)
     steps:

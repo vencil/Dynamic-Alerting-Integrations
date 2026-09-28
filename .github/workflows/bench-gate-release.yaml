@@ -68,7 +68,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch'
       || (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !contains(github.event.release.tag_name, '/'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same generous timeout as Tier 1 v5 (round-12 catch — preserve
     # diagnostic output even on slow runs).
     timeout-minutes: 40

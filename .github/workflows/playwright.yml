@@ -76,7 +76,7 @@ jobs:
   # aggregation gate (see "Portal Tests"). Tracked in #1428.
   lint-specs:
     name: E2E Spec Lint (A-13)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -91,7 +91,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: 'tests/e2e/package-lock.json'
 
@@ -107,7 +107,7 @@ jobs:
 
   test:
     name: Smoke Tests (Chromium)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # TRK-233: 10-min cap restored. The TRK-232e investigation traced
     # the workers=N failures to a stale TRK-231 build hack — `define:
     # { React: 'globalThis.__bundledReact' }` paired with a side-
@@ -139,7 +139,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           # Keyed on the LOCKFILE, not package.json. `npm ci` installs exactly
           # what the lockfile pins, so a lockfile-only change (a security bump

@@ -78,7 +78,7 @@ permissions:
 jobs:
   build:
     name: build ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Since #1337 one leg clones github.com/google/mtail and downloads a Go
     # module graph. `git fetch -q` has no timeout of its own, and with
     # `fail-fast: false` a hung fetch would otherwise burn GitHub's 360-minute

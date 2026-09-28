@@ -107,7 +107,7 @@ jobs:
   # discover the same problem after burning a runner apiece.
   plan:
     name: Validate inputs and plan shards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -222,7 +222,7 @@ jobs:
   measure:
     name: A/A on runner ${{ matrix.shard }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       # One shard failing must not cancel the rest — a 15-of-16 result is still
@@ -316,7 +316,7 @@ jobs:
       # the pairing already proven in nightly-image-scan.yaml.
       - name: Upload shard measurements
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xaa-${{ github.run_id }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/aa/raw
@@ -327,7 +327,7 @@ jobs:
     name: Consolidate raw measurements into one job log
     needs: measure
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Download every shard

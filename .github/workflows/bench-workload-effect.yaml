@@ -140,7 +140,7 @@ permissions:
 jobs:
   workload-effect:
     name: Workload-definition effect (W/R)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ⛔ 這裡的三元式一律寫成 `是不是 self-test && '字面值' || 使用者輸入`，
     #    **不能**寫成 `使用者輸入 || '預設值'`。後者在使用者**刻意留空**時會
     #    悄悄把預設值塞回去 —— 而 `overlay_helpers` 留空正是本 workflow 拿來

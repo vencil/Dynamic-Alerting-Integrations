@@ -73,7 +73,7 @@ concurrency:
 jobs:
   scan:
     name: scan ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
@@ -195,7 +195,7 @@ jobs:
       # third-party (`tp-`) — #902 L1-A.1.
       - name: Upload fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cve-frag-sb-${{ matrix.name }}
           path: frag-${{ matrix.name }}.txt
@@ -203,7 +203,7 @@ jobs:
 
   scan-thirdparty:
     name: scan ${{ matrix.name }} (third-party)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
@@ -308,7 +308,7 @@ jobs:
 
       - name: Upload fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cve-frag-tp-${{ matrix.name }}
           path: frag-${{ matrix.name }}.txt
@@ -316,7 +316,7 @@ jobs:
 
   scan-delivered:
     name: scan ${{ matrix.name }} (customer-delivered)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
@@ -440,7 +440,7 @@ jobs:
       # so the report job's three download patterns cannot cross-match.
       - name: Upload fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cve-frag-dl-${{ matrix.name }}
           path: frag-${{ matrix.name }}.txt
@@ -450,7 +450,7 @@ jobs:
     name: aggregate + alert
     needs: [scan, scan-thirdparty, scan-delivered]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

@@ -25,7 +25,7 @@ concurrency:
 jobs:
   gitlab-ce-e2e:
     name: GitLab CE real-forge E2E
-    runs-on: ubuntu-latest # 7 GB; GitLab CE ~4 GB. If OOM-flaky, move to a larger runner.
+    runs-on: ubuntu-24.04 # 7 GB; GitLab CE ~4 GB. If OOM-flaky, move to a larger runner.
     timeout-minutes: 40
     steps:
       - name: Checkout

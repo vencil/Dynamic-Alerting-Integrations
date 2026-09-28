@@ -69,7 +69,7 @@ permissions:
 jobs:
   attrib:
     name: Bench + attribute (HEAD vs HEAD^)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same budget as bench-gate-pr (identical workload: 6 rounds @1s ≈
     # ~8-10 min nominal, ~2× headroom).
     timeout-minutes: 20

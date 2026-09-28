@@ -161,7 +161,7 @@ jobs:
   # Phase 2 removed the override-label check, so this job is now just merge-base.
   preflight:
     name: Preflight (merge-base)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       merge_base_sha: ${{ steps.merge_base.outputs.sha }}
@@ -223,7 +223,7 @@ jobs:
   bench:
     name: Bench + Compare (single-runner interleaved + canary)
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Budget: ~6 interleaved rounds × (base+pr full set @1s) + pre-compile once +
     # tiny canaries + benchstat = ~8-10 min nominal (was ~20-25 min @3s before
     # the 2026-07 stage-C slimming; cap lowered 40→20 keeping the same ~2×
