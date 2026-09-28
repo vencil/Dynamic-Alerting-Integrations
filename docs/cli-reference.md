@@ -2928,7 +2928,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--config-dir` | 設定目錄路徑 | (必填) |
 | `--tenant` | 只顯示指定 tenant（可多次指定） | (全部) |
 | `--show-profile-expansion` | 顯示所有路由設定檔的展開與引用關係 | `false` |
-| `--trace` | 追蹤模式：模擬一則 alert 的路由路徑（需搭配 `--tenant`） | `false` |
+| `--trace` | 追蹤模式：由 Alertmanager（`amtool`）判定一則 alert 的路由路徑（需搭配 `--tenant`；需 PATH 上有 `amtool`） | `false` |
 | `--alertname` | 追蹤的 alert 名稱（搭配 `--trace`） | `GenericAlert` |
 | `--severity` | 追蹤的 alert 嚴重度（搭配 `--trace`） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
@@ -2937,9 +2937,11 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
 
-`--trace` 走的是 `--output-configmap` 會產出的**整棵**路由樹（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）：平台頂層路由（Watchdog、`component="custom"`、`component="synthetic-probe"`、`component="sentinel"`，皆 `continue: false`）、`_routing_enforced` 的 NOC 路由（`continue: true`）、tenant 主路由與其子路由，掛在 base 的 root 之下。比對照 Alertmanager 的規則：同層第一個命中者取走 alert，除非它設了 `continue: true`；子路由都沒命中就由父節點投遞；`receiver`、`group_by` 與三個 timing 沒寫就沿用父節點。matcher 支援 `=`、`!=`、`=~`、`!~`（正規式整串錨定）、值的跳脫（`\"`、`\\`、`\n`）與一個字串裡的多個 matcher（`a="x", b=~"y"` 或 `{…}`）；解析不了的 matcher 視為**不命中**，並在 stderr 印 `WARN`。
+`--trace` **需要 PATH 上有 `amtool`**（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。它先組出 `--output-configmap` 會產出的**整棵**路由樹：平台頂層路由（Watchdog、`component="custom"`、`component="synthetic-probe"`、`component="sentinel"`，皆 `continue: false`）、`_routing_enforced` 的 NOC 路由（`continue: true`）、tenant 主路由與其子路由，掛在 base 的 root 之下；再交給 `amtool config routes test --tree`。**命中的路徑與投遞到哪些 receiver，都由 Alertmanager 自己的 parser 判定**，本工具不自行比對 matcher 或正規式。解析不了的設定（例如 Alertmanager 不接受的正規式）會印 `WARN`，receiver 顯示為 `(unknown: …)`。
 
-輸出的 `Receiver:` 是主要投遞的 receiver，類型取自設定的 `receiver.type`；`Path:` 是這個主要投遞點所走的那一條路徑（其餘投遞點，例如 enforced 的副本，見 `--json` 的 `matched_routes`）。只有 enforced 路由命中時，它就是投遞點，`Receiver:` 直接寫出它的名稱（如 `platform-enforced`），Alertmanager 不會再回退到 root receiver；`Enforced:` 只在 NOC 路由命中這則 alert 時出現；`Timing:` 是投遞那條路由繼承後的值；domain policy 只套用 `tenants` 列出這個 tenant 的 policy（與產生器相同），並以實際到達的 tenant receiver 類型判斷。`--json` 的第 2 步另有 `route_path` 與 `matched_routes`（依 Alertmanager 順序列出每一個投遞點）。⚠️ 正規式以 Python `re`（`re.ASCII`，整串比對）求值，與 Alertmanager 的 Go RE2 在少數語法上仍可能不同；含 POSIX 字元類（`[[:digit:]]` 之類）的值 Python 讀法不同，一律視為解析不了（不命中並 `WARN`）。
+輸出的 `Receiver:` 是主要投遞的 receiver，類型取自設定的 `receiver.type`；`Path:` 是這個主要投遞點所走的那一條路徑，寫法照 amtool 的輸出（其餘投遞點，例如 enforced 的副本，見 `--json` 的 `matched_routes`）。只有 enforced 路由命中時，它就是投遞點，`Receiver:` 直接寫出它的名稱（如 `platform-enforced`），Alertmanager 不會再回退到 root receiver；`Enforced:` 只在 NOC 路由命中這則 alert 時出現。`Timing:` 是把 amtool 給的路徑對回產出的路由樹，依 Alertmanager 的繼承規則取的值；對不上時印 `WARN`，timing 顯示 `(unknown)`。domain policy 只套用 `tenants` 列出這個 tenant 的 policy（與產生器相同），只檢查 receiver 類型的限制，對象是 Alertmanager 實際投遞到的 tenant receiver。
+
+**PATH 上沒有 `amtool` 時**：stderr 印一行 `WARN: Not validated by Alertmanager: amtool not found on PATH`，receiver 為 `(unknown: amtool not found)`，timing 為 `(unknown)`，第 2 步改列產出的整棵路由樹摘要（`--json` 為 `rendered_tree`）；結束碼仍是 `0`，`--json` 頂層鍵不變。
 
 **範例**
 
