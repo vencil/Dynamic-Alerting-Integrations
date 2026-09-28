@@ -112,6 +112,23 @@ def test_a_fenced_caveat_takes_its_marker_right_after_the_fence(tmp_path) -> Non
     assert _kinds(far) == [("docs/a.md", 2, "unmarked")]
 
 
+def test_a_marker_quoted_in_backticks_is_documentation_not_a_marker(tmp_path) -> None:
+    """doc-template.md shows the convention as `<!-- image-caveat: v2.9.0 -->`.
+    Counted as a marker, that example would go stale at the next release."""
+    root = _tree(tmp_path, {"docs/a.md": f"Write `{MARK}` next to the caveat.\n"})
+    assert _kinds(root, (2, 10, 0)) == []
+    # ...and it does not cover a caveat in the same paragraph either.
+    root2 = _tree(tmp_path / "b", {"docs/a.md":
+                                   f"The v2.9.0 image is old. `{MARK}`\n"})
+    assert _kinds(root2) == [("docs/a.md", 1, "unmarked")]
+
+
+def test_a_phrase_quoted_in_backticks_is_not_a_caveat(tmp_path) -> None:
+    root = _tree(tmp_path, {"docs/a.md":
+                            "Phrasings such as `the image you have` are checked.\n"})
+    assert _kinds(root) == []
+
+
 def test_changelogs_are_not_scanned(tmp_path) -> None:
     root = _tree(tmp_path, {"docs/CHANGELOG.md": "The v2.8.0 image did X.\n",
                             "CHANGELOG.md": "The v2.8.0 image did X.\n"})
@@ -177,9 +194,12 @@ def test_every_real_marker_expires_when_the_version_moves() -> None:
     """
     current = gate.read_tools_version(_REPO_ROOT)
     assert current is not None
+    # Counted the way the gate reads them: a marker quoted in backticks
+    # (doc-template.md documents the convention that way) is not one.
     markers = sum(
-        len(gate.MARKER_RE.findall(p.read_text(encoding="utf-8")))
+        len(gate.MARKER_RE.findall(gate._CODE_SPAN_RE.sub("", line)))
         for p in gate.iter_markdown(_REPO_ROOT)
+        for line in p.read_text(encoding="utf-8").splitlines()
     )
     assert markers > 0, "no markers in the tree; this control measures nothing"
     bumped = (current[0], current[1] + 1, 0)

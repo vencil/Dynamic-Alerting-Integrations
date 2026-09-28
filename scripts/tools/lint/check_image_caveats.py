@@ -72,6 +72,11 @@ CAVEAT_PHRASE_RE = re.compile(
     r"v\d+\.\d+\.\d+ ?(?:映像|image\b)|你手上(?:這顆|的)映像|the image you have"
 )
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# Text inside backticks is quoted, not said: a marker there is SHOWN to the
+# reader (it is how the convention is documented), and a phrase there names
+# the phrasing rather than making a claim about an image. Removed before
+# either check matches.
+_CODE_SPAN_RE = re.compile(r"(`+)(?:(?!\1).)+?\1")
 
 
 def read_tools_version(root: Path) -> tuple[int, int, int] | None:
@@ -167,7 +172,7 @@ def scan(root: Path, current: tuple[int, int, int]) -> list[dict]:
         lines = text.splitlines()
         marked_lines: set[int] = set()
         for idx, line in enumerate(lines):
-            for m in MARKER_RE.finditer(line):
+            for m in MARKER_RE.finditer(_CODE_SPAN_RE.sub("", line)):
                 marked_lines.add(idx)
                 body = m.group("body").strip()
                 vm = _MARKER_VERSION_RE.match(body)
@@ -186,7 +191,7 @@ def scan(root: Path, current: tuple[int, int, int]) -> list[dict]:
             if any(i in marked_lines for i in block):
                 continue
             for i in block:
-                if CAVEAT_PHRASE_RE.search(lines[i]):
+                if CAVEAT_PHRASE_RE.search(_CODE_SPAN_RE.sub("", lines[i])):
                     findings.append({"file": rel, "line": i + 1,
                                      "kind": "unmarked",
                                      "text": lines[i].strip()[:200]})
