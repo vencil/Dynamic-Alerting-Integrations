@@ -235,7 +235,7 @@ Debounce is tunable via `--scan-debounce=<duration>`; recommended 100ms-500ms un
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `da_config_scan_duration_seconds` | histogram | Latency distribution of one directory scan + merge (`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`) |
+| `da_config_scan_duration_seconds` | histogram | Latency distribution of one directory scan + merge (`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`; `10, 30, 60, 120` appended since [#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)) |
 | `da_config_reload_trigger_total{reason}` | counter | Reload trigger attribution, `reason ∈ {source, defaults, new_tenant, delete, forced}` |
 | `da_config_defaults_change_noop_total` | counter | Count of `_defaults.yaml` changes where merged_hash is unchanged. **v2.8.0 (Issue #61) narrows the semantics to cosmetic-only** (comment / reorder / whitespace) |
 | `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults change blocked by a tenant override (split out from `noop_total`) |

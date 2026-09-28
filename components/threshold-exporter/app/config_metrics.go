@@ -7,7 +7,8 @@ package main
 // Three metrics exposed in addition to the per-scrape collector output:
 //
 //   da_config_scan_duration_seconds        (Histogram)
-//     buckets 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s
+//     buckets 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s,
+//             10s, 30s, 60s, 120s (the last four since #2153)
 //     observed once per conf.d tree scan (scanDirTree, both planes; #1568)
 //
 //   da_config_reload_trigger_total         (CounterVec, labels=[reason])
@@ -92,6 +93,19 @@ type configMetrics struct {
 	// reload frequency rather than misconfiguration severity. Set on every
 	// commitConfig — see config_subtree_undeliverable.go.
 	subtreeUndeliverableTenants prometheus.Gauge
+	// #2153 (D): the two size axes that drive the cold-load parse cost —
+	// the widest `tenants:` block in any one file, and the largest key
+	// count of any one mapping the flat plane decodes. Whole-tree maxima,
+	// NOT per-file series: a conf.d tree can hold thousands of files, and
+	// a file-name label would make the gauge's cardinality track the tree.
+	// Re-Set on every config commit (see config_shape.go).
+	maxTenantsPerFile prometheus.Gauge
+	maxMappingKeys    prometheus.Gauge
+	// #2153 (D): wall-clock seconds of the startup load (LoadInitial). A
+	// gauge, not a sample in reloadDuration: the startup load happens once
+	// per process and is a different operation (cold scan, every
+	// merged_hash) from the debounced reload that histogram's p99 describes.
+	initialLoadDuration prometheus.Gauge
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -115,7 +129,12 @@ func newConfigMetrics() *configMetrics {
 			Help: "Duration of one conf.d tree scan (v2.7.0, ADR-016). Observed once per conf.d tree scan (both planes, every watch tick and load).",
 			// Buckets tuned for 1000-tenant scans on ext4 (p50 ~20ms, p99
 			// ~150ms in the benchmark) plus slack for FUSE/NFS mounts.
-			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+			// #2153: 10/30/60/120 appended — a cold scan of one file whose
+			// single mapping holds tens of thousands of keys was measured at
+			// 4.8s (33k keys) and 77s (130k keys), which the old 5s top-end
+			// folded into +Inf. Appending buckets leaves the value of every
+			// existing `le` series unchanged.
+			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 120},
 		}),
 		reloadTriggers: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "da_config_reload_trigger_total",
@@ -150,7 +169,11 @@ func newConfigMetrics() *configMetrics {
 			// degraded FUSE / NFS mounts. 30s top-end exists so a
 			// pathological reload does not silently saturate the last
 			// bucket — operators want to see the actual tail.
-			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+			// #2153: 60/120/300/600 appended — one file declaring 2000-4000
+			// tenants was measured reloading in 30s-3m09s, all of which the
+			// old 30s top-end folded into +Inf. Appending buckets leaves the
+			// value of every existing `le` series unchanged.
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
 		}),
 		debounceBatch: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "da_config_debounce_batch_size",
@@ -182,6 +205,18 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_config_subtree_undeliverable_tenants",
 			Help: "Number of tenants that inherit at least one key existing ONLY in a subtree _defaults.yaml (#1976). /effective reports such a key's value, but the collector cannot emit it — it iterates the conf.d ROOT defaults and the declared surface (optional_overrides), and a nested _defaults.yaml feeds neither — so the tenant's alert on that key can never fire. Every other key of the tenant is delivered. Workaround: declare the key in the ROOT _defaults.yaml or in optional_overrides. State-coded: re-Set on every config commit, so it returns to 0 once the key is declared at the root or removed. The accompanying ERROR log names the tenants, their source files and the keys. Replaces the former conf.d scanner-divergence gauge (#1957), whose other cause — one file decoded into different tenant sets by the two planes — is gone because both planes now judge a file with one decode. Known tenant-set exceptions that are NOT counted here: the incremental tenant-only reload keeping a broken file's last good tenants (#1980) and tenants declared in a _-prefixed file (#1982). SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}),
+		maxTenantsPerFile: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_max_tenants_per_file",
+			Help: "Largest number of tenants declared under `tenants:` in any single config file of the committed config (#2153). A whole-tree maximum, not a per-file series. Load and reload time grow faster than linearly with this number, so a file declaring thousands of tenants is the shape to split into several files. A file that failed to parse is not counted. Re-Set on every config commit.",
+		}),
+		maxMappingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_max_mapping_keys",
+			Help: "Largest key count of any single mapping in one config file of the committed config (#2153): `defaults`, `state_filters`, `tenants`, one tenant's overrides, `profiles`, or one profile. The YAML decoder checks duplicate keys pairwise, so decoding a mapping costs time proportional to the square of its key count. Counted on the already-decoded config, so mappings the exporter does not decode into it (unknown keys, nested `_`-prefixed files, sections dropped by the file-placement rules) are not counted, nor is a file that failed to parse. Re-Set on every config commit.",
+		}),
+		initialLoadDuration: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_initial_load_duration_seconds",
+			Help: "Wall-clock seconds the startup config load took (#2153). Set once, when that load succeeds. The HTTP server (and so /metrics, /health and /ready) starts only after it, so a startup probe must allow at least this long. Reloads are measured by da_config_reload_duration_seconds instead.",
+		}),
 	}
 }
 
@@ -212,6 +247,9 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.freeOSMemory)
 	reg.MustRegister(m.tenantMetricsOverLimit)
 	reg.MustRegister(m.subtreeUndeliverableTenants)
+	reg.MustRegister(m.maxTenantsPerFile)
+	reg.MustRegister(m.maxMappingKeys)
+	reg.MustRegister(m.initialLoadDuration)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -414,6 +452,21 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // counter, and why the condition does not fail the load.
 func (cm *configMetrics) SetSubtreeUndeliverableTenants(n int) {
 	cm.subtreeUndeliverableTenants.Set(float64(n))
+}
+
+// SetConfigShape publishes the two whole-tree size maxima of the config
+// just committed (#2153): da_config_max_tenants_per_file and
+// da_config_max_mapping_keys. Called on every commit, including one that
+// shrinks the tree, so the gauges follow the config down as well as up.
+func (cm *configMetrics) SetConfigShape(s configShape) {
+	cm.maxTenantsPerFile.Set(float64(s.maxTenantsPerFile))
+	cm.maxMappingKeys.Set(float64(s.maxMappingKeys))
+}
+
+// SetInitialLoadDuration records how long the startup load took (#2153).
+// Called once, by LoadInitial, when that load succeeds.
+func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
+	cm.initialLoadDuration.Set(d.Seconds())
 }
 
 // PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit
