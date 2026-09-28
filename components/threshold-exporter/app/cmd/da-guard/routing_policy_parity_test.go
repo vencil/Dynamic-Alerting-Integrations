@@ -45,8 +45,9 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 		t.Fatalf("read matrix: %v", err)
 	}
 	var m struct {
-		Comment []string            `json:"_comment"`
-		Trees   []daGuardParityTree `json:"trees"`
+		Comment       []string            `json:"_comment"`
+		BlockingKinds json.RawMessage     `json:"blocking_kinds"`
+		Trees         []daGuardParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

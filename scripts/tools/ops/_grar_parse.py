@@ -356,6 +356,29 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         flat[name] = cfg
 
 
+def _refuse_nested_enforced(fname: str, result: dict) -> None:
+    """#2326 (b): `_routing_enforced` in a file below the root is blocking."""
+    _tree_problem(
+        result, "routing_enforced_below_root", fname, "_routing_enforced",
+        f"{fname}: _routing_enforced is read only at the conf.d root — a "
+        f"NOC route scoped to one subtree is not supported (ADR-017 "
+        f"amendment 2026-09-28 (b)); move it to a root platform file or "
+        f"delete it")
+
+
+def _enforced_in_unread_file(path: Path, fname: str, result: dict) -> None:
+    """(b) for a file this reader otherwise skips (an unselected carrier
+    spelling below the root). A file that does not parse, or is not a
+    mapping, carries nothing here — Go's LoadTree skips it the same way."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = strict_load_exporter_keys(f, raw_text_sequences=("tenants",))
+    except Exception:  # noqa: BLE001 — see docstring
+        return
+    if isinstance(data, dict) and "_routing_enforced" in data:
+        _refuse_nested_enforced(fname, result)
+
+
 def _parse_nested_config(data: dict, fname: str, level: str,
                          is_level_carrier: bool, result: dict) -> None:
     """The routing-plane keys of one file BELOW the conf.d root (#2326).
@@ -375,16 +398,28 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     _f = safe_label(fname)
 
     if "_routing_enforced" in data:
-        _tree_problem(
-            result, "routing_enforced_below_root", fname, "_routing_enforced",
-            f"{fname}: _routing_enforced is read only at the conf.d root — a "
-            f"NOC route scoped to one subtree is not supported (ADR-017 "
-            f"amendment 2026-09-28 (b)); move it to a root platform file or "
-            f"delete it")
+        _refuse_nested_enforced(fname, result)
 
     if "_routing_defaults" in data:
         rd = data["_routing_defaults"]
-        if not is_level_carrier:
+        if not is_level_carrier and is_reserved_name(os.path.basename(fname)):
+            # #2326 review F3: at the root this very file WOULD be read (any
+            # root `_` file carries `_routing_defaults`), so moving it into a
+            # subdirectory silently drops it — the #2291 "routing where
+            # nothing reads it" class. Same verdict as da-guard's
+            # `routing_in_unread_location` (error there): a `WARN … skipping`
+            # line, blocking under `--validate` like `_routing_defaults.routes`.
+            result.setdefault("routing_defaults_errors", []).append(
+                f"  WARN: _routing_defaults in {fname} is not read: below the "
+                f"conf.d root only the directory's defaults carrier "
+                f"(_defaults.yaml / _defaults.yml) carries it — move it there, "
+                f"skipping")
+            _tree_problem(
+                result, "routing_in_unread_location", fname,
+                "_routing_defaults",
+                f"{fname}: _routing_defaults is not read below the root "
+                f"outside the directory's defaults carrier")
+        elif not is_level_carrier:
             print(f"  WARN: _routing_defaults in {_f} ignored (below the "
                   "conf.d root only the directory's defaults carrier, "
                   "_defaults.yaml / _defaults.yml, is read)", file=sys.stderr)
@@ -588,6 +623,7 @@ def _parse_config_files(config_dir: str) -> dict:
         "domain_policy_origin": {},
         "defaults_keys_by_dir": {},
         "routing_tree_problems": [],
+        "tenant_declarations": [],   # (file, tenant id) per tenant-file key
     }
 
     if not os.path.isdir(config_dir):
@@ -684,7 +720,13 @@ def _parse_config_files(config_dir: str) -> dict:
         if is_defaults_name(path_p.name) and (
                 chosen is None or path_p.name != chosen.name):
             if path_p in readable_set:
-                continue   # the unselected spelling: named above, not read
+                # The unselected spelling: named above, not read — except
+                # that (b) is about ANY file below the root, so a
+                # `_routing_enforced` written into it is still refused, as Go's
+                # LoadTree refuses it (review of #2326, F1).
+                if level != ROOT_LEVEL:
+                    _enforced_in_unread_file(path_p, fname, result)
+                continue
             # unreadable: fall through, the read below books it as skipped
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
         # an open-ended `except` around only `safe_load` reads exactly like
@@ -853,6 +895,15 @@ def _parse_config_files(config_dir: str) -> dict:
                 result)
             continue
         for tenant, overrides in tenants.items():
+            # #2326 review F2: a DECLARATION is the key, whatever its value —
+            # the exporter walker's rule (`TreeFile.TenantIDs` are the keys of
+            # `tenants:`; a null body declares the tenant too). Recorded before
+            # the shape check below, which only decides what gets LOADED, so
+            # `a/ta.yaml: {tenants: {ta: ~}}` beside `b/ta.yaml` is still the
+            # duplicate the exporter refuses.
+            if not is_reserved_name(path_p.name):
+                result.setdefault("tenant_declarations", []).append(
+                    (fname, tenant))
             if not isinstance(overrides, dict):
                 # Per-ENTRY, not per-file: the other tenants in this file
                 # are fine, so this stays out of the file booking — but it
@@ -904,9 +955,16 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
     # merge above would otherwise route a blend of both blocks. The second
     # file in walk order is the one named, as `DuplicateTenantError.PathB`.
     declared: dict = {}
-    for fname, tenant, _o in entries:
-        if not is_reserved_name(os.path.basename(fname)):
-            declared.setdefault(tenant, []).append(fname)
+    # Every declaration by a tenant file (F2: including a body that is not a
+    # mapping and so is not loaded); a caller that hands `entries` without
+    # that record (a hand-built result in a test) falls back to the entries.
+    if "tenant_declarations" in result:
+        decls = result["tenant_declarations"]
+    else:
+        decls = [(f, t) for f, t, _o in entries
+                 if not is_reserved_name(os.path.basename(f))]
+    for fname, tenant in decls:
+        declared.setdefault(tenant, []).append(fname)
     dirs = result.setdefault("tenant_dirs", {})
     for tenant, files in declared.items():
         dirs.setdefault(tenant, PurePosixPath(files[0]).parent.as_posix())

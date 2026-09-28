@@ -256,6 +256,17 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 				Message: fmt.Sprintf("%s: _routing_enforced is read only at the conf.d root — a NOC route scoped to "+
 					"one subtree is not supported; move it to a root platform file or delete it", k)})
 		}
+		// #2326 review F3: `_routing_defaults` in a `_` file below the root
+		// that is not a defaults carrier (`a/_routing.yaml`). At the root the
+		// same file is read, so a move into a subdirectory silently drops it —
+		// the #2291 class. An unselected carrier spelling is not reported here:
+		// the exporter's multi-carrier warning already names it as ignored
+		// whole (and the Python reader skips it the same way).
+		if !selected[k] && !f.IsDefaults && strings.HasPrefix(base, "_") && lookup(top, "_routing_defaults") != nil {
+			probs = append(probs, Problem{Kind: ProblemRoutingInUnreadLocation, File: k, Field: "_routing_defaults",
+				Message: fmt.Sprintf("%s: _routing_defaults is not rendered — below the conf.d root only the directory's "+
+					"defaults carrier (_defaults.yaml / _defaults.yml) carries it; move it there", k)})
+		}
 		if selected[k] {
 			if d, present, stripped, err := routingDefaultsFromNode(top); present {
 				if err != nil {

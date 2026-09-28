@@ -156,14 +156,15 @@ class TestRoutingDefaultsChain:
     def test_a_sibling_subtree_is_not_on_the_chain(self, tree):
         assert tree.routing_configs["t-other"]["receiver"]["type"] == "email"
 
-    def test_only_the_directory_carrier_is_read(self, tmp_path, capsys):
+    def test_only_the_directory_carrier_is_read(self, tmp_path):
         tree = load_tenant_tree(str(_write(tmp_path / "conf.d", {
             "_defaults.yaml": _EMAIL_RD,
             "team/_platform.yaml": _SLACK_RD,
             "team/t-team.yaml": _tenant("t-team"),
         })))
         assert tree.routing_configs["t-team"]["receiver"]["type"] == "email"
-        assert "_routing_defaults in team/_platform.yaml ignored" in capsys.readouterr().err
+        # Named, not silently dropped (review F3; see the f3 tests below).
+        assert any("team/_platform.yaml is not read" in w for w in tree.schema_warnings)
 
 
 @pytest.mark.parametrize("key", ["receiver", "overrides"])
@@ -384,3 +385,96 @@ def test_routing_profiles_lint_reads_the_tree(tmp_path):
     assert "tenant 't-team'" not in err
     assert "tenant 't-root' lives outside this policy's subtree team/" in err
     assert "tenant 't-nowhere' not found in config-dir" in err
+
+
+# ── review round (#2326 review F1–F4) ───────────────────────────────────
+
+
+def test_f1_enforced_in_the_unselected_carrier_spelling_is_refused(tmp_path):
+    """(b) is about ANY file below the root: the carrier spelling the chain
+    does not read is still refused for `_routing_enforced` (Go's LoadTree
+    refuses it too). Its other keys stay unread — a `receiver: null` there is
+    not the (a) finding."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_defaults.yaml": _SLACK_RD,
+        "team/_defaults.yml": ("_routing_enforced:\n  enabled: true\n"
+                               "_routing_defaults:\n  receiver: null\n"),
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+    assert "team/_defaults.yml: _routing_enforced is read only at the conf.d root" in res.stderr
+    assert "_routing_defaults.receiver is null" not in res.stderr
+
+
+def test_f1_a_clean_unselected_spelling_is_not_refused(tmp_path):
+    """Control: the unselected spelling alone is only the multi-carrier WARN."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_defaults.yaml": _SLACK_RD,
+        "team/_defaults.yml": "_routing_defaults:\n  receiver: null\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_OK, res.stderr
+
+
+def test_f2_a_null_body_still_declares_the_tenant(tmp_path):
+    """A declaration is the key, whatever its value (the exporter walker's
+    rule): `t-x:` with no body beside a real `t-x` is the duplicate the
+    exporter refuses."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "a/t-x.yaml": "tenants:\n  t-x:\n",
+        "b/t-x.yaml": _tenant("t-x"),
+    })
+    res = _gar("--config-dir", str(d), "--dry-run")
+    assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+    assert "duplicate tenant id 't-x': declared in both a/t-x.yaml and b/t-x.yaml" in res.stderr
+
+
+def test_f3_routing_defaults_in_a_nested_non_carrier_file(tmp_path):
+    """At the root any `_` file carries `_routing_defaults`; below it only
+    the defaults carrier does. The moved file is named, blocking under
+    --validate (da-guard: routing_in_unread_location, error)."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/_routing.yaml": "_routing_defaults:\n  repeat_interval: 1h\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate")
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert "_routing_defaults in team/_routing.yaml is not read" in res.stderr
+    tree = load_tenant_tree(str(d))
+    assert [p[:3] for p in tree.routing_tree_problems] == [
+        ("routing_in_unread_location", "team/_routing.yaml", "_routing_defaults")]
+    assert "repeat_interval" not in tree.routing_configs["t-team"]
+
+
+def test_f3_a_nested_tenant_file_is_not_this_finding(tmp_path):
+    """Control: a TENANT file never carries `_routing_defaults`, at the root
+    either — a stderr WARN there as here, not the moved-file finding."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/t-team.yaml": _tenant("t-team") + "_routing_defaults:\n  repeat_interval: 1h\n",
+    })
+    res = _gar("--config-dir", str(d), "--validate")
+    assert res.returncode == EXIT_OK, res.stderr
+
+
+@pytest.mark.parametrize("policy_file", ["_domain_policy.yaml", "team/_domain_policy.yaml"])
+@pytest.mark.parametrize("strict, rc", [(True, EXIT_VIOLATION), (False, EXIT_OK)])
+def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_file,
+                                                              strict, rc):
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        policy_file: ("domain_policies:\n  fin:\n    tenants: [t-team, {x: 1}]\n"
+                      "    constraints:\n      forbidden_receiver_types: [slack]\n"),
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
+    assert "Traceback" not in res.stderr, res.stderr
+    assert res.returncode == rc, res.stderr
+    if strict:
+        assert "'tenants' entry must be a tenant id, got dict" in res.stderr

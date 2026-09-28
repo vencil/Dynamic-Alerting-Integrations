@@ -58,8 +58,9 @@ type parityTree struct {
 }
 
 type parityMatrix struct {
-	Comment []string     `json:"_comment"`
-	Trees   []parityTree `json:"trees"`
+	Comment       []string     `json:"_comment"`
+	BlockingKinds []string     `json:"blocking_kinds"`
+	Trees         []parityTree `json:"trees"`
 }
 
 func loadParityMatrix(t *testing.T) parityMatrix {

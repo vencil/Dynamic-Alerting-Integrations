@@ -1059,6 +1059,8 @@ def check_policy_scope(
         if not isinstance(tenants, list):
             continue
         for t in tenants:
+            if not isinstance(t, str):
+                continue  # not a tenant id; check_domain_policies names it
             where = tenant_dirs.get(t)
             if where is None or level_contains(scope, where):
                 continue
@@ -1715,6 +1717,19 @@ def check_domain_policies(
                 min_sec = _parse_policy_duration(min_group_wait)
 
         for tenant in tenants:
+            # #2326 review F4: a `tenants:` entry that is not a scalar id (a
+            # mapping, a list) is unhashable and crashed the run here with a
+            # TypeError. It names no tenant, so it enforces nothing — strict
+            # says so (fail loud), lenient skips it, as for the other
+            # malformed shapes above.
+            if not isinstance(tenant, str):
+                if strict:
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}': 'tenants' entry "
+                        f"must be a tenant id, got {type(tenant).__name__} "
+                        f"— the entry cannot be enforced",
+                        "list each tenant id as a plain YAML scalar"))
+                continue
             if tenant not in routing_configs:
                 continue
             # #2243: a sub-route that renders its own AM receiver

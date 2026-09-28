@@ -52,7 +52,18 @@
     "root), routing_profile_duplicate (one name in two files; the first in root-first name order is kept,",
     "the later file is named), duplicate_tenant (the later file in name order is named; da-guard stops",
     "earlier, exit 2, on the exporter's DuplicateTenantError). tenant_api is null for these trees:",
-    "tenant-api lists tenant files at the conf.d root only."
+    "tenant-api lists tenant files at the conf.d root only.",
+    "blocking_kinds (#2326 review): the platform kinds that refuse the whole tree (generator exit 2",
+    "in every mode). Python asserts it equals _grar_parse.BLOCKING_TREE_KINDS and Go that",
+    "routingpolicy.IsBlocking is true for exactly these among every Problem kind, so the lists cannot",
+    "drift. routing_in_unread_location with field `_routing_defaults` is the one row of that kind the",
+    "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there)."
+  ],
+  "blocking_kinds": [
+    "duplicate_tenant",
+    "routing_defaults_null_below_root",
+    "routing_enforced_below_root",
+    "routing_profile_duplicate"
   ],
   "trees": [
     {
@@ -1565,6 +1576,97 @@
       ],
       "expect": {
         "t-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-b-enforced-in-unselected-carrier-spelling",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "team/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n",
+        "team/_defaults.yml": "_routing_enforced:\n  enabled: true\n_routing_defaults:\n  receiver: null\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_below_root",
+          "team/_defaults.yml",
+          "_routing_enforced"
+        ]
+      ],
+      "expect": {
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-e-duplicate-tenant-with-null-body",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "a/t-x.yaml": "tenants:\n  t-x:\n",
+        "b/t-x.yaml": "tenants:\n  t-x:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "duplicate_tenant",
+          "b/t-x.yaml",
+          "tenants.t-x"
+        ]
+      ],
+      "expect": {
+        "t-x": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-f-routing-defaults-in-nested-non-carrier",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "team/_routing.yaml": "_routing_defaults:\n  repeat_interval: 1h\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "team/_routing.yaml",
+          "_routing_defaults"
+        ]
+      ],
+      "expect": {
+        "t-team": {
           "targets": [
             {
               "ref": "receiver",
