@@ -394,13 +394,25 @@ tenants:
             from: "alerting@example.com"
 ```
 
-### Priority
+### Priority: list order, first match wins
 
-1. **Exact alertname match** — If `alertname` is specified, that alert uses the override receiver with priority
-2. **Metric group match** — If `metric_group` is specified, alerts in that group use the override receiver
-3. **Tenant default** — Without overrides, use tenant default receiver
+Each override sets exactly one of `alertname` or `metric_group`. `generate_alertmanager_routes.py` expands the overrides into sub-routes **in the order you wrote them**, without `continue`. So when Alertmanager matches top-down:
 
-`generate_alertmanager_routes.py` automatically expands overrides into Alertmanager's nested subroutes, ensuring priority is correctly applied.
+- **The first override that matches wins**; later ones are not checked, and the alert does not also go to the tenant default receiver
+- Whether it matches on `alertname` or `metric_group` **does not change the order** — only its position in the list does
+- Only when no override matches does the tenant default receiver apply
+
+```mermaid
+flowchart TD
+    A[Tenant alert] --> B{"overrides[0] matches?"}
+    B -- yes --> R0["overrides[0] receiver"]
+    B -- no --> C{"overrides[1] matches?"}
+    C -- yes --> R1["overrides[1] receiver"]
+    C -- no --> D[... and so on down the list]
+    D -- nothing matched --> T[Tenant default receiver]
+```
+
+⚠️ An alert can match both an `alertname` entry and a `metric_group` entry (its name matches and so does its group); the entry listed first wins. **To make an alertname win over its metric_group, list it first.**
 
 ---
 

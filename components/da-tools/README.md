@@ -310,11 +310,12 @@ Refresh / refresh-source 兩個子命令處理 Base PR merge 後的 rebase 與 h
 docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
   tenant-verify --all --json --conf-d /data/conf.d > pre-base-snapshot.json
 
-# Rollback 後：比對 merged_hash
+# Rollback 後：比對 merged_hash（快照格式是 {"tenants": [{"tenant_id": ..., "merged_hash": ...}, ...]}）
+TENANT=db-a
 docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
-  tenant-verify db-a --conf-d /data/conf.d \
-  --expect-merged-hash $(jq -r '.["db-a"].merged_hash' pre-base-snapshot.json)
-# exit 0 = 與快照一致，rollback 成功；非 0 = 不一致，需追查
+  tenant-verify "$TENANT" --conf-d /data/conf.d \
+  --expect-merged-hash "$(jq -r --arg t "$TENANT" '.tenants[] | select(.tenant_id == $t) | .merged_hash' pre-base-snapshot.json)"
+# exit 0 = 與快照一致，rollback 成功；exit 2 = 不一致（或找不到該 tenant），需追查；exit 1 = 參數／讀檔錯誤
 ```
 
 同一 tenant 被兩個以上的檔宣告時（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)），兩道指令都 exit 2 且不給該 tenant 的 `merged_hash`：單一 tenant 模式列出所有宣告檔；`--all` 把它列成 `error: "duplicate"` 條目、其餘 tenant 照常輸出——`--all` 不再恆為 exit 0，在 `set -e` 腳本裡拍快照會在這裡停下。從多餘的檔移除這個 tenant 的宣告、讓它只留在一個檔後重跑（同一檔可能還宣告了其他 tenant，只有該檔沒有其他要保留的內容時才整個刪掉）。

@@ -390,13 +390,25 @@ tenants:
             from: "alerting@example.com"
 ```
 
-### 優先級
+### 優先級：依列表順序，第一個命中的生效
 
-1. **Exact alertname match** — 若指定 `alertname`，該警報優先使用 override receiver
-2. **Metric group match** — 若指定 `metric_group`，該群組內警報使用 override receiver
-3. **Tenant default** — 無 override 時，使用租戶預設 receiver
+每個 override 只能指定 `alertname` 或 `metric_group` 其中一個。`generate_alertmanager_routes.py` 把 overrides **照你寫的順序**展開成子路由，而且不帶 `continue`。所以 Alertmanager 由上往下比對時：
 
-`generate_alertmanager_routes.py` 自動展開 overrides 為 Alertmanager 的嵌套 subroute，確保優先級正確套用。
+- **第一個命中的 override 生效**，後面的不再比對，也不會再送到租戶預設 receiver
+- 用 `alertname` 還是 `metric_group` 比對，**不影響先後**，只看它在列表裡的位置
+- 一個都沒命中，才走租戶預設 receiver
+
+```mermaid
+flowchart TD
+    A[租戶的告警] --> B{"overrides[0] 命中？"}
+    B -- 是 --> R0["overrides[0] 的 receiver"]
+    B -- 否 --> C{"overrides[1] 命中？"}
+    C -- 是 --> R1["overrides[1] 的 receiver"]
+    C -- 否 --> D[……依序往下]
+    D -- 都沒命中 --> T[租戶預設 receiver]
+```
+
+⚠️ 一個告警可能同時命中 `alertname` 那條與 `metric_group` 那條（它的名字對上、所屬群組也對上），這時排在前面的那條生效。**要讓某個 alertname 壓過它所屬的 metric_group，就把它寫在前面。**
 
 ---
 

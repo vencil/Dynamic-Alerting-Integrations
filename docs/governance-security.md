@@ -193,21 +193,25 @@ da-tools validate-config --config-dir conf.d/ --json
 | mysqld-exporter | — | ✓ | ✓ | ✓ |
 | kube-state-metrics | ✓ | ✓ | ✓ | ✓ |
 
-所有 Pod 設定 `seccompProfile: RuntimeDefault`。Docker image 全部 pin 到具體 patch 版本。
+所有 Pod 設定 `seccompProfile: RuntimeDefault`。自建 image 的基底 pin 到哪一層（patch／minor）因元件而異，見下一節。
 
-### Container Image Security (v2.2.0 updated)
+### Container Image Security
 
 **三層防護策略：**
 
-1. **Base image pin** — 所有 Dockerfile pin 到包含安全修補的特定 Alpine 版本，避免 floating tag 導致 CI cache 凍結在舊版
-2. **Build-time upgrade** — `apk --no-cache upgrade` 在建置時拉取最新 point-release 修補
-3. **Attack surface reduction** — da-portal 移除不需要的 library（libavif, gd, libxml2 等），threshold-exporter 使用 distroless（零 package manager）
+1. **Base image pin** — 基底 image 寫死版本 tag（不用 `latest` 這種浮動 tag），避免 CI cache 凍結在舊版；threshold-exporter 例外，見下表
+2. **Build-time upgrade** — 建置時跑 `apk --no-cache upgrade`，拉最新 point-release 修補
+3. **Attack surface reduction** — 拿掉用不到的東西：da-portal 移除 nginx 的 image-filter／xslt 模組，threshold-exporter 用 distroless（沒有 shell 與 package manager）
 
-| Image | Base | Pin 策略 | CVE 防護 |
+⚠️ 下表**刻意不寫版本號**——版本以各元件 Dockerfile 的 `FROM` 為準（唯一來源），文件只說明策略。
+
+| Image | 基底（版本見 Dockerfile） | Pin 到哪一層 | 強化重點 |
 |-------|------|---------|---------|
-| threshold-exporter | `distroless/static-debian12:nonroot` | digest pin | 零 CVE：無 shell/apk/libc/openssl，Go 內建 crypto |
-| da-tools | `python:3.13.3-alpine3.22` | patch+alpine pin | Alpine 3.22 修復 libavif + openssl；`apk upgrade` 補漏 |
-| da-portal | `nginx:1.28.2-alpine3.23` | patch+alpine pin | Alpine 3.23 + `apk del` 移除 libavif/gd/libxml2 未使用 library |
+| threshold-exporter | distroless static（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/Dockerfile)） | `nonroot` tag，會隨上游移動（非 digest） | 無 shell／apk／libc／openssl，Go 內建 crypto |
+| da-tools | python-alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/app/Dockerfile)） | python patch + alpine minor | `apk upgrade` |
+| da-portal | nginx-alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/Dockerfile)） | nginx minor + alpine minor | `apk upgrade`；移除 image-filter／xslt 模組（連帶移除 libavif／gd／libxml2），libavif 仍在就讓 build 失敗 |
+| tenant-api | alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/Dockerfile)） | alpine minor | 需要 `git`（GitOps 寫入）；**未**跑 `apk upgrade` |
+| recipe-preview | python-alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/recipe-preview/Dockerfile)） | python patch + alpine minor | `apk upgrade` |
 
 **CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時 release job 會失敗。⚠️ 順序要誠實交代：該掃描在 **push 之後**，且五個 release job 有四個它就是最後一步——所以它讓 release run 變紅，而不是把產物攔下來。更早的預警來自每晚對同一批 image 的掃描。見 `.github/workflows/release.yaml` 與 `.github/workflows/nightly-image-scan.yaml`。
 
@@ -216,9 +220,9 @@ da-tools validate-config --config-dir conf.d/ --json
 **CVE 追蹤紀錄：**
 
 - **CVE-2025-15467 (openssl, CVSS 9.8)**：CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE。影響 OpenSSL 3.0–3.6。修復：Alpine 3.22 含修補版 `libssl3`。threshold-exporter 不受影響（distroless + Go 內建 crypto）。
-- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：Alpine 3.22 ships libavif >= 1.3.0。da-portal 額外執行 `apk del libavif` 徹底移除（static file server 不需要圖片處理 library）。threshold-exporter 不受影響（distroless 無 libavif）。
+- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：Alpine 3.22 ships libavif >= 1.3.0。da-portal 另外移除 nginx 的 image-filter 模組，連帶移除 libavif（static file server 不需要圖片處理 library），build 時若 libavif 仍在就失敗。threshold-exporter 不受影響（distroless 無 libavif）。
 - **CVE-2025-48175 (libavif, CVSS 4.5–9.1)**：`rgbRowBytes` 等乘法 integer overflow。與 CVE-2025-48174 同批修復（libavif >= 1.3.0）。
-- **CVE-2026-1642 (nginx, CVSS 5.9)**：SSL upstream injection — MITM 可在 TLS handshake 前注入明文回應。影響 nginx < 1.28.2。修復：da-portal pin `nginx:1.28.0`（1.28 stable 已修復）。
+- **CVE-2026-1642 (nginx, CVSS 5.9)**：SSL upstream injection — MITM 可在 TLS handshake 前注入明文回應。影響 nginx < 1.28.2。修復：da-portal 的 nginx 基底須 ≥ 1.28.2（目前版本見 [Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/Dockerfile) 的 `FROM`）。
 
 ### NetworkPolicy（Ingress + Egress）
 
@@ -231,10 +235,10 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
-| tenant-api | 4180（oauth2-proxy，全叢集）；**8080 僅 Prometheus pod（`app=prometheus`）+ threshold-govern CronJob（`component=threshold-govern`）** — pod 級白名單 | Egress opt-in（`networkPolicy.egress.enabled`，預設 off）；啟用後 DNS + Prometheus 9090 + `extraEgress`（K8s API / git forge） |
+| tenant-api | 4180（oauth2-proxy，全叢集）；**8080 只放行 pod 級白名單**：Prometheus（`app=prometheus`）、threshold-govern CronJob（`component=threshold-govern`）、recipe-preview（`app.kubernetes.io/name=recipe-preview`）、da-portal relay（`app.kubernetes.io/name=da-portal`）。清單以 helm values `networkPolicy.internalPortAllow` 為準，每一組都預設放行、也關不掉（清空 selector 會讓 `helm template` 失敗） | Egress opt-in（`networkPolicy.egress.enabled`，預設 off）；啟用後 DNS + Prometheus 9090 + `extraEgress`（K8s API / git forge） |
 | da-portal | 4180 + listenPort，僅 `allowedNamespaces`（monitoring + `ingress-nginx`〔values 預設；換成你的 ingress controller ns〕；**不含租戶 ns**） | — |
 
-> ⛔ **8080 是 header-trust 面（GHSA-3g2h-rf85-5rrv）**：tenant-api 的 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`。任何能連到 8080 的 pod 可主張任意身分（含 `platform-admins`）。因此 8080 的 NetworkPolicy 必須是 **pod 級**（只放行上表兩類 workload），且 **不可停用** — 兩個 chart 的 `networkPolicy.enabled=false` 已 codified 為 `helm template` 硬失敗（tenant-api 無條件；da-portal 於 `oauth2Proxy.enabled=true` 時）。tenant-api namespace 另掛 **default-deny-ingress**（`podSelector:{}`，僅 Ingress）補齊「非 tenant-api pod 進入該 ns 即全開」的缺口。da-portal 另有 render-time **open-proxy guard**：`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` / `portal.recipePreviewUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始 `X-Forwarded-Groups` 直送後端 = 未認證開放代理），此 guard 為 render-time、**不依賴 CNI**。
+> ⛔ **8080 是 header-trust 面（GHSA-3g2h-rf85-5rrv）**：tenant-api 的 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`。任何能連到 8080 的 pod 可主張任意身分（含 `platform-admins`）。因此 8080 的 NetworkPolicy 必須是 **pod 級**（只放行上表 tenant-api 那列列出的 workload），且 **不可停用** — 兩個 chart 的 `networkPolicy.enabled=false` 已 codified 為 `helm template` 硬失敗（tenant-api 無條件；da-portal 於 `oauth2Proxy.enabled=true` 時）。tenant-api namespace 另掛 **default-deny-ingress**（`podSelector:{}`，僅 Ingress）補齊「非 tenant-api pod 進入該 ns 即全開」的缺口。da-portal 另有 render-time **open-proxy guard**：`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` / `portal.recipePreviewUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始 `X-Forwarded-Groups` 直送後端 = 未認證開放代理），此 guard 為 render-time、**不依賴 CNI**。
 
 > ⚠️ **NetworkPolicy 需 CNI 支援才生效（避免安全劇場）**：上表所有 Ingress/Egress 白名單、8080 pod 級限制、default-deny-ingress **全部依賴叢集 CNI 實作 NetworkPolicy**。若 CNI 不支援（基礎版 Flannel、部分雲廠商預設簡易 CNI），K8s API server 仍會「接受」這些物件、`helm install` 也照樣成功，但流量**完全不受限** — 8080 header-trust 面對整個叢集敞開，形成 *security theater*（看似封鎖、實際全開）。**生產部署務必使用 NetworkPolicy-aware CNI（Calico / Cilium / Antrea）**，並以「實際送一個應被拒的封包」實測 enforcement，不可只看 `helm install` 成功。這也是為何根因層 **#5（L7：KSA OIDC + TokenReview 或內部身分簽章，與 CNI 無關）才是唯一真信任邊界**、而本節的 NetworkPolicy 縱深屬 **L4 stopgap** 的原因。
 

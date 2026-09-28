@@ -193,21 +193,25 @@ All containers follow principle of least privilege:
 | mysqld-exporter | — | ✓ | ✓ | ✓ |
 | kube-state-metrics | ✓ | ✓ | ✓ | ✓ |
 
-All Pods set `seccompProfile: RuntimeDefault`. All Docker images pinned to specific patch versions.
+All Pods set `seccompProfile: RuntimeDefault`. How tightly each self-built image pins its base (patch / minor) differs per component — see the next section.
 
-### Container Image Security (v2.2.0 updated)
+### Container Image Security
 
 **Three-layer defense strategy:**
 
-1. **Base image pin** — All Dockerfiles pin to specific Alpine versions with security patches, avoid floating tags causing CI cache to freeze on old versions
-2. **Build-time upgrade** — `apk --no-cache upgrade` during build pulls latest point-release patches
-3. **Attack surface reduction** — da-portal removes unnecessary libraries (libavif, gd, libxml2, etc.), threshold-exporter uses distroless (zero package manager)
+1. **Base image pin** — base images use a fixed version tag (no floating tag such as `latest`), so the CI cache cannot freeze on an old version; threshold-exporter is the exception, see the table
+2. **Build-time upgrade** — `apk --no-cache upgrade` during build pulls the latest point-release patches
+3. **Attack surface reduction** — drop what is not needed: da-portal removes nginx's image-filter / xslt modules, threshold-exporter uses distroless (no shell, no package manager)
 
-| Image | Base | Pin Strategy | CVE Protection |
+⚠️ The table below **deliberately carries no version numbers** — the `FROM` line of each component's Dockerfile is the single source; this page only describes the strategy.
+
+| Image | Base (version: see Dockerfile) | Pinned to | Hardening |
 |-------|------|---------|---------|
-| threshold-exporter | `distroless/static-debian12:nonroot` | digest pin | Zero CVEs: no shell/apk/libc/openssl, Go built-in crypto |
-| da-tools | `python:3.13.3-alpine3.22` | patch+alpine pin | Alpine 3.22 fixes libavif + openssl; `apk upgrade` patches gaps |
-| da-portal | `nginx:1.28.2-alpine3.23` | patch+alpine pin | Alpine 3.23 + `apk del` removes unused libavif/gd/libxml2 |
+| threshold-exporter | distroless static ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/Dockerfile)) | `nonroot` tag, moves with upstream (not digest) | No shell / apk / libc / openssl, Go built-in crypto |
+| da-tools | python-alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/app/Dockerfile)) | python patch + alpine minor | `apk upgrade` |
+| da-portal | nginx-alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/Dockerfile)) | nginx minor + alpine minor | `apk upgrade`; removes the image-filter / xslt modules (which takes libavif / gd / libxml2 with them); the build fails if libavif is still present |
+| tenant-api | alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/Dockerfile)) | alpine minor | Needs `git` (GitOps writes); does **not** run `apk upgrade` |
+| recipe-preview | python-alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/recipe-preview/Dockerfile)) | python patch + alpine minor | `apk upgrade` |
 
 **CI Scanning:** Trivy scan auto-runs after each image push (CRITICAL + HIGH) and fails the release job if fixable high-severity CVEs exist. Note the ordering honestly: the scan is **post-push**, and in four of the five release jobs it is the final step — so it turns the release run red rather than holding the artifact back. A nightly scan of the same images gives earlier warning. See `.github/workflows/release.yaml` and `.github/workflows/nightly-image-scan.yaml`.
 
@@ -216,9 +220,9 @@ All Pods set `seccompProfile: RuntimeDefault`. All Docker images pinned to speci
 **CVE Tracking Record:**
 
 - **CVE-2025-15467 (openssl, CVSS 9.8)**: CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE. Affects OpenSSL 3.0–3.6. Fix: Alpine 3.22 includes patched `libssl3`. threshold-exporter unaffected (distroless + Go built-in crypto).
-- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**: `makeRoom()` integer overflow → buffer overflow. Affects libavif < 1.3.0. Fix: Alpine 3.22 ships libavif >= 1.3.0. da-portal additionally runs `apk del libavif` (static file server doesn't need image processing library). threshold-exporter unaffected (distroless without libavif).
+- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**: `makeRoom()` integer overflow → buffer overflow. Affects libavif < 1.3.0. Fix: Alpine 3.22 ships libavif >= 1.3.0. da-portal additionally removes nginx's image-filter module, which takes libavif with it (a static file server doesn't need an image processing library); the build fails if libavif is still present. threshold-exporter unaffected (distroless without libavif).
 - **CVE-2025-48175 (libavif, CVSS 4.5–9.1)**: `rgbRowBytes` multiplication integer overflow. Same batch fix as CVE-2025-48174 (libavif >= 1.3.0).
-- **CVE-2026-1642 (nginx, CVSS 5.9)**: SSL upstream injection — MITM can inject plaintext response before TLS handshake. Affects nginx < 1.28.2. Fix: da-portal pins `nginx:1.28.2` (1.28 stable already fixed).
+- **CVE-2026-1642 (nginx, CVSS 5.9)**: SSL upstream injection — MITM can inject plaintext response before TLS handshake. Affects nginx < 1.28.2. Fix: da-portal's nginx base must be ≥ 1.28.2 (current version: the `FROM` line of its [Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/Dockerfile)).
 
 ### NetworkPolicy (Ingress + Egress)
 
@@ -231,6 +235,16 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
+| tenant-api | 4180 (oauth2-proxy, cluster-wide); **8080 admits a pod-scoped allow-list only**: Prometheus (`app=prometheus`), the threshold-govern CronJob (`component=threshold-govern`), recipe-preview (`app.kubernetes.io/name=recipe-preview`), the da-portal relay (`app.kubernetes.io/name=da-portal`). The helm values key `networkPolicy.internalPortAllow` is the source of this list; every entry is admitted by default and cannot be switched off (an empty selector makes `helm template` fail) | Egress opt-in (`networkPolicy.egress.enabled`, default off); when on: DNS + Prometheus 9090 + `extraEgress` (K8s API / git forge) |
+| da-portal | 4180 + listenPort, only from `allowedNamespaces` (monitoring + `ingress-nginx` [values default; replace with your ingress controller's ns]; **tenant namespaces excluded**) | — |
+
+> ⛔ **8080 is a header-trust surface (GHSA-3g2h-rf85-5rrv)**: tenant-api's port 8080 deliberately bypasses oauth2-proxy and trusts `X-Forwarded-Groups` / `X-Forwarded-Email` as sent. Any pod that can reach 8080 can claim any identity (including `platform-admins`). That is why the 8080 NetworkPolicy must be **pod-scoped** (admitting only the workloads listed in the tenant-api row above) and **cannot be disabled** — in both charts `networkPolicy.enabled=false` is codified as a hard `helm template` failure (tenant-api unconditionally; da-portal when `oauth2Proxy.enabled=true`). The tenant-api namespace also carries a **default-deny-ingress** (`podSelector:{}`, Ingress only) to close the gap "any non-tenant-api pod in that namespace is wide open". da-portal additionally has a render-time **open-proxy guard**: with `oauth2Proxy.enabled=false` it forces `portal.tenantApiUrl` / `portal.recipePreviewUrl` to be empty (otherwise nginx, which strips nothing, would forward the client's own `X-Forwarded-Groups` to the backend = an unauthenticated open proxy). That guard is render-time and **does not depend on the CNI**.
+
+> ⚠️ **NetworkPolicy only works if the CNI enforces it (avoid security theater)**: every Ingress/Egress allow-list in the table above, the pod-scoped 8080 restriction and the default-deny-ingress **all depend on the cluster CNI implementing NetworkPolicy**. If it does not (basic Flannel, some cloud providers' default simple CNIs), the K8s API server still *accepts* these objects and `helm install` still succeeds, but traffic is **not restricted at all** — the 8080 header-trust surface is open to the whole cluster (*security theater*: looks blocked, is wide open). **Production deployments must use a NetworkPolicy-aware CNI (Calico / Cilium / Antrea)**, and verify enforcement by actually sending a packet that should be rejected — a successful `helm install` proves nothing. This is also why root-cause layer **#5 (L7: KSA OIDC + TokenReview or internal identity signing, independent of the CNI) is the only real trust boundary**, and the NetworkPolicy depth in this section is an **L4 stopgap**.
+
+> ⚠️ **L4 coverage limits (structural bypasses even when the CNI enforces correctly)**: pod-scoped NetworkPolicy is a stopgap, not a trust boundary. L4 cannot stop the two attacks below; only **#5's L7 caller identity verification** covers them:
+> - **Same-namespace label forgery (lateral movement)**: `podSelector` trusts pod labels as written. If some pod in the monitoring namespace gains `patch` / `create pods` RBAC (or an operator generates objects with user-supplied labels), an attacker can label itself `app=prometheus`, pass the 8080 allow-list, and inject `X-Forwarded-Groups: platform-admins`.
+> - **host-network downgrade**: NetworkPolicy only governs the pod netns. A `hostNetwork: true` pod (privileged DaemonSets such as node-exporter / fluentd) or a compromised node can send packets from the host netns straight to the tenant-api Pod IP:8080; most CNIs allow that local routing by default → the rules are bypassed.
 
 ### Portal Security Headers
 
