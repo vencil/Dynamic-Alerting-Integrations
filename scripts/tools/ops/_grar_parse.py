@@ -28,10 +28,13 @@ from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
-from _lib_io import strict_load_exporter_keys  # noqa: E402
+# #2315: the node too — whether the exporter's full decode accepts a tenant
+# file is a question about its source shape (see exporter_tenant_file_problem).
+from _lib_io import strict_load_exporter_keys_with_node  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     duplicate_declarations,
+    exporter_tenant_file_problem,
     is_defaults_name,
     is_reserved_name,
     iter_config_files,
@@ -525,7 +528,7 @@ def _parse_config_files(config_dir: str) -> dict:
                 # Strict (#2123): a key written twice in one mapping is a
                 # YAMLError naming the line — the exporter's yaml.v3 rejects
                 # the file, so it must not route on PyYAML's last value.
-                data = strict_load_exporter_keys(
+                data, node = strict_load_exporter_keys_with_node(
                     f, raw_text_sequences=("tenants",))
         except yaml.YAMLError as e:
             _drop_unreadable_file(
@@ -655,8 +658,20 @@ def _parse_config_files(config_dir: str) -> dict:
                 result)
             continue
         if not is_reserved_name(fname):
-            for tenant in tenants:
-                declared.setdefault(tenant, []).append(fname)
+            # #2315: a file the exporter's full decode rejects declares no
+            # tenant on the Go side (the walker skips it whole), so its ids
+            # do not make a duplicate there — nor here. Named, not refused:
+            # what happens to its entries below is unchanged.
+            problem = exporter_tenant_file_problem(node)
+            if problem is None:
+                for tenant in tenants:
+                    declared.setdefault(tenant, []).append(fname)
+            else:
+                print(f"  WARN: {safe_label(fname)}: the threshold-exporter "
+                      f"cannot decode this file ({safe_label(problem)}) and "
+                      f"ignores it whole, so its tenants are not counted when "
+                      f"looking for a tenant declared in two files",
+                      file=sys.stderr)
         for tenant, overrides in tenants.items():
             if not isinstance(overrides, dict):
                 # Per-ENTRY, not per-file: the other tenants in this file

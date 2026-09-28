@@ -104,6 +104,7 @@ modules:
       _strict_exporter_key_class: "Loader-class selector (#2114 × #2123) over StrictExporterKeyLoader; exercised through every strict_*_exporter_keys pin in tests/shared/test_yaml_strict_loader.py"
       strict_load_exporter_keys: "strict_safe_load driven with StrictExporterKeyLoader (#2114 × #2123); identity matrix, python/object refusal and parser pinned in tests/shared/test_yaml_strict_loader.py; key text pinned in tests/shared/test_tenant_id_yaml_spelling_parity.py"
       strict_load_all_exporter_keys: "strict_safe_load_all driven with StrictExporterKeyLoader (#2114 × #2123); same pins as strict_load_exporter_keys"
+      strict_load_exporter_keys_with_node: "#2315 strict_load_exporter_keys that also returns the composed node (one parse); enrolled in test_yaml_strict_loader.py's _EXPORTER_KEY_ENTRIES (identity matrix + python/object refusal)"
       load_yaml_file_strict_exporter_keys: "File-reading twin of load_yaml_file_strict with exporter keys (#2114 × #2123); I/O-bound, contract pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
       # #2164 quoting of string fields. The verdict is PyYAML's resolver ×
       # the repo's JSON Schemas; a generator would re-derive both from the

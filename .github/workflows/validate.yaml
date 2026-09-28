@@ -93,7 +93,8 @@ jobs:
             validate:
               - "components/threshold-exporter/config/**"
               # #2315: the try-local seed is the second conf.d validate-config
-              # routes (the two generator steps below loop over both). Without
+              # routes (the "Validate alertmanager routes" step below loops over
+              # both; the amtool step renders only the dev tree). Without
               # it here a seed-only PR skips the required check, and a routing
               # defect in the showcase tree reaches main unvalidated — da-guard
               # does not catch it either: guard-defaults-impact fires only on a
@@ -506,8 +507,9 @@ jobs:
       # ⛔ THIS is the routing gate for TENANT files (#2315): da-guard
       # (guard-defaults-impact.yml) runs only when a `_`-prefixed platform
       # file changes. Both shipped conf.d trees are gated — the dev tree and
-      # the try-local seed (its tenants carry `_routing` so this is not a
-      # zero-route pass). A tenant id declared in two files fails here too.
+      # the try-local seed (its `db-demo` tenant carries `_routing`, so this
+      # is not a zero-route pass; `cache-demo` has none). A tenant id declared
+      # in two files fails here too.
       - name: Validate alertmanager routes
         run: |
           for confd in components/threshold-exporter/config/conf.d/ \
