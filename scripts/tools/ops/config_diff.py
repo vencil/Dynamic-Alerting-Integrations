@@ -129,8 +129,11 @@ def load_tenant_profile_refs(dir_path):
     raw_configs = _load_tenant_configs_profile_text(dir_path)
     for t_name, t_data in raw_configs.items():
         profile = t_data.get("_profile")
-        if profile and isinstance(profile, str):
-            refs.setdefault(profile, []).append(t_name)
+        # Stripped, as the exporter's `profileNameOf` (TrimSpace) and the
+        # other readers (describe_tenant / diagnose / validate_config) name
+        # it (#2297): `'010 '` and a block scalar `|` 010 bind profile 010.
+        if isinstance(profile, str) and profile.strip():
+            refs.setdefault(profile.strip(), []).append(t_name)
     return refs
 
 
