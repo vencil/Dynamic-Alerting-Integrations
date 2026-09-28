@@ -239,6 +239,32 @@ def amtool_required():
 
 
 @pytest.fixture
+def amtool_accepts(monkeypatch, tmp_path):
+    """Put a fake ``amtool`` that accepts every config first on ``PATH``.
+
+    #2311: validate-config's ``routes`` row reports WARN ("Not validated by
+    Alertmanager") when no amtool is on PATH, which is the state of every CI
+    runner. A test whose point is "a healthy tree is all PASS" uses this so
+    the assertion keeps its meaning. It sets the process ``PATH``, so an
+    in-process ``shutil.which`` and a child process both see it; a test that
+    builds its own child ``env`` must prepend the returned directory itself.
+    Returns that directory.
+    """
+    bin_dir = tmp_path / "amtool-accepts-bin"
+    bin_dir.mkdir()
+    if sys.platform == "win32":
+        (bin_dir / "amtool.bat").write_text("@echo SUCCESS\r\n@exit /b 0\r\n",
+                                            encoding="utf-8")
+    else:
+        stub = bin_dir / "amtool"
+        stub.write_text("#!/bin/sh\necho SUCCESS\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+    monkeypatch.setenv("PATH",
+                       str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    return bin_dir
+
+
+@pytest.fixture
 def patch_repo_root(monkeypatch, tmp_path):
     """Replace a tool module's repo-root constant with `tmp_path`.
 

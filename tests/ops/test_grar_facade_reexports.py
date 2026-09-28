@@ -54,6 +54,9 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         # tenant-triggered inhibit must not suppress a platform alert
         "assert_platform_alerts_not_tenant_silenceable",
         "assert_watchdog_inhibit_immunity",
+        # #2311: --validate reaches it via evaluate_generated_config now;
+        # validate_config still reads it as `gen.blocking_generation_errors`
+        "blocking_generation_errors",
         "check_domain_policies",
         "find_tenant_silenceable_platform_inhibits",
         "find_ungated_equal_label_inhibits",  # #1132 finder
@@ -98,6 +101,11 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "generate_routes",
     ),
     "_grar_render": (
+        # #2311: amtool verdict statuses, read by validate_config as `gen.…`
+        "AMTOOL_ACCEPTED",
+        "AMTOOL_NOT_FOUND",
+        "AMTOOL_REJECTED",
+        "AMTOOL_UNUSABLE",
         "BaseConfigInputError",  # #1616 supplied-but-unusable --base-config
         "_apply_merged_configmap",
         "_merge_routes_receivers_inhibits",
@@ -107,6 +115,8 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "assemble_configmap",
         "load_base_config",
         "render_output",
+        # #2260 --validate NOTICE; moved here with the shared verdict (#2311)
+        "VALIDATE_AMTOOL_NOT_FOUND_NOTICE",
     ),
 }
 

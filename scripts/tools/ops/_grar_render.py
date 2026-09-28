@@ -21,12 +21,20 @@ Functions:
                                            → apply → reload
 
   Alertmanager's own parser (#2219):
-    amtool_gate(am_yml, what=, refusing=) → `amtool check-config` on the exact
-                                           text; None = go on, int = exit code
+    amtool_check(am_yml, what=, refusing=) → `amtool check-config` on the exact
+                                           text, returned as an AmtoolCheck
+    amtool_gate(...)                      → amtool_check, printed; None = go on,
+                                           int = exit code
+
+  The --validate verdict (#2311, shared with validate-config's routes row):
+    evaluate_generated_config(...)        → GeneratedConfigVerdict; never
+                                           prints, never exits
 """
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import json
 import os
 import re
@@ -34,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -51,7 +60,10 @@ from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
     assert_equal_labels_gated,
+    blocking_generation_errors,
+    find_tenant_silenceable_platform_inhibits,
     find_ungated_equal_label_inhibits,
+    find_watchdog_suppressing_inhibits,
 )
 
 
@@ -493,24 +505,46 @@ AMTOOL_NOT_FOUND_NOTICE = (
 
 
 
-def amtool_gate(am_yml: str, *, what: str, refusing: str,
-                not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> int | None:
-    """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
-    will load. Returns ``None`` to go on, or the exit code to stop with.
+# `AmtoolCheck.status` values. ⛔ Four, not three: amtool present but unable to
+# give a verdict (could not run, timed out, crashed) is neither "rejected" (a
+# finding about the config) nor "not found" (a run that says it was not
+# validated) — it is an environment failure and every caller reports it as one.
+AMTOOL_ACCEPTED = "accepted"
+AMTOOL_REJECTED = "rejected"
+AMTOOL_NOT_FOUND = "not_found"
+AMTOOL_UNUSABLE = "unusable"
 
-    * amtool absent → print ``AMTOOL_NOT_FOUND_NOTICE``, return None (rc
-      unchanged, but never silent — the run must not read as validated);
-    * amtool accepts → one stderr line saying so, return None;
-    * amtool rejects (rc 1 with its ``FAILED:`` verdict) → its output on
-      stderr, return EXIT_VIOLATION (the CONFIG is wrong: the tool ran and
-      found something the user must fix);
+
+@dataclass(frozen=True)
+class AmtoolCheck:
+    """What ``amtool check-config`` said, as data (#2311).
+
+    *exit_code* is ``None`` to go on, else the code to stop with; *message* is
+    the exact stderr text :func:`amtool_gate` prints for it.
+    """
+    status: str
+    exit_code: int | None
+    message: str
+
+
+def amtool_check(am_yml: str, *, what: str, refusing: str,
+                 not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> AmtoolCheck:
+    """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
+    will load — and return the verdict WITHOUT printing it (#2311: validate-
+    config reports it in a row; ``amtool_gate`` prints it).
+
+    * amtool absent → ``not_found``, exit None (the rc is unchanged, but the
+      message says the run was not validated — never silent);
+    * amtool accepts → ``accepted``, exit None;
+    * amtool rejects (rc 1 with its ``FAILED:`` verdict) → ``rejected``,
+      EXIT_VIOLATION (the CONFIG is wrong: the tool ran and found something
+      the user must fix);
     * anything else non-zero — could not run, timed out, crashed (a Go panic
-      exits 2), a wrapper that fails → EXIT_CALLER_ERROR: no verdict on the
-      config, so it must not read as one.
+      exits 2), a wrapper that fails → ``unusable``, EXIT_CALLER_ERROR: no
+      verdict on the config, so it must not read as one.
 
     *what* names the text for the operator; *refusing* is what the caller will
-    NOT do because of a failure ("write -o …", "apply …"). Everything goes to
-    stderr: in some modes stdout IS the generated config. *not_found_notice*
+    NOT do because of a failure ("write -o …", "apply …"). *not_found_notice*
     lets a caller whose text is not the one it ships say so when amtool is
     absent (#2260: ``--validate`` checks an assembly on the built-in base).
 
@@ -520,8 +554,7 @@ def amtool_gate(am_yml: str, *, what: str, refusing: str,
     """
     amtool = shutil.which("amtool")
     if amtool is None:
-        print(not_found_notice, file=sys.stderr)
-        return None
+        return AmtoolCheck(AMTOOL_NOT_FOUND, None, not_found_notice)
     with tempfile.TemporaryDirectory(prefix="grar-amtool-") as tmp:
         path = Path(tmp) / "alertmanager.yml"
         with open(path, "w", encoding="utf-8", newline="") as fh:
@@ -533,18 +566,136 @@ def amtool_gate(am_yml: str, *, what: str, refusing: str,
     output = "\n".join(safe_label(ln) for ln in
                        (result.stdout + result.stderr).strip().splitlines())
     if result.returncode == 0:
-        print(f"amtool check-config: {what} accepted by Alertmanager's parser "
-              f"({safe_label(amtool)})", file=sys.stderr)
-        return None
+        return AmtoolCheck(
+            AMTOOL_ACCEPTED, None,
+            f"amtool check-config: {what} accepted by Alertmanager's parser "
+            f"({safe_label(amtool)})")
     if not (result.returncode == 1 and "FAILED:" in output):
-        print(f"ERROR: amtool check-config could not validate {what} "
-              f"(rc={result.returncode}) — refusing to {refusing}:\n{output}",
-              file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    print(f"FAIL: amtool check-config rejected {what} (rc={result.returncode}) "
-          f"— refusing to {refusing}. Alertmanager would refuse to load it:\n"
-          f"{output}", file=sys.stderr)
-    return EXIT_VIOLATION
+        return AmtoolCheck(
+            AMTOOL_UNUSABLE, EXIT_CALLER_ERROR,
+            f"ERROR: amtool check-config could not validate {what} "
+            f"(rc={result.returncode}) — refusing to {refusing}:\n{output}")
+    return AmtoolCheck(
+        AMTOOL_REJECTED, EXIT_VIOLATION,
+        f"FAIL: amtool check-config rejected {what} (rc={result.returncode}) "
+        f"— refusing to {refusing}. Alertmanager would refuse to load it:\n"
+        f"{output}")
+
+
+def amtool_gate(am_yml: str, *, what: str, refusing: str,
+                not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> int | None:
+    """:func:`amtool_check`, printed. Returns ``None`` to go on, or the exit
+    code to stop with. Everything goes to stderr: in some modes stdout IS the
+    generated config."""
+    check = amtool_check(am_yml, what=what, refusing=refusing,
+                         not_found_notice=not_found_notice)
+    print(check.message, file=sys.stderr)
+    return check.exit_code
+
+
+# ── #2311: the ONE verdict on a generation result ───────────────────
+# `generate_alertmanager_routes --validate` and validate-config's `routes` row
+# both call `evaluate_generated_config`. Before it, validate-config ran only
+# the first of these steps, so a tree `--validate` failed (a tripwire, an
+# invariant `assemble_configmap` refuses, an amtool rejection) was a PASS row
+# at rc 0 — #2164's drift, one layer further down.
+#
+# #2260: what --validate hands to amtool is assembled on the BUILT-IN base
+# (`--validate --base-config` stays a caller error, #1616), so a pass says
+# nothing about the operator's own base — the NOTICE / result lines say so.
+VALIDATE_AMTOOL_WHAT = ("the generated config (assembled on the built-in "
+                        "default base, never on a --base-config)")
+VALIDATE_AMTOOL_NOT_FOUND_NOTICE = (
+    "NOTICE: amtool not found on PATH; --validate did NOT check the generated "
+    "config with Alertmanager's parser (that check assembles it on the "
+    "built-in default base, never on a --base-config)")
+
+
+@dataclass
+class GeneratedConfigVerdict:
+    """The outcome of :func:`evaluate_generated_config`, as data.
+
+    * ``errors`` — blocking lines, in the text ``--validate`` prints under
+      ``FAIL: N error(s) found:``;
+    * ``assembly_error`` — the ``ValueError`` text a platform invariant in
+      ``assemble_configmap`` refused the assembled config with;
+    * ``warnings`` — non-blocking lines the checks' helpers wrote to stderr
+      while running (an equal-label not presence-gated, a degraded platform-
+      alert probe set), captured so the caller decides where they go;
+    * ``amtool`` — ``None`` when the run stopped before amtool (errors, or the
+      assembly was refused), else its :class:`AmtoolCheck`.
+
+    ⛔ The steps short-circuit exactly as ``--validate`` does: amtool is never
+    asked about a config the Python checks already refused.
+    """
+    errors: list[str]
+    assembly_error: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    amtool: AmtoolCheck | None = None
+
+    @property
+    def exit_code(self) -> int | None:
+        """``None`` = the run may say OK (amtool may still be absent)."""
+        if self.errors or self.assembly_error is not None:
+            return EXIT_VIOLATION
+        return self.amtool.exit_code if self.amtool is not None else None
+
+
+def evaluate_generated_config(routes: list[dict], receivers: list[dict],
+                              inhibit_rules: list[dict], warnings: list[str],
+                              *, extra_errors: "list[str] | tuple" = ()
+                              ) -> GeneratedConfigVerdict:
+    """Every ``--validate`` verdict on a generation result, returned — never
+    printed, never ``sys.exit``-ed (#2311).
+
+    In order, stopping at the first step that blocks:
+
+    1. ``blocking_generation_errors(warnings)`` — entries skipped as unusable,
+       duplicate receiver names (#2279);
+    2. *extra_errors* — caller-selected blocking lines (``--validate --strict``
+       passes its ADR-007 policy errors here, so they sit where they always
+       printed and still keep amtool from running);
+    3. the ADR-025 tripwires on the GENERATED inhibit rules: Watchdog
+       suppression, a tenant-triggered rule silencing a platform alert;
+    4. ``assemble_configmap`` on the built-in base — a ``ValueError`` is a
+       verdict on the config (#2260 / #2279);
+    5. ``amtool check-config`` on that assembly (:func:`amtool_check`).
+    """
+    errors = blocking_generation_errors(warnings)
+    errors.extend(extra_errors)
+    verdict = GeneratedConfigVerdict(errors=errors)
+    cm_yaml = None
+    captured = io.StringIO()
+    with contextlib.redirect_stderr(captured):
+        # ADR-025 D1 regression tripwire: a generated inhibit rule must never
+        # target the Watchdog heartbeat. (The full base+generated set is
+        # enforced fail-closed at the render paths; this catches a
+        # generator-side regression early.)
+        for idx, _rule in find_watchdog_suppressing_inhibits(inhibit_rules):
+            errors.append(f"  WARN: generated inhibit_rules[{idx}] would "
+                          "suppress the Watchdog heartbeat (ADR-025) — "
+                          "skipping forbidden rule")
+        # Same early tripwire for the tenant-cannot-silence-platform invariant.
+        for idx, _rule, lbls in find_tenant_silenceable_platform_inhibits(
+                inhibit_rules):
+            errors.append(f"  WARN: generated inhibit_rules[{idx}] is "
+                          "tenant-triggered and would suppress platform alert "
+                          f"{lbls.get('alertname')} — skipping forbidden rule")
+        if not errors:
+            try:
+                cm_yaml = assemble_configmap(load_base_config(None), routes,
+                                             receivers, inhibit_rules)
+            except ValueError as exc:
+                verdict.assembly_error = str(exc)
+    verdict.warnings = captured.getvalue().splitlines()
+    if cm_yaml is None:
+        return verdict
+    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    verdict.amtool = amtool_check(
+        am_yml, what=VALIDATE_AMTOOL_WHAT,
+        refusing="report the config as valid",
+        not_found_notice=VALIDATE_AMTOOL_NOT_FOUND_NOTICE)
+    return verdict
 
 
 class AlertmanagerConfigRejected(Exception):

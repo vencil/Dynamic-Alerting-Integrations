@@ -411,6 +411,9 @@ jobs:
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
+              # The glossary's default cardinality cap is checked against
+              # DefaultMaxMetricsPerTenant here (glossary-facts.test.ts).
+              - "components/threshold-exporter/app/pkg/config/types.go"
               # The Deployment Profile Wizard's Vitest resolves every emitted
               # values key against the target chart's templates (and lists
               # helm/ to prove each target chart exists), so a chart-only PR
