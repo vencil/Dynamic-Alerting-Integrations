@@ -64,6 +64,29 @@ linters:
           msg: 'http.DefaultTransport is the shared pool #932 flushed; get an isolated transport via platform.NewHTTPClient.'
         - pattern: 'http\.(Get|Post|Head|PostForm)\b'
           msg: 'package-level http.Get/Post/Head/PostForm use the shared DefaultClient; build a platform.NewHTTPClient instance (#932).'
+        # #1279 trigger (1), made mechanical. TestMetricsHandler_Golden reads
+        # two process-globals that have NO reset seam: ws.activeHub (written by
+        # every NewHub/NewHubWithConfig, and never un-set — once stored,
+        # ClientCountSnapshot's ok stays true for the rest of the binary) and
+        # orphan's gauges (written only by Detector.scanOnce, reachable solely
+        # through a Detector built by NewDetector, then Run). Today no other
+        # internal/handler test touches either, so the seams are deliberately
+        # NOT built. The first test that does would turn the golden's
+        # preconditions flaky under -count=N — that is the moment to build
+        # them, and this rule makes that moment a red lint instead of a nightly
+        # surprise. Scoped to internal/handler tests by the exclusions below.
+        #
+        # ⛔ Do NOT silence a hit with //nolint or by widening the exclusion:
+        # build the idempotent reset seams #1279 describes (NOT save/restore —
+        # last-cleanup-wins under t.Parallel()), then delete these two rules.
+        #
+        # ⚠️ Matches source text (analyze-types is off), so an import alias
+        # (`w "…/internal/ws"`) evades it. scanOnce is unexported in package
+        # orphan, so NewDetector is the only way a handler test can rescan.
+        - pattern: 'ws\.NewHub'
+          msg: 'constructing a real ws hub writes ws.activeHub, a process-global with no reset seam that TestMetricsHandler_Golden reads; build the reset seam first (#1279).'
+        - pattern: 'orphan\.NewDetector'
+          msg: 'a real orphan Detector rescan writes the orphan gauges, process-globals with no reset seam that TestMetricsHandler_Golden reads; build the reset seam first (#1279).'
     errcheck:
       # CLI/stdout writes are intentional fire-and-forget; checking their error is
       # noise (they only fail on a broken stdout, where there is nothing to do).
@@ -99,7 +122,23 @@ linters:
       # tests legitimately name http.DefaultTransport/DefaultClient for assertions
       # (e.g. the NewHTTPClient isolation test asserts tr != http.DefaultTransport)
       # and use raw clients against real forges, not the unit-test httptest pool.
+      #
+      # ⚠️ Keyed on `text: '#932'` (every #932 msg above carries the tag) so the
+      # #1279 rules are NOT swept up by it. Consequence: a future forbidigo rule
+      # IS reported in tests unless it is added here too — this rule used to be
+      # a blanket, and is now scoped to the #932 family by name.
       - path: _test\.go
+        text: '#932'
+        linters:
+          - forbidigo
+      # #1279 rules report ONLY in internal/handler's own tests: that package's
+      # test binary is the one TestMetricsHandler_Golden shares process-globals
+      # with. Production (cmd/server/main.go builds the real hub and detector)
+      # and every other package — including the internal/handler/federation
+      # subpackage, a separate test binary — are exempt. `[^/]*` keeps the
+      # subpackage out.
+      - path-except: internal/handler/[^/]*_test\.go
+        text: '#1279'
         linters:
           - forbidigo
 
