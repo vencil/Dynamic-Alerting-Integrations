@@ -697,8 +697,8 @@ tenants:
 
 - 每個 override 必須指定 `alertname` 或 `metric_group`（二擇一，不可同時設定）
 - override receiver 走同一個 `build_receiver_config()` 驗證 + domain allowlist 檢查
-- `expand_routing_overrides()` 產出的子路由插入在 tenant 主路由之前，確保 Alertmanager 優先匹配 override
-- Timing parameters（`group_wait`、`group_interval`、`repeat_interval`）可在 override 層級覆寫，同樣受平台 guardrails 約束
+- `expand_routing_overrides()` 產出的子路由掛在 tenant 主路由的 `routes` 底下（依 `overrides` 順序、第一個命中者生效），沒命中任何 override 的告警才用主路由的 receiver；`tenant="<id>"` matcher 只寫在主路由上，子路由只帶自己的 `alertname` / `metric_group` matcher
+- Timing parameters（`group_wait`、`group_interval`、`repeat_interval`）與 `group_by` 可在 override 層級覆寫，同樣受平台 guardrails 約束；**override 沒寫的值繼承 tenant 主路由**（Alertmanager 子路由繼承父節點）。在 [#2252](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2252) 之前 override 與主路由同層，沒寫的值繼承的是 root（例如 12h）
 
 ### 2.11 Platform Enforced Routing
 

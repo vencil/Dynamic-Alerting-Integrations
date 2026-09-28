@@ -414,6 +414,8 @@ flowchart TD
 
 ⚠️ An alert can match both an `alertname` entry and a `metric_group` entry (its name matches and so does its group); the entry listed first wins. **To make an alertname win over its metric_group, list it first.**
 
+These sub-routes sit under the tenant's main route: any `group_wait` / `group_interval` / `repeat_interval` / `group_by` an override leaves out takes the tenant's `_routing` value, not the root route's.
+
 ---
 
 ## 8. Platform Enforced Routing 

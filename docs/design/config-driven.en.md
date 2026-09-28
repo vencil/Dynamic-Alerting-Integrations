@@ -718,8 +718,8 @@ tenants:
 
 - Each override must specify exactly one of `alertname` or `metric_group` (not both)
 - Override receivers use the same `build_receiver_config()` validation and domain allowlist checks
-- `expand_routing_overrides()` generates sub-routes inserted before the tenant's main route, ensuring Alertmanager matches overrides first
-- Timing parameters (`group_wait`, `group_interval`, `repeat_interval`) can be overridden per-rule, subject to the same platform guardrails
+- `expand_routing_overrides()` generates sub-routes nested under the tenant's main route as its `routes` (in `overrides` order, first match wins); only alerts that match no override use the main route's receiver. The `tenant="<id>"` matcher lives on the main route only; each sub-route carries just its own `alertname` / `metric_group` matcher
+- Timing parameters (`group_wait`, `group_interval`, `repeat_interval`) and `group_by` can be overridden per-rule, subject to the same platform guardrails; **values an override leaves out are inherited from the tenant's main route** (an Alertmanager child route inherits from its parent). Before [#2252](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2252) overrides were siblings of the main route and inherited unset values from the root (e.g. 12h) instead
 
 ### 2.11 Platform Enforced Routing 
 

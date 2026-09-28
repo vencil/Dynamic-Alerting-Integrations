@@ -1077,16 +1077,41 @@ def _parse_policy_duration(value: object) -> float | None:
                for num, unit in _POLICY_DURATION_TOKEN_RE.findall(s))
 
 
-def list_tenant_subroutes(routing_config: dict) -> list[tuple[str, str, dict]]:
+# Keys an override route inherits from the tenant's main route when it does
+# not declare them itself (#2252): the generator nests every override route
+# under the tenant route, and Alertmanager's ``dispatch/route.go`` ``newRoute``
+# starts a child from its parent's ``RouteOpts``. ``receiver`` is not here —
+# an override without one is never rendered.
+SUBROUTE_INHERITED_KEYS = ("group_wait", "group_interval", "repeat_interval",
+                           "group_by")
+
+
+def _renders_on_route(key: str, value: object) -> bool:
+    """Whether the generator writes ``key: value`` onto a route.
+
+    Mirrors WHETHER ``_grar_merge._apply_timing_params`` emits a timing key
+    (when truthy) and ``_grar_routes`` emits ``group_by`` (a non-empty list)
+    — not the emitted VALUE: guardrail clamping is not modelled, matching
+    the main route's own check, which also reads the unclamped value.
+    """
+    if key == "group_by":
+        return bool(value) and isinstance(value, list)
+    return bool(value)
+
+
+def list_tenant_subroutes(
+        routing_config: dict) -> list[tuple[str, str, dict, frozenset[str]]]:
     """List the sub-routes a tenant's resolved routing emits besides its main route.
 
-    Each entry is ``(ref, match, config)``: ``ref`` / ``match`` name the
-    sub-route in operator messages (``override[0]`` / ``alertname=X``), and
-    ``config`` is the mapping that carries that sub-route's OWN ``receiver``,
-    ``group_wait`` / ``group_interval`` / ``repeat_interval`` and
-    ``group_by`` — the same keys, in the same shape, as the tenant's main
-    routing config, so a check written against the main route applies to a
-    sub-route unchanged (#2243).
+    Each entry is ``(ref, match, config, inherited)``: ``ref`` / ``match``
+    name the sub-route in operator messages (``override[0]`` /
+    ``alertname=X``), and ``config`` is the mapping of that sub-route's
+    EFFECTIVE ``receiver``, ``group_wait`` / ``group_interval`` /
+    ``repeat_interval`` and ``group_by`` — the same keys, in the same shape,
+    as the tenant's main routing config, so a check written against the main
+    route applies to a sub-route unchanged (#2243). ``inherited`` names the
+    keys in ``config`` that came from the tenant's main routing rather than
+    from the sub-route itself, so a message can say where to fix the value.
 
     Today the only source is ``_routing.overrides``
     (``_grar_routes.expand_routing_overrides``). Any other kind of sub-route
@@ -1100,19 +1125,24 @@ def list_tenant_subroutes(routing_config: dict) -> list[tuple[str, str, dict]]:
     (unknown type, missing fields, domain allowlist) is not pre-judged —
     the main route's check does not pre-judge it either.
 
-    ⚠ Values a sub-route does NOT declare are returned as absent, never
-    back-filled from the tenant's main routing: the generator emits every
-    override route as a SIBLING of the tenant's main route directly under
-    the root ``route.routes``, so in Alertmanager an undeclared timing /
-    ``group_by`` is inherited from the ROOT route (the platform base
-    config), not from the tenant.
+    #2252: a value the sub-route does NOT declare is back-filled from the
+    tenant's main routing, because that is what Alertmanager uses — the
+    generator renders every override route as a CHILD of the tenant's main
+    route, and a child inherits its parent's timing and ``group_by``. A key
+    counts as declared when it is truthy (the generator's own emit test).
+    A truthy but malformed value (e.g. a non-list ``group_by``, which the
+    generator drops) is still treated as the sub-route's own, so strict mode
+    reports it instead of the tenant's value papering over it. The tenant's
+    value is used only when the tenant route actually renders it
+    (``_renders_on_route``); otherwise the sub-route's value is left as
+    written (both routes then inherit the root's value).
     """
     if not isinstance(routing_config, dict) or not routing_config.get("receiver"):
         return []
     overrides = routing_config.get("overrides")
     if not isinstance(overrides, list):
         return []
-    subroutes: list[tuple[str, str, dict]] = []
+    subroutes: list[tuple[str, str, dict, frozenset[str]]] = []
     for idx, override in enumerate(overrides):
         if not isinstance(override, dict):
             continue
@@ -1124,7 +1154,17 @@ def list_tenant_subroutes(routing_config: dict) -> list[tuple[str, str, dict]]:
             continue
         match = (f"alertname={alertname}" if alertname
                  else f"metric_group={metric_group}")
-        subroutes.append((f"override[{idx}]", match, override))
+        effective = dict(override)
+        inherited = set()
+        for key in SUBROUTE_INHERITED_KEYS:
+            if override.get(key):
+                continue  # declared: the sub-route's own value, even malformed
+            main_value = routing_config.get(key)
+            if _renders_on_route(key, main_value):
+                effective[key] = main_value
+                inherited.add(key)
+        subroutes.append((f"override[{idx}]", match, effective,
+                          frozenset(inherited)))
     return subroutes
 
 
@@ -1254,15 +1294,30 @@ def check_domain_policies(
                 continue
             # #2243: a sub-route that renders its own AM receiver (today:
             # `_routing.overrides`) is held to the same constraints as the
-            # main route, read from the values that sub-route itself
-            # declares — see list_tenant_subroutes() for why an undeclared
-            # value is NOT back-filled from the tenant's main routing.
+            # main route. #2252: read from the sub-route's EFFECTIVE values —
+            # what it declares, plus what it inherits from the tenant's main
+            # route (see list_tenant_subroutes()).
             tenant_rc = routing_configs[tenant]
-            targets = [(f"tenant '{tenant}'", "the tenant's", tenant_rc)]
+            targets = [(f"tenant '{tenant}'", None, tenant_rc, frozenset())]
             targets.extend(
-                (f"tenant '{tenant}' {ref} ({match})", f"{ref}'s", sub_rc)
-                for ref, match, sub_rc in list_tenant_subroutes(tenant_rc))
-            for subject, whose, rc in targets:
+                (f"tenant '{tenant}' {ref} ({match})", ref, sub_rc, inherited)
+                for ref, match, sub_rc, inherited
+                in list_tenant_subroutes(tenant_rc))
+            for subject, ref, rc, inherited in targets:
+                whose = "the tenant's" if ref is None else f"{ref}'s"
+
+                def _src(key: str, _inh: frozenset = inherited) -> str:
+                    """Value-origin note for a key the sub-route inherits."""
+                    return (" (inherited from the tenant's main route)"
+                            if key in _inh else "")
+
+                def _who(key: str, _inh: frozenset = inherited,
+                         _ref: str | None = ref, _whose: str = whose) -> str:
+                    """Whose value the fix hint points at, for *key*."""
+                    if key in _inh:
+                        return (f"the tenant's (which {_ref} inherits) or "
+                                f"{_ref}'s own")
+                    return _whose
 
                 # Check receiver type constraints
                 recv = rc.get("receiver", {})
@@ -1294,7 +1349,7 @@ def check_domain_policies(
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
                                     f"{subject}: repeat_interval "
-                                    f"'{tenant_repeat}' is not a valid duration "
+                                    f"'{tenant_repeat}'{_src('repeat_interval')} is not a valid duration "
                                     f"— cannot check against max '{max_repeat}'",
                                     "use duration syntax such as '30m' or "
                                     "'1h30m'; negative values are not allowed"))
@@ -1302,9 +1357,9 @@ def check_domain_policies(
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
                                     f"{subject}: repeat_interval "
-                                    f"'{tenant_repeat}' exceeds max "
+                                    f"'{tenant_repeat}'{_src('repeat_interval')} exceeds max "
                                     f"'{max_repeat}'",
-                                    f"lower {whose} repeat_interval to "
+                                    f"lower {_who('repeat_interval')} repeat_interval to "
                                     f"'{max_repeat}' or less, or raise the "
                                     f"policy's max_repeat_interval"))
                 elif max_repeat:
@@ -1319,8 +1374,8 @@ def check_domain_policies(
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "
                                 f"{subject}: repeat_interval "
-                                f"'{tenant_repeat}' exceeds max '{max_repeat}'",
-                                f"lower {whose} repeat_interval to "
+                                f"'{tenant_repeat}'{_src('repeat_interval')} exceeds max '{max_repeat}'",
+                                f"lower {_who('repeat_interval')} repeat_interval to "
                                 f"'{max_repeat}' or less, or raise the policy's "
                                 f"max_repeat_interval"))
 
@@ -1334,7 +1389,7 @@ def check_domain_policies(
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
                                     f"{subject}: group_wait "
-                                    f"'{tenant_gw}' is not a valid duration "
+                                    f"'{tenant_gw}'{_src('group_wait')} is not a valid duration "
                                     f"— cannot check against minimum "
                                     f"'{min_group_wait}'",
                                     "use duration syntax such as '30s' or "
@@ -1343,9 +1398,9 @@ def check_domain_policies(
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
                                     f"{subject}: group_wait "
-                                    f"'{tenant_gw}' below minimum "
+                                    f"'{tenant_gw}'{_src('group_wait')} below minimum "
                                     f"'{min_group_wait}'",
-                                    f"raise {whose} group_wait to "
+                                    f"raise {_who('group_wait')} group_wait to "
                                     f"'{min_group_wait}' or more, or lower the "
                                     f"policy's min_group_wait"))
                 elif min_group_wait:
@@ -1358,8 +1413,8 @@ def check_domain_policies(
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "
                                 f"{subject}: group_wait "
-                                f"'{tenant_gw}' below minimum '{min_group_wait}'",
-                                f"raise {whose} group_wait to "
+                                f"'{tenant_gw}'{_src('group_wait')} below minimum '{min_group_wait}'",
+                                f"raise {_who('group_wait')} group_wait to "
                                 f"'{min_group_wait}' or more, or lower the "
                                 f"policy's min_group_wait"))
 
@@ -1371,9 +1426,9 @@ def check_domain_policies(
                         if missing:
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "
-                                f"{subject}: group_by missing required "
+                                f"{subject}: group_by{_src('group_by')} missing required "
                                 f"labels: {sorted(missing)}",
-                                f"add {sorted(missing)} to {whose} group_by "
+                                f"add {sorted(missing)} to {_who('group_by')} group_by "
                                 f"(policy requires {sorted(enforce_group_by)})"))
                     elif strict:
                         messages.append(_fmt(
