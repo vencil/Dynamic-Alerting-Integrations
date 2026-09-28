@@ -405,6 +405,80 @@ func TestColdLoadBrokenDefaultsKeepsItsSignal(t *testing.T) {
 	}
 }
 
+// TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount is the RELOAD twin of
+// TestColdLoadBrokenDefaultsKeepsItsSignal (#2046): a nested `_defaults.yaml`
+// that turns syntactically broken on an incremental reload must still cost
+// the flat plane its own parse_failure increment
+// (reportUnparseableNestedPlatformFile), on top of the hierarchy plane's one
+// per dependent tenant. The control reload edits the same file but keeps it
+// valid and must add 0 — so the broken-reload delta is attributable to the
+// syntax damage, not to "the file changed".
+//
+// ⚠️ WHICH CALL SITE THIS REACHES. `IncrementalLoad` redirects any nested
+// key to `fullDirLoadFrom` (`anyNestedKey`), so the flat-plane probe that
+// runs here is the one in pkg/config's flat build — `incrementalLoadFrom`'s
+// own copy is unreachable today (see the comment on it). ⛔ MEASURED: passing
+// nil metrics to the pkg/config probe drops this delta to +1 (red); passing
+// nil at `incrementalLoadFrom`'s call site leaves it green, because that
+// branch never runs. With the redirect removed this test already goes red
+// earlier, on the control's 65 (the defect
+// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload pins).
+//
+// Content changes size on every write, so the scanner's hash sees them
+// regardless of TreeScanMtimeGuard — no sleep or backdating is needed.
+func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
+	t.Parallel()
+	root := writeColdMergeFixture(t, map[string]string{
+		"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+		"sub/_defaults.yaml": "defaults:\n  mysql_connections: 60\n",
+		"sub/t-1.yaml":       "tenants:\n  t-1: {}\n",
+	})
+	nested := filepath.Join(root, "sub", "_defaults.yaml")
+	fresh, _ := freshMetrics(t)
+	logger, buf := newTestLogger()
+	mgr := NewConfigManager(root)
+	defer mgr.Close()
+	mgr.SetMetrics(fresh)
+	mgr.SetLogger(logger)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	counter := func() float64 {
+		return promtest.ToFloat64(fresh.parseFailures.WithLabelValues("_defaults.yaml"))
+	}
+	if got := counter(); got != 0 {
+		t.Fatalf("healthy cold load: parse_failure{_defaults.yaml} = %v, want 0; log:\n%s", got, buf.String())
+	}
+
+	// Control: the file changes but stays valid.
+	writeFile(t, nested, "defaults:\n  mysql_connections: 65\n# still valid\n")
+	before := counter()
+	if err := mgr.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad (valid edit): %v", err)
+	}
+	if d := counter() - before; d != 0 {
+		t.Errorf("valid edit of the nested defaults: parse_failure{_defaults.yaml} +%v, want +0; log:\n%s", d, buf.String())
+	}
+	// Proof the control reload actually consumed the edit, so its +0 is not
+	// a reload that never happened.
+	if got, ok := seriesFor(t, mgr, "t-1", "connections"); !ok || got != 65 {
+		t.Fatalf("after the valid edit t-1 emits %v (present=%v), want the edited subtree's 65", got, ok)
+	}
+
+	// Break it.
+	buf.Reset()
+	writeFile(t, nested, "defaults: [this is not a map\n")
+	before = counter()
+	if err := mgr.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad (broken edit): %v", err)
+	}
+	if d := counter() - before; d != 2 {
+		t.Errorf("broken nested defaults on reload: parse_failure{_defaults.yaml} +%v, want +2 "+
+			"(1 dependent tenant + the flat plane's nested probe); log:\n%s", d, buf.String())
+	}
+	assertLogLineWith(t, buf.String(), "ERROR: skip unparseable defaults/profiles file "+nested+":")
+}
+
 // TestColdLoadMergesFromTheScanBytesAndParsesEachDefaultsFileOnce pins the
 // optimisation itself, which the equality tests above cannot see (a cold
 // load that re-read every file from disk, or re-parsed every defaults file
