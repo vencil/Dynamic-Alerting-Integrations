@@ -112,6 +112,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _pysource import parse_py
+
 ROOT = Path(__file__).resolve().parents[2]
 _GLOB_SPEC = importlib.util.spec_from_file_location(
     "paths_filter_glob", ROOT / "scripts" / "ops" / "paths_filter_glob.py")
@@ -348,7 +350,7 @@ def test_tracked_files_is_never_sliced_at_a_use_site() -> None:
     prefix keeps some. What this buys is the plausible "cap the one
     O(files x patterns) call" edit, not a proof.
     """
-    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"))
+    tree = parse_py(Path(__file__).resolve())
 
     def _is_call(node: ast.AST) -> bool:
         return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -628,22 +630,72 @@ def _python_filter_patterns() -> list[str]:
     return _filter_patterns("python")
 
 
+def _scan_test_modules(
+    root: Path,
+) -> tuple[tuple[tuple[str, ast.AST], ...], tuple[tuple[str, str], ...]]:
+    """Parse every `<root>/tests/**/test_*.py`: (parsed, unparseable).
+
+    `parsed` is (repo-relative path, tree); `unparseable` is (repo-relative
+    path, the parser's own diagnostic).
+
+    ⛔ A file that does not parse is RETURNED, never dropped (#1632). The
+    first version wrapped the parse in `except SyntaxError: continue`, so a
+    test file this guard could not read contributed no paths and the guard
+    reported green on it — "nothing uncovered" and "never looked" were the
+    same output. A BOM alone does not count as unparseable: `parse_py` strips
+    it exactly as the interpreter does, so a BOM'd file is scanned normally.
+
+    Takes `root` so the rule can be pinned on a constructed tree; the real
+    tree goes through `_scanned_test_modules`.
+    """
+    parsed: list[tuple[str, ast.AST]] = []
+    unparseable: list[tuple[str, str]] = []
+    for test_file in sorted((root / PY_TEST_ROOT).rglob("test_*.py")):
+        rel = test_file.relative_to(root).as_posix()
+        try:
+            tree = parse_py(test_file)
+        except (SyntaxError, ValueError) as exc:  # ValueError ⊇ UnicodeDecodeError
+            unparseable.append((rel, f"{type(exc).__name__}: {exc}"))
+            continue
+        parsed.append((rel, tree))
+    return tuple(parsed), tuple(unparseable)
+
+
 @lru_cache(maxsize=1)
+def _scanned_test_modules() -> tuple[
+        tuple[tuple[str, ast.AST], ...], tuple[tuple[str, str], ...]]:
+    return _scan_test_modules(ROOT)
+
+
 def _parsed_test_modules() -> tuple[tuple[str, ast.AST], ...]:
     """Every `tests/**/test_*.py` parsed once, as (repo-relative path, tree).
 
     Two independent scans walked and re-parsed the whole tree separately; at
     this suite's size the traversal, not the analysis, was the cost. Nothing
-    mutates the trees, so one parse serves both.
+    mutates the trees, so one parse serves both (the tuple is cached in
+    `_scanned_test_modules`, so tree identity stays stable for the per-tree
+    caches downstream).
+
+    ⚠️ Files that failed to parse are NOT in here — they are reported by
+    `test_python_filter_covers_every_out_of_tree_pytest_input` via
+    `_unparseable_test_modules_message`.
     """
-    parsed = []
-    for test_file in sorted((ROOT / PY_TEST_ROOT).rglob("test_*.py")):
-        try:
-            tree = ast.parse(test_file.read_text(encoding="utf-8"))
-        except SyntaxError:
-            continue
-        parsed.append((test_file.relative_to(ROOT).as_posix(), tree))
-    return tuple(parsed)
+    return _scanned_test_modules()[0]
+
+
+def _unparseable_test_modules_message(
+        unparseable: Iterable[tuple[str, str]]) -> str:
+    """The failure text for test files the scanner could not read ('' if none)."""
+    unparseable = list(unparseable)
+    if not unparseable:
+        return ""
+    return (
+        "these pytest files could NOT be parsed, so this guard cannot see "
+        "which repo paths they read — it would otherwise report them "
+        "covered without having looked. Fix the file (a UTF-8 BOM is fine; "
+        "anything else Python itself would refuse is not):\n"
+        + "\n".join(f"    - {rel}: {diag}" for rel, diag in unparseable)
+    )
 
 
 @lru_cache(maxsize=1)
@@ -953,6 +1005,9 @@ def _dir_entries(directory: Path) -> frozenset[str]:
 
 
 def test_python_filter_covers_every_out_of_tree_pytest_input() -> None:
+    unparseable_msg = _unparseable_test_modules_message(
+        _scanned_test_modules()[1])
+    assert not unparseable_msg, unparseable_msg
     patterns = _python_filter_patterns()
     uncovered = {
         path: sources
@@ -2814,6 +2869,39 @@ def test_logical_shell_lines_follows_the_three_shell_rules() -> None:
     # CRLF is handled like LF
     assert tokens(f"pip install a {bs}\r\n  -c reqs/pins.txt\r\n") == [
         ["pip", "install", "a", "-c", "reqs/pins.txt"]]
+
+
+def test_unparseable_test_module_is_reported_not_skipped(tmp_path: Path) -> None:
+    """#1632: the module scan must name a file it cannot read, and must read a
+    BOM'd one. Pinned on a constructed tree because the real tree has neither
+    — its green says nothing about either branch.
+
+    Counterfactuals this goes red on: restoring `except SyntaxError: continue`
+    (the broken file vanishes from `unparseable`), and dropping the BOM strip
+    in `parse_py` (the BOM'd file moves from `parsed` to `unparseable`).
+    """
+    tests_dir = tmp_path / PY_TEST_ROOT / "sub"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_broken.py").write_text("def f(:\n", encoding="utf-8")
+    (tests_dir / "test_bom.py").write_bytes(
+        b"\xef\xbb\xbfimport os\nP = 'docs/index.md'\n")
+
+    parsed, unparseable = _scan_test_modules(tmp_path)
+
+    assert [rel for rel, _ in parsed] == [f"{PY_TEST_ROOT}/sub/test_bom.py"], (
+        "a UTF-8 BOM made a test file unreadable to the scanner, though the "
+        f"interpreter imports it fine; unparseable={unparseable}")
+    assert [rel for rel, _ in unparseable] == [
+        f"{PY_TEST_ROOT}/sub/test_broken.py"], (
+        "an unparseable test file was dropped instead of reported — the guard "
+        "would stay green on a file it never read")
+    diag = unparseable[0][1]
+    assert diag.startswith("SyntaxError") and "test_broken.py" in diag, (
+        f"the diagnostic does not name the file it failed on: {diag!r}")
+
+    msg = _unparseable_test_modules_message(unparseable)
+    assert f"{PY_TEST_ROOT}/sub/test_broken.py" in msg and "NOT be parsed" in msg
+    assert _unparseable_test_modules_message(()) == ""
 
 
 def test_modules_needing_compat_detects_a_synthetic_orphan() -> None:

@@ -56,6 +56,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _pysource import parse_py
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Literal paths, not `/`-joined components: verify_diff.py builds its
@@ -714,7 +716,7 @@ def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     comprehensions alike. Walking the whole tree and subtracting the accessor's
     own nodes cannot miss a scope, because it never names one.
     """
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    tree = parse_py(__file__)
     accessor_names = {"_trigger_paths", "_trigger_branches",
                       "_branches_that_carry_required_checks"}
     accessors = [
