@@ -224,24 +224,40 @@ This extension is backward compatible with v1's `tenants` array (both can coexis
 ### Profile Reference Resolution
 
 ```python
-# Extension logic for generate_alertmanager_routes.py (pseudocode)
-def resolve_tenant_routing(tenant_cfg, profiles, defaults, enforced):
+# Logic of generate_alertmanager_routes.py (pseudocode)
+def shallow_merge(base, layer):
+    # Per top-level key: the whole value is replaced, never merged into
+    # (routes / overrides / receiver included).
+    merged = dict(base)
+    for k, v in layer.items():
+        merged[k] = v
+    return merged
+
+def resolve_tenant_routing(tenant_cfg, profiles, defaults):
     base = copy(defaults)
 
     # If a profile is referenced, merge profile first
     if '_routing_profile' in tenant_cfg:
         profile = profiles[tenant_cfg['_routing_profile']]
-        base = deep_merge(base, profile)
+        base = shallow_merge(base, profile)
 
     # Then merge tenant-level overrides
     if '_routing' in tenant_cfg:
-        base = deep_merge(base, tenant_cfg['_routing'])
-
-    # Finally apply enforced (cannot be overridden)
-    base = deep_merge(base, enforced)
+        base = shallow_merge(base, tenant_cfg['_routing'])
 
     return base
+
+# _routing_enforced is NOT merged into the tenant's routing: it is rendered as
+# its own route(s) with `continue: true` ahead of the tenant routes
+# (_build_enforced_routes in _grar_routes.py), which is what makes it
+# impossible for a tenant to override.
 ```
+
+⚠️ Corrected 2026-09-28 (#2326): this pseudocode used to say `deep_merge` for all three
+steps and merged `_routing_enforced` into the result. The code has always merged shallowly
+(`merge_routing_with_defaults` in `_grar_merge.py`, `routingpolicy.Resolve` in Go), as the
+"Merge Semantics" paragraph under Layer 1 already states, and it builds the enforced routes
+separately.
 
 ### Policy Validation Logic
 
@@ -265,6 +281,30 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
     return violations
 ```
 
+### Amendment 2026-09-28 (#2326): directory scope of profiles and policies
+
+**Status: decided, not implemented** (option P2 of
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); implementation
+in a follow-up PR). ⛔ Until it merges, `_routing_profiles.yaml` and `_domain_policy.yaml`
+are read from the conf.d **root only**; a copy in a subdirectory is not read.
+
+In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md)):
+
+- **Routing profiles**: `_routing_profiles.yaml` / `.yml` may sit in a subdirectory, and its
+  profiles are visible to the tenants in that subtree. A tenant resolves
+  `_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
+  profile name is **unique across the whole tree**: the same name defined at two places is
+  an error.
+- **Domain policies**: `_domain_policy.yaml` / `.yml` may sit in a subdirectory and applies
+  only within its subtree. A subtree policy whose `tenants:` names a tenant outside that
+  subtree is an **error** (ERROR under `--strict`, WARN otherwise), with a message distinct
+  from "tenant not found anywhere". Policies at different levels are judged **additively**:
+  a tenant must satisfy every policy that applies to it, so a subtree can only tighten.
+- **Merge order is unchanged**: `_routing_defaults` → profile → tenant `_routing`, each
+  step a shallow merge per top-level key. `_routing_defaults` itself now comes from a chain
+  of directory levels, and `_routing_enforced` stays root-only; both are specified in
+  [ADR-017 "Amendment 2026-09-28"](017-defaults-yaml-inheritance-dual-hash.en.md).
+
 ## v2.1.0 Implementation Summary
 
 - `generate_alertmanager_routes.py` — Four-layer merge (defaults → profile → tenant → enforced) + `check_domain_policies()` validation (21 tests)
@@ -287,6 +327,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 - **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
 - **#2280**: da-guard and tenant-api judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge, shared through `pkg/routingpolicy` and pinned by a cross-language parity matrix); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; da-guard also checks `routes` entry shapes and `_routing_defaults.routes`; a tenant-api batch op is judged on routing only when its patch touches `_routing_profile` / `_routing`
+- **#2326** (decided 2026-09-28, not implemented): profiles and domain policies scoped to the subtree they sit in, profile names unique across the tree, policies judged additively — see "Amendment 2026-09-28" above
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate
