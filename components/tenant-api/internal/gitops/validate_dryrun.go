@@ -15,9 +15,11 @@ import (
 // (invalid YAML among them).
 //
 // It runs write()'s refusal sequence in the same order: guardTenantID → the
-// body-only pre-flight (validateBodyOnly) → w.tenantFilePath (ambiguous tenant
-// file, #2078 declared-elsewhere) → validate(configDir, …). write() runs the
-// last two under its lock; the ORDER is what makes a body that is both
+// body-only pre-flight (validateBodyOnly) → the tenant file resolution
+// (ambiguous tenant file, #2078 declared-elsewhere; here through
+// w.previewTenantFilePath, the lock-free twin of write()'s w.tenantFilePath)
+// → validate(configDir, …). write() runs the last two under its lock; the
+// ORDER is what makes a body that is both
 // malformed and misplaced get the same first answer here as from Write. If
 // that sequence changes, this must change with it.
 //
@@ -25,14 +27,18 @@ import (
 // the fresh base it checks out, not the local tree — use DryRunValidateBodyOnly
 // there (#1718).
 //
-// ⛔ A *Writer METHOD, NOT A FREE FUNCTION OF configDir: tenantFilePath's walk
-// is bounded by scanTree, whose stuck-walk breaker lives on the Writer. Sharing
-// the production Writer lets a walk blocked on a FIFO fail every later dry-run
-// AND write fast, instead of each dry-run leaking one more blocked goroutine.
+// ⛔ A *Writer METHOD, NOT A FREE FUNCTION OF configDir: previewTenantFilePath
+// walks through scanTreeForRead, whose in-flight walk and stuck-walk breaker
+// live on the Writer. Sharing the production Writer lets concurrent dry-runs
+// and diffs share one walk, and a walk blocked on a FIFO fail every later
+// dry-run fast instead of each one leaking another blocked goroutine. That
+// breaker is the read path's own (#2153): a blocked dry-run walk never fails
+// a write, whose walks run under w.mu with a breaker of their own.
 //
 // No side effects: it takes neither the admission token nor w.mu and only reads
-// the tree, so its verdict is about the tree as it is now; a write queued
-// behind others is judged again on the tree it lands on.
+// the tree. Its verdict is about the tree as a recent walk saw it — possibly
+// one another preview started just before this call (see scanTreeForRead); a
+// write is judged again, on a walk of its own, on the tree it lands on.
 //
 // err is a refusal that would come BEFORE validation, typed exactly as Write
 // returns it (reserved id, ErrAmbiguousTenantFile, ErrTenantDeclaredElsewhere,
@@ -46,7 +52,7 @@ func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []s
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return errs, nil, nil
 	}
-	filePath, err := w.tenantFilePath(tenantID)
+	filePath, err := w.previewTenantFilePath(tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
