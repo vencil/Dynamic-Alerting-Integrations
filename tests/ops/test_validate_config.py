@@ -107,7 +107,7 @@ class TestRouteCheck:
             result = vc.check_routes(d)
             assert result["status"] in (vc.PASS, vc.WARN)
 
-    def test_no_routing_passes(self):
+    def test_no_routing_passes(self, amtool_accepts):
         """Config with no routing should pass (no routes generated)."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
