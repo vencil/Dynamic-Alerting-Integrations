@@ -103,18 +103,25 @@ def render_cr_to_yaml(cr: dict) -> str:
 
     doc: Dict[str, Any] = {}
 
+    # Each block is written only when it is a non-empty MAPPING. ⛔ Not a
+    # truthiness test: a RawPlain scalar is text, so `defaults: 0` /
+    # `stateFilters: false` read as "0" / "false" are truthy, and writing
+    # them out makes the exporter skip the whole file (YamlFileError,
+    # ValueError). Read PyYAML-typed they were falsy and dropped; this keeps
+    # that — and drops any other non-mapping block the same way.
+
     # Tenants block (required)
     tenants = spec.get("tenants")
-    if tenants:
+    if isinstance(tenants, dict) and tenants:
         doc["tenants"] = tenants
 
     # Optional platform blocks
     defaults = spec.get("defaults")
-    if defaults:
+    if isinstance(defaults, dict) and defaults:
         doc["defaults"] = defaults
 
     state_filters = spec.get("stateFilters")
-    if state_filters:
+    if isinstance(state_filters, dict) and state_filters:
         doc["state_filters"] = state_filters
 
     header = (

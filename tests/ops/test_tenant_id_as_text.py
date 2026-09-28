@@ -595,6 +595,65 @@ def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     assert header.endswith(f"ThresholdConfig ns/{want}"), header
 
 
+# A spec block that is not a mapping is not written (as before #2331). Read
+# PyYAML-typed, `defaults: 0` / `stateFilters: false` were falsy and dropped;
+# read as their text (RawPlain "0") they are truthy, and writing them out
+# made the exporter skip the whole tenant file (YamlFileError, ValueError).
+_SPEC_TENANT = '    t1:\n      mysql_connections: "70"\n'
+
+
+def _cr_with_spec_extra(extra: str) -> str:
+    return _cr("t1", _SPEC_TENANT) + extra
+
+
+@pytest.mark.parametrize("extra", [
+    "  defaults: 0\n", "  defaults: false\n", "  defaults: no\n",
+    "  stateFilters: false\n", "  stateFilters: 0\n",
+    "  defaults: 0\n  stateFilters: false\n",
+], ids=["defaults-0", "defaults-false", "defaults-no", "stateFilters-false",
+        "stateFilters-0", "both"])
+def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+                                        encoding="utf-8")
+    assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
+    got = _as_text(out / "t1.yaml")
+    assert got == {"tenants": {"t1": {"mysql_connections": "70"}}}, got
+
+
+@pytest.mark.parametrize("tenants", ["0", "false"])
+def test_da_assembler_drops_a_scalar_tenants_block(tmp_path, tenants):
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr("t1", "").replace("  tenants:\n",
+                                        f"  tenants: {tenants}\n"),
+                  encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    assert _as_text(out / "t1.yaml") == {}
+
+
+def test_da_assembler_still_writes_mapping_spec_blocks(tmp_path, da_guard):
+    """Control: a mapping `stateFilters` is written as before."""
+    extra = ("  stateFilters:\n    container_crashloop:\n"
+             "      reasons: [CrashLoopBackOff]\n      severity: critical\n")
+    cr = tmp_path / "cr.yaml"
+    cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert da_assembler.render_cr_file(cr, out) == 0
+    got = _as_text(out / "t1.yaml")
+    assert got["state_filters"] == {"container_crashloop": {
+        "reasons": ["CrashLoopBackOff"], "severity": "critical"}}, got
+    (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+                                        encoding="utf-8")
+    assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
+
+
 # ── patch-config: the tenant patched is the tenant named (#2216, #2237) ──
 #
 # `_patch_carrier` rewrote the carrier from `yaml.safe_load(old)`: a lone
