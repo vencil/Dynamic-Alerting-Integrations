@@ -475,13 +475,13 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 
 ## 11. Delivering Platform Self-Monitoring Alerts
 
-The platform ships a self-monitoring rule pack of its own (`k8s/03-monitoring/configmap-rules-platform.yaml`, 41 rules) watching the health of Prometheus / Alertmanager / threshold-exporter / tenant-api / the federation and projection pipelines. **Out of the box they notify nobody**: `Watchdog` rides the index-0 heartbeat route described in [Alerting-Plane Self-Liveness](alerting-plane-self-liveness.en.md), and the other 40 land in the root `default` receiver, which has no notifier. That is a deliberate shipping posture (we do not pre-wire alerts to a destination we do not know), **not a dead end** — this section explains how to wire them.
+The platform ships a self-monitoring rule pack of its own (`k8s/03-monitoring/configmap-rules-platform.yaml`) watching the health of Prometheus / Alertmanager / threshold-exporter / tenant-api / the federation and projection pipelines. **Out of the box they notify nobody**: `Watchdog` rides the index-0 heartbeat route described in [Alerting-Plane Self-Liveness](alerting-plane-self-liveness.en.md), and all the others land in the root `default` receiver, which has no notifier. That is a deliberate shipping posture (we do not pre-wire alerts to a destination we do not know), **not a dead end** — this section explains how to wire them.
 
 The mechanism is the same `_routing_enforced` from §8; only the matcher differs.
 
 ### Primary selector: `alert_source="platform"` (a positive assertion)
 
-Platform alerts have **no tenant to route them by**, so the platform gives them a positive discriminator label instead: all 40 alerts except `Watchdog` carry `alert_source: platform`.
+Platform alerts have **no tenant to route them by**, so the platform gives them a positive discriminator label instead: every alert except `Watchdog` carries `alert_source: platform`.
 
 ```yaml
 # conf.d/_defaults.yaml
@@ -501,7 +501,7 @@ This is a **positive** assertion: it selects only what is explicitly labelled, s
 
 ### Fallback: `tenant=""` (⚠️ a negative assertion, with a known trap — and **incomplete**)
 
-**37** of the 40 carry no `tenant` label at all, so `tenant=""` catches those 37. **The other 3 it cannot reach** (all of them `severity: warning`):
+Apart from the 3 below, none of them carry a `tenant` label at all, so `tenant=""` catches them. **These 3 it cannot reach** (all of them `severity: warning`):
 
 | Alert | Where its `tenant` comes from |
 |---|---|
@@ -511,14 +511,14 @@ This is a **positive** assertion: it selects only what is explicitly labelled, s
 
 ⚠️ The last two are easy to miscount: their rule-level `labels:` block does **not** mention `tenant` — the label only materialises at fire time from the aggregation dimension. Reading only the rule file's `labels:` will tell you they have no tenant.
 
-So `tenant=""` is an **incomplete** fallback: it does catch a future rule that forgets `alert_source` *provided that rule's result set has no tenant*, but it reaches **no** per-tenant-aggregated platform alert — and the federation-side alerts are exactly that shape. Its other cost is that it also catches any unrelated alert that happens to have no tenant. **The positive `alert_source="platform"` is the only 40/40 selector**; treat `tenant=""` as an optional second net, not a substitute.
+So `tenant=""` is an **incomplete** fallback: it does catch a future rule that forgets `alert_source` *provided that rule's result set has no tenant*, but it reaches **no** per-tenant-aggregated platform alert — and the federation-side alerts are exactly that shape. Its other cost is that it also catches any unrelated alert that happens to have no tenant. **The positive `alert_source="platform"` is the only selector that catches them all**; treat `tenant=""` as an optional second net, not a substitute.
 
 ⚠️ **There is a trap here that bites in the opposite direction, so remember it**: Alertmanager's documented semantics are that **a label that is not present is equivalent to an empty label value**. Therefore:
 
 | Written as | What it actually matches |
 |---|---|
-| `tenant=""` | alerts with no `tenant` label (37 of the 40 platform alerts) ✅ what the fallback wants |
-| `tenant=~".*"` | **every alert, all 40 platform ones included** ⚠️ `.*` matches the empty value |
+| `tenant=""` | alerts with no `tenant` label (every platform alert except the 3 above) ✅ what the fallback wants |
+| `tenant=~".*"` | **every alert, all platform ones included** ⚠️ `.*` matches the empty value |
 | `tenant!=""` / `tenant=~"\S+"` | any alert that carries a tenant — ⚠️ **including the 3 platform alerts above**, so this is *not* "tenant alerts only" |
 | `tenant!=""` plus `alert_source=""` | genuinely "tenant alerts only" ✅ the two matchers are ANDed |
 
@@ -531,14 +531,14 @@ Four things must be understood up front, or you will form the wrong expectation:
 1. **`_routing_enforced` produces exactly ONE route** (Mode A).
 2. **Multiple matchers inside `match` are ANDed**, not ORed.
 3. Therefore **a single enforced route cannot express "all criticals" OR "all platform alerts"** — you must **pick one**:
-   - Pick `alert_source="platform"` → all 40 platform self-monitoring alerts are delivered; tenant criticals go through each tenant's own `_routing` (and not to the NOC).
+   - Pick `alert_source="platform"` → all platform self-monitoring alerts are delivered; tenant criticals go through each tenant's own `_routing` (and not to the NOC).
    - Pick `severity="critical"` → the NOC gets every tenant critical, but platform self-monitoring coverage is only **18 of 40** (18 critical, 20 warning, 2 info); the remaining 22 stay silent.
 
    ⚠️ Do not try to work around this by hand-adding a second route to the base ConfigMap: `route.routes` is **replaced wholesale** on regeneration (`assemble_configmap`), so a hand-added route disappears at the next regen.
 
 4. **Mode B (`{{tenant}}` expansion) is the wrong tool for platform alerts — and it fails in two opposite directions**: each per-tenant enforced route hard-codes a `tenant="<name>"` matcher (`scripts/tools/ops/_grar_routes.py`).
-   - **Never delivered (37/40)**: the 37 alerts with no `tenant` label at all can never match any per-tenant route.
-   - **⚠️ Over-delivered (3/40)**: `TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors` **do** match — they carry `tenant` (the latter two from their expr's `sum by (tenant)`, so it exists only at fire time). The platform's own failure alerts are therefore delivered into that tenant's channel, and because the enforced route is `continue: true` they go on to hit the tenant's main route as well — **delivered twice**. `FederationGatewayBackendErrors` in particular documents itself as a platform fault rather than a tenant rejection, so the tenant is the wrong recipient.
+   - **Never delivered**: the alerts with no `tenant` label at all (every one except the 3 in the next item) can never match any per-tenant route.
+   - **⚠️ Over-delivered (3 alerts)**: `TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors` **do** match — they carry `tenant` (the latter two from their expr's `sum by (tenant)`, so it exists only at fire time). The platform's own failure alerts are therefore delivered into that tenant's channel, and because the enforced route is `continue: true` they go on to hit the tenant's main route as well — **delivered twice**. `FederationGatewayBackendErrors` in particular documents itself as a platform fault rather than a tenant rejection, so the tenant is the wrong recipient.
 
    **Use Mode A for platform alerts.** If tenant requirements force Mode B on you, understand that those 3 leak into tenant channels; add an `alert_source=""` condition ahead of the per-tenant receiver to block them (the same exclusion the platform uses on its silent-mode inhibits).
 
@@ -546,7 +546,7 @@ Four things must be understood up front, or you will form the wrong expectation:
 
 Platform alerts **bypass most of the platform's own noise reduction**, because those mechanisms are all keyed on `tenant` / `metric_group`:
 
-- **Severity dedup does not apply**: the shipped dedup `inhibit_rules` require `metric_group=~".+"` and `tenant="<name>"` on both sides, while **zero** platform alerts carry `metric_group` (and 37 carry no `tenant` either). The immunity comes from the **former**: since not one platform alert has a `metric_group`, even the 3 that do carry a tenant are never deduped. Concretely: `ThresholdExporterDown` (warning) and `ThresholdExporterAbsent` (critical) will **both** notify during a full outage instead of collapsing into one.
+- **Severity dedup does not apply**: the shipped dedup `inhibit_rules` require `metric_group=~".+"` and `tenant="<name>"` on both sides, while **zero** platform alerts carry `metric_group` (and apart from those 3, none carry a `tenant` either). The immunity comes from the **former**: since not one platform alert has a `metric_group`, even the 3 that do carry a tenant are never deduped. Concretely: `ThresholdExporterDown` (warning) and `ThresholdExporterAbsent` (critical) will **both** notify during a full outage instead of collapsing into one.
 - **Silent mode does not apply (for a different reason than the line above)**: the `TenantSilentWarning` / `TenantSilentCritical` inhibit targets are `severity=<...>` + `tenant=~".+"` — which the 3 tenant-bearing platform warnings **did** satisfy, so a tenant flipping `_silent_mode` once could mute the platform's own failure alerts. This release adds `alert_source=""` to those two `target_matchers` (meaning: only alerts that carry **no** platform marker), so platform alerts are now immune. ⚠️ Do not conflate the two reasons: **dedup is immune because `metric_group` was never there**, **silent mode is immune because this release added an exclusion**.
   The same hole has a **second face**, fixed in this release too: the Alertmanager silences `maintenance-scheduler` creates from a tenant's `_state_maintenance.recurring` carried only a `tenant="<name>"` matcher, so a tenant maintenance window muted those same 3 platform alerts. They now carry `alert_source=""` as well (`scripts/tools/ops/maintenance_scheduler.py`, both write paths sharing one builder). ⚠️ Read the two faces together: **inhibit and silence are different mechanisms** — fixing only one just changes the hole's shape. Pre-existing single-matcher silences are unaffected: the idempotency lookup keys on `(tenant, comment)` and scans for the `tenant` matcher by name rather than comparing the whole set.
 - **`absent()`-shaped alerts fire continuously when a component is not deployed**: `ThresholdExporterAbsent`, `TenantExporterJobAbsent`, `FederationRevocationReconcileStale` and `FederationAuditPipelineSilent` — **four** of them — are "shout when the thing is gone" by design (the last two are federation-side, so they are necessarily lit when federation is not enabled), so in a demo or partial deployment they stay lit. Confirm those components are actually deployed before wiring the channel, or day one is steady noise.
@@ -558,7 +558,7 @@ Recommended approach: wire it to a **low-priority destination** first (a dedicat
 
 ### ⚠️ Upgrade note: this label change disturbs already-running alert state
 
-Adding a rule-level label to 40 rules changes their label sets, which has two **one-off** observable side effects (**only in environments that have already wired platform alerts to a notifier**; with the shipped default of `_routing_enforced` disabled, nobody is listening and nothing is felt):
+Adding a rule-level label to every platform rule except `Watchdog` changes their label sets, which has two **one-off** observable side effects (**only in environments that have already wired platform alerts to a notifier**; with the shipped default of `_routing_enforced` disabled, nobody is listening and nothing is felt):
 
 1. **Alertmanager fingerprints change**: Alertmanager computes an alert's fingerprint from its label set, so a changed label set is a *different alert*. An operator with delivery wired will see the old fingerprint emit a **spurious resolved** after `resolve_timeout` elapses, and the new fingerprint **page again**.
 2. **Prometheus `for:` timers reset**: on a rules reload, Prometheus matches existing pending/firing state by rule name + labels; what does not match is treated as a new rule and **restarts its timer from zero**. Rules with `for: 15m` therefore have a detection gap of up to **15 minutes** — if an incident happens to be burning while you apply this release, no new firing notification will be produced during that window.
