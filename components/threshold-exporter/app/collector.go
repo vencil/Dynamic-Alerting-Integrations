@@ -30,9 +30,7 @@ type ThresholdCollector struct {
 func NewThresholdCollector(manager *ConfigManager) *ThresholdCollector {
 	return &ThresholdCollector{
 		manager: manager,
-		inner: scrape.NewCollector(manager, func(perTenant map[string]int) {
-			manager.getMetrics().PublishTenantMetricsOverLimit(perTenant)
-		}),
+		inner:   scrape.NewCollector(manager),
 	}
 }
 

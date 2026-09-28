@@ -82,14 +82,6 @@ type configMetrics struct {
 	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful conf.d tree scan completion (e2e harness anchor T1; production stuck-detection)
 	lastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
 	freeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
-	// #652: state-coded gauge for per-tenant cardinality cap-hit
-	// observability. Magnitude = max(0, count - effective_limit), so a
-	// tenant stuck 100-over-limit reports 100 (NOT a counter that
-	// scrape-frequency-couples to ~12,000/hour at 30s scrape interval).
-	// Reset+Set per scrape inside ThresholdCollector.Collect so vanished
-	// tenants are evicted automatically. See pkg/config/resolve.go
-	// ResolveAtWithStats for the producer side.
-	tenantMetricsOverLimit *prometheus.GaugeVec
 	// State-coded gauge: tenants that inherit a key existing ONLY in a
 	// subtree `_defaults.yaml`, which /effective reports and the collector
 	// cannot emit (#1976; was the #1521 divergence gauge until #1957 removed
@@ -143,7 +135,6 @@ func newConfigMetrics() *configMetrics {
 		lastScanComplete:            s.LastScanComplete,
 		lastReloadComplete:          s.LastReloadComplete,
 		freeOSMemory:                s.FreeOSMemory,
-		tenantMetricsOverLimit:      s.TenantMetricsOverLimit,
 		subtreeUndeliverableTenants: s.SubtreeUndeliverableTenants,
 		maxTenantsPerFile:           s.MaxTenantsPerFile,
 		maxMappingKeys:              s.MaxMappingKeys,
@@ -385,25 +376,4 @@ func (cm *configMetrics) SetConfigShape(s configShape) {
 // Called once, by LoadInitial, when that load succeeds.
 func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 	cm.initialLoadDuration.Set(d.Seconds())
-}
-
-// PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit
-// snapshot with the supplied per-tenant magnitudes (#652). Called from
-// ThresholdCollector.Collect each scrape with the ResolveStats produced
-// by ResolveAtWithStats:
-//
-//  1. Reset() evicts every previous (tenant) label combination so a tenant
-//     that has been deleted from config no longer surfaces a stale gauge.
-//  2. Set() writes the new magnitude per tenant — 0 for compliant tenants
-//     (so a tenant that just dropped back below the cap is observably
-//     clamped to zero rather than carrying its old over-limit value).
-//
-// Called from inside the collector's Collect; the GaugeVec is mutated only
-// here. ⚠️ Registration order does NOT order it against the GaugeVec's own
-// Collect: Registry.Gather collects the registered collectors concurrently,
-// so within one Gather the GaugeVec may emit before or after this Reset+Set
-// — i.e. a scrape can carry the previous scrape's magnitudes. Known and left
-// as is (#2115 moved this code without changing it).
-func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
-	cm.set.PublishTenantMetricsOverLimit(perTenant)
 }

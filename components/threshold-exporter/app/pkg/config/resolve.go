@@ -106,10 +106,10 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 // per-tenant cardinality observations (#652). See ResolveStats for shape.
 //
 // The threshold-exporter collector uses the stats return value to drive
-// `da_tenant_metrics_over_limit{tenant}` (state-coded gauge); compliant
-// tenants appear with value 0 so the collector's per-scrape Reset+Set
-// loop correctly evicts vanished tenants and clears gauges for tenants
-// that have just dropped back below the limit.
+// `da_tenant_metrics_over_limit{tenant}` (state-coded gauge, one
+// ConstMetric per entry each scrape); compliant tenants appear with value
+// 0 so a tenant that just dropped back below the limit reads 0 instead of
+// vanishing from the family.
 func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
 	return c.resolveAtWithStats(now, nil)
 }
@@ -134,8 +134,8 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 	tenantCount := make(map[string]int)
 	// #652: per-tenant over-limit magnitudes for the
 	// da_tenant_metrics_over_limit gauge. Populated for every visited
-	// tenant — compliant tenants get 0 so the collector's Reset+Set loop
-	// clears stale gauges for tenants that just dropped back below the cap.
+	// tenant — compliant tenants get 0 so a tenant that just dropped back
+	// below the cap reads 0 on the collector's gauge instead of vanishing.
 	perTenantOverLimit := make(map[string]int, len(c.Tenants))
 	// #741 S3a: per-tenant malformed _custom_alerts count for the
 	// da_custom_alert_parse_errors gauge (fail-loud — a bad declaration is

@@ -23,7 +23,7 @@ func (s staticSource) GetConfigInfo() config.ConfigInfo   { return config.Config
 func maintenanceExpiredEvents(t *testing.T, cfg *config.ThresholdConfig, at time.Time) int {
 	t.Helper()
 	metrics := NewConfigMetrics()
-	c := NewCollectorWithHooks(staticSource{cfg}, metrics.PublishTenantMetricsOverLimit, Hooks{
+	c := NewCollectorWithHooks(staticSource{cfg}, Hooks{
 		Now: func() time.Time { return at },
 	})
 	reg := prometheus.NewRegistry()
