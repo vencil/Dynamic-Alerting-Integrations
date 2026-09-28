@@ -1344,88 +1344,112 @@ class EscalationFindings(NamedTuple):
     # First escalation destination ("routes[<j>] (<match>)" or "the main
     # receiver"); None ⇔ non-compliant.
     target: str | None
-    # (ref, match, receiver_type) of each sub-route that can catch a
-    # critical alert ahead of ``target`` without escalating it.
-    shadows: list[tuple[str, str, str]]
-    # (covered, fallthrough) when ``target`` is a routes entry that matches
-    # more than ``severity: critical``: ``covered`` is its other matchers,
-    # ``fallthrough`` where the remaining critical alerts land (a non-
-    # escalation catch-all route, or the main receiver). None otherwise.
-    partial: tuple[str, str] | None = None
+    # (ref, match, receiver_type, caught) of each non-escalation destination
+    # that can receive a severity=critical alert, in render order: rendered
+    # sub-routes by their ref / match, then the main receiver as
+    # ("the main receiver", "", type, "severity=critical"). ``caught`` is
+    # the label set such an alert carries (``severity=critical, team=app``).
+    leaks: list[tuple[str, str, str, str]]
 
 
-def critical_escalation_findings(routing_config: dict) -> EscalationFindings:
+def _subroute_match(ref: str, routing_config: dict) -> dict:
+    """The equality ``match`` a rendered sub-route adds under the tenant route.
+
+    ``override[<i>]`` → ``{alertname|metric_group: str(value)}`` — the
+    generator formats the value into the matcher, so ``alertname: 123``
+    renders as ``"123"`` and must compare equal to a route's ``"123"``;
+    ``routes[<i>]`` → its raw ``match`` (``route_entry_matchers`` already
+    requires string values). Only call it with refs from
+    ``list_tenant_subroutes`` (they are already structurally valid).
+    """
+    if ref.startswith("override["):
+        override = routing_config["overrides"][int(ref[len("override["):-1])]
+        key = "alertname" if override.get("alertname") else "metric_group"
+        return {key: str(override[key])}
+    return dict(routing_config["routes"][int(ref[len("routes["):-1])]["match"])
+
+
+def critical_escalation_findings(routing_config: dict,
+                                 tenant: str | None = None) -> EscalationFindings:
     """Judge one tenant's resolved routing against ``require_critical_escalation``.
 
     Compliant ⇔ the main receiver type is in ``ESCALATION_TYPES``, or a
     rendered ``routes[j]`` (same list as ``list_tenant_subroutes``) matches
     ``severity: critical`` and sends to an ``ESCALATION_TYPES`` receiver.
-    When compliant:
 
-    * ``shadows`` lists each sub-route ahead of the first escalation target —
-      overrides, then routes, then the main receiver, first match wins — that
-      is not itself an escalation receiver and can catch a critical alert:
-      every override (it cannot match on severity), and every route whose
-      ``match`` has no ``severity`` key or ``severity: critical``.
-    * ``partial`` is set when the target is a routes entry whose ``match``
-      has keys besides ``severity``: the remaining critical alerts fall to
-      the first later
-      route whose ``match`` is exactly ``{severity: critical}``, else to the
-      main receiver — reported only when that is not an escalation receiver.
+    When compliant, ``leaks`` (#2312) is exact only inside the tenant
+    route's sub-tree and only for equality matchers: the tenant route's
+    children are tried in render order (overrides, then routes), first
+    match wins, and what no child takes stays on the main
+    receiver. For each destination N whose receiver type is not in
+    ``ESCALATION_TYPES`` — every listed sub-route, then the main receiver
+    with an empty match — let ``C_N = match(N) ∪ {severity: critical}``:
+
+    * N's match has a ``severity`` other than ``critical`` → N never
+      receives a critical alert;
+    * some earlier sub-route P (escalating or not) has ``match(P) ⊆ C_N``
+      → P takes every critical alert N could match, so N never sees one;
+    * otherwise the alert labelled exactly ``C_N`` reaches N, and N is
+      listed with ``caught`` = ``C_N``.
+
+    With *tenant* given, every alert under the tenant route also carries
+    ``tenant=<tenant>`` (the route's own matcher), so the subset test runs
+    against ``C_N ∪ {tenant: <tenant>}`` — an earlier ``match: {tenant:
+    <tenant>}`` takes everything — and a sub-route matching another tenant
+    receives nothing. Without it that label is left unknown, which can only
+    list a destination too many.
+
+    Outside that model: platform routes rendered AHEAD of the tenant route
+    (e.g. ``alertname="Watchdog"``, ``component=custom`` and the other
+    ``continue: false`` platform routes) are not considered, so a sub-route
+    whose match names their values is listed although it never receives an
+    alert — this side can only over-report. And a listed sub-route the
+    generator does not render (invalid receiver content) is still treated as
+    present: it may be listed itself, and as an earlier P it may hide a
+    later N (under-report).
+
+    Whether the main receiver escalates does not change whether a sub-route
+    is listed: a sub-route that catches critical alerts takes them away from
+    whichever destination would otherwise have escalated them.
 
     Call it only for a tenant with a main receiver.
     """
     subroutes = list_tenant_subroutes(routing_config)
-    raw_routes = routing_config.get("routes")
     main_type = _subroute_receiver_type(routing_config)
+    matches = [_subroute_match(ref, routing_config)
+               for ref, _m, _rc, _inh in subroutes]
 
-    def _route_match(ref: str) -> dict | None:
-        """The raw ``match`` of a ``routes[<i>]`` ref; None for an override."""
-        if not ref.startswith("routes["):
-            return None
-        return raw_routes[int(ref[len("routes["):-1])]["match"]
-
-    first = None
-    for pos, (ref, _match, sub_rc, _inh) in enumerate(subroutes):
-        match = _route_match(ref)
-        if (match is not None and match.get("severity") == "critical"
+    target = None
+    for (ref, match_str, sub_rc, _inh), match in zip(subroutes, matches):
+        if (match.get("severity") == "critical"
                 and _subroute_receiver_type(sub_rc) in ESCALATION_TYPES):
-            first = pos
+            target = f"{ref} ({match_str})"
             break
-    if first is None:
+    if target is None:
         if main_type not in ESCALATION_TYPES:
             return EscalationFindings(None, [])
-        first = len(subroutes)
         target = "the main receiver"
-    else:
-        target = f"{subroutes[first][0]} ({subroutes[first][1]})"
 
-    shadows = []
-    for ref, match_str, sub_rc, _inh in subroutes[:first]:
-        sub_type = _subroute_receiver_type(sub_rc)
-        if sub_type in ESCALATION_TYPES:
+    destinations = [(ref, match_str, _subroute_receiver_type(sub_rc), match)
+                    for (ref, match_str, sub_rc, _inh), match
+                    in zip(subroutes, matches)]
+    destinations.append(("the main receiver", "", main_type, {}))
+    leaks = []
+    for pos, (ref, match_str, rtype, match) in enumerate(destinations):
+        if rtype in ESCALATION_TYPES:
             continue
-        match = _route_match(ref)
-        if match is None or match.get("severity") in (None, "critical"):
-            shadows.append((ref, match_str, sub_type))
-
-    partial = None
-    if first < len(subroutes):
-        target_match = _route_match(subroutes[first][0])
-        others = [f"{k}={v}" for k, v in target_match.items()
-                  if k != "severity"]
-        if others:
-            fallthrough = f"the main receiver (type '{main_type}')"
-            fall_type = main_type
-            for ref, match_str, sub_rc, _inh in subroutes[first + 1:]:
-                if _route_match(ref) == {"severity": "critical"}:
-                    fall_type = _subroute_receiver_type(sub_rc)
-                    fallthrough = (f"{ref} ({match_str}, receiver type "
-                                   f"'{fall_type}')")
-                    break
-            if fall_type not in ESCALATION_TYPES:
-                partial = (",".join(others), fallthrough)
-    return EscalationFindings(target, shadows, partial)
+        if match.get("severity", "critical") != "critical":
+            continue
+        if tenant is not None and match.get("tenant", tenant) != tenant:
+            continue
+        caught = {"severity": "critical", **match}
+        labels = caught if tenant is None else {**caught, "tenant": tenant}
+        if any(all(labels.get(k) == v for k, v in earlier.items())
+               for earlier in matches[:pos]):
+            continue
+        leaks.append((ref, match_str, rtype,
+                      ", ".join(f"{k}={v}" for k, v in caught.items())))
+    return EscalationFindings(target, leaks)
 
 
 def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
@@ -1433,11 +1457,12 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     """Append the ``require_critical_escalation`` findings for one tenant.
 
     Non-compliance goes through *fmt* (strict → blocking ERROR, else WARN).
-    A shadowing sub-route and a partial escalation are always a plain WARN —
-    they never block, and the text avoids the ``skipping`` word
+    A non-escalation destination that can still receive a critical alert
+    (``critical_escalation_findings().leaks``) is always a plain WARN — it
+    never blocks, and the text avoids the ``skipping`` word
     ``_validate_mode`` fails on.
     """
-    target, shadows, partial = critical_escalation_findings(routing_config)
+    target, leaks = critical_escalation_findings(routing_config, tenant)
     escalation = sorted(ESCALATION_TYPES)
     if target is None:
         main_type = _subroute_receiver_type(routing_config)
@@ -1451,19 +1476,19 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
             "receiver to the tenant's _routing or its routing profile, or "
             "switch the main receiver.type to pagerduty"))
         return
-    for ref, match, sub_type in shadows:
-        messages.append(
-            f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' {ref} "
-            f"({match}): receiver type '{sub_type}' is matched before the "
-            f"critical escalation target {target}, so severity=critical "
-            f"alerts it matches never reach a receiver of type {escalation}")
-    if partial is not None:
-        covered, fallthrough = partial
-        messages.append(
-            f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
-            f"{target}: the critical escalation only covers alerts with "
-            f"{covered}; other severity=critical alerts go to {fallthrough}, "
-            f"not a receiver of type {escalation}")
+    for ref, match, rtype, caught in leaks:
+        if match:
+            messages.append(
+                f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
+                f"{ref} ({match}): receiver type '{rtype}' catches alerts "
+                f"with {caught} before any receiver of type {escalation} "
+                f"does, so they never reach one")
+        else:
+            messages.append(
+                f"  WARN: domain_policy '{policy_name}', tenant '{tenant}': "
+                f"severity=critical alerts that no sub-route catches go to "
+                f"the main receiver (type '{rtype}'), not a receiver of type "
+                f"{escalation}")
 
 
 def check_domain_policies(
@@ -1493,9 +1518,9 @@ def check_domain_policies(
             "1h30m" is silently skipped there).
 
     ``require_critical_escalation: true`` (#2244) is judged by
-    ``critical_escalation_findings``; a sub-route that shadows the
-    escalation target, and an escalation route that covers only part of
-    the critical alerts, are a WARN in both modes and never block.
+    ``critical_escalation_findings``; a compliant tenant's non-escalation
+    destination that can still receive a critical alert (#2312) is a WARN
+    in both modes and never blocks.
 
     Known limitation: a ``domain_policies:`` block in a wrongly named
     file, or an unparseable ``_domain_policy.yaml``, never reaches this

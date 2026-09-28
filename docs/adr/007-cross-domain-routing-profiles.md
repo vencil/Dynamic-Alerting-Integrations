@@ -114,9 +114,12 @@ domain_policies:
 
 **`require_critical_escalation` 判準**（#2244）：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty，這項檢查不保證每一則 critical 告警都會送到 PagerDuty。合規條件是租戶主 receiver 的 type 為 `pagerduty`，或者有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty` receiver；只換成別的 receiver type 或別的目標都不算升級。
 
-合規之後還有兩種情況只報 WARN，在兩種模式下都不影響 exit code：
-- **遮蔽**：路由順序是 overrides → routes → 主 receiver。排在升級目的地之前、又可能攔下 critical 的非 PagerDuty 子路由，每條報一則。override 一律算，因為它不能比對 severity；route 則是沒寫 `severity`、或寫的正是 `critical` 才算。
-- **部分涵蓋**：升級用的 `routes` 條目除了 `severity` 還比對了別的 label（例如 `alertname`）。WARN 會列出它涵蓋的 label，以及其餘 critical 告警的去處：後面第一條 `match` 恰為 `{severity: critical}` 的 route，沒有的話就是主 receiver。那個去處是 PagerDuty 時不報。
+合規之後，凡是還收得到 critical 告警的非 PagerDuty 目的地，每個報一則 WARN，在兩種模式下都不影響 exit code（#2312）。路由順序是 overrides → routes → 主 receiver，先符合者勝出。對每個 receiver 不是 PagerDuty 的目的地 N，把它會攔下的 critical 告警寫成 `C_N`：N 的 `match` 再加上 `severity: critical`（override 的 match 是它的 `alertname` 或 `metric_group`，主 receiver 的 match 視為空）。
+- N 的 `match` 寫了 `critical` 以外的 `severity`：收不到 critical，不報。
+- N 之前有任何子路由 P 的 `match` 是 `C_N` 的子集（P 是不是 PagerDuty 都算，tenant route 自帶的 `tenant=<租戶>` 也算進 `C_N`）：P 先攔走，N 收不到，不報。
+- 其餘情況報 WARN，點名 N 與它攔走的條件，例如 `severity=critical, team=app`。
+
+主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或特定 `component` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。這項檢查不看 custom 子樹（#2342）。
 
 ### 為何拒絕三層 Contact Profile 模型
 

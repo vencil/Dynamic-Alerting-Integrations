@@ -109,9 +109,12 @@ domain_policies:
 
 **`require_critical_escalation` criterion** (#2244): the tenant must have at least one `severity=critical` path to PagerDuty; the check does not guarantee that every critical alert reaches PagerDuty. A tenant complies when its main receiver type is `pagerduty`, or when a rendered `routes` entry matches `severity: critical` and sends to a `pagerduty` receiver; switching to some other receiver type or target does not count as escalation.
 
-Once a tenant complies, two cases only produce WARNs, which never affect the exit code in either mode:
-- **Shadowing**: routing order is overrides → routes → main receiver. Each non-PagerDuty sub-route placed ahead of the escalation target that can catch a critical alert gets its own WARN. Every override counts, since it cannot match on severity; a route counts when it has no `severity` or has `severity: critical`.
-- **Partial coverage**: the escalating `routes` entry matches labels besides `severity` (e.g. `alertname`). The WARN lists the labels it covers and where the remaining critical alerts go: the first later route whose `match` is exactly `{severity: critical}`, otherwise the main receiver. No WARN when that destination is PagerDuty.
+Once a tenant complies, every non-PagerDuty destination that can still receive a critical alert gets its own WARN, which never affects the exit code in either mode (#2312). Routing order is overrides → routes → main receiver, and the first match wins. For each destination N whose receiver is not PagerDuty, write the critical alerts it would catch as `C_N`: N's `match` plus `severity: critical` (an override's match is its `alertname` or `metric_group`; the main receiver's match is empty).
+- N's `match` has a `severity` other than `critical`: it never receives a critical alert, no WARN.
+- Some sub-route P ahead of N has a `match` that is a subset of `C_N` (whether or not P is PagerDuty; the `tenant=<tenant>` matcher of the tenant route counts as part of `C_N`): P takes those alerts first, N never sees one, no WARN.
+- Otherwise the WARN names N and the labels it catches, e.g. `severity=critical, team=app`.
+
+Whether the main receiver is PagerDuty does not change the verdict for a sub-route: the critical alerts a sub-route catches would otherwise have reached a later escalation destination. The WARN says critical alerts land on the main receiver only when N is the main receiver itself. The check is exact only within the tenant route's sub-tree and only for equality matchers. Two things fall outside its model. First, platform routes placed ahead of the tenant route (e.g. `alertname="Watchdog"` or routes for specific `component` values) are not considered, so a sub-route whose match names those values may be reported although it never receives an alert; this part can only over-report. Second, a sub-route whose receiver content is invalid, which the generator does not render, is still treated as present: it may itself be over-reported, and it may make a later N look already caught and so be under-reported. The check does not look at the custom sub-tree (#2342).
 
 ### Why Reject Three-Layer Contact Profile Model
 

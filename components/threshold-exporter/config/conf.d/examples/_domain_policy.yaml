@@ -21,8 +21,9 @@ domain_policies:
       min_group_wait: 30s
       # require_critical_escalation: true  # enforced: at least one severity=critical
       #   path to PagerDuty — the main receiver is pagerduty, or a `routes` entry
-      #   with match {severity: critical} sends to pagerduty (ADR-007; shadowing
-      #   and partial coverage are WARN only). Left commented:
+      #   with match {severity: critical} sends to pagerduty (ADR-007; a
+      #   non-PagerDuty destination that still gets critical alerts is WARN
+      #   only). Left commented:
       #   db-a / db-b have neither, so enabling it here would fail --strict.
 
   # E-commerce domain: standard SLA
