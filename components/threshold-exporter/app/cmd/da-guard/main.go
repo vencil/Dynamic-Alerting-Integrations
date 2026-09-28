@@ -31,12 +31,14 @@
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
 //	2  caller error (bad flags, missing/invalid path, IO failure)
-//	3  config files the exporter cannot decode (#2123; operator-facing
-//	   wording: docs/cli-reference.md §guard): the files ScopeEffective
-//	   reports in ParseFailed, or a config.DecodeError met while
-//	   resolving. The report names them (relative to --config-dir). A
-//	   DecodeError stops the run before any tenant is checked, so only
-//	   that first file is named.
+//	3  config files the exporter drops (#2123, #2179; the one definition
+//	   of which files: docs/cli-reference.md §guard): the files
+//	   ScopeEffective reports in ParseFailed — the exporter's own load's
+//	   parse-failure list, kept when the file bears on --scope — or a
+//	   config.DecodeError met while resolving. Independent of
+//	   --cardinality-limit. The report names them (relative to
+//	   --config-dir). A DecodeError stops the run before any tenant is
+//	   checked, so only that first file is named.
 //
 // 3 wins over 1: findings computed over a tree with a skipped file
 // describe only part of it, so "fix the file first" is the one
@@ -93,7 +95,6 @@ type flags struct {
 	output               string
 	warnAsError          bool
 	showVersion          bool
-	help                 bool
 }
 
 func parseFlags(args []string, errOut io.Writer) (*flags, error) {
@@ -127,9 +128,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		"Treat warnings as errors for exit-code purposes (still rendered as 'warning' in the report).")
 	fs.BoolVar(&f.showVersion, "version", false,
 		"Print version and exit.")
-	fs.BoolVar(&f.help, "help", false, "Print usage and exit.")
-	// `-h` short alias
-	fs.BoolVar(&f.help, "h", false, "Alias for --help.")
+	// -h / -help / --help are deliberately NOT registered: the flag package
+	// then prints fs.Usage and returns flag.ErrHelp, which run() maps to
+	// exit 0. Registering them as bools (before #2179) swallowed the usage.
 
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
@@ -161,14 +162,15 @@ func run(args []string, stdout, errOut io.Writer) int {
 	log.SetFlags(0)
 
 	f, err := parseFlags(args, errOut)
+	if errors.Is(err, flag.ErrHelp) {
+		// -h / -help / --help: the flag package already printed fs.Usage
+		// to errOut; asking for help is not an error.
+		return exitOK
+	}
 	if err != nil {
 		// flag.ContinueOnError already printed the message; just
 		// return the code.
 		return exitCallerErr
-	}
-	if f.help {
-		// parseFlags already printed usage on -h; just exit clean.
-		return exitOK
 	}
 	if f.showVersion {
 		fmt.Fprintf(stdout, "%s %s\n", programName, Version)
@@ -213,8 +215,16 @@ func run(args []string, stdout, errOut io.Writer) int {
 	if !f.cardinalityLimitSet {
 		limit, source, err := config.RootMaxMetricsPerTenant(f.configDir)
 		if err != nil {
-			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
-			return exitCallerErr
+			// #2179: a root carrier that fails the decode is a file the
+			// exporter drops, so it is in scoped.ParseFailed and this run
+			// ends in exit 3. The exporter then enforces the built-in cap
+			// (nothing sets max_metrics_per_tenant), so predict against that.
+			if !rootCarrierDropped(f.configDir, source, scoped.ParseFailed) {
+				fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+				return exitCallerErr
+			}
+			limit = config.EffectiveMaxMetricsPerTenant(0)
+			source = "built-in default (the root defaults file fails the exporter's decode, which drops it)"
 		}
 		if limit < 0 {
 			limit = 0 // exporter: negative = no truncation; guard: 0 = no check
@@ -279,6 +289,26 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return exitFindings
 	}
 	return exitOK
+}
+
+// rootCarrierDropped reports whether source (the root defaults carrier
+// RootMaxMetricsPerTenant read, an absolute path) is one of the files the
+// exporter drops (parseFailed, keys relative to configDir).
+func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
+	if source == "" {
+		return false
+	}
+	rel, err := filepath.Rel(config.AbsScanRoot(configDir), source)
+	if err != nil {
+		return false
+	}
+	key := filepath.ToSlash(rel)
+	for _, pf := range parseFailed {
+		if pf == key {
+			return true
+		}
+	}
+	return false
 }
 
 // buildCheckInput assembles a guard.CheckInput from the scoped
@@ -461,7 +491,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) 
 		if len(parseFailed) > 0 {
 			// #2123: not "safe" — the tenants may be in the files listed.
 			verdict = "_No tenant could be checked under the requested scope; " +
-				"the files listed above fail the exporter's YAML decode, so this is NOT a safe result._\n"
+				"the files listed above cannot be decoded, so this is NOT a safe result._\n"
 		}
 		body = parseFailedMarkdown(parseFailed) +
 			"## Dangling Defaults Guard\n\n" +
@@ -587,7 +617,7 @@ func parseFailedMarkdown(files []string) string {
 // reportParseFailed is the stderr line for exit 3, so a CI log names the
 // files even when the report went to --output.
 func reportParseFailed(errOut io.Writer, files []string) {
-	fmt.Fprintf(errOut, "%s: %d file(s) fail the exporter's YAML decode: %s — "+
+	fmt.Fprintf(errOut, "%s: %d file(s) cannot be decoded: %s — "+
 		"fix them and re-run (exit 3)\n",
 		programName, len(files), strings.Join(files, ", "))
 }

@@ -154,18 +154,24 @@ func TestCardinalityLimit_ScopedRunStillUsesTheRootCap(t *testing.T) {
 	}
 }
 
-func TestCardinalityLimit_UndecodableRootIsACallerError(t *testing.T) {
+// An undecodable root carrier is a file the exporter drops, so it is exit 3
+// with the file named (#2179), not a caller error (exit 2, before #2179) —
+// and not 0 with --cardinality-limit, which used to skip this read.
+func TestCardinalityLimit_UndecodableRootExitsThree(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": defaultsWithMetrics(2, "max_metrics_per_tenant: lots\n"),
 		"conf.d/tenant-a.yaml":  oneTenant,
 	})
-	code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"))
-	if code != exitCallerErr {
-		t.Fatalf("exit = %d, want %d. stdout=%q stderr=%q", code, exitCallerErr, stdout, stderr)
-	}
-	if !strings.Contains(stderr, "parse root defaults") {
-		t.Errorf("stderr should name the undecodable root defaults: %q", stderr)
+	for _, extra := range [][]string{nil, {"--cardinality-limit", "500"}} {
+		args := append([]string{"--config-dir", filepath.Join(tmp, "conf.d")}, extra...)
+		code, stdout, stderr := runOnce(t, args...)
+		if code != exitParseFailed {
+			t.Fatalf("%v: exit = %d, want %d. stdout=%q stderr=%q", extra, code, exitParseFailed, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "_defaults.yaml") || !strings.Contains(stdout, "`_defaults.yaml`") {
+			t.Errorf("%v: the undecodable root defaults should be named. stdout=%q stderr=%q", extra, stdout, stderr)
+		}
 	}
 }
