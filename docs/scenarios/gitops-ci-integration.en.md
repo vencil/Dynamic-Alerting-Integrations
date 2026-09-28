@@ -241,7 +241,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-Runs only on PRs. Generates Alertmanager config fragments and computes blast radius.
+Runs only on PRs. Generates Alertmanager config fragments and computes blast radius. ⚠️ The comment below saying the da-tools image bundles amtool does not hold for the v2.9.0 image: it does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # Generate Alertmanager routes/receivers/inhibit_rules

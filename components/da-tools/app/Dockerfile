@@ -89,7 +89,7 @@ RUN chmod +x /usr/local/bin/da-parser
 # puts amtool at /bin/amtool; it is a static Go binary, so musl is fine.
 COPY --from=prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a /bin/amtool /usr/local/bin/amtool
 # Apache-2.0 §4: the upstream image carries no LICENSE / NOTICE, so they are
-# vendored verbatim from the same release (prometheus/alertmanager v0.34.1).
+# vendored verbatim from the same Alertmanager release the COPY --from above pins.
 COPY third_party/alertmanager/LICENSE third_party/alertmanager/NOTICE /usr/share/doc/amtool/
 
 # ── Entrypoint ────────────────────────────────────────────────────

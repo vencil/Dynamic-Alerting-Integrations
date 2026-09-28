@@ -24,9 +24,11 @@ name: Nightly Image CVE Scan
 #
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
-# scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
-# real-build scan + Go CI / CodeQL govulncheck). The other images build real, so
-# their full image surface is scanned.
+# scanned, but its FIRST-PARTY Go binaries' module CVEs are NOT here (covered by
+# release.yaml's real-build scan + Go CI / CodeQL govulncheck). The exception is
+# the bundled upstream amtool (#2294): it is COPYed --from the real Alertmanager
+# image, not stubbed, so its module CVEs ARE scanned here. The other images build
+# real, so their full image surface is scanned.
 #
 # THREE buckets, three tracking issues, and the split is about WHO ACTS, not about
 # where the Dockerfile lives:
@@ -534,20 +536,21 @@ jobs:
           # (federation-audit-sidecar / vector-projection-gate), which are never
           # published, so no tag-time gate exists for them and this nightly bucket
           # plus the PR-time scan are their whole CVE signal (#1337).
-          # "We own these, so patch it" is honest for all but two — but NOT blanket
+          # "We own these, so patch it" is honest for all but three — but NOT blanket
           # true, and the same wrong-advice failure the third-party sentence below
-          # was rewritten for (#1243) applies here in miniature: TWO of these images
+          # was rewritten for (#1243) applies here in miniature: THREE of these images
           # carry findings inside a BUNDLED upstream binary that no first-party
-          # rebuild or dependency bump can clear — recipe-preview (promtool) and
+          # rebuild or dependency bump can clear — recipe-preview (promtool),
           # federation-audit-sidecar (mtail's own grpc pin; #1337 already rebuilt
           # mtail from source with a current Go toolchain, which is what cleared
-          # the other 20). The sentence names both exceptions rather than sending
-          # the reader to do something that cannot work (#1058).
+          # the other 20) and da-tools (amtool, copied from the deployed
+          # Alertmanager image; #2294). The sentence names all three exceptions
+          # rather than sending the reader to do something that cannot work (#1058).
           bash scripts/ops/file_cve_report.sh frags-sb \
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             7 "self-built component" \
-            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local \`go get google.golang.org/grpc@v1.82.1\` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. ⛔ DO NOT ASSUME THE RELEASE GATE WILL CATCH THIS. For the published components release.yaml does scan with exit-code 1, but it runs POST-PUSH — by then the image, and for the exporter the Helm chart too, are already in the registry. So a red there means a red Actions run, not an artifact held back; only release-da-tools has steps after its scan (signing, SBOM, archives, the GitHub Release) that a finding actually prevents. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue. Treat this nightly bucket as the actionable signal, not a preview of something a tag push will stop (security-audit-runbook §37)." || rc=1
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). THREE EXCEPTIONS, all bundled upstream binaries no first-party bump touches: da-tools bundles amtool copied from the deployed Alertmanager image (lever: bump the Alertmanager pin in k8s/03-monitoring/deployment-alertmanager.yaml — the da-tools Dockerfile COPY --from ref must move with it, tests/ops/test_da_tools_amtool_pin_parity.py; #2294), recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local \`go get google.golang.org/grpc@v1.82.1\` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. ⛔ DO NOT ASSUME THE RELEASE GATE WILL CATCH THIS. For the published components release.yaml does scan with exit-code 1, but it runs POST-PUSH — by then the image, and for the exporter the Helm chart too, are already in the registry. So a red there means a red Actions run, not an artifact held back; only release-da-tools has steps after its scan (signing, SBOM, archives, the GitHub Release) that a finding actually prevents. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue. Treat this nightly bucket as the actionable signal, not a preview of something a tag push will stop (security-audit-runbook §37)." || rc=1
           # Third-party — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243

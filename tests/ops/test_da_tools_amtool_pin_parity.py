@@ -89,7 +89,14 @@ def test_amtool_lands_on_path() -> None:
 
 def test_upstream_license_and_notice_ship_with_amtool() -> None:
     """Apache-2.0 §4(a)/(d): redistributing amtool carries its LICENSE and NOTICE.
-    The upstream image has neither, so they are vendored and COPYed in."""
+    The upstream image has neither, so they are vendored and COPYed in.
+
+    ⚠️ On an Alertmanager bump (Renovate moves the manifest and the Dockerfile
+    ref together), re-check the vendored pair against the NEW release's tarball
+    (`cmp` its LICENSE / NOTICE) and replace them if upstream changed either.
+    This test only proves the files exist and are shipped — it cannot see that
+    they came from the same release as the ref, and the Dockerfile deliberately
+    names no version so it cannot go stale on a bump."""
     for name in ("LICENSE", "NOTICE"):
         vendored = _THIRD_PARTY / name
         assert vendored.is_file(), f"missing vendored {vendored.relative_to(_REPO).as_posix()}"

@@ -219,7 +219,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-僅在 PR 時執行。產出 Alertmanager 配置片段並計算變更影響範圍。
+僅在 PR 時執行。產出 Alertmanager 配置片段並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 amtool」不適用於 v2.9.0 映像：它不內含 `amtool` <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 產出 Alertmanager routes/receivers/inhibit_rules
