@@ -213,7 +213,7 @@ All Pods set `seccompProfile: RuntimeDefault`. How tightly each self-built image
 | tenant-api | alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/Dockerfile)) | alpine minor | Needs `git` (GitOps writes); does **not** run `apk upgrade` |
 | recipe-preview | python-alpine ([Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/recipe-preview/Dockerfile)) | python patch + alpine minor | `apk upgrade` |
 
-**CI Scanning:** Trivy scan auto-runs after each image push (CRITICAL + HIGH) and fails the release job if fixable high-severity CVEs exist. Note the ordering honestly: the scan is **post-push**, and in four of the five release jobs it is the final step — so it turns the release run red rather than holding the artifact back. A nightly scan of the same images gives earlier warning. See `.github/workflows/release.yaml` and `.github/workflows/nightly-image-scan.yaml`.
+**CI Scanning:** Every release job runs the Trivy scan (CRITICAL + HIGH, `ignore-unfixed`) **before publishing**: the image is first pushed only to a candidate tag and that digest is scanned. A fixable high-severity CVE fails the job, and no release tag (`:v<version>` / `:latest`), Helm chart, signature or GitHub Release is produced. On a pass, the release tags are pointed at **the same scanned digest** ([#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278)). A nightly scan of the same images gives earlier warning. See `.github/workflows/release.yaml` and `.github/workflows/nightly-image-scan.yaml`.
 
 **Enterprise Registry recommendation:** Regular rebuilds (suggest monthly or within 48h of CVE announcement). Configure Trivy/Grype for scheduled scans on archived images.
 

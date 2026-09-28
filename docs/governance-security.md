@@ -213,7 +213,7 @@ da-tools validate-config --config-dir conf.d/ --json
 | tenant-api | alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/Dockerfile)） | alpine minor | 需要 `git`（GitOps 寫入）；**未**跑 `apk upgrade` |
 | recipe-preview | python-alpine（[Dockerfile](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/recipe-preview/Dockerfile)） | python patch + alpine minor | `apk upgrade` |
 
-**CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時 release job 會失敗。⚠️ 順序要誠實交代：該掃描在 **push 之後**，且五個 release job 有四個它就是最後一步——所以它讓 release run 變紅，而不是把產物攔下來。更早的預警來自每晚對同一批 image 的掃描。見 `.github/workflows/release.yaml` 與 `.github/workflows/nightly-image-scan.yaml`。
+**CI 掃描：** 每個 release job 都在**發布前**執行 Trivy 掃描（CRITICAL + HIGH，`ignore-unfixed`）：image 先只推到候選 tag，掃的是那個 digest；有已修復的高危漏洞時 job 失敗，正式版號 tag（`:v<version>`／`:latest`）、Helm chart、簽章與 GitHub Release 都不會產生。通過後正式 tag 指向**同一個已掃描的 digest**（[#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278)）。更早的預警來自每晚對同一批 image 的掃描。見 `.github/workflows/release.yaml` 與 `.github/workflows/nightly-image-scan.yaml`。
 
 **企業 Registry 建議：** 定期 rebuild（建議每月或 CVE 公告後 48h 內）。設定 Trivy/Grype 排程掃描已上架 image。
 
