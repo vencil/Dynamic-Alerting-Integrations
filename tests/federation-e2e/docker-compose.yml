@@ -34,7 +34,7 @@ services:
     # from the harness commit (#544) until #1333, two minors behind what we
     # ship, and nothing noticed because a working Prometheus passes every
     # scenario regardless of version.
-    image: prom/prometheus:v3.13.2
+    image: prom/prometheus:v3.15.0
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -70,7 +70,7 @@ services:
     # is outside every Renovate customManager (they glob helm/ + k8s/ only, and
     # this ref is tag-only so the digest-anchored patterns cannot match it), so
     # nothing else would notice the e2e validating a version we do not ship.
-    image: prometheuscommunity/prom-label-proxy:v0.15.0
+    image: prometheuscommunity/prom-label-proxy:v0.15.1
     # Args mirror helm/federation-proxy/templates/deployment.yaml (the
     # SoT) verbatim — single-dash flags, same order.
     command:
