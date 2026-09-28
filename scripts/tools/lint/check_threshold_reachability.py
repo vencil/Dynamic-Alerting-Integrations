@@ -587,7 +587,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # ⚠️ "Elsewhere" is ONE other grouping, not two: the bracket test's
 # `_artifact_groups` (an rsplit on `/conf.d`) and `conf_d_root` (the fifth
 # floor's, and this module's, definition of a root) produce the IDENTICAL
-# partition — all 17 tracked artifacts agree. An earlier wording named them
+# partition over every tracked artifact. An earlier wording named them
 # separately ("neither … nor …"), which reads as three groupings in play when
 # there are two. Two independent spellings of one partition is still worth
 # noting, though: if they ever diverge, the bracket test and the fifth floor
@@ -1373,10 +1373,10 @@ def _assert_defaults_artifacts_match_schema(
     the rest — a `_custom_alerts` entry missing its `recipe` key is reported
     here too. Stated because "renamed section guard" is how this reads at a
     glance, and because the widening is only safe on the evidence that today's
-    tree is clean under it — measured as 0 violations across the 16 DOCUMENTS
-    the 17 tracked artifacts yield (one is comment-only and yields none; the
-    paragraph on the judged count below is the same correction, and this
-    sentence is where the stale "all 17" survived it once already).
+    tree is clean under it — evidence this gate re-establishes on every run,
+    over every document the tracked artifacts yield (a comment-only artifact
+    yields none). ⛔ No count here on purpose: this sentence carried a
+    present-tense artifact count that went stale twice (#1586).
 
     ⛔⛔ WHAT IT ACTUALLY CATCHES IS THE TYPO SHAPE, AND THE SILENT SET IS FAR
     BIGGER THAN TWO SPELLINGS. An earlier wording here named `^_state_` /

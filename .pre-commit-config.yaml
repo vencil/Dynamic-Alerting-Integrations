@@ -1453,9 +1453,9 @@ repos:
         # and `try-local/seed/conf.d/_defaults.yaml`; blind review then walked
         # past it three ways (an `examples/` sibling in the same tree, a NESTED
         # `_defaults.yaml`, and a second conf.d root), so the face now WALKS for
-        # the artifact class — 17 files, not 2. A filter that still listed two
-        # would leave the gate unable to fire on the commit that changed the
-        # other fifteen. Kept in step by
+        # the artifact class, not two named files. A filter that still listed
+        # two would leave the gate unable to fire on a commit that changed any
+        # of the others. Kept in step by
         # tests/lint/test_check_threshold_reachability.py::
         # test_precommit_filter_covers_every_input_this_gate_reads, which derives
         # the list from `_defaults_artifacts()` rather than restating it.
