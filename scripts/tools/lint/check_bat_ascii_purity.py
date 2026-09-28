@@ -30,7 +30,8 @@ by start_process) MUST be pure ASCII.
 
 What this hook enforces
 -----------------------
-For every ``scripts/ops/*.bat`` (restricted by pre-commit ``files:``):
+For every ``.bat`` under ``scripts/ops/``, at any depth (restricted by
+pre-commit ``files:``):
 
 1. No byte >= 0x80 (ASCII-only, no CJK / em-dash / non-breaking space)
 2. No UTF-8 BOM prefix (``EF BB BF`` breaks the first command)
@@ -44,12 +45,15 @@ added via the Windows-side ``--no-verify`` escape hatch.
 Lint class & scope (lint-policy.md §3)
 --------------------------------------
 Class **(b)** — negative pattern (forbidden bytes / line endings) +
-allowlist scope (only ``scripts/ops/*.bat``). Default invocation is
+allowlist scope (only ``.bat`` under ``scripts/ops/``). Default invocation is
 already effectively **diff-aware** via pre-commit's ``files:`` filter
 (only staged .bat files reach this hook). For ad-hoc CLI invocation:
 
 * No paths, no flag → diff-aware (only files in current diff vs base)
-* ``--full-scan`` → scan every ``scripts/ops/*.bat``
+* ``--full-scan`` → scan every ``.bat`` under ``scripts/ops/``, at any depth
+  — the depth diff mode and pre-commit ``files:`` already reach (#2240).
+  It walks the filesystem, so unlike those two it also sees untracked and
+  gitignored files.
 * Explicit paths → scan those (pre-commit pass-through)
 
 Bypass (per lint-policy.md §4):
@@ -159,7 +163,7 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
 
 
 def _diff_changed_bats(repo: Path, base: str) -> list[Path]:
-    """Return scripts/ops/*.bat changed in current diff vs base.
+    """Return .bat files under scripts/ops/ changed in current diff vs base.
 
     ⛔ The extension is matched case-insensitively and NOT in the pathspec:
     git pathspecs are case-sensitive, and cmd.exe runs ``FOO.BAT`` exactly
@@ -188,12 +192,12 @@ def main() -> int:
         help=(
             "Explicit file paths to check (pre-commit passes the staged .bat "
             "files here). If empty + no flag: diff-only. With --full-scan: "
-            "all scripts/ops/*.bat."
+            "every .bat under scripts/ops/, at any depth."
         ),
     )
     parser.add_argument(
         "--full-scan", action="store_true",
-        help="Scan every scripts/ops/*.bat (manual audit; ignores diff).",
+        help="Scan every .bat under scripts/ops/, at any depth (manual audit; ignores diff).",
     )
     parser.add_argument(
         "--diff-base", default=None,
@@ -212,8 +216,11 @@ def main() -> int:
         bat_paths = [Path(p) for p in args.paths]
         scan_mode = "explicit-paths"
     elif args.full_scan:
-        # ⛔ Not ``glob("*.bat")``: case-sensitive on POSIX (#2196).
-        bat_paths = sorted(p for p in (repo / "scripts" / "ops").iterdir()
+        # ⛔ Not ``glob("*.bat")``: case-sensitive on POSIX (#2196). And
+        # recursive, not ``iterdir``: diff mode and pre-commit ``files:``
+        # already reach subdirectories, so a flat scan read a nested
+        # violation as clean (#2240).
+        bat_paths = sorted(p for p in (repo / "scripts" / "ops").rglob("*")
                            if p.is_file() and p.name.lower().endswith(".bat"))
         scan_mode = "full-scan"
     else:
@@ -229,7 +236,7 @@ def main() -> int:
             return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base_label}"
 
-    # Only apply the rule to scripts/ops/*.bat -- other .bat (e.g. dev-
+    # Only apply the rule to .bat under scripts/ops/ -- other .bat (e.g. dev-
     # container bind-mount scripts) don't go through Desktop Commander
     # start_process and aren't subject to pitfall #45.
     target_prefix = "scripts/ops/"
