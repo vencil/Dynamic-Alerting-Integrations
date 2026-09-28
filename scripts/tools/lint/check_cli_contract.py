@@ -1908,7 +1908,7 @@ def portal_commands(src_dir: Path = PORTAL_PLAYGROUND_DIR,
         driver = _PORTAL_DRIVER % {"commands": mods["commands.js"],
                                    "engine": mods["engine.js"]}
         proc = subprocess.run([node, "--input-type=module", "-e", driver],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     if proc.returncode != 0:
         raise RuntimeError(f"node could not evaluate the CLI Playground catalog "
                            f"(rc={proc.returncode}): {proc.stderr.strip()[:500]}")

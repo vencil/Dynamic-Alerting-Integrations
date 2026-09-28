@@ -51,7 +51,11 @@ Which encoding to state — it is set by the process that WRITES the bytes:
 
 - git and Go binaries (docker, gh, kubectl, helm, ...) write UTF-8:
   ``encoding="utf-8", errors="replace"``. ``errors="strict"`` buys nothing
-  on Windows, where the reader thread swallows the error.
+  on Windows, where the reader thread swallows the error. Exception: FILE
+  NAMES from a ``-z`` listing (``git ls-files -z``, ``diff --name-only -z``)
+  are raw path bytes — use ``errors="surrogateescape"`` so a name that is not
+  valid UTF-8 keeps its identity; ``replace`` silently renames it. Without
+  ``-z``, git C-quotes such names (``core.quotePath``) and the output is ASCII.
 - a Python child writes the parent's locale codec unless ITS environment
   sets ``PYTHONIOENCODING=utf-8`` (or ``PYTHONUTF8=1``; ``-X utf8`` on the
   parent is not inherited) — pair ``encoding="utf-8"`` with that env.

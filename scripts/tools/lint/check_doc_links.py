@@ -258,7 +258,7 @@ class DocLinkChecker:
             out = subprocess.run(
                 ["git", "ls-files", "--others", "--ignored",
                  "--exclude-standard", "--directory"],
-                capture_output=True, text=True, cwd=str(self.repo_root),
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(self.repo_root),
                 timeout=10,
             )
             if out.returncode == 0:

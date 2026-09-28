@@ -158,7 +158,7 @@ def _force_utf8_streams() -> None:
 
 def _subprocess_runner(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["gh", *args], capture_output=True, text=True, timeout=120, check=False
+        ["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False
     )
 
 

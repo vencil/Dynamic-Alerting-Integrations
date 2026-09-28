@@ -97,7 +97,7 @@ def _run_kubectl(args, dry_run=False):
         return True, "(dry-run)"
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         output = result.stdout.strip()
         if result.returncode != 0:

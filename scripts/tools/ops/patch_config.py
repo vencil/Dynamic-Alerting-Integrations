@@ -212,7 +212,7 @@ def run_cmd(cmd):
         import shlex
         cmd = shlex.split(cmd)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise KubectlError(f"Error executing: {' '.join(cmd)}\n{exc}") from exc
     if result.returncode != 0:

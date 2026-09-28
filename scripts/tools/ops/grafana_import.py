@@ -55,7 +55,7 @@ def run_cmd(cmd, dry_run=False):
         print(f"  [DRY RUN] {' '.join(cmd)}", file=sys.stderr)
         return "[dry-run]"
     try:
-        return subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE, timeout=120).strip()
+        return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.PIPE, timeout=120).strip()
     except subprocess.CalledProcessError as e:
         return None
 
@@ -123,7 +123,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
                 ["kubectl", "apply", "-f", "-"],
                 input=yaml_output,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=120,
             )
             if proc.returncode == 0:

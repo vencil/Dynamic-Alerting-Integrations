@@ -131,7 +131,7 @@ def package(chart_dir: Path, dest: Path) -> Path:
         proc = subprocess.run(  # nosec B603 — fixed argv, no shell
             [helm, "package", str(chart_dir), "-d", str(dest)],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
