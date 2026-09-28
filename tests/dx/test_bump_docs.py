@@ -1667,6 +1667,63 @@ class TestCountSourceUnreadable:
         assert "NO-SOURCE" in capsys.readouterr().out
 
 
+class TestRulePackCountSharedWithChecker:
+    """#1451：Rule Pack badge 的寫入端與檢查端共用同一個計數函式。
+
+    舊寫入端讀 platform-data.json，讀不到就算 configmap 檔數扣掉
+    `-platform`——那個集合留下 `custom-alerts`、漏掉 `platform`，跟檢查端
+    （扣 `custom-alerts`、含 `platform`）一進一出，只是數量剛好相等。
+    """
+
+    @staticmethod
+    def _tree(tmp_path, configmaps):
+        k8s = tmp_path / "k8s" / "03-monitoring"
+        k8s.mkdir(parents=True)
+        for name in configmaps:
+            (k8s / f"configmap-rules-{name}.yaml").write_text(
+                "kind: ConfigMap\ndata: {}\n", encoding="utf-8")
+        packs = tmp_path / "rule-packs"
+        packs.mkdir()
+        return packs, k8s
+
+    @staticmethod
+    def _point_counter_at(monkeypatch, packs, k8s):
+        """Patch the module the WRITER holds, not `sys.modules[...]`.
+
+        ⚠️ Another test file loads `validate_docs_versions` afresh, so by the
+        time this runs `sys.modules` may hold a different module object than
+        the one `bump_docs.count_rule_packs` closes over — patching that one
+        is a no-op and the count comes back from the real repo.
+        """
+        g = bump_docs.count_rule_packs.__globals__
+        monkeypatch.setitem(g, "RULE_PACKS_DIR", packs)
+        monkeypatch.setitem(g, "K8S_RULES_DIR", k8s)
+
+    def test_writer_counts_what_the_checker_counts(self, tmp_path,
+                                                   monkeypatch):
+        """只有 `platform`、沒有 `custom-alerts`：舊 fallback 在這裡少算 1。"""
+        packs, k8s = self._tree(tmp_path, ["platform", "redis"])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        assert bump_docs.count_rule_packs()["pack_count"] == 2
+        assert bump_docs._count_rule_packs() == 2
+
+    def test_tenant_custom_alerts_is_not_a_platform_pack(self, tmp_path,
+                                                         monkeypatch):
+        packs, k8s = self._tree(tmp_path, ["custom-alerts", "redis"])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        assert bump_docs._count_rule_packs() == 1
+
+    def test_no_rule_pack_source_is_no_source(self, tmp_path, monkeypatch):
+        """沒有 fallback 可以把數字補上：讀不到就是 NO-SOURCE。"""
+        packs, k8s = self._tree(tmp_path, [])
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        self._point_counter_at(monkeypatch, packs, k8s)
+        rules = {r["id"]: r for r in bump_docs._build_count_rules()}
+        assert rules["readme-rule-pack-badge"]["source_ok"] is False
+
+
 class TestScopeMustSelectSomething:
     """`--scope` 過濾到 0 條規則是 caller error，不是通過（#1407 F8）。"""
 
