@@ -270,6 +270,11 @@ jobs:
           # offenders by the guards below.
           - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
             ref: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+            # Static binaries only: Trivy finds no OS/language packages and omits
+            # `Results`, which the summarizer otherwise treats as schema drift
+            # (this was the nightly "1 unscanned" in #1243). Reported as "no
+            # inventory", never as clean.
+            no_inventory: true
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
             ref: "alpine/git:v2.54.0@sha256:729da2347ce652f30476b064198577fe12e1147e58499be9f343039343ef2cee"
     steps:
@@ -297,6 +302,8 @@ jobs:
           exit-code: 0
 
       - name: Summarize findings
+        env:
+          TRIVY_ALLOW_NO_INVENTORY: ${{ matrix.no_inventory && 'true' || '' }}
         run: bash scripts/ops/summarize_trivy_cve.sh '${{ matrix.name }}'
 
       - name: Upload fragment

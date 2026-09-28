@@ -23,7 +23,28 @@ NAME="${1:?usage: summarize_trivy_cve.sh <name> [trivy-json]}"
 JSON="${2:-trivy-${NAME}.json}"
 
 jq empty "$JSON"                            # malformed / truncated → abort
-jq -e 'has("Results")' "$JSON" >/dev/null   # schema drift (Results renamed) → abort
+
+# A static-binary image (busybox) has no OS release file and no language
+# packages, so Trivy omits `Results` entirely — the same shape as schema drift.
+# Only an image the matrix explicitly marks `no_inventory: true` (passed in as
+# TRIVY_ALLOW_NO_INVENTORY=true) may take this path, and only when the report is
+# otherwise a well-formed Trivy report. It is reported as "no inventory", never
+# as clean: Trivy had nothing to check, which is not the same as finding nothing.
+if ! jq -e 'has("Results")' "$JSON" >/dev/null; then
+  if [ "${TRIVY_ALLOW_NO_INVENTORY:-}" != "true" ]; then
+    echo "ERROR: ${JSON} has no Results key (schema drift?) and ${NAME} is not marked no_inventory" >&2
+    exit 1
+  fi
+  # Well-formed report check: without it, a drifted schema on a no_inventory
+  # image would still slip through.
+  jq -e 'has("SchemaVersion") and has("ArtifactName") and (.Metadata | type == "object")' "$JSON" >/dev/null
+  FRAG="frag-${NAME}.txt"
+  printf '%s\t%s\n' "$NAME" 0 > "$FRAG"
+  printf '⚪ **%s** — no package inventory (Trivy found no OS/language packages to check; static binary image) — NOT a clean result\n' "$NAME" >> "$FRAG"
+  { tail -n +2 "$FRAG"; echo; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  echo "scanned ${NAME}: no package inventory"
+  exit 0
+fi
 
 # One line per UNIQUE CVE (dedup by VulnerabilityID across all packages).
 # Capture via $() so a jq runtime error propagates (set -e), NOT via a process
