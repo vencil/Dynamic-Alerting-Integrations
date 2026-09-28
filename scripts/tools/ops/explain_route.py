@@ -21,6 +21,7 @@ import argparse
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 
 import yaml
@@ -382,6 +383,7 @@ AM_DEFAULT_TIMING = {"group_wait": "30s", "group_interval": "5m",
 _TIMING_KEYS = tuple(AM_DEFAULT_TIMING)
 _MATCHER_OPS = ("=~", "!~", "!=", "=")  # longest first: "=~" before "="
 _MATCHER_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+_REGEX_CACHE: dict[str, re.Pattern] = {}
 
 
 class MatcherParseError(ValueError):
@@ -472,16 +474,45 @@ def _parse_one_matcher(text: str) -> tuple[str, str, str]:
     return name, op, value
 
 
+def _compile_am_regex(value: str) -> re.Pattern:
+    """Compile a matcher regex the way the trace evaluates it.
+
+    Alertmanager anchors the value (``^(?:value)$``) and runs Go RE2, whose
+    ``\\d`` / ``\\w`` / ``\\s`` are ASCII-only — hence ``re.ASCII`` and
+    ``fullmatch`` on the value itself. It is NOT wrapped in ``(?:…)``: Python
+    rejects a leading inline flag such as ``(?i)`` inside a group, which RE2
+    accepts. A POSIX class (``[[:digit:]]``) means something different in
+    Python (a nested set, with a FutureWarning), so it is refused rather than
+    evaluated differently; any Python warning while compiling is refused the
+    same way instead of leaking to stderr. Raises MatcherParseError.
+    """
+    if value in _REGEX_CACHE:
+        return _REGEX_CACHE[value]
+    if "[[:" in value:
+        raise MatcherParseError(
+            f"POSIX character class in regex {value!r} is not evaluated by "
+            f"the trace (Python re reads it differently from Alertmanager)")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        try:
+            pattern = re.compile(value, re.ASCII)
+        except (re.error, Warning) as exc:
+            raise MatcherParseError(
+                f"regex {value!r} cannot be evaluated: {exc}") from exc
+    _REGEX_CACHE[value] = pattern
+    return pattern
+
+
 def parse_matchers(text: str) -> list[tuple[str, str, str]]:
     """Parse one Alertmanager ``matchers:`` entry — possibly several matchers.
 
-    Raises MatcherParseError (or re.error for a bad regex value).
+    Raises MatcherParseError.
     """
     out = []
     for part in _split_matcher_list(text):
         name, op, value = _parse_one_matcher(part)
         if op in ("=~", "!~"):
-            re.compile(f"(?:{value})")  # fail here, not at match time
+            _compile_am_regex(value)  # fail here, not at match time
         out.append((name, op, value))
     return out
 
@@ -493,13 +524,13 @@ def _matcher_holds(name: str, op: str, value: str, labels: dict) -> bool:
         return have == value
     if op == "!=":
         return have != value
-    hit = re.fullmatch(f"(?:{value})", have) is not None
+    hit = _compile_am_regex(value).fullmatch(have) is not None
     return hit if op == "=~" else not hit
 
 
 def _route_matchers(node: dict) -> list[tuple[str, str, str]]:
     """Every matcher of a route node: ``matchers`` plus legacy ``match`` /
-    ``match_re``. Raises MatcherParseError / re.error when one cannot be read."""
+    ``match_re``. Raises MatcherParseError when one cannot be read."""
     out: list[tuple[str, str, str]] = []
     for entry in node.get("matchers") or []:
         if not isinstance(entry, str):
@@ -508,7 +539,7 @@ def _route_matchers(node: dict) -> list[tuple[str, str, str]]:
     for key, op in (("match", "="), ("match_re", "=~")):
         for name, value in (node.get(key) or {}).items():
             if op == "=~":
-                re.compile(f"(?:{value})")
+                _compile_am_regex(str(value))
             out.append((str(name), op, str(value)))
     return out
 
@@ -538,7 +569,9 @@ def walk_route_tree(root: dict, labels: dict, *,
         try:
             matchers = _route_matchers(node)
         except (MatcherParseError, re.error) as exc:
-            msg = f"cannot parse a matcher of route {node.get('matchers')!r}: {exc}"
+            shown = {k: node[k] for k in ("matchers", "match", "match_re")
+                     if node.get(k) is not None}
+            msg = f"cannot parse a matcher of route {shown!r}: {exc}"
             if warn and msg not in seen_warn:
                 seen_warn.add(msg)
                 warn(msg)
@@ -645,6 +678,35 @@ def build_trace_tree(parsed: dict, base: dict | None = None
         if isinstance(recv, dict) and recv.get("name"):
             by_name.setdefault(recv["name"], recv)  # base wins, as in assembly
     return root, by_name, _conf_receiver_types(routing_configs, enforced)
+
+
+def _policies_for_tenant(domain_policies: dict, tenant: str
+                         ) -> list[tuple[str, set, set]]:
+    """``(name, forbidden types, allowed types)`` of every domain policy
+    that applies to *tenant* — read the way the generator's
+    ``check_domain_policies`` reads them (non-strict): a policy applies only
+    when its ``tenants`` list names the tenant; a non-mapping policy or
+    ``constraints``, a non-list ``tenants``, and a non-list type constraint
+    are inert.
+    """
+    out = []
+    for name, policy in sorted(domain_policies.items()):
+        if not isinstance(policy, dict):
+            continue
+        tenants = policy.get("tenants", [])
+        if not isinstance(tenants, list) or tenant not in tenants:
+            continue
+        constraints = policy.get("constraints", {})
+        if not isinstance(constraints, dict):
+            continue
+
+        def _types(field: str) -> set:
+            raw = constraints.get(field)
+            return set(raw) if isinstance(raw, list) else set()
+
+        out.append((name, _types("forbidden_receiver_types"),
+                    _types("allowed_receiver_types")))
+    return out
 
 
 def _describe_path(hit: dict) -> str:
@@ -756,12 +818,13 @@ def trace_alert_routing(
         receiver_desc = f"{receiver_type} → {top['receiver']} ({where})"
         timing_src = top
     else:
-        # Only continue:true routes matched: Alertmanager does NOT fall back
-        # to the root receiver then.
-        receiver_type = ""
-        receiver_desc = ("(none: only the enforced route matched; Alertmanager "
-                         "does not fall back to the root receiver)")
-        timing_src = enforced_hits[0]
+        # Only continue:true (enforced) routes matched: they ARE the
+        # delivery — Alertmanager does NOT fall back to the root receiver.
+        top = enforced_hits[0]
+        receiver_type = top["receiver_type"]
+        receiver_desc = (f"{receiver_type} → {top['receiver']} ({top['route_path']}"
+                         f"; only the enforced route matched, no root fallback)")
+        timing_src = top
 
     step2 = {
         "step": 2,
@@ -769,7 +832,7 @@ def trace_alert_routing(
         "detail": f"Alert labels: {alert_labels}",
         "receiver_type": receiver_type,
         "receiver_desc": receiver_desc,
-        "route_path": primary[0]["route_path"] if primary else "",
+        "route_path": timing_src["route_path"],
         "matched_routes": [
             {"receiver": h["receiver"], "receiver_type": h["receiver_type"],
              "route_path": h["route_path"]} for h in hits],
@@ -836,19 +899,17 @@ def trace_alert_routing(
     tenant_types = [h["receiver_type"] for h in primary
                     if str(h["receiver"] or "") == main_prefix
                     or str(h["receiver"] or "").startswith(main_prefix + "-")]
-    domain_policies = parsed.get("domain_policies", {})
+    applicable = _policies_for_tenant(parsed.get("domain_policies") or {},
+                                      tenant)
     policy_issues: list[str] = []
-    for domain_name, policy in domain_policies.items():
-        constraints = policy.get("constraints", {})
-        forbidden = constraints.get("forbidden_receiver_types", [])
-        allowed = constraints.get("allowed_receiver_types", [])
+    for domain_name, forbidden, allowed in applicable:
         for rtype in tenant_types:
             if forbidden and rtype in forbidden:
                 policy_issues.append(
                     f"Domain '{domain_name}' forbids receiver type '{rtype}'")
             if allowed and rtype not in allowed:
                 policy_issues.append(
-                    f"Domain '{domain_name}' only allows {allowed}, got '{rtype}'")
+                    f"Domain '{domain_name}' only allows {sorted(allowed)}, got '{rtype}'")
 
     if policy_issues:
         steps.append({
@@ -858,7 +919,14 @@ def trace_alert_routing(
             "violations": policy_issues,
             "passed": False,
         })
-    elif domain_policies and not tenant_types:
+    elif not applicable:
+        steps.append({
+            "step": 5,
+            "action": "policy_check",
+            "detail": f"No domain policy lists tenant '{tenant}'",
+            "passed": True,
+        })
+    elif not tenant_types:
         steps.append({
             "step": 5,
             "action": "policy_check",

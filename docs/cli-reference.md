@@ -2939,7 +2939,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 
 `--trace` 走的是 `--output-configmap` 會產出的**整棵**路由樹（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）：平台頂層路由（Watchdog、`component="custom"`、`component="synthetic-probe"`、`component="sentinel"`，皆 `continue: false`）、`_routing_enforced` 的 NOC 路由（`continue: true`）、tenant 主路由與其子路由，掛在 base 的 root 之下。比對照 Alertmanager 的規則：同層第一個命中者取走 alert，除非它設了 `continue: true`；子路由都沒命中就由父節點投遞；`receiver`、`group_by` 與三個 timing 沒寫就沿用父節點。matcher 支援 `=`、`!=`、`=~`、`!~`（正規式整串錨定）、值的跳脫（`\"`、`\\`、`\n`）與一個字串裡的多個 matcher（`a="x", b=~"y"` 或 `{…}`）；解析不了的 matcher 視為**不命中**，並在 stderr 印 `WARN`。
 
-輸出的 `Receiver:` 是實際投遞的 receiver，類型取自設定的 `receiver.type`（`Path:` 列出命中的路由）；`Enforced:` 只在 NOC 路由命中這則 alert 時出現；`Timing:` 是投遞那條路由繼承後的值；domain policy 以實際到達的 tenant receiver 類型判斷。`--json` 的第 2 步另有 `route_path` 與 `matched_routes`（依 Alertmanager 順序列出每一個投遞點）。⚠️ 正規式以 Python `re` 求值，與 Alertmanager 的 Go RE2 在少數語法上可能不同。
+輸出的 `Receiver:` 是主要投遞的 receiver，類型取自設定的 `receiver.type`；`Path:` 是這個主要投遞點所走的那一條路徑（其餘投遞點，例如 enforced 的副本，見 `--json` 的 `matched_routes`）。只有 enforced 路由命中時，它就是投遞點，`Receiver:` 直接寫出它的名稱（如 `platform-enforced`），Alertmanager 不會再回退到 root receiver；`Enforced:` 只在 NOC 路由命中這則 alert 時出現；`Timing:` 是投遞那條路由繼承後的值；domain policy 只套用 `tenants` 列出這個 tenant 的 policy（與產生器相同），並以實際到達的 tenant receiver 類型判斷。`--json` 的第 2 步另有 `route_path` 與 `matched_routes`（依 Alertmanager 順序列出每一個投遞點）。⚠️ 正規式以 Python `re`（`re.ASCII`，整串比對）求值，與 Alertmanager 的 Go RE2 在少數語法上仍可能不同；含 POSIX 字元類（`[[:digit:]]` 之類）的值 Python 讀法不同，一律視為解析不了（不命中並 `WARN`）。
 
 **範例**
 

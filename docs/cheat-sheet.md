@@ -49,7 +49,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `test-notification` | 多通道通知連通性測試：驗證 receiver 可達性 | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | 閾值推薦引擎：基於歷史 P50/P95/P99 數據 | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
 | `threshold-govern` | 閾值治理迴路：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR (#656) | --config-dir <PATH>, --prometheus <URL>, --apply, --min-delta-pct | `da-tools threshold-govern --help` |
-| `explain-route` | 路由合併管線除錯器：四層展開 + 設定檔擴展 (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --json | `da-tools explain-route --help` |
+| `explain-route` | 路由合併管線除錯器：四層展開 + 設定檔擴展 (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --base-config <PATH>, --json | `da-tools explain-route --help` |
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射 (ADR-006) | --endpoint <URL> 或 --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
 | `config-history` | 配置快照與歷史追蹤（snapshot / log / show / diff） | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |

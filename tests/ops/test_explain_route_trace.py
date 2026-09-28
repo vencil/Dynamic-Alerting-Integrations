@@ -131,6 +131,7 @@ class TestTraceAlertRouting:
             routing_defaults={"receiver": _EMAIL},
             domain_policies={
                 "production": {
+                    "tenants": ["db-a"],
                     "constraints": {"forbidden_receiver_types": ["email"]},
                 }
             },
@@ -146,6 +147,7 @@ class TestTraceAlertRouting:
             routing_defaults={"receiver": _WEBHOOK},
             domain_policies={
                 "production": {
+                    "tenants": ["db-a"],
                     "constraints": {"allowed_receiver_types": ["webhook", "pagerduty"]},
                 }
             },
@@ -354,6 +356,10 @@ def _delivered(trace):
 
 # Scenarios shared by the fixed-expectation tests and the amtool oracle:
 # (id, tree kwargs, alertname, severity, --label args, receivers in AM order)
+def _enf_re(matcher):
+    return {"receiver": _HOOK_NOC, "match": [matcher]}
+
+
 _ENF_MATCH = {"receiver": _HOOK_NOC,
               "match": ['severity=~"critical|warning", team!="x"']}
 _ESC_ROUTES = {"routes": [{"match": {"team": 'a"b'}, "receiver": _HOOK_TEAM}]}
@@ -379,6 +385,18 @@ SCENARIOS = [
      ['team=a"b'], [f"tenant-{_TT}-route-0"]),
     ("value-without-quote", {"routing": _ESC_ROUTES}, "X", "warning",
      ["team=ab"], [f"tenant-{_TT}"]),
+    # Regex semantics (should-fix of round 2): a leading inline flag, an
+    # alternation anchored as a whole, and ASCII-only \d as in Go RE2.
+    ("re-inline-flag", {"enforced": _enf_re('severity=~"(?i)CRITICAL"')},
+     "X", "critical", [], ["platform-enforced", f"tenant-{_TT}"]),
+    ("re-alternation-anchored", {"enforced": _enf_re('severity=~"crit|warning"')},
+     "X", "critical", [], [f"tenant-{_TT}"]),
+    ("re-alternation-hit", {"enforced": _enf_re('severity=~"crit|warning"')},
+     "X", "warning", [], ["platform-enforced", f"tenant-{_TT}"]),
+    ("re-digit-ascii-only", {"enforced": _enf_re('team=~"\\\\d"')},
+     "X", "warning", ["team=\u0663"], [f"tenant-{_TT}"]),
+    ("re-digit-ascii-hit", {"enforced": _enf_re('team=~"\\\\d"')},
+     "X", "warning", ["team=7"], ["platform-enforced", f"tenant-{_TT}"]),
 ]
 
 
@@ -487,7 +505,8 @@ class TestTraceWalksRenderedTree:
                      enforced={"receiver": _HOOK_NOC})
         trace = _trace(capsys, conf)
         assert _delivered(trace) == ["platform-enforced"]
-        assert trace["final_receiver"].startswith("(none:")
+        assert trace["final_receiver"].startswith("webhook → platform-enforced ")
+        assert trace["steps"][1]["receiver_type"] == "webhook"
 
 
 class TestMatcherParsing:
@@ -593,3 +612,106 @@ class TestTraceAgreesWithAmtool:
             capture_output=True, text=True, encoding="utf-8", timeout=300)
         assert am.returncode == 0, am.stdout + am.stderr
         assert am.stdout.strip().split(",") == _delivered(trace) == expected
+
+
+class TestPolicyScope:
+    """Step 5 applies only the policies whose ``tenants`` list the traced
+    tenant — the same scope the generator's check_domain_policies uses."""
+
+    def _conf(self, tmp_path, tenants):
+        return _tree(
+            tmp_path,
+            routing={"receiver": {"type": "slack",
+                                  "api_url": "https://hooks.slack.com/x"}},
+            policy={"chat-free": {"tenants": tenants, "constraints": {
+                "forbidden_receiver_types": ["slack"]}}})
+
+    def test_policy_for_another_tenant_does_not_apply(self, capsys, tmp_path):
+        step5 = _trace(capsys, self._conf(tmp_path, ["some-other-tenant"]))["steps"][4]
+        assert step5["passed"] is True
+        assert "violations" not in step5
+        assert "No domain policy lists" in step5["detail"]
+
+    def test_policy_without_tenants_does_not_apply(self, capsys, tmp_path):
+        conf = _tree(tmp_path, routing={"receiver": {
+            "type": "slack", "api_url": "https://hooks.slack.com/x"}},
+            policy={"p": {"constraints": {"forbidden_receiver_types": ["slack"]}}})
+        assert _trace(capsys, conf)["steps"][4]["passed"] is True
+
+    def test_policy_listing_the_tenant_applies(self, capsys, tmp_path):
+        step5 = _trace(capsys, self._conf(tmp_path, [_TT]))["steps"][4]
+        assert step5["passed"] is False
+
+    def test_agrees_with_the_generator(self, tmp_path):
+        """Both sides of the fork: the generator's own verdict on the tree."""
+        from generate_alertmanager_routes import load_tenant_configs
+        for tenants, flagged in ((["some-other-tenant"], False), ([_TT], True)):
+            d = tmp_path / str(flagged)
+            d.mkdir()
+            conf = self._conf(d, tenants)
+            schema_warnings = load_tenant_configs(str(conf))[2]
+            assert any("slack" in w for w in schema_warnings) is flagged
+
+
+class TestRegexSemantics:
+    @pytest.mark.parametrize("value, have, expected", [
+        ("(?i)CRITICAL", "critical", True),
+        ("crit|warning", "critical", False),
+        ("crit|warning", "crit", True),
+        ("\\d", "\u0663", False),  # ARABIC-INDIC DIGIT THREE: RE2 \d is ASCII
+        ("\\d", "7", True),
+    ])
+    def test_matches_like_re2(self, value, have, expected):
+        assert er._matcher_holds("x", "=~", value, {"x": have}) is expected
+
+    def test_posix_class_is_refused_with_warning(self, capsys, tmp_path):
+        with pytest.raises(er.MatcherParseError, match="POSIX"):
+            er.parse_matchers('team=~"[[:digit:]]"')
+        conf = _tree(tmp_path, enforced=_enf_re('team=~"[[:digit:]]"'))
+        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+                      "--label", "team=5", "--json"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "WARN: cannot parse a matcher" in captured.err
+        assert "POSIX" in captured.err
+        assert "FutureWarning" not in captured.err
+        [trace] = json.loads(captured.out)
+        assert _delivered(trace) == [f"tenant-{_TT}"]
+
+    def test_python_warnings_do_not_leak(self, capsys):
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("always")
+            with pytest.raises(er.MatcherParseError):
+                er._compile_am_regex("[[a]")  # "Possible nested set" in Python
+        assert "Warning" not in capsys.readouterr().err
+
+    def test_warn_names_legacy_match_when_no_matchers(self):
+        warned: list[str] = []
+        root = {"receiver": "root", "routes": [
+            {"match_re": {"team": "[[:digit:]]"}, "receiver": "child"}]}
+        er.walk_route_tree(root, {"team": "5"}, warn=warned.append)
+        assert "match_re" in warned[0] and "None" not in warned[0]
+
+
+@pytest.mark.skipif(_AMTOOL is None, reason="amtool not on PATH")
+def test_posix_class_divergence_from_amtool_is_pinned(capsys, tmp_path):
+    """RE2 evaluates ``[[:digit:]]``; the trace refuses it (WARN, no match).
+    Measured here so the documented divergence cannot drift silently."""
+    conf = _tree(tmp_path, enforced=_enf_re('team=~"[[:digit:]]"'))
+    cm = tmp_path / "cm.yaml"
+    r = subprocess.run(
+        [sys.executable, _GAR, "--config-dir", str(conf),
+         "--output-configmap", "-o", str(cm)],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert r.returncode == 0, r.stdout + r.stderr
+    am_yml = tmp_path / "alertmanager.yml"
+    am_yml.write_text(yaml.safe_load(cm.read_text(encoding="utf-8"))
+                      ["data"]["alertmanager.yml"], encoding="utf-8")
+    trace = _trace(capsys, conf, "--label", "team=5")
+    am = subprocess.run(
+        [_AMTOOL, "config", "routes", "test", f"--config.file={am_yml}"]
+        + [f"{k}={_am_quote(v)}" for k, v in trace["labels"].items()],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert am.stdout.strip().split(",") == ["platform-enforced", f"tenant-{_TT}"]
+    assert _delivered(trace) == [f"tenant-{_TT}"]
