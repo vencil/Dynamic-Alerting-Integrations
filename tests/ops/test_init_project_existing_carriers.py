@@ -558,19 +558,11 @@ def da_guard(tmp_path_factory):
     return out
 
 
-# `1a-007`：Go 端 extractTenantRaw 對數字形狀的租戶 key 回 "not in file"，
-# ScopeEffective 因此整個 scope 失敗（rc=2），walker 與 exporter 卻照常服務
-# 該租戶——issue 1379 量到，移到 issue 2019（walker 平面）追。修好時 strict
-# xfail 會轉紅，提醒拿掉這一行。
-_GUARD_XFAIL = {"1a-007": "issue 2019: da-guard resolves tenant key 007 as "
-                          "'not in file' while the walker serves it"}
-
-
+# `1a-007`（裸寫的租戶 key `007`）曾是 strict xfail：Go 端把它解成整數、
+# 以 "7" 查不到 "007"，da-guard 整個 scope rc=2；issue 2118 修好後照常跑。
 @pytest.mark.parametrize(
     "case,rel,body,tenant",
-    [pytest.param(*c, id=c[0], marks=pytest.mark.xfail(
-        strict=True, reason=_GUARD_XFAIL[c[0]])) if c[0] in _GUARD_XFAIL
-     else pytest.param(*c, id=c[0]) for c in _SKIP_CASES])
+    [pytest.param(*c, id=c[0]) for c in _SKIP_CASES])
 def test_the_printed_guard_command_runs_and_lists_the_file(
         tmp_path, da_guard, case, rel, body, tenant):
     out = _brownfield(tmp_path)

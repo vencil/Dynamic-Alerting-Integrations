@@ -1454,8 +1454,9 @@ def test_python_scanner_actually_finds_something() -> None:
 # 'true' off a PR) — so the defect is not "never tested", it is "no pre-merge
 # signal, and main goes red for everyone instead of the PR going red for its
 # author". Which is exactly what a required check is for. (Such a bump is
-# hand-authored today — `renovate.json` sets `enabledManagers:
-# ["custom.regex"]` and its managers match only image refs.)
+# hand-authored today — `renovate.json`'s `enabledManagers` has no
+# pip_requirements manager: custom.regex plus github-actions / dockerfile /
+# devcontainer since #1354, none of which reads `requirements/**`.)
 #
 # Invariant enforced here: **every repo file a path-gated job EXECUTES or
 # INSTALLS FROM must TRIGGER the condition that gates that job.** Not "be
@@ -2233,6 +2234,11 @@ TRACED_INDIRECT_INPUTS = {
     ("validate.yaml", "validate", "components/da-tools/app/VERSION"),
     ("validate.yaml", "validate", "components/threshold-exporter/README.md"),
     ("validate.yaml", "validate", ".github/workflows/config-diff.yaml"),
+    # validate-config's generator step routes the try-local seed as a second
+    # `--config-dir` (#2315). A DIRECTORY argument — the blind spot
+    # `_job_step_files` documents — so no scanner here derives it; one tracked
+    # tenant file stands for the `try-local/seed/conf.d/**` entry.
+    ("validate.yaml", "validate", "try-local/seed/conf.d/db-demo.yaml"),
 }
 
 

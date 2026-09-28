@@ -52,7 +52,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -618,11 +620,118 @@ type TenantDoc struct {
 // ParseTenantDoc parses one tenant file's bytes for the *Doc merge entry
 // points (ComputeMergedHashDoc, ComputeMergedHashFromChainDoc).
 func ParseTenantDoc(b []byte) *TenantDoc {
-	var raw any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
+	doc, err := decodeTenantFile(b)
+	if err != nil {
 		return &TenantDoc{err: err}
 	}
-	return &TenantDoc{doc: normalizeYAMLToJSON(raw)}
+	return &TenantDoc{doc: doc}
+}
+
+// TenantRaw is tenantID's override block from the parsed file — a fresh
+// deep copy — or an error (the file did not parse, has no `tenants:`
+// mapping, or does not declare tenantID). For the exporter's reload-side
+// readers that need one tenant's own block (#2118): reading it through here
+// keys the tenant the way the merge does.
+func (d *TenantDoc) TenantRaw(tenantID string) (map[string]any, error) {
+	return d.tenantRaw(tenantID)
+}
+
+// decodeTenantFile is yaml.Unmarshal into `any` + normalizeYAMLToJSON — the
+// same parse, the same errors — except that the keys of the top-level
+// `tenants:` mapping are the tenant ids the flat plane serves (#2118).
+//
+// The flat plane decodes `tenants:` into a map[string] (ParseConfigFile, and
+// simulate's tenant enumeration in source.go), so a key is its scalar TEXT
+// as yaml.v3 decodes it into a string: bare `010` is tenant "010". The
+// generic decode types the same key as int 8, and normalizeYAMLToJSON can
+// only re-spell the decoded value ("8"), so the walker looked "010" up and
+// answered `not in file` — /effective 404, da-guard failing the whole scope,
+// the exporter skipping the tenant's merged_hash — for a tenant /metrics
+// serves. Likewise `0x1`, `007`, `1.0`, `2024-01-01`, `+1`, `.inf`.
+//
+// ⛔ Only the `tenants:` keys are re-keyed; normalizeYAMLToJSON's general
+// rule for every other mapping (a key inside a tenant's block, `defaults:`)
+// is unchanged. A file whose `tenants:` keys are all strings — every file
+// but the ones this fixes — pays one walk over the keys and nothing more;
+// a file with a non-string key re-decodes each tenant's body from its own
+// node, so two keys the generic decode collapses (`010` and `8` are both
+// int 8) keep their own bodies, as they do on the flat plane.
+func decodeTenantFile(b []byte) (any, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(b, &root); err != nil {
+		return nil, err
+	}
+	if root.Kind == 0 {
+		// Empty input: yaml.Unmarshal leaves `any` nil, no error.
+		return nil, nil
+	}
+	var raw any
+	if err := root.Decode(&raw); err != nil {
+		return nil, err
+	}
+	doc := normalizeYAMLToJSON(raw)
+	m, ok := doc.(map[string]any)
+	if !ok {
+		return doc, nil
+	}
+	if block, ok := tenantsBlockByKeyText(&root); ok {
+		m["tenants"] = block
+	}
+	return doc, nil
+}
+
+// tenantsBlockByKeyText rebuilds the top-level `tenants:` mapping of the
+// parsed document keyed by each key's string decode (see decodeTenantFile).
+// ok=false — keep the generic decode — when there is no such mapping, every
+// key already is a string, or a key is not a plain scalar (a merge key
+// `<<`, an alias): shapes the flat plane's typed decode does not key by
+// text either, left exactly as before.
+func tenantsBlockByKeyText(root *yaml.Node) (map[string]any, bool) {
+	n := root
+	if n.Kind == yaml.DocumentNode && len(n.Content) == 1 {
+		n = n.Content[0]
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	var tn *yaml.Node
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if k := n.Content[i]; k.Kind == yaml.ScalarNode && k.ShortTag() == "!!str" && k.Value == "tenants" {
+			tn = n.Content[i+1]
+		}
+	}
+	if tn != nil && tn.Kind == yaml.AliasNode {
+		tn = tn.Alias
+	}
+	if tn == nil || tn.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	retype := false
+	for i := 0; i+1 < len(tn.Content); i += 2 {
+		k := tn.Content[i]
+		if k.Kind != yaml.ScalarNode || k.ShortTag() == "!!merge" {
+			return nil, false
+		}
+		if k.ShortTag() != "!!str" {
+			retype = true
+		}
+	}
+	if !retype {
+		return nil, false
+	}
+	block := make(map[string]any, len(tn.Content)/2)
+	for i := 0; i+1 < len(tn.Content); i += 2 {
+		var id string
+		if err := tn.Content[i].Decode(&id); err != nil {
+			return nil, false
+		}
+		var body any
+		if err := tn.Content[i+1].Decode(&body); err != nil {
+			return nil, false
+		}
+		block[id] = normalizeYAMLToJSON(body)
+	}
+	return block, true
 }
 
 // tenantRaw is tenantID's override block — a fresh deep copy, see TenantDoc —
@@ -818,17 +927,106 @@ func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
 }
 
 func canonicalJSON(data any) ([]byte, error) {
+	out, err := encodeCanonical(data)
+	if err == nil {
+		return out, nil
+	}
+	// encoding/json has no token for a non-finite float and refuses the
+	// whole document; Python's json.dumps (allow_nan=True, the default in
+	// describe_tenant.py's _canonical_hash) writes NaN / Infinity /
+	// -Infinity. A YAML `.inf` / `.nan` anywhere in a tenant (a routing
+	// override, a threshold) made every Go reader of the merged hash —
+	// da-guard, the exporter, tenant-api — fail the tenant while the Python
+	// tools read the same tree fine. Only that error takes the slow path,
+	// so every document encoding/json accepts stays byte-identical.
+	var unsupported *json.UnsupportedValueError
+	if !errors.As(err, &unsupported) {
+		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := writeCanonicalNonFinite(&buf, data); err != nil {
+		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// encodeCanonical is encoding/json with no HTML escaping and no trailing
+// newline — the canonical form of every value encoding/json accepts.
+func encodeCanonical(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(data); err != nil {
-		return nil, fmt.Errorf("canonicalJSON encode: %w", err)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
 	out := buf.Bytes()
 	if n := len(out); n > 0 && out[n-1] == '\n' {
 		out = out[:n-1]
 	}
 	return out, nil
+}
+
+// writeCanonicalNonFinite writes v the way json.dumps(sort_keys=True,
+// separators=(",", ":")) does, descending into the containers a decoded
+// YAML tree holds (map[string]any, []any) so a non-finite float at any
+// depth becomes Python's token. Every other value goes through
+// encodeCanonical, so it renders exactly as on the fast path.
+func writeCanonicalNonFinite(buf *bytes.Buffer, v any) error {
+	switch x := v.(type) {
+	case float64:
+		switch {
+		case math.IsNaN(x):
+			buf.WriteString("NaN")
+			return nil
+		case math.IsInf(x, 1):
+			buf.WriteString("Infinity")
+			return nil
+		case math.IsInf(x, -1):
+			buf.WriteString("-Infinity")
+			return nil
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			kb, err := encodeCanonical(k)
+			if err != nil {
+				return err
+			}
+			buf.Write(kb)
+			buf.WriteByte(':')
+			if err := writeCanonicalNonFinite(buf, x[k]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+		return nil
+	case []any:
+		buf.WriteByte('[')
+		for i, e := range x {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonicalNonFinite(buf, e); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+		return nil
+	}
+	b, err := encodeCanonical(v)
+	if err != nil {
+		return err
+	}
+	buf.Write(b)
+	return nil
 }
 
 // ============================================================
@@ -857,6 +1055,11 @@ func ExtractDefaultsBlock(doc any) map[string]any { return extractDefaultsBlock(
 // ExtractTenantRaw returns `doc.tenants[tenantID]` from a parsed
 // `<tenant>.yaml`-shaped doc, or an error if the document doesn't
 // have the expected `tenants:` wrapper.
+//
+// ⚠️ Over a doc from yaml.Unmarshal + NormalizeYAMLToJSON, a bare
+// non-string key (`010:`) is re-spelled ("8") and the flat plane's id
+// ("010") is not found (#2118). To read a tenant FILE by the flat plane's
+// id, use ParseTenantDoc(b).TenantRaw(id).
 func ExtractTenantRaw(doc any, tenantID string) (map[string]any, error) {
 	return extractTenantRaw(doc, tenantID)
 }

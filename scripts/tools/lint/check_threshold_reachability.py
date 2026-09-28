@@ -670,7 +670,8 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      `test_the_artifact_key_floor_backstops_a_vanished_group` keeps — the
 #      full-l0-l3 probe read 49 against 47 — so the floor went 47 -> 50, which
 #      leaves both figures here at +6 / 12. A raise, not a re-basing.)
-#     (#1550 added three more mixed-mode subtrees — `routing-null/` and
+#     (#1550 added three more mixed-mode subtrees — `routing-null/` (renamed
+#      `reserved-nested-null/` by #2417, same key count) and
 #      `reserved-null/` (+ `child/`) — +6 artifact keys, total 62 -> 68, the
 #      whole of the +6 above. Same remedy as #1674: the floor went 50 -> 56,
 #      the full-l0-l3 probe reads 55 against it (one-key margin kept), and
