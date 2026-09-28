@@ -111,6 +111,9 @@ func PyYAMLRoutingByTenant(data []byte) map[string]any {
 	}
 	var out map[string]any
 	for _, e := range mappingEntries(t) {
+		if e.dup {
+			continue // the generator refuses the file: Unmatched downstream
+		}
 		if n := routingNode(e.value); n != nil {
 			if out == nil {
 				out = map[string]any{}
@@ -121,17 +124,16 @@ func PyYAMLRoutingByTenant(data []byte) map[string]any {
 	return out
 }
 
-// routingNode is the `_routing` value node of a tenant entry body (the last
-// one, merge keys expanded), or nil.
+// routingNode is the `_routing` value node of a tenant entry body (merge
+// keys expanded), or nil — also when `_routing` is written twice.
 func routingNode(body *yaml.Node) *yaml.Node {
 	if body == nil || body.Kind != yaml.MappingNode {
 		return nil
 	}
-	var out *yaml.Node
 	for _, f := range mappingEntries(body) {
-		if f.key == "_routing" {
-			out = f.value
+		if f.key == "_routing" && !f.dup {
+			return f.value
 		}
 	}
-	return out
+	return nil
 }

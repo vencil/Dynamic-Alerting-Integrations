@@ -114,17 +114,32 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	return top, nil
 }
 
-// lookup returns the value node of key in a mapping node, or nil.
+// lookup returns the value node of key in a mapping node, or nil. A key
+// written twice (an alias key beside its anchor: yaml.v3 lets it through,
+// the generator's StrictLoader refuses the file) is not found either.
 func lookup(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
+	n, dup := lookupDup(m, key)
+	if dup {
 		return nil
+	}
+	return n
+}
+
+// lookupDup is lookup that also returns the first value of a key written
+// twice, reporting dup.
+func lookupDup(m *yaml.Node, key string) (n *yaml.Node, dup bool) {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil, false
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if deref(m.Content[i]).Value == key { // an alias key: its anchor's text
-			return deref(m.Content[i+1])
+			if n != nil {
+				return n, true
+			}
+			n = deref(m.Content[i+1])
 		}
 	}
-	return nil
+	return n, false
 }
 
 func deref(n *yaml.Node) *yaml.Node {
@@ -169,7 +184,7 @@ func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, er
 // routingDefaultsFromNode is RoutingDefaultsFrom over a parsed document;
 // stripped reports that the block carried `routes`, which were removed.
 func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, stripped bool, err error) {
-	n := lookup(top, "_routing_defaults")
+	n, dup := lookupDup(top, "_routing_defaults")
 	if n == nil {
 		return nil, false, false, nil
 	}
@@ -177,7 +192,11 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 	if err := n.Decode(&v); err != nil {
 		return nil, true, false, err
 	}
-	m, ok := asStringMap(withPyYAMLReceiversFrom(v, n))
+	py := n
+	if dup { // the generator refuses the file: no PyYAML reading, Unmatched
+		py = nil
+	}
+	m, ok := asStringMap(withPyYAMLReceiversFrom(v, py))
 	if !ok {
 		return nil, true, false, nil
 	}
@@ -450,12 +469,18 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 		if e.value == nil || e.value.Decode(&decoded) != nil {
 			continue
 		}
-		body, ok := asStringMap(decoded)
+		// Keys made strings as for a tenant file (the exporter's merge), so
+		// a `1:` in the body or `_routing` does not drop it unjudged.
+		body, ok := asStringMap(config.NormalizeYAMLToJSON(decoded))
 		if !ok {
 			continue
 		}
 		if r, has := body["_routing"]; has {
-			body["_routing"] = withPyYAMLReceiversFrom(r, routingNode(e.value))
+			var py *yaml.Node
+			if !e.dup {
+				py = routingNode(e.value)
+			}
+			body["_routing"] = withPyYAMLReceiversFrom(r, py)
 		}
 		tid := e.key
 		for _, k := range routingBlockKeys {
@@ -477,6 +502,7 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 type mapEntry struct {
 	key   string // the key's source text (tenant ids are text: `010` is "010")
 	value *yaml.Node
+	dup   bool // written twice (alias key beside its anchor); value is the last
 }
 
 // mappingEntries lists a mapping node's entries with YAML merge keys
@@ -513,17 +539,26 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 		}
 		own = append(own, mapEntry{key: deref(k).Value, value: v}) // an alias key: its anchor's text, as a decode reads it
 	}
-	written := map[string]bool{}
+	// A key written twice after deref is one entry (yaml.v3 keeps the last)
+	// marked dup: the generator's StrictLoader refuses the file, so there
+	// is no PyYAML reading of it.
+	written := map[string]int{}
+	var ownOnce []mapEntry
 	for _, e := range own {
-		written[e.key] = true
+		if i, seen := written[e.key]; seen {
+			ownOnce[i] = mapEntry{key: e.key, value: e.value, dup: true}
+			continue
+		}
+		written[e.key] = len(ownOnce)
+		ownOnce = append(ownOnce, e)
 	}
-	out := make([]mapEntry, 0, len(merged)+len(own))
+	out := make([]mapEntry, 0, len(merged)+len(ownOnce))
 	for _, e := range merged {
-		if !written[e.key] {
+		if _, w := written[e.key]; !w {
 			out = append(out, e)
 		}
 	}
-	return append(out, own...)
+	return append(out, ownOnce...)
 }
 
 func trimUnusable(err error) string {

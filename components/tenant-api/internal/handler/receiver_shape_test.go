@@ -29,6 +29,12 @@ import (
 // copy of the tenant file (empty when nothing was written anywhere).
 func putReceiverBody(t *testing.T, routing string, pr bool) (int, string, string) {
 	t.Helper()
+	return putReceiverDoc(t, "tenants:\n  rs-t:\n    _routing:\n"+routing, pr)
+}
+
+// putReceiverDoc is putReceiverBody with the whole tenant document as body.
+func putReceiverDoc(t *testing.T, body string, pr bool) (int, string, string) {
+	t.Helper()
 	const tenant = "rs-t"
 	dir := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n"})
 	rb := adminRBAC(t)
@@ -38,7 +44,6 @@ func putReceiverBody(t *testing.T, routing string, pr bool) (int, string, string
 		d.PRClient = &mockPlatformClient{}
 		d.PRTracker = &mockPlatformTracker{}
 	}
-	body := "tenants:\n  " + tenant + ":\n    _routing:\n" + routing
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+tenant, "id", tenant, bytes.NewBufferString(body))
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
@@ -176,6 +181,35 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 					t.Errorf("code %q violations %v, want %s on %v", env.Code, got, CodeInvalidBody, tc.fields)
 				}
 			})
+		}
+	}
+}
+
+// TestPutTenant_ReceiverDupAliasKey (#2295 review): an alias key beside its
+// anchor (`&a rs-t:` + `*a:`, `&k _routing:` + `*k:`) is one key written
+// twice. yaml.v3 keeps the last copy; the route generator's StrictLoader
+// refuses the file whole, so there is no PyYAML reading of the receiver and
+// the PUT is refused — whichever copy is the bad one — and nothing written.
+func TestPutTenant_ReceiverDupAliasKey(t *testing.T) {
+	const (
+		bad  = "{type: webhook}"
+		good = "{type: webhook, url: 'https://hook.example.com/g'}"
+		body = "    cpu_usage_percent: \"50\"\n"
+	)
+	dupTenant := func(first, second string) string {
+		return "tenants:\n  &a rs-t :\n" + body + "    _routing:\n      receiver: " + first + "\n  *a :\n" + body +
+			"    _routing:\n      receiver: " + second + "\n"
+	}
+	for name, doc := range map[string]string{
+		"tenant alias dup, bad first":   dupTenant(bad, good),
+		"tenant alias dup, good first":  dupTenant(good, bad),
+		"_routing alias dup, bad first": "tenants:\n  rs-t:\n" + body + "    &k _routing :\n      receiver: " + bad + "\n    *k :\n      receiver: " + good + "\n",
+	} {
+		for _, pr := range []bool{false, true} {
+			code, resp, written := putReceiverDoc(t, doc, pr)
+			if code != http.StatusBadRequest || written != "" {
+				t.Errorf("%s (pr=%v): status %d, written %q; want 400 and no write; body: %s", name, pr, code, written, resp)
+			}
 		}
 	}
 }
