@@ -46,7 +46,9 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E
 from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 
 # ---------------------------------------------------------------------------
-# Repo-layout import compatibility (stripped in Docker build)
+# Repo-layout import compatibility: the repo subdir layout needs the
+# parent dir. Shipped unmodified; in the flat image it points at /opt,
+# which is harmless (#2313).
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:

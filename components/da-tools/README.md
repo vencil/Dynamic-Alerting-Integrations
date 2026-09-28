@@ -417,10 +417,9 @@ kind load docker-image da-tools:dev --name dynamic-alerting-cluster
 ```
 
 `build.sh` 的工作流程：
-1. 從 [`scripts/tools/`](../../scripts/tools/) 複製 [TOOL_FILES](app/build.sh) 列表內的 Python 工具進 build context
-2. Strip repo-layout `sys.path` hack（Docker flat layout 不需要）
-3. 從 [`components/threshold-exporter/app/cmd/`](../../components/threshold-exporter/app/cmd/) 編 `da-guard` / `da-batchpr` / `da-parser` 三顆 linux/amd64 binary
-4. `docker build` → 清理臨時檔
+1. 從 [`scripts/tools/`](../../scripts/tools/) 複製 [TOOL_FILES](app/build.sh) 列表內的 Python 工具進 build context（原樣複製、攤平成單層目錄，不改寫原始碼——repo 佈局用的 parent-dir `sys.path.insert` 在映像裡指向 `/opt`，無害，見 [#2313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2313)）
+2. 從 [`components/threshold-exporter/app/cmd/`](../../components/threshold-exporter/app/cmd/) 編 `da-guard` / `da-batchpr` / `da-parser` 三顆 linux/amd64 binary
+3. `docker build` → 清理臨時檔
 
 **前置需求**：本地需有 Go 1.26+ 才能編 Go binary。CI 已有 `actions/setup-go`。
 
