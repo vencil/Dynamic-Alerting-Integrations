@@ -27,7 +27,7 @@ Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹�
 | 評估技術是否適合我的環境 | [決策矩陣](docs/getting-started/decision-matrix.md) · [整合指南](docs/integration/README.md) |
 | 想在筆電上 1 分鐘試玩（免 Kubernetes） | [在本機試用](#在本機試用) |
 | 準備部署到自己的叢集 | [按角色入門](#按角色入門) · [整合指南](docs/integration/README.md) |
-| **已熟悉，要找特定場景 / 生命週期階段** | [場景指南（14 個）](docs/scenarios/) · [遷移路徑](#文件導覽) · [Day-2 運維](#文件導覽) |
+| **已熟悉，要找特定場景 / 生命週期階段** | [場景指南](docs/scenarios/) · [遷移路徑](#文件導覽) · [Day-2 運維](#文件導覽) |
 | 已上線，找日常運維 / 排錯 | [CLI 參考](docs/cli-reference.md) · [故障排查](docs/troubleshooting.md) |
 
 ---
@@ -250,7 +250,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 16 個 Rule Pack Projected Volum
 | 整合指南 | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.md) · [VictoriaMetrics](docs/integration/victoriametrics-integration.md) · [Federation](docs/integration/federation-integration.md) · [GitOps](docs/integration/gitops-deployment.md) |
 | [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、CI Linting |
 | [性能基準](docs/benchmarks.md) | Benchmark 數據與方法論 |
-| [場景指南](docs/scenarios/) | 14 個實戰場景（含上方遷移類；其他：Routing · Shadow · Federation · Lifecycle · GitOps · Lab） |
+| [場景指南](docs/scenarios/) | 實戰場景（含上方遷移類） |
 | Day-2 運維 | [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [故障排查（運行期）](docs/troubleshooting.md) · [Migration Troubleshooting](docs/integration/troubleshooting-checklist.md)（遷移期 symptom-keyed runbook） |
 
 完整文件對照表：[doc-map.md](docs/internal/doc-map.md) · 工具表：[tool-map.md](docs/internal/tool-map.md)

@@ -27,7 +27,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 | Evaluate whether the tech fits my environment | [Decision Matrix](docs/getting-started/decision-matrix.en.md) · [Integration Guides](docs/integration/README.en.md) |
 | Try it on my laptop in 1 minute (no Kubernetes) | [Try it locally](#try-it-locally) |
 | Ready to deploy to my own cluster | [Getting Started by Role](#getting-started-by-role) · [Integration Guides](docs/integration/README.en.md) |
-| **Already familiar — find a specific scenario / lifecycle stage** | [Scenarios (14)](docs/scenarios/) · [Migration paths](#documentation-guide) · [Day-2 ops](#documentation-guide) |
+| **Already familiar — find a specific scenario / lifecycle stage** | [Scenarios](docs/scenarios/) · [Migration paths](#documentation-guide) · [Day-2 ops](#documentation-guide) |
 | Already live, looking for day-2 ops / troubleshooting | [CLI Reference](docs/cli-reference.en.md) · [Troubleshooting](docs/troubleshooting.en.md) |
 
 ---
@@ -257,7 +257,7 @@ Full ADR index → [architecture-and-design.en.md §ADR Index](docs/architecture
 | Integration guides | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.en.md) · [VictoriaMetrics](docs/integration/victoriametrics-integration.en.md) · [Federation](docs/integration/federation-integration.en.md) · [GitOps](docs/integration/gitops-deployment.en.md) |
 | [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Benchmarks](docs/benchmarks.md) | Full benchmark data and methodology |
-| [Scenarios](docs/scenarios/) | 14 hands-on scenarios (includes migration paths above; others: Routing · Shadow · Federation · Lifecycle · GitOps · Lab) |
+| [Scenarios](docs/scenarios/) | Hands-on scenarios (includes migration paths above) |
 | Day-2 Operations | [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Troubleshooting (runtime)](docs/troubleshooting.en.md) · [Migration Troubleshooting](docs/integration/troubleshooting-checklist.en.md) (migration-phase symptom-keyed runbook) |
 
 Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md)
