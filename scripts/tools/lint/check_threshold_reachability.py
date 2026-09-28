@@ -553,7 +553,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # Measured today — generators 93 (chart 8 / scaffold 42 / init 42 / onboard 1),
 # artifacts 76 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
 # fixtures 53) plus 13 read but NOT counted by the key floor (e2e-bench, see
-# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 81 scanned in all. Each floor sits
+# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 89 scanned in all. Each floor sits
 # below its class's value; what it would read if a whole group stopped yielding:
 #
 #   generators   chart 85 / scaffold 51 / init 51 / onboard 92

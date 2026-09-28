@@ -13,12 +13,14 @@ package main
 //   - a tree NOT listed must exit 0 from `da-guard served-values`, so a new
 //     fixture (or an edit to a served one) cannot slip into the dropped shape
 //     and leave parity green over a tree nothing serves;
-//   - a listed tree must exit 3 (parse_failed non-empty), so the list cannot
-//     outlive the shape it excuses, and must name a tree that exists.
+//   - a listed tree must exit 3 with its ROOT _defaults.yaml in parse_failed
+//     (the reason every entry gives), so the list cannot outlive the shape it
+//     excuses, and must name a tree that exists.
 //
 // ⚠️ rc 0 means nothing in the tree is dropped. It does not mean every golden
 // value equals the served one; see the served-* scenarios' comment in
-// tests/golden/build_and_capture.py for two shapes where they differ.
+// tests/golden/build_and_capture.py, and the header of
+// app/config_golden_parity_test.go for the existing rows where they differ.
 
 import (
 	"bytes"
@@ -26,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -106,6 +109,16 @@ func TestGoldenFixtureTrees_ServedUnlessListed(t *testing.T) {
 					t.Errorf("%s is listed in tests/golden/not_served.json but the exporter "+
 						"serves it (exit %d, parse_failed %v): remove it from the list",
 						name, code, doc.ParseFailed)
+					return
+				}
+				// The list's reason is the ROOT defaults file being dropped.
+				// Some other file failing to decode (a broken tenant file under
+				// a root that now decodes) is a different tree, not this entry.
+				if !slices.Contains(doc.ParseFailed, "_defaults.yaml") {
+					t.Errorf("%s is listed in tests/golden/not_served.json for its root "+
+						"_defaults.yaml, but parse_failed is %v: the root file is served, "+
+						"so the entry no longer describes this tree",
+						name, doc.ParseFailed)
 				}
 				return
 			}

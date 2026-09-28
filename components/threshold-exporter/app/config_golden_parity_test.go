@@ -51,6 +51,19 @@ package main
 // corpus and listed in tests/golden/not_served.json;
 // cmd/da-guard/golden_served_test.go holds that list to the trees (#2387).
 //
+// ⛔ That list names only trees the exporter drops a file of WHOLE. A tree off
+// it exits da-guard rc 0, which does NOT make every golden row here a value
+// /metrics serves. Rows in rc-0 trees that /metrics does not carry (measured
+// with `da-guard served-values`, #2387):
+//   flat, mixed-mode-flat, mixed-mode-hier — the tenant file's nested
+//       `threshold:` map (and flat's `alert_group`): /metrics serves no row for
+//       a nested map, it reports it as unserved; mixed-mode-hier's inherited
+//       `threshold.memory: 60` does not reach it at all.
+//   carrier-selection-pair / -sub — `cpu_pct` is declared only in a subtree
+//       _defaults.yaml, and /metrics emits no row for a subtree-only key
+//       (#1976).
+// On those rows parity still proves only reader-vs-reader agreement.
+//
 // Chain discovery: MergedHash / EffectiveConfig read the defaults chain out of
 // golden.json on purpose (they isolate the merge core). The chain itself is
 // derived from the tree, and compared with Python's, by ScannerChainOrder (the

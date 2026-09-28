@@ -11,7 +11,12 @@
     "here must exit 3; every other tree must exit 0. Do not add a tree here to make",
     "that test green: fix the fixture, unless it pins a merge rule no served shape can.",
     "Do not regenerate golden.json to move these trees into a served shape (see the",
-    "header of config_golden_parity_test.go)."
+    "header of config_golden_parity_test.go).",
+    "Scope: this list names only trees whose file the exporter drops WHOLE. A tree",
+    "off it (rc 0) can still hold golden rows /metrics does not serve: nested maps",
+    "such as `threshold:` in flat / mixed-mode tenant files are unserved, and keys",
+    "declared only in a subtree _defaults.yaml (carrier-selection `cpu_pct`) get no",
+    "row (#1976). The row-by-row list is in config_golden_parity_test.go's header."
   ],
   "trees": {
     "l0-only": "root defaults hold a nested `threshold:` map and a string `alert_group`: root-level scalar override inside a nested map",
