@@ -119,7 +119,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ops := cfg.OperationalStatesAt(now)
 	c.collectStateFilters(ch, ops.StateFilters)
 	c.collectSilentModes(ch, ops)
-	c.collectMaintenanceExpiries(ch, cfg)
+	c.collectMaintenanceExpiries(ch, cfg, now)
 	c.collectThresholdExpiries(ch, cfg, now)
 	c.collectSeverityDedup(ch, cfg)
 	c.collectConfigInfo(ch)
@@ -308,13 +308,14 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 // filter simply keeps emitting).
 //
 // The exporter (c.now nil) resolves at the wall clock, as it always has; a
-// reader that set Hooks.Now resolves at that instant, like every other family.
-func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig) {
+// reader that set Hooks.Now resolves at the scrape's `now` (that hook's
+// instant), like every other family.
+func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) {
 	var expiries []config.ResolvedMaintenanceExpiry
 	if c.now == nil {
 		expiries = cfg.ResolveMaintenanceExpiries()
 	} else {
-		expiries = cfg.ResolveMaintenanceExpiriesAt(c.now())
+		expiries = cfg.ResolveMaintenanceExpiriesAt(now)
 	}
 	for _, me := range expiries {
 		if !me.Expired {

@@ -398,12 +398,12 @@ func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 //     (so a tenant that just dropped back below the cap is observably
 //     clamped to zero rather than carrying its old over-limit value).
 //
-// Safe to call from inside Collect because Prometheus client_golang
-// invokes each Collector's Collect serially per Gather, and the
-// GaugeVec is mutated only here. The order vs the GaugeVec's own
-// Collect within the same Gather: ThresholdCollector is registered
-// first (see collector.go MetricsHandler), so its Reset+Set runs before
-// the GaugeVec is asked to emit its current state.
+// Called from inside the collector's Collect; the GaugeVec is mutated only
+// here. ⚠️ Registration order does NOT order it against the GaugeVec's own
+// Collect: Registry.Gather collects the registered collectors concurrently,
+// so within one Gather the GaugeVec may emit before or after this Reset+Set
+// — i.e. a scrape can carry the previous scrape's magnitudes. Known and left
+// as is (#2115 moved this code without changing it).
 func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
 	cm.set.PublishTenantMetricsOverLimit(perTenant)
 }

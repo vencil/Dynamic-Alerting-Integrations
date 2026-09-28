@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -165,8 +166,10 @@ func TestCollector_MetricsHandler(t *testing.T) {
 	if !strings.Contains(body, "user_threshold") {
 		t.Errorf("expected user_threshold metric in output, got:\n%s", body[:min(len(body), 500)])
 	}
-	if !strings.Contains(body, "go_") {
-		t.Errorf("expected Go collector metrics in output")
+	// A series line, not any "go_" substring: help texts elsewhere mention
+	// go_memstats_* and would satisfy a plain Contains.
+	if !regexp.MustCompile(`(?m)^go_goroutines `).MatchString(body) {
+		t.Errorf("expected the Go collector's go_goroutines series in output")
 	}
 }
 

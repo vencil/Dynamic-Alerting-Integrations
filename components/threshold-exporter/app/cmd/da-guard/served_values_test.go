@@ -699,26 +699,58 @@ func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
 // two distinct keys could come out as one; it is refused and named instead.
 func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct{ tenants, want string }{
+	const sf = "state_filters:\n  maintenance:\n    reasons: []\n    default_state: disable\n"
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
 		// `dP8=` is "t\xff"
-		"tenant id": {"tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n",
-			`tenant "t\xff"`},
+		"tenant id": {map[string]string{
+			"_defaults.yaml": defaultsOnly,
+			"tenant-a.yaml":  "tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n",
+		}, `tenant "t\xff"`},
 		// mysql_connections{q="\xff"} and mysql_connections{q="\xfe"}: both become {q="\ufffd"} in JSON.
-		"key": {"tenants:\n  tenant-a:\n    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n    : 5\n" +
-			"    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n    : 6\n",
-			`is not valid UTF-8`},
+		"tenant key": {map[string]string{
+			"_defaults.yaml": defaultsOnly,
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n    : 5\n" +
+				"    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n    : 6\n",
+		}, `tenant "tenant-a": key "mysql_connections{q=\"\x`}, // \xfe or \xff: whichever the map yields first
+		"defaults key": {map[string]string{
+			"_defaults.yaml": defaultsOnly + "  ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n  : 5\n" +
+				"  ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n  : 6\n",
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+		}, `defaults: key "mysql_connections{q=\"\x`},
+		// `eP8=` / `eP4=` are "x\xff" / "x\xfe".
+		"state filter name": {map[string]string{
+			"_defaults.yaml": defaultsOnly + "state_filters:\n  ? !!binary eP8=\n  : {reasons: [\"a\"]}\n  ? !!binary eP4=\n  : {reasons: [\"b\"]}\n",
+			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+		}, `state_filters: name "x\x`},
+		// Values, not keys: the reserved readings carry them out.
+		"_metadata value": {map[string]string{
+			"_defaults.yaml": defaultsOnly + sf,
+			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _metadata:\n      runbook_url: !!binary /w==\n      db_type: !!binary /w==\n",
+		}, `tenants["tenant-a"].values["_metadata"]`},
+		"_routing value": {map[string]string{
+			"_defaults.yaml": defaultsOnly + sf,
+			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: !!binary /w==\n",
+		}, `tenants["tenant-a"].values["_routing"]`},
+		// Two broken files whose names differ only in a non-UTF-8 byte: JSON
+		// would render both as "b\ufffd.yaml".
+		"parse_failed file name": {map[string]string{
+			"_defaults.yaml": defaultsOnly,
+			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+			"b\xfe.yaml":     "tenants: [\n",
+			"b\xff.yaml":     "tenants: [\n",
+		}, `parse_failed[0]: "b\xfe.yaml"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			code, _, _, stderr := served(t, map[string]string{
-				"_defaults.yaml": defaultsOnly,
-				"tenant-a.yaml":  tc.tenants,
-			}, "")
+			code, _, _, stderr := served(t, tc.files, "")
 			if code != exitCallerErr {
 				t.Fatalf("exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
 			}
 			if !strings.Contains(stderr, tc.want) || !strings.Contains(stderr, "not valid UTF-8") {
-				t.Errorf("stderr should name it with %%q: %q", stderr)
+				t.Errorf("stderr should name it (%s): %q", tc.want, stderr)
 			}
 		})
 	}
@@ -764,5 +796,43 @@ func TestServedValues_OtherFamilyFailsGather_ExitsTwo(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "da_config_event") || !strings.Contains(stderr, "HTTP 500") {
 		t.Errorf("stderr should carry client_golang's error: %q", stderr)
+	}
+}
+
+// A non-UTF-8 name in optional_overrides reaches no output string while no
+// tenant sets it, and /metrics serves the tree: so must this, with no U+FFFD.
+func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": defaultsOnly + "optional_overrides:\n  - !!binary eP8=\n",
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+	})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", filepath.Join(tmp, "conf.d"))
+	mustOK(t, code, stderr)
+	if strings.Contains(stdout, "\ufffd") || strings.Contains(stdout, `\ufffd`) {
+		t.Errorf("output carries U+FFFD:\n%s", stdout)
+	}
+}
+
+// --- threshold expiry events follow --at ----------------------------------------------
+
+// Two time-boxed overrides whose expiry events would render one
+// da_config_event series ("container_cpu: a: b"): before they expire nothing
+// collides; after, the scrape fails. The expiry is far in the future, so only
+// --at (not the wall clock) can put the run after it.
+func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": defaultsOnly + "  container_cpu: 75\n  \"container_cpu: a\": 50\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    container_cpu:\n      default: \"95\"\n      expires: \"2099-06-01T00:00:00Z\"\n      reason: \"a: b\"\n" +
+			"    \"container_cpu: a\":\n      default: \"96\"\n      expires: \"2099-06-01T00:00:00Z\"\n      reason: \"b\"\n",
+	}
+	code, doc, _, stderr := served(t, files, "2026-07-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "container_cpu", 95)
+	code, _, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
+	if code != exitCallerErr || !strings.Contains(stderr, "da_config_event") {
+		t.Fatalf("after expiry: exit = %d, want %d naming da_config_event; stderr=%q", code, exitCallerErr, stderr)
 	}
 }

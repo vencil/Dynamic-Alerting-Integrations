@@ -23,6 +23,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,7 +91,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
-			"     a tenant id or key that is not valid UTF-8, or a Gather failure of the same\n"+
+			"     any output string that is not valid UTF-8, or a Gather failure of the same\n"+
 			"     collectors production /metrics serves (e.g. two keys producing one series)\n"+
 			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n\n"+
 			"Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with\n"+
@@ -147,12 +148,17 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	if parseFailed == nil {
 		parseFailed = []string{}
 	}
-	b, err := json.MarshalIndent(servedValuesDoc{
+	doc := servedValuesDoc{
 		ConfigDir:   f.configDir,
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
 		Tenants:     tenants,
-	}, "", "  ")
+	}
+	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+		return exitCallerErr
+	}
+	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: encode JSON: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
@@ -168,11 +174,13 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	return exitOK
 }
 
-// checkUTF8 refuses a tree whose tenant ids or keys are not valid UTF-8.
-// JSON cannot carry such a string: encoding/json writes U+FFFD for the bad
-// bytes, so two distinct keys can come out as one and a reader silently loses
-// one of them. (The exporter itself fails on such a tenant id at scrape time,
-// #2266.)
+// checkUTF8 refuses, before anything is resolved, a tree whose tenant ids or
+// keys are not valid UTF-8, naming where in the config the string sits. JSON
+// cannot carry such a string: encoding/json writes U+FFFD for the bad bytes,
+// so two distinct keys can come out as one and a reader silently loses one of
+// them. It must run before the Gather: the exporter's collector panics on
+// such a tenant id (#2266). checkOutputUTF8 is the net over everything else
+// the output carries.
 func checkUTF8(cfg *config.ThresholdConfig) error {
 	for tenant, overrides := range cfg.Tenants {
 		if !utf8.ValidString(tenant) {
@@ -189,17 +197,71 @@ func checkUTF8(cfg *config.ThresholdConfig) error {
 			return fmt.Errorf("defaults: key %q is not valid UTF-8; JSON cannot carry it", k)
 		}
 	}
-	for _, k := range cfg.OptionalOverrides {
-		if !utf8.ValidString(k) {
-			return fmt.Errorf("optional_overrides: key %q is not valid UTF-8; JSON cannot carry it", k)
-		}
-	}
 	for name := range cfg.StateFilters {
 		if !utf8.ValidString(name) {
 			return fmt.Errorf("state_filters: name %q is not valid UTF-8; JSON cannot carry it", name)
 		}
 	}
 	return nil
+}
+
+// checkOutputUTF8 walks every string the output document carries — struct
+// fields, map keys and values, list items, whatever their nesting — and
+// refuses the first that is not valid UTF-8, naming its path (keys and the
+// string itself shown with %q). One walk, so a field added later is covered
+// without being listed.
+func checkOutputUTF8(path string, v reflect.Value) error {
+	switch v.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if v.IsNil() {
+			return nil
+		}
+		return checkOutputUTF8(path, v.Elem())
+	case reflect.String:
+		if !utf8.ValidString(v.String()) {
+			return fmt.Errorf("%s: %q is not valid UTF-8; JSON cannot carry it", path, v.String())
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			if !t.Field(i).IsExported() {
+				continue
+			}
+			name := t.Field(i).Name
+			if tag := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]; tag != "" {
+				name = tag
+			}
+			if err := checkOutputUTF8(joinPath(path, name), v.Field(i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		keys := v.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j]) })
+		for _, k := range keys {
+			kp := fmt.Sprintf("%s[%q]", path, fmt.Sprint(k.Interface()))
+			if err := checkOutputUTF8(kp+" (key)", k); err != nil {
+				return err
+			}
+			if err := checkOutputUTF8(kp, v.MapIndex(k)); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if err := checkOutputUTF8(fmt.Sprintf("%s[%d]", path, i), v.Index(i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func joinPath(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "." + name
 }
 
 // servedValues reads every tenant of cfg at `at`.
