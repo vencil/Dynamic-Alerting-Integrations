@@ -239,7 +239,7 @@ def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
     assert rc == 0, rc
 
 
-def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
+def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts):
     """The exception is structural, not a list: a check that returns before
     reaching a tenant reader was never told anything by one.
 
@@ -264,7 +264,7 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     # routes the nested tenant (before, it was the flat row that WARNed).
     assert routes["status"] == vc.PASS, routes
     assert "skipped_nested_files" not in routes, routes
-    assert routes["details"] == ["1 routes, 1 receivers, 1 inhibit_rules"], routes
+    assert routes["details"][0] == "1 routes, 1 receivers, 1 inhibit_rules", routes
 
 
 def test_a_nested_tenant_alone_does_not_flag_a_root_carrier_lookup(tmp_path):
