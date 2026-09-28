@@ -91,6 +91,11 @@ class GoBinaryDispatcher:
             it's a Python-side organising layer only.
         usage_en: English usage block printed for --help / no-args.
         usage_zh: Traditional Chinese usage block.
+        forwarded_subcommands: Subcommands forwarded as the first arg
+            even when pass_subcommand is False — for a binary whose
+            default mode takes flags directly but which also has real
+            subcommands (da-guard: `defaults-impact` is stripped,
+            `served-values` is forwarded).
 
     Notes:
         Language detection is deferred to message-build time
@@ -105,6 +110,7 @@ class GoBinaryDispatcher:
     pass_subcommand: bool
     usage_en: str
     usage_zh: str
+    forwarded_subcommands: frozenset = frozenset()
 
     # ------------------------------------------------------------------
     # Internal helpers — kept private so shims and tests stay decoupled
@@ -156,6 +162,15 @@ class GoBinaryDispatcher:
             ), cleaned
         return shutil.which(self.binary_name), cleaned
 
+    def resolve_binary(self, explicit: str | None = None) -> str | None:
+        """The binary path by the resolution order — explicit path, then
+        $<env_var>, then $PATH — or None when the step that applies names
+        no existing file. Public so a library calling the binary resolves
+        it exactly as the da-tools subcommand does: it IS _resolve_binary,
+        fed the explicit path the way the flag would carry it."""
+        args = [self.binary_flag, explicit] if explicit else []
+        return self._resolve_binary(args)[0]
+
     def _recover_explicit_attempt(
         self, argv: list[str]
     ) -> str | None:
@@ -174,6 +189,11 @@ class GoBinaryDispatcher:
         self, explicit_attempt: str | None
     ) -> None:
         """Print friendly missing-binary error to stderr."""
+        print(self.binary_missing_message(explicit_attempt), file=sys.stderr)
+
+    def binary_missing_message(self, explicit_attempt: str | None) -> str:
+        """The missing-binary error text (resolution order + install
+        hints, or the explicit path that was not found)."""
         bn = self.binary_name
         if explicit_attempt:
             # Quote the path manually, NOT with !r. repr() escapes backslashes,
@@ -181,14 +201,13 @@ class GoBinaryDispatcher:
             # the user (looks like doubled separators) and it differs from the raw
             # path the user typed. Manual quotes show the boundary without escaping
             # (POSIX paths are unchanged — repr added no escapes there either).
-            print(self._msg(
+            return self._msg(
                 f"Error: {bn} binary not found "
                 f"at '{explicit_attempt}'.\n",
                 f"錯誤: 在 '{explicit_attempt}' 找不到 {bn} 執行檔。\n"
-            ), file=sys.stderr)
-            return
+            )
 
-        print(self._msg(
+        return self._msg(
             f"Error: {bn} binary not found.\n"
             "Resolution order:\n"
             f"  1. {self.binary_flag} <path>\n"
@@ -216,7 +235,7 @@ class GoBinaryDispatcher:
             "  - 從原始碼編譯:\n"
             "      cd components/threshold-exporter/app && \\\n"
             f"          go build -o /usr/local/bin/{bn} ./cmd/{bn}\n"
-        ), file=sys.stderr)
+        )
 
     # ------------------------------------------------------------------
     # Public surface
@@ -260,7 +279,7 @@ class GoBinaryDispatcher:
             )
             return _EXIT_CALLER_ERROR
 
-        if self.pass_subcommand:
+        if self.pass_subcommand or subcmd in self.forwarded_subcommands:
             cmd = [binary, subcmd] + forward_args
         else:
             cmd = [binary] + forward_args

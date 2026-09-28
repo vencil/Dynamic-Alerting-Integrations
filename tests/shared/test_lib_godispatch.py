@@ -287,6 +287,22 @@ class TestSubcommandForwarding:
         forwarded = run.call_args[0][0]
         assert forwarded == [fake_binary, "do-thing", "--arg", "v"]
 
+    def test_forwarded_subcommands_forward_despite_pass_false(
+            self, make_dispatcher, fake_binary):
+        """da-guard pattern: the default mode is stripped, a real
+        subcommand listed in forwarded_subcommands is forwarded."""
+        d = make_dispatcher(pass_subcommand=False,
+                            forwarded_subcommands=frozenset({"another-thing"}))
+        with mock.patch("subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            d.dispatch(["another-thing", "--fake-binary-path", fake_binary, "--arg", "v"])
+            d.dispatch(["do-thing", "--fake-binary-path", fake_binary, "--arg", "v"])
+        forwarded = [c[0][0] for c in run.call_args_list]
+        assert forwarded == [
+            [fake_binary, "another-thing", "--arg", "v"],
+            [fake_binary, "--arg", "v"],
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Argv passthrough integrity

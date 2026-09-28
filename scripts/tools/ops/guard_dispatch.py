@@ -19,8 +19,12 @@ the actual guard logic lives in Go for two reasons:
 Subcommands:
   defaults-impact   Validate a conf.d/ tree (mapped to
                     da-guard --config-dir ...). The subcommand name
-                    is a Python-side organising layer; da-guard
-                    itself takes flags directly with no subcommand.
+                    is a Python-side organising layer; da-guard's
+                    default mode takes flags directly.
+  served-values     Print, as JSON, the values the exporter's /metrics
+                    serves per tenant (#2115; forwarded as
+                    da-guard served-values ...). The reader library is
+                    scripts/tools/_lib_tenant_values.py.
 
 Resolution order for the `da-guard` binary:
   1. --da-guard-binary <path>   (explicit override)
@@ -36,6 +40,7 @@ at the top of cmd/da-guard/main.go):
   3  config files the exporter cannot decode (#2123)
 
 Usage:
+  da-tools guard served-values --config-dir conf.d/ [--at 2026-07-01T03:00:00Z]
   da-tools guard defaults-impact --config-dir conf.d/
   da-tools guard defaults-impact --config-dir conf.d/ --scope conf.d/db/ \\
       --required-fields cpu,memory
@@ -61,6 +66,8 @@ _USAGE_EN = (
     "Subcommands:\n"
     "  defaults-impact   Validate a conf.d/ tree against the C-12 Dangling\n"
     "                    Defaults Guard (schema + routing + cardinality).\n"
+    "  served-values     Print, as JSON, the values the exporter's /metrics\n"
+    "                    serves per tenant (--config-dir, optional --at RFC3339).\n"
     "\n"
     "Flags (most common; full list via `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          Required. conf.d/ root.\n"
@@ -94,6 +101,8 @@ _USAGE_ZH = (
     "子命令:\n"
     "  defaults-impact   依 C-12 Dangling Defaults Guard 規則\n"
     "                    驗證 conf.d/ 樹 (schema + routing + cardinality)。\n"
+    "  served-values     以 JSON 印出 exporter /metrics 對每個租戶實際發出的值\n"
+    "                    (--config-dir，可加 --at RFC3339)。\n"
     "\n"
     "常用選項 (完整選項見 `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          必填，conf.d/ 根目錄。\n"
@@ -121,19 +130,25 @@ _USAGE_ZH = (
     "      --scope conf.d/db/ --format json\n"
 )
 
-# guard's subcommand is a Python-side organising layer — da-guard
-# itself takes flags directly without a subcommand string. So we
-# strip the subcommand before forwarding (pass_subcommand=False).
+# `defaults-impact` is a Python-side organising layer — da-guard's
+# default mode takes flags directly — so it is stripped before
+# forwarding (pass_subcommand=False). `served-values` is a real
+# da-guard subcommand and is forwarded.
 _DISPATCHER = GoBinaryDispatcher(
     binary_name="da-guard",
     cli_alias="guard",
     binary_flag="--da-guard-binary",
     env_var="DA_GUARD_BINARY",
-    subcommands={"defaults-impact"},
+    subcommands={"defaults-impact", "served-values"},
     pass_subcommand=False,
     usage_en=_USAGE_EN,
     usage_zh=_USAGE_ZH,
+    forwarded_subcommands=frozenset({"served-values"}),
 )
+
+# The same resolution, for _lib_tenant_values (which calls da-guard as a
+# library rather than as a da-tools subcommand).
+DISPATCHER = _DISPATCHER
 
 
 def main(argv: list[str] | None = None) -> int:

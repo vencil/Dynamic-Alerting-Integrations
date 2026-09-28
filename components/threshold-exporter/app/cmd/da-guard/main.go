@@ -48,6 +48,11 @@
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
+//
+// Subcommand `served-values` (#2115, served_values.go) prints what /metrics
+// serves per tenant as JSON, for the Python readers. Same exit codes: 0 ok,
+// 2 caller error or a tree the exporter's load rejects, 3 files the load
+// skips (the JSON is still written, naming them in parse_failed).
 package main
 
 import (
@@ -134,7 +139,10 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
-		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n\n")
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
+		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
+			"(see '%s %s -h').\n\n", servedValuesCmd, programName, servedValuesCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
 			"  3  config files the exporter cannot decode; the report names them (fix, re-run)\n")
@@ -156,6 +164,12 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 // (usage errors, exception messages); the report itself goes to
 // either stdout (if --output empty) or the named file.
 func run(args []string, stdout, errOut io.Writer) int {
+	// Subcommands are dispatched before the log redirect below: served-values
+	// leaves the process's `log` on stderr (see runServedValues).
+	if len(args) > 0 && args[0] == servedValuesCmd {
+		return runServedValues(args[1:], stdout, errOut)
+	}
+
 	// Force log output to errOut so the report stream stays clean
 	// when --output is empty (i.e. report goes to stdout).
 	log.SetOutput(errOut)

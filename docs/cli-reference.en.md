@@ -2719,6 +2719,7 @@ da-tools guard <subcommand> [flags]
 | Subcommand | Description |
 |---|---|
 | `defaults-impact` | Run deepMerge → guard checks against every tenant under conf.d/ (or the `--scope` subdirectory); emit Markdown / JSON report |
+| `served-values` | Print, as JSON, the values the exporter's `/metrics` serves per tenant ([#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)); Python readers call it through `scripts/tools/_lib_tenant_values.py` |
 
 **Binary resolution order**
 
@@ -2751,6 +2752,15 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
 | 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
 
+**`served-values`**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config-dir <path>` | (required) | conf.d/ root |
+| `--at <RFC3339>` | now | Instant to resolve at (schedule windows, `expires`, silence / maintenance end times all follow it) |
+
+The values come from the exporter's own load and resolvers; the subcommand judges nothing itself. JSON output: `parse_failed` (files the exporter's load skips whole; `[]` when none) and `tenants`, each with `values` (every threshold key `/metrics` emits a row for, canonical name → value, plus the reserved keys as the exporter's resolvers read them at `--at`), `severities` (each threshold key's severity label) and `unserved` (keys of the tenant's merged config absent from `values`, switched-off ones included, value as written). Exit codes: 0 ok; 2 caller error, or the exporter rejects the whole tree (e.g. a tenant declared in two files), with the reason on stderr; 3 a file was skipped whole — the JSON is still written and names it in `parse_failed`.
+
 **Examples**
 
 ```bash
@@ -2764,6 +2774,9 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 # JSON output for downstream PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
+
+# What /metrics serves per tenant, at a given instant
+da-tools guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
 ```
 
 **Scope simplification**: `da-guard` ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to a "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by the `/simulate` endpoint). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).

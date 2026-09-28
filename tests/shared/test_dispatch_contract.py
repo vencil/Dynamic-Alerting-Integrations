@@ -59,9 +59,15 @@ class ShimSpec:
     help_regexes: tuple           # usage 輸出必須命中的 regex（防 substring 假陽性）
     # 每項: (subcommand, forwarded_flags) — passthrough 精確順序測試用。
     passthrough_samples: tuple
+    # pass_subcommand=False 時仍原樣轉發的 subcommand（da-guard 的真子命令）。
+    forwarded_subcommands: tuple = ()
 
     def __str__(self):  # pytest ids
         return self.id
+
+    def forwards(self, sub: str) -> bool:
+        """sub 是否作為第一個 arg 轉發給 Go binary。"""
+        return self.pass_subcommand or sub in self.forwarded_subcommands
 
 
 SPECS = [
@@ -72,10 +78,10 @@ SPECS = [
         binary_name="da-guard",
         binary_flag="--da-guard-binary",
         env_var="DA_GUARD_BINARY",
-        subcommands=("defaults-impact",),
+        subcommands=("defaults-impact", "served-values"),
         pass_subcommand=False,
         sample_flags=("--config-dir", "/tmp/conf.d"),
-        help_regexes=(r"guard", r"defaults-impact"),
+        help_regexes=(r"guard", r"defaults-impact", r"served-values"),
         passthrough_samples=(
             (
                 "defaults-impact",
@@ -88,7 +94,12 @@ SPECS = [
                     "--warn-as-error",
                 ),
             ),
+            (
+                "served-values",
+                ("--config-dir", "/conf.d", "--at", "2026-07-01T03:00:00Z"),
+            ),
         ),
+        forwarded_subcommands=("served-values",),
     ),
     ShimSpec(
         id="batchpr",
@@ -222,14 +233,14 @@ def test_help_explicit_flag_returns_zero(spec, flag, capsys):
     "spec,sub", SPEC_SUB_PAIRS, ids=[f"{s.id}-{sub}" for s, sub in SPEC_SUB_PAIRS]
 )
 def test_known_subcommand_accepted(spec, sub, tmp_path):
-    """每個合法 subcommand 都乾淨轉發；subcommand 依 pass_subcommand 出現/剝除。"""
+    """每個合法 subcommand 都乾淨轉發；subcommand 依 forwards() 出現/剝除。"""
     fake = _make_fake_binary(tmp_path, spec.binary_name)
     rc, cmd = _run_ok(
         spec.main, [sub, spec.binary_flag, fake, *spec.sample_flags]
     )
     assert rc == 0
     assert cmd[0] == fake
-    if spec.pass_subcommand:
+    if spec.forwards(sub):
         assert cmd[1] == sub
     else:
         assert sub not in cmd
@@ -384,9 +395,9 @@ def test_argv_passthrough_exact_order(spec, sub, flags, tmp_path):
     fake = _make_fake_binary(tmp_path, spec.binary_name)
     rc, cmd = _run_ok(spec.main, [sub, spec.binary_flag, fake, *flags])
     assert rc == 0
-    expected = [fake] + ([sub] if spec.pass_subcommand else []) + list(flags)
+    expected = [fake] + ([sub] if spec.forwards(sub) else []) + list(flags)
     assert cmd == expected
-    if not spec.pass_subcommand:
+    if not spec.forwards(sub):
         assert sub not in cmd  # guard pattern：subcommand 是 Python 側組織層
 
 

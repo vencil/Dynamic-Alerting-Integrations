@@ -1,0 +1,178 @@
+"""_lib_tenant_values：經 da-guard served-values 讀出 /metrics 實際發出的租戶值（#2115）。
+
+測試用真的 da-guard：session 級 fixture 以 `go build` 建到 tmp 目錄。建不起來
+（含沒有 go）一律 fail、不 skip——這支 lib 的全部意義就是「值來自 Go」，
+量不到 Go 的測試綠燈等於沒測。
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import _lib_io
+import _lib_tenant_values as tv
+from _lib_io import YamlFileError
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+APP = REPO_ROOT / "components" / "threshold-exporter" / "app"
+
+
+@pytest.fixture(scope="session")
+def da_guard(tmp_path_factory) -> str:
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: da-guard cannot be built, so nothing here can be measured")
+    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
+        cwd=APP, capture_output=True, text=True, check=False, timeout=600)
+    if proc.returncode != 0:
+        pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+def _tree(root: Path, files: dict[str, str]) -> Path:
+    conf_d = root / "conf.d"
+    for rel, body in files.items():
+        p = conf_d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    return conf_d
+
+
+_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_CONTROL = "tenants:\n  tenant-b:\n    _silent_mode: disable\n"
+
+# 同一個值（55）分別只寫在三個地方；tenant-b 是對照組，永遠吃 defaults 的 80。
+_WHERE = {
+    "defaults": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 55\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n",
+    },
+    "platform-tenants": {
+        "_defaults.yaml": _DEFAULTS + "tenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+        "tenant-b.yaml": _CONTROL,
+    },
+    "tenant-file": {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "tenant-b.yaml": _CONTROL,
+    },
+}
+
+
+@pytest.mark.parametrize("where", sorted(_WHERE))
+def test_value_is_read_wherever_it_is_written(where, tmp_path, da_guard):
+    conf_d = _tree(tmp_path, _WHERE[where])
+    got = tv.load_served_values(conf_d, binary=da_guard)
+    assert got["tenant-a"].values["mysql_connections"] == 55
+    assert got["tenant-a"].severities["mysql_connections"] == "warning"
+    assert got["tenant-b"].values["mysql_connections"] == 80  # 對照組不變
+
+
+def test_the_old_root_only_reader_misses_the_first_two(tmp_path):
+    """對照：load_tenant_configs 只讀根目錄租戶檔，前兩種樹看不到 55，第三種看得到。
+    這支測試釘住「為什麼需要這支 lib」；哪天它轉紅，代表舊 reader 已被修正。"""
+    seen = {}
+    for where in sorted(_WHERE):
+        conf_d = _tree(tmp_path / where, _WHERE[where])
+        seen[where] = _lib_io.load_tenant_configs(str(conf_d)).get("tenant-a", {}).get("mysql_connections")
+    assert seen["defaults"] != 55 and seen["platform-tenants"] != 55, seen
+    assert str(seen["tenant-file"]) == "55", seen
+
+
+def test_at_is_passed_through(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections:\n      default: \"70\"\n"
+                         "      overrides:\n        - window: \"01:00-09:00\"\n          value: \"1000\"\n",
+    })
+    inside = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)
+    outside = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard)
+    assert inside["tenant-a"].values["mysql_connections"] == 1000
+    assert outside["tenant-a"].values["mysql_connections"] == 70
+
+
+def test_disabled_value_is_unserved(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: disable\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
+    assert "mysql_connections" not in got.values
+    assert got.unserved == {"mysql_connections": "disable"}
+    assert got.tenant_id == "tenant-a"
+
+
+def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b: [1]\n",
+    })
+    with pytest.raises(YamlFileError) as ei:
+        tv.load_served_values(conf_d, binary=da_guard)
+    assert ei.value.path == str(conf_d / "tenant-b.yaml")
+    assert "tenant-b.yaml" in str(ei.value)
+
+
+def test_nonzero_exit_raises_with_stderr(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "b.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 71\n",
+    })
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_values(conf_d, binary=da_guard)
+    assert ei.value.returncode == 2
+    assert "duplicate tenant" in ei.value.stderr
+    assert "duplicate tenant" in str(ei.value)
+
+
+def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):
+    monkeypatch.setenv("DA_LANG", "en")
+    monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(tv.DaGuardNotFoundError) as ei:
+        tv.load_served_values(tmp_path)
+    msg = str(ei.value)
+    assert "da-guard binary not found" in msg
+    assert "DA_GUARD_BINARY" in msg and "go build" in msg
+
+    with pytest.raises(tv.DaGuardNotFoundError) as ei:
+        tv.load_served_values(tmp_path, binary=str(tmp_path / "nope"))
+    assert str(tmp_path / "nope") in str(ei.value)
+
+
+def test_binary_resolution_order_env_then_path(tmp_path, monkeypatch, da_guard):
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setenv("DA_GUARD_BINARY", da_guard)
+    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connections"] == 70
+    monkeypatch.delenv("DA_GUARD_BINARY")
+    monkeypatch.setattr(shutil, "which", lambda name: da_guard if name == "da-guard" else None)
+    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connections"] == 70
+
+
+def test_every_exception_class_is_exported():
+    """呼叫端要接的例外都得能從 __all__ 取到；新增例外卻漏加時轉紅。"""
+    exceptions = {name for name, obj in vars(tv).items()
+                  if isinstance(obj, type) and issubclass(obj, BaseException)
+                  and not name.startswith("_")}
+    assert exceptions, "no exception class found — the scan itself is broken"
+    assert exceptions <= set(tv.__all__), sorted(exceptions - set(tv.__all__))
+    assert {"YamlFileError", "DaGuardNotFoundError", "ServedValuesError"} <= exceptions
+
+
+def test_env_var_name_is_the_dispatchers():
+    """lib 與 `da-tools guard` 共用同一條解析路徑（同一個 dispatcher）。"""
+    import guard_dispatch
+    assert guard_dispatch.DISPATCHER.env_var == "DA_GUARD_BINARY"
+    assert os.path.basename(guard_dispatch.DISPATCHER.binary_name) == "da-guard"

@@ -243,6 +243,12 @@ da-guard --config-dir conf.d/ --format json --output guard-report.json
 
 GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml)——客戶可整份 copy，於 `**/_defaults.yaml` 變更時自動跑並貼 PR comment。
 
+子命令 `served-values`（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）以 JSON 印出 `/metrics` 對每個租戶實際發出的值，值由 exporter 自己的載入與解析算出；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+
+```bash
+da-guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
+```
+
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON
 
 導入既有 PrometheusRule 的第一步：解析、dialect 分類（標準 PromQL / VictoriaMetrics-only）、可選 portability gate。
