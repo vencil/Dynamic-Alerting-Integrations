@@ -636,7 +636,11 @@ func (r *reloadOutcomes) last() bool {
 
 func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
 	t.Parallel()
-	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1"} {
+	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1",
+		// Collections PyYAML refuses for their own tag or direct children.
+		"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
+		"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
+		"!!binary [1]", "{? [1] : 2}"} {
 		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
 		m := NewManager(dir)
 		obs := &reloadOutcomes{}
@@ -660,8 +664,10 @@ func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
 // an alias cycle or fan-out must neither crash the process (a CrashLoop, on
 // the first load and on a hot reload alike) nor stall it, and as for any
 // other non-boolean the constraint is off while the rest still applies.
-// PyYAML-refused children (`!!omap [{[1]: 2}]`) and merge sources
-// (`{<<: !foo {b: 1}}`) are not looked at.
+// Accepted gap: nothing below the direct children is looked at, so a value
+// PyYAML refuses only there (`[!!bool y]`) also loads with the constraint
+// off — on a hot reload, from last-good on to off — while the generator and
+// da-guard refuse it.
 func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	t.Parallel()
 	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
@@ -679,7 +685,11 @@ func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 			t.Errorf("%s %.40s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
 		}
 	}
-	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}"} {
+	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}",
+		"[true]", "!!set {a: null}", "!!omap [{a: 1}]", "!!pairs [{a: 1}]", "{<<: {b: 1}}",
+		// the accepted gap: PyYAML refuses these below the direct children
+		"[!!bool y]", "{a: !!int x}", "!!set {!!bool y: null}", "!!omap [{a: !!bool y}]",
+		"{<<: [{b: !!bool y}]}", "[[!!bool y]]", "{b: 2001-13-40}", "[2001-13-40]"} {
 		start := time.Now()
 		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
 		want("initial load", v, NewManager(dir), time.Since(start))

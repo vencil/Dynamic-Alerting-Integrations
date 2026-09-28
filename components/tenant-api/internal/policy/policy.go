@@ -46,9 +46,13 @@ type Constraints struct {
 	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
 	// the constraint on (the generator's `is True`); any other value PyYAML
 	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
-	// left off, and the rest of the file still applies. A scalar PyYAML refuses (`!!bool y`,
-	// `!!int abc`) fails the file, as the generator drops it: a hot reload
-	// keeps the last good policy and records the failure.
+	// left off, and the rest of the file still applies. A scalar PyYAML
+	// refuses (`!!bool y`, `!!int abc`), or a mapping or list it refuses for
+	// its own tag or direct children (`!!bool [true]`, `{<<: 1}`), fails the
+	// file, as the generator drops it: a hot reload keeps the last good policy
+	// and records the failure. Accepted gap: one PyYAML refuses only deeper
+	// (`[!!bool y]`) loads with the constraint off (from last-good on to off
+	// on a hot reload), while the generator and da-guard refuse it.
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 

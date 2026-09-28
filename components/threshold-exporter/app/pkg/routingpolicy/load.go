@@ -194,16 +194,22 @@ func normalizeTaggedBools(n *yaml.Node) {
 // tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind spot (the
 // non-specific tag `!` on a quoted scalar) is in pyyaml.go.
 //
-// A mapping or sequence (an alias is followed once) is never a bool, so it
-// is returned as a non-bool without looking inside: no recursion, so an
+// A mapping or sequence (an alias is followed once) is never a bool. It is
+// an error when PyYAML refuses it for its own tag or its direct children
+// (`!!bool [true]`, `!!omap [1]`, `{<<: 1}`, `{[1]: 2}`; see pyCollection),
+// otherwise a non-bool. Nothing deeper is looked at: no recursion, so an
 // alias cycle (`&x [*x]`) or fan-out costs nothing. Accepted gap: where
-// PyYAML refuses a scalar inside it (`[!!bool y]`) the generator drops the
-// whole file, while here only this flag is off — stricter, fail-closed.
+// PyYAML refuses something deeper (`[!!bool y]`) the generator drops the
+// whole file and da-guard refuses it, but tenant-api reads it as "flag off"
+// and turns this constraint off (on a hot reload, from last-good on to off).
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
 	}
 	if n.Kind != yaml.ScalarNode {
+		if err := pyCollection(n); err != nil {
+			return nil, err
+		}
 		return kindName(n), nil
 	}
 	v, other, err := pyScalar(n)

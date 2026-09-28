@@ -84,9 +84,10 @@ func TestDecodePyYAML_MatchesPyYAMLOracle(t *testing.T) {
 	}
 }
 
-// A mapping or sequence is never a bool: DecodePyYAML returns a non-bool
-// without looking inside, whatever PyYAML would make of the children — an
-// alias cycle or a fan-out included (#2325), so it must also be fast.
+// A mapping or sequence is never a bool: one PyYAML accepts, and one PyYAML
+// refuses only for something below its direct children (the accepted gap:
+// `[!!bool y]` …), decodes to a non-bool with no error — an alias cycle or a
+// fan-out included (#2325), so it must also be fast.
 func TestDecodePyYAML_CollectionIsNonBool(t *testing.T) {
 	t.Parallel()
 	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
@@ -94,8 +95,14 @@ func TestDecodePyYAML_CollectionIsNonBool(t *testing.T) {
 		fan += fmt.Sprintf(", &l%d [%s]", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 10), ","))
 	}
 	for _, src := range []string{
-		"[yes]", "{b: true}", "[!!bool y]", "!foo [1]", "!!omap [{[1]: 2}]",
-		"{<<: !foo {b: 1}}", "&x [*x]", "&x {b: *x}", "[" + fan + "]",
+		// PyYAML accepts these.
+		"[yes]", "[true]", "{b: true}", "[]", "{}", "! [1]", "!!seq [1]", "!!map {a: 1}",
+		"!!set {a: null}", "!!set {a}", "!!omap [{a: 1}]", "!!pairs [{a: 1}]", "!!omap []",
+		"!!omap [{[1]: 2}]", "{<<: {b: 1}}", "{<<: [{b: 1}]}", "{<<: []}", "{<<: !foo {b: 1}}",
+		"{\"<<\": 1}", "{!!merge x: {b: 1}}", "{a: [1]}", "&x [*x]", "&x {b: *x}", "[" + fan + "]",
+		// PyYAML refuses these below the direct children: not seen here.
+		"[!!bool y]", "{a: !!int x}", "!!set {!!bool y: null}", "!!omap [{a: !!bool y}]",
+		"{<<: [{b: !!bool y}]}", "[[!!bool y]]", "{b: 2001-13-40}", "[2001-13-40]",
 	} {
 		var doc yaml.Node
 		if err := yaml.Unmarshal([]byte("a: "+src+"\n"), &doc); err != nil {
@@ -108,6 +115,50 @@ func TestDecodePyYAML_CollectionIsNonBool(t *testing.T) {
 		}
 		if d := time.Since(start); d > time.Second {
 			t.Errorf("%.40s: DecodePyYAML took %v", src, d)
+		}
+	}
+}
+
+// A mapping or sequence PyYAML refuses for its own tag or its direct
+// children is refused here too (#2325), as the generator drops the file.
+func TestDecodePyYAML_CollectionRefusedOneLevel(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{
+		// the collection's own tag
+		"!!bool [true]", "!!bool {a: 1}", "!!str [1]", "!!int {a: 1}", "!foo [1]", "!!seq {a: 1}",
+		"!!map [1]", "!!timestamp [1]", "!!binary [1]", "!!null {}", "!!omap {a: 1}", "!!set [1]",
+		// its direct children
+		"!!omap [1]", "!!pairs [a]", "!!omap [{a: 1, b: 2}]", "!!pairs [{}]",
+		"{<<: 1}", "{<<: [1]}", "{<<: null}", "{!!merge x: 1}", "{! <<: 1}", "!!set {<<: 1}",
+		"{[1]: 2}", "{? [1] : 2}", "{{a: 1}: 2}", "!!set {[1]: null}",
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte("a: "+src+"\n"), &doc); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if v, err := DecodePyYAML(doc.Content[0].Content[1]); err == nil {
+			t.Errorf("%s: DecodePyYAML = %#v, nil; want the error PyYAML's refusal is", src, v)
+		}
+	}
+	// An alias child is followed once for its kind.
+	for _, src := range []string{"a: &a [1]\nb: {*a : 1}\n", "a: &a 1\nb: {<<: *a}\n",
+		"a: &a 1\nb: {<<: [*a]}\n", "a: &a {c: 1, d: 2}\nb: !!omap [*a]\n"} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if v, err := DecodePyYAML(doc.Content[0].Content[3]); err == nil {
+			t.Errorf("%q: DecodePyYAML = %#v, nil; want an error", src, v)
+		}
+	}
+	for _, src := range []string{"a: &a {c: 1}\nb: {<<: *a}\n", "a: &a {c: 1}\nb: {<<: [*a]}\n",
+		"a: &a {c: 1}\nb: !!omap [*a]\n"} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if v, err := DecodePyYAML(doc.Content[0].Content[3]); err != nil || v == nil {
+			t.Errorf("%q: DecodePyYAML = %#v, %v; want a non-bool, no error", src, v, err)
 		}
 	}
 }

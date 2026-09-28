@@ -4,7 +4,7 @@ package routingpolicy
 // SafeLoader) makes of one SCALAR node, for DecodePyYAML (#2325). Only the
 // outcome DecodePyYAML needs is modelled: refused (safe_load raises, the
 // generator drops the whole file), None, a bool, or some other value.
-// Collections are not modelled at all (see DecodePyYAML). The contract is
+// A collection is judged one level deep only (pyCollection). The contract is
 // pinned row by row against PyYAML itself by
 // tests/shared/pyyaml_tagged_scalar_matrix.json.
 //
@@ -106,6 +106,60 @@ func pyScalar(n *yaml.Node) (v any, other bool, err error) {
 		return nil, false, fmt.Errorf("PyYAML cannot read %q as %s", n.Value, tag)
 	}
 	return nil, true, nil
+}
+
+// pyCollection is safe_load's refusal, if any, of collection n judged ONE
+// level deep (#2325): n's own tag, and each direct child's kind (an alias
+// child is followed once, never entered). O(direct children), no recursion,
+// nothing decoded. What it cannot see — a refused scalar or structure further
+// in (`[!!bool y]`, `{<<: {<<: 1}}`) — PyYAML refuses and this lets through.
+// Rules as SafeConstructor 6.0.x applies them, pinned by the tests:
+//   - a sequence may carry !!seq / !!omap / !!pairs (or no tag), a mapping
+//     !!map / !!set; any other tag has no collection constructor;
+//   - !!omap / !!pairs: every item is a mapping of exactly one pair;
+//   - a mapping (flatten_mapping + construct_mapping): a `<<` merge value is a
+//     mapping or a sequence of mappings, and no key is a collection
+//     (unhashable).
+func pyCollection(n *yaml.Node) error {
+	tag := n.ShortTag()
+	if n.Kind == yaml.SequenceNode {
+		switch tag {
+		case "!!seq":
+			return nil
+		case "!!omap", "!!pairs":
+			for _, c := range n.Content {
+				if c = deref(c); c.Kind != yaml.MappingNode || len(c.Content) != 2 {
+					return fmt.Errorf("PyYAML's %s needs one-pair mappings, found %s", tag, kindName(c))
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("PyYAML has no constructor for tag %s on a sequence", tag)
+	}
+	if tag != "!!map" && tag != "!!set" {
+		return fmt.Errorf("PyYAML has no constructor for tag %s on a mapping", tag)
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k := deref(n.Content[i])
+		if k.Kind != yaml.ScalarNode {
+			return fmt.Errorf("PyYAML cannot use %s as a mapping key", kindName(k))
+		}
+		if k.ShortTag() != "!!merge" { // yaml.v3 resolves `<<` as PyYAML does
+			continue
+		}
+		v := deref(n.Content[i+1])
+		ok := v.Kind == yaml.MappingNode
+		if v.Kind == yaml.SequenceNode {
+			ok = true
+			for _, c := range v.Content {
+				ok = ok && deref(c).Kind == yaml.MappingNode
+			}
+		}
+		if !ok {
+			return fmt.Errorf("PyYAML merges only a mapping or a list of mappings, found %s", kindName(v))
+		}
+	}
+	return nil
 }
 
 // pyNumeric is the text Python's int() / float() parse: underscores already
