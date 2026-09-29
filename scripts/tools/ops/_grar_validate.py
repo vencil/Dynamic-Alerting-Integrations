@@ -1133,6 +1133,61 @@ DEPRECATED_KEY_ALIASES = {
     "mysql_cpu": "mysql_threads_running",
 }
 
+_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
+
+
+def _legacy_tenant_key(key: str) -> "str | None":
+    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
+    (exact, `_critical`-suffixed, dimensional), or None."""
+    if key in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key]
+    if key.endswith("_critical"):
+        base = key.removesuffix("_critical")
+        if base in _LEGACY_BY_CANONICAL:
+            return _LEGACY_BY_CANONICAL[base] + "_critical"
+    brace = key.find("{")
+    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
+    return None
+
+
+def _other_tenant_key_spellings(key: object) -> "list[str]":
+    """Go `otherSpellings`: every spelling of `key`'s threshold but `key`.
+    Empty for a key no alias touches — every routing / reserved key."""
+    if not isinstance(key, str):
+        return []  # a non-text YAML key names no aliased threshold
+    canon, _ = _canonical_tenant_key(key)
+    out = [canon] if canon != key else []
+    legacy = _legacy_tenant_key(canon)
+    if legacy is not None and legacy != key:
+        out.append(legacy)
+    return out
+
+
+def drop_shadowed_spellings(m: dict) -> dict:
+    """Go `dropShadowedSpellings` / resolve's canonical-wins dedup inside
+    ONE layer: a deprecated spelling whose canonical spelling the same map
+    also sets is dropped (a lone deprecated spelling is kept, not renamed).
+    Returns `m` itself when nothing is dropped."""
+    drop = [k for k in m if isinstance(k, str)
+            and _canonical_tenant_key(k)[1] and _canonical_tenant_key(k)[0] in m]
+    if not drop:
+        return m
+    return {k: v for k, v in m.items() if k not in drop}
+
+
+def overlay_across_spellings(dst: dict, src: dict) -> None:
+    """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per THRESHOLD,
+    not per spelling — a key `src` writes also drops from `dst` every other
+    spelling of it that `src` does not write itself. For a key no alias
+    touches (every routing and reserved key) this is exactly
+    ``dst.update(src)``."""
+    for k, v in src.items():
+        for s in _other_tenant_key_spellings(k):
+            if s not in src:
+                dst.pop(s, None)
+        dst[k] = v
+
 # Prometheus/Go-style duration grammar for domain-policy checks: one or
 # more <number><unit> tokens (multi-unit "1h30m", fractional "1.5h") or
 # the bare literal "0". Signs are rejected — a negative duration is never

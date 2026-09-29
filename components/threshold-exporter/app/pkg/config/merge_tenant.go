@@ -99,11 +99,11 @@ type platformSupply struct {
 //   - Errors: the tenant layer's Errors, and nothing else. A root platform
 //     file's entry never blocks a write to the tenant and is never the
 //     tenant's error.
-//   - A tenant LEGACY key whose canonical spelling a platform file supplies
-//     (tenant `mysql_cpu`, platform `mysql_threads_running`): resolve's
-//     canonical-wins dedup serves the platform's value, on /metrics and
-//     here alike, so the tenant's notice says the key is not applied and
-//     names the file, instead of "the old name still resolves".
+//   - A tenant LEGACY key whose canonical spelling a platform file also
+//     writes (tenant `mysql_cpu`, platform `mysql_threads_running`) is the
+//     tenant's: supplyFor never supplies a threshold the body writes under
+//     any spelling (#2368), so the usual rename notice ("the old name still
+//     resolves") is true, and it is the one given.
 //   - Notices: the tenant layer's Notices, then one notice per problem in a
 //     platform file's entry — every message ValidateTenantKeys would give
 //     had the tenant written those keys (unknown key, bad `expires:`,
@@ -129,7 +129,7 @@ func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 		Profiles:          m.Profiles,
 		Tenants:           m.own,
 	}
-	v := tenantLayer.validateTenantKeys(m.shadowingPlatformFile)
+	v := tenantLayer.validateTenantKeys()
 	if len(m.platform) > 0 {
 		tenants := make([]string, 0, len(m.platform))
 		for tid := range m.platform {
@@ -144,7 +144,7 @@ func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 					Profiles:          m.Profiles,
 					Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
 				}
-				pv := layer.validateOverrideKeys(nil)
+				pv := layer.validateOverrideKeys()
 				msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
 				sort.Strings(msgs)
 				for _, msg := range msgs {
@@ -231,7 +231,7 @@ func (m *TenantMerge) profileLayerNotices() []string {
 					Profiles:          m.Profiles,
 					Tenants:           map[string]map[string]ScheduledValue{tid: keys},
 				}
-				pv := pl.validateOverrideKeys(nil)
+				pv := pl.validateOverrideKeys()
 				msgs = append(append(msgs, pv.Errors...), pv.Notices...)
 			}
 			for _, k := range declaredBy[f] {
@@ -273,20 +273,6 @@ func profileLayerNotice(file, name, tenantID, msg string) string {
 	body = strings.TrimPrefix(body, "tenant="+tenantID+": ")
 	return fmt.Sprintf("NOTICE: platform file %s, profile %q (elected by tenant %s via _profile): %s — fix it in that file; "+
 		"it is not in this tenant's file and does not block writing it", file, name, tenantID, body)
-}
-
-// shadowingPlatformFile is the tenant layer's aliasShadow: the platform file
-// that supplies canonKey to tenant, if any. A supplied key is by
-// construction one the tenant's own map does not write, and the display
-// merge carries it beside the tenant's legacy spelling — so resolve serves
-// the platform's value (as /metrics does) and ignores the tenant's.
-func (m *TenantMerge) shadowingPlatformFile(tenant, _, canonKey string) (string, bool) {
-	for _, sup := range m.platform[tenant] {
-		if _, ok := sup.keys[canonKey]; ok {
-			return "platform file " + sup.file, true
-		}
-	}
-	return "", false
 }
 
 // platformLayerNotice rewrites one validateOverrideKeys message about a
@@ -638,15 +624,26 @@ func (r rootPlatform) supplyFor(tenant string, own map[string]ScheduledValue) []
 		if pf.err != nil {
 			continue
 		}
-		for k := range pf.cfg.Tenants[tenant] {
+		entry := pf.cfg.Tenants[tenant]
+		for k := range entry {
 			if k == "_metadata" {
 				continue
 			}
-			if _, written := own[k]; written {
+			// Per THRESHOLD, not per spelling (#2368): the body writing
+			// `mysql_cpu` owns `mysql_threads_running` too, and a later
+			// file's spelling drops an earlier file's other one — the
+			// flat plane's overlayAcrossSpellings, applied to ownership.
+			if hasAliasEquivalent(own, k) {
 				continue
 			}
 			if owner == nil {
 				owner = make(map[string]int)
+			}
+			var buf [2]string
+			for _, s := range otherSpellings(k, &buf) {
+				if _, same := entry[s]; !same {
+					delete(owner, s)
+				}
 			}
 			owner[k] = i
 		}

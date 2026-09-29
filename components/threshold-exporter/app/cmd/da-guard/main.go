@@ -414,7 +414,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// per-tenant entry out of the map, which the guard treats
 		// as "skip this tenant for redundant-override".
 		if ec.TenantOverridesRaw != nil {
-			tenantOverrides[ec.TenantID] = ec.TenantOverridesRaw
+			// #2368: a threshold the tenant writes under BOTH #1231
+			// spellings is not judged — deleting either spelling serves the
+			// other one's value, which no inherited value can stand for.
+			tenantOverrides[ec.TenantID] = config.WithoutDoubleSpelledThresholds(ec.TenantOverridesRaw)
 		}
 		if ec.MergedDefaults != nil {
 			newDefaultsByTenant[ec.TenantID] = ec.MergedDefaults

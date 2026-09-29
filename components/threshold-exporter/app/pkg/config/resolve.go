@@ -1242,21 +1242,19 @@ type KeyValidation struct {
 // both spellings appear in the same map, the canonical entry wins and the
 // deprecated one is reported as ignored (matching resolve's dedup).
 func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
-	return c.validateTenantKeys(nil)
+	return c.validateTenantKeys()
 }
 
-// aliasShadow reports, for a tenant's LEGACY key whose canonical spelling the
-// tenant's own map does not set, who else sets that canonical key for the
-// tenant in the merged config — a root platform file (#2208). Resolve's
-// canonical-wins dedup then serves THAT value and ignores the tenant's, so
-// the "old name still resolves" notice would be false. by is the
-// human-readable setter (e.g. "platform file _p.yaml"); ok=false when nobody
-// does.
-type aliasShadow func(tenant, legacyKey, canonKey string) (by string, ok bool)
-
-// validateTenantKeys is ValidateTenantKeys with an optional aliasShadow
-// (nil = none: the key sets of c.Tenants are the whole picture).
-func (c *ThresholdConfig) validateTenantKeys(shadow aliasShadow) KeyValidation {
+// validateTenantKeys is ValidateTenantKeys' body, shared with the tenant-api
+// merge core (TenantMerge.ValidateTenantKeys).
+//
+// ⚠️ There used to be an `aliasShadow` hook here (#2208): a tenant's legacy
+// key whose canonical spelling a root platform file supplied was reported as
+// "not applied", because the platform's canonical spelling won. #2368 made
+// the tenant win across spellings on every plane, so no layer can shadow a
+// tenant key any more; the hook and its "not applied" notice were removed
+// rather than left describing a merge that no longer happens.
+func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 	var v KeyValidation
 
 	// Defaults-side conflict: both spellings of the same threshold present.
@@ -1276,7 +1274,7 @@ func (c *ThresholdConfig) validateTenantKeys(shadow aliasShadow) KeyValidation {
 		}
 	}
 
-	o := c.validateOverrideKeys(shadow)
+	o := c.validateOverrideKeys()
 	v.Errors = append(v.Errors, o.Errors...)
 	v.Notices = append(v.Notices, o.Notices...)
 	return v
@@ -1287,12 +1285,7 @@ func (c *ThresholdConfig) validateTenantKeys(shadow aliasShadow) KeyValidation {
 // for the tenant-api merge core (#2208), which judges a root platform file's
 // per-tenant entries on their own and must not repeat the defaults-side
 // notice once per platform file.
-//
-// shadow (may be nil) replaces the rename notice of a legacy key whose
-// canonical spelling another layer sets — see aliasShadow. It changes a
-// NOTICE only: the key is validated exactly as before, so Errors do not
-// depend on it.
-func (c *ThresholdConfig) validateOverrideKeys(shadow aliasShadow) KeyValidation {
+func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	var v KeyValidation
 	canonDefaults := canonicalizeDefaults(c.Defaults)
 	// The platform surface is TWO sets, not one (#1189 / TRK-337): keys the
@@ -1331,18 +1324,9 @@ func (c *ThresholdConfig) validateOverrideKeys(shadow aliasShadow) KeyValidation
 						tenant, key, canonKey, key))
 					continue
 				}
-				if by, shadowed := shadowedAlias(shadow, tenant, key, canonKey); shadowed {
-					// The legacy key does NOT resolve here: resolve's
-					// canonical-wins dedup takes the other layer's value.
-					// Saying "the old name still resolves" would be false.
-					v.Notices = append(v.Notices, fmt.Sprintf(
-						"NOTICE: tenant=%s: key %q is not applied — %s sets its replacement %q for this tenant, and the replacement wins; rename this override to %q to take effect",
-						tenant, key, by, canonKey, canonKey))
-				} else {
-					v.Notices = append(v.Notices, fmt.Sprintf(
-						"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
-						tenant, key, canonKey, canonKey))
-				}
+				v.Notices = append(v.Notices, fmt.Sprintf(
+					"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
+					tenant, key, canonKey, canonKey))
 			}
 
 			// PREVENT #656 v1: `expires:` is honored only on base standard metrics
@@ -1548,15 +1532,6 @@ func (c *ThresholdConfig) validateOverrideKeys(shadow aliasShadow) KeyValidation
 	}
 
 	return v
-}
-
-// shadowedAlias is shadow(tenant, key, canonKey) with a nil shadow meaning
-// "not shadowed".
-func shadowedAlias(shadow aliasShadow, tenant, key, canonKey string) (string, bool) {
-	if shadow == nil {
-		return "", false
-	}
-	return shadow(tenant, key, canonKey)
 }
 
 // validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
