@@ -1770,7 +1770,8 @@ class TestUnparseableDefaults:
 
     Fails when the `DefaultsParseError` raise in `ConfDScanner._scan` or its
     catch in `main` is removed: every case below then prints a Traceback
-    with rc 1 and no file name."""
+    with rc 1 and no file name. The `tagged-*` shapes also fail when that
+    raise catches only `yaml.YAMLError` / `UnicodeDecodeError`."""
 
     DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
@@ -1778,6 +1779,11 @@ class TestUnparseableDefaults:
         "unclosed-flow": b"defaults: [\n",
         "not-utf8": b'defaults:\n  x: "\xff\xfe"\n',
         "surrogate-escape": b'defaults:\n  _x: "\\udfff"\n',
+        # An explicit tag whose text does not fit it: PyYAML raises
+        # ValueError / KeyError here, not a YAMLError.
+        "tagged-int": b"defaults:\n  x: !!int foo\n",
+        "tagged-float": b"defaults:\n  x: !!float foo\n",
+        "tagged-bool": b"defaults:\n  x: !!bool foo\n",
     }
     MODES = {
         "tenant": ["tr"],

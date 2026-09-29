@@ -1090,7 +1090,11 @@ class ConfDScanner:
             resolved = dict(listed[d])[chosen]
             try:
                 defaults_files[str(resolved)] = _load_yaml(chosen)
-            except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            except Exception as exc:  # noqa: BLE001 — named, then refused
+                # As broad as `_load_tenant_file`: PyYAML's constructors
+                # raise more than YAMLError for an explicit tag whose text
+                # does not fit it — ValueError (`!!int foo`), KeyError
+                # (`!!bool foo`) — and the exporter rejects those files too.
                 raise DefaultsParseError(chosen, exc) from exc
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
