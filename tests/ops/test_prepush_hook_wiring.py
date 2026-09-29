@@ -1980,8 +1980,8 @@ def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
 def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> None:
     """`git worktree add` returns non-zero AFTER creating the tree when the
     post-checkout hook fails — git-lfs's hook does when git-lfs is missing.
-    The tree must be registered for clean-up before `add` runs: with two refs,
-    carrying on past it used to leave it in .git, still registered."""
+    The tree must be registered for clean-up before `add` runs, or it stays
+    in .git, still registered."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path)
     assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
     (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
@@ -1992,14 +1992,16 @@ def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> No
     hook = work / ".git" / "hooks" / "post-checkout"
     hook.write_text("#!/bin/sh\necho 'post-checkout: simulated failure' >&2\nexit 7\n", encoding="utf-8")
     hook.chmod(0o755)
+    # Local beats a developer's global core.hooksPath, which would skip the hook.
+    assert _git(work, "config", "core.hooksPath", str(hook.parent)).returncode == 0
     before = _git(work, "worktree", "list", "--porcelain").stdout
 
     r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n"
                                  f"refs/heads/topic2 {sha_c} refs/heads/topic2 {sha_a}\n")
 
-    assert r.returncode == 1, f"a push it could not validate went through:\n{r.stdout}{r.stderr}"
     # Must-fire half: the hook ran, so the tree did exist.
-    assert "post-checkout: simulated failure" in r.stderr, r.stderr
+    assert "post-checkout: simulated failure" in r.stderr, f"the hook never ran:\n{r.stderr}"
+    assert r.returncode == 1, f"a push it could not validate went through:\n{r.stdout}{r.stderr}"
     after = _git(work, "worktree", "list", "--porcelain").stdout
     assert after == before, f"worktrees changed across the push:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
