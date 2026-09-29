@@ -56,6 +56,13 @@ from _lib_confd import (  # noqa: E402
     unusable_reason,
     warn_nested,
 )
+# #2368: threshold keys layer per THRESHOLD, not per spelling (the #1231
+# alias window), as the exporter's merge does.
+from _grar_validate import (  # noqa: E402
+    _other_tenant_key_spellings,
+    drop_shadowed_spellings,
+    overlay_across_spellings,
+)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -173,8 +180,10 @@ def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
     file cannot create a tenant. *announce* is False on the caller that
     `check()` pairs with `resolve_inheritance_chain`, so the WARN prints once.
     """
+    # #2368: per threshold, across the #1231 spellings — a tenant's legacy
+    # `mysql_cpu` beats a platform `mysql_threads_running`, as on /metrics.
     merged, orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(base))
+        entries, lambda: declared_tenant_ids(base), merge=overlay_across_spellings)
     if announce:
         for fname, t in orphans:
             print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(t))} "
@@ -501,11 +510,16 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         chain.append({"layer": "defaults", "source": defaults_source,
                        "keys": default_only})
 
+    def _tenant_sets(k: str) -> bool:
+        """The tenant writes threshold `k` under ANY spelling (#2368)."""
+        return k in tenant_metric_keys or any(
+            s in tenant_metric_keys for s in _other_tenant_key_spellings(k))
+
     # Layer 2: profile (fill-in — keys NOT in tenant override)
     if profile_name and profile_keys:
         effective_profile = {
             k: v for k, v in profile_keys.items()
-            if not k.startswith("_") and k not in tenant_metric_keys
+            if not k.startswith("_") and not _tenant_sets(k)
         }
         chain.append({"layer": "profile", "source": f"_profiles.yaml → {profile_name}",
                        "keys": effective_profile})
@@ -515,15 +529,33 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         chain.append({"layer": "tenant", "source": f"{tenant}.yaml",
                        "keys": tenant_metric_keys})
 
-    # Resolved: merge all layers (later layers win)
+    # Resolved: merge all layers (later layers win) — per THRESHOLD, not per
+    # spelling (#2368): a later layer's `mysql_cpu` replaces an earlier
+    # layer's `mysql_threads_running`, so `resolved` carries the one value
+    # /metrics serves, under the spelling that supplied it.
+    #
+    # #2420 (CodeRabbit, checked against Go): each layer first takes
+    # resolve's canonical-wins dedup (drop_shadowed_spellings) — a layer
+    # writing BOTH spellings serves only the canonical one on /metrics — and
+    # a tenant-layer threshold written as null is NOT a value: /metrics logs
+    # `unknown value ""` and falls back to the defaults, so it is left out of
+    # the tenant overlay (it still keeps the profile out, via _tenant_sets,
+    # and still displaced the platform's other spelling in _tenant_block,
+    # both as on /metrics).
     resolved = {}
-    resolved.update(default_only)
+    overlay_across_spellings(resolved, drop_shadowed_spellings(default_only))
     if profile_keys:
         # Profile fills in only where tenant hasn't overridden
-        for k, v in profile_keys.items():
-            if not k.startswith("_") and k not in tenant_metric_keys:
-                resolved[k] = v
-    resolved.update(tenant_metric_keys)
+        overlay_across_spellings(resolved, drop_shadowed_spellings({
+            k: v for k, v in profile_keys.items()
+            if not k.startswith("_") and not _tenant_sets(k)}))
+    # Dedup BEFORE dropping nulls: a canonical null still shadows the legacy
+    # spelling in the same layer (canonical wins, then "" → defaults on
+    # /metrics); filtering first would let the legacy value through (#2420
+    # round 4).
+    overlay_across_spellings(resolved, {
+        k: v for k, v in drop_shadowed_spellings(tenant_metric_keys).items()
+        if v is not None})
 
     out: dict[str, object] = {
         "chain": chain,

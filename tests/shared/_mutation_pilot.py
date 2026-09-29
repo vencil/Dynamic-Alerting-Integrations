@@ -831,6 +831,47 @@ MUTATIONS: list[Mutation] = [
         old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                # ADR-024 OQ-6: validate any `version` dimensional label.\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
         new='        if False:\n            base = ""\n            if base in defaults_keys:\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
     ),
+    # ── #1231 alias spellings (_grar_validate, #2368) ─────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="legacy_tenant_key: drop the _critical shape",
+        fn_name="_legacy_tenant_key",
+        old='    if key.endswith("_critical"):\n        base = key.removesuffix("_critical")\n        if base in _LEGACY_BY_CANONICAL:',
+        new='    if False:\n        base = key.removesuffix("_critical")\n        if base in _LEGACY_BY_CANONICAL:',
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="legacy_tenant_key: drop the dimensional shape",
+        fn_name="_legacy_tenant_key",
+        old="    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:",
+        new="    if False:",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="other_tenant_key_spellings: forget the legacy spelling",
+        fn_name="_other_tenant_key_spellings",
+        old="    if legacy is not None and legacy != key:\n        out.append(legacy)",
+        new="    if False:\n        out.append(legacy)",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="overlay_across_spellings: literal update (earlier spelling survives)",
+        fn_name="overlay_across_spellings",
+        old="            if s not in src:\n                dst.pop(s, None)",
+        new="            if False:\n                dst.pop(s, None)",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="drop_shadowed_spellings: keep the shadowed deprecated spelling",
+        fn_name="drop_shadowed_spellings",
+        old="    if not drop:\n        return m\n    return {k: v for k, v in m.items() if k not in drop}",
+        new="    if True:\n        return m\n    return {k: v for k, v in m.items() if k not in drop}",
+    ),
     # ── _parse_policy_duration (_grar_validate) ──────────────────
     # ROI refactor round 5: #1136 promoted check_domain_policies +
     # _parse_policy_duration from dead code to the CI blocking gate's
