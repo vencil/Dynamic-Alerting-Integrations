@@ -1,7 +1,7 @@
 """promtool regression goldens for the Tenant Log Query dashboard (ADR-021 / #609 PR-4).
 
 The dashboard (`k8s/03-monitoring/tenant-log-query-dashboard.json`) consumes two
-metrics emitted by the federation-gateway mtail sidecar in victorialogs mode:
+metrics emitted by the federation-gateway audit-metrics sidecar in victorialogs mode:
 `tenant_log_query_requests_total{account_id,project_id,status}` (counter) and
 `tenant_log_query_duration_ms` (histogram). The non-trivial PromQL — a
 rejection-ratio with a `clamp_min` divide-by-zero guard, a `histogram_quantile`
@@ -187,8 +187,9 @@ def test_dashboard_is_valid_grafana_shape():
 
 
 def test_metric_names_are_the_pr4_contract():
-    """Pin the exact source-metric names the mtail sidecar emits — a rename on
-    either side (mtail program or dashboard) breaks the data flow silently."""
+    """Pin the exact source-metric names the audit-metrics sidecar emits — a
+    rename on either side (Vector program or dashboard) breaks the data flow
+    silently."""
     import json
 
     raw = _DASHBOARD.read_text(encoding="utf-8")

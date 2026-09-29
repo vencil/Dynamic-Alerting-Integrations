@@ -167,7 +167,7 @@ def expect_positive(value, desc="value"):
 
 def assert_eventually(fn, *, timeout=15.0, interval=0.4, desc="condition"):
     """Poll fn() until it returns without raising AssertionError, else
-    fail at `timeout`. The async safety-net for pipeline lag — the mtail
+    fail at `timeout`. The async safety-net for pipeline lag — the audit-metrics
     metric flow (S5/S7) and the Lua revoked-set reload gate (S4)."""
     deadline = time.monotonic() + timeout
     last = None
@@ -180,10 +180,10 @@ def assert_eventually(fn, *, timeout=15.0, interval=0.4, desc="condition"):
     raise AssertionError(f"{desc}: not satisfied within {timeout}s (last: {last})")
 
 
-def mtail_counter(mtail_url, metric, **labels):
-    """Sum of an mtail counter filtered to the given labels (extra labels
-    on the series, e.g. `prog`, are ignored). 0.0 if no series match."""
-    text = requests.get(mtail_url + "/metrics", timeout=10).text
+def audit_counter(audit_metrics_url, metric, **labels):
+    """Sum of an audit-metrics counter filtered to the given labels (extra
+    labels on the series are ignored). 0.0 if no series match."""
+    text = requests.get(audit_metrics_url + "/metrics", timeout=10).text
     total = 0.0
     for line in text.splitlines():
         if not line.startswith(metric + "{"):

@@ -396,7 +396,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
 | 25 | Fine-grained PAT 權限不足建立 Release | 詳見 [GitHub Release Playbook §PAT 權限](github-release-playbook.md)。摘要：需 **Contents: Read and Write** scope |
 | 26 | PAT 查 GHCR packages 回 403 | 需 `packages:read` scope；驗證 image 最快用瀏覽器開 `github.com/{owner}?tab=packages` |
-| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/session-guards/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1--5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/session-guards/git_check_lock.sh --clean`（列出每把 lock 與刪除指令，本身一律不刪，[#2328](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2328)；確認沒有 git 在用後再手動 `rm -f`）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1--5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
@@ -412,7 +412,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 40 | Markdown heading 用 em-dash `—` 時，Python Markdown / MkDocs slugify 產出**單 hyphen** 而非雙 hyphen | 例：`## Windows Clone 初次設定 — Symlink 支援` → slug 是 `windows-clone-初次設定-symlink-支援`（不是 `--symlink-支援`）。em-dash 被當作 space 處理，兩側 space 合併成一個 hyphen。PR #18 因此打到 broken anchor CI fail。**檢測**：本地跑 `python scripts/tools/lint/check_doc_links.py --ci`。**修法**：link 裡的 `--` 改成 `-`，或 heading 改成 ASCII hyphen `-`（會 slugify 成 `--`，但可讀性差） |
 | 41 | `git rebase -i --autosquash` 在 MCP 下無法開編輯器 | 想非互動地跑 `git commit --fixup=<sha> && git rebase -i --autosquash <base>`，但 `GIT_SEQUENCE_EDITOR=rem` 或 `=cmd /c rem` 會被 Git for Windows 的 bundled sh 當成 shell command 解讀，報 `rem: command not found`。**正解**：用 `true`（msys 的內建 no-op），並透過 `-c` 臨時設定避免污染 env：`git -c sequence.editor=true -c core.editor=true rebase -i --autosquash <base>`。autosquash 會在 sequence file 寫入後立即以 `true` 結束編輯器，保留預設順序。驗證：`git log --oneline` 看到 `fixup!` 已被摺進 target commit |
 | 42 | pre-commit hook CRLF shebang + dual shebang 雙重問題 | Windows 端 `pre-commit install` 產生的 `.git/hooks/pre-commit` 有兩個問題：(1) CRLF 行尾導致 Linux/FUSE 找不到 `#!/bin/sh\r`（報 `cannot run .git/hooks/pre-commit: No such file or directory`）；(2) 修完 CRLF 後，`#!/bin/sh` 無法解析 bash array `ARGS=(...)`（報 `Syntax error: "(" unexpected`）。**修法**：`tr -d '\r' < hook > hook.tmp && mv hook.tmp hook && chmod +x hook`，再把 `#!/bin/sh` 改成 `#!/usr/bin/env bash`。已內建到 `win_git_escape.bat fix-hooks` 子命令 |
-| 43 | pre-commit stash + FUSE 交互形成死鎖 | pre-commit 偵測到 unstaged changes → `git stash` → stash 操作在 FUSE 上衝突 → 嘗試 `git checkout -- .` → 建立 `index.lock` → FUSE phantom lock → 整個 git 卡死。**防治**：(1) commit 前先 `git stash` 手動處理 unstaged changes，不要讓 pre-commit 自動 stash；(2) 大量 unstaged files 時改用 Windows 逃生門 commit；(3) 已發生時用 `make git-lock ARGS="--clean"` 或 Windows MCP `Remove-Item` 清鎖 |
+| 43 | pre-commit stash + FUSE 交互形成死鎖 | pre-commit 偵測到 unstaged changes → `git stash` → stash 操作在 FUSE 上衝突 → 嘗試 `git checkout -- .` → 建立 `index.lock` → FUSE phantom lock → 整個 git 卡死。**防治**：(1) commit 前先 `git stash` 手動處理 unstaged changes，不要讓 pre-commit 自動 stash；(2) 大量 unstaged files 時改用 Windows 逃生門 commit；(3) 已發生時先 `make git-lock` 列出鎖，確認沒有 git 在用後手動刪，或 Windows MCP `Remove-Item` |
 | 44 | Phantom lock 薛丁格態：ls 顯示存在但所有操作都失敗 | FUSE dentry cache 殘留的 `.git/index.lock`，`ls` 同時報 "No such file" 卻又列出檔案。`os.unlink` 報 "Operation not permitted"，`os.rename` 報 "No such file"。Level 1 `drop_caches` 和 Level 6 rename-trick 皆無效。**唯一可靠解法**：放棄從 FUSE 側操作，切換到 Windows 原生 git（`win_git_escape.bat`）完成所有 git 操作。這是「逃生門」設計存在的核心理由 |
 | 45 | Desktop Commander `start_process` 執行 `.bat` 檔案時編碼損壞 | Desktop Commander 的 `start_process` 直接執行 `.bat` 會對 `@echo off`、`setlocal`、`goto` 等**下游**關鍵字產生亂碼，batch 無法正確解析（症狀：CJK 那行 OK，但「之後幾行」才出現 `'@echo' 不是內部或外部命令`）。**Byte-level 根因**（v2.8.0 PR #45 定位）：`start_process` 啟動的子 `cmd.exe` **繼承父行程 OEM codepage**（zh-TW 是 cp950，en-US 是 cp437），**不是 cp65001**；cmd batch parser 是**逐 byte 讀檔**、**不做 UTF-8 normalization**，當 `.bat` 以 UTF-8 儲存且含 CJK 或 em-dash，任何 byte ≥ 0x80 都可能落在 parser 視為 shell metachar 的範圍（0x80–0xBF 包含 cp1252 多個標點 continuation byte），parser 內部狀態機被破壞，**後續幾行**指令才開始被誤判。**為何 `cmd /c` 不救**：子 cmd 仍繼承父 codepage，byte-level collision 不變。**為何 `chcp 65001` 不救**：chcp 要 parser 執行到那行才生效，preamble (`@echo off` / `setlocal`) 已用錯誤 codepage 讀完。**為何 PowerShell 呼 .bat 能過**：PS runtime 先把 command line decode 成 UTF-16 再交給 cmd，byte collision 發生在更上層。**三條鐵律**（scripts/ops/*.bat only）：(a) 全 ASCII（byte < 0x80），CJK 只放在 `.md`；(b) CRLF 行尾（pitfall #2）；(c) 不得有 UTF-8 BOM（`EF BB BF` 破壞第一道指令）。**CI gate ✅**：`tests/dx/test_bat_label_integrity.py::{test_bat_files_are_ascii_pure,test_bat_files_are_crlf,test_bat_files_have_no_utf8_bom}` + pre-commit `scripts/tools/lint/check_bat_ascii_purity.py`（L1 本地攔 commit，pytest CI 捕逃逸）。`win_git_escape.bat` / `win_gh.bat` / `dx-run.bat` 已在 `e55d9af` + PR #45 改為全 ASCII 🛡️ |
 | 46 | cmd `git commit -m` 無法處理 UTF-8 特殊字元（em-dash、CJK） | `git commit -m "feat(ops): playbook audit — harness"` 中的 em-dash（U+2014）不在 cmd codepage 內，導致引號解析崩潰，每個空格後的單字都被當成獨立 pathspec，產生大量 `fatal: pathspec 'xxx' did not match any file` 錯誤。**正解**：永遠用 `git commit -F file.txt` 檔案傳遞 commit message。已內建到 `win_git_escape.bat commit-file` 子命令。UTF-8 檔案用 `[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))` 產生；cmd 的 `echo msg > file` 寫出的是主控台字碼頁（zh-TW 為 cp950），只適合純 ASCII 訊息（#2276） |
@@ -629,14 +629,14 @@ Add-MpPreference -ExclusionPath "C:\Users\<USERNAME>\vibe-k8s-lab\.git"
 ### 診斷層：遇到 Lock 時的安全處理
 
 ```bash
-# 診斷（不刪除，只報告）
+# 診斷：列出每把 lock 與手動刪除指令（一律不刪，#2328）
 bash scripts/session-guards/git_check_lock.sh
 
-# 診斷 + 清理（只清 >30s 且無活躍 git process 的 stale lock）
+# 同上，另外修復被 NUL 填滿的 .git/HEAD
 bash scripts/session-guards/git_check_lock.sh --clean
 ```
 
-若 Cowork VM 無法刪除（`Operation not permitted`），腳本會輸出對應的 Windows MCP 指令。
+手動 `rm -f` 刪不掉（`Operation not permitted`，FUSE phantom lock）時，改走 `make fuse-commit` 或 Windows 側 `Remove-Item -Force`。
 
 ### 跨平台 Line Ending
 
@@ -653,7 +653,7 @@ bash scripts/session-guards/git_check_lock.sh --clean
 | `make fuse-locks` | 列出 `.git/*.lock` 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態 | `make fuse-locks` |
 | `make fuse-commit MSG=_msg.txt FILES="a b"` | 前項 `fuse_plumbing_commit.py --auto` 的 Make 封裝 | `make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"` |
 | `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）。⚠️ `--no-verify` 會連它一起跳過，所以 Windows 側的 `commit-file` 不靠這支 hook，而是由 `commit_helper.py` 在 commit 前自己跑同一個驗證器（#1914） | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
-| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | `make pr-preflight`（pre-push hook 自動 consume marker）|
+| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | 容器：`make pr-preflight`。Windows host（沒有 make）：`py scripts/tools/dx/pr_preflight.py --skip-hooks`——完整版的 `pre-commit run --all-files` 在 Windows host 會撞 1800 秒逾時。pre-push hook 自動 consume marker |
 
 **什麼時候用哪一條**（決策助記）：
 
@@ -661,8 +661,8 @@ bash scripts/session-guards/git_check_lock.sh --clean
 git commit 失敗，錯誤訊息是 ...
 │
 ├─ "Unable to create '.git/index.lock': File exists"
-│   └─ 先跑 `bash scripts/session-guards/git_check_lock.sh --clean`；
-│      清不掉 → `make fuse-locks` 看 phantom 狀態；
+│   └─ 先跑 `bash scripts/session-guards/git_check_lock.sh` 列出鎖（它不刪）；
+│      確認沒有 git 在用再手動 `rm -f`；刪不掉 → `make fuse-locks` 看 phantom 狀態；
 │      仍卡 → `python3 scripts/ops/fuse_plumbing_commit.py --auto --msg <file> <paths>`（繞過 index.lock）
 │
 ├─ "fatal: index file corrupt"（或 `git status` 讀 index 崩）
@@ -677,6 +677,7 @@ git commit 失敗，錯誤訊息是 ...
        判 PR 狀態（⛔ 不是 `gh pr view`）；OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發
        CI smoke。⚠️ `gh` 不在 PATH 或查詢失敗時反而**一律要 marker**，所以容器裡看到
        "marker missing" 是預期的，先跑 `make pr-preflight-quick`
+       （Windows host 沒有 make：`py scripts/tools/dx/pr_preflight.py --skip-hooks`）
 ```
 
 > **為什麼 plumbing 路徑可以繞 phantom lock**：git porcelain (`git commit`) 一定會 acquire `.git/index.lock`；plumbing 直接操作 object database + refs — `hash-object` 寫 blob 到 `.git/objects/`（新檔，無 lock 爭用），`write-tree` / `commit-tree` 寫 tree & commit 物件（同理），最後只 `echo <sha> > .git/refs/heads/<branch>`（單檔 atomic write）。完全不觸發 `.git/index.lock`。
@@ -719,7 +720,7 @@ git apply ~/.cache/pre-commit/patch1234567890-12345
 |---|---|---|
 | 1 | `sync; echo 2 \| sudo tee /proc/sys/vm/drop_caches`（VM kernel cache；常無 sudo） | ✅ `make fuse-reset` 串 |
 | 2 | **最實用**：Cowork 桌面 UI 把 workspace 取消再重選 → FUSE driver per-session cold start（解 9 成殘影） | ⛔ 需手動 UI 操作 |
-| 3 | Windows 端清壓著 inode 的 process：(a) `vscode_git_toggle off` (b) `git_check_lock.sh --clean` (c) `Stop-Process Code, git, pre-commit` | ✅ `make fuse-reset` 串 a/b/c |
+| 3 | Windows 端清壓著 inode 的 process：(a) `vscode_git_toggle off` (b) `git_check_lock.sh --clean`（列出 lock、修 HEAD，不刪鎖） (c) `Stop-Process Code, git, pre-commit` | ✅ `make fuse-reset` 串 a/b/c |
 | 4 | 核彈：`make session-cleanup` → 關 Cowork 桌面、重開、開新 session | ✅ make target |
 | 5 | Sysinternals `handle64.exe -nobanner vibe-k8s-lab` 找壓 inode 的 PID → `Stop-Process -Id <PID> -Force`；仍殘 → `chkdsk C: /scan` | ⛔ admin tool |
 
@@ -943,6 +944,8 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/internal/windows-mcp-playbook.md"
 ```
 
+⚠️ **只有 WSL 會真的執行 [2/3]、[3/3]**：recipe 以看得到 `/mnt/c/Windows/System32/cmd.exe` 判斷，看不到時只印出三行 `win_git_escape.bat` 指令讓你貼到 Windows cmd，不會 commit。Windows host 預設沒有 make，直接用 `win_git_escape.bat` 的 `add` / `commit-file` / `push`。原本給 Git Bash 的 `Windows_NT` 分支已移除（[#2248](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2248)）：MSYS 把 `cmd.exe /c` 的 `/c` 當路徑轉換，bat 沒跑卻印出 `✅ Done`。
+
 **執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 `[1/3]` / `[2/3]` / `[3/3]`）**：
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`
@@ -992,7 +995,10 @@ Q1. 輸出前綴是哪一支？
     ├─ [protect_main_push] → 你在推 main/master。這不是 drift，是規則：
     │      開 branch + PR。⛔ 沒有旗標，也不要拆 hook。
     ├─ [require_preflight_pass] → marker 綁 commit SHA，commit 之後要重跑：
-    │      make pr-preflight（剛證過 hooks 綠時可用 make pr-preflight-quick）。
+    │      容器：make pr-preflight（剛證過 hooks 綠時可用 make pr-preflight-quick）。
+    │      Windows host 沒有 make：py scripts/tools/dx/pr_preflight.py --skip-hooks
+    │      （完整版的 pre-commit run --all-files 在 Windows host 會撞 1800 秒逾時）。
+    │      橫幅本身也會依當下 PATH 印出跑得起來的那一行。
     │      ⛔ 站在別的 commit 上跑 preflight 寫的是「那一顆」的 marker，
     │         這次 push 仍然被擋。
     └─ [pre-push-mkdocs] → 走 Q2。

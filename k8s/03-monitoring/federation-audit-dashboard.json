@@ -5,7 +5,7 @@
   "graphTooltip": 1,
   "id": null,
   "links": [],
-  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the mtail sidecar in helm/federation-gateway from the Envoy audit access log.",
+  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the audit-metrics sidecar (Vector) in helm/federation-gateway from the Envoy audit access log.",
   "panels": [
     {
       "title": "Federation Requests /s (5m)",

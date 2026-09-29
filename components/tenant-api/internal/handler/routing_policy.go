@@ -105,9 +105,13 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 // each passed alone and stacked into a violation on the PR branch). Only ops
 // that were taken into the batch belong there. Direct mode writes each op
 // before judging the next, which reads the file back, so it passes nil.
-func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID string, prior []map[string]string, patch map[string]string) []policy.Violation {
+//
+// advisories are the non-blocking `require_critical_escalation` leak
+// messages (#2325) for the same resolved routing; the caller adds them to
+// the op's warnings when the op goes through.
+func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID string, prior []map[string]string, patch map[string]string) (violations []policy.Violation, advisories []string) {
 	if mgr == nil || !touchesRouting(patch) {
-		return nil
+		return nil, nil
 	}
 	block := tenantBlockOnDisk(configDir, tenantID)
 	for _, p := range prior {
@@ -118,5 +122,5 @@ func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID stri
 	for k, v := range patch {
 		block[k] = v
 	}
-	return mgr.CheckTenantRouting(tenantID, block, loadRoutingLayers(configDir))
+	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
 }

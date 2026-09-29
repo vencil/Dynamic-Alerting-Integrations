@@ -199,15 +199,17 @@ Envoy writes one JSON line per federation request to **two sinks** of
 identical shape (`ts` / `tenant_id` / `token_id` / `account_id` / `method` /
 `path` / `query` / `status` / `duration_ms`). `account_id` is populated only
 in `victorialogs` mode (the verified numeric tenant partition; empty in the
-other modes, whose tokens carry no `account_id` claim) — it lets the PR-4
-mtail sidecar derive a per-tenant `tenant_log_query_requests_total`:
+other modes, whose tokens carry no `account_id` claim) — it lets the
+audit-metrics sidecar derive a per-tenant `tenant_log_query_requests_total`:
 
 - **`stdout`** — the durable, collector-ready compliance trail. Shipping
   it to a central store (Loki / SIEM) is follow-up
   [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539);
   until then it rides the standard container-log path.
-- **an `emptyDir` file** — tailed by the **`mtail` sidecar**, which emits
-  `tenant_federation_requests_total{tenant,status}` on `:3903`. This file
+- **an `emptyDir` file** — tailed by the **`audit-metrics` sidecar**
+  (upstream Vector — the same image as `helm/vector` — running
+  [`files/audit-metrics.vector.yaml`](files/audit-metrics.vector.yaml)), which
+  emits `tenant_federation_requests_total{tenant,status}` on `:3903`. This file
   is a per-pod metrics feed, *not* the system of record — it is an
   `emptyDir`, never a PVC (a `ReadWriteOnce` PVC cannot be mounted by the
   multi-replica gateway at all).
@@ -220,33 +222,31 @@ to 2048 chars.
 A **`logrotate` sidecar** caps the `emptyDir` mirror: it rotates at
 `auditLog.logrotate.sizeMB` MiB, keeps `auditLog.logrotate.keep`
 rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
-`/reopen_logs` so no line is lost. Both sidecars share one image built
-from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
-`mtail` + `logrotate`) — build it, then set `auditLog.image.repository`.
+`/reopen_logs` so no line is lost. It runs an image built from
+[`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine + `logrotate`)
+— build it, then set `auditLog.image.repository`.
 
-> ⛔ **#1278 bumped this image's tag to `3.0.8-3` (previously `3.0.8-2`, #1337) — rebuild and push before you
-> upgrade the chart, or the gateway pods will not start.** The mtail *version* is
-> unchanged; the *build* is not: mtail is now compiled from its pinned upstream
-> commit with a current Go toolchain instead of upstream's 2024 prebuilt binary,
-> and the runtime base moved to Alpine 3.23.6. Measured on the built image, that
-> takes it from **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned
-> by mtail's own `go.mod`).
+> ⛔ **Chart 0.6.0 (#1278 D1) replaced the `mtail` sidecar with upstream Vector
+> and changed values — rebuild, push and adjust overrides before you upgrade.**
+> * The metrics sidecar is `audit-metrics`, configured under `auditLog.metrics`
+>   (was `auditLog.mtail`): image (`timberio/vector`, pinned by digest), `port`,
+>   `resources` (memory limit 64Mi → 128Mi; measured ~42 MiB RSS) and
+>   `dataSizeLimit` for its checkpoint `emptyDir`. Metric names, labels and
+>   histogram buckets are unchanged; mtail's automatic `prog` label is gone.
+>   mtail's upstream is dormant and its grpc pin carried the image's only fixable
+>   HIGH/CRITICAL findings.
+> * `audit-sidecar/Dockerfile` no longer compiles mtail, so its tag moved from
+>   `3.0.8-3` to `alpine3.23.6-1`. There is no `digest` knob for that container
+>   and the pod template's checksum annotations hash only ConfigMaps, so the tag
+>   is the only thing that makes `helm upgrade` roll the pods — leaving it would
+>   render a byte-identical pod spec and keep the old image under `IfNotPresent`.
 >
-> The `-2` suffix exists precisely so you cannot miss this. This container has no
-> `digest` knob and the pod template's checksum annotations hash only ConfigMaps,
-> so keeping `3.0.8` would have rendered a byte-identical pod spec: no rollout,
-> and under the default `IfNotPresent` your nodes would keep serving the old
-> 23-CVE image while the platform's nightly scan reported 2.
->
-> You no longer need to remember to scan it by hand: the image is a matrix entry
-> in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
-> `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
-> `release.yaml`'s tag-time Trivy scan never sees it — and that scan is the one
-> gate that actually withholds a release (it runs before anything is published,
-> #1278). Those three are its whole *CVE* coverage, none of them blocking; its
-> *build* is
-> additionally exercised by the `federation-e2e` CI job, which builds this image
-> from source on every run and scrapes the metrics it produces.
+> The logrotate image is a matrix entry in `nightly-image-scan.yaml`,
+> `component-docker-build.yaml`, and `make trivy-scan-all`. ⛔ It is **not**
+> published by any pipeline, so `release.yaml`'s tag-time Trivy scan never sees
+> it — those three are its whole CVE coverage, none of them blocking. The
+> metrics pipeline itself is exercised end to end by the `federation-e2e` CI
+> job, which runs the same Vector image and program and scrapes the metrics.
 
 The metric is scraped via the `prometheus.io/scrape` annotations on the
 Service — **install the chart in the `monitoring` namespace** so the
@@ -290,11 +290,14 @@ exposed, 1 = one ingress, …).
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
-| `auditLog.enabled` | `true` | Master switch for the metrics pipeline (mtail + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
+| `auditLog.enabled` | `true` | Master switch for the metrics pipeline (audit-metrics + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
-| `auditLog.volumeSizeLimit` | `256Mi` | `emptyDir` cap for the audit-log mirror |
-| `auditLog.image.repository` | `federation-audit-sidecar` | mtail + logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
-| `auditLog.image.tag` | `3.0.8-3` | `<mtail version>-<build revision>`. Bump the suffix whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
+| `auditLog.volumeSizeLimit` | `1Gi` | `emptyDir` cap for the audit-log mirror. Disk-backed (node ephemeral storage, not RAM). The headroom is deliberate: under a flood of rejected requests, logrotate has to rotate the file before the `emptyDir` fills and the kubelet evicts the pod |
+| `auditLog.image.repository` | `federation-audit-sidecar` | logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
+| `auditLog.image.tag` | `alpine3.23.6-1` | `alpine<version>-<build revision>`. Bump it whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
+| `auditLog.metrics.image.*` | `timberio/vector:0.57.0-distroless-libc` + digest | The audit-metrics sidecar — kept identical to `helm/vector`'s image (one Vector version, one Renovate bump) |
+| `auditLog.metrics.port` | `3903` | `/metrics` port; the Service's scrape annotations point here |
+| `auditLog.metrics.resources` | 10m/48Mi req, 100m/128Mi limit | Measured ~42 MiB RSS |
 | `auditLog.logrotate.sizeMB` / `.keep` | `50` / `2` | Rotate the mirror at this size; keep this many rotations |
 
 ## Resiliency

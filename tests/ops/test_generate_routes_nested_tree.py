@@ -556,6 +556,82 @@ def test_a_non_mapping_level_contributes_nothing(tmp_path):
     assert tree.routing_configs["t-team"]["receiver"]["type"] == "email"
 
 
+_ROOT_NOT_A_MAPPING = [("[a, b]", "list"), ("not-a-mapping", "str"),
+                       ("42", "int"), ("false", "bool")]
+
+
+@pytest.mark.parametrize("value, kind", _ROOT_NOT_A_MAPPING,
+                         ids=[k for _v, k in _ROOT_NOT_A_MAPPING])
+def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
+    """#2412: the ROOT gets the subdirectory verdict above — named, no layer,
+    rc 0 — where it used to die in `resolve_routing_defaults`' `dict(root)`
+    with a traceback (generate-routes `--validate --strict` and explain-route
+    at rc 1; validate-config's routing rows too).
+    Go's `routingDefaultsFromNode` agrees (parity matrix
+    `hier-a-root-routing-defaults-not-a-mapping`); a level below still
+    contributes its own."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": f"_routing_defaults: {value}\n",
+        "t-root.yaml": _tenant("t-root"),
+        "team/_defaults.yaml": _SLACK_RD,
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    warn = (f"WARN: _routing_defaults in _defaults.yaml must be a mapping, "
+            f"got {kind} — this level contributes nothing")
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_OK, res.stderr
+    assert "Traceback" not in res.stderr, res.stderr
+    assert warn in res.stderr
+    for tenant in ("t-root", "t-team"):
+        exp = subprocess.run(
+            [sys.executable, "-s", str(REPO / "scripts" / "tools" / "ops" / "explain_route.py"),
+             "--config-dir", str(d), "--tenant", tenant],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert exp.returncode == EXIT_OK, (tenant, exp.stderr)
+        assert warn in exp.stderr, (tenant, exp.stderr)
+    vc = subprocess.run([sys.executable, "-s", str(_VC), "--config-dir", str(d)],
+                        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert vc.returncode == EXIT_OK, (vc.stdout, vc.stderr)
+    assert "Traceback" not in vc.stdout + vc.stderr, (vc.stdout, vc.stderr)
+    tree = load_tenant_tree(str(d))
+    assert "t-root" not in tree.routing_configs
+    assert tree.routing_configs["t-team"]["receiver"]["type"] == "slack"
+
+
+def test_a_null_root_stays_silent(tmp_path):
+    """#2412 control: `_routing_defaults: null` at the root was already an
+    empty layer without a word, and still is — no WARN, rc 0."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": "_routing_defaults: null\n",
+        "t-root.yaml": _tenant("t-root"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_OK, res.stderr
+    assert "_routing_defaults" not in res.stderr, res.stderr
+    assert "t-root" not in load_tenant_tree(str(d)).routing_configs
+
+
+@pytest.mark.parametrize("first, second, want", [
+    (_EMAIL_RD, "_routing_defaults: 42\n", None),
+    ("_routing_defaults: [a, b]\n", _EMAIL_RD, "email"),
+], ids=["later-not-a-mapping", "earlier-not-a-mapping"])
+def test_a_later_root_file_replaces_the_root_defaults_whole(tmp_path, first,
+                                                            second, want):
+    """#2412: among root `_` files (name order) the later
+    `_routing_defaults` replaces the earlier WHOLE, even when it is not a
+    mapping — Go's "defaults then become nil" (parity matrix
+    `hier-a-root-later-file-*` / `-earlier-file-*`)."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": first,
+        "_platform.yaml": second,
+        "t-root.yaml": _tenant("t-root"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", "--strict")
+    assert res.returncode == EXIT_OK, res.stderr
+    rc = load_tenant_tree(str(d)).routing_configs.get("t-root")
+    assert (rc["receiver"]["type"] if rc else None) == want, rc
+
+
 def test_routes_in_a_nested_level_are_stripped_and_block_validate(tmp_path):
     """#2245 as at the root: `routes` never belong to the defaults — named,
     dropped from the level, and blocking under --validate."""

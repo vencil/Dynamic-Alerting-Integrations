@@ -52,11 +52,19 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..'))
 Push-Location $repoRoot
 
+# The first non-zero rc of a gh (or tool) call is this script's rc (#2236).
+# Passed unchanged, rc 8 from `gh pr checks` ("still running") included:
+# pending is not a pass, and the caller can tell 8 from 1.
+$script:rc = 0
+function Save-Rc {
+    if ($LASTEXITCODE -ne 0 -and $script:rc -eq 0) { $script:rc = $LASTEXITCODE }
+}
+
 try {
     switch ($Command) {
         'auth-check' {
             Write-Host "=== GitHub Auth Status ===" -ForegroundColor Cyan
-            & gh auth status
+            & gh auth status; Save-Rc
         }
 
         'pr-create' {
@@ -74,12 +82,12 @@ try {
             if ($Draft) { $args_list += '--draft' }
 
             Write-Host "Creating PR: $Title" -ForegroundColor Cyan
-            & gh @args_list
+            & gh @args_list; Save-Rc
         }
 
         'pr-list' {
             Write-Host "=== Open Pull Requests ===" -ForegroundColor Cyan
-            & gh pr list --state open
+            & gh pr list --state open; Save-Rc
         }
 
         'pr-view' {
@@ -87,7 +95,7 @@ try {
                 Write-Error "Usage: win_git_escape.ps1 pr-view <number>"
                 exit 1
             }
-            & gh pr view $Arg1
+            & gh pr view $Arg1; Save-Rc
         }
 
         'pr-merge' {
@@ -96,7 +104,7 @@ try {
                 exit 1
             }
             Write-Host "Merging PR #$Arg1..." -ForegroundColor Cyan
-            & gh pr merge $Arg1 --merge --delete-branch
+            & gh pr merge $Arg1 --merge --delete-branch; Save-Rc
         }
 
         'ci-status' {
@@ -104,12 +112,12 @@ try {
             $branch = & git branch --show-current 2>$null
             if ($branch) {
                 Write-Host "Branch: $branch" -ForegroundColor Yellow
-                & gh run list --branch $branch --limit 5
+                & gh run list --branch $branch --limit 5; Save-Rc
                 Write-Host ""
                 Write-Host "PR checks:" -ForegroundColor Yellow
-                & gh pr checks 2>$null
+                & gh pr checks 2>$null; Save-Rc
             } else {
-                & gh run list --limit 10
+                & gh run list --limit 10; Save-Rc
             }
         }
 
@@ -130,7 +138,7 @@ try {
             }
 
             Write-Host "Creating release: $Tag" -ForegroundColor Cyan
-            & gh @args_list
+            & gh @args_list; Save-Rc
         }
 
         'pr-preflight' {
@@ -138,12 +146,12 @@ try {
             $preflight_args = @('scripts/tools/dx/pr_preflight.py', '--skip-hooks')
             if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
             Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan
-            & python @preflight_args
-            # ⛔ 傳出工具的 rc（#1472），且 ⛔ 只在這個 case 裡傳：放到 switch
-            # 之後會連 `ci-status` 一起傳，而 `gh pr checks` 的 rc 8 是 pending。
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # py -3, not python: `python` can be the Store stub, which exits 0
+            # without running the tool (#2236, same shape as #1918).
+            & py -3 @preflight_args; Save-Rc
         }
     }
 } finally {
     Pop-Location
 }
+exit $script:rc

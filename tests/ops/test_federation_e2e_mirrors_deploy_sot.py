@@ -63,6 +63,12 @@ def _chart_image(values_path: Path) -> str:
     return f"{image['repository']}:{image['tag']}"
 
 
+def _gateway_audit_metrics_image() -> str:
+    """`repository:tag` of the gateway chart's audit-metrics sidecar (#1278 D1)."""
+    image = yaml.safe_load(GATEWAY_CHART_VALUES.read_text(encoding="utf-8"))["auditLog"]["metrics"]["image"]
+    return f"{image['repository']}:{image['tag']}"
+
+
 def _manifest_image(manifest_path: Path, container: str) -> str:
     """`repository:tag` for one container in a k8s Deployment, digest stripped."""
     for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8")):
@@ -78,6 +84,7 @@ def _manifest_image(manifest_path: Path, container: str) -> str:
 MIRRORED = {
     "federation-proxy": lambda: _chart_image(PROXY_CHART_VALUES),
     "federation-gateway": lambda: _chart_image(GATEWAY_CHART_VALUES),
+    "audit-metrics": _gateway_audit_metrics_image,
     "prometheus": lambda: _manifest_image(PROMETHEUS_MANIFEST, "prometheus"),
 }
 

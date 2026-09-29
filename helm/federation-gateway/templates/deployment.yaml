@@ -22,7 +22,7 @@ spec:
         checksum/envoy: {{ include (print $.Template.BasePath "/configmap-envoy.yaml") . | sha256sum }}
         checksum/jwks: {{ include (print $.Template.BasePath "/configmap-jwks.yaml") . | sha256sum }}
         {{- if .Values.auditLog.enabled }}
-        checksum/mtail: {{ include (print $.Template.BasePath "/configmap-mtail.yaml") . | sha256sum }}
+        checksum/audit-metrics: {{ include (print $.Template.BasePath "/configmap-audit-metrics.yaml") . | sha256sum }}
         checksum/logrotate: {{ include (print $.Template.BasePath "/configmap-logrotate.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -167,7 +167,7 @@ spec:
               mountPath: /tmp
             {{- if .Values.auditLog.enabled }}
             # Audit-log emptyDir (ADR-020 IV-2f) — Envoy writes sink 2,
-            # the mtail / logrotate sidecars share the same volume.
+            # the audit-metrics / logrotate sidecars share the same volume.
             - name: audit-log
               mountPath: /var/log/federation
             {{- end }}
@@ -192,22 +192,30 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         {{- if .Values.auditLog.enabled }}
-        # ── mtail sidecar (ADR-020 IV-2f) ────────────────────────────
+        # ── audit-metrics sidecar (ADR-020 IV-2f) ────────────────────
         # Tails the Envoy audit access log (sink 2) and turns it into
-        # tenant_federation_requests_total{tenant,status}. Prometheus
-        # scrapes it via the metrics port annotated on the Service.
-        - name: mtail
-          image: "{{ .Values.auditLog.image.repository }}:{{ .Values.auditLog.image.tag }}"
-          imagePullPolicy: {{ .Values.auditLog.image.pullPolicy }}
-          command: ["/usr/local/bin/mtail"]
+        # tenant_federation_requests_total{tenant,status} plus the ADR-021
+        # log-query metrics. Upstream Vector (same image as helm/vector)
+        # running files/audit-metrics.vector.yaml; replaced mtail (#1278).
+        # Prometheus scrapes it via the metrics port annotated on the Service.
+        - name: audit-metrics
+          image: "{{ .Values.auditLog.metrics.image.repository }}:{{ .Values.auditLog.metrics.image.tag }}{{ with .Values.auditLog.metrics.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.auditLog.metrics.image.pullPolicy }}
           args:
-            - --logtostderr
-            - --progs
-            - /etc/mtail
-            - --logs
-            - {{ .Values.auditLog.path | quote }}
-            - --port
-            - {{ .Values.auditLog.mtail.port | quote }}
+            - --config
+            - /etc/audit-metrics/audit-metrics.yaml
+          env:
+            # ⛔ Vector 0.5x expands env vars in its config ONLY with this set.
+            # Safe here: this container's env is exactly the three values below
+            # — no secret for the config to pick up.
+            - name: VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION
+              value: "true"
+            - name: AUDIT_LOG_PATH
+              value: {{ .Values.auditLog.path | quote }}
+            - name: AUDIT_METRICS_PORT
+              value: {{ .Values.auditLog.metrics.port | quote }}
+            - name: AUDIT_METRICS_DATA
+              value: /var/lib/audit-metrics
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -215,18 +223,21 @@ spec:
               drop: ["ALL"]
           ports:
             - name: metrics
-              containerPort: {{ .Values.auditLog.mtail.port }}
+              containerPort: {{ .Values.auditLog.metrics.port }}
               protocol: TCP
           volumeMounts:
-            # Read-only: mtail only tails. logrotate (below) owns rotation.
+            # Read-only: this sidecar only tails. logrotate (below) owns rotation.
             - name: audit-log
               mountPath: /var/log/federation
               readOnly: true
-            - name: mtail-progs
-              mountPath: /etc/mtail
+            - name: audit-metrics-config
+              mountPath: /etc/audit-metrics
               readOnly: true
+            # File checkpoints — writable, and outlive a container restart.
+            - name: audit-metrics-data
+              mountPath: /var/lib/audit-metrics
           resources:
-            {{- toYaml .Values.auditLog.mtail.resources | nindent 12 }}
+            {{- toYaml .Values.auditLog.metrics.resources | nindent 12 }}
         # ── logrotate sidecar (ADR-020 IV-2f) ────────────────────────
         # Caps the audit-log emptyDir so a high-pull tenant can never
         # grow it large enough to evict the pod. Rotation is rename +
@@ -297,9 +308,12 @@ spec:
         - name: audit-log
           emptyDir:
             sizeLimit: {{ .Values.auditLog.volumeSizeLimit }}
-        - name: mtail-progs
+        - name: audit-metrics-config
           configMap:
-            name: {{ include "federation-gateway.name" . }}-mtail
+            name: {{ include "federation-gateway.name" . }}-audit-metrics
+        - name: audit-metrics-data
+          emptyDir:
+            sizeLimit: {{ .Values.auditLog.metrics.dataSizeLimit }}
         - name: logrotate-config
           configMap:
             name: {{ include "federation-gateway.name" . }}-logrotate

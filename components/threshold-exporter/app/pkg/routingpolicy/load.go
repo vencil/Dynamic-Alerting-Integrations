@@ -104,7 +104,13 @@ var errUnusable = errors.New("unusable")
 // and so does a key only the route generator counts as written twice (an
 // alias key beside its anchor, two `<<`): its StrictLoader refuses the whole
 // file (#2295, pyyamlcompat.FindDuplicateKey), so nothing in it is read.
-func parseDoc(data []byte) (*yaml.Node, error) {
+//
+// policy is true only for a `_domain_policy.yaml` / `.yml` document: only
+// there does `require_critical_escalation` go through
+// normalizeTaggedNullEscalation (#2325). Every other platform file keeps
+// yaml.v3's reading of a `!!null`-tagged value — refusing one there would
+// drop a profiles / defaults file the policy check still needs.
+func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
@@ -113,6 +119,12 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 		return nil, nil
 	}
 	top := doc.Content[0]
+	normalizeTaggedBools(top)
+	if policy {
+		if err := normalizeTaggedNullEscalation(top, false); err != nil {
+			return nil, err
+		}
+	}
 	var probe any
 	if err := top.Decode(&probe); err != nil {
 		return nil, err
@@ -153,6 +165,188 @@ func isNull(n *yaml.Node) bool {
 	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
 }
 
+// yaml11Bools is PyYAML's YAML 1.1 boolean set for a PLAIN scalar
+// (Resolver's tag:yaml.org,2002:bool regexp; measured with PyYAML 6.0.3:
+// `yEs`, `y`, `n` stay strings). yaml.v3 resolves only true/false (YAML 1.2
+// core) and reads the rest as strings.
+var yaml11Bools = map[string]bool{
+	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
+	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
+	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
+}
+
+// taggedBoolWords is what PyYAML's construct_yaml_bool accepts for a scalar
+// TAGGED `!!bool` (any style), looked up by value.lower() — not the plain set
+// above: `!!bool yEs` is True (PyYAML 6.0.3), and `!!bool y` / `!!bool 1`
+// raise, failing the whole safe_load.
+var taggedBoolWords = map[string]bool{"yes": true, "no": false, "true": true, "false": false, "on": true, "off": false}
+
+// taggedBool reports whether n is a scalar explicitly tagged `!!bool` (or
+// `!<tag:yaml.org,2002:bool>`) and, if so, the boolean PyYAML reads (ok false
+// = PyYAML refuses it). yaml.v3 decodes only true/false under that tag.
+func taggedBool(n *yaml.Node) (b, tagged, ok bool) {
+	if n.Kind != yaml.ScalarNode || n.Style&yaml.TaggedStyle == 0 || n.ShortTag() != "!!bool" {
+		return false, false, false
+	}
+	b, ok = taggedBoolWords[strings.ToLower(n.Value)]
+	return b, true, ok
+}
+
+// normalizeTaggedBools rewrites every `!!bool` scalar PyYAML reads to the
+// plain `true` / `false` yaml.v3 decodes, so that a file the generator reads
+// is not refused whole here (#2325). One PyYAML refuses is left as is, and
+// yaml.v3 refuses the file as PyYAML does.
+func normalizeTaggedBools(n *yaml.Node) {
+	if b, tagged, ok := taggedBool(n); tagged {
+		if ok {
+			n.Tag, n.Style, n.Value = "!!bool", 0, fmt.Sprint(b)
+		}
+		return
+	}
+	for _, c := range n.Content {
+		normalizeTaggedBools(c)
+	}
+}
+
+// normalizeTaggedNullEscalation hands the value of every
+// `require_critical_escalation` key that carries the `!!null` tag
+// (`!!null x`, `!<tag:yaml.org,2002:null> x`; an alias followed once) to
+// DecodePyYAML before any struct decode (#2325). Every such key in the
+// document counts, not only one under `domain_policies.*.constraints`: in a
+// policy file a same-named key in `_routing_defaults` or an overlay is
+// rewritten (or refused) too, as PyYAML's safe_load of the whole file
+// constructs every node. yaml.v3 never passes such a node to an Unmarshaler:
+// it refuses `!!null x` itself (the whole file, while PyYAML reads None) and
+// reads `!!null {}` as null (while PyYAML refuses the whole file). A scalar
+// PyYAML reads as None is rewritten to a plain `null`. A node PyYAML refuses
+// is, unless lenient, the error returned, and the caller refuses the document
+// as the generator does; lenient (UnmarshalPolicy), the entry's value is
+// replaced by a refusedTag scalar carrying the refusal, which PyYAMLValue
+// records in Refused. Nothing else is touched. Domain policy documents only
+// (parseDoc's policy, UnmarshalPolicy).
+func normalizeTaggedNullEscalation(n *yaml.Node, lenient bool) error {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			v := deref(n.Content[i+1])
+			if n.Content[i].Value != ConstraintRequireCriticalEscalation || v == nil || v.ShortTag() != "!!null" {
+				continue
+			}
+			if _, err := DecodePyYAML(v); err != nil {
+				if !lenient {
+					return fmt.Errorf("%s: %w", ConstraintRequireCriticalEscalation, err)
+				}
+				// A new node, not v rewritten: an anchor elsewhere keeps its value.
+				n.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: refusedTag, Value: err.Error()}
+				continue
+			}
+			if v.Kind == yaml.ScalarNode {
+				v.Tag, v.Style, v.Value = "!!null", 0, "null"
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := normalizeTaggedNullEscalation(c, lenient); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refusedTag marks, in UnmarshalPolicy's lenient pass, a `!!null`-tagged
+// value PyYAML refuses; the scalar's text is the refusal. yaml.v3 hands a
+// node so tagged to an Unmarshaler, where it does not a `!!null` one.
+const refusedTag = "!routingpolicy-pyyaml-refused"
+
+// UnmarshalPolicy is yaml.Unmarshal(data, out) for a `_domain_policy.yaml`
+// whose `require_critical_escalation` is a PyYAMLValue: the document goes
+// through normalizeTaggedNullEscalation (lenient) first, so a `!!null`-tagged
+// value reads as PyYAML reads it — None, or refused. A value PyYAML refuses
+// never fails the decode: it lands in that PyYAMLValue's Refused, and the
+// rest of the document decodes. An empty document leaves out untouched, as
+// yaml.Unmarshal does.
+func UnmarshalPolicy(data []byte, out any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		return nil
+	}
+	if err := normalizeTaggedNullEscalation(&doc, true); err != nil {
+		return err
+	}
+	return doc.Decode(out)
+}
+
+// DecodePyYAML decodes n as PyYAML's safe_load reads it (#2325), for where
+// the Python generator's reading of a boolean flag decides the outcome. For
+// a scalar it returns an error exactly when safe_load refuses the value
+// (`!!bool y`, `!!int abc`, a plain `2001-13-40`) — the generator then drops
+// the whole file. Otherwise it returns what PyYAML builds: nil for None
+// (`!!null x` included), the bool for a bool (a plain `yes` / `On`, a
+// `!!bool yEs`; a quoted `"yes"` or `!!str yes` stays a string), and for
+// anything else a non-bool value — yaml.v3's decode where it has one, else
+// the scalar's text. Pinned against PyYAML by
+// tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind spot (the
+// non-specific tag `!` on a quoted scalar) is in pyyaml.go.
+//
+// A mapping or sequence (an alias is followed once) is never a bool. It is
+// an error when PyYAML refuses it for its own tag or its direct children
+// (`!!bool [true]`, `!!omap [1]`, `{<<: 1}`, `{[1]: 2}`; see pyCollection),
+// otherwise a non-bool. Nothing deeper is looked at: no recursion, so an
+// alias cycle (`&x [*x]`) or fan-out costs nothing. Accepted gap: where
+// PyYAML refuses something deeper (`[!!bool y]`) the generator drops the
+// whole file and da-guard refuses it, but this returns a non-bool; tenant-api
+// treats that as it treats every refused value — this constraint off.
+func DecodePyYAML(n *yaml.Node) (any, error) {
+	if n = deref(n); n == nil {
+		return nil, nil
+	}
+	if n.Kind != yaml.ScalarNode {
+		if err := pyCollection(n); err != nil {
+			return nil, err
+		}
+		return kindName(n), nil
+	}
+	v, other, err := pyScalar(n)
+	if err != nil || !other {
+		return v, err
+	}
+	if n.Decode(&v) == nil && v != nil {
+		if _, isBool := v.(bool); !isBool {
+			return v, nil
+		}
+	}
+	return n.Value, nil
+}
+
+// PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
+// value leaves Value nil). A value PyYAML refuses does not fail the decode:
+// Value is nil and Refused says why (tenant-api: the constraint is off, the
+// rest of the file applies). yaml.v3 never hands a `!!null`-tagged node to an
+// Unmarshaler: decode through UnmarshalPolicy, or `!!null x` (None in PyYAML)
+// fails the enclosing decode and `!!null {}` (refused by PyYAML) reads as
+// null.
+type PyYAMLValue struct {
+	Value   any
+	Refused error
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) error {
+	if n.Tag == refusedTag {
+		p.Value, p.Refused = nil, errors.New(n.Value)
+		return nil
+	}
+	v, err := DecodePyYAML(n)
+	if err != nil {
+		p.Value, p.Refused = nil, err
+		return nil
+	}
+	p.Value, p.Refused = v, nil
+	return nil
+}
+
 func kindName(n *yaml.Node) string {
 	switch n.Kind {
 	case yaml.MappingNode:
@@ -173,7 +367,7 @@ func kindName(n *yaml.Node) string {
 // later file that carries it replaces an earlier one WHOLE, even when its
 // value is not a mapping (defaults then become nil), as in the Python reader.
 func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, err error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, false)
 	if err != nil || top == nil {
 		return nil, false, err
 	}
@@ -205,7 +399,7 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 // `_routing_profiles.yaml` document. present=false: no such key. A block that
 // is not a mapping is an error (the Python reader WARNs and ignores it whole).
 func ParseRoutingProfiles(data []byte) (profiles map[string]map[string]any, present bool, err error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, false)
 	if err != nil || top == nil {
 		return nil, false, err
 	}
@@ -239,7 +433,7 @@ func profilesFromNode(top *yaml.Node) (map[string]map[string]any, bool, error) {
 // enforced. Tenant ids are the scalars' source TEXT (`010` is "010"), as the
 // exporter keys tenants.
 func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, true)
 	if err != nil || top == nil {
 		return nil, nil, err
 	}
@@ -349,6 +543,25 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 				}
 			}
 		}
+		// #2325: only a YAML boolean is a value; the Python check enforces
+		// `is True` and --strict reports any other non-null value. Booleans
+		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
+		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
+			// A value PyYAML refuses is a problem too (fail-closed): the
+			// generator drops the whole file over it.
+			v, err := DecodePyYAML(e)
+			if b, ok := v.(bool); ok {
+				p.RequireCriticalEscalation = b
+			} else if err != nil {
+				bad(field+".constraints."+ConstraintRequireCriticalEscalation,
+					"domain policy %q: constraint '%s' cannot be read by the route generator (%v) — it refuses the whole file; set it to true or false (unquoted)",
+					name, ConstraintRequireCriticalEscalation, err)
+			} else {
+				bad(field+".constraints."+ConstraintRequireCriticalEscalation,
+					"domain policy %q: constraint '%s' must be a boolean, got %s %q — the constraint cannot be enforced; set it to true or false (unquoted)",
+					name, ConstraintRequireCriticalEscalation, kindName(e), e.Value)
+			}
+		}
 		pols = append(pols, p)
 	}
 	return pols, probs
@@ -403,7 +616,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		}
 		isPolicy := contains(policyFileNames, f.Name)
 		isProfiles := contains(profileFileNames, f.Name)
-		top, err := parseDoc(f.Data)
+		top, err := parseDoc(f.Data, isPolicy)
 		if err != nil {
 			switch {
 			case isPolicy:

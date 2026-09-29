@@ -30,8 +30,8 @@ from _tree import REPO_ROOT as ROOT
 from _tree import repo_files
 
 # The module whose go.mod is the platform-wide Go SSOT: the dev container and
-# every surface that builds no module of its own (e.g. the federation audit
-# sidecar, which compiles upstream mtail) follow it.
+# every surface that builds no module of its own follow it. (The federation
+# audit sidecar compiled upstream mtail until #1278 D1; it builds no Go now.)
 SSOT_MODULE = "components/threshold-exporter/app"
 
 # go.mod files whose `go` directive is deliberately NOT the SSOT, with why.

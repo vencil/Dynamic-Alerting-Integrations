@@ -53,8 +53,8 @@ _REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
 
 
 def test_vector_present_when_required() -> None:
-    """Fail-closed guard against silent disarmament (mirrors the #908
-    ``test_mtail_present_when_required`` precedent).
+    """Fail-closed guard against silent disarmament (the #908 pattern;
+    the mtail twin it mirrored retired with mtail in #1278 D1).
 
     ``TestVectorValidateAndTest`` is the ONLY place the shipped VRL is executed
     rather than string-matched — tenant fail-closed routing, the ADR-028 §D3 PII
@@ -1085,3 +1085,49 @@ class TestVectorValidateAndTest:
             r = subprocess.run(["vector", "test", str(cfg_path), str(tests_file)],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             assert r.returncode == 0, f"vector test failed:\n{r.stdout}\n{r.stderr}"
+
+    @_needs_vector
+    def test_additional_sink_env_var_interpolation_as_deployed(self, repo_root: Path) -> None:
+        """The documented SIEM credential pattern — `default_token: ${SPLUNK_TOKEN}`
+        in an additionalSinks entry — validated under the SAME Vector env the
+        DaemonSet ships (read from the rendered manifest, not hard-coded), so this
+        mirrors the deployed behaviour rather than `vector validate`'s default.
+
+        Unset → the load fails naming the var (the misconfiguration is loud);
+        set → valid. Without the chart's VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION
+        both cases are rc 0 and the literal `${SPLUNK_TOKEN}` becomes the token."""
+        docs = _render(repo_root / "helm/vector", sets={
+            "additionalSinks[0].name": "splunk_compliance",
+            "additionalSinks[0].type": "splunk_hec_logs",
+            "additionalSinks[0].inputs": "{demux,federation_evidence}",
+            "additionalSinks[0].endpoint": "https://splunk.example.com:8088",
+            "additionalSinks[0].default_token": "${SPLUNK_TOKEN}",
+            "additionalSinks[0].encoding.codec": "json",
+        })
+        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
+        vector = [c for c in ds["spec"]["template"]["spec"]["containers"] if c["name"] == "vector"][0]
+        # Only literal-valued env reaches a local run; fieldRef entries are pod metadata.
+        deployed_env = {e["name"]: e["value"] for e in vector["env"] if "value" in e}
+        cm = [d for d in docs if d.get("kind") == "ConfigMap"
+              and "vector-config" in d["metadata"]["name"]][0]
+        assert "${SPLUNK_TOKEN}" in cm["data"]["vector.yaml"], "fixture sink did not render"
+        base_env = {k: v for k, v in os.environ.items()
+                    if k != "SPLUNK_TOKEN" and not k.startswith("VECTOR_")}
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "vector.yaml"
+            p.write_text(cm["data"]["vector.yaml"], encoding="utf-8")
+
+            def _validate(extra: dict[str, str]) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    ["vector", "validate", "--no-environment", str(p)],
+                    env={**base_env, **deployed_env, **extra},
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+
+            unset = _validate({})
+            assert unset.returncode != 0, (
+                "an unset ${SPLUNK_TOKEN} must fail the load under the deployed env — "
+                f"rc 0 means interpolation is off and the literal ships as the token:\n{unset.stdout}"
+            )
+            assert "SPLUNK_TOKEN" in unset.stdout + unset.stderr, unset.stdout + unset.stderr
+            ok = _validate({"SPLUNK_TOKEN": "smoke-test-token"})
+            assert ok.returncode == 0, f"vector validate failed with the var set:\n{ok.stdout}\n{ok.stderr}"
