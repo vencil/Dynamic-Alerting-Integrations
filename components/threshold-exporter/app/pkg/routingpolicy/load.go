@@ -109,7 +109,7 @@ func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 	top := doc.Content[0]
 	normalizeTaggedBools(top)
 	if policy {
-		if err := normalizeTaggedNullEscalation(top); err != nil {
+		if err := normalizeTaggedNullEscalation(top, false); err != nil {
 			return nil, err
 		}
 	}
@@ -194,17 +194,22 @@ func normalizeTaggedBools(n *yaml.Node) {
 }
 
 // normalizeTaggedNullEscalation hands the value of every
-// `require_critical_escalation` key (anywhere in the document, an alias
-// followed once) that carries the `!!null` tag (`!!null x`,
-// `!<tag:yaml.org,2002:null> x`) to DecodePyYAML before any struct decode
-// (#2325). yaml.v3 never passes such a node to an Unmarshaler: it refuses
-// `!!null x` itself (the whole file, while PyYAML reads None) and reads
-// `!!null {}` as null (while PyYAML refuses the whole file). A scalar PyYAML
-// reads as None is rewritten to a plain `null`; a node PyYAML refuses is the
-// error returned, and the caller refuses the document as the generator does.
-// Nothing else is touched. Domain policy documents only (parseDoc's policy,
-// UnmarshalPolicy).
-func normalizeTaggedNullEscalation(n *yaml.Node) error {
+// `require_critical_escalation` key that carries the `!!null` tag
+// (`!!null x`, `!<tag:yaml.org,2002:null> x`; an alias followed once) to
+// DecodePyYAML before any struct decode (#2325). Every such key in the
+// document counts, not only one under `domain_policies.*.constraints`: in a
+// policy file a same-named key in `_routing_defaults` or an overlay is
+// rewritten (or refused) too, as PyYAML's safe_load of the whole file
+// constructs every node. yaml.v3 never passes such a node to an Unmarshaler:
+// it refuses `!!null x` itself (the whole file, while PyYAML reads None) and
+// reads `!!null {}` as null (while PyYAML refuses the whole file). A scalar
+// PyYAML reads as None is rewritten to a plain `null`. A node PyYAML refuses
+// is, unless lenient, the error returned, and the caller refuses the document
+// as the generator does; lenient (UnmarshalPolicy), the entry's value is
+// replaced by a refusedTag scalar carrying the refusal, which PyYAMLValue
+// records in Refused. Nothing else is touched. Domain policy documents only
+// (parseDoc's policy, UnmarshalPolicy).
+func normalizeTaggedNullEscalation(n *yaml.Node, lenient bool) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			v := deref(n.Content[i+1])
@@ -212,7 +217,12 @@ func normalizeTaggedNullEscalation(n *yaml.Node) error {
 				continue
 			}
 			if _, err := DecodePyYAML(v); err != nil {
-				return fmt.Errorf("%s: %w", ConstraintRequireCriticalEscalation, err)
+				if !lenient {
+					return fmt.Errorf("%s: %w", ConstraintRequireCriticalEscalation, err)
+				}
+				// A new node, not v rewritten: an anchor elsewhere keeps its value.
+				n.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: refusedTag, Value: err.Error()}
+				continue
 			}
 			if v.Kind == yaml.ScalarNode {
 				v.Tag, v.Style, v.Value = "!!null", 0, "null"
@@ -220,18 +230,25 @@ func normalizeTaggedNullEscalation(n *yaml.Node) error {
 		}
 	}
 	for _, c := range n.Content {
-		if err := normalizeTaggedNullEscalation(c); err != nil {
+		if err := normalizeTaggedNullEscalation(c, lenient); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// refusedTag marks, in UnmarshalPolicy's lenient pass, a `!!null`-tagged
+// value PyYAML refuses; the scalar's text is the refusal. yaml.v3 hands a
+// node so tagged to an Unmarshaler, where it does not a `!!null` one.
+const refusedTag = "!routingpolicy-pyyaml-refused"
+
 // UnmarshalPolicy is yaml.Unmarshal(data, out) for a `_domain_policy.yaml`
 // whose `require_critical_escalation` is a PyYAMLValue: the document goes
-// through normalizeTaggedNullEscalation first, so a `!!null`-tagged value
-// reads as PyYAML reads it (None, or the whole file refused). An empty
-// document leaves out untouched, as yaml.Unmarshal does.
+// through normalizeTaggedNullEscalation (lenient) first, so a `!!null`-tagged
+// value reads as PyYAML reads it — None, or refused. A value PyYAML refuses
+// never fails the decode: it lands in that PyYAMLValue's Refused, and the
+// rest of the document decodes. An empty document leaves out untouched, as
+// yaml.Unmarshal does.
 func UnmarshalPolicy(data []byte, out any) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -240,7 +257,7 @@ func UnmarshalPolicy(data []byte, out any) error {
 	if doc.Kind == 0 || len(doc.Content) == 0 {
 		return nil
 	}
-	if err := normalizeTaggedNullEscalation(&doc); err != nil {
+	if err := normalizeTaggedNullEscalation(&doc, true); err != nil {
 		return err
 	}
 	return doc.Decode(out)
@@ -264,8 +281,8 @@ func UnmarshalPolicy(data []byte, out any) error {
 // otherwise a non-bool. Nothing deeper is looked at: no recursion, so an
 // alias cycle (`&x [*x]`) or fan-out costs nothing. Accepted gap: where
 // PyYAML refuses something deeper (`[!!bool y]`) the generator drops the
-// whole file and da-guard refuses it, but tenant-api reads it as "flag off"
-// and turns this constraint off (on a hot reload, from last-good on to off).
+// whole file and da-guard refuses it, but this returns a non-bool; tenant-api
+// treats that as it treats every refused value — this constraint off.
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
@@ -289,17 +306,30 @@ func DecodePyYAML(n *yaml.Node) (any, error) {
 }
 
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
-// value leaves Value nil). A value PyYAML refuses fails the decode, as it
-// fails the generator's read of the whole file. yaml.v3 never hands a
-// `!!null`-tagged node to an Unmarshaler: decode through UnmarshalPolicy,
-// or `!!null x` (None in PyYAML) fails the enclosing decode and `!!null {}`
-// (refused by PyYAML) reads as null.
-type PyYAMLValue struct{ Value any }
+// value leaves Value nil). A value PyYAML refuses does not fail the decode:
+// Value is nil and Refused says why (tenant-api: the constraint is off, the
+// rest of the file applies). yaml.v3 never hands a `!!null`-tagged node to an
+// Unmarshaler: decode through UnmarshalPolicy, or `!!null x` (None in PyYAML)
+// fails the enclosing decode and `!!null {}` (refused by PyYAML) reads as
+// null.
+type PyYAMLValue struct {
+	Value   any
+	Refused error
+}
 
 // UnmarshalYAML implements yaml.Unmarshaler.
-func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) (err error) {
-	p.Value, err = DecodePyYAML(n)
-	return err
+func (p *PyYAMLValue) UnmarshalYAML(n *yaml.Node) error {
+	if n.Tag == refusedTag {
+		p.Value, p.Refused = nil, errors.New(n.Value)
+		return nil
+	}
+	v, err := DecodePyYAML(n)
+	if err != nil {
+		p.Value, p.Refused = nil, err
+		return nil
+	}
+	p.Value, p.Refused = v, nil
+	return nil
 }
 
 func kindName(n *yaml.Node) string {

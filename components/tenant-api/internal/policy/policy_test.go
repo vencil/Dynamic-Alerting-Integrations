@@ -608,12 +608,11 @@ func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
 	}
 }
 
-// #2325: hot reload of a require_critical_escalation value. One PyYAML
-// refuses (`!!bool y`, `!!int abc`) makes the route generator drop the whole
-// file, so it fails the reload here: the last good policy stays in effect and
-// the reload failure is recorded. One PyYAML reads but is not a boolean
-// (`!!int 5`) loads, with only that constraint off (and a WARN), as the
-// generator does.
+// #2325: a require_critical_escalation value. tenant-api treats one PyYAML
+// refuses (`!!bool y`, `!!int abc`; the route generator drops the whole file)
+// as this constraint off: the rest of the file loads (and a WARN). One PyYAML
+// reads but is not a boolean (`!!int 5`) loads with only that constraint off
+// (and a WARN), as the generator does.
 const escalationPolicyTmpl = "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
 	"      require_critical_escalation: %s\n      forbidden_receiver_types: [slack]\n"
 
@@ -634,29 +633,36 @@ func (r *reloadOutcomes) last() bool {
 	return len(r.oks) > 0 && r.oks[len(r.oks)-1]
 }
 
-func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
+func TestLoad_RefusedEscalationValueTurnsOnlyItOff(t *testing.T) {
 	t.Parallel()
 	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1",
 		// Collections PyYAML refuses for their own tag or direct children.
 		"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
 		"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
 		"!!binary [1]", "{? [1] : 2}"} {
-		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		want := func(what string, m *Manager) {
+			t.Helper()
+			pols := m.RoutingPolicies()
+			if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+				t.Errorf("%s %s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
+			}
+		}
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		want("initial load", NewManager(dir))
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
 		m := NewManager(dir)
 		obs := &reloadOutcomes{}
 		m.SetReloadObserver(obs)
 		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
-		if err := m.Reload(); err == nil {
-			t.Errorf("%s: Reload() = nil, want the error PyYAML's refusal is", v)
+		if err := m.Reload(); err != nil {
+			t.Errorf("%s: Reload() = %v, want the file loaded with this constraint off", v, err)
 		}
-		if obs.last() {
-			t.Errorf("%s: reload recorded as successful, want a failure", v)
+		if !obs.last() {
+			t.Errorf("%s: reload recorded as failed, want a success", v)
 		}
-		pols := m.RoutingPolicies()
-		if len(pols) != 1 || !pols[0].RequireCriticalEscalation ||
-			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
-			t.Errorf("%s: policies %+v, want the last good one (escalation on, slack forbidden)", v, pols)
-		}
+		want("hot reload", m)
 	}
 }
 
@@ -665,9 +671,9 @@ func TestReload_RefusedEscalationValueKeepsLastGood(t *testing.T) {
 // the first load and on a hot reload alike) nor stall it, and as for any
 // other non-boolean the constraint is off while the rest still applies.
 // Accepted gap: nothing below the direct children is looked at, so a value
-// PyYAML refuses only there (`[!!bool y]`) also loads with the constraint
-// off — on a hot reload, from last-good on to off — while the generator and
-// da-guard refuse it.
+// PyYAML refuses only there (`[!!bool y]`) reads as a non-boolean while the
+// generator and da-guard refuse it; tenant-api treats every refused value as
+// this constraint off, so the outcome is the same.
 func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	t.Parallel()
 	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
@@ -705,41 +711,39 @@ func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	}
 }
 
-// A `!!null`-tagged value (#2325), on the first load and on a hot reload
-// from a good policy with escalation on. PyYAML reads a tagged scalar as
-// None: the file loads, escalation is off and slack is still forbidden (as
-// the generator enforces it). It refuses a tagged collection and the
-// generator drops the file: the first load fails (the empty policy), and a
-// hot reload fails and keeps the last good policy.
+// A `!!null`-tagged value (#2325) — and `!!bool y`, refused without the tag —
+// on the first load and on a hot reload from a good policy with escalation
+// on. PyYAML reads a tagged scalar as None and refuses a tagged collection
+// (the generator drops the file); tenant-api reads both as this constraint
+// off: the file loads, slack is still forbidden in the same domain, and
+// another domain's escalation is still on.
+const twoDomainEscalationTmpl = escalationPolicyTmpl +
+	"  ops:\n    tenants: [t2]\n    constraints:\n      require_critical_escalation: true\n"
+
 func TestLoad_TaggedNullEscalationValue(t *testing.T) {
 	t.Parallel()
-	for v, refused := range map[string]bool{
-		"!!null x": false, "!<tag:yaml.org,2002:null> x": false, `!!null ""`: false,
-		"!!null {}": true, "!!null [1]": true,
-	} {
-		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
-		pols := NewManager(dir).RoutingPolicies()
-		if refused && len(pols) != 0 {
-			t.Errorf("initial load %s: policies %+v, want none (the file refused)", v, pols)
+	for _, v := range []string{"!!null x", "!<tag:yaml.org,2002:null> x", `!!null ""`,
+		"!!null {}", "!!null [1]", "!!bool y"} {
+		want := func(what string, m *Manager) {
+			t.Helper()
+			pols := m.RoutingPolicies()
+			if len(pols) != 2 || pols[0].Domain != "fin" || pols[0].RequireCriticalEscalation ||
+				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) ||
+				pols[1].Domain != "ops" || !pols[1].RequireCriticalEscalation {
+				t.Errorf("%s %s: policies %+v, want fin escalation off and slack forbidden, ops escalation on",
+					what, v, pols)
+			}
 		}
-		if !refused && (len(pols) != 1 || pols[0].RequireCriticalEscalation ||
-			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"})) {
-			t.Errorf("initial load %s: policies %+v, want escalation off and slack forbidden", v, pols)
-		}
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, v))
+		want("initial load", NewManager(dir))
 
-		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, "true"))
 		m := NewManager(dir)
-		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
-		err := m.Reload()
-		if (err != nil) != refused {
-			t.Errorf("hot reload %s: Reload() = %v, want refused=%v", v, err, refused)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, v))
+		if err := m.Reload(); err != nil {
+			t.Errorf("hot reload %s: Reload() = %v, want the file loaded", v, err)
 		}
-		pols = m.RoutingPolicies()
-		if len(pols) != 1 || pols[0].RequireCriticalEscalation != refused ||
-			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
-			t.Errorf("hot reload %s: policies %+v, want escalation=%v (last good kept iff refused), slack forbidden",
-				v, pols, refused)
-		}
+		want("hot reload", m)
 	}
 }
 
@@ -764,6 +768,23 @@ func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
 	if out := buf.String(); !strings.Contains(out, "require_critical_escalation is not a boolean") ||
 		!strings.Contains(out, "domain=fin") || !strings.Contains(out, "value=5") {
 		t.Errorf("log %q, want the non-boolean WARN for domain fin", out)
+	}
+}
+
+// Not parallel: it swaps the process-wide slog default to read the WARN.
+func TestLoad_RefusedEscalationValueWarns(t *testing.T) {
+	var buf lockedBuffer
+	orig := slog.Default()
+	defer slog.SetDefault(orig)
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "!!null {}"))
+	if pols := NewManager(dir).RoutingPolicies(); len(pols) != 1 || pols[0].RequireCriticalEscalation {
+		t.Errorf("policies %+v, want fin loaded with escalation off", pols)
+	}
+	if out := buf.String(); strings.Count(out, "PyYAML refuses") != 1 || !strings.Contains(out, "domain=fin") ||
+		!strings.Contains(out, "reason=") {
+		t.Errorf("log %q, want one refusal WARN for domain fin with its reason", out)
 	}
 }
 

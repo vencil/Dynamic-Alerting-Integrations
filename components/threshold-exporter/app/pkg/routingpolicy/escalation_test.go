@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
@@ -71,35 +69,43 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 	}
 }
 
-// A value PyYAML refuses (`!!bool y`) fails PyYAML's whole safe_load, and
-// the generator drops the file: da-guard refuses the whole document, and a
-// PyYAMLValue field fails the struct it sits in (tenant-api's parseConfig,
-// so a hot reload keeps the last good policy). One PyYAML reads but yaml.v3
-// cannot (`!!int 1:30`, `!!binary 1_000`) decodes, as a non-boolean.
-func TestPyYAMLValue_RefusedFailsTheDecode(t *testing.T) {
+// A value PyYAML refuses (`!!bool y`, `!!null {}`) fails PyYAML's whole
+// safe_load, and the generator drops the file: da-guard refuses the whole
+// document (or, for a collection, reports the constraint). A PyYAMLValue field records the refusal in Refused and the rest
+// of the struct decodes (tenant-api turns only this constraint off). One
+// PyYAML reads but yaml.v3 cannot (`!!int 1:30`, `!!binary 1_000`) decodes,
+// as a non-boolean.
+func TestPyYAMLValue_RefusedIsRecorded(t *testing.T) {
 	t.Parallel()
-	src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: !!bool y\n"
-	if _, _, err := ParseDomainPolicies([]byte(src)); err == nil {
-		t.Errorf("ParseDomainPolicies(!!bool y): want the document refused")
-	}
 	type doc struct {
-		E PyYAMLValue `yaml:"e"`
+		E PyYAMLValue `yaml:"require_critical_escalation"`
 		S []string    `yaml:"s"`
 	}
-	for _, v := range []string{"!!bool y", "!!bool 1", "!!int abc", "!!int 0X1F"} {
+	for _, v := range []string{"!!bool y", "!!bool 1", "!!int abc", "!!int 0X1F", "!!bool [true]", "{<<: 1}",
+		"!!null {}", "!!null [1]"} {
 		var d doc
-		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &d); err == nil {
-			t.Errorf("%s: decoded %#v, want the decode to fail as PyYAML's does", v, d.E.Value)
+		if err := UnmarshalPolicy([]byte("require_critical_escalation: "+v+"\ns: [webhook]\n"), &d); err != nil {
+			t.Errorf("%s: %v, want the refusal recorded, not the decode failed", v, err)
+			continue
+		}
+		if d.E.Refused == nil || d.E.Value != nil || !reflect.DeepEqual(d.S, []string{"webhook"}) {
+			t.Errorf("%s: got %#v / %v / %v, want Refused set, Value nil and [webhook]", v, d.E.Value, d.E.Refused, d.S)
+		}
+		// da-guard's path is not lenient: the document refused, or the
+		// constraint reported unusable.
+		if _, probs, err := ParseDomainPolicies([]byte("domain_policies:\n  d:\n    constraints:\n      require_critical_escalation: " +
+			v + "\n")); err == nil && len(probs) == 0 {
+			t.Errorf("ParseDomainPolicies(%s): want the document refused or the constraint reported", v)
 		}
 	}
-	for v, want := range map[string]any{"!!int 1:30": "1:30", "!!binary 1_000": "1_000", "!!int 5": 5} {
+	for v, want := range map[string]any{"!!int 1:30": "1:30", "!!binary 1_000": "1_000", "!!int 5": 5, "!!null x": nil} {
 		var d doc
-		if err := yaml.Unmarshal([]byte("e: "+v+"\ns: [webhook]\n"), &d); err != nil {
+		if err := UnmarshalPolicy([]byte("require_critical_escalation: "+v+"\ns: [webhook]\n"), &d); err != nil {
 			t.Errorf("%s: %v, want it decoded (PyYAML reads it)", v, err)
 			continue
 		}
-		if !reflect.DeepEqual(d.E.Value, want) || !reflect.DeepEqual(d.S, []string{"webhook"}) {
-			t.Errorf("%s: got %#v / %v, want %#v and [webhook]", v, d.E.Value, d.S, want)
+		if d.E.Refused != nil || !reflect.DeepEqual(d.E.Value, want) || !reflect.DeepEqual(d.S, []string{"webhook"}) {
+			t.Errorf("%s: got %#v / %v / %v, want %#v and [webhook]", v, d.E.Value, d.E.Refused, d.S, want)
 		}
 	}
 }

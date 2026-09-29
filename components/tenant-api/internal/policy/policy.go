@@ -45,16 +45,15 @@ type Constraints struct {
 	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
 	// the constraint on (the generator's `is True`); any other value PyYAML
 	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
-	// left off, and the rest of the file still applies. A scalar PyYAML
-	// refuses (`!!bool y`, `!!int abc`), or a mapping or list it refuses for
-	// its own tag or direct children (`!!bool [true]`, `{<<: 1}`, `!!null {}`),
-	// fails the file, as the generator drops it: a hot reload keeps the last
-	// good policy and records the failure. A `!!null`-tagged scalar (`!!null x`)
-	// is None, as for PyYAML: the constraint is off, the rest applies
-	// (parseConfig decodes via routingpolicy.UnmarshalPolicy). Accepted gap:
-	// one PyYAML refuses only deeper (`[!!bool y]`) loads with the constraint
-	// off (from last-good on to off on a hot reload), while the generator and
-	// da-guard refuse it.
+	// left off, and the rest of the file still applies. A `!!null`-tagged
+	// scalar (`!!null x`) is None, as for PyYAML: the constraint is off, the
+	// rest applies (parseConfig decodes via routingpolicy.UnmarshalPolicy).
+	// A value PyYAML refuses — `!!bool y`, `!!int abc`, `!!bool [true]`,
+	// `{<<: 1}`, `!!null {}`, or one refused only deeper (`[!!bool y]`) — makes
+	// the generator drop the whole file and da-guard refuse it; tenant-api
+	// treats every refused value as this constraint off (logged once per
+	// load), and the rest of the file applies, on a first load and a hot
+	// reload alike.
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 
@@ -121,7 +120,13 @@ func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 		cfg.DomainPolicies = make(map[string]DomainPolicy)
 	}
 	for _, name := range sortedDomains(&cfg) {
-		v := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation.Value
+		esc := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation
+		if esc.Refused != nil {
+			slog.Warn("policy: PyYAML refuses require_critical_escalation (the route generator drops this file); "+
+				"the constraint is not enforced", "domain", name, "reason", esc.Refused.Error())
+			continue
+		}
+		v := esc.Value
 		if _, isBool := v.(bool); v != nil && !isBool {
 			slog.Warn("policy: require_critical_escalation is not a boolean; the constraint is not enforced",
 				"domain", name, "value", fmt.Sprint(v))
