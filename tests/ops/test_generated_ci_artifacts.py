@@ -290,7 +290,7 @@ INSTALLS the binary says so via ``VIBE_REQUIRE_ACTIONLINT`` /
 install step must not silently turn this whole file into a green no-op.
 The fourth of those covers ``git``/``bash``/``tar``, which are what the
 execution-based tests need; ``ubuntu-latest`` ships them, so an absence is a
-regressed runner image rather than an optional check. Same fail-closed pattern as ``VIBE_REQUIRE_MTAIL`` / ``_VECTOR``
+regressed runner image rather than an optional check. Same fail-closed pattern as ``VIBE_REQUIRE_VECTOR``
 / ``_HELM`` / ``_DOCKER`` in ``.github/workflows/ci.yml`` (see
 ``tests/helm/test_federation_store_namespace_guard.py`` for the test-side
 precedent).

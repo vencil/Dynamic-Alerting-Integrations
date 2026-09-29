@@ -4,7 +4,7 @@
 # rendered/ before `compose up` (see README — no configuration drift).
 #
 # Stack: fixture-exporter -> prometheus <- federation-proxy <- federation-gateway
-#        federation-gateway --audit log--> mtail
+#        federation-gateway --audit log--> audit-metrics (Vector)
 # The pytest driver runs on the HOST against the published gateway port.
 
 services:
@@ -119,24 +119,30 @@ services:
       federation-proxy:
         condition: service_started
 
-  # mtail sidecar — tails the gateway's audit access log off the shared
-  # volume and exposes tenant_federation_requests_total. Built from the
-  # real audit-sidecar image (helm/federation-gateway/audit-sidecar).
-  mtail:
-    build:
-      context: ../../helm/federation-gateway/audit-sidecar
-    command:
-      - "mtail"
-      - "--logtostderr"
-      - "--progs=/etc/mtail"
-      - "--logs=/var/log/federation/audit.log"
-      - "--port=3903"
+  # audit-metrics sidecar — tails the gateway's audit access log off the
+  # shared volume and exposes tenant_federation_requests_total. The SAME
+  # upstream Vector image and program the chart deploys
+  # (helm/federation-gateway values `auditLog.metrics` +
+  # files/audit-metrics.vector.yaml, rendered by federation_e2e_run.sh).
+  # Replaced the mtail sidecar in #1278 D1.
+  audit-metrics:
+    image: timberio/vector:0.57.0-distroless-libc
+    command: ["--config", "/etc/audit-metrics/audit-metrics.yaml"]
+    environment:
+      # Vector 0.5x only expands env vars in its config with this set; the
+      # container env is exactly the four names here, no secrets.
+      VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION: "true"
+      AUDIT_LOG_PATH: /var/log/federation/audit.log
+      AUDIT_METRICS_PORT: "3903"
+      AUDIT_METRICS_DATA: /var/lib/audit-metrics
+    tmpfs:
+      - /var/lib/audit-metrics
     volumes:
-      - ./rendered/federation-audit.mtail:/etc/mtail/federation-audit.mtail:ro
+      - ./rendered/audit-metrics.yaml:/etc/audit-metrics/audit-metrics.yaml:ro
       # Same bind-mounted audit-log dir the gateway writes; read-only here.
       - ./rendered/audit-log:/var/log/federation:ro
     ports:
-      - "${E2E_MTAIL_PORT:-13903}:3903"
+      - "${E2E_AUDIT_METRICS_PORT:-13903}:3903"
     depends_on:
       federation-gateway:
         condition: service_started

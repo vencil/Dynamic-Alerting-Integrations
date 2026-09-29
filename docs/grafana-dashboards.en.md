@@ -378,7 +378,7 @@ Panel thresholds deliberately **use the same values as the seven alerts in [conf
 
 ### Motivation
 
-The audit view of the tenant federation ([ADR-020](./adr/020-tenant-federation.md)) data plane. Every panel derives from **a single** counter: `tenant_federation_requests_total{tenant, status}`, emitted by the mtail sidecar in `helm/federation-gateway` from the Envoy audit access log. The six status enum values use fixed colours across the whole dashboard (`ok` green / `client_aborted` blue / `rate_limited` yellow / `auth_failed` orange / `bad_request` light orange / `backend_error` red), so panels can be cross-read directly. No template variables; default time range `now-6h`.
+The audit view of the tenant federation ([ADR-020](./adr/020-tenant-federation.md)) data plane. Every panel derives from **a single** counter: `tenant_federation_requests_total{tenant, status}`, emitted by the audit-metrics sidecar (Vector) in `helm/federation-gateway` from the Envoy audit access log. The six status enum values use fixed colours across the whole dashboard (`ok` green / `client_aborted` blue / `rate_limited` yellow / `auth_failed` orange / `bad_request` light orange / `backend_error` red), so panels can be cross-read directly. No template variables; default time range `now-6h`.
 
 ### Deployment
 
@@ -418,7 +418,7 @@ da-tools grafana-import \
 
 ### Motivation
 
-The observability view of the tenant log-query plane ([ADR-021](./adr/021-tenant-log-query-federation.md); when the federation-gateway runs in **victorialogs mode**). Both source metrics are emitted by the mtail sidecar in `helm/federation-gateway` from the Envoy audit access log:
+The observability view of the tenant log-query plane ([ADR-021](./adr/021-tenant-log-query-federation.md); when the federation-gateway runs in **victorialogs mode**). Both source metrics are emitted by the audit-metrics sidecar (Vector) in `helm/federation-gateway` from the Envoy audit access log:
 
 - `tenant_log_query_requests_total{account_id, project_id, status}` (counter) — query volume and outcome
 - `tenant_log_query_duration_ms` (histogram) — query latency

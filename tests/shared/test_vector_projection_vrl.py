@@ -53,8 +53,8 @@ _REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
 
 
 def test_vector_present_when_required() -> None:
-    """Fail-closed guard against silent disarmament (mirrors the #908
-    ``test_mtail_present_when_required`` precedent).
+    """Fail-closed guard against silent disarmament (the #908 pattern;
+    the mtail twin it mirrored retired with mtail in #1278 D1).
 
     ``TestVectorValidateAndTest`` is the ONLY place the shipped VRL is executed
     rather than string-matched — tenant fail-closed routing, the ADR-028 §D3 PII
