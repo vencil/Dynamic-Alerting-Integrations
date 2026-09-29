@@ -1,8 +1,9 @@
 """Drift guard for the nightly third-party scan matrix (#902 L1-A drift guard).
 
 Closes the dual-SSOT gap raised in #907 review: the `scan-thirdparty` matrix in
-nightly-image-scan.yaml hardcodes the 15 third-party refs, while the actual
-deployment refs live in helm values / k8s manifests. If a maintainer bumps a
+nightly-image-scan.yaml hardcodes the third-party refs, while the actual
+deployment refs live in helm values / k8s manifests (and, for the demo stack,
+in try-local/docker-compose.yaml — #1337 ①). If a maintainer bumps a
 manifest (e.g. grafana 12.4.2 -> 12.5.0) but forgets the scan matrix, the scan
 would keep reporting the OLD version as "safe" while prod runs the new one —
 false security ("scanning a parallel universe").
@@ -127,21 +128,95 @@ def _aggregate_run() -> str:
     return agg["run"]
 
 
-def test_thirdparty_matrix_equals_deployed_refs() -> None:
-    """scan-thirdparty matrix == the refs the extractor finds in values/manifests."""
-    matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
+TRY_LOCAL_COMPOSE = ROOT / "try-local" / "docker-compose.yaml"
 
+# First-party images are the release flow's job (the extractor skips the same
+# prefix); try-local holds them at an older release on purpose.
+_FIRST_PARTY_PREFIX = "ghcr.io/vencil/"
+
+# `${VAR:-default}` — compose resolves an unset VAR to the default, so that is
+# what the demo pulls. Resolved rather than skipped: skipping any ref containing
+# `${` would let a third-party ref written that way fall out of the guard.
+_COMPOSE_DEFAULT_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}")
+
+
+def _strip_digest(ref: str) -> str:
+    return ref.split("@", 1)[0]
+
+
+def _trylocal_thirdparty_refs() -> set[str]:
+    """`repo:tag` of every third-party image the try-local demo stack PULLS.
+
+    #1337 ①: the extractor's SOURCE_GLOBS cover helm/ and k8s/ only, so an image
+    only try-local pulls (pushgateway, curl) sat in no scan. The file is NOT
+    added to SOURCE_GLOBS — measured, that yields 8 new refs: the two build-from-
+    source services (resolver would false-fail them) and four images whose
+    try-local ref is tag-only while the matrix row is tag+digest (never
+    string-equal). So the binding is by `repo:tag`, digest ignored, and the
+    compose file keeps its tag-only shape (see test_trylocal_compose_pins).
+    """
+    doc = yaml.safe_load(TRY_LOCAL_COMPOSE.read_text(encoding="utf-8"))
+    refs: set[str] = set()
+    for name, svc in (doc.get("services") or {}).items():
+        if "build" in svc:  # built from source, never pulled
+            continue
+        image = svc.get("image")
+        assert isinstance(image, str) and image.strip(), f"try-local service {name!r} has no image"
+        image = _COMPOSE_DEFAULT_RE.sub(r"\1", image.strip())
+        assert "${" not in image, f"try-local service {name!r}: unresolvable image {image!r}"
+        if image.startswith(_FIRST_PARTY_PREFIX):
+            continue
+        refs.add(_strip_digest(image))
+    # Anti-vacuity: a parse that finds nothing would make both guards below pass.
+    assert len(refs) >= 5, f"expected the try-local third-party images, got {sorted(refs)}"
+    return refs
+
+
+def _extractor_list() -> set[str]:
     proc = subprocess.run(
         [sys.executable, str(EXTRACTOR), "--root", str(ROOT), "--list"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
-    deployed = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
 
-    assert matrix_refs == deployed, (
+
+def test_every_trylocal_image_is_in_the_scan_matrix() -> None:
+    """#1337 ①: what the demo stack pulls is scanned — by `repo:tag`.
+
+    Goes red when a Renovate bump (or a hand edit) moves the matrix row of an
+    image try-local also pulls, but not try-local itself: the demo would then run
+    a version nothing scans. Fix by moving try-local/docker-compose.yaml to the
+    same tag, or — if the demo must stay behind — by adding a matrix row for it.
+    """
+    matrix_keys = {_strip_digest(e["ref"]) for e in _matrix_include("scan-thirdparty")}
+    unscanned = sorted(_trylocal_thirdparty_refs() - matrix_keys)
+    assert not unscanned, (
+        f"try-local pulls images the nightly scan does not cover: {unscanned}\n"
+        "Align try-local/docker-compose.yaml with the scan-thirdparty matrix tag, or "
+        "add a tag+digest row for it in .github/workflows/nightly-image-scan.yaml."
+    )
+
+
+def test_thirdparty_matrix_equals_deployed_refs() -> None:
+    """scan-thirdparty matrix == deployed refs ∪ the try-local-only rows.
+
+    The try-local-only half is derived, not listed: a matrix row whose `repo:tag`
+    try-local pulls and no deployed ref carries. Anything else in the matrix is
+    still drift.
+    """
+    matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
+    deployed = _extractor_list()
+    deployed_keys = {_strip_digest(r) for r in deployed}
+    trylocal_only = {r for r in matrix_refs
+                     if _strip_digest(r) in _trylocal_thirdparty_refs()
+                     and _strip_digest(r) not in deployed_keys}
+    expected = deployed | trylocal_only
+
+    assert matrix_refs == expected, (
         "scan-thirdparty matrix drifted from the deployed third-party image set.\n"
-        f"  only in scan matrix : {sorted(matrix_refs - deployed)}\n"
-        f"  only in deployed    : {sorted(deployed - matrix_refs)}\n"
+        f"  only in scan matrix : {sorted(matrix_refs - expected)}\n"
+        f"  only in deployed    : {sorted(expected - matrix_refs)}\n"
         "Sync the scan-thirdparty matrix in .github/workflows/nightly-image-scan.yaml "
         "with the chart values / k8s manifests (or adjust the extractor skip-lists)."
     )

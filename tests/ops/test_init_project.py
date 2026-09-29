@@ -4027,8 +4027,7 @@ class TestCustomerDeliveredImagePins:
             'and no `entrypoint:` override can rescue it.',
         'bitnami/kubectl':
             'free namespace carries only `latest` since 2025-09-29 (every '
-            'version tag 404s), and the image ships no `kustomize` binary '
-            'while the kustomize branch runs `kustomize build`.',
+            'version tag 404s), so no default we hand out could be pinned.',
     }
 
     def test_pin_table_covers_exactly_the_methods_the_generator_branches_on(self):
@@ -4113,7 +4112,9 @@ class TestCustomerDeliveredImagePins:
     # runs. Used to check the image against the script rather than trusting
     # that both were derived from the same lookup.
     _SCRIPT_MARKER = {
-        'kustomize': 'kustomize build',
+        # GitLab builds with the kubectl-embedded kustomize: the apply image
+        # (alpine/kubectl) ships no standalone `kustomize` binary.
+        'kustomize': 'kubectl kustomize',
         'helm': 'helm upgrade',
     }
 

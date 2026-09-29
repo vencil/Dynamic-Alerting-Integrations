@@ -378,7 +378,7 @@ panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/venci
 
 ### 動機
 
-租戶聯邦（[ADR-020](./adr/020-tenant-federation.md)）資料面的稽核視圖。全部 panel 都從**同一個** counter 導出：`tenant_federation_requests_total{tenant, status}`，由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生。status enum 六值全 dashboard 固定配色（`ok` 綠／`client_aborted` 藍／`rate_limited` 黃／`auth_failed` 橘／`bad_request` 淺橘／`backend_error` 紅），各 panel 間可直接互相對照。無 template 變數；時間範圍預設 `now-6h`。
+租戶聯邦（[ADR-020](./adr/020-tenant-federation.md)）資料面的稽核視圖。全部 panel 都從**同一個** counter 導出：`tenant_federation_requests_total{tenant, status}`，由 `helm/federation-gateway` 的 audit-metrics sidecar（Vector）從 Envoy audit access log 產生。status enum 六值全 dashboard 固定配色（`ok` 綠／`client_aborted` 藍／`rate_limited` 黃／`auth_failed` 橘／`bad_request` 淺橘／`backend_error` 紅），各 panel 間可直接互相對照。無 template 變數；時間範圍預設 `now-6h`。
 
 ### 部署
 
@@ -418,7 +418,7 @@ da-tools grafana-import \
 
 ### 動機
 
-租戶日誌查詢面（[ADR-021](./adr/021-tenant-log-query-federation.md)；federation-gateway 跑 **victorialogs mode** 時）的觀測視圖。兩個資料源 metric 皆由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生：
+租戶日誌查詢面（[ADR-021](./adr/021-tenant-log-query-federation.md)；federation-gateway 跑 **victorialogs mode** 時）的觀測視圖。兩個資料源 metric 皆由 `helm/federation-gateway` 的 audit-metrics sidecar（Vector）從 Envoy audit access log 產生：
 
 - `tenant_log_query_requests_total{account_id, project_id, status}`（counter）——查詢量與結果
 - `tenant_log_query_duration_ms`（histogram）——查詢延遲

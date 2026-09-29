@@ -301,9 +301,13 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 	fi
 	@echo ""
 	@echo "--- [2/3] Windows stage + commit ---"
-	@if [ "$(OS)" = "Windows_NT" ] || [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
-		CMD_EXE="cmd.exe"; \
-		if [ -x /mnt/c/Windows/System32/cmd.exe ]; then CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; fi; \
+	@# Only WSL runs the batch from here (#2248). A Windows_NT branch used to
+	@# call `cmd.exe /c` from Git Bash: MSYS rewrote `/c` as a path, cmd.exe
+	@# started interactive, read EOF and returned 0, and the recipe printed
+	@# Done with nothing committed. A Windows host has no make by default, so
+	@# that branch is gone -- there the else branch prints the three commands.
+	@if [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
+		CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; \
 		if [ -n "$(FILES)" ]; then \
 			$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat add $(FILES)" || exit 1; \
 		fi; \
@@ -314,7 +318,7 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 		echo "✅ Done (hook-gated + committed + pushed)"; \
 	else \
 		echo ""; \
-		echo "⚠  Sandbox (Linux) side: cannot exec Windows batch directly."; \
+		echo "⚠  No WSL cmd.exe here: this recipe does not run the Windows batch itself."; \
 		echo "   Hooks already ran above. Copy/paste the following into Windows cmd.exe (repo root):"; \
 		echo ""; \
 		if [ -n "$(FILES)" ]; then \
@@ -738,9 +742,8 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # INSIDE Helm charts and are never published, so release.yaml never builds them
 # at all (#1337). Their other build paths differ — vector-projection-gate is
 # built ONLY here, by component-docker-build.yaml and by the nightly scan, while
-# federation-audit-sidecar is additionally built on every CI run by the
-# federation-e2e job's compose stack. audit-sidecar compiles mtail from source
-# (~25 s, needs the Go module proxy); pre-tag already reaches the network for
+# (Until #1278 D1 federation-audit-sidecar also compiled mtail and was rebuilt
+# by the federation-e2e compose stack; it is Alpine + logrotate now.) pre-tag already reaches the network for
 # recipe-preview's promtool tarball and tenant-api's `go mod download`, so this
 # is not a new class of failure — just a slower step.
 # Needs docker (buildx) + trivy on PATH — run on the maintainer machine /

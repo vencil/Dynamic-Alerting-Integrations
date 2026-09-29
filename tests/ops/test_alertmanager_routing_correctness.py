@@ -64,7 +64,7 @@ from test_alertmanager_amtool_validity import (
 
 # Set to "1" by the CI job that is SUPPOSED to have docker (ci.yml python-tests
 # ``env:``). When set, a missing docker is a FAILURE, not a skip — see
-# test_docker_present_when_required（對齊 VIBE_REQUIRE_MTAIL pattern）。
+# test_docker_present_when_required（對齊 VIBE_REQUIRE_VECTOR pattern）。
 _REQUIRE_DOCKER = os.environ.get("VIBE_REQUIRE_DOCKER") == "1"
 
 # 刻意用 per-class mark 而非 module-level pytestmark：presence guard
@@ -78,7 +78,7 @@ _needs_docker = pytest.mark.skipif(
 
 def test_docker_present_when_required() -> None:
     """Fail-closed guard against silent disarmament（對齊 ci.yml python-tests 的
-    ``VIBE_REQUIRE_MTAIL`` / test_mtail_present_when_required 前例）。
+    ``VIBE_REQUIRE_VECTOR`` / test_vector_present_when_required 前例）。
 
     本檔與 test_alertmanager_amtool_validity.py 的 amtool 防線都掛在
     ``skipif(not _DOCKER)`` 之下——對本地無 docker 的開發機友善，但在「理應有

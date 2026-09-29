@@ -1232,10 +1232,11 @@ def test_paths_filter_action_stays_on_the_verified_major() -> None:
     `_covers` compares path segments literally, i.e. it behaves like picomatch
     with `dot: true` — which is what dorny/paths-filter v3 passes
     (`src/filter.ts`: `const MatchOptions = {dot: true}`), not a free choice,
-    so a major bump must re-verify it. ⚠️ This does NOT catch a behaviour
-    change inside v3: the action is referenced by floating major tag.
+    so a major bump must re-verify it. The action is pinned to the commit of
+    v3.0.4 (third-party actions are SHA-pinned; renovate.json), so a behaviour
+    change inside v3 now arrives only through a Renovate PR that moves this SHA.
     """
-    verified = "dorny/paths-filter@v3"
+    verified = "dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad"  # v3.0.4
     # ⛔ Parsed `uses:` values, not raw file text: a comment saying "we
     # evaluated dorny/paths-filter@v4 and rejected it" would otherwise red.
     seen = []

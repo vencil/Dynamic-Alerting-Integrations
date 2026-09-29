@@ -53,7 +53,6 @@ REM
 REM Usage:
 REM   win_git_escape.bat status
 REM   win_git_escape.bat add <file1> [file2...]
-REM   win_git_escape.bat commit "commit message"
 REM   win_git_escape.bat commit-file <msg-file.txt>     (UTF-8/CJK safe)
 REM   win_git_escape.bat push [remote] [branch]
 REM   win_git_escape.bat tag <tag-name>
@@ -63,7 +62,8 @@ REM   win_git_escape.bat diff
 REM   win_git_escape.bat preflight
 REM   win_git_escape.bat fix-hooks                       (fix CRLF hooks)
 REM
-REM WARNING: For CJK/em-dash/special chars in commit message, always use commit-file.
+REM Commit messages go through a file: there is no `commit "message"` (#2249).
+REM   cmd corrupts non-ASCII in arguments, and commit-file covers every message.
 REM   The file must be UTF-8. cmd's echo writes the console codepage (cp950 on
 REM   zh-TW), so write non-ASCII messages from PowerShell:
 REM   [IO.File]::WriteAllText("_msg.txt", $msg, [Text.UTF8Encoding]::new($false))
@@ -75,16 +75,17 @@ REM   - Writes no files of its own: git prints straight to stdout (2>&1), so
 REM     two calls at once cannot read each other's output (#2275)
 REM   - Auto-sets UTF-8 environment
 
-REM Delayed expansion (enabled below) rewrites every `!` in a path, and the
-REM rewritten path can name another tree. Refuse such a location first, while
-REM `!` is still an ordinary character.
+REM Delayed expansion stays OFF for the whole script (#2249): it rewrites every
+REM `!` in whatever a line expands -- a file name, a commit message, a command
+REM this script hands to PowerShell. The one place that turns it on is the
+REM tree check below, and a rewritten path there can name another tree, so a
+REM location with a `!` is refused first.
 setlocal DisableDelayedExpansion
 set "SELF=%~dp0"
 if "%SELF:!=%"=="%SELF%" goto :self_ok
 echo ERROR: this script's path contains "!", which it cannot work with: "%SELF%"
 exit /b 1
 :self_ok
-setlocal EnableDelayedExpansion
 
 REM --- Environment setup ---
 set "PYTHONUTF8=1"
@@ -132,7 +133,7 @@ if "%PY_CMD%"=="" (
 if "%PY_CMD%"=="" (
     if exist "%LOCALAPPDATA%\Python\bin\python.exe" set "PY_CMD=%LOCALAPPDATA%\Python\bin\python.exe"
 )
-REM If still unset, commit/commit-file/pr-preflight fail with a clear error below.
+REM If still unset, commit-file/pr-preflight fail with a clear error below.
 REM Non-commit operations (status/add/push/log/diff) don't need python.
 
 REM --- Repo: the work tree this copy lives in (scripts\ops\..\..) ---
@@ -152,26 +153,21 @@ for /f "delims=" %%v in ('"%GIT_CMD%" rev-parse --local-env-vars') do set "%%v="
 REM --- The caller must be inside the tree this copy lives in. Commands run in
 REM --- the caller's directory, so relative arguments (add's paths,
 REM --- commit-file's message file) resolve the way git resolves them.
-REM --- Read with delayed expansion off: it rewrites every `!` in the path, and
-REM --- the rewritten name can be another tree (`w!x!` becomes `w`). A location
-REM --- with a `!` is refused outright.
-setlocal DisableDelayedExpansion
+REM --- The comparison below runs with delayed expansion on (the paths may hold
+REM --- `&` or `)`), which rewrites every `!` -- and the rewritten name can be
+REM --- another tree (`w!x!` becomes `w`). A location with a `!` is refused first.
 set "CWD_TOP="
 for /f "delims=" %%t in ('"%GIT_CMD%" rev-parse --show-toplevel 2^>nul') do set "CWD_TOP=%%t"
-REM --- Echo before endlocal: after it delayed expansion is back on and would
-REM --- strip the `!` from the message below.
 if not defined CWD_TOP (
     "%GIT_CMD%" rev-parse --show-toplevel 2>&1
     echo FAILED: the current directory is not in a git work tree
-    endlocal
     goto :done_err
 )
 if not "%CWD_TOP:!=%"=="%CWD_TOP%" (
     echo FAILED: the current directory's tree path contains "!", which this script cannot work with
-    endlocal
     goto :done_err
 )
-endlocal & set "CWD_TOP=%CWD_TOP%"
+setlocal EnableDelayedExpansion
 set "CWD_TOP=!CWD_TOP:/=\!"
 if /i not "!CWD_TOP!"=="!REPO_DIR!" (
     echo FAILED: this copy of the script works on !REPO_DIR!
@@ -179,10 +175,10 @@ if /i not "!CWD_TOP!"=="!REPO_DIR!" (
     echo         Run it from inside that tree, or use the copy in the tree you mean.
     goto :done_err
 )
+endlocal
 
 if /i "%CMD%"=="status"      goto :do_status
 if /i "%CMD%"=="add"         goto :do_add
-if /i "%CMD%"=="commit"      goto :do_commit
 if /i "%CMD%"=="commit-file" goto :do_commit_file
 if /i "%CMD%"=="push"        goto :do_push
 if /i "%CMD%"=="tag"         goto :do_tag
@@ -203,40 +199,20 @@ shift
 set "FILES="
 :add_loop
 if "%~1"=="" goto :add_exec
-set "FILES=!FILES! %~1"
+REM Each path in its own quotes (#2249): `sp ace.txt` is one pathspec, not
+REM two. No outer quotes on this set: every character of the value then sits
+REM inside a path's quotes, so an `&` in a name stays part of the name.
+set FILES=%FILES% "%~1"
 shift
 goto :add_loop
 :add_exec
-if "!FILES!"=="" (
+if not defined FILES (
     echo ERROR: no files specified
     echo Usage: win_git_escape.bat add file1 [file2...]
     goto :done_err
 )
-"%GIT_CMD%" add !FILES! 2>&1 || goto :failed
+"%GIT_CMD%" add %FILES% 2>&1 || goto :failed
 echo OK: staged files
-goto :done
-
-:do_commit
-REM Get full commit message (%~2 strips outer quotes but keeps spaces)
-set "MSG=%~2"
-if "%MSG%"=="" (
-    echo ERROR: commit message required
-    echo Usage: win_git_escape.bat commit "my commit message here"
-    echo NOTE: message must be wrapped in double quotes
-    goto :done_err
-)
-REM UTF-8 safety gate (PR #42 Trap #58): reject non-ASCII in -m args, since
-REM cmd.exe corrupts them regardless of chcp. Helper prints hint + exits 1.
-if "%PY_CMD%"=="" (
-    echo ERROR: python not found. Install Python or the `py` launcher, then retry.
-    echo Looked in PATH, py launcher, and %%LOCALAPPDATA%%\Programs\Python\*
-    goto :done_err
-)
-"%PY_CMD%" "%~dp0commit_helper.py" check-ascii "%MSG%"
-if %ERRORLEVEL% NEQ 0 goto :done_err
-REM Use %~2 not %2 -- batch auto-handles quotes
-"%GIT_CMD%" commit -m "%MSG%" 2>&1 || goto :failed
-echo OK: committed
 goto :done
 
 :do_commit_file
@@ -378,13 +354,25 @@ goto :done
 REM fix-hooks: Fix cross-platform issues in pre-commit hooks
 REM Problem 1: Windows pre-commit install generates CRLF shebang -> Linux can't find /bin/sh\r
 REM Problem 2: #!/bin/sh + bash array ARGS=(...) are incompatible
+REM The hooks directory is git's answer, not `<tree>\.git\hooks`: in a linked
+REM worktree `.git` is a file, and core.hooksPath moves it (#2249).
 echo === Fixing git hooks ===
-for %%h in ("%REPO_DIR%\.git\hooks\pre-commit" "%REPO_DIR%\.git\hooks\pre-push" "%REPO_DIR%\.git\hooks\pre-merge-commit") do (
+set "HOOK_DIR="
+for /f "delims=" %%p in ('"%GIT_CMD%" rev-parse --git-path hooks') do set "HOOK_DIR=%%~fp"
+if not defined HOOK_DIR goto :failed
+set "FIXED=0"
+for %%h in ("%HOOK_DIR%\pre-commit" "%HOOK_DIR%\pre-push" "%HOOK_DIR%\pre-merge-commit") do (
     if exist "%%~h" (
         REM Use PowerShell to fix CRLF and shebang
-        powershell -NoProfile -Command "$f='%%~h'; $c=Get-Content $f -Raw -Encoding UTF8; $c=$c -replace \"`r`n\",\"`n\"; $c=$c -replace '^#!/bin/sh\n#!/usr/bin/env bash','#!/usr/bin/env bash'; [IO.File]::WriteAllText($f,$c,[Text.UTF8Encoding]::new($false))"
+        powershell -NoProfile -Command "$f='%%~h'; $c=Get-Content $f -Raw -Encoding UTF8; $c=$c -replace \"`r`n\",\"`n\"; $c=$c -replace '^#!/bin/sh\n#!/usr/bin/env bash','#!/usr/bin/env bash'; [IO.File]::WriteAllText($f,$c,[Text.UTF8Encoding]::new($false))" || goto :failed
         echo   Fixed: %%~nxh
+        set /a FIXED+=1
     )
+)
+REM Nothing fixed is not a success: the caller ran this because a hook is broken.
+if "%FIXED%"=="0" (
+    echo FAILED: no pre-commit, pre-push or pre-merge-commit hook in "%HOOK_DIR%"
+    goto :done_err
 )
 echo === Done ===
 goto :done
@@ -399,7 +387,6 @@ echo.
 echo Commands:
 echo   status              Show working tree status
 echo   add file1 [file2]   Stage files
-echo   commit "message"    Commit (ASCII-safe messages only)
 echo   commit-file msg.txt Commit using file (CJK/UTF-8 safe, RECOMMENDED)
 echo   push [remote] [br]  Push to remote
 echo   tag tag-name        Create a tag

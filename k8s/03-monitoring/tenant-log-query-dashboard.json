@@ -5,7 +5,7 @@
   "graphTooltip": 1,
   "id": null,
   "links": [],
-  "description": "ADR-021 (#609) tenant log-query plane observability. Source metrics: tenant_log_query_requests_total{account_id,project_id,status} (counter) and tenant_log_query_duration_ms (histogram), emitted by the mtail sidecar in helm/federation-gateway from the Envoy audit access log when the gateway runs in victorialogs mode. account_id is the verified VictoriaLogs partition key (>=1000); project_id is 0 for the Phase 1 (b) platform-operational projection.",
+  "description": "ADR-021 (#609) tenant log-query plane observability. Source metrics: tenant_log_query_requests_total{account_id,project_id,status} (counter) and tenant_log_query_duration_ms (histogram), emitted by the audit-metrics sidecar (Vector) in helm/federation-gateway from the Envoy audit access log when the gateway runs in victorialogs mode. account_id is the verified VictoriaLogs partition key (>=1000); project_id is 0 for the Phase 1 (b) platform-operational projection.",
   "panels": [
     {
       "title": "Log Queries /s (5m)",

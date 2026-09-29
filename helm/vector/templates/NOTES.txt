@@ -25,7 +25,7 @@ set evidenceChannel.podNamespace / .gatewayNamespace or that branch silently
 matches nothing:
   - evidence: bounded + loud. FederationRevocationEvidenceChannelDown fires
     ~45-50 min after the last good heartbeat.
-  - gateway : SILENT. FederationAuditPipelineSilent watches the mtail
+  - gateway : SILENT. FederationAuditPipelineSilent watches the audit-metrics
     sidecar's own counters — a different path that stays green.
 Set either to "" to disable that branch's binding (pre-0.10.0 behaviour).
 
