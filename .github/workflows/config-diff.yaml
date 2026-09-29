@@ -32,6 +32,16 @@ on:
 permissions:
   pull-requests: write
 
+# ⛔ One run per pull request (#1518). Why the PR number and not the ref, why
+# the workflow prefix (blast-radius.yml fires on the same paths), why other
+# events never cancel, and why a cancelled run cannot tear the comment: see
+# the block of the same shape in blast-radius.yml.
+# `tests/ops/test_pr_report_workflow_concurrency.py` evaluates both
+# expressions per event.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   config-diff:
     # ⚠️ Deliberately NOT "Blast Radius Report": blast-radius.yml renders a
