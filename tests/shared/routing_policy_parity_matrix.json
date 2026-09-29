@@ -60,7 +60,8 @@
     "in every mode). Python asserts it equals _grar_parse.BLOCKING_TREE_KINDS and Go that",
     "routingpolicy.IsBlocking is true for exactly these among every Problem kind, so the lists cannot",
     "drift. routing_in_unread_location with field `_routing_defaults` is the one row of that kind the",
-    "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there)."
+    "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there).",
+    "#2412 - a root `_routing_defaults` that is not a mapping (list, string, number) contributes nothing, as below the root: no platform row (the generator WARNs, rc 0); it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -1669,6 +1670,96 @@
       ],
       "expect": {
         "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-a-root-routing-defaults-not-a-mapping",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults: [a, b]\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n",
+        "t-own.yaml": "tenants:\n  t-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/o\n",
+        "team/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-root": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        },
+        "t-team": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-a-root-later-file-not-a-mapping-replaces",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "_platform.yaml": "_routing_defaults: 42\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-root": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null
+        }
+      }
+    },
+    {
+      "name": "hier-a-root-earlier-file-not-a-mapping-is-replaced",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults: not-a-mapping\n",
+        "_platform.yaml": "_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-root": {
           "targets": [
             {
               "ref": "receiver",
