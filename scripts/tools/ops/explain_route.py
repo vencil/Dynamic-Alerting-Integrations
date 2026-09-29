@@ -48,6 +48,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     generate_routes,
     load_base_config,
     merge_routing_with_defaults,
+    tree_refusal,
 )
 from _grar_render import _run_binary, assemble_configmap  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
@@ -829,16 +830,29 @@ def trace_alert_routing(
     hits, unknown = None, "the generator refuses this config"
     root, receivers, conf_types = {}, {}, {}
     assembled = False
-    try:
-        am_yml, root, receivers, conf_types = build_trace_tree(parsed, base_config)
-    except UnassemblableBase as exc:
-        _warn("the generator cannot assemble this config (malformed "
-              f"--base-config?): {exc}")
-    except ValueError as exc:
-        _warn(f"the generator refuses to assemble this config: {exc}")
+    # The generator refuses these trees before building anything (unreadable
+    # tenant file #1460, duplicate tenant #2315): same judgment, same words.
+    refusal = tree_refusal(parsed.get("files_read", 0),
+                           parsed.get("tenant_file_errors") or [],
+                           parsed.get("duplicate_tenants") or {})
+    if refusal:
+        _warn("the generator refuses this config "
+              "(generate_alertmanager_routes.py exits 1):")
+        for msg in refusal:
+            _warn(msg)
     else:
-        assembled = True
-        hits, unknown = run_amtool_trace(am_yml, root, alert_labels, warn=_warn)
+        try:
+            am_yml, root, receivers, conf_types = build_trace_tree(
+                parsed, base_config)
+        except UnassemblableBase as exc:
+            _warn("the generator cannot assemble this config (malformed "
+                  f"--base-config?): {exc}")
+        except ValueError as exc:
+            _warn(f"the generator refuses to assemble this config: {exc}")
+        else:
+            assembled = True
+            hits, unknown = run_amtool_trace(am_yml, root, alert_labels,
+                                             warn=_warn)
     main_prefix = f"tenant-{tenant}"
 
     def _is_enforced(hit: dict) -> bool:

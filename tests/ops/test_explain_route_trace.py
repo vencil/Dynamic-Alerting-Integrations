@@ -878,3 +878,67 @@ class TestWithoutAmtool:
         step5 = _trace(capsys, conf)["steps"][4]
         assert step5["passed"] is None
         assert "not evaluated" in step5["detail"]
+
+
+# ---------------------------------------------------------------------------
+# #2293: trees the generator refuses before building anything
+# ---------------------------------------------------------------------------
+_GEN = os.path.join(_TOOLS_DIR, "generate_alertmanager_routes.py")
+_REFUSED = "(unknown: the generator refuses this config)"
+
+
+def _refused_tree(tmp_path, kind):
+    conf = _tree(tmp_path)
+    if kind == "duplicate-tenant":
+        (conf / "other.yaml").write_text(yaml.safe_dump(
+            {"tenants": {_TT: {"_routing": {"receiver": _HOOK_TEAM}}}}),
+            encoding="utf-8")
+    else:  # a second tenant file that does not parse
+        (conf / "broken.yaml").write_text(
+            "tenants:\n  tb: {_routing: {receiver: {type: webhook, url: 'x}}}\n",
+            encoding="utf-8")
+    return conf
+
+
+@pytest.mark.parametrize("kind", ["duplicate-tenant", "unreadable-file"])
+class TestGeneratorRefusedTree:
+    """`--output-configmap` exits 1 on these trees (#1460 / #2315), so the
+    trace has no tree to show: unknown + the generator's own words, rc 0."""
+
+    def _generator(self, conf):
+        return subprocess.run(
+            [sys.executable, _GEN, "--config-dir", str(conf),
+             "--output-configmap", "--dry-run"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+            env=dict(os.environ, DA_LANG="en", PYTHONUTF8="1"))
+
+    def test_generator_still_refuses_with_same_message(self, tmp_path, kind):
+        gen = self._generator(_refused_tree(tmp_path, kind))
+        assert gen.returncode == 1, gen.stderr
+        head = {"duplicate-tenant": "FAIL: 1 tenant(s) declared in more than "
+                "one file — nothing was written or applied:",
+                "unreadable-file": "FAIL: 1 config file(s) could not be read "
+                "— refusing to treat the remaining 2 as the whole tree:"}[kind]
+        assert head in gen.stderr.splitlines()
+        assert "Written to" not in gen.stdout
+
+    def test_json_is_unknown_with_the_generator_message(
+            self, capsys, tmp_path, kind):
+        conf = _refused_tree(tmp_path, kind)
+        trace, err = _trace_err(capsys, conf)
+        assert trace["final_receiver"] == _REFUSED
+        assert trace["steps"][1]["matched_routes"] == []
+        assert trace["steps"][3]["inhibit_rules_yaml"] is None
+        assert "WARN: the generator refuses this config" in err
+        # Every FAIL line the generator prints, verbatim, as a WARN.
+        gen_fail = [ln for ln in self._generator(conf).stderr.splitlines()
+                    if ln.startswith("FAIL:")]
+        assert gen_fail and all(f"WARN: {ln}" in err for ln in gen_fail)
+
+    def test_text_is_unknown(self, capsys, tmp_path, kind):
+        conf = _refused_tree(tmp_path, kind)
+        assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+                        "--trace"]) == 0
+        captured = capsys.readouterr()
+        assert f"Receiver: {_REFUSED}" in captured.out
+        assert "WARN: the generator refuses this config" in captured.err
