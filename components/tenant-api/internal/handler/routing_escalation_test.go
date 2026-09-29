@@ -267,3 +267,22 @@ func TestBatchTenants_EscalationAdvisory_PRModeLastOpPerTenant(t *testing.T) {
 		t.Errorf("advisory tenants = %v, want %v; warnings: %v", got, want, resp.Warnings)
 	}
 }
+
+// A later op of the same tenant that does not touch routing leaves the
+// routing an earlier op produced in the PR as is, so it must not clear that
+// op's advisory: the PR still ships esc-leak (#2440 review).
+func TestBatchTenants_EscalationAdvisory_PRModeNonRoutingOpKeepsAdvisory(t *testing.T) {
+	configDir := seedGitTree(t, escalationTree())
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
+		PRTracker: &mockPlatformTracker{}}
+	resp := runBatch(t, configDir, d, `[
+		{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}},
+		{"tenant_id":"t-leak","patch":{"cpu_usage_percent":"90"}}]`)
+	if resp.Status != "pending_review" {
+		t.Fatalf("status = %q, want pending_review: %+v", resp.Status, resp)
+	}
+	if !hasAdvisory(resp.Warnings) {
+		t.Errorf("warnings = %v, want the %q advisory kept", resp.Warnings, escalationAdvisory)
+	}
+}

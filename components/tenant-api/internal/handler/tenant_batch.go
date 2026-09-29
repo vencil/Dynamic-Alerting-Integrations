@@ -194,9 +194,11 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// routing check must see them stacked (batchRoutingViolations).
 	included := map[string][]map[string]string{}
 	// advisoriesByTenant: the non-blocking #2325 domain-policy notes of each
-	// tenant's LAST op taken into the PR. An earlier op of the same tenant is
-	// judged on an intermediate routing the later ops are stacked over, so its
-	// notes are replaced, not kept (#2440 review). advisoryTenants holds the
+	// tenant's LAST routing op taken into the PR. An earlier op of the same
+	// tenant is judged on an intermediate routing the later ops are stacked
+	// over, so its notes are replaced, not kept (#2440 review). An op that
+	// does not touch routing is not judged (batchRoutingViolations) and leaves
+	// the routing as is, so it replaces nothing. advisoryTenants holds the
 	// order the tenants were first taken in; advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
@@ -229,7 +231,9 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			if _, seen := advisoriesByTenant[op.TenantID]; !seen {
 				advisoryTenants = append(advisoryTenants, op.TenantID)
 			}
-			advisoriesByTenant[op.TenantID] = adv
+			if touchesRouting(op.Patch) {
+				advisoriesByTenant[op.TenantID] = adv
+			}
 		}
 		// #1097: carry a merge closure, not pre-built content, so the
 		// authoritative partial merge runs under the writer lock against
