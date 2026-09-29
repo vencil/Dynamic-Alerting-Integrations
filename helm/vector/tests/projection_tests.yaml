@@ -697,7 +697,7 @@ tests:
         log_fields:
           message: '{"tenant_id":"tenant-alpha","status":200,"kubernetes":{"container_name":"envoy","pod_namespace":"FORGED-ns","pod_name":"FORGED-pod","pod_node_name":"FORGED-node"}}'
           'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
-          kubernetes.container_name: mtail
+          kubernetes.container_name: audit-metrics
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
@@ -707,7 +707,7 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.app, "mtail", "app must be the real container name, not the payload's")
+              assert_eq!(.app, "audit-metrics", "app must be the real container name, not the payload's")
               assert_eq!(.k8s_namespace, "monitoring", "namespace must be the kubelet's")
               assert_eq!(.pod_name, "federation-gateway-7d9f-abcde", "pod_name must be the kubelet's")
               assert_eq!(.pod_node, "node-7", "pod_node must be the kubelet's")

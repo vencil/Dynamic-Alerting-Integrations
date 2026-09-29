@@ -150,6 +150,10 @@ _UNCOMPARABLE_DEFAULTS = {
         "subtree shown as repository:tag plus a digest note",
     ("federation-gateway", "`rateLimit.perToken.*` / `perTenant.*` / `perIp.*`"):
         "defers to values.yaml, states no value",
+    ("federation-gateway", "`auditLog.metrics.image.*`"):
+        "subtree shown as repository:tag plus a digest note",
+    ("federation-gateway", "`auditLog.metrics.resources`"):
+        "requests/limits mapping summarised as prose",
 }
 
 

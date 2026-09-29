@@ -1,7 +1,12 @@
 package policy
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -566,4 +571,236 @@ func TestCheckTenantRouting_ResolvedRoutingEveryReceiver(t *testing.T) {
 	if got := m.CheckTenantRouting("t-nobody", map[string]any{"_routing_profile": "team-esc"}, layers); got != nil {
 		t.Errorf("tenant in no policy: %+v", got)
 	}
+}
+
+// #2325: require_critical_escalation — non-compliance is a violation, a leak
+// an advisory; a non-boolean value neither fails the load nor turns it on.
+func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
+	t.Parallel()
+	cfg, err := parseConfig([]byte("domain_policies:\n" +
+		"  esc:\n    tenants: [t-esc]\n    constraints:\n      require_critical_escalation: true\n" +
+		"  quoted:\n    tenants: [t-esc]\n    constraints:\n      require_critical_escalation: \"true\"\n"))
+	if err != nil {
+		t.Fatalf("a non-boolean value must not fail the whole file: %v", err)
+	}
+	m := NewForTest(cfg)
+	for _, p := range m.RoutingPolicies() {
+		if p.RequireCriticalEscalation != (p.Domain == "esc") {
+			t.Errorf("%s: RequireCriticalEscalation = %v", p.Domain, p.RequireCriticalEscalation)
+		}
+	}
+	slack := map[string]any{"type": "slack", "api_url": "https://hooks.slack.com/x"}
+	pd := map[string]any{"type": "pagerduty", "service_key": "k"}
+
+	v, adv := m.JudgeTenantRouting("t-esc", map[string]any{"_routing": map[string]any{"receiver": slack}}, routingpolicy.Layers{})
+	if len(v) != 1 || v[0].Constraint != "require_critical_escalation" || v[0].Target != "receiver" || adv != nil {
+		t.Errorf("no escalation: violations %+v, advisories %v", v, adv)
+	}
+	v, adv = m.JudgeTenantRouting("t-esc", map[string]any{"_routing": map[string]any{
+		"receiver": slack,
+		"routes": []any{
+			map[string]any{"match": map[string]any{"team": "app"}, "receiver": slack},
+			map[string]any{"match": map[string]any{"severity": "critical"}, "receiver": pd},
+		}}}, routingpolicy.Layers{})
+	if len(v) != 0 || len(adv) != 1 || !strings.HasPrefix(adv[0], "tenant=t-esc: domain policy 'esc': routes[0] (team=app)") ||
+		!strings.Contains(adv[0], "severity=critical, team=app") {
+		t.Errorf("leak: violations %+v, advisories %v", v, adv)
+	}
+}
+
+// #2325: a require_critical_escalation value. tenant-api treats one PyYAML
+// refuses (`!!bool y`, `!!int abc`; the route generator drops the whole file)
+// as this constraint off: the rest of the file loads (and a WARN). One PyYAML
+// reads but is not a boolean (`!!int 5`) loads with only that constraint off
+// (and a WARN), as the generator does.
+const escalationPolicyTmpl = "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
+	"      require_critical_escalation: %s\n      forbidden_receiver_types: [slack]\n"
+
+type reloadOutcomes struct {
+	mu  sync.Mutex
+	oks []bool
+}
+
+func (r *reloadOutcomes) RecordReload(_ string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.oks = append(r.oks, ok)
+}
+
+func (r *reloadOutcomes) last() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.oks) > 0 && r.oks[len(r.oks)-1]
+}
+
+func TestLoad_RefusedEscalationValueTurnsOnlyItOff(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1",
+		// Collections PyYAML refuses for their own tag or direct children.
+		"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
+		"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
+		"!!binary [1]", "{? [1] : 2}"} {
+		want := func(what string, m *Manager) {
+			t.Helper()
+			pols := m.RoutingPolicies()
+			if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+				t.Errorf("%s %s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
+			}
+		}
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		want("initial load", NewManager(dir))
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		m := NewManager(dir)
+		obs := &reloadOutcomes{}
+		m.SetReloadObserver(obs)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		if err := m.Reload(); err != nil {
+			t.Errorf("%s: Reload() = %v, want the file loaded with this constraint off", v, err)
+		}
+		if !obs.last() {
+			t.Errorf("%s: reload recorded as failed, want a success", v)
+		}
+		want("hot reload", m)
+	}
+}
+
+// A mapping or sequence value is not a boolean (#2325), however it is built:
+// an alias cycle or fan-out must neither crash the process (a CrashLoop, on
+// the first load and on a hot reload alike) nor stall it, and as for any
+// other non-boolean the constraint is off while the rest still applies.
+// Accepted gap: nothing below the direct children is looked at, so a value
+// PyYAML refuses only there (`[!!bool y]`) reads as a non-boolean while the
+// generator and da-guard refuse it; tenant-api treats every refused value as
+// this constraint off, so the outcome is the same.
+func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
+	t.Parallel()
+	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
+	for i := 1; i <= 8; i++ {
+		fan += fmt.Sprintf(", &l%d [%s]", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 10), ","))
+	}
+	want := func(what, v string, m *Manager, took time.Duration) {
+		t.Helper()
+		if took > time.Second {
+			t.Errorf("%s %.40s: took %v", what, v, took)
+		}
+		pols := m.RoutingPolicies()
+		if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("%s %.40s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
+		}
+	}
+	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}",
+		"[true]", "!!set {a: null}", "!!omap [{a: 1}]", "!!pairs [{a: 1}]", "{<<: {b: 1}}",
+		// the accepted gap: PyYAML refuses these below the direct children
+		"[!!bool y]", "{a: !!int x}", "!!set {!!bool y: null}", "!!omap [{a: !!bool y}]",
+		"{<<: [{b: !!bool y}]}", "[[!!bool y]]", "{b: 2001-13-40}", "[2001-13-40]"} {
+		start := time.Now()
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		want("initial load", v, NewManager(dir), time.Since(start))
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		m := NewManager(dir)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		start = time.Now()
+		if err := m.Reload(); err != nil {
+			t.Errorf("hot reload %.40s: Reload() = %v, want a non-boolean to load", v, err)
+		}
+		want("hot reload", v, m, time.Since(start))
+	}
+}
+
+// A `!!null`-tagged value (#2325) — and `!!bool y`, refused without the tag —
+// on the first load and on a hot reload from a good policy with escalation
+// on. PyYAML reads a tagged scalar as None and refuses a tagged collection
+// (the generator drops the file); tenant-api reads both as this constraint
+// off: the file loads, slack is still forbidden in the same domain, and
+// another domain's escalation is still on.
+const twoDomainEscalationTmpl = escalationPolicyTmpl +
+	"  ops:\n    tenants: [t2]\n    constraints:\n      require_critical_escalation: true\n"
+
+func TestLoad_TaggedNullEscalationValue(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"!!null x", "!<tag:yaml.org,2002:null> x", `!!null ""`,
+		"!!null {}", "!!null [1]", "!!bool y"} {
+		want := func(what string, m *Manager) {
+			t.Helper()
+			pols := m.RoutingPolicies()
+			if len(pols) != 2 || pols[0].Domain != "fin" || pols[0].RequireCriticalEscalation ||
+				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) ||
+				pols[1].Domain != "ops" || !pols[1].RequireCriticalEscalation {
+				t.Errorf("%s %s: policies %+v, want fin escalation off and slack forbidden, ops escalation on",
+					what, v, pols)
+			}
+		}
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, v))
+		want("initial load", NewManager(dir))
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, "true"))
+		m := NewManager(dir)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(twoDomainEscalationTmpl, v))
+		if err := m.Reload(); err != nil {
+			t.Errorf("hot reload %s: Reload() = %v, want the file loaded", v, err)
+		}
+		want("hot reload", m)
+	}
+}
+
+// Not parallel: it swaps the process-wide slog default to read the WARN.
+func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
+	var buf lockedBuffer
+	orig := slog.Default()
+	defer slog.SetDefault(orig)
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+	m := NewManager(dir)
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "!!int 5"))
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload(): %v, want a value PyYAML reads (int 5) to load", err)
+	}
+	pols := m.RoutingPolicies()
+	if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+		!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+		t.Errorf("policies %+v, want escalation off and slack still forbidden", pols)
+	}
+	if out := buf.String(); !strings.Contains(out, "require_critical_escalation is not a boolean") ||
+		!strings.Contains(out, "domain=fin") || !strings.Contains(out, "value=5") {
+		t.Errorf("log %q, want the non-boolean WARN for domain fin", out)
+	}
+}
+
+// Not parallel: it swaps the process-wide slog default to read the WARN.
+func TestLoad_RefusedEscalationValueWarns(t *testing.T) {
+	var buf lockedBuffer
+	orig := slog.Default()
+	defer slog.SetDefault(orig)
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "!!null {}"))
+	if pols := NewManager(dir).RoutingPolicies(); len(pols) != 1 || pols[0].RequireCriticalEscalation {
+		t.Errorf("policies %+v, want fin loaded with escalation off", pols)
+	}
+	if out := buf.String(); strings.Count(out, "PyYAML refuses") != 1 || !strings.Contains(out, "domain=fin") ||
+		!strings.Contains(out, "reason=") {
+		t.Errorf("log %q, want one refusal WARN for domain fin with its reason", out)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

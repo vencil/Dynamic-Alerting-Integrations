@@ -1,0 +1,17 @@
+{{- if .Values.auditLog.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "federation-gateway.name" . }}-audit-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+data:
+  # Vector program — derives tenant_federation_requests_total{tenant,status}
+  # and the ADR-021 log-query metrics from the Envoy audit access log
+  # (ADR-020 IV-2f). Plain Files.Get, not tpl: the program uses Vector's own
+  # double-brace field templates, which Helm must not touch. Deployment values reach
+  # it through the sidecar's env (see deployment.yaml).
+  audit-metrics.yaml: |
+    {{- .Files.Get "files/audit-metrics.vector.yaml" | nindent 4 }}
+{{- end }}

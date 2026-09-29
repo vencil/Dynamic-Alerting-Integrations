@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1045,3 +1046,181 @@ class TestRoutingTreeRefusedTrace:
                         "--json"]) == 0
         err = capsys.readouterr().err
         assert "generate-routes refuses this tree" in err
+
+
+# ---------------------------------------------------------------------------
+# #2435: subtree domain policies (#2326 (d)) through the trace, and the
+# policy step's icon following its verdict
+# ---------------------------------------------------------------------------
+_T_ROOT_POLICED = "t-other"   # named by the root policy
+_T_ROOT_FREE = "t-a"          # named by no policy that reaches it
+_T_TEAM = "t-team"            # lives in team/, named by team/'s policy
+_EMAIL_FORBIDDEN = {"forbidden_receiver_types": ["email"]}
+
+
+def _policy_tree(tmp_path, team_tenants=(_T_TEAM,)):
+    """Root routes by email; the root policy `fin` names the root tenant
+    _T_ROOT_POLICED, `team/_domain_policy.yaml`'s `teamp` names
+    *team_tenants*. Tenants: _T_ROOT_POLICED, _T_ROOT_FREE (root), _T_TEAM
+    (team/)."""
+    d = tmp_path / "conf.d"
+    (d / "team").mkdir(parents=True)
+
+    def _w(rel, body):
+        (d / rel).write_text(yaml.safe_dump(body), encoding="utf-8")
+
+    _w("_defaults.yaml", {
+        "defaults": {"cpu_usage_percent": 80},
+        "_routing_defaults": {"receiver": {
+            "type": "email", "to": ["oncall@example.com"],
+            "from": "alerting@example.com",
+            "smarthost": "smtp.example.com:587"}}})
+    _w("_domain_policy.yaml", {"domain_policies": {"fin": {
+        "tenants": [_T_ROOT_POLICED], "constraints": _EMAIL_FORBIDDEN}}})
+    _w("team/_domain_policy.yaml", {"domain_policies": {"teamp": {
+        "tenants": list(team_tenants), "constraints": _EMAIL_FORBIDDEN}}})
+    for rel, tenant in ((f"{_T_ROOT_POLICED}.yaml", _T_ROOT_POLICED),
+                        (f"{_T_ROOT_FREE}.yaml", _T_ROOT_FREE),
+                        (f"team/{_T_TEAM}.yaml", _T_TEAM)):
+        _w(rel, {"tenants": {tenant: {"cpu_usage_percent": "85"}}})
+    return d
+
+
+def _parsed(conf):
+    from generate_alertmanager_routes import _parse_config_files
+    return _parse_config_files(str(conf))
+
+
+class TestSubtreePolicyScopeNoAmtool:
+    """The policy set step 5 applies, judged without Alertmanager."""
+
+    def test_subtree_policy_applies_to_its_tenant(self, tmp_path):
+        applicable, inert = er._policies_for_tenant(
+            _parsed(_policy_tree(tmp_path)), _T_TEAM)
+        assert applicable == [("teamp", {"email"}, set())]
+        assert inert == []
+
+    def test_root_policy_still_applies(self, tmp_path):
+        applicable, _ = er._policies_for_tenant(
+            _parsed(_policy_tree(tmp_path)), _T_ROOT_POLICED)
+        assert [name for name, _f, _a in applicable] == ["fin"]
+
+    def test_unlisted_root_tenant_meets_no_policy(self, tmp_path):
+        assert er._policies_for_tenant(
+            _parsed(_policy_tree(tmp_path)), _T_ROOT_FREE) == ([], [])
+
+    def test_subtree_tenant_violation_is_reported(self, tmp_path):
+        step = er._policy_step(_parsed(_policy_tree(tmp_path)), _T_TEAM,
+                               ["email"])
+        assert step["passed"] is False
+        assert step["violations"] == [
+            "Domain 'teamp' forbids receiver type 'email'"]
+
+    def test_out_of_scope_entry_is_not_enforced_and_said_so(self, tmp_path):
+        """check_policy_scope: `team/`'s policy naming a ROOT tenant does not
+        reach it — the generator does not enforce the entry, nor does the
+        trace; the generator's finding travels as a note."""
+        conf = _policy_tree(tmp_path, team_tenants=(_T_TEAM, _T_ROOT_FREE))
+        step = er._policy_step(_parsed(conf), _T_ROOT_FREE, ["email"])
+        assert step["passed"] is True
+        assert "violations" not in step
+        [note] = step["notes"]
+        assert (f"domain_policy 'teamp' in team/_domain_policy.yaml names "
+                f"tenant '{_T_ROOT_FREE}', which lives outside this "
+                f"policy's subtree team/") in note
+        assert "NOT enforced" in note
+
+
+class TestPolicyStepIcon:
+    """The step-5 heading's icon is the verdict (``passed``); the other
+    steps keep their kind icon."""
+
+    @staticmethod
+    def _headings(passed):
+        trace = {"tenant": "t", "alertname": "A", "severity": "warning",
+                 "labels": {}, "final_receiver": "x",
+                 "timing": {k: None for k in er._TIMING_KEYS},
+                 "steps": [
+                     {"step": 3, "action": "enforced_routing", "detail": "d"},
+                     {"step": 5, "action": "policy_check", "detail": "d",
+                      "passed": passed}]}
+        lines = er.format_trace(trace).splitlines()
+        return ([ln for ln in lines if "Step 5:" in ln][0].split()[0],
+                [ln for ln in lines if "Step 3:" in ln][0].split()[0])
+
+    @pytest.mark.parametrize("passed, icon", [(True, "✅"), (False, "⚠"),
+                                              (None, "❔")])
+    def test_icon_follows_verdict(self, passed, icon):
+        step5, step3 = self._headings(passed)
+        assert step5 == icon
+        assert step3 == "🛡️"
+
+
+def _generator_policy_findings(conf):
+    """`generate-routes --validate --strict` on *conf*: its rc, its
+    (policy, tenant) receiver-type violations, its out-of-scope entries."""
+    r = subprocess.run(
+        [sys.executable, _GEN, "--config-dir", str(conf), "--validate",
+         "--strict"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+        env=dict(os.environ, DA_LANG="en", PYTHONUTF8="1"))
+    text = r.stdout + r.stderr
+    violations = set(re.findall(
+        r"ERROR: domain_policy '([\w-]+)', tenant '([\w-]+)': receiver type",
+        text))
+    out_of_scope = set(re.findall(
+        r"ERROR: domain_policy '([\w-]+)' in \S+ names tenant '([\w-]+)', "
+        r"which lives outside", text))
+    return r.returncode, violations, out_of_scope
+
+
+@needs_amtool
+class TestSubtreePolicyTrace:
+    """Whole `--trace` runs on the #2435 tree; the verdicts match
+    `generate-routes --validate --strict`."""
+
+    @staticmethod
+    def _step5(capsys, conf, tenant):
+        rc = er.main(["--config-dir", str(conf), "--tenant", tenant,
+                      "--trace"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        lines = out.splitlines()
+        i = next(i for i, ln in enumerate(lines) if "Step 5:" in ln)
+        return lines[i], "\n".join(lines[i:])
+
+    def test_text_trace_per_tenant(self, capsys, tmp_path):
+        conf = _policy_tree(tmp_path)
+        head, body = self._step5(capsys, conf, _T_TEAM)
+        assert head.split()[0] == "⚠"
+        assert "⚠ Domain 'teamp' forbids receiver type 'email'" in body
+        head, body = self._step5(capsys, conf, _T_ROOT_POLICED)
+        assert head.split()[0] == "⚠"
+        assert "⚠ Domain 'fin' forbids receiver type 'email'" in body
+        head, body = self._step5(capsys, conf, _T_ROOT_FREE)
+        assert head.split()[0] == "✅"
+        assert "forbids" not in body
+
+    @pytest.mark.parametrize("team_tenants", [(_T_TEAM,),
+                                              (_T_TEAM, _T_ROOT_FREE)],
+                             ids=["in-scope", "out-of-scope-entry"])
+    def test_agrees_with_generate_routes_strict(self, capsys, tmp_path,
+                                                team_tenants):
+        conf = _policy_tree(tmp_path, team_tenants=team_tenants)
+        rc, gen_violations, gen_oos = _generator_policy_findings(conf)
+        assert rc == 1
+        trace_violations = set()
+        for tenant in (_T_TEAM, _T_ROOT_POLICED, _T_ROOT_FREE):
+            assert er.main(["--config-dir", str(conf), "--tenant", tenant,
+                            "--trace", "--json"]) == 0
+            [trace] = json.loads(capsys.readouterr().out)
+            step5 = trace["steps"][4]
+            for v in step5.get("violations", []):
+                trace_violations.add((v.split("'")[1], tenant))
+            oos = {(n.split("'")[1], tenant) for n in step5.get("notes", [])
+                   if "outside this policy's subtree" in n}
+            assert oos == {row for row in gen_oos if row[1] == tenant}
+        assert trace_violations == gen_violations == {
+            ("fin", _T_ROOT_POLICED), ("teamp", _T_TEAM)}
+        assert gen_oos == ({("teamp", _T_ROOT_FREE)}
+                           if _T_ROOT_FREE in team_tenants else set())

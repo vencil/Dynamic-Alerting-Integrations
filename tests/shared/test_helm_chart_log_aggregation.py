@@ -393,8 +393,8 @@ class TestVector:
     @_needs_helm
     def test_extra_env_renders_into_daemonset(self, repo_root: Path) -> None:
         """Phase 3 self-review: SIEM creds need to flow via extraEnv. If the
-        knob doesn't render, the documented example silently breaks (token
-        stays the literal string `${SPLUNK_TOKEN}`)."""
+        knob doesn't render, the documented example breaks: with interpolation
+        on (next test) an unset `${SPLUNK_TOKEN}` fails the config load."""
         docs = _render(repo_root / "helm/vector", sets={
             "extraEnv[0].name": "SPLUNK_TOKEN",
             "extraEnv[0].value": "smoke-test-token",
@@ -403,6 +403,57 @@ class TestVector:
         env = ds["spec"]["template"]["spec"]["containers"][0]["env"]
         names = {e["name"] for e in env}
         assert "SPLUNK_TOKEN" in names
+
+    @_needs_helm
+    def test_env_var_interpolation_enabled_on_vector_container(self, repo_root: Path) -> None:
+        """The documented credential pattern (`default_token: ${SPLUNK_TOKEN}`
+        in additionalSinks, fed by extraEnv / extraEnvFrom) only works when
+        Vector's env-var interpolation is ON. Vector 0.57.0 leaves `${VAR}`
+        LITERAL without it — no error, the sink ships the string
+        `${SPLUNK_TOKEN}` as its token. Removing this env var silently breaks
+        every SIEM credential while `vector validate` stays rc 0."""
+        docs = _render(repo_root / "helm/vector")
+        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
+        containers = {c["name"]: c for c in ds["spec"]["template"]["spec"]["containers"]}
+        env = {e["name"]: e.get("value") for e in containers["vector"]["env"]}
+        assert env.get("VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION") == "true", (
+            "vector container must set VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true — "
+            "without it `${VAR}` in additionalSinks is shipped literally"
+        )
+
+    @_needs_helm
+    @pytest.mark.parametrize("sets", [
+        {},
+        {
+            "tenantProjections[0].tenantId": "tenant-alpha",
+            "tenantProjections[0].accountId": "1000",
+            "projectionGate.registry.configMapName": "test-registry",
+        },
+    ], ids=["default", "tenant-projections"])
+    def test_chart_rendered_vector_config_contains_no_dollar(
+            self, repo_root: Path, sets: dict[str, str]) -> None:
+        """Interpolation is on (previous test), and it is TEXTUAL and runs over
+        the raw file before YAML/VRL parsing: bare `$NAME` is substituted too,
+        inside VRL string literals and YAML COMMENTS alike, and an unset
+        `${NAME}` fails the load on every node. So the chart's own config must
+        contain no `$` at all — the only interpolation sites are the ones an
+        operator writes into additionalSinks. A `$` added to a comment or VRL
+        in configmap.yaml turns this red instead of CrashLooping the DaemonSet."""
+        docs = _render(repo_root / "helm/vector", sets=sets)
+        cms = [d for d in docs if d.get("kind") == "ConfigMap"
+               and "vector-config" in d["metadata"]["name"]]
+        assert cms, "vector-config ConfigMap not rendered"
+        offenders = [
+            f"{key}:{n}: {line.strip()}"
+            for cm in cms
+            for key, body in cm["data"].items()
+            for n, line in enumerate(body.splitlines(), 1)
+            if "$" in line
+        ]
+        assert not offenders, (
+            "chart-rendered Vector config contains `$` (Vector would interpolate it):\n"
+            + "\n".join(offenders)
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -729,6 +780,26 @@ class TestEgressLintInternals:
         ])
         vios = egress_mod.lint_chart(Path("helm/vector"), [m], [])
         assert len(vios) == 1
+
+    def test_chart_pinned_reserved_env_exact_value_allowed(self, egress_mod) -> None:
+        """helm/vector's own interpolation flag, at the exact value it ships."""
+        m = _workload("DaemonSet", [
+            {"name": "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION", "value": "true"},
+        ])
+        assert egress_mod.lint_chart(Path("helm/vector"), [m], []) == []
+
+    @pytest.mark.parametrize("env", [
+        {"name": "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION", "value": "false"},
+        {"name": "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION",
+         "valueFrom": {"configMapKeyRef": {"name": "c", "key": "k"}}},
+    ], ids=["other-literal", "valueFrom"])
+    def test_chart_pinned_reserved_env_other_form_still_violation(self, egress_mod, env) -> None:
+        """The exemption is name AND value: an extraEnv duplicate with another
+        value (Kubernetes resolves duplicates last-wins) or any valueFrom source
+        is still an operator override of a reserved var."""
+        m = _workload("DaemonSet", [env])
+        vios = egress_mod.lint_chart(Path("helm/vector"), [m], [])
+        assert len(vios) == 1 and "reserved" in vios[0].message.lower()
 
     def test_sensitive_env_literal_violation(self, egress_mod) -> None:
         m = _workload("CronJob", [{"name": "SPLUNK_TOKEN", "value": "hardcoded"}])

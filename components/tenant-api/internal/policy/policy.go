@@ -16,6 +16,7 @@
 //	      enforce_group_by: [tenant, alertname, severity]
 //	      max_repeat_interval: 1h
 //	      min_group_wait: 30s
+//	      require_critical_escalation: true
 //
 // Concurrency: reads are lock-free (atomic.Value). Hot-reloaded via SHA-256
 // (the underlying configwatcher.Watcher dedups disk reads on each tick).
@@ -30,7 +31,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
-	"gopkg.in/yaml.v3"
 )
 
 // Constraints defines the constraints for a domain policy.
@@ -40,6 +40,21 @@ type Constraints struct {
 	EnforceGroupBy         []string `yaml:"enforce_group_by"`
 	MaxRepeatInterval      string   `yaml:"max_repeat_interval"`
 	MinGroupWait           string   `yaml:"min_group_wait"`
+	// RequireCriticalEscalation is read as the generator's PyYAML reads it
+	// (routingpolicy.DecodePyYAML, #2325): a plain `yes` / `on` or a
+	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
+	// the constraint on (the generator's `is True`); any other value PyYAML
+	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
+	// left off, and the rest of the file still applies. A `!!null`-tagged
+	// scalar (`!!null x`) is None, as for PyYAML: the constraint is off, the
+	// rest applies (parseConfig decodes via routingpolicy.UnmarshalPolicy).
+	// A value PyYAML refuses — `!!bool y`, `!!int abc`, `!!bool [true]`,
+	// `{<<: 1}`, `!!null {}`, or one refused only deeper (`[!!bool y]`) — makes
+	// the generator drop the whole file and da-guard refuse it; tenant-api
+	// treats every refused value as this constraint off (logged once per
+	// load), and the rest of the file applies, on a first load and a hot
+	// reload alike.
+	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 
 // DomainPolicy defines a single domain's compliance constraints.
@@ -96,11 +111,26 @@ func emptyConfig() *DomainPolicyConfig {
 
 func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	var cfg DomainPolicyConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// UnmarshalPolicy, not yaml.Unmarshal: a `!!null`-tagged
+	// require_critical_escalation is read as PyYAML reads it (#2325).
+	if err := routingpolicy.UnmarshalPolicy(data, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.DomainPolicies == nil {
 		cfg.DomainPolicies = make(map[string]DomainPolicy)
+	}
+	for _, name := range sortedDomains(&cfg) {
+		esc := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation
+		if esc.Refused != nil {
+			slog.Warn("policy: PyYAML refuses require_critical_escalation (the route generator drops this file); "+
+				"the constraint is not enforced", "domain", name, "reason", esc.Refused.Error())
+			continue
+		}
+		v := esc.Value
+		if _, isBool := v.(bool); v != nil && !isBool {
+			slog.Warn("policy: require_critical_escalation is not a boolean; the constraint is not enforced",
+				"domain", name, "value", fmt.Sprint(v))
+		}
 	}
 	return &cfg, nil
 }
@@ -147,6 +177,8 @@ func (m *Manager) RoutingPolicies() []routingpolicy.Policy {
 			ForbiddenReceiverTypes: dp.Constraints.ForbiddenReceiverTypes,
 			AllowedReceiverTypes:   dp.Constraints.AllowedReceiverTypes,
 			AllowedListNonEmpty:    len(dp.Constraints.AllowedReceiverTypes) > 0,
+			// #2325: only a boolean true (parseConfig logs anything else).
+			RequireCriticalEscalation: dp.Constraints.RequireCriticalEscalation.Value == true,
 		})
 	}
 	return out
@@ -161,14 +193,29 @@ func (m *Manager) RoutingPolicies() []routingpolicy.Policy {
 // forbidden_receiver_types and allowed_receiver_types are independent tests,
 // so one receiver can yield two violations (the generator's --strict
 // semantics). A tenant with no resolved routing yields none.
+//
+// #2325: a policy with `require_critical_escalation: true` also refuses a
+// routing whose severity=critical alerts reach no pagerduty receiver
+// (routingpolicy.CheckCriticalEscalation; constraint
+// require_critical_escalation, Target `receiver`). The non-blocking half —
+// a non-pagerduty destination that still catches some critical alerts first
+// — is JudgeTenantRouting's advisories.
 func (m *Manager) CheckTenantRouting(tenantID string, block map[string]any, layers routingpolicy.Layers) []Violation {
+	violations, _ := m.JudgeTenantRouting(tenantID, block, layers)
+	return violations
+}
+
+// JudgeTenantRouting is CheckTenantRouting plus its advisories: one message
+// per `require_critical_escalation` leak (#2325), never blocking. Each names
+// the tenant (`tenant=<id>`), so it reads alone in a batch-level list.
+func (m *Manager) JudgeTenantRouting(tenantID string, block map[string]any, layers routingpolicy.Layers) ([]Violation, []string) {
 	pols := m.RoutingPolicies()
 	if len(pols) == 0 {
-		return nil
+		return nil, nil
 	}
 	resolved, ok, prov, _ := routingpolicy.Resolve(tenantID, block, layers)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	var out []Violation
 	for _, v := range routingpolicy.CheckReceiverTypes(tenantID, resolved, pols) {
@@ -183,7 +230,34 @@ func (m *Manager) CheckTenantRouting(tenantID string, block map[string]any, laye
 		where := fmt.Sprintf("%s (from %s)", v.Target, routingpolicy.Describe(source))
 		out = append(out, violation(v.Domain, v.Constraint, v.ReceiverType, v.Target, where))
 	}
-	return out
+	escalation := strings.Join(routingpolicy.EscalationTypes, ", ")
+	var advisories []string
+	for _, f := range routingpolicy.CheckCriticalEscalation(tenantID, resolved, pols) {
+		if !f.Verdict.Compliant() {
+			out = append(out, Violation{
+				Domain:     f.Domain,
+				Constraint: routingpolicy.ConstraintRequireCriticalEscalation,
+				Target:     routingpolicy.MainReceiverRef,
+				Message: fmt.Sprintf("severity=critical alerts reach no receiver of type %s (main receiver type '%s', "+
+					"and no routes entry matches severity=critical with such a receiver), but domain policy '%s' "+
+					"requires critical escalation", escalation, routingpolicy.ReceiverType(resolved["receiver"]), f.Domain),
+			})
+			continue
+		}
+		for _, l := range f.Verdict.Leaks {
+			if l.Ref == routingpolicy.MainReceiverRef {
+				advisories = append(advisories, fmt.Sprintf(
+					"tenant=%s: domain policy '%s': severity=critical alerts that no sub-route catches go to the main "+
+						"receiver (type '%s'), not a receiver of type %s", tenantID, f.Domain, l.ReceiverType, escalation))
+				continue
+			}
+			advisories = append(advisories, fmt.Sprintf(
+				"tenant=%s: domain policy '%s': %s (%s) receiver type '%s' catches alerts with %s before any receiver "+
+					"of type %s does, so they never reach one", tenantID, f.Domain, l.Ref,
+				routingpolicy.FormatLabels(l.Match), l.ReceiverType, routingpolicy.FormatLabels(l.Caught), escalation))
+		}
+	}
+	return out, advisories
 }
 
 func sortedDomains(cfg *DomainPolicyConfig) []string {
