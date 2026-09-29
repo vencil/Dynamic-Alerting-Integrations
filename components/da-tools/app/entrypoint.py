@@ -207,7 +207,12 @@ def detect_cli_lang():
     return 'en'
 
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+# realpath, not abspath: the image puts a /usr/local/bin/da-tools SYMLINK to
+# this file on PATH, and every GitLab job `da-tools init --ci gitlab` emits
+# clears the image ENTRYPOINT and calls `da-tools <cmd>` through it. abspath
+# keeps the link's directory, where no tool lives, so every such job exited 2
+# (issue 1444; measured on a real runner).
+TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 _LANG = detect_cli_lang()
 
 # Exit code for "the dispatcher itself could not do its job": unknown
