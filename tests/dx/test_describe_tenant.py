@@ -1727,3 +1727,38 @@ class TestYamlMappingKeyParity:
         assert "Traceback" not in res.stderr
         assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
         assert set(json.loads(res.stdout)) == {"t2"}
+
+    # A `_profile:` value is read as source text (#2297) without passing
+    # construct_scalar, so `_GoKeyLoader.construct_mapping` refuses the
+    # surrogate for it separately; these two keep that refusal honest.
+    def test_a_surrogate_profile_in_a_tenant_file_drops_that_file(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+        (conf_d / "t1.yaml").write_text('tenants:\n  t1:\n    _profile: "\\udfff"\n', encoding="utf-8")
+        res = subprocess.run([sys.executable, self.DESCRIBE, "t1", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
+        assert "Traceback" not in res.stderr
+        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
+        assert "Tenant 't1' not found" in res.stderr
+
+    def test_a_surrogate_profile_in_a_root_platform_file_contributes_nothing(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+        (conf_d / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 60\n", encoding="utf-8")
+
+        def merged_hash():
+            res = subprocess.run([sys.executable, self.DESCRIBE, "tx", "--conf-d", str(conf_d), "--show-sources"],
+                                 capture_output=True, text=True, encoding="utf-8", timeout=20)
+            assert res.returncode == 0, res.stderr
+            assert "Traceback" not in res.stderr
+            return json.loads(res.stdout)["merged_hash"], res.stderr
+
+        without, _ = merged_hash()
+        # A root platform file that does not parse contributes nothing, and
+        # silently — as Go drops it (`_read_platform_files`).
+        (conf_d / "_x.yaml").write_text('tenants:\n  tx:\n    _profile: "\\udfff"\n', encoding="utf-8")
+        with_file, _ = merged_hash()
+        assert with_file == without

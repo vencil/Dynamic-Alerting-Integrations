@@ -687,8 +687,9 @@ _PROFILE_AS_TEXT = ("_profile",)
 
 class _GoKeyProfileTextLoader(_GoKeyLoader):
     """`_GoKeyLoader` with a `_profile:` VALUE read as its source text
-    (#2297), for the tenant files and the `--what-if` file — the reads
-    #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
+    (#2297), for the tenant files, the root platform files (their
+    `tenants:` and `profiles:` blocks, read by `_load_first_document`) and
+    the `--what-if` file — the reads #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
     before any constructor runs, so neither the timestamp nor the `!!binary`
     rendering (#2371) reaches it: `_profile: 2026-12-31` names profile
     "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`."""
