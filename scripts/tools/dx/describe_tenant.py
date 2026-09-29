@@ -139,6 +139,22 @@ def _load_yaml(path: Path) -> dict:
     raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
 
 
+class DefaultsParseError(Exception):
+    """A selected `_defaults.yaml` carrier that does not parse (#2413).
+
+    Unlike a tenant file (`_load_tenant_file`, skipped with a warning), a
+    defaults level cannot be dropped: every tenant below it would be
+    described without it — a wrong answer with rc 0. So the scan stops, and
+    the CLI names the file and the YAML error on stderr with
+    EXIT_CALLER_ERROR instead of a traceback. `path` is the entry as listed.
+    """
+
+    def __init__(self, path: Path, cause: BaseException):
+        self.path = path
+        self.cause = cause
+        super().__init__(f"{path} does not parse: {cause}")
+
+
 def _file_hash(path: Path) -> str:
     """SHA-256 of file bytes."""
     h = hashlib.sha256()
@@ -1072,7 +1088,10 @@ class ConfDScanner:
                 continue
             warn_multi_carrier(d, readable)
             resolved = dict(listed[d])[chosen]
-            defaults_files[str(resolved)] = _load_yaml(chosen)
+            try:
+                defaults_files[str(resolved)] = _load_yaml(chosen)
+            except (yaml.YAMLError, UnicodeDecodeError) as exc:
+                raise DefaultsParseError(chosen, exc) from exc
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
@@ -1579,7 +1598,11 @@ def main() -> None:
         print(f"   Use --conf-d to specify the path.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    scanner = ConfDScanner(conf_d)
+    try:
+        scanner = ConfDScanner(conf_d)
+    except DefaultsParseError as exc:  # #2413
+        print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     print(f"📂 Scanned {conf_d}: {len(scanner.tenants)} tenants, {len(scanner.defaults_data)} defaults files", file=sys.stderr)
 
     def _output(data: Any) -> str:
@@ -1680,8 +1703,8 @@ def main() -> None:
             # platform files it may stand in for — `_load_yaml` keeps
             # PyYAML's typing for the defaults chain it has always fed.
             what_if_platform_doc = _load_platform_doc(what_if_path)
-        except Exception as e:  # pragma: no cover — defensive
-            print(f"❌ Failed to parse --what-if file: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — named, then refused (#2413)
+            print(f"❌ Failed to parse --what-if file {what_if_path}: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
         # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
