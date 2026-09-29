@@ -944,6 +944,8 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/internal/windows-mcp-playbook.md"
 ```
 
+⚠️ **只有 WSL 會真的執行 [2/3]、[3/3]**：recipe 以看得到 `/mnt/c/Windows/System32/cmd.exe` 判斷，看不到時只印出三行 `win_git_escape.bat` 指令讓你貼到 Windows cmd，不會 commit。Windows host 預設沒有 make，直接用 `win_git_escape.bat` 的 `add` / `commit-file` / `push`。原本給 Git Bash 的 `Windows_NT` 分支已移除（[#2248](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2248)）：MSYS 把 `cmd.exe /c` 的 `/c` 當路徑轉換，bat 沒跑卻印出 `✅ Done`。
+
 **執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 `[1/3]` / `[2/3]` / `[3/3]`）**：
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`

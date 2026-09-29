@@ -258,7 +258,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints; violations are WARN by default — add `--strict` to escalate them to ERROR with a non-zero exit code. CI's validate-config job runs `--validate --strict`, making domain-policy violations blocking. ⚠️ `--strict` landed **after** v2.9.0 and **the shipped image rejects it on both subcommands**: `generate-routes --validate --strict` and `validate-config --strict` both measured `rc=2`, `unrecognized arguments: --strict`, zero bytes on stdout. Until the image is refreshed this paragraph describes the source running in CI, not what you can run locally). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`. JSON Schema available in `docs/schemas/` for VS Code validation.
+Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints. Domain-policy violations are WARN by default — add `--strict` to escalate them to ERROR with a non-zero exit code. A reference to an unknown routing profile stays a non-blocking WARN with or without `--strict`. CI's validate-config job runs `--validate --strict`, making domain-policy violations blocking. ⚠️ `--strict` landed **after** v2.9.0 and **the shipped image rejects it on both subcommands**: `generate-routes --validate --strict` and `validate-config --strict` both measured `rc=2`, `unrecognized arguments: --strict`, zero bytes on stdout. Until the image is refreshed this paragraph describes the source running in CI, not what you can run locally). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`. JSON Schema available in `docs/schemas/` for VS Code validation.
 
 ### Setting Up Webhook Domain Allowlist
 
@@ -641,7 +641,7 @@ A: Create a new YAML file in `rule-packs/` directory and mount the corresponding
 A: Set `_routing_enforced` in `_defaults.yaml`. Notifications go to the NOC channel and each tenant's receiver independently.
 
 **Q: Why does the webhook allowlist reject my domain?**
-A: Check whether your webhook URL matches an fnmatch pattern under `allowed_domains:` in the policy YAML that `--policy` points at. For example, `*.example.com` won't match `webhook.internal.example.com` (multi-level subdomain).
+A: Check whether your webhook URL matches an fnmatch pattern under `allowed_domains:` in the policy YAML that `--policy` points at. `*` also matches dots, so `*.example.com` does match `webhook.internal.example.com`; the only thing it does not match is `example.com` itself, which needs its own entry.
 
 **Q: How do I validate that a new tenant's config won't cause alert noise?**
 A: First use `validate_config.py` to check syntax and schema, then `config_diff.py` to see blast radius, finally test in a shadow monitoring environment (see shadow-monitoring-sop.md).

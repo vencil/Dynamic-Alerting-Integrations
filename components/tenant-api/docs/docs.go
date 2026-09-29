@@ -2421,7 +2421,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "warnings": {
-                    "description": "Warnings carries non-blocking advisories for an op that SUCCEEDED\n(#1231 deprecated-key alias notices from the direct WriteMerged path).\nError results never carry warnings — Message owns the failure text.",
+                    "description": "Warnings carries non-blocking advisories for an op that SUCCEEDED\n(#1231 deprecated-key alias notices from the direct WriteMerged path,\nand the #2325 require_critical_escalation advisories).\nError results never carry warnings — Message owns the failure text.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -2895,7 +2895,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "warnings": {
-                    "description": "Warnings carries NON-BLOCKING advisories for a write that SUCCEEDED —\ncurrently the #1231 deprecated-key alias notices (e.g. a body still\nspelling mysql_threads_running as mysql_cpu). The write went through;\nthese tell the author what to migrate before the transition window\ncloses. Never populated on error responses.",
+                    "description": "Warnings carries NON-BLOCKING advisories for a write that SUCCEEDED —\ncurrently the #1231 deprecated-key alias notices (e.g. a body still\nspelling mysql_threads_running as mysql_cpu). The write went through;\nthese tell the author what to migrate before the transition window\ncloses. Also the #2325 domain-policy advisories: a non-pagerduty\ndestination that still catches severity=critical alerts under\n` + "`" + `require_critical_escalation` + "`" + `. Never populated on error responses.",
                     "type": "array",
                     "items": {
                         "type": "string"
