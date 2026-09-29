@@ -2935,13 +2935,13 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
 
-`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config.
+`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
 
 **Usage**
 
 ```bash
 da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
 ```
 
 **Parameters**
@@ -2951,13 +2951,18 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--config-dir` | Config directory path | (required) |
 | `--tenant` | Show only specified tenant(s) (repeatable) | (all) |
 | `--show-profile-expansion` | Show all routing profile expansions and references | `false` |
-| `--trace` | Trace mode: simulate one alert's routing path (requires `--tenant`) | `false` |
+| `--trace` | Trace mode: one alert's routing path as Alertmanager (`amtool`) decides it (requires `--tenant`; needs `amtool` on PATH) | `false` |
 | `--alertname` | Alert name to trace (with `--trace`) | `GenericAlert` |
 | `--severity` | Alert severity to trace (with `--trace`) | `warning` |
 | `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
+| `--base-config` | Base Alertmanager YAML for the trace: only the root receiver / `group_by` / timings are used, `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
 | `--json` | Output in JSON format | `false` |
 
 The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group` or a `routes` `match` key can only be supplied through `--label`, otherwise the trace always lands on the main receiver. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).
+
+Step 4 of `--trace` lists the effective inhibit rules (verbatim from the assembled config, including the `--base-config`'s own rules) and does not evaluate whether the alert would be inhibited — that depends on which alerts are firing at the same time.
+
+`--trace` needs `amtool`; the da-tools image bundles it since [#2294](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2294) (the v2.9.0 image does not). <!-- image-caveat: v2.9.0 -->
 
 **Examples**
 
@@ -2976,6 +2981,9 @@ da-tools explain-route --config-dir conf.d/ --json
 
 # Trace which receiver an alert carrying metric_group lands on (pass an overrides metric_group or a routes match key via --label)
 da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alertname HighConnectionCount --label metric_group=connections
+
+# Use your own base Alertmanager config as the root (routes without timings inherit the root's)
+da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --severity critical --base-config base-alertmanager.yaml
 ```
 
 ---

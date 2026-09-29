@@ -387,8 +387,8 @@ class TestExplainRouteConsistency:
 class TestEnforcedWithProfiles:
     """Verify _routing_enforced works correctly with profiles."""
 
-    def test_enforced_overrides_profile_receiver(self, config_dir):
-        """Layer 4 enforced receiver overrides profile receiver in final."""
+    def test_enforced_does_not_replace_profile_receiver(self, config_dir):
+        """Layer 4 enforced receiver stays in Layer 4; final keeps the profile's."""
         _write(config_dir, "_defaults.yaml", {
             "defaults": {"cpu": "80"},
             "_routing_defaults": {
@@ -419,9 +419,11 @@ class TestEnforcedWithProfiles:
         parsed = _parse_config_files(config_dir)
         explanation = explain_tenant_routing(parsed, "db-a")
 
-        # Layer 4 receiver overrides everything
-        assert explanation["final"]["receiver"]["type"] == "webhook"
-        assert explanation["final"]["receiver"]["url"] == \
+        # G2 (#2293): the enforced route is an ADDITIONAL route (continue:
+        # true), so the tenant keeps its profile receiver; Layer 4 carries
+        # the NOC receiver on its own.
+        assert explanation["final"]["receiver"]["type"] == "slack"
+        assert explanation["layers"][3]["config"]["receiver"]["url"] == \
             "https://noc.example.com/alerts"
         # But Layer 2 group_wait should still be from profile (not overridden by enforced)
         assert explanation["final"]["group_wait"] == "10s"

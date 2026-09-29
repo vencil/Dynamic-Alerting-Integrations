@@ -7,6 +7,7 @@ _lib_python``, ``import bump_docs``, etc. without per-file boilerplate.
 Factory helpers are defined in ``tests/factories.py``.
 """
 import os
+import shutil
 import sys
 import tempfile
 
@@ -221,13 +222,31 @@ def cli_argv(monkeypatch):
 
 
 @pytest.fixture
+def amtool_required():
+    """A test whose verdict comes from Alertmanager's own ``amtool`` (#2293).
+
+    No ``amtool`` on PATH → skip, EXCEPT under ``VIBE_REQUIRE_AMTOOL=1`` (the
+    CI Python Tests jobs, which install it): there a missing binary means the
+    install step regressed, so the test FAILS instead of turning into a quiet
+    skip — same fail-closed pattern as ``VIBE_REQUIRE_MTAIL``. Use it as
+    ``pytest.mark.usefixtures("amtool_required")``.
+    """
+    if shutil.which("amtool") is None:
+        if os.environ.get("VIBE_REQUIRE_AMTOOL") == "1":
+            pytest.fail("VIBE_REQUIRE_AMTOOL=1 but `amtool` is not on PATH — "
+                        "the CI 'Install amtool' step is missing or broke")
+        pytest.skip("amtool not on PATH")
+
+
+@pytest.fixture
 def amtool_accepts(monkeypatch, tmp_path):
     """Put a fake ``amtool`` that accepts every config first on ``PATH``.
 
     #2311: validate-config's ``routes`` row reports WARN ("Not validated by
-    Alertmanager") when no amtool is on PATH, which is the state of every CI
-    runner. A test whose point is "a healthy tree is all PASS" uses this so
-    the assertion keeps its meaning. It sets the process ``PATH``, so an
+    Alertmanager") when no amtool is on PATH, as on a dev machine without it
+    (the CI Python Tests jobs install a real one). A test whose point is "a
+    healthy tree is all PASS" uses this so the assertion never depends on
+    which amtool, if any, is installed. It sets the process ``PATH``, so an
     in-process ``shutil.which`` and a child process both see it; a test that
     builds its own child ``env`` must prepend the returned directory itself.
     Returns that directory.

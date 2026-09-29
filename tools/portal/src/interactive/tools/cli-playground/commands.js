@@ -252,6 +252,7 @@ Tenant: db-a
       { name: '--alertname', label: t('追蹤用告警名稱', 'Alert name for trace'), required: false, placeholder: 'HighMemoryUsage' },
       { name: '--severity', label: t('追蹤用嚴重度', 'Severity for trace'), required: false, placeholder: 'warning' },
       { name: '--label', label: t('追蹤用額外 label（KEY=VALUE）', 'Extra label for trace (KEY=VALUE)'), required: false, placeholder: 'metric_group=connections' },
+      { name: '--base-config', label: t('追蹤用 base Alertmanager YAML（只取 root）', 'Base Alertmanager YAML for trace (root only)'), required: false, placeholder: 'base-alertmanager.yaml' },
       { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]
   },
