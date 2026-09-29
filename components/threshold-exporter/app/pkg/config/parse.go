@@ -91,8 +91,14 @@ func (sv ScheduledValue) String() string {
 // ResolveValue returns the effective value at the given time.
 // If a time-window override matches, its value is returned; otherwise the default.
 func (sv ScheduledValue) ResolveValue(now time.Time) string {
+	return sv.resolveValue(now, log.Printf)
+}
+
+// resolveValue is ResolveValue with the invalid-window WARN sink as a
+// parameter (#2397; nil = silent) — see resolveAtWithStats.
+func (sv ScheduledValue) resolveValue(now time.Time, logf func(format string, args ...any)) string {
 	for _, o := range sv.Overrides {
-		if matchTimeWindow(o.Window, now) {
+		if matchTimeWindowLogf(o.Window, now, logf) {
 			return o.Value
 		}
 	}
@@ -106,15 +112,24 @@ func MatchTimeWindow(window string, now time.Time) bool {
 }
 
 func matchTimeWindow(window string, now time.Time) bool {
+	return matchTimeWindowLogf(window, now, log.Printf)
+}
+
+// matchTimeWindowLogf is matchTimeWindow with its WARN sink as a parameter
+// (#2397); nil = silent.
+func matchTimeWindowLogf(window string, now time.Time, logf func(format string, args ...any)) bool {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	parts := strings.SplitN(window, "-", 2)
 	if len(parts) != 2 {
-		log.Printf("WARN: invalid time window format %q", window)
+		logf("WARN: invalid time window format %q", window)
 		return false
 	}
 	startH, startM, err1 := parseHHMM(parts[0])
 	endH, endM, err2 := parseHHMM(parts[1])
 	if err1 != nil || err2 != nil {
-		log.Printf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
+		logf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
 		return false
 	}
 
