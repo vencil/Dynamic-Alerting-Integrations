@@ -341,6 +341,29 @@ class TestRenderCrFile:
         else:
             assert (f"it wrote {stale} there: delete it" in caplog.text), \
                 caplog.text
+        # `true` -> `True.yaml` differs from `true.yaml` only in case.
+        case_only = stale is not None and \
+            stale.casefold() == f"{name}.yaml".casefold()
+        assert ("case-insensitive file system" in caplog.text) == case_only
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("name", ["0b_", "0x_", "-0x_"])
+    def test_unconstructable_int_name_is_caller_error(
+            self, name, tmp_path, caplog):
+        """#2430：YAML 判成 int 卻建不出值的 name 仍是 rc 2 單行訊息。
+
+        推算舊版檔名要 safe_load 這個 name，這些形狀會丟 ValueError；舊版
+        對它們同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "read as int" in caplog.text
+        assert "earlier version" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("spec", [
