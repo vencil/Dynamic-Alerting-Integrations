@@ -74,7 +74,7 @@ func UnreadRouting(configDir string, defaults []config.DefaultsFile, skip func(r
 // topMap decodes one document's top level; nil when it is not a mapping or
 // does not decode.
 func topMap(data []byte) map[string]any {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, false)
 	if err != nil || top == nil {
 		return nil
 	}

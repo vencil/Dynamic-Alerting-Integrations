@@ -953,6 +953,56 @@ func TestRun_TaggedNullEscalation_AsTheGenerator(t *testing.T) {
 	}
 }
 
+// taggedNullOutsidePolicyTrees carry `require_critical_escalation: !!null {}`
+// in a platform file that is NOT the domain policy (#2325): the PyYAML
+// reading of that key is the policy file's only, so the profiles / defaults
+// file is read as before and the tenant's slack receiver still violates the
+// policy — not dropped with the file, which left the tenant receiver-less and
+// every violation gone.
+var taggedNullOutsidePolicyTrees = map[string]map[string]string{
+	"profiles file, top-level key": {
+		"_routing_profiles.yaml": "routing_profiles:\n  p1:\n" +
+			"    receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"meta: {require_critical_escalation: !!null {}}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing_profile: p1\n",
+	},
+	"profiles file, inside a profile": {
+		"_routing_profiles.yaml": "routing_profiles:\n  p1:\n" +
+			"    receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"    require_critical_escalation: !!null {}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing_profile: p1\n",
+	},
+	"defaults file carrying _routing_defaults": {
+		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
+			"  receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"meta: {require_critical_escalation: !!null {}}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n      group_wait: 30s\n",
+	},
+}
+
+const taggedNullOutsidePolicyDomain = "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
+	"      require_critical_escalation: true\n      forbidden_receiver_types: [slack]\n"
+
+func TestRun_TaggedNullEscalationOutsidePolicyFile_StillEnforced(t *testing.T) {
+	t.Parallel()
+	for name, tree := range taggedNullOutsidePolicyTrees {
+		files := map[string]string{"_defaults.yaml": "defaults:\n  cpu: 70\n", "_domain_policy.yaml": taggedNullOutsidePolicyDomain}
+		for k, v := range tree {
+			files[k] = v
+		}
+		code, findings, _ := runTreeJSON(t, files)
+		var got []string
+		for _, f := range findings {
+			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
+		}
+		sort.Strings(got)
+		want := []string{"error/critical_escalation_missing/t-pol/receiver.type", "error/domain_policy_violation/t-pol/receiver.type"}
+		if code != exitFindings || !equalStrings(got, want) {
+			t.Errorf("%s: exit = %d, findings %v; want exit %d and %v", name, code, got, exitFindings, want)
+		}
+	}
+}
+
 // A profiles / policy file that fails YAML syntax is a file the exporter
 // drops: exit 3 names it, and the routing loader skips it rather than naming
 // it a second time as an unusable structure.

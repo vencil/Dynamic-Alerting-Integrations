@@ -187,3 +187,40 @@ func TestPutTenant_TaggedNullEscalationStillEnforcesForbidden(t *testing.T) {
 		t.Errorf("status = %d, body %s; want 403 for forbidden_receiver_types only", code, resp)
 	}
 }
+
+// A `require_critical_escalation: !!null {}` in a platform file that is NOT
+// the domain policy (#2325) is not read the PyYAML way: only the policy file
+// is. The profiles / defaults file stays usable, the tenant keeps its slack
+// receiver, and PUT is still refused for both constraints — not accepted
+// because the file carrying the receiver was dropped.
+func TestPutTenant_TaggedNullEscalationOutsidePolicyFile_StillRefused(t *testing.T) {
+	t.Parallel()
+	slack := "{type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}"
+	domain := "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
+		"      require_critical_escalation: true\n      forbidden_receiver_types: [slack]\n"
+	viaProfile := "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing_profile: p1\n"
+	for name, c := range map[string]struct {
+		files map[string]string
+		body  string
+	}{
+		"profiles file, top-level key": {map[string]string{
+			"_defaults.yaml":         "defaults:\n  cpu_usage_percent: 80\n",
+			"_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver: " + slack + "\nmeta: {require_critical_escalation: !!null {}}\n",
+		}, viaProfile},
+		"profiles file, inside a profile": {map[string]string{
+			"_defaults.yaml":         "defaults:\n  cpu_usage_percent: 80\n",
+			"_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver: " + slack + "\n    require_critical_escalation: !!null {}\n",
+		}, viaProfile},
+		"defaults file carrying _routing_defaults": {map[string]string{
+			"_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver: " + slack +
+				"\nmeta: {require_critical_escalation: !!null {}}\n",
+		}, "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      group_wait: 30s\n"},
+	} {
+		c.files["_domain_policy.yaml"] = domain
+		code, resp, _ := putRoutingTenant(t, c.files, "t1", c.body)
+		if code != http.StatusForbidden || !strings.Contains(resp, `"constraint":"forbidden_receiver_types"`) ||
+			!strings.Contains(resp, `"constraint":"require_critical_escalation"`) {
+			t.Errorf("%s: status = %d, body %s; want 403 for forbidden_receiver_types and require_critical_escalation", name, code, resp)
+		}
+	}
+}

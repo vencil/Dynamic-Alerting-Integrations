@@ -92,7 +92,13 @@ var errUnusable = errors.New("unusable")
 // parseDoc decodes one YAML document into its top-level node. A nil node with
 // a nil error is an empty document. The full decode is run as well so that a
 // duplicate key fails here as it fails in every other reader of the file.
-func parseDoc(data []byte) (*yaml.Node, error) {
+//
+// policy is true only for a `_domain_policy.yaml` / `.yml` document: only
+// there does `require_critical_escalation` go through
+// normalizeTaggedNullEscalation (#2325). Every other platform file keeps
+// yaml.v3's reading of a `!!null`-tagged value — refusing one there would
+// drop a profiles / defaults file the policy check still needs.
+func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
@@ -102,8 +108,10 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	}
 	top := doc.Content[0]
 	normalizeTaggedBools(top)
-	if err := normalizeTaggedNullEscalation(top); err != nil {
-		return nil, err
+	if policy {
+		if err := normalizeTaggedNullEscalation(top); err != nil {
+			return nil, err
+		}
 	}
 	var probe any
 	if err := top.Decode(&probe); err != nil {
@@ -194,7 +202,8 @@ func normalizeTaggedBools(n *yaml.Node) {
 // `!!null {}` as null (while PyYAML refuses the whole file). A scalar PyYAML
 // reads as None is rewritten to a plain `null`; a node PyYAML refuses is the
 // error returned, and the caller refuses the document as the generator does.
-// Nothing else is touched.
+// Nothing else is touched. Domain policy documents only (parseDoc's policy,
+// UnmarshalPolicy).
 func normalizeTaggedNullEscalation(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
@@ -313,7 +322,7 @@ func kindName(n *yaml.Node) string {
 // later file that carries it replaces an earlier one WHOLE, even when its
 // value is not a mapping (defaults then become nil), as in the Python reader.
 func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, err error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, false)
 	if err != nil || top == nil {
 		return nil, false, err
 	}
@@ -345,7 +354,7 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 // `_routing_profiles.yaml` document. present=false: no such key. A block that
 // is not a mapping is an error (the Python reader WARNs and ignores it whole).
 func ParseRoutingProfiles(data []byte) (profiles map[string]map[string]any, present bool, err error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, false)
 	if err != nil || top == nil {
 		return nil, false, err
 	}
@@ -378,7 +387,7 @@ func profilesFromNode(top *yaml.Node) (map[string]map[string]any, bool, error) {
 // enforced. Tenant ids are the scalars' source TEXT (`010` is "010"), as the
 // exporter keys tenants.
 func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
-	top, err := parseDoc(data)
+	top, err := parseDoc(data, true)
 	if err != nil || top == nil {
 		return nil, nil, err
 	}
@@ -545,7 +554,7 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		}
 		isPolicy := contains(policyFileNames, f.Name)
 		isProfiles := contains(profileFileNames, f.Name)
-		top, err := parseDoc(f.Data)
+		top, err := parseDoc(f.Data, isPolicy)
 		if err != nil {
 			switch {
 			case isPolicy:
