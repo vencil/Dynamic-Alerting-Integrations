@@ -1536,3 +1536,43 @@ def test_ps1_pr_preflight_does_not_trust_a_python_that_runs_nothing(tmp_path) ->
     assert _wrapper_rc(tmp_path, "win_git_escape.ps1", tool_rc=1, env=env) != 0, (
         "win_git_escape.ps1 pr-preflight ran the `python` on PATH"
     )
+
+
+# ---------------------------------------------------------------------------
+# #2248 — `make win-commit` on Git Bash printed Done with nothing committed.
+#
+# Its Windows_NT branch ran `cmd.exe /c ...`; MSYS rewrote `/c` as a path,
+# cmd.exe started interactive, read EOF and returned 0. A Windows host has no
+# make by default, so the branch was removed: only WSL (which sees
+# /mnt/c/.../cmd.exe) runs the batch, everything else prints the commands.
+# Static on purpose, so Linux CI sees it.
+# ---------------------------------------------------------------------------
+
+
+def _make_recipe(target: str) -> list[str]:
+    """The recipe lines of `target`, `@#` comment lines dropped."""
+    lines = (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith(f"{target}:"))
+    recipe = []
+    for ln in lines[start + 1:]:
+        if not ln.startswith("\t"):
+            break
+        if not ln.lstrip("\t").startswith("@#"):
+            recipe.append(ln)
+    return recipe
+
+
+def test_win_commit_has_no_windows_nt_branch() -> None:
+    recipe = _make_recipe("win-commit")
+    assert any("[2/3]" in ln for ln in recipe), "control: the recipe extraction no longer matches"
+    assert not [ln for ln in recipe if "Windows_NT" in ln], (
+        "win-commit runs cmd.exe from Git Bash again; MSYS turns `/c` into a path (#2248)"
+    )
+
+
+def test_win_commit_still_runs_the_batch_from_wsl() -> None:
+    """Must-ring control: deleting the whole [2/3] block would pass the check above."""
+    body = "\n".join(_make_recipe("win-commit"))
+    assert "/mnt/c/Windows/System32/cmd.exe" in body
+    assert "win_git_escape.bat commit-file" in body
+    assert "win_git_escape.bat push" in body
