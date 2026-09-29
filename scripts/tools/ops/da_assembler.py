@@ -297,7 +297,11 @@ def reconcile_one(
         # Error status, still returns. ⚠️ `api is None` is NOT the test: the
         # controller nulls `api` under `--dry-run`, so it would take this
         # branch too (see the docstring).
-        if cli and isinstance(e, OutputWriteError):
+        #
+        # #2395: ANY exception on the CLI path, not only OutputWriteError —
+        # anything else was logged here and `render_cr_file` still returned
+        # EXIT_OK with nothing written. `render_cr_file` turns it into rc 2.
+        if cli:
             raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
         if api and not dry_run:
@@ -492,9 +496,57 @@ def render_cr_file(
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
+    shape_error = _spec_block_shape_error(cr.get("spec") or {})
+    if shape_error:
+        log.error("%s: %s", cr_path, shape_error)
+        return EXIT_CALLER_ERROR
 
-    reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    # #2395: `reconcile_one(cli=True)` re-raises whatever stopped the
+    # render. OutputWriteError goes on to `main`'s decorator (#1789, rc 2
+    # naming --config-dir); anything else is one line and rc 2 here — rc 0
+    # is only for a run that got as far as the write.
+    try:
+        reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    except OutputWriteError:
+        raise
+    except Exception as e:  # noqa: BLE001 — every cause is a failed render
+        log.error("Failed to render %s: %s", cr_path, e)
+        return EXIT_CALLER_ERROR
     return EXIT_OK
+
+
+def _spec_block_shape_error(spec: dict) -> str:
+    """Why *spec*'s blocks would not render as the CR wrote them, or ``""``.
+
+    #2395. ``render_cr_to_yaml`` silently drops a block that is not a
+    mapping (``defaults: [x]``, ``stateFilters: foo``), and writes a tenant
+    whose value is not a mapping as-is — the exporter then refuses the WHOLE
+    file (``cannot unmarshal !!int``), every tenant in it included. The CRD
+    declares each of these ``type: object``.
+    Left alone: null (a null tenant is read by the exporter as empty), and a
+    BLOCK whose value YAML types as falsy (``defaults: 0``, ``tenants:
+    false``, ``[]``) — dropped as an empty block, which #2331 pins (tests/
+    ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
+    written, not dropped, and the exporter refuses ``t2: 0`` too.
+    Only ``--render-cr`` asks this; the controller path is unchanged.
+    """
+    for key in ("tenants", "defaults", "stateFilters"):
+        block = spec.get(key)
+        if block is None or isinstance(block, dict):
+            continue
+        if isinstance(block, RawPlain):
+            try:
+                block = yaml.safe_load(block)
+            except yaml.YAMLError:
+                pass  # not a typed falsy scalar: judged as the text below
+        if block:
+            return f"spec.{key} must be a mapping"
+    tenants = spec.get("tenants")
+    for tenant, values in (tenants if isinstance(tenants, dict) else {}).items():
+        if values is not None and not isinstance(values, dict):
+            return (f"spec.tenants.{tenant} must be a mapping; the exporter "
+                    f"skips the whole rendered file otherwise")
+    return ""
 
 
 # ── Main ─────────────────────────────────────────────────────────────

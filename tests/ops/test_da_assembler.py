@@ -385,6 +385,108 @@ class TestRenderCrFile:
             encoding="utf-8").split("\n")[0]
         assert header.endswith(f"/{want}"), header
 
+    def test_a_non_write_exception_is_not_rc_0(self, tmp_path, caplog):
+        """#2395：render 途中非 OutputWriteError 的例外一律 rc 2、不寫檔。
+
+        先前 reconcile_one 只對 OutputWriteError 重拋，其餘例外只記一行
+        `Failed to reconcile`，render_cr_file 照樣回 rc 0 卻一個檔都沒寫。
+        會讓本測試轉紅的改動：把 reconcile_one 的重拋條件改回
+        `cli and isinstance(e, OutputWriteError)`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        with mock.patch("da_assembler.dump_for_rewrite",
+                        side_effect=RuntimeError("injected")):
+            rc = render_cr_file(cr_path, out_dir)
+        assert rc == EXIT_CALLER_ERROR
+        assert "injected" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("value", [
+        pytest.param("0", id="int"),
+        pytest.param("false", id="bool"),
+        pytest.param("[x]", id="list"),
+        pytest.param("x", id="scalar"),
+    ])
+    def test_a_non_mapping_tenant_is_caller_error(
+            self, value, tmp_path, caplog):
+        """#2395：租戶的值不是 mapping 時 rc 2、不寫檔。
+
+        先前照原樣寫出，exporter 以 `cannot unmarshal !!int` 之類整份
+        跳過該檔——連同一個檔裡其他合法租戶也不生效——而 rc 是 0。
+        會讓本測試轉紅的改動：拿掉 `_spec_block_shape_error` 的租戶迴圈。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + "metadata: {name: ok}\nspec:\n  tenants:\n"
+            "    t1: {mysql_connections: '70'}\n"
+            f"    t2: {value}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "spec.tenants.t2 must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("block", [
+        pytest.param("defaults: [x]", id="defaults-list"),
+        pytest.param("defaults: 1", id="defaults-int"),
+        pytest.param("stateFilters: foo", id="stateFilters-scalar"),
+        pytest.param("stateFilters: true", id="stateFilters-true"),
+        pytest.param("tenants: [x]", id="tenants-list"),
+        pytest.param("tenants: x", id="tenants-scalar"),
+    ])
+    def test_a_non_mapping_spec_block_is_caller_error(
+            self, block, tmp_path, caplog):
+        """#2395：spec 子區塊不是 mapping 時 rc 2、不寫檔。
+
+        先前 render_cr_to_yaml 把它靜默丟掉、rc 0，CR 寫的內容沒有一項
+        進到輸出。會讓本測試轉紅的改動：拿掉 `_spec_block_shape_error`
+        的區塊迴圈。
+        """
+        key = block.split(":")[0]
+        tenants = "" if key == "tenants" else "  tenants: {t1: {}}\n"
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + "metadata: {name: ok}\nspec:\n" + tenants
+            + f"  {block}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"spec.{key} must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("spec, body", [
+        pytest.param("  tenants: {t1: {m: '1'}, t2: null}\n",
+                     "tenants:\n  t1:\n    m: '1'\n  t2: null\n",
+                     id="null-tenant"),
+        pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: null\n"
+                     "  stateFilters: {}\n",
+                     "tenants:\n  t1:\n    m: '1'\n",
+                     id="null-and-empty-blocks"),
+        pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: 0\n"
+                     "  stateFilters: []\n",
+                     "tenants:\n  t1:\n    m: '1'\n",
+                     id="falsy-blocks"),
+    ])
+    def test_null_or_empty_shapes_still_render(self, spec, body, tmp_path):
+        """#2395 對照組：null 租戶與 null／空／falsy 區塊維持 rc 0、照舊寫出。
+
+        exporter 把 null 租戶讀成空（da-guard served-values 實測 rc 0）。
+        區塊值被 YAML 讀成 falsy（`defaults: 0`、`[]`）時當成空區塊丟掉，
+        這是 #2331 釘住的行為（test_tenant_id_as_text.py），本票不改。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\nspec:\n" + spec,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        text = (out_dir / "ok.yaml").read_text(encoding="utf-8")
+        assert text.split("\n", 2)[2] == body
+
 
 class TestSignalHandler:
     """_signal_handler() 測試。"""
@@ -535,6 +637,34 @@ class TestReconcileOne:
             (Path(d) / "db-a.yaml").mkdir()
             # Exactly what run_once/run_watch pass under --dry-run.
             reconcile_one(cr, Path(d), dry_run=True, api=None)
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_controller_still_swallows_a_non_write_exception(self, dry_run):
+        """#2395 只改 `--render-cr`：controller 對非寫出例外的語意不變。
+
+        一個 CR render 失敗時 controller 記 log、（非 dry-run 時）把 CR
+        status 設成 Error，然後繼續——不往外丟，run_once 也照樣走完每個
+        CR、回 rc 0。會讓本測試轉紅的改動：把重拋條件寫成不看 `cli`。
+        """
+        mock_api = mock.MagicMock()
+        mock_api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name="first"), _make_cr(name="second")]}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("da_assembler.dump_for_rewrite",
+                           side_effect=RuntimeError("injected")), \
+                mock.patch("da_assembler.reconcile_one",
+                           wraps=reconcile_one) as spy:
+            rc = run_once(mock_api, Path(d), dry_run=dry_run)
+            assert list(Path(d).iterdir()) == []
+        assert rc == 0
+        assert [c.args[0]["metadata"]["name"] for c in spy.call_args_list] \
+            == ["first", "second"]
+        patch = mock_api.patch_namespaced_custom_object_status
+        if dry_run:
+            patch.assert_not_called()
+        else:
+            assert patch.call_count == 2
+            assert all("'Error'" in str(c) for c in patch.call_args_list)
 
 
 class TestRunOnce:
