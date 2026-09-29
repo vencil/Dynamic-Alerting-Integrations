@@ -498,6 +498,95 @@ class TestRenderCrNameFormat:
         assert new_files == []
         assert "tagged !!null" in caplog.text
 
+    _SPEC = "spec:\n  tenants:\n    t1: {}\n"
+
+    def _render_text(self, tmp_path, text):
+        """整份 CR 文字 → (rc, 輸出位元組或 None)。"""
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\n" + text + self._SPEC,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        rc = render_cr_file(cr_path, out_dir)
+        out = out_dir / "ok.yaml"
+        files = list(out_dir.iterdir())
+        assert files in ([], [out]), files
+        return rc, (out.read_bytes() if files else None)
+
+    @pytest.mark.parametrize("text", [
+        pytest.param("base: &b {namespace: null}\n"
+                     "metadata: {<<: *b, name: ok}\n", id="merge-alias-null"),
+        pytest.param("base: &b {namespace: ~}\n"
+                     "metadata: {<<: *b, name: ok}\n", id="merge-alias-tilde"),
+        pytest.param("base: &b\n  namespace:\n"
+                     "metadata:\n  <<: *b\n  name: ok\n",
+                     id="merge-alias-empty"),
+        pytest.param("base: &b {namespace: null}\n"
+                     "metadata: {<<: [*b], name: ok}\n", id="merge-list"),
+        pytest.param("metadata: {<<: {namespace: null}, name: ok}\n",
+                     id="merge-inline"),
+        pytest.param("<<: {metadata: {name: ok, namespace: null}}\n",
+                     id="merge-top-level"),
+    ])
+    def test_namespace_unset_through_merge_renders_as_absent(
+            self, text, tmp_path):
+        """#2396：namespace 只經 `<<` merge 提供、值為 null 時也是「未設」。
+
+        Kubernetes（YAML→JSON）同樣展開 merge，這些 CR 建得進叢集。會讓
+        本組轉紅的改動：`!!null` 檢查改回只定位 namespace 節點原文（merge
+        進來的節點找不到原文 → 被誤擋 rc 2）。
+        """
+        rc, want = self._render_text(tmp_path / "absent",
+                                     "metadata: {name: ok}\n")
+        assert rc == 0
+        rc, got = self._render_text(tmp_path / "merged", text)
+        assert rc == 0
+        assert got == want
+
+    @pytest.mark.parametrize("text", [
+        pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
+                     "  namespace: null\n", id="duplicate-key"),
+        pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
+                     "metadata:\n  name: ok\n", id="earlier-metadata-block"),
+        pytest.param("metadata: {name: ok}\nextra: !!null team\n",
+                     id="elsewhere-in-document"),
+    ])
+    def test_tagged_null_anywhere_is_caller_error(self, text, tmp_path,
+                                                   caplog):
+        """go-yaml 對文件任何位置的 `!!null <值>` 都整份拒收。
+
+        載入時「後者勝」會把前一個重複鍵或前一個 metadata 區塊丟掉，只看
+        最後生效的 namespace 會放行。會讓本組轉紅的改動：只檢查 namespace
+        節點、不走整份 compose 圖。
+        """
+        rc, got = self._render_text(tmp_path, text)
+        assert rc == EXIT_CALLER_ERROR
+        assert got is None
+        assert "tagged !!null" in caplog.text
+
+    @pytest.mark.parametrize("text", [
+        pytest.param("metadata: {name: ok\n", id="syntax"),
+        pytest.param("metadata:\n  name: ok\x01\n", id="control-char"),
+        pytest.param("metadata:\n  name: *nope\n", id="undefined-alias"),
+    ])
+    def test_yaml_error_names_the_file(self, text, tmp_path, caplog):
+        """YAML 錯誤訊息點名 CR 檔路徑，不是 `<unicode string>`。
+
+        會讓本組轉紅的改動：把讀進來的文字直接交給 loader
+        （`load_for_rewrite(text)`），PyYAML 會把來源名寫成
+        `<unicode string>`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\n" + text,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f'in "{cr_path}"' in caplog.text
+        assert "<unicode string>" not in caplog.text
+        assert list(out_dir.iterdir()) == []
+
     @pytest.mark.parametrize("namespace", [
         pytest.param('"8"', id="quoted-int"),
         pytest.param("'yes'", id="quoted-bool"),
@@ -512,6 +601,7 @@ class TestRenderCrNameFormat:
     @pytest.mark.parametrize("ns_line", [
         pytest.param("  namespace: null\n", id="null"),
         pytest.param("  namespace: NULL\n", id="null-upper"),
+        pytest.param("  namespace: Null\n", id="null-title"),
         pytest.param("  namespace: ~\n", id="tilde"),
         pytest.param("  namespace:\n", id="empty-value"),
         pytest.param('  namespace: ""\n', id="empty-string"),

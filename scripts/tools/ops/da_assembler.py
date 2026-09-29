@@ -21,6 +21,7 @@ Prerequisites:
 
 import argparse
 import hashlib
+import io
 import logging
 import os
 import re
@@ -432,29 +433,46 @@ def _is_dns1123_label(text: str) -> bool:
             and _DNS1123_LABEL_RE.fullmatch(text) is not None)
 
 
-#: The spellings YAML 1.1 reads as null. Only these (and an empty value)
-#: make a namespace UNSET: PyYAML builds None for `!!null <anything>`, but
-#: Kubernetes (YAML→JSON) refuses `!!null team`.
+#: The spellings YAML 1.1 reads as null (plus an empty value). PyYAML
+#: builds None for `!!null <anything>`; Kubernetes (YAML→JSON, go-yaml)
+#: refuses the whole document when a `!!null` scalar is written as
+#: anything else (`!!null team`).
 _NULL_SPELLINGS = frozenset(("", "~", "null", "Null", "NULL"))
+_NULL_TAG = "tag:yaml.org,2002:null"
 
 
-def _namespace_source_text(text: str) -> Any:
-    """The text `metadata.namespace` is written as in the CR *text*.
+def _null_tagged_non_null(root: Any) -> Any:
+    """The text of the first ``!!null`` scalar in *root* not written as null.
 
-    Read from the composed node tree, i.e. before a tag turned it into a
-    value. None when there is no such scalar (the last one wins, as in the
-    load). *text* has already loaded, so composing it cannot fail.
+    Walks the WHOLE composed graph, not one key: go-yaml refuses the
+    document wherever such a scalar sits — under a duplicate key the load
+    drops, in an earlier `metadata:` block, or behind a `<<` merge / alias
+    (visited once, by node id). None when there is none.
     """
-    root = yaml.compose(text, Loader=yaml.SafeLoader)
-    if not isinstance(root, yaml.MappingNode):
-        return None
-    found = None
-    for key, meta in root.value:
-        if key.value == "metadata" and isinstance(meta, yaml.MappingNode):
-            for k, v in meta.value:
-                if k.value == "namespace" and isinstance(v, yaml.ScalarNode):
-                    found = v.value
-    return found
+    seen = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag == _NULL_TAG and node.value not in _NULL_SPELLINGS:
+                return node.value
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                stack.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    return None
+
+
+def _named_stream(text: str, path: Path) -> io.StringIO:
+    """*text* as a stream named *path*, so a YAML error names the file
+    (and prints no snippet) exactly as reading the file itself did."""
+    stream = io.StringIO(text)
+    stream.name = str(path)
+    return stream
 
 
 def _plain_tag(text: str) -> str:
@@ -502,13 +520,23 @@ def render_cr_file(
     try:
         with open(cr_path, encoding="utf-8") as fh:
             text = fh.read()
-        cr = _keys_as_plain_text(load_for_rewrite(text))
+        cr = _keys_as_plain_text(
+            load_for_rewrite(_named_stream(text, cr_path)))
+        # #2396: the node graph, for the `!!null` check below.
+        root = yaml.compose(_named_stream(text, cr_path),
+                            Loader=yaml.SafeLoader)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
 
     if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
+        return EXIT_CALLER_ERROR
+    written = _null_tagged_non_null(root)
+    if written is not None:
+        log.error("%s: a value tagged !!null is written as %r; Kubernetes "
+                  "refuses the document (only an empty value or ~ / null "
+                  "is null)", cr_path, written)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its
@@ -553,15 +581,8 @@ def render_cr_file(
     # server fills in the request's namespace), so such a CR exists in a
     # cluster. It is dropped here and renders exactly as an absent one:
     # header `?`, log `default`. ⛔ None alone is not the test: PyYAML
-    # builds None for `!!null team` too, which Kubernetes refuses — the
-    # source text has to be a null spelling (or empty).
-    if "namespace" in metadata and metadata["namespace"] is None:
-        written = _namespace_source_text(text)
-        if written not in _NULL_SPELLINGS:
-            log.error("%s: metadata.namespace is tagged !!null but written "
-                      "as %r; only an empty value or ~ / null means unset",
-                      cr_path, written)
-            return EXIT_CALLER_ERROR
+    # builds None for `!!null team` too, which Kubernetes refuses (checked
+    # over the whole document, above).
     if metadata.get("namespace", "") in (None, ""):
         metadata.pop("namespace", None)
     if "namespace" in metadata:
