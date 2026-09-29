@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import logging
 import os
+import re
 import signal
 import stat
 import sys
@@ -401,10 +402,34 @@ def run_watch(
 #: error: int / float / bool. `timestamp` is absent — an unquoted date is
 #: kept as written. Close to what Kubernetes sees after YAML→JSON, NOT the
 #: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
-#: differently (#2371 review). Kubernetes' name format (DNS-1123) is not
-#: checked either.
+#: differently (#2371 review). The name FORMAT is checked separately, below.
 _NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
                                   for t in ("int", "float", "bool"))
+
+#: #2396: the formats the API server enforces on a ThresholdConfig, so the
+#: `--render-cr` path accepts the same names the controller path can ever
+#: see. `metadata.name` becomes the output FILE NAME and both land in the
+#: header comment: unchecked, `../x` was written outside `--config-dir` and
+#: a newline split the header into a top-level key of the rendered file.
+#: ⛔ Used with `re.fullmatch` only — `$` also matches before a trailing
+#: newline, which is exactly the shape this has to refuse.
+_DNS1123_LABEL = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
+_DNS1123_SUBDOMAIN_RE = re.compile(rf"{_DNS1123_LABEL}(?:\.{_DNS1123_LABEL})*")
+_DNS1123_LABEL_RE = re.compile(_DNS1123_LABEL)
+_DNS1123_SUBDOMAIN_MAX = 253
+_DNS1123_LABEL_MAX = 63
+
+
+def _is_dns1123_subdomain(text: str) -> bool:
+    """RFC 1123 subdomain, as Kubernetes checks an object name."""
+    return (len(text) <= _DNS1123_SUBDOMAIN_MAX
+            and _DNS1123_SUBDOMAIN_RE.fullmatch(text) is not None)
+
+
+def _is_dns1123_label(text: str) -> bool:
+    """RFC 1123 label, as Kubernetes checks a namespace name."""
+    return (len(text) <= _DNS1123_LABEL_MAX
+            and _DNS1123_LABEL_RE.fullmatch(text) is not None)
 
 
 def _plain_tag(text: str) -> str:
@@ -485,10 +510,27 @@ def render_cr_file(
     if tag in _NON_STRING_NAME_TAGS:
         log.error("%s: metadata.name must be a string, but unquoted %s is "
                   "read as %s (YAML 1.1). Quoting makes it a string; it "
-                  "must still be a valid Kubernetes object name (DNS-1123), "
-                  "which this tool does not check", cr_path, name,
-                  tag.rsplit(":", 1)[-1])
+                  "must still be a valid Kubernetes object name (DNS-1123)",
+                  cr_path, name, tag.rsplit(":", 1)[-1])
         return EXIT_CALLER_ERROR
+    # #2396: the name is the output file name and goes into the header
+    # comment, so its format is checked here, before anything is written.
+    # An absent namespace still renders as `default`.
+    if not _is_dns1123_subdomain(name):
+        log.error("%s: metadata.name %r is not a valid Kubernetes object "
+                  "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
+                  "'.', starting and ending alphanumeric, at most %d "
+                  "characters)", cr_path, name, _DNS1123_SUBDOMAIN_MAX)
+        return EXIT_CALLER_ERROR
+    if "namespace" in metadata:
+        namespace = metadata["namespace"]
+        if not (isinstance(namespace, str) and _is_dns1123_label(namespace)):
+            log.error("%s: metadata.namespace %r is not a valid Kubernetes "
+                      "namespace name (DNS-1123 label: lowercase a-z, 0-9 "
+                      "and '-', starting and ending alphanumeric, at most "
+                      "%d characters)", cr_path, namespace,
+                      _DNS1123_LABEL_MAX)
+            return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR

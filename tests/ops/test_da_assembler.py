@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """da_assembler.py 的 pytest 風格測試 — CRD → YAML 組合器。"""
 
+import json
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -12,6 +13,8 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import OutputWriteError  # noqa: E402  (#1789)
 from da_assembler import (  # noqa: E402
     _content_sha256,
+    _is_dns1123_label,
+    _is_dns1123_subdomain,
     _output_filename,
     _signal_handler,
     reconcile_one,
@@ -293,8 +296,8 @@ class TestRenderCrFile:
     #   `08`    PyYAML str (not valid octal)     go-yaml differs
     #   `y`/`n` PyYAML str                       go-yaml v2 bool
     #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
-    # Shapes let through here cannot be created in a cluster anyway (not a
-    # DNS-1123 name), and the name format itself is not checked.
+    # Shapes let through here that are not a DNS-1123 name are refused by
+    # the name-format check instead (#2396, TestRenderCrNameFormat).
     @pytest.mark.parametrize("name, kind", [
         pytest.param("42", "int", id="name-int"),
         pytest.param("8", "int", id="name-int-8"),
@@ -314,7 +317,7 @@ class TestRenderCrFile:
 
         以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
         後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
-        加引號只讓它變成字串，名稱格式（DNS-1123）本工具不檢查。
+        加引號只讓它變成字串，仍須是合法的 Kubernetes 名稱（DNS-1123）。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -352,12 +355,8 @@ class TestRenderCrFile:
         # PyYAML's date resolver needs two-digit month/day: this one stays str.
         pytest.param("2024-1-1", "2024-1-1", id="date-short-is-str"),
         pytest.param('"2024-01-01"', "2024-01-01", id="quoted-date"),
-        pytest.param("2024-01-01T10:20:30Z", "2024-01-01T10:20:30Z",
-                     id="name-datetime"),
-        pytest.param("2024-01-01 10:20:30", "2024-01-01 10:20:30",
-                     id="name-datetime-space"),
         pytest.param('"010"', "010", id="quoted-int"),
-        pytest.param("'0x1F'", "0x1F", id="quoted-hex"),
+        pytest.param("'0x1f'", "0x1f", id="quoted-hex"),
         pytest.param('"1.5"', "1.5", id="quoted-float"),
         pytest.param('"yes"', "yes", id="quoted-bool"),
         pytest.param('"null"', "null", id="quoted-null"),
@@ -370,8 +369,10 @@ class TestRenderCrFile:
     def test_string_name_renders_as_written(self, name, want, tmp_path):
         """#2371：字串 name 照原文收，檔名與檔頭用原文。
 
-        未加引號的日期／日期時間照原文收；加了引號（或 `!!str`）的任何值
-        同理。明示 `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。
+        未加引號的日期照原文收；加了引號（或 `!!str`）的值同理。明示
+        `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。日期時間
+        （含 `:`、大寫 `T`／`Z`、空白）不是 DNS-1123 名稱，#2396 起 rc 2，
+        見 TestRenderCrNameFormat。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -384,6 +385,133 @@ class TestRenderCrFile:
         header = (out_dir / f"{want}.yaml").read_text(
             encoding="utf-8").split("\n")[0]
         assert header.endswith(f"/{want}"), header
+
+
+class TestRenderCrNameFormat:
+    """#2396：`--render-cr` 以 Kubernetes 的規則驗 name／namespace。
+
+    name 直接當輸出檔名、name 與 namespace 都寫進檔頭註解。先前不驗：
+    `../escaped` rc 0 並寫到 `--config-dir` 之外；含換行的 name／namespace
+    把檔頭註解斷行，輸出多出頂層鍵。現在 name 須是 RFC 1123 subdomain、
+    namespace（有給時）須是 RFC 1123 label，否則 rc 2 且不寫任何檔案。
+
+    會讓本組反例轉紅的改動：拿掉 render_cr_file 裡的
+    `_is_dns1123_subdomain` / `_is_dns1123_label` 檢查。
+    """
+
+    @staticmethod
+    def _run(tmp_path, metadata_yaml):
+        """寫 CR、渲染，回傳 (rc, 渲染前後 tmp_path 下新增的檔案)。
+
+        輸出目錄放兩層深，逃出 `--config-dir` 的檔案也還在 tmp_path 內，
+        才量得到「目錄內外都沒有新檔」。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            "kind: ThresholdConfig\nmetadata:\n" + metadata_yaml
+            + "spec:\n  tenants:\n    t1: {}\n", encoding="utf-8")
+        out_dir = tmp_path / "work" / "out"
+        out_dir.mkdir(parents=True)
+        before = {p for p in tmp_path.rglob("*") if p.is_file()}
+        rc = render_cr_file(cr_path, out_dir)
+        after = {p for p in tmp_path.rglob("*") if p.is_file()}
+        return rc, sorted(str(p.relative_to(tmp_path))
+                          for p in after - before)
+
+    @staticmethod
+    def _q(text):
+        """YAML 雙引號字串（JSON 字串是合法的 YAML flow scalar）。"""
+        return json.dumps(text)
+
+    @pytest.mark.parametrize("name", [
+        pytest.param("../escaped", id="dotdot-escape"),
+        pytest.param("sub/x", id="slash"),
+        pytest.param("x\nevil: 1", id="newline-injects-key"),
+        pytest.param("ok\n", id="trailing-newline"),
+        pytest.param("Foo", id="uppercase"),
+        pytest.param("a_b", id="underscore"),
+        pytest.param("-a", id="leading-dash"),
+        pytest.param("a-", id="trailing-dash"),
+        pytest.param("a..b", id="empty-label"),
+        pytest.param(".a", id="leading-dot"),
+        pytest.param("a" * 254, id="len-254"),
+    ])
+    def test_invalid_name_is_caller_error(self, name, tmp_path, caplog):
+        rc, new_files = self._run(tmp_path, f"  name: {self._q(name)}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "is not a valid Kubernetes object name" in caplog.text
+
+    @pytest.mark.parametrize("namespace", [
+        pytest.param("n\nevil: 1", id="newline-injects-key"),
+        pytest.param("ns\n", id="trailing-newline"),
+        pytest.param("Team", id="uppercase"),
+        pytest.param("a.b", id="dot-not-in-label"),
+        pytest.param("../x", id="dotdot"),
+        pytest.param("a" * 64, id="len-64"),
+        pytest.param(None, id="null"),
+    ])
+    def test_invalid_namespace_is_caller_error(
+            self, namespace, tmp_path, caplog):
+        ns = "null" if namespace is None else self._q(namespace)
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {ns}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "is not a valid Kubernetes namespace name" in caplog.text
+
+    @pytest.mark.parametrize("name, namespace", [
+        pytest.param("ok", None, id="plain-no-namespace"),
+        pytest.param("a.b-c", "team-1", id="dot-and-dash"),
+        pytest.param("0-9.x", "0", id="digits"),
+        pytest.param("x", "a" * 63, id="namespace-len-63"),
+    ])
+    def test_valid_names_still_render(self, name, namespace, tmp_path):
+        """must-trigger 對照組：合法 name 照舊 rc 0，寫進 --config-dir。"""
+        meta = f"  name: {self._q(name)}\n"
+        if namespace is not None:
+            meta += f"  namespace: {self._q(namespace)}\n"
+        rc, new_files = self._run(tmp_path, meta)
+        assert rc == 0
+        assert new_files == [f"work/out/{name}.yaml"]
+        header = (tmp_path / "work" / "out" / f"{name}.yaml").read_text(
+            encoding="utf-8").split("\n")[0]
+        # 缺 namespace 時檔頭沿用既有的 `?`（#2396 不改這條）。
+        assert header.endswith(f" {namespace or '?'}/{name}"), header
+
+    @staticmethod
+    def _long_name(length):
+        """`length` 字元、由 63 字元 label 以 `.` 串成的合法 subdomain。"""
+        name = ".".join(["a" * 63] * 5)[:length - 1] + "b"
+        assert len(name) == length
+        return name
+
+    @pytest.mark.parametrize("length, want", [
+        pytest.param(253, True, id="len-253-accepted"),
+        pytest.param(254, False, id="len-254-refused"),
+    ])
+    def test_name_length_boundary(self, length, want):
+        """253 字元邊界，直接量驗證函式。
+
+        不走 render_cr_file：`<253 字元>.yaml` 超過多數檔案系統的
+        NAME_MAX（255），連 dry-run 的 `dest.exists()` 都會先丟
+        ENAMETOOLONG，量到的就不是本檢查了。len-254 的 rc 2 由
+        test_invalid_name_is_caller_error 端到端量。"""
+        assert _is_dns1123_subdomain(self._long_name(length)) is want
+
+    @pytest.mark.parametrize("length, want", [
+        pytest.param(63, True, id="len-63-accepted"),
+        pytest.param(64, False, id="len-64-refused"),
+    ])
+    def test_namespace_length_boundary(self, length, want):
+        assert _is_dns1123_label("a" * length) is want
+
+    def test_long_valid_name_renders(self, tmp_path):
+        """端到端對照組：檔名塞得進 NAME_MAX 的最長合法 name（250）rc 0。"""
+        name = self._long_name(250)
+        rc, new_files = self._run(tmp_path, f"  name: {name}\n")
+        assert rc == 0
+        assert new_files == [f"work/out/{name}.yaml"]
 
 
 class TestSignalHandler:
