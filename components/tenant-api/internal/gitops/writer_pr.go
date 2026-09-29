@@ -338,6 +338,14 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			return nil, err
 		}
 		if err := w.readMergeBodyOnly(op.TenantID, opPath, op.Merge); err != nil {
+			// #2373: a MergeFunc refusing the file's CONTENT is, like the
+			// ambiguity above, a verdict on a tree the write does not land
+			// on — the branch is cut from the fresh origin base, where the
+			// file may already be repaired. Tolerated here; the
+			// post-checkout loop re-merges and refuses (abortFeatureBranch).
+			if errors.Is(err, ErrMergeBaseNotLoadable) {
+				continue
+			}
 			return nil, err
 		}
 	}

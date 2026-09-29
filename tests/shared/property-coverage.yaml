@@ -274,6 +274,7 @@ modules:
       is_receiver_name_collision: "#2279 one-line prefix test on RECEIVER_NAME_COLLISION_PREFIX; example-pinned by test_grar_receiver_name_collision.py (generate_routes line + not-a-policy-error cases)"
       blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
       receiver_name_collisions: "#2279 group-by-name over (name, source) pairs; example-covered by test_grar_receiver_name_collision.py (routes- and overrides-type collisions name both sources, no-collision control)"
+      duplicate_tenant_errors: "#2315 formatter over _lib_confd.duplicate_declarations' {id: [files]} (the grouping is that shared predicate's); example-covered by test_grar_duplicate_tenant.py (root pair, .yaml+.yml, root+nested name every file; overlay / distinct-tenant / filename controls; shared-scan agreement with validate-config)"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

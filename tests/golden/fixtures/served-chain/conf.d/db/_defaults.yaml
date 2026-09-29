@@ -1,0 +1,2 @@
+defaults:
+  mysql_connections: 70

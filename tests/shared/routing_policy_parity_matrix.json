@@ -50,8 +50,9 @@
     "rows (the generator exits 2 before rendering; da-guard reports them as errors):",
     "routing_enforced_below_root, routing_defaults_null_below_root (receiver / overrides null below the",
     "root), routing_profile_duplicate (one name in two files; the first in root-first name order is kept,",
-    "the later file is named), duplicate_tenant (the later file in name order is named; da-guard stops",
-    "earlier, exit 2, on the exporter's DuplicateTenantError). tenant_api is null for these trees:",
+    "the later file is named). duplicate_tenant is recorded but not in blocking_kinds: the generator",
+    "refuses it first through #2315 (exit 1), and da-guard stops earlier, exit 2, on the exporter's",
+    "DuplicateTenantError; the later file in name order is named. tenant_api is null for these trees:",
     "tenant-api lists tenant files at the conf.d root only.",
     "blocking_kinds (#2326 review): the platform kinds that refuse the whole tree (generator exit 2",
     "in every mode). Python asserts it equals _grar_parse.BLOCKING_TREE_KINDS and Go that",
@@ -60,7 +61,6 @@
     "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there)."
   ],
   "blocking_kinds": [
-    "duplicate_tenant",
     "routing_defaults_null_below_root",
     "routing_enforced_below_root",
     "routing_profile_duplicate"

@@ -1106,8 +1106,9 @@ def is_receiver_name_collision(line: str) -> bool:
 # ── #2326: a conf.d tree the routing plane refuses (blocking in EVERY mode) ─
 # ADR-017 "Amendment 2026-09-28": `_routing_enforced` below the root, a
 # `receiver` / `overrides` written as null in a subdirectory level's
-# `_routing_defaults`, one routing-profile name defined in two files, one
-# tenant id declared in two files. The generator exits EXIT_CALLER_ERROR
+# `_routing_defaults`, one routing-profile name defined in two files. (One
+# tenant id declared in two files is `DUPLICATE_TENANT_PREFIX` below, #2315 —
+# not a warning-stream line.) The generator exits EXIT_CALLER_ERROR
 # before anything is rendered; validate-config's schema row FAILs on it
 # (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX` — none of these
 # is a domain-policy finding, and none waits for --strict.
@@ -1117,6 +1118,36 @@ ROUTING_TREE_ERROR_PREFIX = "ERROR (routing tree):"
 def is_routing_tree_error(line: str) -> bool:
     """True for a #2326 routing-tree line in the warning stream."""
     return line.lstrip().startswith(ROUTING_TREE_ERROR_PREFIX)
+# ── #2315: one tenant id declared by two tenant files (blocking in EVERY mode) ──
+# The exporter's walker refuses such a tree WHOLE (`*DuplicateTenantError`,
+# pkg/config/tree_scan.go), and so does da-guard. This reader used to merge
+# the two blocks key by key and route on whichever file sorted last, rc 0 —
+# and da-guard does not run on a change to a tenant file, so nothing in CI
+# said so. Not a warning-stream line: the record travels on `TenantTree`, and
+# validate-config reports the same state through its own `tenant_uniqueness`
+# row (the same scan), so its output is unchanged.
+DUPLICATE_TENANT_PREFIX = "ERROR (duplicate tenant):"
+
+
+def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
+    """One blocking line per tenant id that more than one tenant file declares.
+
+    *duplicates* is ``_lib_confd.duplicate_declarations``' shape:
+    ``{tenant_id: [file, file, ...]}``. Every declaring file is named, because
+    which one owns the tenant is the operator's decision — removing the wrong
+    one drops that file's overrides silently.
+    """
+    return [
+        f"  {DUPLICATE_TENANT_PREFIX} tenant '{tenant}' is declared in "
+        f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
+        "da-guard) reject the WHOLE config dir in this state, so every tenant "
+        "loses alerting, not just this one. Which file owns the tenant is "
+        "your decision (removing the wrong one drops its overrides "
+        "silently): keep the tenant in exactly one file. If one of these "
+        "files cannot be decoded by the threshold-exporter (da-guard exit 3), "
+        "fix that file first."
+        for tenant, files in sorted(duplicates.items())
+    ]
 
 
 def blocking_generation_errors(warnings: list[str]) -> list[str]:

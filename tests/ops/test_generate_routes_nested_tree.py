@@ -333,9 +333,34 @@ def test_duplicate_tenant_id_is_refused(tmp_path):
     })
     out = tmp_path / "out.yaml"
     res = _gar("--config-dir", str(d), "-o", str(out))
-    assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-    assert "duplicate tenant id 't-x': declared in both t-x.yaml and team/t-x.yaml" in res.stderr
+    # #2315's refusal (rc 1, validate-config's own scan) runs first and owns
+    # this verdict; the routing-tree refusal (rc 2) does not repeat it.
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert "tenant 't-x' is declared in 2 files: t-x.yaml, team/t-x.yaml" in res.stderr
+    assert "routing-tree error" not in res.stderr
     assert not out.exists()
+
+
+@pytest.mark.parametrize("files, needle", [
+    # #2315's refusal: named from `duplicate_tenants`, not a routing-tree kind.
+    ({"t-x.yaml": _tenant("t-x"), "team/t-x.yaml": _tenant("t-x")},
+     "tenant 't-x' is declared in 2 files: t-x.yaml, team/t-x.yaml"),
+    # A #2326 routing-tree kind.
+    ({"t-x.yaml": _tenant("t-x"),
+      "team/_defaults.yaml": "_routing_enforced:\n  enabled: true\n",
+      "team/t-y.yaml": _tenant("t-y")},
+     "ERROR (routing tree):"),
+], ids=["duplicate-tenant", "routing-tree"])
+def test_explain_route_names_a_tree_generate_routes_refuses(tmp_path, files, needle):
+    """explain-route is a diagnostic, so it still explains — but a tree the
+    generator refuses outright is said so first, whichever check refuses it."""
+    d = _write(tmp_path / "conf.d", {"_defaults.yaml": _EMAIL_RD, **files})
+    res = subprocess.run(
+        [sys.executable, "-s", str(REPO / "scripts" / "tools" / "ops" / "explain_route.py"),
+         "--config-dir", str(d), "--tenant", "t-x"],
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
+    line = [ln for ln in res.stderr.splitlines() if needle in ln]
+    assert line and line[0].endswith("generate-routes refuses this tree"), res.stderr
 
 
 # ── (f) a nested platform file's `tenants:` block ───────────────────────
@@ -430,8 +455,13 @@ def test_f2_a_null_body_still_declares_the_tenant(tmp_path):
         "b/t-x.yaml": _tenant("t-x"),
     })
     res = _gar("--config-dir", str(d), "--dry-run")
-    assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-    assert "duplicate tenant id 't-x': declared in both a/t-x.yaml and b/t-x.yaml" in res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert "tenant 't-x' is declared in 2 files: a/t-x.yaml, b/t-x.yaml" in res.stderr
+    tree = load_tenant_tree(str(d))
+    assert tree.duplicate_tenants == {"t-x": ["a/t-x.yaml", "b/t-x.yaml"]}
+    # The routing plane's own record agrees (parity with Go LoadTree).
+    assert [p[:3] for p in tree.routing_tree_problems] == [
+        ("duplicate_tenant", "b/t-x.yaml", "tenants.t-x")]
 
 
 def test_f3_routing_defaults_in_a_nested_non_carrier_file(tmp_path):

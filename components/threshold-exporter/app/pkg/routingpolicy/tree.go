@@ -18,9 +18,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Problem kinds of the hierarchical routing plane. The first four refuse
+// Problem kinds of the hierarchical routing plane. The first three refuse
 // the whole tree: the route generator exits 2 on them in every mode (see
-// IsBlocking). ProblemDomainPolicyOutOfScope is a domain-policy finding
+// IsBlocking). ProblemDuplicateTenant is refused too, but by the generator's
+// #2315 duplicate-tenant check (exit 1, it runs first) and in da-guard by the
+// exporter's DuplicateTenantError, so it is not one of IsBlocking's kinds. ProblemDomainPolicyOutOfScope is a domain-policy finding
 // (ERROR under the generator's --strict, WARN otherwise; da-guard reports
 // every domain-policy finding as an error).
 const (
@@ -48,7 +50,7 @@ const (
 func IsBlocking(kind string) bool {
 	switch kind {
 	case ProblemRoutingEnforcedBelowRoot, ProblemRoutingDefaultsNullBelowRoot,
-		ProblemRoutingProfileDuplicate, ProblemDuplicateTenant:
+		ProblemRoutingProfileDuplicate:
 		return true
 	}
 	return false

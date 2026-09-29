@@ -42,6 +42,7 @@ from generate_alertmanager_routes import (  # noqa: E402
 from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     _matcher_matches_labels,
+    duplicate_tenant_errors,
 )
 from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
@@ -706,6 +707,11 @@ def main(argv: list[str] | None = None) -> int:
         if kind in BLOCKING_TREE_KINDS:
             print(f"  {ROUTING_TREE_ERROR_PREFIX} {safe_label(msg)} — "
                   f"generate-routes refuses this tree", file=sys.stderr)
+    # #2315 owns the duplicate-tenant refusal (rc 1, not a routing-tree kind),
+    # so it is named from its own record — the same lines the generator prints.
+    for line in duplicate_tenant_errors(parsed.get("duplicate_tenants", {})):
+        print(f"{safe_label(line)} — generate-routes refuses this tree",
+              file=sys.stderr)
 
     # --trace mode: simulate alert routing path
     if args.trace:

@@ -440,7 +440,7 @@ elif any ancestor _defaults.yaml changed:
 Python 路由生成器（`_grar_parse` / `_grar_merge` 及建在其上的讀取器）與 Go
 `pkg/routingpolicy.LoadTree`（da-guard）同一支 PR 落地，parity 矩陣的 `hier-*` 樹在兩邊釘住
 (a)–(e)。下文沒講死的地方，實作的選擇是：阻擋條件在所有模式一律 rc **2**（含 (c) 的 profile
-名稱重複）；重複名稱保留先出現的定義（先根目錄，再依名稱順序走樹），點名後出現的檔；子樹
+名稱重複；(e) 例外，見該條）；重複名稱保留先出現的定義（先根目錄，再依名稱順序走樹），點名後出現的檔；子樹
 policy 點名子樹外租戶的條目，除了回報，也從該 policy 移除（不生效）。⚠️ tenant-api 只列
 根目錄的租戶檔，所以仍只讀根目錄那一半（`LoadRoot`）。
 
@@ -489,15 +489,18 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個�
 訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條
 適用於它的 policy，所以子樹只能收緊。
 
-**(e) 租戶 id 重複。** 同一個租戶 id 在多個檔案宣告，在路由面同樣是**阻擋錯誤**（rc 2），
-對齊 Go 的 `DuplicateTenantError` 與 `validate_config.check_tenant_uniqueness`。
+**(e) 租戶 id 重複。** 同一個租戶 id 在多個檔案宣告，在路由面同樣是**阻擋錯誤**，
+對齊 Go 的 `DuplicateTenantError` 與 `validate_config.check_tenant_uniqueness`。rc 是 **1**
+不是 2：這道拒收由 [#2315](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2315)
+先落地（`_refuse_duplicate_tenants`，直接呼叫 validate-config 的同一支掃描，所有模式 rc 1），
+並在其他樹形錯誤之前執行；本 amendment 沿用它，不另立第二種說法。
 
 **(f) 本次不處理。** 子目錄平台（`_`）檔的 `tenants:` 區塊維持不被任何平面讀取（上方條 1）；
 路由生成器比照 exporter 對它發 WARN。
 
 **取代 #2326 第 1 步止血。** 止血版是只要子目錄有設定檔，生成器就回 rc 2。整棵樹都讀之後，
 這本身不再是錯誤；阻擋條件改為：子目錄檔案裡出現 `_routing_enforced` → rc 2；租戶 id 重複
-→ rc 2；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
+→ rc 1（見 (e)）；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
 （見 (a)）；以及上面 (c)、(d) 所列的錯誤。
 
 ## 考量的替代方案

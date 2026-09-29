@@ -492,7 +492,7 @@ one PR for the Python route generator (`_grar_parse` / `_grar_merge`, and the re
 it) and Go `pkg/routingpolicy.LoadTree` (da-guard), with the parity matrix's `hier-*` trees
 pinning (a)–(e) on both sides. Where the text below leaves a choice open, the implementation
 took: the blocking conditions all exit **2** in every mode, (c)'s duplicate profile name
-included; the first definition of a duplicated name is kept (root files first, then the tree
+included ((e) is the exception, see there); the first definition of a duplicated name is kept (root files first, then the tree
 in name order) and the later file is named; a subtree policy entry naming an out-of-subtree
 tenant is dropped from that policy (not enforced) besides being reported. ⚠️ tenant-api lists
 tenant files at the root only, so it keeps reading the root half (`LoadRoot`).
@@ -552,8 +552,12 @@ distinct from "tenant not found anywhere". Policies at different levels are judg
 only tighten.
 
 **(e) Duplicate tenant id.** The same tenant id declared in more than one file is a
-**blocking error** in the routing plane too (rc 2), aligning with Go
-`DuplicateTenantError` and `validate_config.check_tenant_uniqueness`.
+**blocking error** in the routing plane too, aligning with Go
+`DuplicateTenantError` and `validate_config.check_tenant_uniqueness`. The rc is **1**, not 2:
+this refusal landed first with [#2315](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2315)
+(`_refuse_duplicate_tenants`, which calls validate-config's own scan, rc 1 in every mode) and
+runs before the other tree-shape refusals; this amendment adopts it rather than adding a second
+spelling.
 
 **(f) Out of scope.** The `tenants:` block of a platform (`_`) file in a subdirectory stays
 unread by every plane (item 1 above); the route generator WARNs about it the way the
@@ -562,7 +566,7 @@ exporter does.
 **Replaces the #2326 step-1 stopgap.** The stopgap failed the generator with rc 2 whenever a
 subdirectory held a config file. Once the tree is read, that is no longer an error; the
 blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2; a duplicate
-tenant id → rc 2; `receiver` or `overrides` written as `null` in a subdirectory level's
+tenant id → rc 1 (see (e)); `receiver` or `overrides` written as `null` in a subdirectory level's
 `_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
 
 ## Alternatives Considered

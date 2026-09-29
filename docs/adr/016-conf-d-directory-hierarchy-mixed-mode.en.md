@@ -207,7 +207,7 @@ layers (`LoadRoot`); see the table above.
 - **Blocking conditions** (replacing the #2326 step-1 stopgap "any config file in
   a subdirectory → rc 2", since a subdirectory file is no longer an error once the
   tree is read): `_routing_enforced` in a subdirectory file → rc 2; the same
-  tenant id declared in more than one file → rc 2; the `null`-receiver,
+  tenant id declared in more than one file → rc 1 (#2315; see ADR-017 (e)); the `null`-receiver,
   profile-name and domain-policy errors listed in ADR-017.
 
 ## Related

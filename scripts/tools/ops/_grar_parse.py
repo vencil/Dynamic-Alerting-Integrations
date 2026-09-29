@@ -38,6 +38,8 @@ from _lib_confd import (  # noqa: E402
     overlay_platform_tenants,
     readable_carriers,
     select_defaults_carrier,
+    tenant_declarations,
+    unusable_config_paths,
     unusable_reason,
     warn_multi_carrier,
 )
@@ -320,11 +322,14 @@ def _tree_problem(result: dict, kind: str, fname: str, field: str,
 # anything is rendered. The subtree-policy finding
 # (`domain_policy_out_of_scope`) is not here — it is ERROR under --strict and
 # WARN otherwise, like every other domain-policy finding (ADR-007 (d)).
+# `duplicate_tenant` is recorded (the parity matrix pins it against Go) but is
+# not here either: #2315 owns that refusal — `_refuse_duplicate_tenants`,
+# EXIT_VIOLATION, validate-config's `tenant_uniqueness` scan — and it runs
+# first, so a second spelling of the same verdict would only disagree on rc.
 BLOCKING_TREE_KINDS = frozenset({
     "routing_enforced_below_root",
     "routing_defaults_null_below_root",
     "routing_profile_duplicate",
-    "duplicate_tenant",
 })
 
 
@@ -624,6 +629,8 @@ def _parse_config_files(config_dir: str) -> dict:
         "defaults_keys_by_dir": {},
         "routing_tree_problems": [],
         "tenant_declarations": [],   # (file, tenant id) per tenant-file key
+        # #2315: {tenant_id: [file, ...]} for every id two tenant files declare.
+        "duplicate_tenants": {},
     }
 
     if not os.path.isdir(config_dir):
@@ -918,6 +925,11 @@ def _parse_config_files(config_dir: str) -> dict:
 
     for nested_def in result.pop("_nested_profile_defs", []):
         _record_profiles(*nested_def, result)
+    # #2315: validate-config's `tenant_uniqueness` scan, called — not
+    # re-derived — so the two tools agree on every duplicate. It walks the
+    # whole tree, as the exporter does, although this reader routes the root.
+    result["duplicate_tenants"] = duplicate_declarations(
+        tenant_declarations(config_dir)[0])
     _apply_tenant_entries(config_dir, tenant_entries, result)
     return result
 
@@ -1076,6 +1088,9 @@ class TenantTree:
         """The #2326 findings that refuse the whole tree (rc 2, every mode)."""
         return [p for p in self.routing_tree_problems
                 if p[0] in BLOCKING_TREE_KINDS]
+    # #2315: {tenant_id: [file, ...]} — ids two tenant files declare
+    # (`_lib_confd.tenant_declarations`, validate-config's own scan).
+    duplicate_tenants: dict[str, list[str]] = field(default_factory=dict)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -1228,4 +1243,5 @@ def load_tenant_tree(
         files_read=parsed.get("files_read", 0),
         files_skipped=list(parsed.get("files_skipped", [])),
         tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
-        routing_tree_problems=tree_problems)
+        routing_tree_problems=tree_problems,
+        duplicate_tenants=dict(parsed.get("duplicate_tenants", {})))

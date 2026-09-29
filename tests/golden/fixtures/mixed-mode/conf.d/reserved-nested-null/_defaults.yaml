@@ -1,0 +1,4 @@
+defaults:
+  _x:
+    inherited_list: ["alertname"]
+    inherited_str: "30s"

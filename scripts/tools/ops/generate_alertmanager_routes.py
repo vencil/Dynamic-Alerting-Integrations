@@ -146,6 +146,9 @@ from _grar_render import VALIDATE_AMTOOL_NOT_FOUND_NOTICE  # noqa: E402, F401
 # re-export and carries the F401 marker.
 from _grar_validate import blocking_generation_errors  # noqa: E402, F401
 from _grar_validate import is_receiver_name_collision  # noqa: E402
+# #2315: the duplicate-tenant refusal, shared with validate-config's
+# tenant_uniqueness row through `_lib_confd.tenant_declarations`.
+from _grar_validate import duplicate_tenant_errors  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -477,8 +480,9 @@ def _refuse_routing_tree_errors(tree: TenantTree) -> None:
     ADR-017 "Amendment 2026-09-28" makes the routing plane hierarchical and
     names what blocks it: `_routing_enforced` below the root, `receiver` /
     `overrides` written as null in a subdirectory level's `_routing_defaults`,
-    one routing-profile name defined in two files, one tenant id declared in
-    two files. Runs in EVERY mode, right after the file accounting and before
+    one routing-profile name defined in two files. (One tenant id declared in
+    two files is `_refuse_duplicate_tenants`, #2315 — rc 1, and it runs
+    first.) Runs in EVERY mode, right after the file accounting and before
     anything is rendered, written, validated or applied — its output is the
     Alertmanager config a customer deploys, and each of these would ship a
     route tree that silently routes some tenant's alerts somewhere else.
@@ -496,6 +500,24 @@ def _refuse_routing_tree_errors(tree: TenantTree) -> None:
     for _kind, _fname, _field, msg in errors:
         print(f"  {safe_label(msg)}", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
+def _refuse_duplicate_tenants(tree: TenantTree) -> None:
+    """#2315: one tenant id in two tenant files — refused in EVERY mode.
+
+    Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
+    the exporter rejects the WHOLE tree in this state, so no route set
+    generated from it describes anything that will run, and a ConfigMap
+    written or applied from it is the worst outcome. Before this the reader
+    merged the two blocks and exited 0 in every mode (render, --validate,
+    --output-configmap, with or without --strict).
+    """
+    dups = duplicate_tenant_errors(tree.duplicate_tenants)
+    if not dups:
+        return
+    print(f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
+          "nothing was written or applied:", file=sys.stderr)
+    for e in dups:
+        print(safe_label(e), file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
 
 
 def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:
@@ -833,6 +855,7 @@ def main() -> None:
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
         tree.as_tuple()
     _refuse_unreadable_tenant_files(tree)
+    _refuse_duplicate_tenants(tree)
     _refuse_routing_tree_errors(tree)
 
     has_routing = bool(routing_configs)

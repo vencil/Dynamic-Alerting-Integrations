@@ -190,7 +190,7 @@ owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/i
   [ADR-017「Amendment 2026-09-28」](017-defaults-yaml-inheritance-dual-hash.md)，這裡不重複。
 - **阻擋條件**（取代 #2326 第 1 步止血的「子目錄有設定檔就 rc 2」；整棵樹都讀之後，子目錄
   有檔本身不再是錯誤）：子目錄檔案裡出現 `_routing_enforced` → rc 2；同一個租戶 id 在多個
-  檔案宣告 → rc 2；以及 ADR-017 列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
+  檔案宣告 → rc 1（#2315；見 ADR-017 (e)）；以及 ADR-017 列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
 
 ## 相關
 

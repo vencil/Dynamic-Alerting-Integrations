@@ -1,4 +1,0 @@
-defaults:
-  _routing:
-    group_by: ["alertname"]
-    group_wait: "30s"

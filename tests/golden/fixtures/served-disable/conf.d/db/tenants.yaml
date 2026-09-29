@@ -1,0 +1,3 @@
+tenants:
+  tenant-served-disable:
+    mysql_connections: "disable"

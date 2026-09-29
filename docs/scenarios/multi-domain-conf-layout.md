@@ -348,11 +348,12 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 3. **陣列合併**：只支援替代，不支援追加。若需追加新 receiver，須完整列出舊的
 4. **環境變數逃逸**：`_defaults.yaml` 中的 env 變數僅在該檔案有效，tenant 檔案內不可引用
 
-### 🛡️ 已自動化的檢查
+### 🛡️ 能接上的檢查（要自己接，不是預設就有）
 
-- Pre-commit hook：禁止 `_defaults.yaml` 含有 hardcoded tenant id
-- 配置驗證：檢測重複 receiver、未定義的 rule group 參考
-- Git hook：對 `conf.d/` 的修改自動執行 `da-tools validate-config` + `describe_tenant.py` 檢查
+這個目錄布局本身不帶任何自動檢查。能擋錯的是 `da-tools validate-config`，要接到你自己的 CI 或 pre-commit：
+
+- 它實際驗什麼、哪些只給 WARN 不擋：見 [GitOps CI 整合 §2.2](gitops-ci-integration.md#22-stage-1-validate)
+- 每次改 `conf.d/` 就在本機跑：見 [§4 Pre-commit Hooks](gitops-ci-integration.md#4-shift-leftpre-commit-hooks)
 
 ## 相關資源
 

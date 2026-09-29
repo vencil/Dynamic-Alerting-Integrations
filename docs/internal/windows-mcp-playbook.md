@@ -648,7 +648,7 @@ bash scripts/session-guards/git_check_lock.sh --clean
 | `scripts/ops/recover_index.sh` | `.git/index` 已經 corrupt 或寫入一半；用 `git read-tree HEAD` 在 tmp 產生新 index，**以 atomic cp+rename 換掉 `.git/index`**（同 FS 上的 rename 才保證原子性 — trap EXIT 清 staging 檔） | `bash scripts/ops/recover_index.sh`（或 `make recover-index`） |
 | `make fuse-locks` | 列出 `.git/*.lock` 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態 | `make fuse-locks` |
 | `make fuse-commit MSG=_msg.txt FILES="a b"` | 前項 `fuse_plumbing_commit.py --auto` 的 Make 封裝 | `make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"` |
-| `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）— 讓 Windows 側 `--no-verify` 的 commit 仍有 commit-msg gate | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
+| `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）。⚠️ `--no-verify` 會連它一起跳過，所以 Windows 側的 `commit-file` 不靠這支 hook，而是由 `commit_helper.py` 在 commit 前自己跑同一個驗證器（#1914） | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
 | `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | `make pr-preflight`（pre-push hook 自動 consume marker）|
 
 **什麼時候用哪一條**（決策助記）：
@@ -665,7 +665,8 @@ git commit 失敗，錯誤訊息是 ...
 │   └─ `make recover-index`（atomic 重建 `.git/index` from HEAD tree）→ 再跑 `git status`
 │
 ├─ Commit message 被 commitlint 打回（本地沒裝 commitlint 而不自覺）
-│   └─ 自家 `scripts/hooks/commit-msg`（session-init 已自動 install）跑 `.commitlintrc.yaml` 的 type/scope 驗證
+│   └─ 自家 `scripts/hooks/commit-msg`（session-init 已自動 install）跑 `pr_preflight.py --check-commit-msg`；
+│      Windows 側 `commit-file` 帶 `--no-verify` 不觸發 hook，改由 `commit_helper.py` 在 commit 前跑同一支
 │
 └─ pre-push hook 說 "preflight marker missing"，但 branch 是 WIP 還沒開 PR
     └─ v2.8.0 後：`require_preflight_pass.sh` 用 `gh pr list --head <branch> --state open`
@@ -913,7 +914,7 @@ Windows 側剛修完的檔案（pre-commit hook EOF 換行、CI 剛寫完的 log
 
 #### 3. `run_hooks_sandbox.sh` — sandbox-side pre-commit gate
 
-`win_git_escape.bat commit-file` 內部跑 `git commit --no-verify`（陷阱 #36：pre-commit 的 shebang 寫死 Linux python path，Windows 側 git.exe 呼叫 hook 直接 404）。這意味著走 Windows 逃生門時，**本地 pre-commit hooks 完全被繞過**。
+`win_git_escape.bat commit-file` 內部跑 `git commit --no-verify`（陷阱 #36：pre-commit 的 shebang 寫死 Linux python path，Windows 側 git.exe 呼叫 hook 直接 404）。這意味著走 Windows 逃生門時，**本地 pre-commit hooks 完全被繞過**。commit-msg hook 也一樣被跳過，但那一道由 `commit_helper.py` 在 commit 前自己補跑（#1914）；這一節補的是 pre-commit 那一道。
 
 這個 wrapper 在 Cowork VM（sandbox）側跑 pre-commit，補上那個漏洞：
 
@@ -941,12 +942,12 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 **執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 `[1/3]` / `[2/3]` / `[3/3]`）**：
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`
-2. **[2/3] Windows stage + commit** — `cmd /c win_git_escape.bat add $(FILES)` 後接 `commit-file $(MSG)`（內部 `--no-verify`，因 Windows 端 hook 本來就無法執行；add + commit 合併為同一階段、同一 label，不拆 `[2/3a]` / `[2/3b]`）
+2. **[2/3] Windows stage + commit** — `cmd /c win_git_escape.bat add $(FILES)` 後接 `commit-file $(MSG)`（內部 `--no-verify`，因 Windows 端 hook 本來就無法執行；commit 訊息改由 `commit_helper.py` 先驗，不過就不 commit。add + commit 合併為同一階段、同一 label，不拆 `[2/3a]` / `[2/3b]`）
 3. **[3/3] Windows push** — `cmd /c win_git_escape.bat push`（**不帶** `--no-verify`；#1487 起改為逐格繞過 mkdocs strict 與 preflight marker，擋直推 main 那道照跑）
 
 必填：`MSG=<message-file>`（UTF-8 without BOM）
 選填：
-- `FILES=<space-separated paths>`（省略時跳過 hook-gate 和 add，假設已 staged）
+- `FILES=<space-separated paths>`（省略時跳過 hook-gate 和 add，假設已 staged。⚠️ 這時 pre-commit 一個都沒跑，只剩 commit 訊息的驗證）
 - `SKIP=<hook1,hook2>`（targeted skip，pre-commit 原生 env var）
 - `SKIP_HOOKS=1`（緊急完全繞過 sandbox hook-gate，只在 runner 異常時用）
 
@@ -955,7 +956,7 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 | 層 | 執行位置 | --no-verify？ | 原因 |
 |----|---------|--------------|------|
 | Sandbox hook-gate | Cowork VM（workspace 經 FUSE 掛載） | ❌ 不繞過 | 環境完整，hooks 真的有執行 |
-| Windows commit | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 pre-commit 產的 hook |
+| Windows commit | Windows（NTFS） | ✅ 內部固定繞過 | 陷阱 #36：Windows git.exe 無法呼叫 pre-commit 產的 hook。commit-msg 那一道由 `commit_helper.py` 在 commit 前自己跑（#1914） |
 | Windows push | Windows（NTFS） | ⚠️ 逐格繞過三道中的兩道（#1487） | hook 真的被呼叫（守衛自 #1689 起是純 bash，Windows 跑得動），但 wrapper 設了 `MKDOCS_STRICT_BYPASS=1` / `GIT_PREFLIGHT_BYPASS=1`，那兩道讀到就自行退出 ⇒ 實際在判的是擋直推 main 那道，也是唯一沒有旗標的那道 |
 
 換句話說：**pre-commit stage 的 hooks 不是被 `--no-verify` 繞過的，而是移到 sandbox 側跑**；pre-push 這條路則是 hook 真的被呼叫，而三道裡有兩道被逐格關掉——買到的是「擋直推 main 這道不再跟著一起被關」，不是「三道都在判」。

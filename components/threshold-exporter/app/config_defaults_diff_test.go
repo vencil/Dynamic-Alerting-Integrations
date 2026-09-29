@@ -346,6 +346,26 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenNoKeyChanged(t *testing.T) {
 	}
 }
 
+// #2118: the tenant id is the flat plane's (the key's text), so a bare
+// `010:` key must be found as "010" — the generic decode re-spelled it "8",
+// the lookup missed and the shadowed change was reported as cosmetic.
+func TestClassifyDefaultsNoOpEffect_BareScalarTenantKey(t *testing.T) {
+	t.Parallel()
+	dp := "/conf.d/_defaults.yaml"
+	chain := []string{dp}
+	prior := map[string]map[string]any{dp: {"mysql_connections": 80}}
+	now := map[string]map[string]any{dp: {"mysql_connections": 200}}
+	priorHashes := map[string]string{dp: "h-old"}
+	hashes := map[string]string{dp: "h-NEW"}
+	for _, key := range []string{"010", "0x1", "007", "1.0"} {
+		tenantYAML := []byte("tenants:\n  " + key + ":\n    mysql_connections: 999\n")
+		got := classifyDefaultsNoOpEffect(tenantYAML, key, chain, prior, now, hashes, priorHashes, nil, nil, nil, nil, nil, nil)
+		if got != "shadowed" {
+			t.Errorf("tenant %q: expected shadowed (its file overrides mysql_connections), got %q", key, got)
+		}
+	}
+}
+
 func TestClassifyDefaultsNoOpEffect_ShadowedWhenTenantOverridesChangedKey(t *testing.T) {
 	t.Parallel()
 	dp := "/conf.d/_defaults.yaml"
