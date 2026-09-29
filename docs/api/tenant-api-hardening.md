@@ -162,7 +162,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 | 階段 | 動作 | 風險 |
 |---|---|---|
-| 1. Deploy v2.8.0 | 預設 `TA_RATE_LIMIT_PER_MIN=100`；Groups/Views/Task/PR 開始強制 tenant-scoped authz | 客戶端跑高 QPS（>100/min）會被擋；自動化巡檢腳本可能踩到限流 |
+| 1. Deploy v2.8.0 | 預設 `TA_RATE_LIMIT_PER_MIN=100`；Groups/Views/Task/PR 開始強制 tenant-scoped authz | 同一呼叫者（`X-Forwarded-Email`，沒有則來源 IP）任一 60 秒內第 101 個請求回 `429`；只有 `/health`、`/ready`、`/metrics` 不計，SSE 每開一條連線也算一次。自動化巡檢腳本可能踩到限流 |
 | 2. 監測 24h | grep `429` 比例；確認沒有合法用戶被擋 | — |
 | 3. 調參 | 若特定批次工具需要更高 budget，調 `TA_RATE_LIMIT_PER_MIN`（建議 100 → 250 → 500 step-up）| — |
 | 4. 客戶 RBAC 補完 | 若有 group/view 跨團隊共用 → 補完成員租戶的 RBAC 授權 | 不補的話 PUT/DELETE 會 403 |
