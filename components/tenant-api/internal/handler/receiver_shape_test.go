@@ -289,7 +289,7 @@ func TestPutTenant_GeneratorRepeatedKey(t *testing.T) {
 				code, resp, written := putReceiverDoc(t, doc, pr)
 				if code != http.StatusBadRequest || written != "" ||
 					!strings.Contains(resp, "invalid YAML") ||
-					!(strings.Contains(resp, "already defined") || strings.Contains(resp, "already set")) {
+					!strings.Contains(resp, "already defined") && !strings.Contains(resp, "already set") {
 					t.Errorf("%s: status %d, written %q; want 400 invalid YAML … already defined, no write; body: %s",
 						label, code, written, resp)
 				}
