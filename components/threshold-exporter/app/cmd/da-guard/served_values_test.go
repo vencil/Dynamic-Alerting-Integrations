@@ -733,10 +733,9 @@ func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
 // two distinct keys could come out as one; it is refused and named instead.
 //
 // NOT parallel, subtests included: these trees make the collector fail
-// NewConstMetric and log.Printf through the process-global logger, which
-// run() points at its caller's stderr buffer — under t.Parallel that is some
-// other test's buffer, written by two goroutines at once (-race). Serial, with
-// an idempotent reset so the lines go to the real stderr.
+// NewConstMetric and log.Printf through the process-global logger. run() no
+// longer redirects it (#2444), so the reset below is only an idempotent guard
+// that the lines go to the real stderr, never to some test's buffer.
 func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags)
