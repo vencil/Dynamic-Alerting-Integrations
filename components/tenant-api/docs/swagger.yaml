@@ -1732,8 +1732,11 @@ paths:
         source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
         skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
         the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-        tenant file itself is repaired; a whole-file PUT replaces it (refused only if the body adds an end-of-life
-        recipe: the broken file's end-of-life usage cannot be read, so it counts as none).
+        tenant file itself is repaired. A whole-file PUT can replace it: it is not refused merely because the current
+        file is broken, though a body adding an end-of-life recipe is still refused (the broken file's end-of-life usage
+        cannot be read, so it counts as none). A broken file shared with other tenants cannot keep their sections through
+        that PUT: a body without them deletes them, a body with them is refused as adding tenant sections; to keep
+        them, fix the file in git.
       parameters:
       - description: Tenant ID
         in: path
@@ -1880,7 +1883,8 @@ paths:
         base_hash (409 on drift). Empty array deletes the key.
         409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
         tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-        whole-file PUT /api/v1/tenants/{id}, which replaces it.
+        whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
+        repair, e.g. a broken file shared with other tenants).
       parameters:
       - description: Tenant ID
         in: path

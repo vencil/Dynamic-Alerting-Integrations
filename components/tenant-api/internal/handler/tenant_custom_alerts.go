@@ -71,7 +71,8 @@ type PutCustomAlertsResponse struct {
 // @Description base_hash (409 on drift). Empty array deletes the key.
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
 // @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-// @Description whole-file PUT /api/v1/tenants/{id}, which replaces it.
+// @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
+// @Description repair, e.g. a broken file shared with other tenants).
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
