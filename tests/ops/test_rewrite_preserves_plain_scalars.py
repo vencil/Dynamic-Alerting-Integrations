@@ -317,10 +317,13 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
 @pytest.mark.parametrize("bad", _UNREADABLE)
 @pytest.mark.parametrize("layout", ["multi-file", "legacy"])
 def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
-    """Run in a FRESH interpreter: `generate_crd_schemas` registers a `!!value`
-    constructor on `yaml.SafeLoader` at import, so in a pytest worker that
-    imported it `=` is constructible for every loader and the refusal cannot
-    be observed (measured: this test went green-then-red by test order)."""
+    """Run in a FRESH interpreter: `generate_crd_schemas` used to register a
+    `!!value` constructor on the global `yaml.SafeLoader` at import, so in a
+    pytest worker that imported it `=` became constructible for every loader
+    and this test went green-then-red by test order. #2335 moved it to a
+    private loader (pinned by `tests/dx/test_generate_crd_schemas.py`); the
+    fresh interpreter stays so that no OTHER process-global import can mask
+    the refusal again."""
     tenant = _unreadable_tenant(bad)
     data = ({"_defaults.yaml": "defaults:\n  m: 1\n", "t.yaml": tenant}
             if layout == "multi-file" else

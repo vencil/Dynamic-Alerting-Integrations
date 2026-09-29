@@ -1019,6 +1019,8 @@ cat /tmp/b1_out/bench.out.txt
 
 ⚠️ `BenchmarkDiffAndReload_Hierarchical_{1000,2000,5000}_NoChange` 已固定在 Warm 模式（[#2048](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2048)）：載入前把共用 fixture 的 mtime 回溯到 `TreeScanMtimeGuard` 之外，所以單獨跑或窄 regex 下不再因執行順序與 `-benchtime` 在「全檔重讀」與「mtime fast-path」兩個模式間翻轉（改前 1000 單獨 1s 量到 42943 allocs/op，改後恆為約 33333）。PR gate 與 nightly 的完整 regex 下它本來就落在 Warm，數字不會出現斷層。冷路徑改看 `..._1000_NoChange_Reread`。
 
+⚠️ **同名不同模式**：平面的 `BenchmarkIncrementalLoad_1000_NoChange` 與 `..._OneFileChanged` 固定在 **Reread** 模式（[#2344](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2344)），和上面固定在 Warm 的階層 `..._NoChange` 相反：載入前把 fixture mtime 推到一小時後，`TreeScanMtimeGuard` 永遠不放行 fast-path，每個 tick 全檔重讀。改前兩者每次都從 `b.TempDir()` 新建 fixture，迴圈越過 2s 後才轉進 fast-path，所以 `-benchtime 3s` 量到的是兩個模式的混合（NoChange 單獨跑 1s 為 16107 allocs/op、3s 為約 10.2k–10.7k）。平面的 Warm 模式由 `..._NoChange_MtimeGuard` 量。⛔ **nightly 會出現一次階梯，那是工作定義改變、不是退化**：PR gate（`bench_gate_compare.sh`，1s）改前就落在 Reread，沒有斷層；但 nightly（`bench-record.yaml` 與 `make benchmark-report`，3s）改前量到的是混合值，main 側從 #2344 起跳到 Reread，而參考版本側仍是混合值，這兩支的配對比值會一次性上升（當夜 `workload_drift` 會列出 `config_bench_test.go`，見 ADR-032 §工作定義漂移）。
+
 ---
 
 ## Engineering Reference Benchmarks

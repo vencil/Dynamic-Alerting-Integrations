@@ -159,6 +159,11 @@ def _iter_confd_yaml(entries, suffixes):
     return sorted(p for p in entries if has_yaml_extension(p.name, suffixes))
 
 
+# #2297: a `_profile:` value names a profile by its source text, as the
+# exporter reads it (the #2216 precedent: `deprecate_rule._read_yaml`).
+_PROFILE_AS_TEXT = ("_profile",)
+
+
 def _load_first_document(path: Path) -> Any:
     """The FIRST YAML document of `path`, as the exporter's walker reads a
     config file (yaml.v3 `Unmarshal` decodes one document).
@@ -175,20 +180,24 @@ def _load_first_document(path: Path) -> Any:
     Strict (#2123): a key written twice in one mapping raises — by the
     exporter's identity, so `123:` and `"123":` are that duplicate.
     Same pure-Python parser as before.
+
+    A `_profile:` VALUE is its source text too (#2297): the exporter binds
+    `_profile: 010` to profile `010`, where PyYAML's 8 bound none.
     """
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
     with open(path, "r", encoding="utf-8") as f:
         # #2123 strict + #2114 exporter keys, composed in `_lib_io`.
-        return next(strict_load_all_exporter_keys(f), None)
+        return next(strict_load_all_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT), None)
 
 
 def _load_platform_doc(path: Path) -> Any:
     """`path` as ONE document with source-text keys (#2114) — `_load_yaml`'s
     read (single document, strict, pure parser) for the `--what-if` file's
-    `tenants:` block, so its ids match the tenant files'."""
+    `tenants:` block, so its ids match the tenant files' — and its
+    `_profile:` values (#2297)."""
     with open(path, "r", encoding="utf-8") as f:
-        return strict_load_exporter_keys(f) or {}
+        return strict_load_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",

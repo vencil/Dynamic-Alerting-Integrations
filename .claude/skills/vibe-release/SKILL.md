@@ -61,6 +61,8 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 含 version-check + lint-docs + **`lint-image-caveats`（hard gate：`<!-- image-caveat: vX.Y.Z -->` 標記舊於新的 da-tools VERSION 就擋，發版時要把那些「已發布映像還是舊行為」的註記拿掉或改寫）** + playbook-freshness + **`changelog-fragments-consumed`（hard gate，#2102）** + **`draft-advisory-check`（hard gate，#1295 fold-in）** + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 **7** 個 self-built image build + CVE scan 收進 pre-tag——#1337 由 5 擴到 7，多的兩顆隨 chart 出貨、從不發布）。⇒ 需要 PATH 上有 **docker（含 Buildx plugin——`docker-build-all` 跑的是 `docker buildx build`）** + trivy + **gh**。
 
 > **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
+>
+> ⛔ **release.yaml 的 Trivy 是「發布前」閘門（#1278）**：各 job 先推 `:candidate-<run_id>-<run_attempt>`、掃那個 digest，通過才 promote 成 `:v<ver>`／`:latest` 並簽章／`helm push`／建 Release。所以 `trivy-scan-all` 雖只是 informational，**它報的 fixable HIGH/CRITICAL 到 tag push 時就是一條被擋下、什麼都沒發布的 release 線**——打 tag 前清掉，別指望「先發再補」。被擋時的復原是 patch → 刪 git tag → 重打同名 tag；registry 上的候選 tag 不必清（理由見 playbook §Release-gate 陷阱）。
 
 ### 5. 六線 tag push + `gh release create`
 

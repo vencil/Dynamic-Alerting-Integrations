@@ -410,7 +410,9 @@ echo file as UTF-8 from PowerShell - cmd echo writes the console codepage:
 echo   [IO.File]::WriteAllText^("_msg.txt", $msg, [Text.UTF8Encoding]::new^($false^)^)
 echo   win_git_escape.bat commit-file _msg.txt
 echo.
-goto :done
+REM rc 1, like win_gh.bat: a mistyped or missing subcommand lands here, and
+REM rc 0 read as success -- `win_git_escape.bat raw ...` did exactly that (#1920).
+goto :done_err
 
 REM --- A git (or commit_helper) call failed: return 1. ---
 REM Its reason is already on stdout: each call runs with 2>&1.

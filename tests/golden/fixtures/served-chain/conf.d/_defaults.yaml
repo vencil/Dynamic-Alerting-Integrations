@@ -1,0 +1,4 @@
+defaults:
+  mysql_connections: 80
+  container_memory: 85
+  redis_connected_clients: 5000

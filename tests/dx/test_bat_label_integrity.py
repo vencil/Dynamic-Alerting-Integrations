@@ -1213,3 +1213,75 @@ def test_preflight_lists_every_lock_git_may_be_holding(tmp_path, layout) -> None
     out = _bat(trees[layout], tmp_path, "preflight").stdout.decode("utf-8", "replace")
     missed = [str(p) for p in locks if str(p).lower() not in out.lower()]
     assert missed == [], f"preflight missed locks in {layout}:\n{out}"
+
+
+# --- #1920: what the docs say a wrapper can do, the wrapper must dispatch -----
+# The playbook told readers to run `win_git_escape.bat raw git ...`; the .bat had
+# no `raw`, fell through to `:usage`, and returned 0. Two halves, both static so
+# Linux CI sees them: every documented `<wrapper>.bat <sub>` is dispatched, and
+# the fall-through is not a success.
+DISPATCH_RE = re.compile(r'^\s*if\s+/i\s+"%CMD%"=="([a-z][a-z-]*)"\s+goto\s+:', re.IGNORECASE)
+# Only inside code (inline `...` or a fenced block): prose like "the
+# win_git_escape.bat header" names the file, not an invocation.
+DOC_CALL_RE = re.compile(r"\bwin_(git_escape|gh)\.bat[ \t]+([a-z][a-z-]*)")
+FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
+INLINE_RE = re.compile(r"`[^`\n]+`")
+
+
+def _dispatched(bat: pathlib.Path) -> set[str]:
+    return {m.group(1).lower() for ln in _read_normalized(bat) if (m := DISPATCH_RE.match(ln))}
+
+
+def _documented_calls() -> list[tuple[str, str, str]]:
+    """(doc, wrapper, subcommand) for every wrapper call written as code in a .md."""
+    from _tree import REPO_ROOT as TREE_ROOT, repo_files  # noqa: PLC0415
+
+    calls = []
+    for md in repo_files(".md"):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        code = FENCE_RE.findall(text) + INLINE_RE.findall(FENCE_RE.sub("", text))
+        for chunk in code:
+            for m in DOC_CALL_RE.finditer(chunk):
+                calls.append((md.relative_to(TREE_ROOT).as_posix(), m.group(1), m.group(2)))
+    return calls
+
+
+def test_every_wrapper_dispatches_something() -> None:
+    """Control: an empty set would make the doc check below pass vacuously."""
+    for bat in BAT_FILES:
+        assert len(_dispatched(bat)) >= 5, f"{bat.name}: dispatch pattern no longer matches"
+
+
+def test_documented_subcommands_exist() -> None:
+    calls = _documented_calls()
+    assert calls, "no documented wrapper call found — the scan no longer matches"
+    known = {b.stem.removeprefix("win_"): _dispatched(b) for b in BAT_FILES}
+    missing = sorted({f"{doc}: win_{w}.bat {sub}" for doc, w, sub in calls
+                      if sub.lower() not in known[w]})
+    assert missing == [], (
+        "docs call a subcommand the wrapper does not dispatch (it falls to "
+        ":usage instead):\n" + "\n".join(missing))
+
+
+@pytest.mark.parametrize("bat_path", BAT_FILES, ids=lambda p: p.name)
+def test_usage_is_not_a_success(bat_path: pathlib.Path) -> None:
+    """An unknown subcommand lands in `:usage`; rc 0 there reads as success."""
+    lines = _read_normalized(bat_path)
+    start = next(i for i, ln in enumerate(lines) if LABEL_RE.match(ln) and ln.strip().lower() == ":usage")
+    block = []
+    for ln in lines[start + 1:]:
+        if LABEL_RE.match(ln):
+            break
+        block.append(ln)
+    gotos = [m.group(1).lower() for ln in block
+             if not ln.strip().upper().startswith("REM ") for m in GOTO_RE.finditer(ln)]
+    assert gotos and gotos[-1] == "done_err", f"{bat_path.name} :usage ends in {gotos[-1:]}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_an_unknown_subcommand_is_reported_as_failure(tmp_path) -> None:
+    """The behavioural twin of the check above."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True, timeout=60)
+    (tmp_path / "scripts" / "ops").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", tmp_path / "scripts" / "ops")
+    assert _bat(tmp_path, tmp_path, "raw", "git", "status").returncode != 0

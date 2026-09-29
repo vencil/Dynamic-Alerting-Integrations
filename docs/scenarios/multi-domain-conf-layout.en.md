@@ -143,6 +143,17 @@ tenants:
 > own `_routing:` are **consumed by nothing** — use the remaining routing examples in
 > this document against a flat directory.
 >
+> 🗓️ **Hierarchical routing is decided; the implementation lands in a follow-up PR**
+> ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326), 2026-09-28):
+> the routing plane will follow the same directory hierarchy as the threshold plane —
+> `_routing_defaults` from each level's `_defaults.yaml` merged shallowly per top-level key
+> (deeper level wins; `null` follows ADR-017's existing per-field rules); `_routing_enforced` at the root
+> only; `_routing_profiles.yaml` and `_domain_policy.yaml` allowed in subdirectories and
+> scoped to their subtree; the same tenant id declared in more than one file is a blocking
+> error. Full semantics:
+> [ADR-017 "Amendment 2026-09-28"](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
+> ⛔ Until that PR merges, the previous paragraph is the actual behaviour.
+>
 > ✅ **`validate_config.py` was made recursive in
 > [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)** (conf.d family ticket
 > [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)) — it
@@ -355,11 +366,12 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 3. **Array merging**: Only replacement supported, no appending. If new receiver needed, list old ones too
 4. **Environment variable escape**: Env variables in `_defaults.yaml` are local to that file; tenant files cannot reference them
 
-### 🛡️ Automated Checks
+### 🛡️ Checks You Can Wire In (not on by default)
 
-- Pre-commit hook: Prevents `_defaults.yaml` from containing hardcoded tenant IDs
-- Config validation: Detects duplicate receivers, undefined rule group references
-- Git hook: Any `conf.d/` modification triggers `da-tools validate-config` + `describe_tenant.py` checks
+This directory layout comes with no automatic checks. What catches mistakes is `da-tools validate-config`, wired into your own CI or pre-commit:
+
+- What it actually validates, and what only warns without blocking: see [GitOps CI Integration §2.2](gitops-ci-integration.en.md#22-stage-1-validate)
+- Run it locally on every `conf.d/` change: see [§4 Pre-commit Hooks](gitops-ci-integration.en.md#4-shift-left-pre-commit-hooks)
 
 ## Related Resources
 

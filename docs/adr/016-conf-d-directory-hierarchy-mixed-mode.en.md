@@ -63,7 +63,7 @@ conf.d/
 - Depth **0-3 layers are all valid** (flat = 0 layers)
 - Suggested naming: `{domain}/{region}/{env}/` — aligns with `_metadata` fields
 - Scanner does not enforce directory name vs `_metadata` correspondence (warning-level log only)
-- Subdirectories beyond 3 levels are also scanned (future extensibility), but `_defaults.yaml` inheritance only recognizes the domain/region/env three layers
+- Subdirectories beyond 3 levels are also scanned, and `_defaults.yaml` inheritance has **no depth cap** either: every directory from the root down to the tenant's own directory contributes its carrier to the chain (`CollectDefaultsChain` in `pkg/config/inheritance_graph.go` walks up to the root with no level limit). ⚠️ Corrected 2026-09-28 (#2326): this line used to say inheritance "only recognizes the domain/region/env three layers", which the code never implemented; three levels is the naming recommendation, not a limit
 
 ### Directory Path Provides Metadata Defaults
 
@@ -127,7 +127,8 @@ State after the PR #1343 fix:
 | threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
 | threshold-exporter **metrics it actually emits** | ✅ full recursive inheritance (fixed by #1521; flat before that — see the note below) |
 | `validate_config.py` | ✅ now recursive |
-| routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
+| routing plane: the route generator (`generate_alertmanager_routes.py`) and da-guard / tenant-api routing layers (`pkg/routingpolicy`) | ⚠️ **still flat today**: the generator reads tenants and routing layers from the conf.d root only; da-guard finds tenants recursively but reads the routing layers from the root only. **Hierarchical support is decided** (see "Amendment 2026-09-28" below); ⛔ the implementation lands in a follow-up PR |
+| remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
 > ⚠️ **Note (found 2026-08-22 → closed 2026-08-24, #1521)**: this table used to
 > carry a single row, `threshold-exporter (thresholds) | ✅ full recursive
@@ -162,15 +163,46 @@ State after the PR #1343 fix:
 > `Defaults`: that map has no subtree scope, so admitting it would re-price
 > every tenant in the tree that carries no override of its own.
 
-⇒ **The routing plane does not support a hierarchical layout yet**:
+⇒ **Today the routing plane does not support a hierarchical layout yet**:
 `_routing_defaults` and a tenant's own `_routing` are consumed by nothing when
-they sit in a subdirectory. To use routing, keep tenant files at the top level
-of `conf.d/`.
+they sit in a subdirectory, and the generator emits no route for a tenant in a
+subdirectory. Until the follow-up implementation PR lands, keep tenant files
+that need routing at the top level of `conf.d/`.
 
 The "flat but loud" contract is enforced by
 `tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
 stays silent fails the gate, so **the choice has to be deliberate**. The shared
-enumeration layer is `scripts/tools/_lib_confd.py`.
+enumeration layer is `scripts/tools/_lib_confd.py`. The route generator is
+still one of the flat-but-loud readers today; the implementation PR for the
+amendment below moves it out of that set and updates the contract test's entry
+with it.
+
+### Amendment 2026-09-28 (#2326): the routing plane becomes hierarchical (decided; implementation in a follow-up PR)
+
+Owner decision (option **P2** of
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)):
+the routing plane follows the same directory hierarchy as the threshold plane,
+instead of staying root-only. **This amendment only fixes the semantics; no code
+has changed yet.** Until the implementation PR merges, the table above and the
+paragraph above describe the actual behaviour.
+
+- **Walker**: the same one the threshold plane uses — Python
+  `_lib_confd.list_config_tree()`, Go `config.ScanDirTree` +
+  `CollectDefaultsChain` (hidden directories pruned, directory symlinks
+  reported, a directory holding only a README contributes nothing). The route
+  generator and da-guard / tenant-api (`pkg/routingpolicy`) change together, so
+  the Python ↔ Go parity matrix stays one answer.
+- **Layer chain**: `_routing_defaults` along the tenant's chain → routing profile
+  → the tenant's own `_routing`. The full semantics (shallow merge per top-level
+  key, root-only `_routing_enforced`, subtree-scoped profiles and domain
+  policies, duplicate tenant ids) are recorded in
+  [ADR-017 "Amendment 2026-09-28"](017-defaults-yaml-inheritance-dual-hash.en.md),
+  the ADR that owns inheritance semantics; they are not repeated here.
+- **Blocking conditions** (replacing the #2326 step-1 stopgap "any config file in
+  a subdirectory → rc 2", since a subdirectory file is no longer an error once the
+  tree is read): `_routing_enforced` in a subdirectory file → rc 2; the same
+  tenant id declared in more than one file → rc 2; the `null`-receiver,
+  profile-name and domain-policy errors listed in ADR-017.
 
 ## Related
 
