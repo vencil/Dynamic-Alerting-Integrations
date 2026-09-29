@@ -1998,6 +1998,9 @@ def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> No
     assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
 
 
+# ---------------------------------------------------------------------------
+# #1690 round 2 — gaps a coverage-inventory review measured as unasserted
+# ---------------------------------------------------------------------------
 def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
     """A refused checkout shows git's own words and the guard's fixed refusal,
     on both streams, pinned whole: no guessed cause slips in either one."""
@@ -2073,10 +2076,6 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
     assert not record.exists(), (
         "the guard fell back to building the working tree — that is #1690, and "
         "as a fallback it reports the wrong tree's verdict"
-    )
-    assert "MKDOCS_STRICT_BYPASS" in (r.stdout + r.stderr), (
-        "refusing without naming the one command that reaches green turns this "
-        "into a dead end; the message must offer the documented escape hatch"
     )
     # ⛔ git's own words, all of them, and no guessed cause (#2210).
     _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\nhint: second line\n")
