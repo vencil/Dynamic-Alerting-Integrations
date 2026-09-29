@@ -117,13 +117,13 @@ OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
-curl -fsSLo da-guard.tar.gz "${URL}/da-guard-${OS}-${ARCH}.tar.gz"
+curl -fsSLO "${URL}/da-guard-${OS}-${ARCH}.tar.gz"   # keep the original name so SHA256SUMS matches it
 curl -fsSLo SHA256SUMS "${URL}/SHA256SUMS"
 
 # Verify hash (any mismatch aborts)
 sha256sum --check --ignore-missing SHA256SUMS
 
-tar xzf da-guard.tar.gz
+tar xzf da-guard-${OS}-${ARCH}.tar.gz
 sudo install -m 0755 da-guard-${OS}-${ARCH} /usr/local/bin/da-guard
 da-guard --version    # should print da-guard v2.9.0
 ```
@@ -165,21 +165,21 @@ For environments that cannot pull from `ghcr.io` at all (isolated internal regis
 
 ```bash
 TAG=tools/v2.9.0    # Synced by bump_docs.py at release time; replace with the tag you want
-VER=2.7.0
+VER=${TAG#tools/v}
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
 # 1. Download image tar + SHA256
-curl -fsSLo da-tools-image.tar.gz "${URL}/da-tools-image-v${VER}.tar.gz"
-curl -fsSLo da-tools-image.tar.gz.sha256 "${URL}/da-tools-image-v${VER}.tar.gz.sha256"
+curl -fsSLO "${URL}/da-tools-image-v${VER}.tar.gz"
+curl -fsSLO "${URL}/da-tools-image-v${VER}.tar.gz.sha256"
 
 # 2. Verify hash
-sha256sum --check da-tools-image.tar.gz.sha256
+sha256sum --check da-tools-image-v${VER}.tar.gz.sha256
 
 # 3. Move the entire tar.gz into the air-gapped environment
 #    (USB / internal file transfer / etc.)
 
 # 4. Inside the air-gapped environment, load into local Docker
-gunzip -c da-tools-image.tar.gz | docker load
+gunzip -c da-tools-image-v${VER}.tar.gz | docker load
 # Prints: Loaded image: ghcr.io/vencil/da-tools:v2.9.0
 
 # 5. Re-tag to your internal registry (optional)

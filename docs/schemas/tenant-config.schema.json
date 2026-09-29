@@ -1133,7 +1133,7 @@
         "op": {
           "type": "string",
           "title": "Comparison Operator",
-          "description": "How the computed value is compared to the threshold (ignored by absence). `==` is threshold-recipe-only (validator-enforced, #810): exact match for an integer status/error code on a raw gauge; computed-value recipes (rate/ratio/p99_latency/forecast) reject it as float-fragile.",
+          "description": "How the computed value is compared to the threshold (ignored by absence). `==` is threshold-recipe-only (validator-enforced, #810): exact match for an integer status/error code on a raw gauge; every other recipe rejects it (float equality on a computed value is fragile; absence compares no value).",
           "enum": [">", ">=", "<", "<=", "=="],
           "default": ">"
         },

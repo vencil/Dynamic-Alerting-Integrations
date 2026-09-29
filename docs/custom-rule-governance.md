@@ -392,7 +392,7 @@ flowchart TD
   threshold: "1236:critical"
 ```
 
-`==` 為 **threshold recipe 限定**（計算型 recipe——rate／ratio／p99／forecast——兩側 validator 一致拒絕：浮點等值脆弱）。語意是 **any-match**：逐 replica 的原始值先比代碼再聚合，**任一**實例等於該碼即觸發，多副本持不同碼不會互相掩蓋。
+`==` 為 **threshold recipe 限定**（其他 recipe 兩側 validator 一律拒絕：計算出來的值做浮點等值很脆弱，absence 則根本不比數值）。語意是 **any-match**：逐 replica 的原始值先比代碼再聚合，**任一**實例等於該碼即觸發，多副本持不同碼不會互相掩蓋。
 
 **決策樹**
 
