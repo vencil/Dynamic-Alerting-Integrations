@@ -222,22 +222,23 @@ WORKTREE_FAILED
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
-    _failed=""
-    for _sha in "${_build_shas[@]}"; do
-        echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
-        _build_one "$_sha" || _failed="$_failed ${_sha:0:8}"
-    done
-    if [ -z "$_failed" ]; then
-        echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
-        exit 0
-    fi
+    # ⛔ Stop at the first failure. A Ctrl-C ends the build it lands in with a
+    # plain non-zero, and carrying on built the next ref after git had already
+    # given the prompt back, then named the interrupted commit as failing.
     # ⛔ No fix-up advice and no "see above": every non-zero lands here —
     # broken links, a failed checkout, an aborted build, a Ctrl-C mid-build,
     # which prints nothing above — so advice is a guess, and it sent a
-    # contributor who pressed Ctrl-C to edit links (#2210). Name the commits.
-    echo ""
-    echo "::error::mkdocs strict did not pass for:$_failed"
-    exit 1
+    # contributor who pressed Ctrl-C to edit links (#2210). Name the commit.
+    for _sha in "${_build_shas[@]}"; do
+        echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
+        if ! _build_one "$_sha"; then
+            echo ""
+            echo "::error::mkdocs strict did not pass for ${_sha:0:8}"
+            exit 1
+        fi
+    done
+    echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
+    exit 0
 fi
 
 # Tier 2: no native mkdocs; soft fail

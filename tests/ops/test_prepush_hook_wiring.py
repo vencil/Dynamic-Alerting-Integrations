@@ -1931,9 +1931,11 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     )
 
 
-# Fails only for the commit named in PREPUSH_TEST_FAIL_SHA, and marks what it
-# printed on each stream, so the test can tell its output from the guard's.
+# The recorder, failing only for the commit named in PREPUSH_TEST_FAIL_SHA and
+# marking what it printed on each stream, so the test can tell its output from
+# the guard's.
 _SENTINEL_CHECK = """#!/usr/bin/env bash
+git rev-parse HEAD >> "$PREPUSH_TEST_RECORD"
 [ "$(git rev-parse HEAD)" = "$PREPUSH_TEST_FAIL_SHA" ] || exit 0
 echo "CHECK-STDOUT"
 echo "CHECK-STDERR" >&2
@@ -1948,7 +1950,9 @@ def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
     links, an aborted build, a Ctrl-C mid-build. Advice there is a guess. What
     the guard may add is exactly one line naming the commit that failed —
     pinned as a whole, so no reworded advice slips past a keyword list. Two
-    refs, the first one failing: the second one's PASS then sits just above."""
+    refs, the first one failing: the guard stops there, because a Ctrl-C ends
+    the build it lands in with a plain non-zero, and carrying on built the next
+    ref after git had already given the prompt back."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_SENTINEL_CHECK)
     assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
     (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
@@ -1963,12 +1967,14 @@ def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
     assert r.returncode == 1, f"a failed build let the push through:\n{r.stdout}{r.stderr}"
     assert r.stderr == "CHECK-STDERR\n", f"stderr is not the build's own:\n{r.stderr}"
     tail = r.stdout.split(f"validating pushed commit {sha_b[:8]}\n", 1)[-1].splitlines()
-    assert tail == [
-        "CHECK-STDOUT",
-        f"[pre-push-mkdocs] validating pushed commit {sha_c[:8]}",
-        "",
-        f"::error::mkdocs strict did not pass for: {sha_b[:8]}",
-    ], f"the guard added to or dropped from the build's output:\n{r.stdout}"
+    assert tail == ["CHECK-STDOUT", "", f"::error::mkdocs strict did not pass for {sha_b[:8]}"], (
+        f"the guard added to or dropped from the build's output:\n{r.stdout}"
+    )
+    assert record.read_text(encoding="utf-8").split() == [sha_b], (
+        f"the guard went on building after a failure (not {sha_c})"
+    )
+
+
 # mkdocs.yml hook: the build announces itself, then sleeps until interrupted.
 _SLOW_HOOK = """import os, pathlib, time
 
@@ -2057,7 +2063,7 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
     assert proc.returncode != 0, f"the push went through:\n{out}"
     # Everything after the build's last word, pinned whole: the guard adds
     # the one line naming the commit, and nothing that guesses at a cause.
-    verdict = ["", f"::error::mkdocs strict did not pass for: {sha8}"]
+    verdict = ["", f"::error::mkdocs strict did not pass for {sha8}"]
     if case == "broken-link":
         assert "missing.md" in out, out
         tail = out.split("MKDOCS STRICT STATUS=FAIL ACTIONABLE_WARNINGS=1\n", 1)[-1].splitlines()
@@ -2132,10 +2138,20 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
     )
     # ⛔ git's own reason, not a guessed one: "stale registration, run prune"
     # was offered for a `.git/worktrees` that was a file, where prune does
-    # nothing (#2210 review).
-    assert "fatal: simulated worktree failure" in r.stderr, (
-        "the guard hid git's own error. stderr=%s" % r.stderr
-    )
+    # nothing (#2210 review). Pinned whole, so no guess slips back in.
+    assert r.stderr == (
+        "fatal: simulated worktree failure\n"
+        "\n"
+        f"[pre-push-mkdocs] ⛔ could not check out {sha_b} to validate it.\n"
+        "\n"
+        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
+        "in, so it cannot fall back to the working tree — that would report on the\n"
+        "wrong commit. Refusing instead.\n"
+        "\n"
+        "To push anyway (the docs build then runs only in CI):\n"
+        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
+        "\n"
+    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
 
 
 def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(
