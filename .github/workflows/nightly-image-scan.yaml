@@ -245,7 +245,7 @@ jobs:
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
             ref: "prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.11@sha256:3ea272e5cab64a4a62240c682e2c62433b25614d956d44c299a10cb6994f6f2e"
+            ref: "grafana/grafana:12.4.12@sha256:83be3e511ede559bee80e2215bb1987cb1246075461cb961beb515b0341e7aea"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
