@@ -650,9 +650,6 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-# 本輪決策 R2：pre-tag 時 since 標記的版號必須已是 CHANGELOG 的 ## [vX.Y.Z]
-# 標題（收尾第一步就加上要打的那一版）。target-specific 變數會傳給前置 target。
-pre-tag: IMAGE_CAVEATS_ARGS := --pre-tag
 pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
@@ -661,6 +658,11 @@ pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll change
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
+
+# 本輪決策 R2：pre-tag 時 since 標記的版號必須已是 CHANGELOG 的 ## [vX.Y.Z]
+# 標題（收尾第一步就加上要打的那一版）。target-specific 變數會傳給前置 target；
+# 放在規則之後，`pre-tag:` 開頭的第一行才仍是依賴清單（test_bump_docs 讀它）。
+pre-tag: IMAGE_CAVEATS_ARGS := --pre-tag
 
 # --- #2102: every changelog.d/ fragment must be assembled before tagging ---
 # The release wrap-up turns changelog.d/ into ## [vX.Y.Z] and deletes the
