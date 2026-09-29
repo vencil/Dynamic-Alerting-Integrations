@@ -407,11 +407,12 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	const withOther = ownOnly + "  " + other + ":\n    mysql_connections: \"60\"\n"
 	cases := []struct {
 		name, base, body string
+		wantConfigError  string
 		wantCode         int
 	}{
-		{"unparseable_own_section_only_deletes_co_resident", unparseable, ownOnly, http.StatusOK},
-		{"unparseable_with_co_resident_is_refused", unparseable, withOther, http.StatusBadRequest},
-		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, http.StatusOK},
+		{"unparseable_own_section_only_deletes_co_resident", unparseable, ownOnly, "malformed_yaml", http.StatusOK},
+		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "malformed_yaml", http.StatusBadRequest},
+		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, "invalid_config", http.StatusOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -420,6 +421,19 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": broken, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, rbacYAML), WriteMode: WriteModeDirect}
+			// The base really is one GET flags (and with the reason this case
+			// is about), so a 200 below is a repair, not a healthy write.
+			gw := httptest.NewRecorder()
+			GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/"+id, "id", id, nil))
+			var got struct {
+				ConfigError string `json:"config_error"`
+			}
+			if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil || gw.Code != http.StatusOK {
+				t.Fatalf("GET status = %d, err = %v; body: %s", gw.Code, err, gw.Body.String())
+			}
+			if got.ConfigError != c.wantConfigError {
+				t.Fatalf("before: GET config_error = %q, want %q", got.ConfigError, c.wantConfigError)
+			}
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(c.body))
 			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{"ops"})
 			if w.Code != c.wantCode {

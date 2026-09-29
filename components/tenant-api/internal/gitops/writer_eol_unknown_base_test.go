@@ -86,6 +86,24 @@ func TestEolGuard_UnparseableBaseForbidsEveryEolRecipe(t *testing.T) {
 	}
 }
 
+// Control for the line between "cannot parse" and "cannot be loaded as a
+// tenant config": a file that is invalid_config only because it also
+// declares a non-UTF-8 tenant id still parses for the eol guard, so its
+// baseline is the ACTUAL usage — keeping the existing eol alert passes,
+// growing it is refused against a baseline of one, not zero.
+func TestEolGuard_NonUTF8SiblingBaseKeepsActualBaseline(t *testing.T) {
+	t.Parallel()
+	base := []byte("tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
+		strings.TrimPrefix(eolBody("a"), "tenants:\n"))
+	if errs := eolGuardErrs(base, nil, eolBody("a-renamed"), eolTestTenant, fakeEolViolations); len(errs) > 0 {
+		t.Errorf("keeping the one existing eol alert over a non-UTF-8 sibling base refused: %q", errs)
+	}
+	errs := eolGuardErrs(base, nil, eolBody("a", "b"), eolTestTenant, fakeEolViolations)
+	if len(errs) != 1 || !strings.Contains(errs[0], "have 1, write requests 2") {
+		t.Errorf("growing eol usage over a non-UTF-8 sibling base: errs = %q, want one violation against have 1", errs)
+	}
+}
+
 // Must-trigger controls: the guard's behavior on a PARSEABLE base, on a
 // missing file and on an unreadable one is what it was before #2405.
 func TestEolGuard_KnownBaselineUnchanged(t *testing.T) {
