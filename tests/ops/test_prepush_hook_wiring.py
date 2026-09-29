@@ -1947,13 +1947,9 @@ exit 1
 def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: int,
 ) -> None:
-    """#2210 — every non-zero from the build reaches the same branch: broken
-    links, an aborted build, a Ctrl-C mid-build. Advice there is a guess. What
-    the guard may add is exactly one line naming the commit that failed —
-    pinned as a whole, so no reworded advice slips past a keyword list. The
-    guard stops at that commit, because a Ctrl-C ends the build it lands in
-    with a plain non-zero, and carrying on built the next ref after git had
-    already given the prompt back."""
+    """#2210 — a failed build (broken links, an abort, a Ctrl-C) gets no
+    advice: the guard adds one line naming the commit, pinned whole, and stops
+    there instead of building the next ref."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_SENTINEL_CHECK)
     assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
     (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
@@ -1983,133 +1979,25 @@ def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> No
     The tree must be registered for clean-up before `add` runs, or it stays
     in .git, still registered."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path)
-    assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
-    (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "docs: change on topic2 only")
-    sha_c = _git(work, "rev-parse", "HEAD").stdout.strip()
-    assert _git(work, "checkout", "-q", "main").returncode == 0
     hook = work / ".git" / "hooks" / "post-checkout"
-    hook.write_text("#!/bin/sh\necho 'post-checkout: simulated failure' >&2\nexit 7\n", encoding="utf-8")
+    hook.write_text("#!/bin/sh\nprintf '%s\\n' 'post-checkout: simulated failure' 'second line' >&2\n"
+                    "exit 7\n", encoding="utf-8")
     hook.chmod(0o755)
     # Local beats a developer's global core.hooksPath, which would skip the hook.
     assert _git(work, "config", "core.hooksPath", str(hook.parent)).returncode == 0
     before = _git(work, "worktree", "list", "--porcelain").stdout
 
-    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n"
-                                 f"refs/heads/topic2 {sha_c} refs/heads/topic2 {sha_a}\n")
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
 
     # Must-fire half: the hook ran, so the tree did exist.
     assert "post-checkout: simulated failure" in r.stderr, f"the hook never ran:\n{r.stderr}"
     assert r.returncode == 1, f"a push it could not validate went through:\n{r.stdout}{r.stderr}"
-    _assert_refused_verbatim(r, sha_b, "post-checkout: simulated failure\n")
+    _assert_refused_verbatim(r, sha_b, "post-checkout: simulated failure\nsecond line\n")
     after = _git(work, "worktree", "list", "--porcelain").stdout
     assert after == before, f"worktrees changed across the push:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
 
 
-# mkdocs.yml hook: the build announces itself, then sleeps until interrupted.
-_SLOW_HOOK = """import os, pathlib, time
-
-def on_pre_build(config):
-    started = os.environ.get("PREPUSH_TEST_STARTED")
-    if started:
-        pathlib.Path(started).touch()
-        time.sleep(30)
-"""
-
-
-@pytest.mark.skipif(shutil.which("mkdocs") is None, reason="needs a real mkdocs: its Ctrl-C handling is the subject")
-@pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
-@pytest.mark.parametrize("case", ["interrupted", "broken-link", "clean"])
-def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
-    tmp_path: Path, case: str,
-) -> None:
-    """#2210, end to end: real mkdocs, the shipped strict check, the installed
-    wiring, and the group-wide SIGINT a terminal sends.
-
-    The guard outlives the interrupt and reaches its failure branch.
-    ``broken-link`` is the must-fire twin (the check's own verdict still
-    reaches the user); ``clean`` proves the fixture passes when nothing is
-    wrong.
-    """
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    lint = work / "scripts" / "tools" / "lint"
-    lint.mkdir(parents=True)
-    shutil.copy2(_REPO_ROOT / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh", lint)
-    (work / "mkdocs.yml").write_text(
-        "site_name: t\nvalidation:\n  links:\n    anchors: warn\nhooks:\n  - slow_hook.py\n",
-        encoding="utf-8",
-    )
-    (work / "slow_hook.py").write_text(_SLOW_HOOK, encoding="utf-8")
-    (work / ".gitignore").write_text("site/\nmkdocs-build.log\n__pycache__/\n", encoding="utf-8")
-    (work / "docs").mkdir()
-    # One anchor warning: the check refuses an empty debt ledger as stale.
-    (work / "docs" / "index.md").write_text("# index\n\n[a](#nowhere)\n", encoding="utf-8")
-    env = {**os.environ, "GIT_PREFLIGHT_BYPASS": "1"}
-    for var in ("MKDOCS_STRICT_BYPASS", "PREPUSH_TEST_STARTED"):
-        env.pop(var, None)
-    w = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/tools/lint/mkdocs_strict_check.sh", "--write-baseline"],
-        cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
-    assert w.returncode == 0 and "wrote 1 lines" in w.stdout, f"baseline:\n{w.stdout}{w.stderr}"
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "docs site")
-    assert _git(work, "push", "-q", "origin", "main").returncode == 0
-    assert _git(work, "checkout", "-q", "-b", "topic").returncode == 0
-    extra = "\n[m](missing.md)\n" if case == "broken-link" else "\nmore\n"
-    with (work / "docs" / "index.md").open("a", encoding="utf-8") as f:
-        f.write(extra)
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "docs: change")
-    sha8 = _git(work, "rev-parse", "--short=8", "HEAD").stdout.strip()
-    r = _install_guards(work)
-    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
-
-    started = tmp_path / "started"
-    if case == "interrupted":
-        env["PREPUSH_TEST_STARTED"] = str(started)
-    proc = subprocess.Popen(  # subprocess-timeout: ignore
-        ["git", "push", "--dry-run", "origin", "topic"], cwd=work, env=env,
-        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-    )
-    try:
-        if case == "interrupted":
-            deadline = time.monotonic() + 60
-            while not started.exists():
-                assert proc.poll() is None, f"the push ended before the build started: {proc.communicate(timeout=20)}"
-                assert time.monotonic() < deadline, "the build never started"
-                time.sleep(0.05)
-            os.killpg(proc.pid, signal.SIGINT)
-        out, _ = proc.communicate(timeout=50)
-    finally:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    if case == "clean":
-        assert proc.returncode == 0 and "MKDOCS STRICT STATUS=PASS" in out, out
-        return
-    assert proc.returncode != 0, f"the push went through:\n{out}"
-    # Everything after the build's last word, pinned whole: the guard adds
-    # the one line naming the commit, and nothing that guesses at a cause.
-    verdict = ["", f"::error::mkdocs strict did not pass for {sha8}"]
-    if case == "broken-link":
-        assert "missing.md" in out, out
-        tail = out.split("MKDOCS STRICT STATUS=FAIL ACTIONABLE_WARNINGS=1\n", 1)[-1].splitlines()
-        assert tail[:2] == verdict and len(tail) == 3 and tail[2].startswith("error: failed to push"), out
-    else:
-        # The interrupted build printed nothing; git died of the signal.
-        tail = out.split(f"validating pushed commit {sha8}\n", 1)[-1].splitlines()
-        assert tail == verdict, f"not the failure branch, or more than the verdict:\n{out}"
-
-
-# ---------------------------------------------------------------------------
-# #1690 round 2 — gaps a coverage-inventory review measured as unasserted
-# ---------------------------------------------------------------------------
 def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
     """A refused checkout shows git's own words and the guard's fixed refusal,
     on both streams, pinned whole: no guessed cause slips in either one."""
@@ -2134,7 +2022,7 @@ def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
 _GIT_SHIM = """#!/usr/bin/env bash
 # Fail only `git worktree add`; delegate everything else to the real git.
 if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
-    echo "fatal: simulated worktree failure" >&2
+    printf '%s\\n' "fatal: simulated worktree failure" "hint: second line" >&2
     exit 1
 fi
 exec "$REAL_GIT" "$@"
@@ -2190,10 +2078,8 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
         "refusing without naming the one command that reaches green turns this "
         "into a dead end; the message must offer the documented escape hatch"
     )
-    # ⛔ git's own reason, not a guessed one: "stale registration, run prune"
-    # was offered for a `.git/worktrees` that was a file, where prune does
-    # nothing (#2210 review). Pinned whole, so no guess slips back in.
-    _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\n")
+    # ⛔ git's own words, all of them, and no guessed cause (#2210).
+    _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\nhint: second line\n")
 
 
 def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(

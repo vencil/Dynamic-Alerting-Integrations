@@ -187,10 +187,10 @@ _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
     rm -rf "$_wt"
-    # Set BEFORE `add`: the path is this process's own, so a failed add leaves
-    # nothing the trap could wrongly remove.
+    # Set BEFORE `add`: a failed add can still leave the tree (a failing
+    # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
-    # ⛔ git's own stderr is the diagnosis; no guessed causes here (#2210).
+    # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
     if ! git worktree add --detach --quiet "$_wt" "$_sha"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
         # is EXACTLY the #1690 defect this guard exists to remove, and it is
@@ -222,13 +222,9 @@ WORKTREE_FAILED
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
-    # ⛔ Stop at the first failure. A Ctrl-C ends the build it lands in with a
-    # plain non-zero, and carrying on built the next ref after git had already
-    # given the prompt back, then named the interrupted commit as failing.
-    # ⛔ No fix-up advice and no "see above": every non-zero lands here —
-    # broken links, a failed checkout, an aborted build, a Ctrl-C mid-build,
-    # which prints nothing above — so advice is a guess, and it sent a
-    # contributor who pressed Ctrl-C to edit links (#2210). Name the commit.
+    # ⛔ Every non-zero lands here — broken links, a failed checkout, a Ctrl-C
+    # (which prints nothing) — so name the commit, give no advice, and stop:
+    # carrying on would build the next ref after git has returned (#2210).
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
         if ! _build_one "$_sha"; then
