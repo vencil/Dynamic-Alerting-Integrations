@@ -320,3 +320,65 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 		}
 	}
 }
+
+// #2405: the whole-file PUT is the repair path for every file GET answers with
+// config_error — not only for the non-UTF-8 sibling id. Before the fix, a file
+// whose YAML does not parse, whose `tenants:` is not a mapping, or that
+// repeats a key was refused by the end-of-life guard's read of the current
+// file (400 "cannot read current custom alerts") and could only be fixed in
+// git. The body here carries no end-of-life recipe; that the guard still
+// refuses one over such a file is pinned in package gitops
+// (TestEolGuard_UnparseableBaseForbidsEveryEolRecipe) — the embedded recipe
+// status map has no end-of-life recipe to send through the handler.
+func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
+	t.Parallel()
+	const id = "svc-alpha"
+	const rbacYAML = "groups:\n  - name: ops\n    tenants: [\"" + id + "\"]\n    permissions: [read, write]\n"
+	files := []struct{ name, body, reason string }{
+		{"unclosed_flow", "tenants:\n  " + id + ": [unclosed\n", "malformed_yaml"},
+		{"not_yaml", "{{not yaml\n", "malformed_yaml"},
+		{"top_level_list", "- a\n- b\n", "invalid_config"},
+		{"tenants_scalar", "tenants: oops\n", "invalid_config"},
+		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config"},
+		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config"},
+		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config"},
+	}
+	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
+	for _, c := range files {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": c.body, "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, rbacYAML), WriteMode: WriteModeDirect}
+			getConfigError := func() string {
+				gw := httptest.NewRecorder()
+				GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/"+id, "id", id, nil))
+				if gw.Code != http.StatusOK {
+					t.Fatalf("GET status = %d; body: %s", gw.Code, gw.Body.String())
+				}
+				var got struct {
+					ConfigError string `json:"config_error"`
+				}
+				if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				return got.ConfigError
+			}
+			if got := getConfigError(); got != c.reason {
+				t.Fatalf("before: GET config_error = %q, want %q", got, c.reason)
+			}
+
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
+			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{"ops"})
+			if w.Code != http.StatusOK {
+				t.Fatalf("PUT status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if after := mustRead(t, filepath.Join(dir, id+".yaml")); after != repaired {
+				t.Errorf("file after PUT:\n%s\nwant:\n%s", after, repaired)
+			}
+			if got := getConfigError(); got != "" {
+				t.Errorf("after: GET config_error = %q, want none", got)
+			}
+		})
+	}
+}

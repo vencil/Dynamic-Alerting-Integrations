@@ -178,11 +178,12 @@ func tenantConfigError(data []byte) string {
 // reads the missing list as []) would write its partial view back over the
 // real one. The whole-file PUT /tenants/{id} does not go through here.
 //
-// ⚠️ The message does not promise an API repair path: the whole-file PUT
-// replaces a file whose only problem is a non-UTF-8 tenant id, but a file
-// with a YAML syntax error, a non-mapping `tenants:` or duplicate keys is
-// refused by that PUT too (its end-of-life guard reads the current file), so
-// today it can only be fixed in git.
+// The message names the whole-file PUT as the repair path, which holds for
+// every config_error this refusal carries (#2405): that PUT replaces rather
+// than merges, and its end-of-life guard treats a current file it cannot parse
+// as having no end-of-life usage — so the replacement is refused only if it
+// adds an end-of-life recipe, not merely because the file it replaces is
+// broken. Pinned by TestPutTenant_RepairsFileExporterRejects.
 type tenantFileNotLoadableError struct {
 	TenantID string
 	Reason   string
@@ -191,8 +192,7 @@ type tenantFileNotLoadableError struct {
 func (e *tenantFileNotLoadableError) Error() string {
 	return fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s), "+
 		"so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first "+
-		"(a whole-file PUT /api/v1/tenants/{id} can replace a file whose only problem is a non-UTF-8 tenant id; "+
-		"a file with a YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git)",
+		"(a whole-file PUT /api/v1/tenants/{id} replaces it)",
 		e.TenantID, e.Reason)
 }
 

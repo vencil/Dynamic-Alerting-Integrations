@@ -82,8 +82,8 @@ type tenantDetailNotLoadable struct {
 // @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-// @Description tenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a
-// @Description YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.
+// @Description tenant file itself is repaired; a whole-file PUT replaces it (refused only if the body adds an end-of-life
+// @Description recipe: the broken file's end-of-life usage cannot be read, so it counts as none).
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"

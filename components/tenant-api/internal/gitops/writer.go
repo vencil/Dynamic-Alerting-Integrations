@@ -1785,8 +1785,9 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// write commits — to compute the per-eol-recipe delta. Skipped when configDir
 	// is unset (unit-test shape mode). FAIL CLOSED: only a MISSING tenant file
 	// (ENOENT, a brand-new tenant with no existing eol usage) means "no current
-	// alerts"; any other read error or a parse failure errors out rather than
-	// silently skipping the guard (matches the handler's extraction fail-closed).
+	// alerts"; any other read error errors out rather than silently skipping the
+	// guard. A file that reads but does not PARSE is not refused wholesale
+	// (#2405) — see eolGuardErrs.
 	if configDir != "" {
 		// #1673: the path is resolved ONCE by the caller and handed down, so
 		// the guard reads the same file the write will land on — and so an
@@ -1794,21 +1795,51 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 		// than being flattened into a validation string here. That read now
 		// happens once at the top of this function and both stateful checks
 		// share it (#1681).
-		oldRaw, rerr := baseRaw, baseErr
-		switch {
-		case rerr == nil:
-			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
-			if err != nil {
-				return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(err)), notices
-			}
-			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
-			if err != nil {
-				return append(errs, "internal error: cannot read requested custom alerts: "+err.Error()), notices
-			}
-			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
-		case !os.IsNotExist(rerr):
-			return append(errs, "internal error: cannot read current custom alerts: "+pathlessErrText(rerr)), notices
+		if ferr := eolGuardErrs(baseRaw, baseErr, yamlContent, tenantID, customalerts.EolExpansionViolations); len(ferr) > 0 {
+			return append(errs, ferr...), notices
 		}
 	}
 	return errs, notices
+}
+
+// eolGuardErrs is validate's eol-expansion guard (ADR-024 §8): the write may
+// not grow any end-of-life recipe's instance count over what the file it
+// replaces already has. violations is customalerts.EolExpansionViolations in
+// production; it is a parameter only so a test can mark a recipe eol (the
+// embedded status map has none) without swapping a process global.
+//
+// ⛔ #2405 — AN UNPARSEABLE CURRENT FILE MEANS "BASELINE UNKNOWN", AND UNKNOWN
+// COUNTS AS ZERO. The guard used to refuse the whole write when the current
+// file would not parse (a YAML syntax error, `tenants:` that is not a mapping,
+// duplicate keys, a top-level list). That made the whole-file PUT — the one
+// endpoint that REPLACES rather than merges, i.e. the repair path — unable to
+// repair exactly the files that need it. The fail-closed direction is kept by
+// taking the baseline as empty: EolExpansionViolations counts every eol
+// instance the body has above the baseline, so with an empty baseline ANY eol
+// recipe in the body is refused and a body without one passes. What must never
+// happen is the opposite reading — "cannot tell, so do not check" — which would
+// let a broken file launder new eol usage in. Pinned by
+// TestEolGuard_UnparseableBaseForbidsEveryEolRecipe.
+//
+// Only a PARSE failure takes that path. A file that exists but cannot be READ
+// (permissions, I/O) still refuses the write: nothing about it is known, and
+// the write would land on the same unreadable path.
+func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string,
+	violations func(current, next []map[string]any) []string) []string {
+	var oldAlerts []map[string]any
+	switch {
+	case baseErr == nil:
+		cur, err := customalerts.Extract(string(baseRaw), tenantID)
+		if err == nil {
+			oldAlerts = cur
+		}
+		// err != nil: baseline unknown ⇒ oldAlerts stays empty (see above).
+	case !os.IsNotExist(baseErr):
+		return []string{"internal error: cannot read current custom alerts: " + pathlessErrText(baseErr)}
+	}
+	newAlerts, err := customalerts.Extract(yamlContent, tenantID)
+	if err != nil {
+		return []string{"internal error: cannot read requested custom alerts: " + err.Error()}
+	}
+	return violations(oldAlerts, newAlerts)
 }
