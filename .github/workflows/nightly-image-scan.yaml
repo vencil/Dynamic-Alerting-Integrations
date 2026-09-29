@@ -291,9 +291,9 @@ jobs:
           # like every other row. Bound by repo:tag to try-local/docker-compose.yaml
           # in the drift guard, so a bump on one side alone goes red.
           - name: pushgateway # try-local/docker-compose.yaml
-            ref: "prom/pushgateway:v1.10.0@sha256:7a4d0696a24ef4e8bad62bee5656855a0aff2f26416d8cb32009dc28d6263604"
+            ref: "prom/pushgateway:v1.11.3@sha256:74fa117cef2d7e383112d25139ff1c2d2e309c35389a9e0554a47136a1482e48"
           - name: curl # try-local/docker-compose.yaml (seed-metrics, mock-reconciler)
-            ref: "curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13"
+            ref: "curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)

@@ -157,7 +157,7 @@ services:
 
   # ── Monitoring stack (official multi-arch images) ────────────────────────
   pushgateway:
-    image: prom/pushgateway:v1.10.0
+    image: prom/pushgateway:v1.11.3
     ports:
       - "127.0.0.1:${EXPOSE_PUSHGATEWAY_PORT:-9091}:9091"
     restart: unless-stopped
@@ -285,7 +285,7 @@ services:
 
   seed-metrics:
     # Push the synthetic high-connections metric so the headline critical fires.
-    image: curlimages/curl:8.21.0
+    image: curlimages/curl:8.22.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-metrics.sh"]
     environment:
@@ -308,7 +308,7 @@ services:
     # a live green sawtooth. (Full rationale in push-federation-metrics.sh.)
     # restart: unless-stopped so the freshness signal survives a pushgateway
     # bounce (re-push repopulates the memory-only gateway).
-    image: curlimages/curl:8.21.0
+    image: curlimages/curl:8.22.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-federation-metrics.sh"]
     environment:
