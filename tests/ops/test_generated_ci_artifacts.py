@@ -4166,7 +4166,8 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
+        # `kubectl kustomize`: the GitLab apply image ships kubectl only.
+        'kubectl kustomize --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
