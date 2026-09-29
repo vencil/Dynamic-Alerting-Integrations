@@ -216,7 +216,8 @@ jobs:
     strategy:
       fail-fast: false # scan every image so one pull failure doesn't mask the rest
       matrix:
-        # Third-party upstream images our charts / k8s manifests PULL (not build).
+        # Third-party upstream images our charts / k8s manifests PULL (not build),
+        # plus the two the try-local demo stack alone pulls (#1337).
         # Trivy pulls each ref and scans it directly — these had ZERO automated CVE
         # detection before #902. Keep each ref in sync with the source-of-truth file
         # noted alongside it.
@@ -283,6 +284,16 @@ jobs:
             no_inventory: true
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
             ref: "alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f"
+          # try-local demo stack ONLY (#1337 ①) — README points prospective customers
+          # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
+          # pulls these two, so the extractor cannot see them. The compose file keeps
+          # a release TAG on purpose (no updater there); these rows carry tag+digest
+          # like every other row. Bound by repo:tag to try-local/docker-compose.yaml
+          # in the drift guard, so a bump on one side alone goes red.
+          - name: pushgateway # try-local/docker-compose.yaml
+            ref: "prom/pushgateway:v1.10.0@sha256:7a4d0696a24ef4e8bad62bee5656855a0aff2f26416d8cb32009dc28d6263604"
+          - name: curl # try-local/docker-compose.yaml (seed-metrics, mock-reconciler)
+            ref: "curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
@@ -564,7 +575,7 @@ jobs:
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
-            15 "third-party upstream image" \
+            17 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
           # Customer-delivered — its own issue BECAUSE THE LEVER IS DIFFERENT.
           # The other two buckets end in an action we can merge; this one mostly

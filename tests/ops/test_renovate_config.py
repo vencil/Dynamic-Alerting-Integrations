@@ -72,6 +72,14 @@ EXPECTED_DEPNAMES = {
 # SSOT (test_scan_matrix_and_deploy_refs_share_depnames), and a forge-e2e image is
 # neither deployed nor scanned. Each one gets its own customManager and group.
 FORGE_E2E_DEPNAMES = {"gitlab/gitlab-ce"}
+
+# #1337 ①: images ONLY the try-local demo stack pulls. They are in the scan
+# matrix (so the matrix manager extracts them) but in no deploy file, so they
+# sit outside the matrix == deploy depName invariant. Renovate bumps only their
+# matrix row; the compose file stays tag-only with no updater, and
+# test_every_trylocal_image_is_in_the_scan_matrix goes red on that Renovate PR
+# until try-local is moved to the same tag — the accepted cost of A′.
+TRY_LOCAL_ONLY_DEPNAMES = {"prom/pushgateway", "curlimages/curl"}
 FORGE_E2E_SCRIPT = "scripts/ops/forge_e2e_run.sh"
 
 
@@ -176,7 +184,7 @@ def test_coverage_is_complete_and_exact():
     match would mean Renovate touches an unintended ref)."""
     cfg = _load_config()
     seen = {d["depName"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
-    expected = EXPECTED_DEPNAMES | FORGE_E2E_DEPNAMES
+    expected = EXPECTED_DEPNAMES | FORGE_E2E_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES
     assert seen == expected, (
         f"\n  missing (pinned but Renovate won't bump): {sorted(expected - seen)}"
         f"\n  unexpected (Renovate would touch):       {sorted(seen - expected)}"
@@ -191,7 +199,9 @@ def test_scan_matrix_and_deploy_refs_share_depnames():
     matrix_mgr = _matrix_manager(cfg)
     matrix_names = {d["depName"] for d in _extract(matrix_mgr)}
     deploy_names = {d["depName"] for m in _deploy_managers(cfg) for d in _extract(m)}
-    assert matrix_names == EXPECTED_DEPNAMES, f"matrix missing: {sorted(EXPECTED_DEPNAMES - matrix_names)}"
+    assert matrix_names == EXPECTED_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES, (
+        f"matrix missing: {sorted((EXPECTED_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES) - matrix_names)}; "
+        f"unexpected: {sorted(matrix_names - EXPECTED_DEPNAMES - TRY_LOCAL_ONLY_DEPNAMES)}")
     assert deploy_names == EXPECTED_DEPNAMES, f"deploy missing: {sorted(EXPECTED_DEPNAMES - deploy_names)}"
 
 
