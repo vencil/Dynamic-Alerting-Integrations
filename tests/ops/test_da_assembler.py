@@ -480,6 +480,24 @@ class TestRenderCrNameFormat:
         assert f"read as {kind}" in caplog.text
         assert "Quoting makes it a string" in caplog.text
 
+    @pytest.mark.parametrize("written", [
+        pytest.param("team", id="word"),
+        pytest.param('"team"', id="quoted-word"),
+        pytest.param("0", id="zero"),
+    ])
+    def test_tagged_null_with_a_value_is_caller_error(
+            self, written, tmp_path, caplog):
+        """`!!null team`：PyYAML 建成 None，Kubernetes（YAML→JSON）拒收。
+
+        只有原文為空或 null 字面時才算「未設」。會讓本組轉紅的改動：把
+        None 一律正規化成缺鍵（不看原文），此時 rc 0 並照寫。
+        """
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: !!null {written}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "tagged !!null" in caplog.text
+
     @pytest.mark.parametrize("namespace", [
         pytest.param('"8"', id="quoted-int"),
         pytest.param("'yes'", id="quoted-bool"),
@@ -493,9 +511,12 @@ class TestRenderCrNameFormat:
 
     @pytest.mark.parametrize("ns_line", [
         pytest.param("  namespace: null\n", id="null"),
+        pytest.param("  namespace: NULL\n", id="null-upper"),
         pytest.param("  namespace: ~\n", id="tilde"),
         pytest.param("  namespace:\n", id="empty-value"),
         pytest.param('  namespace: ""\n', id="empty-string"),
+        pytest.param("  namespace: !!null\n", id="tagged-null-empty"),
+        pytest.param("  namespace: !!null null\n", id="tagged-null-null"),
     ])
     def test_unset_namespace_renders_as_absent(
             self, ns_line, tmp_path, caplog):

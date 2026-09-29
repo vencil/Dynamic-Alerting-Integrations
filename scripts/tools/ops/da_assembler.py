@@ -398,9 +398,9 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
-#: YAML 1.1 (PyYAML) implicit tags that make an unquoted name a caller
-#: error: int / float / bool. `timestamp` is absent — an unquoted date is
-#: kept as written. Close to what Kubernetes sees after YAML→JSON, NOT the
+#: YAML 1.1 (PyYAML) implicit tags that make an unquoted `metadata.name`
+#: or `metadata.namespace` a caller error: int / float / bool. `timestamp`
+#: is absent — an unquoted date passes this check (then the format one). Close to what Kubernetes sees after YAML→JSON, NOT the
 #: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
 #: differently (#2371 review). The name FORMAT is checked separately, below.
 _NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
@@ -430,6 +430,31 @@ def _is_dns1123_label(text: str) -> bool:
     """RFC 1123 label, as Kubernetes checks a namespace name."""
     return (len(text) <= _DNS1123_LABEL_MAX
             and _DNS1123_LABEL_RE.fullmatch(text) is not None)
+
+
+#: The spellings YAML 1.1 reads as null. Only these (and an empty value)
+#: make a namespace UNSET: PyYAML builds None for `!!null <anything>`, but
+#: Kubernetes (YAML→JSON) refuses `!!null team`.
+_NULL_SPELLINGS = frozenset(("", "~", "null", "Null", "NULL"))
+
+
+def _namespace_source_text(text: str) -> Any:
+    """The text `metadata.namespace` is written as in the CR *text*.
+
+    Read from the composed node tree, i.e. before a tag turned it into a
+    value. None when there is no such scalar (the last one wins, as in the
+    load). *text* has already loaded, so composing it cannot fail.
+    """
+    root = yaml.compose(text, Loader=yaml.SafeLoader)
+    if not isinstance(root, yaml.MappingNode):
+        return None
+    found = None
+    for key, meta in root.value:
+        if key.value == "metadata" and isinstance(meta, yaml.MappingNode):
+            for k, v in meta.value:
+                if k.value == "namespace" and isinstance(v, yaml.ScalarNode):
+                    found = v.value
+    return found
 
 
 def _plain_tag(text: str) -> str:
@@ -476,7 +501,8 @@ def render_cr_file(
     # the file name, the log and the header name the CR as written.
     try:
         with open(cr_path, encoding="utf-8") as fh:
-            cr = _keys_as_plain_text(load_for_rewrite(fh))
+            text = fh.read()
+        cr = _keys_as_plain_text(load_for_rewrite(text))
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
@@ -526,7 +552,16 @@ def render_cr_file(
     # #2396: a null / empty namespace is UNSET in Kubernetes (the API
     # server fills in the request's namespace), so such a CR exists in a
     # cluster. It is dropped here and renders exactly as an absent one:
-    # header `?`, log `default`.
+    # header `?`, log `default`. ⛔ None alone is not the test: PyYAML
+    # builds None for `!!null team` too, which Kubernetes refuses — the
+    # source text has to be a null spelling (or empty).
+    if "namespace" in metadata and metadata["namespace"] is None:
+        written = _namespace_source_text(text)
+        if written not in _NULL_SPELLINGS:
+            log.error("%s: metadata.namespace is tagged !!null but written "
+                      "as %r; only an empty value or ~ / null means unset",
+                      cr_path, written)
+            return EXIT_CALLER_ERROR
     if metadata.get("namespace", "") in (None, ""):
         metadata.pop("namespace", None)
     if "namespace" in metadata:
