@@ -79,6 +79,11 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, ec)
+		// A YAML `.inf` / `.nan` leaves a non-finite float in the tree, which
+		// JSON cannot carry: send it as the text Python's json.dumps writes.
+		// merged_hash was computed from the original tree, so it is unchanged.
+		out := *ec
+		out.EffectiveConfig = cfg.NonFiniteAsText(ec.EffectiveConfig)
+		writeJSON(w, http.StatusOK, out)
 	}
 }

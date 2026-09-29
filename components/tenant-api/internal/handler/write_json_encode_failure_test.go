@@ -5,10 +5,11 @@ package handler
 //
 // writeJSON used to commit the status line before encoding, so when Encode
 // failed there was nothing left to report: the client got a success it could
-// not parse and the log got nothing. The reachable case is /effective on a
-// tenant whose YAML holds `.inf` / `-.inf` / `.nan` — pkg/config resolves it
-// (merged_hash renders it the way Python's json.dumps does), but
-// effective_config itself is a float64 ±Inf / NaN, which JSON cannot carry.
+// not parse and the log got nothing. The case that first reached it was
+// /effective on a tenant whose YAML holds `.inf` / `-.inf` / `.nan`: the
+// effective_config held a float64 ±Inf / NaN, which JSON cannot carry. That
+// handler now sends such a value as text (below), so the writeJSON tests use
+// the float directly.
 
 import (
 	"encoding/json"
@@ -18,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 func TestWriteJSON_UnencodableValue_Is500Envelope(t *testing.T) {
@@ -62,7 +65,9 @@ func TestWriteJSON_EncodableValue_UnchangedBytes(t *testing.T) {
 	}
 }
 
-func TestGetTenantEffective_NonFiniteFloat_Is500NotEmpty200(t *testing.T) {
+// /effective sends a non-finite float as the text Python's json.dumps writes,
+// and merged_hash — computed from the original tree — is Python's.
+func TestGetTenantEffective_NonFiniteFloat_ReadableWithPythonHash(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -86,14 +91,20 @@ func TestGetTenantEffective_NonFiniteFloat_Is500NotEmpty200(t *testing.T) {
 	w := httptest.NewRecorder()
 	h(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body %q)", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", w.Code, w.Body.String())
 	}
-	var env ErrorResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("body is not a JSON error envelope: %v (%q)", err, w.Body.String())
+	var ec cfg.EffectiveConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &ec); err != nil {
+		t.Fatalf("body is not JSON: %v (%q)", err, w.Body.String())
 	}
-	if env.Code != CodeInternal || !strings.Contains(env.Error, "+Inf") {
-		t.Errorf("envelope = %+v, want code %s naming +Inf", env, CodeInternal)
+	ov := ec.EffectiveConfig["_routing"].(map[string]any)["overrides"].([]any)[0].(map[string]any)
+	if got := ov["match"].(map[string]any)["severity"]; got != "Infinity" {
+		t.Errorf("severity = %#v, want \"Infinity\"", got)
+	}
+	// sha256 of describe_tenant.py's json.dumps of the same tenant body,
+	// first 16 hex (same fixture as pkg/config's RoutingOverrideInf test).
+	if ec.MergedHash != "b35b4f8f5c95253c" {
+		t.Errorf("merged_hash = %q, want Python's b35b4f8f5c95253c", ec.MergedHash)
 	}
 }
