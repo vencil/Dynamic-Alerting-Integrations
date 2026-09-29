@@ -67,6 +67,13 @@ EXPECTED_DEPNAMES = {
     "busybox",
 }
 
+# #2442: pins Renovate owns that are NOT deployed images — test infrastructure
+# only. Kept out of EXPECTED_DEPNAMES on purpose: that set is also the scan-matrix
+# SSOT (test_scan_matrix_and_deploy_refs_share_depnames), and a forge-e2e image is
+# neither deployed nor scanned. Each one gets its own customManager and group.
+FORGE_E2E_DEPNAMES = {"gitlab/gitlab-ce"}
+FORGE_E2E_SCRIPT = "scripts/ops/forge_e2e_run.sh"
+
 
 # #1354 option B: the built-in managers the owner approved, on top of custom.regex.
 BUILTIN_MANAGERS = ("github-actions", "dockerfile", "devcontainer")
@@ -127,6 +134,17 @@ def _matrix_manager(cfg: dict) -> dict:
                 if "nightly-image-scan" in "".join(_manager_file_patterns(m)))
 
 
+def _forge_manager(cfg: dict) -> dict:
+    return next(m for m in cfg["customManagers"]
+                if "forge_e2e_run" in "".join(_manager_file_patterns(m)))
+
+
+def _deploy_managers(cfg: dict) -> list[dict]:
+    """The customManagers that own DEPLOYED refs (helm + k8s + da-tools COPY)."""
+    skip = (_matrix_manager(cfg), _forge_manager(cfg))
+    return [m for m in cfg["customManagers"] if not any(m is x for x in skip)]
+
+
 def test_renovate_json_is_strict_json_and_well_formed():
     cfg = _load_config()
     # #1354: exactly these managers. docker-compose stays OFF (the tests/** compose
@@ -135,7 +153,7 @@ def test_renovate_json_is_strict_json_and_well_formed():
     # SSOT and lang-dep bumps are #902 L3 Category C, deliberately out).
     assert sorted(cfg["enabledManagers"]) == sorted(ENABLED_MANAGERS)
     assert cfg.get("pinDigests") is True
-    assert len(cfg["customManagers"]) == 3
+    assert len(cfg["customManagers"]) == 4
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
 
 
@@ -158,9 +176,10 @@ def test_coverage_is_complete_and_exact():
     match would mean Renovate touches an unintended ref)."""
     cfg = _load_config()
     seen = {d["depName"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
-    assert seen == EXPECTED_DEPNAMES, (
-        f"\n  missing (pinned but Renovate won't bump): {sorted(EXPECTED_DEPNAMES - seen)}"
-        f"\n  unexpected (Renovate would touch):       {sorted(seen - EXPECTED_DEPNAMES)}"
+    expected = EXPECTED_DEPNAMES | FORGE_E2E_DEPNAMES
+    assert seen == expected, (
+        f"\n  missing (pinned but Renovate won't bump): {sorted(expected - seen)}"
+        f"\n  unexpected (Renovate would touch):       {sorted(seen - expected)}"
     )
 
 
@@ -171,8 +190,7 @@ def test_scan_matrix_and_deploy_refs_share_depnames():
     cfg = _load_config()
     matrix_mgr = _matrix_manager(cfg)
     matrix_names = {d["depName"] for d in _extract(matrix_mgr)}
-    deploy_names = {d["depName"] for m in cfg["customManagers"] if m is not matrix_mgr
-                    for d in _extract(m)}
+    deploy_names = {d["depName"] for m in _deploy_managers(cfg) for d in _extract(m)}
     assert matrix_names == EXPECTED_DEPNAMES, f"matrix missing: {sorted(EXPECTED_DEPNAMES - matrix_names)}"
     assert deploy_names == EXPECTED_DEPNAMES, f"deploy missing: {sorted(EXPECTED_DEPNAMES - deploy_names)}"
 
@@ -211,6 +229,53 @@ def test_alertmanager_is_matched_in_manifest_and_da_tools_dockerfile():
         "components/da-tools/app/Dockerfile",
     }, f"prom/alertmanager is not matched in both files, only: {sorted(d['file'] for d in hits)}"
     assert len({(d["currentValue"], d["currentDigest"]) for d in hits}) == 1, hits
+
+
+def test_forge_e2e_gitlab_pin_is_owned_by_its_own_manager():
+    """#2442: the forge-e2e GitLab CE pin (a shell default, which no built-in
+    manager parses) is matched exactly once, in the script CI actually runs, and
+    by no other manager. Asserted per FILE for the same reason as busybox."""
+    cfg = _load_config()
+    forge = _forge_manager(cfg)
+    hits = _extract(forge)
+    assert [(d["file"], d["depName"]) for d in hits] == [(FORGE_E2E_SCRIPT, "gitlab/gitlab-ce")], hits
+    others = [d for m in cfg["customManagers"] if m is not forge for d in _extract(m)
+              if d["depName"] in FORGE_E2E_DEPNAMES]
+    assert not others, f"another manager also owns the forge-e2e pin: {others}"
+
+
+def test_forge_e2e_gitlab_versioning_parses_the_real_tag():
+    """GitLab tags are `X.Y.Z-ce.N`. Under `docker` versioning the `-ce.N` part is
+    a compatibility suffix, so a regex versioning is used instead — and a regex
+    that does not match the CURRENT tag makes Renovate skip the dep silently.
+    Parse the tag the script really carries, and reject a floating one."""
+    cfg = _load_config()
+    forge = _forge_manager(cfg)
+    template = forge.get("versioningTemplate", "")
+    assert template.startswith("regex:"), template
+    rx = _py_regex(template[len("regex:"):])
+    (dep,) = _extract(forge)
+    m = rx.match(dep["currentValue"])
+    assert m and {"major", "minor", "patch"} <= set(k for k, v in m.groupdict().items() if v), (
+        f"versioning regex does not parse the pinned tag {dep['currentValue']!r}: {template}")
+    assert not rx.match("latest") and not rx.match("nightly"), "versioning regex accepts a floating tag"
+
+
+def test_forge_e2e_gitlab_has_its_own_group_and_gated_majors():
+    """Test infrastructure must not ride the third-party DEPLOY group PR, and a
+    GitLab major (config/upgrade-path changes) waits for the Dashboard."""
+    cfg = _load_config()
+    image_group = _resolve(cfg, manager="custom.regex", dep="grafana/grafana",
+                           datasource="docker", update="minor").get("groupName")
+    for update in ("patch", "minor", "digest"):
+        got = _resolve(cfg, manager="custom.regex", dep="gitlab/gitlab-ce",
+                       datasource="docker", update=update)
+        assert got["enabled"] is True, got
+        assert got.get("groupName") and got["groupName"] != image_group, (update, got)
+        assert not got.get("dependencyDashboardApproval"), (update, got)
+    major = _resolve(cfg, manager="custom.regex", dep="gitlab/gitlab-ce",
+                     datasource="docker", update="major")
+    assert major.get("dependencyDashboardApproval") is True, major
 
 
 def test_renovate_config_validator_if_available():

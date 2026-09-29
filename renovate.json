@@ -56,6 +56,16 @@
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "#2442 — the GitLab CE image the nightly forge-e2e workflow runs (scripts/ops/forge_e2e_run.sh, the GITLAB_CE_IMAGE shell default). Not a deployed image, so it is NOT in the scan matrix and does not join the third-party group (own group below). Versioning is a regex because GitLab tags carry a '-ce.N' build suffix that docker versioning would treat as a compatibility string.",
+      "managerFilePatterns": ["/^scripts/ops/forge_e2e_run\\.sh$/"],
+      "matchStrings": [
+        "GITLAB_CE_IMAGE=\"\\$\\{GITLAB_CE_IMAGE:-(?<depName>[^\\s:\"'}]+(?:/[^\\s:\"'}]+)*):(?<currentValue>[^\\s\"'@}]+)@(?<currentDigest>sha256:[0-9a-f]+)\\}\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-ce\\.(?<build>\\d+)$"
     }
   ],
   "packageRules": [
@@ -65,6 +75,12 @@
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
       "groupName": "third-party container images"
+    },
+    {
+      "description": "#2442 — the forge-e2e GitLab CE pin gets its own PR: it is test infrastructure (nightly forge-e2e-gitlab.yaml), not a deployed image, so it must not ride the third-party deploy group. Majors still wait for the Dependency Dashboard via the docker major rule below.",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["gitlab/gitlab-ce"],
+      "groupName": "forge e2e GitLab CE"
     },
     {
       "description": "#902 L3 — MAJOR upgrades can break (grafana/prometheus/mariadb majors carry config/schema changes). Require an explicit tick on the Dependency Dashboard before Renovate opens the PR, rather than auto-flooding a breaking bump.",

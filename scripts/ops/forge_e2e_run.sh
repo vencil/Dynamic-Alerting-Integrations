@@ -13,7 +13,10 @@
 # Knobs (env): GITLAB_CE_IMAGE, GITLAB_PORT, CONTAINER, GO_TEST_TIMEOUT.
 set -euo pipefail
 
-GITLAB_CE_IMAGE="${GITLAB_CE_IMAGE:-gitlab/gitlab-ce:18.11.3-ce.0}"   # PINNED — never :latest (#616 DoD)
+# PINNED — never :latest (#616 DoD). tag+digest so Renovate can own the bump
+# (renovate.json customManager "forge e2e GitLab CE", #2442): it keys on the
+# `${GITLAB_CE_IMAGE:-<repo>:<tag>@sha256:…}` shape below — keep it on one line.
+GITLAB_CE_IMAGE="${GITLAB_CE_IMAGE:-gitlab/gitlab-ce:18.11.3-ce.0@sha256:49bd9fd166d8f82d443415c50aa65de2675a020b218c5949061db4b87442c7e1}"
 GITLAB_PORT="${GITLAB_PORT:-8929}"
 CONTAINER="${CONTAINER:-vibe-gitlab-ce-e2e}"
 GO_TEST_TIMEOUT="${GO_TEST_TIMEOUT:-30m}"

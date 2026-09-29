@@ -31,6 +31,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | | action `with:` 裡的工具版本（`node-version`、`python-version`、`go-version`、setup-helm `version`、trivy-action `version`、cosign `cosign-release`…） | 另一側是 devcontainer feature、Makefile、`install-*.sh` 或 lint wrapper 的 digest pin，都不是 Renovate dep |
 | Dockerfile 的 `FROM` base image（`alpine`、`python`、`nginx` 等；python 的 minor 需 Dashboard 打勾） | `golang:*` builder | Go 的 SSOT 是 `go.mod`（本表 Go 列）；`test_go_toolchain_parity.py` 綁住 |
 | | da-tools Dockerfile 的 `COPY --from=prom/alertmanager` | 已由 `custom.regex` 與部署的 Alertmanager 同 PR 升（#2294），不能有第二個 owner |
+| forge-e2e 的 GitLab CE（`scripts/ops/forge_e2e_run.sh` 的 `GITLAB_CE_IMAGE` 預設值，tag＋digest；`custom.regex`，自己一支 group，major → Dashboard；[#2442](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2442)） | | |
 | devcontainer feature 參照本身（`features/<name>:<major>`，皆為 major → Dashboard） | node / go / python feature 的 `version` | 與 CI `setup-*` 或 `go.mod` 互綁 |
 | — | `sigstore/cosign-installer`、`anchore/sbom-action` | 仍會出現在 Dashboard，但每次都要打勾才開 PR（release.yaml：「bump deliberately」） |
 | — | `tests/**`、`test/**` 下的一切（`ignorePaths`） | bench Dockerfile 與 federation-e2e compose 由各自的綁定測試守，不交給 Renovate |
