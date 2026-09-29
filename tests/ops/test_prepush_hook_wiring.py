@@ -1931,6 +1931,115 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     )
 
 
+# Any fix-up advice has to name its escape hatch or a link; neither belongs
+# after a build the guard cannot diagnose.
+_ADVICE = ("MKDOCS_STRICT_BYPASS", "site-root")
+
+
+def test_a_failed_build_is_not_diagnosed_by_the_guard(tmp_path: Path) -> None:
+    """#2210 — every non-zero from the build reaches the same branch: broken
+    links, an aborted build, a Ctrl-C that mkdocs caught itself. Advice there
+    is a guess; the build's own output is the diagnosis."""
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n", rc="1")
+
+    assert r.returncode == 1, f"a failed build let the push through:\n{r.stdout}{r.stderr}"
+    out = r.stdout + r.stderr
+    assert [a for a in _ADVICE if a in out] == [], f"the guard guessed at the cause:\n{out}"
+
+
+# mkdocs.yml hook: the build announces itself, then sleeps until interrupted.
+_SLOW_HOOK = """import os, pathlib, time
+
+def on_pre_build(config):
+    started = os.environ.get("PREPUSH_TEST_STARTED")
+    if started:
+        pathlib.Path(started).touch()
+        time.sleep(30)
+"""
+
+
+@pytest.mark.skipif(shutil.which("mkdocs") is None, reason="needs a real mkdocs: its Ctrl-C handling is the subject")
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
+@pytest.mark.parametrize("case", ["interrupted", "broken-link", "clean"])
+def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
+    tmp_path: Path, case: str,
+) -> None:
+    """#2210, end to end: real mkdocs, the shipped strict check, the installed
+    wiring, and the group-wide SIGINT a terminal sends.
+
+    The guard outlives the interrupt and reaches its failure branch. ``broken-link`` is the must-fire
+    twin (the check's own verdict still reaches the user); ``clean`` proves the
+    fixture passes when nothing is wrong.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    lint = work / "scripts" / "tools" / "lint"
+    lint.mkdir(parents=True)
+    shutil.copy2(_REPO_ROOT / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh", lint)
+    (work / "mkdocs.yml").write_text(
+        "site_name: t\nvalidation:\n  links:\n    anchors: warn\nhooks:\n  - slow_hook.py\n",
+        encoding="utf-8",
+    )
+    (work / "slow_hook.py").write_text(_SLOW_HOOK, encoding="utf-8")
+    (work / ".gitignore").write_text("site/\nmkdocs-build.log\n__pycache__/\n", encoding="utf-8")
+    (work / "docs").mkdir()
+    # One anchor warning: the check refuses an empty debt ledger as stale.
+    (work / "docs" / "index.md").write_text("# index\n\n[a](#nowhere)\n", encoding="utf-8")
+    env = {**os.environ, "GIT_PREFLIGHT_BYPASS": "1"}
+    for var in ("MKDOCS_STRICT_BYPASS", "PREPUSH_TEST_STARTED"):
+        env.pop(var, None)
+    w = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/tools/lint/mkdocs_strict_check.sh", "--write-baseline"],
+        cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert w.returncode == 0 and "wrote 1 lines" in w.stdout, f"baseline:\n{w.stdout}{w.stderr}"
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs site")
+    assert _git(work, "push", "-q", "origin", "main").returncode == 0
+    assert _git(work, "checkout", "-q", "-b", "topic").returncode == 0
+    extra = "\n[m](missing.md)\n" if case == "broken-link" else "\nmore\n"
+    with (work / "docs" / "index.md").open("a", encoding="utf-8") as f:
+        f.write(extra)
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: change")
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+
+    started = tmp_path / "started"
+    if case == "interrupted":
+        env["PREPUSH_TEST_STARTED"] = str(started)
+    proc = subprocess.Popen(  # subprocess-timeout: ignore
+        ["git", "push", "--dry-run", "origin", "topic"], cwd=work, env=env,
+        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+    )
+    try:
+        if case == "interrupted":
+            deadline = time.monotonic() + 60
+            while not started.exists():
+                assert proc.poll() is None, f"the push ended before the build started: {proc.communicate(timeout=20)}"
+                assert time.monotonic() < deadline, "the build never started"
+                time.sleep(0.05)
+            os.killpg(proc.pid, signal.SIGINT)
+        out, _ = proc.communicate(timeout=120)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    if case == "clean":
+        assert proc.returncode == 0 and "MKDOCS STRICT STATUS=PASS" in out, out
+        return
+    assert proc.returncode != 0, f"the push went through:\n{out}"
+    if case == "broken-link":
+        assert "MKDOCS STRICT STATUS=FAIL ACTIONABLE_WARNINGS=1" in out and "missing.md" in out, out
+    else:
+        # The premise of #2210: the guard outlives the interrupt and reports.
+        assert "STATUS=PASS" not in out and "::error::" in out, f"not the failure branch:\n{out}"
+    assert [a for a in _ADVICE if a in out] == [], f"the guard guessed at the cause:\n{out}"
+
+
 # ---------------------------------------------------------------------------
 # #1690 round 2 — gaps a coverage-inventory review measured as unasserted
 # ---------------------------------------------------------------------------

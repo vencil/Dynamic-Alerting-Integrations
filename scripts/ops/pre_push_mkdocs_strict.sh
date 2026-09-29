@@ -175,7 +175,6 @@ fi
 # full copies, so on a Windows checkout — where they are path stubs — the built
 # site gains three duplicated documents under docs/. That is the platform
 # dependence these aliases exist to remove, reintroduced by the build step.
-_checkout_failed=0
 # ⛔ ONE top-level EXIT trap for the tree being built, not a trap inside
 # _build_one: the loop is sequential, so at most one tree is alive, and a trap
 # set per call would replace the previous one. A clean-up written after the
@@ -213,7 +212,6 @@ To push anyway (the docs build then runs only in CI):
     MKDOCS_STRICT_BYPASS=1 git push ...
 
 WORKTREE_FAILED
-        _checkout_failed=1
         return 1
     fi
     ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh )
@@ -234,30 +232,14 @@ if command -v mkdocs >/dev/null 2>&1; then
     if [ "$_all_ok" = "0" ]; then
         echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
         exit 0
-    elif [ "$_checkout_failed" = "1" ]; then
-        # ⛔ The docs were never built, so do not print the doc-link advice —
-        # that would blame the contributor's links for an environment failure.
-        # _build_one already said what went wrong and how to recover.
-        exit 1
-    else
-        echo ""
-        echo "::error::mkdocs strict check failed. See output above."
-        if [ -n "$_unknown_base" ]; then
-            echo ""
-            echo "⚠️  This build was precautionary — the base for one or more refs"
-            echo "    could not be determined, so no doc change was actually seen."
-            echo "    The failure may have nothing to do with your links."
-        fi
-        echo ""
-        echo "Common fixes for the recurring site-root path gotcha:"
-        echo "  • ../../foo.md from docs/X/Y.md → use absolute GitHub URL"
-        echo "    https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/foo.md"
-        echo "  • #anchor-with--double-dash → single-dash (mkdocs normalizes consecutive dashes)"
-        echo "  • Missing file in nav → add to mkdocs.yml or remove the link"
-        echo ""
-        echo "Bypass (emergency only): MKDOCS_STRICT_BYPASS=1 git push"
-        exit 1
     fi
+    # ⛔ No fix-up advice: every non-zero lands here — broken links, a failed
+    # checkout, an aborted build, a Ctrl-C mid-build — so advice is
+    # a guess, and it sent a contributor who pressed Ctrl-C to edit links
+    # (#2210). The output above already says what failed.
+    echo ""
+    echo "::error::mkdocs strict did not pass. See the output above."
+    exit 1
 fi
 
 # Tier 2: no native mkdocs; soft fail
