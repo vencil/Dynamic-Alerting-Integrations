@@ -231,7 +231,7 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.52.0@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:8ee214843129f43e2ebf5e0ca9f2e4e6d8292143d1b8a6787f169b5898578884"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
