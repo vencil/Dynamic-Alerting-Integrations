@@ -6,7 +6,8 @@ package main
 // says the route generator does: one domain_policy_violation per `policy`
 // row (Field <ref>.receiver.type), one invalid_route_entry per
 // `rejected_routes` ref, unknown_routing_profile exactly when the table
-// names one, and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
+// names one, critical_escalation_missing exactly when `escalation` says
+// violation and one critical_escalation_leak Field per leak ref (#2325), and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
 
 import (
 	"bytes"
@@ -26,6 +27,10 @@ type daGuardParityExpect struct {
 	UnknownProfile *string         `json:"unknown_profile"`
 	TenantAPI      json.RawMessage `json:"tenant_api"`
 	PythonDiffers  json.RawMessage `json:"python_differs"`
+	Escalation     *struct {
+		Verdict string   `json:"verdict"`
+		Leaks   []string `json:"leaks"`
+	} `json:"escalation"`
 }
 
 type daGuardParityTree struct {
@@ -173,6 +178,28 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				if got := fieldsOf(findings, tenantID, "invalid_route_entry"); !equalStrings(got, wantRejected) {
 					t.Errorf("%s: invalid_route_entry fields %v, table says %v", tenantID, got, wantRejected)
 				}
+				// #2325: critical_escalation_missing ⇔ verdict violation; the
+				// critical_escalation_leak Fields are the leak refs (as a set:
+				// findings are sorted, not in render order), per requiring domain.
+				wantMissing, wantLeaks := false, []string{}
+				if want.Escalation != nil {
+					wantMissing = want.Escalation.Verdict == "violation"
+					for _, ref := range want.Escalation.Leaks {
+						field := ref + ".receiver.type"
+						if ref == "receiver" {
+							field = "receiver.type"
+						}
+						wantLeaks = append(wantLeaks, field)
+					}
+				}
+				gotMissing := fieldsOf(findings, tenantID, "critical_escalation_missing")
+				if (len(gotMissing) > 0) != wantMissing {
+					t.Errorf("%s: critical_escalation_missing %v, table says violation=%v", tenantID, gotMissing, wantMissing)
+				}
+				sort.Strings(wantLeaks)
+				if got := dedupe(fieldsOf(findings, tenantID, "critical_escalation_leak")); !equalStrings(got, dedupe(wantLeaks)) {
+					t.Errorf("%s: critical_escalation_leak fields %v, table says %v", tenantID, got, wantLeaks)
+				}
 				gotUnknown := len(fieldsOf(findings, tenantID, "unknown_routing_profile")) > 0
 				if gotUnknown != (want.UnknownProfile != nil) {
 					t.Errorf("%s: unknown_routing_profile reported=%v, table names %v", tenantID, gotUnknown, want.UnknownProfile)
@@ -180,6 +207,18 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// dedupe drops adjacent repeats of a sorted list (one finding per requiring
+// domain names the same Field again).
+func dedupe(sorted []string) []string {
+	out := []string{}
+	for i, s := range sorted {
+		if i == 0 || s != sorted[i-1] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func equalStrings(a, b []string) bool {

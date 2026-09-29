@@ -6,6 +6,9 @@ import "sort"
 const (
 	ConstraintForbidden = "forbidden_receiver_types"
 	ConstraintAllowed   = "allowed_receiver_types"
+	// ConstraintRequireCriticalEscalation (#2325): severity=critical alerts
+	// must reach an EscalationTypes receiver (CheckCriticalEscalation).
+	ConstraintRequireCriticalEscalation = "require_critical_escalation"
 )
 
 // Policy is the receiver-type part of one domain policy.
@@ -20,6 +23,12 @@ type Policy struct {
 	// NO receiver type; AllowedReceiverTypes keeps the strings only, and
 	// would read that list as "unconstrained" on its own.
 	AllowedListNonEmpty bool
+	// RequireCriticalEscalation is `require_critical_escalation: true`
+	// (#2325), booleans read as PyYAML reads them (DecodePyYAML: a plain
+	// `yes` / `on` is true). null / false / absent leave it off; any other value is not a
+	// boolean, is reported as a Problem, and leaves it off too (the Python
+	// check enforces only `is True`).
+	RequireCriticalEscalation bool
 	// Scope is the directory level (root-relative, slash-separated) of the
 	// `_domain_policy.yaml` below the conf.d root this policy came from
 	// (#2326); "" for a root policy. LoadTree has already dropped the
