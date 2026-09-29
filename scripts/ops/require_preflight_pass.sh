@@ -243,9 +243,10 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # actually starts.
 _preflight_cmd=""
 for _py in python3 python; do
-    # -I -S: only "does it start" is asked, so no site, no .pth hooks and no
-    # PYTHON* env — a coverage hook inherited from a test run hung here.
-    if "$_py" -I -S -c '' >/dev/null 2>&1; then
+    # -S: no site, so no .pth hooks — under a test run's coverage one hung here
+    # (cwd with a newline). Not -I: it would also ignore a broken PYTHONHOME,
+    # and the printed command, run without it, would then fail.
+    if "$_py" -S -c '' >/dev/null 2>&1; then
         _preflight_cmd="$_py scripts/tools/dx/pr_preflight.py"
         break
     fi
