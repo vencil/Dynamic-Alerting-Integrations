@@ -347,17 +347,14 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 
 ### ✅ Supported Features
 
-- ✅ Arbitrary nesting depth (not limited to 3 levels)
-- ✅ Environment variables in `_defaults.yaml` (e.g., `{{ env.REGION }}`)
-- ✅ Version control tracking (`.git-blame` shows which level file made the change)
-- ✅ Backward compatible: old flat files still work
+- ✅ Any directory depth: neither the exporter nor `da-tools` caps how deep they scan `conf.d/`
+- ✅ Flat and hierarchical can mix: old tenant files directly in the `conf.d/` root still load, inheriting only the root `_defaults.yaml`
 
 ### ⚠️ Limitations and Pitfalls
 
-1. **Filename convention**: `_defaults.yaml` is reserved, cannot be used as tenant name
-2. **Circular inheritance**: System detects and prevents (`da-tools validate-config` reports error)
-3. **Array merging**: Only replacement supported, no appending. If new receiver needed, list old ones too
-4. **Environment variable escape**: Env variables in `_defaults.yaml` are local to that file; tenant files cannot reference them
+1. **Files starting with `_` are platform files, not tenant files**: a tenant is defined by the `tenants:` keys inside a file, never by its filename. A `tenants:` block in a subdirectory's `_defaults.yaml` is not loaded; the exporter logs `WARN: tenants: block in nested platform file ... ignored`
+2. **Lists replace, never append**: a list in a child level replaces the parent's whole list. To add one receiver, list the parent's receivers too
+3. **Directory symlinks are not followed**: e.g. the `team-a -> ..data/team-a` link kubelet creates when a ConfigMap `items[].path` contains `/`. Files under it are not loaded, and the exporter logs a WARN. See [Troubleshooting](../troubleshooting.en.md#sha-256-hot-reload-delay) for the fix
 
 ### 🛡️ Checks You Can Wire In (not on by default)
 

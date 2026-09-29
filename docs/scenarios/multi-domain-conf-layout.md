@@ -336,17 +336,14 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 
 ### ✅ 支援的特性
 
-- ✅ 任意深度的目錄巢狀（不限 3 層）
-- ✅ Env 變數在 `_defaults.yaml` 中（如 `{{ env.REGION }}`）
-- ✅ 版本控制跟蹤（`.git-blame` 顯示哪層檔案做的修改）
-- ✅ 反向相容：舊平面檔案仍可用
+- ✅ 目錄可以任意深：exporter 與 `da-tools` 掃描 `conf.d/` 都沒有層數上限
+- ✅ 平面與階層可混用：直接放在 `conf.d/` 根目錄的舊 tenant 檔照常載入，只繼承根目錄的 `_defaults.yaml`
 
 ### ⚠️ 限制與陷阱
 
-1. **檔案名約定**：`_defaults.yaml` 是保留字，不能當作 tenant 名稱
-2. **循環繼承**：系統檢測並防止（`da-tools validate-config` 會報錯）
-3. **陣列合併**：只支援替代，不支援追加。若需追加新 receiver，須完整列出舊的
-4. **環境變數逃逸**：`_defaults.yaml` 中的 env 變數僅在該檔案有效，tenant 檔案內不可引用
+1. **`_` 開頭的檔案是平台檔，不是 tenant 檔**：tenant 由檔案內 `tenants:` 的 key 決定，不看檔名。子目錄裡的 `_defaults.yaml` 若寫了 `tenants:`，那段不會載入，exporter 會印 `WARN: tenants: block in nested platform file ... ignored`
+2. **陣列只替代、不追加**：子層寫了 list 就整個取代父層的。要多加一個 receiver，得把父層的也一起列出
+3. **目錄 symlink 不會跟進**：例如 ConfigMap `items[].path` 帶 `/` 時 kubelet 建的 `team-a -> ..data/team-a`，底下的檔案不會載入，exporter 會 WARN。做法見[疑難排解](../troubleshooting.md#sha-256-熱重新加載延遲)
 
 ### 🛡️ 能接上的檢查（要自己接，不是預設就有）
 
