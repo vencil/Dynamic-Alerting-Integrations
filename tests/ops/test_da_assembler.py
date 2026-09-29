@@ -449,16 +449,76 @@ class TestRenderCrNameFormat:
         pytest.param("a.b", id="dot-not-in-label"),
         pytest.param("../x", id="dotdot"),
         pytest.param("a" * 64, id="len-64"),
-        pytest.param(None, id="null"),
     ])
     def test_invalid_namespace_is_caller_error(
             self, namespace, tmp_path, caplog):
-        ns = "null" if namespace is None else self._q(namespace)
         rc, new_files = self._run(
-            tmp_path, f"  name: ok\n  namespace: {ns}\n")
+            tmp_path, f"  name: ok\n  namespace: {self._q(namespace)}\n")
         assert rc == EXIT_CALLER_ERROR
         assert new_files == []
         assert "is not a valid Kubernetes namespace name" in caplog.text
+
+    @pytest.mark.parametrize("namespace, kind", [
+        pytest.param("8", "int", id="int"),
+        pytest.param("010", "int", id="int-octal"),
+        pytest.param("true", "bool", id="bool-true"),
+        pytest.param("yes", "bool", id="bool-yes"),
+        pytest.param("1.5", "float", id="float"),
+    ])
+    def test_non_string_namespace_is_caller_error(
+            self, namespace, kind, tmp_path, caplog):
+        """未加引號、YAML 1.1 讀成數字／布林的 namespace 比照 name，rc 2。
+
+        會讓本組轉紅的改動：拿掉 namespace 的 `_plain_tag` 型別檢查（`8`、
+        `010` 是合法 label，只靠格式檢查會照收、檔頭寫 `8/ok`）。
+        """
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {namespace}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "metadata.namespace must be a string" in caplog.text
+        assert f"read as {kind}" in caplog.text
+        assert "Quoting makes it a string" in caplog.text
+
+    @pytest.mark.parametrize("namespace", [
+        pytest.param('"8"', id="quoted-int"),
+        pytest.param("'yes'", id="quoted-bool"),
+    ])
+    def test_quoted_numeric_namespace_renders(self, namespace, tmp_path):
+        """對照組：加了引號就是字串，且是合法 label，rc 0。"""
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {namespace}\n")
+        assert rc == 0
+        assert new_files == ["work/out/ok.yaml"]
+
+    @pytest.mark.parametrize("ns_line", [
+        pytest.param("  namespace: null\n", id="null"),
+        pytest.param("  namespace: ~\n", id="tilde"),
+        pytest.param("  namespace:\n", id="empty-value"),
+        pytest.param('  namespace: ""\n', id="empty-string"),
+    ])
+    def test_unset_namespace_renders_as_absent(
+            self, ns_line, tmp_path, caplog):
+        """null／空值／`""` 在 Kubernetes 是「未設」，CR 建得進叢集。
+
+        比照沒寫 namespace：rc 0，輸出與缺鍵時逐位元組相同（檔頭 `?`），
+        log 為 `default`。會讓本組轉紅的改動：拿掉 render_cr_file 裡把
+        None／`""` 正規化成缺鍵的那一步（先前 rc 2；若只放行不正規化，
+        檔頭會寫 `None/ok`、`/ok`）。
+        """
+        caplog.set_level("INFO")
+        absent_dir = tmp_path / "absent"
+        absent_dir.mkdir()
+        rc, _ = self._run(absent_dir, "  name: ok\n")
+        assert rc == 0
+        want = (absent_dir / "work" / "out" / "ok.yaml").read_bytes()
+        caplog.clear()
+
+        rc, new_files = self._run(tmp_path, "  name: ok\n" + ns_line)
+        assert rc == 0
+        assert new_files == ["work/out/ok.yaml"]
+        assert (tmp_path / "work" / "out" / "ok.yaml").read_bytes() == want
+        assert "Rendered default/ok" in caplog.text
 
     @pytest.mark.parametrize("name, namespace", [
         pytest.param("ok", None, id="plain-no-namespace"),

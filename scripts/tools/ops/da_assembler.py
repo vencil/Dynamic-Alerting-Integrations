@@ -503,9 +503,11 @@ def render_cr_file(
         log.error("%s: metadata.name must be a non-empty string", cr_path)
         return EXIT_CALLER_ERROR
     # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
-    # implicit typing: one read as int / float / bool is a caller error;
-    # a date / datetime is kept as written (see _NON_STRING_NAME_TAGS for
-    # where this differs from Kubernetes). Null was refused above.
+    # implicit typing: one read as int / float / bool is a caller error; a
+    # date passes this type check and is then held to the DNS-1123 format
+    # check below, which refuses a datetime (`:`, `T`, `Z`, space). See
+    # _NON_STRING_NAME_TAGS for where the typing differs from Kubernetes.
+    # Null was refused above.
     tag = _plain_tag(name) if isinstance(name, RawPlain) else None
     if tag in _NON_STRING_NAME_TAGS:
         log.error("%s: metadata.name must be a string, but unquoted %s is "
@@ -515,15 +517,29 @@ def render_cr_file(
         return EXIT_CALLER_ERROR
     # #2396: the name is the output file name and goes into the header
     # comment, so its format is checked here, before anything is written.
-    # An absent namespace still renders as `default`.
     if not _is_dns1123_subdomain(name):
         log.error("%s: metadata.name %r is not a valid Kubernetes object "
                   "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
                   "'.', starting and ending alphanumeric, at most %d "
                   "characters)", cr_path, name, _DNS1123_SUBDOMAIN_MAX)
         return EXIT_CALLER_ERROR
+    # #2396: a null / empty namespace is UNSET in Kubernetes (the API
+    # server fills in the request's namespace), so such a CR exists in a
+    # cluster. It is dropped here and renders exactly as an absent one:
+    # header `?`, log `default`.
+    if metadata.get("namespace", "") in (None, ""):
+        metadata.pop("namespace", None)
     if "namespace" in metadata:
         namespace = metadata["namespace"]
+        ns_tag = (_plain_tag(namespace) if isinstance(namespace, RawPlain)
+                  else None)
+        if ns_tag in _NON_STRING_NAME_TAGS:
+            log.error("%s: metadata.namespace must be a string, but "
+                      "unquoted %s is read as %s (YAML 1.1). Quoting makes "
+                      "it a string; it must still be a valid Kubernetes "
+                      "namespace name (DNS-1123 label)",
+                      cr_path, namespace, ns_tag.rsplit(":", 1)[-1])
+            return EXIT_CALLER_ERROR
         if not (isinstance(namespace, str) and _is_dns1123_label(namespace)):
             log.error("%s: metadata.namespace %r is not a valid Kubernetes "
                       "namespace name (DNS-1123 label: lowercase a-z, 0-9 "
