@@ -2957,7 +2957,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--alertname` | Alert name to trace (with `--trace`) | `GenericAlert` |
 | `--severity` | Alert severity to trace (with `--trace`) | `warning` |
 | `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
-| `--base-config` | Base Alertmanager YAML for the trace: only the root receiver / `group_by` / timings are used, `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
+| `--base-config` | Base Alertmanager YAML for the trace: `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
 | `--json` | Output in JSON format | `false` |
 
 The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group` or a `routes` `match` key can only be supplied through `--label`, otherwise the trace always lands on the main receiver. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).

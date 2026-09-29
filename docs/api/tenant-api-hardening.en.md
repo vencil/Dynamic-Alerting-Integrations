@@ -162,7 +162,7 @@ De-duplicated, in request order. Operators can grep their RBAC config directly.
 
 | Stage | Action | Risk |
 |---|---|---|
-| 1. Deploy v2.8.0 | Default `TA_RATE_LIMIT_PER_MIN=100`; Groups/Views/Task/PR start enforcing tenant-scoped authz | Clients running > 100 RPM get 429; periodic check scripts may hit the limit |
+| 1. Deploy v2.8.0 | Default `TA_RATE_LIMIT_PER_MIN=100`; Groups/Views/Task/PR start enforcing tenant-scoped authz | The 101st request from one caller (`X-Forwarded-Email`, else the source IP) within any 60 seconds gets `429`; only `/health`, `/ready` and `/metrics` are exempt, and each SSE connection opened counts once. Periodic check scripts may hit the limit |
 | 2. Monitor 24h | Grep `429` ratio; verify no legitimate user blocked | — |
 | 3. Tune | If specific batch tools need more budget, raise `TA_RATE_LIMIT_PER_MIN` (suggested 100 → 250 → 500 step-up) | — |
 | 4. Customer RBAC fix-up | If groups/views span teams, complete RBAC grants for member tenants | Otherwise PUT/DELETE returns 403 |

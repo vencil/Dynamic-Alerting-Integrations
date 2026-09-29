@@ -259,7 +259,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑；預設違規只出 WARN，加 `--strict` 轉 ERROR 並 exit 非零——CI 的 validate-config job 跑 `--validate --strict`，domain policy 違規為 blocking。⚠️ `--strict` 是 v2.9.0 **之後**才加的，**目前出貨的映像兩支子命令都拒收它**：實測 `generate-routes --validate --strict` 與 `validate-config --strict` 皆為 `rc=2`、`unrecognized arguments: --strict`、stdout 零位元組。在映像更新前，這一段描述的是 CI 上的原始碼行為，不是你在本機跑得到的行為）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
+驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑。domain policy 違規預設只出 WARN，加 `--strict` 轉 ERROR 並 exit 非零；引用不存在的 routing profile 則不論有沒有 `--strict` 都只出 WARN、不擋——CI 的 validate-config job 跑 `--validate --strict`，domain policy 違規為 blocking。⚠️ `--strict` 是 v2.9.0 **之後**才加的，**目前出貨的映像兩支子命令都拒收它**：實測 `generate-routes --validate --strict` 與 `validate-config --strict` 皆為 `rc=2`、`unrecognized arguments: --strict`、stdout 零位元組。在映像更新前，這一段描述的是 CI 上的原始碼行為，不是你在本機跑得到的行為）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
 
 ### 設定 Webhook Domain Allowlist
 
@@ -491,7 +491,7 @@ A: 新 Rule Pack 需在 `rule-packs/` 目錄新增 YAML 檔案，並在 Promethe
 A: 在 `_defaults.yaml` 中設定 `_routing_enforced`。通知會發送給 NOC 的 channel 和各 tenant 的 receiver，獨立進行。
 
 **Q: Webhook allowlist 為何拒絕我的 domain？**
-A: 檢查你的 webhook URL 是否符合 `--policy` 所指政策檔裡 `allowed_domains:` 的 fnmatch 模式。例如 `*.example.com` 不會匹配 `webhook.internal.example.com`（多層子域名）。
+A: 檢查你的 webhook URL 是否符合 `--policy` 所指政策檔裡 `allowed_domains:` 的 fnmatch 模式。`*` 會跨過點號，所以 `*.example.com` 也匹配 `webhook.internal.example.com`；它唯一不匹配的是 `example.com` 本身，要放行得另列一條 `example.com`。
 
 **Q: 如何驗證新 tenant 的配置不會造成 alert noise？**
 A: 先用 `validate_config.py` 檢查語法和 schema，再用 `config_diff.py` 看 blast radius，最後在 shadow monitoring 環境中測試（參考 shadow-monitoring-sop.md）。

@@ -1112,12 +1112,11 @@ _HELP = {
         "en": "Alert severity (default: warning)",
     },
     "base_config": {
-        "zh": "追蹤用的 base Alertmanager YAML（只取 root 的 receiver／group_by／"
-              "timing；route.routes 會被產生的路由整份取代）。只在 --trace 下讀取；"
+        "zh": "追蹤用的 base Alertmanager YAML（route.routes 會被產生的路由整份"
+              "取代）。只在 --trace 下讀取；"
               "未給時用內建 base（與 generate_alertmanager_routes --validate 相同）",
-        "en": "Base Alertmanager YAML for the trace (only the root receiver / "
-              "group_by / timings are used; route.routes is replaced by the "
-              "generated routes). Read only with --trace; omitted → the built-in "
+        "en": "Base Alertmanager YAML for the trace (route.routes is replaced "
+              "by the generated routes). Read only with --trace; omitted → the built-in "
               "base (same as generate_alertmanager_routes --validate)",
     },
     "label": {

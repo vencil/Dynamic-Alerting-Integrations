@@ -2943,7 +2943,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--alertname` | 追蹤的 alert 名稱（搭配 `--trace`） | `GenericAlert` |
 | `--severity` | 追蹤的 alert 嚴重度（搭配 `--trace`） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
-| `--base-config` | 追蹤用的 base Alertmanager YAML：只取 root 的 receiver／`group_by`／timing，`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
+| `--base-config` | 追蹤用的 base Alertmanager YAML：`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。

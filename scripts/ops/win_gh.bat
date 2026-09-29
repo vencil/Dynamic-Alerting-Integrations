@@ -28,8 +28,7 @@ REM  Dogfooded pattern (PR #44 C5 close-loop). The naive `& this.bat` call
 REM  hangs the MCP because the transport inherits the child console handle.
 REM
 REM    $bat  = "<tree>\scripts\ops\win_gh.bat"   # acts on <tree>
-REM    $t    = "$env:TEMP\vibe-gh-out.txt"
-REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $t    = Join-Path $env:TEMP ("vibe-gh-out-" + [guid]::NewGuid() + ".txt")
 REM    $args = '/s /c "' + '"' + $bat + '" pr-checks > "' + $t + '" 2>&1"'
 REM    $psi = New-Object Diagnostics.ProcessStartInfo
 REM    $psi.FileName         = "cmd.exe"
@@ -37,15 +36,24 @@ REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- without it MCP hangs
 REM    $p = [Diagnostics.Process]::Start($psi)
-REM    [void]$p.WaitForExit(30000)
+REM    if (-not $p.WaitForExit(30000)) {
+REM        taskkill /T /F /PID $p.Id | Out-Null   # timed out: stop gh too
+REM        [void]$p.WaitForExit()
+REM    }
 REM    Get-Content $t -Raw
+REM    Remove-Item $t
+REM
+REM  One file per call (the GUID): a fixed name is shared by every call
+REM  running at the same time, which then read each other's output (#2275).
 REM
 REM  CreateNoWindow = $true + cmd.exe /s /c + WaitForExit(ms) are the three
 REM  non-optional pieces. See win_git_escape.bat header + windows-mcp-
 REM  playbook "MCP Shell Pitfalls" section for the failure modes of each.
 REM ============================================================================
 
-setlocal enabledelayedexpansion
+REM Delayed expansion stays OFF (#2236, same shape as #2249): it rewrites every
+REM `!` and `^` in whatever a line expands, so `raw ... "a!b"` reached gh as `ab`.
+setlocal DisableDelayedExpansion
 
 REM --- Environment setup (mirrors win_git_escape.bat) ---
 set "PYTHONUTF8=1"
@@ -75,14 +83,13 @@ REM --- Force a sane PATHEXT so gh's internal `git` shell-out works.
 set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
 
 REM --- Find repo ---
-set "REPO_DIR="
-if exist "%~dp0..\..\.git" (
-    pushd "%~dp0..\.."
-    set "REPO_DIR=!CD!"
-    popd
-) else (
-    set "REPO_DIR=%CD%"
-)
+REM Outside a block: %CD% in a ( ) block is read before its pushd runs.
+set "REPO_DIR=%CD%"
+if not exist "%~dp0..\..\.git" goto :repo_found
+pushd "%~dp0..\.."
+set "REPO_DIR=%CD%"
+popd
+:repo_found
 pushd "%REPO_DIR%"
 
 REM --- Dispatch ---
@@ -97,6 +104,10 @@ if /i "%CMD%"=="run-log"    goto :do_run_log
 if /i "%CMD%"=="raw"        goto :do_raw
 goto :usage
 
+REM Every gh call ends in `goto :gh_rc`, which returns gh's own rc unchanged
+REM (#2236): a failed `pr create` used to report 0. That includes rc 8 from
+REM `pr checks` -- "checks still running" -- which is not a pass either.
+
 :do_pr_checks
 set "PR=%~2"
 if "%PR%"=="" (
@@ -104,7 +115,7 @@ if "%PR%"=="" (
 ) else (
     "%GH_CMD%" pr checks %PR%
 )
-goto :done
+goto :gh_rc
 
 :do_pr_view
 set "PR=%~2"
@@ -113,7 +124,7 @@ if "%PR%"=="" (
 ) else (
     "%GH_CMD%" pr view %PR%
 )
-goto :done
+goto :gh_rc
 
 :do_pr_create
 REM Forward all remaining args verbatim to gh pr create.
@@ -121,12 +132,14 @@ shift
 set "ARGS="
 :pr_create_loop
 if "%~1"=="" goto :pr_create_exec
-set "ARGS=!ARGS! "%~1""
+REM Each argument in its own quotes, no outer quotes on this set: every
+REM character of the value then sits inside an argument's quotes (#2249).
+set ARGS=%ARGS% "%~1"
 shift
 goto :pr_create_loop
 :pr_create_exec
-"%GH_CMD%" pr create !ARGS!
-goto :done
+"%GH_CMD%" pr create %ARGS%
+goto :gh_rc
 
 :do_run_view
 set "RUN=%~2"
@@ -136,7 +149,7 @@ if "%RUN%"=="" (
     goto :done_err
 )
 "%GH_CMD%" run view %RUN%
-goto :done
+goto :gh_rc
 
 :do_run_log
 set "RUN=%~2"
@@ -146,7 +159,7 @@ if "%RUN%"=="" (
     goto :done_err
 )
 "%GH_CMD%" run view %RUN% --log-failed
-goto :done
+goto :gh_rc
 
 :do_raw
 REM Escape hatch for uncovered subcommands.
@@ -154,12 +167,12 @@ shift
 set "ARGS="
 :raw_loop
 if "%~1"=="" goto :raw_exec
-set "ARGS=!ARGS! "%~1""
+set ARGS=%ARGS% "%~1"
 shift
 goto :raw_loop
 :raw_exec
-"%GH_CMD%" !ARGS!
-goto :done
+"%GH_CMD%" %ARGS%
+goto :gh_rc
 
 :usage
 echo.
@@ -176,6 +189,11 @@ echo.
 echo Do NOT write _pr_checks.bat / _gh.bat / etc. Extend this wrapper.
 echo.
 goto :done_err
+
+:gh_rc
+set "GH_RC=%ERRORLEVEL%"
+popd
+exit /b %GH_RC%
 
 :done
 popd
