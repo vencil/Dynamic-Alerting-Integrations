@@ -102,6 +102,9 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	}
 	top := doc.Content[0]
 	normalizeTaggedBools(top)
+	if err := normalizeTaggedNullEscalation(top); err != nil {
+		return nil, err
+	}
 	var probe any
 	if err := top.Decode(&probe); err != nil {
 		return nil, err
@@ -182,6 +185,58 @@ func normalizeTaggedBools(n *yaml.Node) {
 	}
 }
 
+// normalizeTaggedNullEscalation hands the value of every
+// `require_critical_escalation` key (anywhere in the document, an alias
+// followed once) that carries the `!!null` tag (`!!null x`,
+// `!<tag:yaml.org,2002:null> x`) to DecodePyYAML before any struct decode
+// (#2325). yaml.v3 never passes such a node to an Unmarshaler: it refuses
+// `!!null x` itself (the whole file, while PyYAML reads None) and reads
+// `!!null {}` as null (while PyYAML refuses the whole file). A scalar PyYAML
+// reads as None is rewritten to a plain `null`; a node PyYAML refuses is the
+// error returned, and the caller refuses the document as the generator does.
+// Nothing else is touched.
+func normalizeTaggedNullEscalation(n *yaml.Node) error {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			v := deref(n.Content[i+1])
+			if n.Content[i].Value != ConstraintRequireCriticalEscalation || v == nil || v.ShortTag() != "!!null" {
+				continue
+			}
+			if _, err := DecodePyYAML(v); err != nil {
+				return fmt.Errorf("%s: %w", ConstraintRequireCriticalEscalation, err)
+			}
+			if v.Kind == yaml.ScalarNode {
+				v.Tag, v.Style, v.Value = "!!null", 0, "null"
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := normalizeTaggedNullEscalation(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UnmarshalPolicy is yaml.Unmarshal(data, out) for a `_domain_policy.yaml`
+// whose `require_critical_escalation` is a PyYAMLValue: the document goes
+// through normalizeTaggedNullEscalation first, so a `!!null`-tagged value
+// reads as PyYAML reads it (None, or the whole file refused). An empty
+// document leaves out untouched, as yaml.Unmarshal does.
+func UnmarshalPolicy(data []byte, out any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		return nil
+	}
+	if err := normalizeTaggedNullEscalation(&doc); err != nil {
+		return err
+	}
+	return doc.Decode(out)
+}
+
 // DecodePyYAML decodes n as PyYAML's safe_load reads it (#2325), for where
 // the Python generator's reading of a boolean flag decides the outcome. For
 // a scalar it returns an error exactly when safe_load refuses the value
@@ -227,8 +282,9 @@ func DecodePyYAML(n *yaml.Node) (any, error) {
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
 // value leaves Value nil). A value PyYAML refuses fails the decode, as it
 // fails the generator's read of the whole file. yaml.v3 never hands a
-// `!!null`-tagged node to an Unmarshaler, so `!!null x` (None in PyYAML)
-// still fails the enclosing decode.
+// `!!null`-tagged node to an Unmarshaler: decode through UnmarshalPolicy,
+// or `!!null x` (None in PyYAML) fails the enclosing decode and `!!null {}`
+// (refused by PyYAML) reads as null.
 type PyYAMLValue struct{ Value any }
 
 // UnmarshalYAML implements yaml.Unmarshaler.

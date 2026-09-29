@@ -923,6 +923,36 @@ func TestRun_UnusablePolicyStructure_NamedAndOtherChecksRun(t *testing.T) {
 	}
 }
 
+// A `!!null`-tagged require_critical_escalation (#2325) is judged as the
+// generator's PyYAML reads it: a scalar is None — the constraint is off and
+// forbidden_receiver_types still refuses slack — and a collection is refused
+// with the whole file (the generator drops every domain policy in it).
+func TestRun_TaggedNullEscalation_AsTheGenerator(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[string]string{
+		"!!null x":                    "error/domain_policy_violation/t-pol/receiver.type",
+		"!<tag:yaml.org,2002:null> x": "error/domain_policy_violation/t-pol/receiver.type",
+		`!!null ""`:                   "error/domain_policy_violation/t-pol/receiver.type",
+		"!!null {}":                   "error/domain_policy_unusable//_domain_policy.yaml",
+		"!!null [1]":                  "error/domain_policy_unusable//_domain_policy.yaml",
+	} {
+		code, findings, _ := runTreeJSON(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  cpu: 70\n",
+			"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
+				"      require_critical_escalation: " + v + "\n      forbidden_receiver_types: [slack]\n",
+			"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
+				"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
+		})
+		var got []string
+		for _, f := range findings {
+			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
+		}
+		if code != exitFindings || !equalStrings(got, []string{want}) {
+			t.Errorf("%s: exit = %d, findings %v; want exit %d and [%s]", v, code, got, exitFindings, want)
+		}
+	}
+}
+
 // A profiles / policy file that fails YAML syntax is a file the exporter
 // drops: exit 3 names it, and the routing loader skips it rather than naming
 // it a second time as an unusable structure.

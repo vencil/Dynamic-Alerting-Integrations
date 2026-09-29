@@ -705,6 +705,44 @@ func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	}
 }
 
+// A `!!null`-tagged value (#2325), on the first load and on a hot reload
+// from a good policy with escalation on. PyYAML reads a tagged scalar as
+// None: the file loads, escalation is off and slack is still forbidden (as
+// the generator enforces it). It refuses a tagged collection and the
+// generator drops the file: the first load fails (the empty policy), and a
+// hot reload fails and keeps the last good policy.
+func TestLoad_TaggedNullEscalationValue(t *testing.T) {
+	t.Parallel()
+	for v, refused := range map[string]bool{
+		"!!null x": false, "!<tag:yaml.org,2002:null> x": false, `!!null ""`: false,
+		"!!null {}": true, "!!null [1]": true,
+	} {
+		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		pols := NewManager(dir).RoutingPolicies()
+		if refused && len(pols) != 0 {
+			t.Errorf("initial load %s: policies %+v, want none (the file refused)", v, pols)
+		}
+		if !refused && (len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"})) {
+			t.Errorf("initial load %s: policies %+v, want escalation off and slack forbidden", v, pols)
+		}
+
+		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
+		m := NewManager(dir)
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
+		err := m.Reload()
+		if (err != nil) != refused {
+			t.Errorf("hot reload %s: Reload() = %v, want refused=%v", v, err, refused)
+		}
+		pols = m.RoutingPolicies()
+		if len(pols) != 1 || pols[0].RequireCriticalEscalation != refused ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("hot reload %s: policies %+v, want escalation=%v (last good kept iff refused), slack forbidden",
+				v, pols, refused)
+		}
+	}
+}
+
 // Not parallel: it swaps the process-wide slog default to read the WARN.
 func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
 	var buf lockedBuffer

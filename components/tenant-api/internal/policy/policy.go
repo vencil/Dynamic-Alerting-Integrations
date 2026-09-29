@@ -31,7 +31,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
-	"gopkg.in/yaml.v3"
 )
 
 // Constraints defines the constraints for a domain policy.
@@ -48,11 +47,14 @@ type Constraints struct {
 	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
 	// left off, and the rest of the file still applies. A scalar PyYAML
 	// refuses (`!!bool y`, `!!int abc`), or a mapping or list it refuses for
-	// its own tag or direct children (`!!bool [true]`, `{<<: 1}`), fails the
-	// file, as the generator drops it: a hot reload keeps the last good policy
-	// and records the failure. Accepted gap: one PyYAML refuses only deeper
-	// (`[!!bool y]`) loads with the constraint off (from last-good on to off
-	// on a hot reload), while the generator and da-guard refuse it.
+	// its own tag or direct children (`!!bool [true]`, `{<<: 1}`, `!!null {}`),
+	// fails the file, as the generator drops it: a hot reload keeps the last
+	// good policy and records the failure. A `!!null`-tagged scalar (`!!null x`)
+	// is None, as for PyYAML: the constraint is off, the rest applies
+	// (parseConfig decodes via routingpolicy.UnmarshalPolicy). Accepted gap:
+	// one PyYAML refuses only deeper (`[!!bool y]`) loads with the constraint
+	// off (from last-good on to off on a hot reload), while the generator and
+	// da-guard refuse it.
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 
@@ -110,7 +112,9 @@ func emptyConfig() *DomainPolicyConfig {
 
 func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	var cfg DomainPolicyConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// UnmarshalPolicy, not yaml.Unmarshal: a `!!null`-tagged
+	// require_critical_escalation is read as PyYAML reads it (#2325).
+	if err := routingpolicy.UnmarshalPolicy(data, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.DomainPolicies == nil {

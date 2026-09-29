@@ -167,3 +167,23 @@ func TestBatchTenants_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
 		t.Errorf("response = %+v, want completed with the %q advisory", resp, escalationAdvisory)
 	}
 }
+
+// A `!!null x` require_critical_escalation (#2325) is None to PyYAML: the
+// generator runs the policy with that constraint off and still refuses a
+// forbidden slack receiver, so PUT does too — the file is not refused whole
+// (yaml.v3 alone cannot decode `!!null x`, which left every constraint off).
+func TestPutTenant_TaggedNullEscalationStillEnforcesForbidden(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+		"_domain_policy.yaml": "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
+			"      require_critical_escalation: !!null x\n      forbidden_receiver_types: [slack]\n",
+	}
+	body := "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n" +
+		"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n"
+	code, resp, _ := putRoutingTenant(t, files, "t1", body)
+	if code != http.StatusForbidden || !strings.Contains(resp, `"constraint":"forbidden_receiver_types"`) ||
+		strings.Contains(resp, "require_critical_escalation") {
+		t.Errorf("status = %d, body %s; want 403 for forbidden_receiver_types only", code, resp)
+	}
+}

@@ -208,6 +208,35 @@ func TestCheckCriticalEscalation_PerRequiringDomain(t *testing.T) {
 	}
 }
 
+// A `!!null`-tagged value (#2325): yaml.v3 decodes it itself, never through
+// PyYAMLValue. PyYAML reads a tagged scalar as None — the constraint is off,
+// the rest of the policy applies, as the generator enforces it — and refuses
+// a tagged collection, dropping the whole file.
+func TestParseDomainPolicies_TaggedNullEscalation(t *testing.T) {
+	t.Parallel()
+	for v, refused := range map[string]bool{
+		"!!null x": false, "!<tag:yaml.org,2002:null> x": false, `!!null ""`: false,
+		"!!null {}": true, "!!null [1]": true,
+	} {
+		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " +
+			v + "\n      forbidden_receiver_types: [slack]\n"
+		pols, probs, err := ParseDomainPolicies([]byte(src))
+		if refused {
+			if err == nil {
+				t.Errorf("%s: policies %+v, want the document refused (PyYAML refuses it)", v, pols)
+			}
+			continue
+		}
+		if err != nil || len(probs) != 0 {
+			t.Errorf("%s: err %v, problems %+v; want None read as an absent constraint", v, err, probs)
+			continue
+		}
+		if len(pols) != 1 || pols[0].RequireCriticalEscalation || !reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("%s: policies %+v, want escalation off and forbid [slack]", v, pols)
+		}
+	}
+}
+
 // A mapping or sequence value — an alias cycle and a fan-out included —
 // fails closed without a crash and fast (#2325): the document is refused
 // (yaml.v3's own alias checks) or the constraint is reported and off while
