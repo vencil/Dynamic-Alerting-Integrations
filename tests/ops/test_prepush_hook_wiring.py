@@ -2002,6 +2002,7 @@ def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> No
     # Must-fire half: the hook ran, so the tree did exist.
     assert "post-checkout: simulated failure" in r.stderr, f"the hook never ran:\n{r.stderr}"
     assert r.returncode == 1, f"a push it could not validate went through:\n{r.stdout}{r.stderr}"
+    _assert_refused_verbatim(r, sha_b, "post-checkout: simulated failure\n")
     after = _git(work, "worktree", "list", "--porcelain").stdout
     assert after == before, f"worktrees changed across the push:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
@@ -2109,6 +2110,27 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
 # ---------------------------------------------------------------------------
 # #1690 round 2 — gaps a coverage-inventory review measured as unasserted
 # ---------------------------------------------------------------------------
+def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
+    """A refused checkout shows git's own words and the guard's fixed refusal,
+    on both streams, pinned whole: no guessed cause slips in either one."""
+    assert r.stderr == git_says + (
+        "\n"
+        f"[pre-push-mkdocs] ⛔ could not check out {sha} to validate it.\n"
+        "\n"
+        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
+        "in, so it cannot fall back to the working tree — that would report on the\n"
+        "wrong commit. Refusing instead.\n"
+        "\n"
+        "To push anyway (the docs build then runs only in CI):\n"
+        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
+        "\n"
+    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
+    tail = r.stdout.split(f"validating pushed commit {sha[:8]}\n", 1)[-1].splitlines()
+    assert tail == ["", f"::error::mkdocs strict did not pass for {sha[:8]}"], (
+        "the guard added to its refusal on stdout. stdout=%s" % r.stdout
+    )
+
+
 _GIT_SHIM = """#!/usr/bin/env bash
 # Fail only `git worktree add`; delegate everything else to the real git.
 if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
@@ -2171,23 +2193,7 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
     # ⛔ git's own reason, not a guessed one: "stale registration, run prune"
     # was offered for a `.git/worktrees` that was a file, where prune does
     # nothing (#2210 review). Pinned whole, so no guess slips back in.
-    assert r.stderr == (
-        "fatal: simulated worktree failure\n"
-        "\n"
-        f"[pre-push-mkdocs] ⛔ could not check out {sha_b} to validate it.\n"
-        "\n"
-        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
-        "in, so it cannot fall back to the working tree — that would report on the\n"
-        "wrong commit. Refusing instead.\n"
-        "\n"
-        "To push anyway (the docs build then runs only in CI):\n"
-        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
-        "\n"
-    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
-    tail = r.stdout.split(f"validating pushed commit {sha_b[:8]}\n", 1)[-1].splitlines()
-    assert tail == ["", f"::error::mkdocs strict did not pass for {sha_b[:8]}"], (
-        "the guard added to its refusal on stdout. stdout=%s" % r.stdout
-    )
+    _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\n")
 
 
 def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(
