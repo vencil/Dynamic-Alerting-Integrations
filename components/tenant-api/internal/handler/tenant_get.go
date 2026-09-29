@@ -84,9 +84,10 @@ type tenantDetailNotLoadable struct {
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
 // @Description tenant file itself is repaired. A whole-file PUT can replace it: it is not refused merely because the current
 // @Description file is broken, though a body adding an end-of-life recipe is still refused (the broken file's end-of-life usage
-// @Description cannot be read, so it counts as none). A broken file shared with other tenants cannot keep their sections through
-// @Description that PUT: a body without them deletes them, a body with them is refused as adding tenant sections; to keep
-// @Description them, fix the file in git.
+// @Description cannot be read, so it counts as none). A broken file shared with other tenants may not keep their sections
+// @Description through that PUT: when tenant-api cannot parse the current file, other tenants' sections in the body count as
+// @Description added and are refused, and a body with only the tenant's own section overwrites them; to keep them, fix the
+// @Description file in git.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"

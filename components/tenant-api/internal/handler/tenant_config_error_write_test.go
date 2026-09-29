@@ -383,30 +383,40 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 	}
 }
 
-// #2405 review F1: the limit of that repair, pinned so a change to it is a
-// decision rather than an accident. A broken file SHARED with another tenant
-// cannot keep that tenant's section through the whole-file PUT: the
-// added-section gate (addedTenantKeys) grandfathers only sections it can read
-// in the current file, and it cannot read a broken one — so a body that
-// carries the co-resident section is refused as adding it (file untouched),
-// and a body without it replaces the file and the section is gone. The gate
-// is deliberately not relaxed (it fails closed); the documented way to keep
-// the section is fixing the file in git.
-func TestPutTenant_BrokenSharedFileCannotKeepCoResident(t *testing.T) {
+// #2405 review: the limit of that repair, pinned so a change to it is a
+// decision rather than an accident. The added-section gate (addedTenantKeys)
+// grandfathers only the sections it can read in the current file. When
+// tenant-api cannot parse a broken file SHARED with another tenant, a body
+// that carries the co-resident section is refused as adding it (file
+// untouched), and a body without it replaces the file and the section is
+// gone. The gate is deliberately not relaxed (it fails closed); the documented
+// way to keep the section is fixing the file in git.
+//
+// Control: a shared file that is invalid_config only because it also declares
+// a non-UTF-8 tenant id still parses for that gate, so the co-resident section
+// IS grandfathered and survives — which is why the docs say "may not keep",
+// not "cannot keep".
+func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	t.Parallel()
 	const id, other = "svc-alpha", "svc-beta"
 	const rbacYAML = "groups:\n  - name: ops\n    tenants: [\"" + id + "\"]\n    permissions: [read, write]\n"
-	const broken = "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\n  " + other + ":\n    mysql_connections: \"60\"\n  oops: [unclosed\n"
+	const sections = "  " + id + ":\n    mysql_connections: \"70\"\n  " + other + ":\n    mysql_connections: \"60\"\n"
+	const unparseable = "tenants:\n" + sections + "  oops: [unclosed\n"
+	const nonUTF8 = "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" + sections
+	const ownOnly = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
+	const withOther = ownOnly + "  " + other + ":\n    mysql_connections: \"60\"\n"
 	cases := []struct {
-		name, body string
-		wantCode   int
+		name, base, body string
+		wantCode         int
 	}{
-		{"own_section_only_deletes_co_resident", "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n", http.StatusOK},
-		{"with_co_resident_is_refused", "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n  " + other + ":\n    mysql_connections: \"60\"\n", http.StatusBadRequest},
+		{"unparseable_own_section_only_deletes_co_resident", unparseable, ownOnly, http.StatusOK},
+		{"unparseable_with_co_resident_is_refused", unparseable, withOther, http.StatusBadRequest},
+		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, http.StatusOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			broken := c.base
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": broken, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, rbacYAML), WriteMode: WriteModeDirect}
@@ -417,8 +427,8 @@ func TestPutTenant_BrokenSharedFileCannotKeepCoResident(t *testing.T) {
 			}
 			after := mustRead(t, filepath.Join(dir, id+".yaml"))
 			if c.wantCode == http.StatusOK {
-				if after != c.body || strings.Contains(after, other) {
-					t.Errorf("file after PUT = %q, want exactly the body (co-resident %s gone)", after, other)
+				if after != c.body {
+					t.Errorf("file after PUT = %q, want exactly the body %q", after, c.body)
 				}
 				return
 			}
