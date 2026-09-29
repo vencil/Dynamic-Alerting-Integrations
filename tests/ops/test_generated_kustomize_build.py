@@ -146,11 +146,31 @@ def _setup_symlinks(out: Path) -> None:
         assert proc.returncode == 0, f"README step {argv} failed: {proc.stderr}"
 
 
-_BUILD_RE = re.compile(r"\bkustomize build\b[^\n>|]*")
+# `kustomize build …` (GitHub leg: the runner ships kustomize) or
+# `kubectl kustomize …` (GitLab leg: its apply image, GITLAB_KUBECTL_IMAGE, is
+# alpine/kubectl and ships kubectl only — #1401 D2). Both are the same build.
+_BUILD_RE = re.compile(r"\b(?:kustomize build|kubectl kustomize)\b[^\n>|]*")
+
+# The standalone `kustomize` this module runs stands in for `kubectl kustomize`.
+# ⛔ That substitution is only honest while the two are the SAME kustomize:
+# kubectl 1.37.1 (GITLAB_KUBECTL_IMAGE) embeds kustomize v5.8.1 (measured with
+# `kubectl version --client` on the checksum-verified upstream binary), which
+# is KUSTOMIZE_PIN. Bumping the image's kubectl minor must re-check this.
+_KUBECTL_KUSTOMIZE = {"1.37.1": "5.8.1"}
+
+
+def _build_args(argv: list[str]) -> list[str]:
+    """Arguments after the verb, i.e. what `kustomize build` would receive."""
+    if argv[:2] == ["kustomize", "build"]:
+        return argv[2:]
+    if argv[:2] == ["kubectl", "kustomize"]:
+        return argv[2:]
+    raise AssertionError(f"not a kustomize build invocation: {argv}")
 
 
 def _workflow_build_commands(out: Path) -> dict[str, list[str]]:
-    """The `kustomize build …` invocation each generated pipeline runs.
+    """The build invocation each generated pipeline runs (`kustomize build …`
+    on GitHub, `kubectl kustomize …` on GitLab).
 
     Parsed from the YAML (step `run:` bodies / job `script:` lists), then cut
     at the first `>`/`|` so the shell redirection is not part of argv.
@@ -172,7 +192,7 @@ def _workflow_build_commands(out: Path) -> dict[str, list[str]]:
                 found["gitlab"].append(shlex.split(m.group(0)))
     for leg, cmds in found.items():
         assert len(cmds) == 1, (
-            f"expected exactly one `kustomize build` in the {leg} pipeline, "
+            f"expected exactly one kustomize build invocation in the {leg} pipeline, "
             f"found {cmds}")
     return {leg: cmds[0] for leg, cmds in found.items()}
 
@@ -215,8 +235,7 @@ def test_pipeline_build_command_after_readme_setup(leg, kustomize, tmp_path):
     root, out = _generate(tmp_path)
     _setup_symlinks(out)
     argv = _workflow_build_commands(out)[leg]
-    assert argv[0] == "kustomize", argv
-    _assert_built(_run([kustomize, *argv[1:]], root), out)
+    _assert_built(_run([kustomize, "build", *_build_args(argv)], root), out)
 
 
 def test_readme_cp_fallback_then_bare_build(kustomize, tmp_path):
@@ -249,7 +268,7 @@ def test_the_readme_setup_is_load_bearing(kustomize, tmp_path):
     """
     root, out = _generate(tmp_path)
     argv = _workflow_build_commands(out)["github"]
-    proc = _run([kustomize, *argv[1:]], root)
+    proc = _run([kustomize, "build", *_build_args(argv)], root)
     assert proc.returncode != 0, "raw generated tree builds without the README setup"
 
 
@@ -305,3 +324,21 @@ def test_ci_runs_this_module_with_the_pinned_kustomize():
         f"no ci.yml job installs kustomize v{KUSTOMIZE_PIN} (sha-verified) and "
         f"then runs {THIS_MODULE} with KUSTOMIZE_REQUIRE=1 — without that step "
         "every test above is a skip in CI")
+
+
+def test_kubectl_kustomize_stand_in_matches_the_delivered_image():
+    """The GitLab leg is built here with standalone kustomize standing in for
+    `kubectl kustomize`. Pin that the delivered kubectl is one whose embedded
+    kustomize is known to equal KUSTOMIZE_PIN — otherwise this gate would be
+    certifying a different kustomize than the customer's pipeline runs."""
+    src = INIT.read_text(encoding="utf-8")
+    m = re.search(r"^GITLAB_KUBECTL_IMAGE = '[^':]+:([^']+)'$", src, re.MULTILINE)
+    assert m, "GITLAB_KUBECTL_IMAGE not found in init_project.py"
+    kubectl = m.group(1)
+    assert kubectl in _KUBECTL_KUSTOMIZE, (
+        f"GITLAB_KUBECTL_IMAGE moved to kubectl {kubectl}; measure its embedded "
+        f"kustomize (`kubectl version --client`) and record it in _KUBECTL_KUSTOMIZE")
+    assert _KUBECTL_KUSTOMIZE[kubectl] == KUSTOMIZE_PIN, (
+        f"kubectl {kubectl} embeds kustomize {_KUBECTL_KUSTOMIZE[kubectl]}, but this "
+        f"module builds with {KUSTOMIZE_PIN} — bump KUSTOMIZE_PIN (and ci.yml's "
+        f"Install kustomize) to match, or the GitLab leg tests the wrong build")

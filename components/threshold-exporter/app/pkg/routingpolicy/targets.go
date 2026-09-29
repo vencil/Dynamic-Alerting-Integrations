@@ -14,6 +14,13 @@ type Target struct {
 	// "routes[<i>]" — the index into the resolved list.
 	Ref      string
 	Receiver any
+	// Match is the equality match the route adds under the tenant route
+	// (#2325, _grar_validate._subroute_match): nil for the main route;
+	// `{alertname|metric_group: str(value)}` for an override — the
+	// generator formats the value into the matcher, so `alertname: 123` is
+	// "123" (PyStr); a `routes` entry's own `match` (RouteEntryProblem
+	// already requires string values).
+	Match map[string]string
 }
 
 // RouteEntryKeys are the keys a `routes` entry may carry
@@ -128,7 +135,12 @@ func Targets(resolved map[string]any) []Target {
 			if !Truthy(ov["receiver"]) {
 				continue
 			}
-			out = append(out, Target{Ref: fmt.Sprintf("overrides[%d]", i), Receiver: ov["receiver"]})
+			key := "alertname"
+			if !Truthy(ov["alertname"]) {
+				key = "metric_group"
+			}
+			out = append(out, Target{Ref: fmt.Sprintf("overrides[%d]", i), Receiver: ov["receiver"],
+				Match: map[string]string{key: PyStr(ov[key])}})
 		}
 	}
 	if routes, ok := resolved["routes"].([]any); ok {
@@ -140,7 +152,12 @@ func Targets(resolved map[string]any) []Target {
 			if !Truthy(entry["receiver"]) {
 				continue
 			}
-			out = append(out, Target{Ref: fmt.Sprintf("routes[%d]", i), Receiver: entry["receiver"]})
+			match := map[string]string{}
+			m, _ := asStringMap(entry["match"])
+			for k, v := range m {
+				match[k], _ = v.(string)
+			}
+			out = append(out, Target{Ref: fmt.Sprintf("routes[%d]", i), Receiver: entry["receiver"], Match: match})
 		}
 	}
 	return out

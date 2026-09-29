@@ -1,7 +1,6 @@
 """Tests for scripts/ops/commit_helper.py — UTF-8 safety layer.
 
 Covers:
-  check-ascii: ASCII pass, non-ASCII fail with hint
   commit-file: file-not-found, invalid UTF-8, BOM strip
   commit-file happy path is mocked via subprocess patch since it invokes git
 """
@@ -25,42 +24,6 @@ def _load():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-class TestCheckAscii:
-    def test_pure_ascii_passes(self, capsys):
-        mod = _load()
-        assert mod.check_ascii("feat: plain ASCII message") == 0
-        # No error output
-        assert capsys.readouterr().err == ""
-
-    def test_ascii_punctuation_passes(self):
-        mod = _load()
-        assert mod.check_ascii("fix(dx): <>[](){}!@#$%^&*") == 0
-
-    def test_cjk_fails(self, capsys):
-        mod = _load()
-        rc = mod.check_ascii("feat: 起手式 automation")
-        assert rc == 1
-        err = capsys.readouterr().err
-        assert "non-ASCII" in err
-        assert "commit-file" in err
-
-    def test_em_dash_fails(self):
-        """Em-dash (U+2014) is non-ASCII even though it looks like punctuation."""
-        mod = _load()
-        assert mod.check_ascii("fix: foo \u2014 bar") == 1
-
-    def test_accented_fails(self):
-        mod = _load()
-        assert mod.check_ascii("feat: café update") == 1
-
-    def test_hint_mentions_commit_file(self, capsys):
-        mod = _load()
-        mod.check_ascii("起手式")
-        err = capsys.readouterr().err
-        assert "commit-file" in err
-        assert "chcp" in err  # explains why -m can't just be made to work
 
 
 class TestCommitFile:
@@ -188,26 +151,6 @@ class TestCommitMsgGate:
 class TestCLI:
     """Smoke tests invoking the script as a subprocess."""
 
-    def test_check_ascii_pass(self):
-        result = subprocess.run(
-            [sys.executable, str(_SCRIPT), "check-ascii", "plain text"],
-            capture_output=True,
-            text=True,
-            timeout=10, encoding='utf-8'
-        )
-        assert result.returncode == 0
-
-    def test_check_ascii_fail(self):
-        result = subprocess.run(
-            [sys.executable, str(_SCRIPT), "check-ascii", "起手式"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            encoding="utf-8",
-        )
-        assert result.returncode == 1
-        assert "non-ASCII" in result.stderr
-
     def test_help(self):
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--help"],
@@ -216,8 +159,17 @@ class TestCLI:
             timeout=10, encoding='utf-8'
         )
         assert result.returncode == 0
-        assert "check-ascii" in result.stdout
         assert "commit-file" in result.stdout
+
+    def test_check_ascii_is_gone(self):
+        """#2249: it guarded only the removed `commit "msg"` subcommand."""
+        result = subprocess.run(
+            [sys.executable, str(_SCRIPT), "check-ascii", "plain text"],
+            capture_output=True,
+            text=True,
+            timeout=10, encoding='utf-8'
+        )
+        assert result.returncode != 0
 
     def test_requires_subcommand(self):
         result = subprocess.run(

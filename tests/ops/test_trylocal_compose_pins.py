@@ -32,12 +32,11 @@ listed, including shapes nobody has thought of yet.
   pinned.
 * **Not currency.** A release triple from two years ago passes. Nothing offline
   can tell the difference; that needs a registry round-trip.
-* **Not CVE coverage.** try-local images are outside the nightly scan matrix.
-  ⚠️ Not because they are undeployable — `test_nightly_scan_matrix_drift.py`'s
-  `_DEPLOYABLE_TREES` already lists `try-local` ("installed on a cluster or
-  handed to a customer"). The reason is mechanical: the matrix is set-equal to
-  what `scripts/ops/check_image_refs_resolve.py` extracts, and its `SOURCE_GLOBS`
-  cover only `helm/*/values*.yaml` and `k8s/**`.
+* **Not CVE coverage.** That lives in `test_nightly_scan_matrix_drift.py`
+  (`test_every_trylocal_image_is_in_the_scan_matrix`, #1337 ①): every third-party
+  image this file pulls must appear in the nightly scan matrix by `repo:tag`.
+  The file is deliberately NOT in the extractor's `SOURCE_GLOBS` — its tag-only
+  refs would never string-equal the matrix's tag+digest rows.
 * **Not an update path.** Nothing bumps these refs — `try-local/**` matches no
   Renovate `managerFilePatterns`. That is why the pins here are release TAGS and
   not digests: a digest with no updater cannot inherit an upstream rebuild, so

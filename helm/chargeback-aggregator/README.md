@@ -6,7 +6,7 @@ CronJob queries VictoriaLogs for `log_type=prometheus_query_log` entries, aggreg
 
 ## Why this exists (the #552 boundary)
 
-`tenant_federation_requests_total{tenant,status}` from the gateway mtail sidecar counts **requests**, not **cost**. A heavy 100k-series query and a light 10-series query both increment that counter by 1 — useless for chargeback. IV-2f (#511) deliberately did **not** add `series_returned` to the gateway audit log because Envoy would have to buffer + decode the Prometheus response body (cost prohibitive; blast-radius enforcement lives at the storage `--query.max-samples` cap instead).
+`tenant_federation_requests_total{tenant,status}` from the gateway audit-metrics sidecar counts **requests**, not **cost**. A heavy 100k-series query and a light 10-series query both increment that counter by 1 — useless for chargeback. IV-2f (#511) deliberately did **not** add `series_returned` to the gateway audit log because Envoy would have to buffer + decode the Prometheus response body (cost prohibitive; blast-radius enforcement lives at the storage `--query.max-samples` cap instead).
 
 The accurate cost signal is in Prometheus's own **query log** (`query_log_file` config setting — there's no CLI flag for this), which records per-query `stats.samples.totalQueryableSamples` + `stats.timings.evalTotalTime` + `stats.timings.execTotalTime`. This chart's CronJob aggregates those, offline, into a billable per-tenant report.
 

@@ -125,7 +125,7 @@ jobs:
       # isn't allowed in `if`, so gate on the mirrored env var (#902 / #907 review).
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # Same stubs as component-docker-build.yaml: da-portal needs the vendor dir
       # (CDN fallback at runtime), da-tools stubs its pre-built Go binaries
@@ -158,7 +158,7 @@ jobs:
       # the last build. A build failure fails THIS matrix job (a real main-health
       # signal; the report job notes the missing image and won't claim "all clean").
       - name: Build image (load, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -171,7 +171,7 @@ jobs:
       # = only actionable/fixable) but exit-code 0 — we CAPTURE findings here and let
       # the report job decide on alerting. JSON output for machine aggregation.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
@@ -216,7 +216,8 @@ jobs:
     strategy:
       fail-fast: false # scan every image so one pull failure doesn't mask the rest
       matrix:
-        # Third-party upstream images our charts / k8s manifests PULL (not build).
+        # Third-party upstream images our charts / k8s manifests PULL (not build),
+        # plus the two the try-local demo stack alone pulls (#1337).
         # Trivy pulls each ref and scans it directly — these had ZERO automated CVE
         # detection before #902. Keep each ref in sync with the source-of-truth file
         # noted alongside it.
@@ -230,7 +231,7 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.52.0@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:8ee214843129f43e2ebf5e0ca9f2e4e6d8292143d1b8a6787f169b5898578884"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -245,7 +246,7 @@ jobs:
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
             ref: "prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.11@sha256:3ea272e5cab64a4a62240c682e2c62433b25614d956d44c299a10cb6994f6f2e"
+            ref: "grafana/grafana:12.4.12@sha256:83be3e511ede559bee80e2215bb1987cb1246075461cb961beb515b0341e7aea"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
@@ -283,11 +284,21 @@ jobs:
             no_inventory: true
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
             ref: "alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f"
+          # try-local demo stack ONLY (#1337 ①) — README points prospective customers
+          # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
+          # pulls these two, so the extractor cannot see them. The compose file keeps
+          # a release TAG on purpose (no updater there); these rows carry tag+digest
+          # like every other row. Bound by repo:tag to try-local/docker-compose.yaml
+          # in the drift guard, so a bump on one side alone goes red.
+          - name: pushgateway # try-local/docker-compose.yaml
+            ref: "prom/pushgateway:v1.11.3@sha256:74fa117cef2d7e383112d25139ff1c2d2e309c35389a9e0554a47136a1482e48"
+          - name: curl # try-local/docker-compose.yaml (seed-metrics, mock-reconciler)
+            ref: "curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -298,7 +309,7 @@ jobs:
       # as the scan job (CRITICAL,HIGH + ignore-unfixed, exit-code 0 — capture,
       # don't gate; the report job decides on alerting).
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
@@ -397,7 +408,7 @@ jobs:
         # nothing here and are not free.
         include:
           - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py)
-            ref: "alpine/k8s:1.34.12"
+            ref: "alpine/kubectl:1.37.1"
           - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py)
             ref: "alpine/helm:3.22.0"
           # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
@@ -419,10 +430,10 @@ jobs:
             ref: "ghcr.io/vencil/da-tools:latest"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without
-      # creds. Two of the refs are Docker Hub (alpine/k8s, alpine/helm).
+      # creds. Two of the refs are Docker Hub (alpine/kubectl, alpine/helm).
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -434,7 +445,7 @@ jobs:
       # exists is recipe-preview's bundled promtool, which has nothing to do with
       # these.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
@@ -536,21 +547,22 @@ jobs:
           # (federation-audit-sidecar / vector-projection-gate), which are never
           # published, so no tag-time gate exists for them and this nightly bucket
           # plus the PR-time scan are their whole CVE signal (#1337).
-          # "We own these, so patch it" is honest for all but three — but NOT blanket
+          # "We own these, so patch it" is honest for all but two — but NOT blanket
           # true, and the same wrong-advice failure the third-party sentence below
-          # was rewritten for (#1243) applies here in miniature: THREE of these images
+          # was rewritten for (#1243) applies here in miniature: TWO of these images
           # carry findings inside a BUNDLED upstream binary that no first-party
-          # rebuild or dependency bump can clear — recipe-preview (promtool),
-          # federation-audit-sidecar (mtail's own grpc pin; #1337 already rebuilt
-          # mtail from source with a current Go toolchain, which is what cleared
-          # the other 20) and da-tools (amtool, copied from the deployed
-          # Alertmanager image; #2294). The sentence names all three exceptions
-          # rather than sending the reader to do something that cannot work (#1058).
+          # rebuild or dependency bump can clear — recipe-preview (promtool) and
+          # da-tools (amtool, copied from the deployed Alertmanager image; #2294).
+          # The sentence names both exceptions rather than sending the reader to do
+          # something that cannot work (#1058). (There were three until #1278 D1:
+          # federation-audit-sidecar built mtail, whose dormant upstream pinned a
+          # vulnerable grpc; the metrics sidecar is now upstream Vector and that
+          # image is logrotate-only.)
           bash scripts/ops/file_cve_report.sh frags-sb \
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             7 "self-built component" \
-            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). THREE EXCEPTIONS, all bundled upstream binaries no first-party bump touches: da-tools bundles amtool copied from the deployed Alertmanager image (lever: bump the Alertmanager pin in k8s/03-monitoring/deployment-alertmanager.yaml — the da-tools Dockerfile COPY --from ref must move with it, tests/ops/test_da_tools_amtool_pin_parity.py; #2294), recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local \`go get google.golang.org/grpc@v1.82.1\` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. ⛔ WHAT THE RELEASE GATE DOES AND DOES NOT DO. For the five published components release.yaml scans BEFORE publishing (#1278): the image is pushed only to a candidate tag, Trivy (exit-code 1) scans that digest, and only a pass promotes it to :v<version>/:latest and lets the chart push, signing, SBOM and GitHub Release run. So a finding listed here that is still open at tag time WILL stop that component's release — nothing ships, and the fix is a patch plus a re-tag, on release night. That is why this bucket is the place to act: it is the early warning for a gate that now really blocks. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue (security-audit-runbook §37)." || rc=1
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: da-tools bundles amtool copied from the deployed Alertmanager image (lever: bump the Alertmanager pin in k8s/03-monitoring/deployment-alertmanager.yaml — the da-tools Dockerfile COPY --from ref must move with it, tests/ops/test_da_tools_amtool_pin_parity.py; #2294), and recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml). federation-audit-sidecar is logrotate on Alpine only since #1278 D1 (it used to build mtail), so a finding there is an Alpine package: bump the FROM and the image tag together. ⛔ WHAT THE RELEASE GATE DOES AND DOES NOT DO. For the five published components release.yaml scans BEFORE publishing (#1278): the image is pushed only to a candidate tag, Trivy (exit-code 1) scans that digest, and only a pass promotes it to :v<version>/:latest and lets the chart push, signing, SBOM and GitHub Release run. So a finding listed here that is still open at tag time WILL stop that component's release — nothing ships, and the fix is a patch plus a re-tag, on release night. That is why this bucket is the place to act: it is the early warning for a gate that now really blocks. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue (security-audit-runbook §37)." || rc=1
           # Third-party — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243
@@ -564,7 +576,7 @@ jobs:
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
-            15 "third-party upstream image" \
+            17 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
           # Customer-delivered — its own issue BECAUSE THE LEVER IS DIFFERENT.
           # The other two buckets end in an action we can merge; this one mostly

@@ -69,19 +69,20 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 跑法：`python3 scripts/tools/lint/check_iac_vibe_rules.py`（CI hook `iac-sast-check`）。
 
-**Baseline 截至 2026-09-28**（issue 1444 重新以工具輸出核對整張表）：**9** 個 Dockerfile，**0 BLOCK** ✅ / **7** WARN（High，列管如下）/ **2** INFO。
+**Baseline 截至 2026-09-29**（#1278 D1 以工具輸出重新核對整張表，hadolint v2.12.0，與 ci.yml 同版）：**9** 個 Dockerfile，**0 BLOCK** ✅ / **4** WARN（High，列管如下）/ **2** INFO（`components/da-tools/app/Dockerfile:10`、`components/recipe-preview/Dockerfile:17` 的 DL3059）。
 
 > ⚠️ 這張表在 #1337 之前已經對不上工具輸出：宣稱 8 個 Dockerfile（實際 9）、漏列 `components/recipe-preview` 的 DL3013 與 DL3059 兩筆、`tenant-api` 行號停在 `:44`（實際 `:53`）。表格與工具之間**沒有機械閘門**（`check_iac_vibe_rules.py` 只 print，不比對本檔），所以列管表只能靠人工對帳——動這張表時請重跑 `python3 scripts/tools/lint/check_iac_vibe_rules.py --ci` 並以輸出為準，不要只改自己那幾列。
 
 | # | File:line | Code | 說明 | Rationale | 退場 / 修補 |
 |---|---|---|---|---|---|
-| 1 | `components/tenant-api/Dockerfile:53` | DL3018 | `apk add --no-cache git ca-certificates tzdata` 未 pin 版本 | 平台刻意採 `--no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 `components/da-portal/Dockerfile` L30-31 註解的策略。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
-| 2 | `helm/federation-gateway/audit-sidecar/Dockerfile:66` | DL3018 | build stage `apk add --no-cache git` 未 pin | 同 #1（build stage，只為 clone mtail 的 pinned commit，不入 runtime image） | 同 #1 |
-| 3 | `helm/federation-gateway/audit-sidecar/Dockerfile:88` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
-| 4 | `components/da-tools/app/Dockerfile:15` | DL3013 | `pip install --upgrade pip` 未 pin pip 版本 | 升級 pip 自身到最新是標準且刻意的；應用相依套件**已 pin**（`PyYAML==6.0.3` / `promql-parser==0.7.0` / `croniter==6.0.0`）。DL3013 命中的是 `pip` 自身那一段。 | 低價值；可選擇性 pin，不列為待辦 |
-| 5 | `components/recipe-preview/Dockerfile:15` | DL3013 | 同 #4，builder stage 的 `pip install --upgrade pip` | 同 #4 | 同 #4 |
-| 6 | `helm/vector/projection-gate/Dockerfile:24` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
-| 7 | `components/da-tools/app/Dockerfile:32` | DL3018 | runtime `apk add --no-cache git` 未 pin | 同 #1。issue 1444：`da-tools init` 產出的 GitLab pipeline 在這個映像**裡面**跑 blast-radius job，要用 git 讀 MR 的 base commit；映像以 nonroot 執行，所以沒辦法在 job 裡 `apk add`，只能裝進映像。 | 同 #1 |
+| 1 | `components/tenant-api/Dockerfile:56` | DL3018 | `apk add --no-cache git ca-certificates tzdata` 未 pin 版本 | 平台刻意採 `--no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 `components/da-portal/Dockerfile` L30-31 註解的策略。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 2 | `helm/federation-gateway/audit-sidecar/Dockerfile:33` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
+| 3 | `helm/vector/projection-gate/Dockerfile:25` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
+| 4 | `components/da-tools/app/Dockerfile:38` | DL3018 | runtime `apk add --no-cache git` 未 pin | 同 #1。issue 1444：`da-tools init` 產出的 GitLab pipeline 在這個映像**裡面**跑 blast-radius job，要用 git 讀 MR 的 base commit；映像以 nonroot 執行，所以沒辦法在 job 裡 `apk add`，只能裝進映像。 | 同 #1 |
+
+**已退場（#1278 D1）**：`audit-sidecar/Dockerfile` build stage 的 **DL3018**（`apk add --no-cache git`，只為 clone mtail 的 pinned commit）——metrics sidecar 改用上游 Vector 後這個映像不再編譯任何東西，build stage 整段拿掉，所以是**消失**而非豁免。
+
+**已退場（#2338）**：`components/da-tools/app/Dockerfile` 與 `components/recipe-preview/Dockerfile` 的 **DL3013**（`pip install --upgrade pip` 未 pin）——兩個映像改為裝完相依後移除 pip，不再有 `--upgrade pip` 那一段。本表直到 #1278 D1 重新對帳前仍列著這兩筆，行號也已漂移（tenant-api `:53`→`:56`、da-tools `:32`→`:38`、projection-gate `:24`→`:25`）。
 
 **已退場（#1337）**：`audit-sidecar/Dockerfile:22` 的 **DL4006**（`echo "<sha>  file" | sha256sum -c -` 的 pipe 未設 `-o pipefail`）。原列管寫的退場條件是「留待 sidecar Dockerfile 下次動到時順手」——本次改建置方式（預編 binary → 自 pinned commit 編譯）把整個 pipe 拿掉了，供應鏈把關由 tarball SHA-256 換成更強的 commit pin，所以這一筆是**消失**而非豁免。WARN 因此 7 → 6。
 

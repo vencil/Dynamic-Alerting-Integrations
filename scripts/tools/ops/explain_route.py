@@ -53,12 +53,15 @@ from generate_alertmanager_routes import (  # noqa: E402
 from _grar_render import _run_binary, assemble_configmap  # noqa: E402
 from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
+    check_policy_scope,
     duplicate_tenant_errors,
 )
-from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
+    domain_policy_levels,
+    policy_reaches,
     resolve_routing_defaults,
     visible_routing_profiles,
 )
@@ -695,15 +698,11 @@ def summarize_tree(root: dict) -> list[str]:
     return lines
 
 
-def _policies_for_tenant(domain_policies: dict, tenant: str
-                         ) -> tuple[list[tuple[str, set, set]], list[str]]:
-    """Domain policies for *tenant*, read the way the generator's
-    ``check_domain_policies`` reads them (non-strict).
-
-    Returns ``(applicable, inert)``: ``applicable`` is ``(name, forbidden
-    types, allowed types)`` of every policy whose ``tenants`` list names the
-    tenant; ``inert`` says, per policy, why one that may concern the tenant
-    is not applied (``tenants`` not a list, ``constraints`` not a mapping).
+def _level_policies_for_tenant(domain_policies: dict, tenant: str
+                               ) -> tuple[list[tuple[str, set, set]], list[str]]:
+    """The policies of ONE level's ``domain_policies`` that list *tenant*,
+    read the way the generator's ``check_domain_policies`` reads them
+    (non-strict). Returns ``(applicable, inert)`` as ``_policies_for_tenant``.
     """
     applicable, inert = [], []
     for name, policy in sorted(domain_policies.items()):
@@ -731,13 +730,46 @@ def _policies_for_tenant(domain_policies: dict, tenant: str
     return applicable, inert
 
 
+def _policies_for_tenant(parsed: dict, tenant: str
+                         ) -> tuple[list[tuple[str, set, set]], list[str]]:
+    """Domain policies for *tenant*, at every conf.d level (#2435).
+
+    The levels and their reach are the generator's own
+    (``domain_policy_levels`` / ``policy_reaches``, #2326 (d)): the root's
+    policies reach every tenant, a subtree's only the tenants of that
+    subtree. A subtree policy that names *tenant* from outside its subtree
+    is not enforced — the generator's ``check_policy_scope`` finding, in its
+    own words, becomes a note.
+
+    Returns ``(applicable, inert)``: ``applicable`` is ``(name, forbidden
+    types, allowed types)`` of every reaching policy whose ``tenants`` list
+    names the tenant; ``inert`` says, per policy, why one that may concern
+    the tenant is not applied (``tenants`` not a list, ``constraints`` not a
+    mapping, out of its subtree's scope).
+    """
+    tenant_dirs = parsed.get("tenant_dirs") or {}
+    applicable, inert = [], []
+    for level, policies in domain_policy_levels(parsed):
+        if policy_reaches(level, tenant, tenant_dirs):
+            got, why = _level_policies_for_tenant(policies, tenant)
+            applicable.extend(got)
+            inert.extend(why)
+            continue
+        msgs, rows = check_policy_scope(
+            level, policies, tenant_dirs,
+            source=policy_level_source(parsed, level))
+        for msg, (_domain, named) in zip(msgs, rows):
+            if named == tenant:
+                inert.append(msg.strip().split(": ", 1)[-1])
+    return applicable, inert
+
+
 def _policy_step(parsed: dict, tenant: str, tenant_types: list[str] | None
                  ) -> dict:
     """Step 5: the receiver-type constraints of the policies that list
     *tenant*, against the tenant receiver(s) Alertmanager delivers to.
     ``tenant_types`` None means the delivery is unknown (no amtool)."""
-    applicable, inert = _policies_for_tenant(
-        parsed.get("domain_policies") or {}, tenant)
+    applicable, inert = _policies_for_tenant(parsed, tenant)
     step: dict = {"step": 5, "action": "policy_check"}
     if inert:
         step["notes"] = inert
@@ -1017,11 +1049,19 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
         "match_receiver": "📡",
         "enforced_routing": "🛡️",
         "inhibit_rules": "🚫",
-        "policy_check": "✅",
     }
+    # #2435: the policy step's icon is its verdict, not its kind — a
+    # violation under ✅ read as a pass. ⚠ rather than ❌: --trace reads the
+    # policies the way the generator's non-strict run does (WARN, rc 0), and
+    # the violation lines under it carry ⚠ already. ❔ = not evaluated (the
+    # delivered receiver is unknown, e.g. no amtool).
+    policy_icons = {True: "✅", False: "⚠", None: "❔"}
 
     for step in trace["steps"]:
-        icon = step_icons.get(step["action"], "▸")
+        if step["action"] == "policy_check":
+            icon = policy_icons.get(step.get("passed"), "▸")
+        else:
+            icon = step_icons.get(step["action"], "▸")
         action_label = step["action"].replace("_", " ").title()
         lines.append(f"  {icon} Step {step['step']}: {action_label}")
         detail = step["detail"]

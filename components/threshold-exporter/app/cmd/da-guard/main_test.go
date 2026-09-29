@@ -851,16 +851,26 @@ func TestRun_ADR007_ExitOneComesFromDomainPolicy(t *testing.T) {
 		t.Fatalf("exit = %d, want %d", code, exitFindings)
 	}
 	perTenant := map[string]int{}
+	var noEscalation []string
 	for _, f := range findings {
 		if f.Kind == "missing_receiver_field" {
 			t.Errorf("profile routing not resolved: %+v", f)
 		}
-		if f.Severity == "error" && f.Kind != "domain_policy_violation" {
+		if f.Severity == "error" && f.Kind != "domain_policy_violation" && f.Kind != "critical_escalation_missing" {
 			t.Errorf("error that is not a policy violation: %+v", f)
 		}
 		if f.Kind == "domain_policy_violation" {
 			perTenant[f.TenantID]++
 		}
+		if f.Kind == "critical_escalation_missing" {
+			noEscalation = append(noEscalation, f.TenantID)
+		}
+	}
+	// #2325: the example policy also sets require_critical_escalation; the
+	// two tenants with no pagerduty path break it.
+	sort.Strings(noEscalation)
+	if !equalStrings(noEscalation, []string{"t-dba", "t-livedbb"}) {
+		t.Errorf("critical_escalation_missing tenants = %v, want [t-dba t-livedbb]", noEscalation)
 	}
 	// slack / webhook main receivers break both forbidden and allowed.
 	want := map[string]int{"t-sre": 2, "t-dba": 2, "t-ovr": 2, "t-livedbb": 2}
@@ -910,6 +920,86 @@ func TestRun_UnusablePolicyStructure_NamedAndOtherChecksRun(t *testing.T) {
 	}
 	if !equalStrings(got, want) {
 		t.Errorf("findings %v\nwant %v", got, want)
+	}
+}
+
+// A `!!null`-tagged require_critical_escalation (#2325) is judged as the
+// generator's PyYAML reads it: a scalar is None — the constraint is off and
+// forbidden_receiver_types still refuses slack — and a collection is refused
+// with the whole file (the generator drops every domain policy in it).
+func TestRun_TaggedNullEscalation_AsTheGenerator(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[string]string{
+		"!!null x":                    "error/domain_policy_violation/t-pol/receiver.type",
+		"!<tag:yaml.org,2002:null> x": "error/domain_policy_violation/t-pol/receiver.type",
+		`!!null ""`:                   "error/domain_policy_violation/t-pol/receiver.type",
+		"!!null {}":                   "error/domain_policy_unusable//_domain_policy.yaml",
+		"!!null [1]":                  "error/domain_policy_unusable//_domain_policy.yaml",
+	} {
+		code, findings, _ := runTreeJSON(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  cpu: 70\n",
+			"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
+				"      require_critical_escalation: " + v + "\n      forbidden_receiver_types: [slack]\n",
+			"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
+				"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
+		})
+		var got []string
+		for _, f := range findings {
+			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
+		}
+		if code != exitFindings || !equalStrings(got, []string{want}) {
+			t.Errorf("%s: exit = %d, findings %v; want exit %d and [%s]", v, code, got, exitFindings, want)
+		}
+	}
+}
+
+// taggedNullOutsidePolicyTrees carry `require_critical_escalation: !!null {}`
+// in a platform file that is NOT the domain policy (#2325): the PyYAML
+// reading of that key is the policy file's only, so the profiles / defaults
+// file is read as before and the tenant's slack receiver still violates the
+// policy — not dropped with the file, which left the tenant receiver-less and
+// every violation gone.
+var taggedNullOutsidePolicyTrees = map[string]map[string]string{
+	"profiles file, top-level key": {
+		"_routing_profiles.yaml": "routing_profiles:\n  p1:\n" +
+			"    receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"meta: {require_critical_escalation: !!null {}}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing_profile: p1\n",
+	},
+	"profiles file, inside a profile": {
+		"_routing_profiles.yaml": "routing_profiles:\n  p1:\n" +
+			"    receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"    require_critical_escalation: !!null {}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing_profile: p1\n",
+	},
+	"defaults file carrying _routing_defaults": {
+		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
+			"  receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
+			"meta: {require_critical_escalation: !!null {}}\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n      group_wait: 30s\n",
+	},
+}
+
+const taggedNullOutsidePolicyDomain = "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
+	"      require_critical_escalation: true\n      forbidden_receiver_types: [slack]\n"
+
+func TestRun_TaggedNullEscalationOutsidePolicyFile_StillEnforced(t *testing.T) {
+	t.Parallel()
+	for name, tree := range taggedNullOutsidePolicyTrees {
+		files := map[string]string{"_defaults.yaml": "defaults:\n  cpu: 70\n", "_domain_policy.yaml": taggedNullOutsidePolicyDomain}
+		for k, v := range tree {
+			files[k] = v
+		}
+		code, findings, _ := runTreeJSON(t, files)
+		var got []string
+		for _, f := range findings {
+			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
+		}
+		sort.Strings(got)
+		want := []string{"error/critical_escalation_missing/t-pol/receiver.type", "error/domain_policy_violation/t-pol/receiver.type"}
+		if code != exitFindings || !equalStrings(got, want) {
+			t.Errorf("%s: exit = %d, findings %v; want exit %d and %v", name, code, got, exitFindings, want)
+		}
 	}
 }
 

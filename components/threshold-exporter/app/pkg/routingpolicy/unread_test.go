@@ -143,6 +143,24 @@ func TestUnreadRouting(t *testing.T) {
 			"_defaults.yaml": "defaults:\n  _routing: {}\n",
 			"_profiles.yaml": "profiles:\n  a: {_routing: {}}\n",
 		}, "_defaults.yaml", []string{"_profiles.yaml:profiles.a._routing"}},
+		// A policy file is read as one (#2325): the generator reads
+		// `!!null x` as None and keeps the file, so its profiles are
+		// reported as they are beside `true`.
+		{"policy-file-profiles-beside-null-tagged-escalation", map[string]string{
+			"_domain_policy.yaml": "profiles:\n  p1:\n    _routing: {group_wait: 30s}\n" +
+				"domain_policies:\n  fin:\n    tenants: [tx]\n    constraints:\n      require_critical_escalation: !!null x\n",
+		}, "", []string{"_domain_policy.yaml:profiles.p1._routing"}},
+		{"policy-file-profiles-beside-bool-escalation", map[string]string{
+			"_domain_policy.yml": "profiles:\n  p1:\n    _routing: {group_wait: 30s}\n" +
+				"domain_policies:\n  fin:\n    tenants: [tx]\n    constraints:\n      require_critical_escalation: true\n",
+		}, "", []string{"_domain_policy.yml:profiles.p1._routing"}},
+		// PyYAML refuses `!!null {}`, so the generator drops the whole
+		// file and reads none of it (LoadRoot names it
+		// domain_policy_unusable); nothing in it is reported as unread.
+		{"policy-file-refused-by-pyyaml-is-not-reported", map[string]string{
+			"_domain_policy.yaml": "profiles:\n  p1:\n    _routing: {group_wait: 30s}\n" +
+				"domain_policies:\n  fin:\n    tenants: [tx]\n    constraints:\n      require_critical_escalation: !!null {}\n",
+		}, "", []string{}},
 		{"undecodable-file-is-not-reported", map[string]string{
 			// No tenant below it, so the resolve does not fail on it.
 			"other/_defaults.yaml": "defaults: [\n  _routing: {}\n",
