@@ -190,7 +190,8 @@ _build_one() {
     # Set BEFORE `add`: the path is this process's own, so a failed add leaves
     # nothing the trap could wrongly remove.
     _live_wt="$_wt"
-    if ! git worktree add --detach --quiet "$_wt" "$_sha" 2>/dev/null; then
+    # ⛔ git's own stderr is the diagnosis; no guessed causes here (#2210).
+    if ! git worktree add --detach --quiet "$_wt" "$_sha"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
         # is EXACTLY the #1690 defect this guard exists to remove, and it is
         # worse as a fallback than as the original bug: it returns the wrong
@@ -204,9 +205,6 @@ _build_one() {
 This guard builds the commit you are PUSHING, not the tree you are standing
 in, so it cannot fall back to the working tree — that would report on the
 wrong commit. Refusing instead.
-
-Usual causes: no disk space, or a stale temporary worktree registration.
-    git worktree prune && git worktree list
 
 To push anyway (the docs build then runs only in CI):
     MKDOCS_STRICT_BYPASS=1 git push ...
@@ -224,21 +222,21 @@ WORKTREE_FAILED
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
-    _all_ok=0
+    _failed=""
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
-        _build_one "$_sha" || _all_ok=1
+        _build_one "$_sha" || _failed="$_failed ${_sha:0:8}"
     done
-    if [ "$_all_ok" = "0" ]; then
+    if [ -z "$_failed" ]; then
         echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
         exit 0
     fi
-    # ⛔ No fix-up advice: every non-zero lands here — broken links, a failed
-    # checkout, an aborted build, a Ctrl-C mid-build — so advice is
-    # a guess, and it sent a contributor who pressed Ctrl-C to edit links
-    # (#2210). The output above already says what failed.
+    # ⛔ No fix-up advice and no "see above": every non-zero lands here —
+    # broken links, a failed checkout, an aborted build, a Ctrl-C mid-build,
+    # which prints nothing above — so advice is a guess, and it sent a
+    # contributor who pressed Ctrl-C to edit links (#2210). Name the commits.
     echo ""
-    echo "::error::mkdocs strict did not pass. See the output above."
+    echo "::error::mkdocs strict did not pass for:$_failed"
     exit 1
 fi
 

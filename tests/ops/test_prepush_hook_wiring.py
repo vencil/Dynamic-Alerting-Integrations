@@ -1931,23 +1931,44 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     )
 
 
-# Any fix-up advice has to name its escape hatch or a link; neither belongs
-# after a build the guard cannot diagnose.
-_ADVICE = ("MKDOCS_STRICT_BYPASS", "site-root")
+# Fails only for the commit named in PREPUSH_TEST_FAIL_SHA, and marks what it
+# printed on each stream, so the test can tell its output from the guard's.
+_SENTINEL_CHECK = """#!/usr/bin/env bash
+[ "$(git rev-parse HEAD)" = "$PREPUSH_TEST_FAIL_SHA" ] || exit 0
+echo "CHECK-STDOUT"
+echo "CHECK-STDERR" >&2
+exit 1
+"""
 
 
-def test_a_failed_build_is_not_diagnosed_by_the_guard(tmp_path: Path) -> None:
+def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#2210 — every non-zero from the build reaches the same branch: broken
-    links, an aborted build, a Ctrl-C that mkdocs caught itself. Advice there
-    is a guess; the build's own output is the diagnosis."""
-    work, record, sha_a, sha_b = _docs_repo(tmp_path)
-    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n", rc="1")
+    links, an aborted build, a Ctrl-C mid-build. Advice there is a guess. What
+    the guard may add is exactly one line naming the commit that failed —
+    pinned as a whole, so no reworded advice slips past a keyword list. Two
+    refs, the first one failing: the second one's PASS then sits just above."""
+    work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_SENTINEL_CHECK)
+    assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
+    (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: change on topic2 only")
+    sha_c = _git(work, "rev-parse", "HEAD").stdout.strip()
+    assert _git(work, "checkout", "-q", "main").returncode == 0
+    monkeypatch.setenv("PREPUSH_TEST_FAIL_SHA", sha_b)
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n"
+                                 f"refs/heads/topic2 {sha_c} refs/heads/topic2 {sha_a}\n")
 
     assert r.returncode == 1, f"a failed build let the push through:\n{r.stdout}{r.stderr}"
-    out = r.stdout + r.stderr
-    assert [a for a in _ADVICE if a in out] == [], f"the guard guessed at the cause:\n{out}"
-
-
+    assert r.stderr == "CHECK-STDERR\n", f"stderr is not the build's own:\n{r.stderr}"
+    tail = r.stdout.split(f"validating pushed commit {sha_b[:8]}\n", 1)[-1].splitlines()
+    assert tail == [
+        "CHECK-STDOUT",
+        f"[pre-push-mkdocs] validating pushed commit {sha_c[:8]}",
+        "",
+        f"::error::mkdocs strict did not pass for: {sha_b[:8]}",
+    ], f"the guard added to or dropped from the build's output:\n{r.stdout}"
 # mkdocs.yml hook: the build announces itself, then sleeps until interrupted.
 _SLOW_HOOK = """import os, pathlib, time
 
@@ -1968,9 +1989,10 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
     """#2210, end to end: real mkdocs, the shipped strict check, the installed
     wiring, and the group-wide SIGINT a terminal sends.
 
-    The guard outlives the interrupt and reaches its failure branch. ``broken-link`` is the must-fire
-    twin (the check's own verdict still reaches the user); ``clean`` proves the
-    fixture passes when nothing is wrong.
+    The guard outlives the interrupt and reaches its failure branch.
+    ``broken-link`` is the must-fire twin (the check's own verdict still
+    reaches the user); ``clean`` proves the fixture passes when nothing is
+    wrong.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     lint = work / "scripts" / "tools" / "lint"
@@ -2002,6 +2024,7 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
         f.write(extra)
     assert _git(work, "add", "-A").returncode == 0
     _commit(work, "docs: change")
+    sha8 = _git(work, "rev-parse", "--short=8", "HEAD").stdout.strip()
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
 
@@ -2021,7 +2044,7 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
                 assert time.monotonic() < deadline, "the build never started"
                 time.sleep(0.05)
             os.killpg(proc.pid, signal.SIGINT)
-        out, _ = proc.communicate(timeout=120)
+        out, _ = proc.communicate(timeout=50)
     finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -2032,12 +2055,17 @@ def test_ctrl_c_during_a_real_build_is_not_reported_as_broken_links(
         assert proc.returncode == 0 and "MKDOCS STRICT STATUS=PASS" in out, out
         return
     assert proc.returncode != 0, f"the push went through:\n{out}"
+    # Everything after the build's last word, pinned whole: the guard adds
+    # the one line naming the commit, and nothing that guesses at a cause.
+    verdict = ["", f"::error::mkdocs strict did not pass for: {sha8}"]
     if case == "broken-link":
-        assert "MKDOCS STRICT STATUS=FAIL ACTIONABLE_WARNINGS=1" in out and "missing.md" in out, out
+        assert "missing.md" in out, out
+        tail = out.split("MKDOCS STRICT STATUS=FAIL ACTIONABLE_WARNINGS=1\n", 1)[-1].splitlines()
+        assert tail[:2] == verdict and len(tail) == 3 and tail[2].startswith("error: failed to push"), out
     else:
-        # The premise of #2210: the guard outlives the interrupt and reports.
-        assert "STATUS=PASS" not in out and "::error::" in out, f"not the failure branch:\n{out}"
-    assert [a for a in _ADVICE if a in out] == [], f"the guard guessed at the cause:\n{out}"
+        # The interrupted build printed nothing; git died of the signal.
+        tail = out.split(f"validating pushed commit {sha8}\n", 1)[-1].splitlines()
+        assert tail == verdict, f"not the failure branch, or more than the verdict:\n{out}"
 
 
 # ---------------------------------------------------------------------------
@@ -2102,14 +2130,11 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
         "refusing without naming the one command that reaches green turns this "
         "into a dead end; the message must offer the documented escape hatch"
     )
-    # ⛔ The docs were never built here, so the doc-link advice would be a
-    # guess dressed as a diagnosis. A blind review measured the same shape on
-    # a missing mkdocs plugin: an environment failure told the contributor to
-    # go fix their `../../foo.md` links.
-    assert "site-root path gotcha" not in (r.stdout + r.stderr), (
-        "an environment failure was reported as a broken-links failure; the "
-        "contributor is sent to edit docs that were never built. stdout=%s"
-        % r.stdout
+    # ⛔ git's own reason, not a guessed one: "stale registration, run prune"
+    # was offered for a `.git/worktrees` that was a file, where prune does
+    # nothing (#2210 review).
+    assert "fatal: simulated worktree failure" in r.stderr, (
+        "the guard hid git's own error. stderr=%s" % r.stderr
     )
 
 
