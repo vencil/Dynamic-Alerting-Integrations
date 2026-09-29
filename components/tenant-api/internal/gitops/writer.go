@@ -80,6 +80,32 @@ func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
 // file another tenant already merged remotely — the whole TRK-318 hazard).
 var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
 
+// MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
+// whole-file write over a current tenant file that cannot be parsed, by a
+// caller without platform-wide write permission (#2405; see eolGuardErrs).
+const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be parsed; " +
+	"replacing it through the API requires write permission on all tenants " +
+	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
+	"otherwise repair the file in git"
+
+// replaceUnparseableKey is the context key WithReplaceUnparseable sets.
+type replaceUnparseableKey struct{}
+
+// WithReplaceUnparseable marks ctx as carrying a caller with platform-wide
+// write permission, allowing Write / WriteIfUnchanged / WritePR /
+// DryRunValidate to replace a current tenant file that cannot be parsed
+// (#2405). Absent the mark, such a write is refused. The permission decision is
+// the handler's (rbac.PlatformUnrestricted); the Writer only reads the bit, so
+// the check stays under the writer lock, on the file the write lands on.
+func WithReplaceUnparseable(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replaceUnparseableKey{}, true)
+}
+
+func replaceUnparseableAllowed(ctx context.Context) bool {
+	ok, _ := ctx.Value(replaceUnparseableKey{}).(bool)
+	return ok
+}
+
 // ErrValidation wraps a schema/structural validation failure of the incoming
 // YAML. It lets handlers distinguish a CLIENT error (malformed body → HTTP 400)
 // from a server-side write failure (500): the direct-write path already returned
@@ -757,7 +783,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 	}
 
-	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
+	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -1713,6 +1739,15 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant
 // section) return nil notices: key validation never ran.
 func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
+	return validateReplacing(configDir, tenantID, tenantFilePath, yamlContent, false)
+}
+
+// validateReplacing is validate with the #2405 permission bit for replacing a
+// current file that does not parse (see eolGuardErrs). validate — the merge
+// paths' entry — passes false: a merge needs a base it can read, so the bit
+// only means something to the whole-file write paths, which pass
+// replaceUnparseableAllowed(ctx).
+func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, replaceUnparseable bool) (errs, notices []string) {
 	// ⛔ THE ORDER OF THE REMAINING CHECKS IS UNCHANGED, DELIBERATELY. Hoisting
 	// ValidateTenantCustomAlerts up into validateShape would have let a recipe
 	// violation short-circuit ahead of addedTenantKeys — i.e. a body that both
@@ -1786,8 +1821,8 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// is unset (unit-test shape mode). FAIL CLOSED: only a MISSING tenant file
 	// (ENOENT, a brand-new tenant with no existing eol usage) means "no current
 	// alerts"; any other read error errors out rather than silently skipping the
-	// guard. A file that reads but does not PARSE is not refused wholesale
-	// (#2405) — see eolGuardErrs.
+	// guard. A file that reads but does not PARSE is replaceable only with
+	// platform-wide write permission (#2405) — see eolGuardErrs.
 	if configDir != "" {
 		// #1673: the path is resolved ONCE by the caller and handed down, so
 		// the guard reads the same file the write will land on — and so an
@@ -1795,7 +1830,7 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 		// than being flattened into a validation string here. That read now
 		// happens once at the top of this function and both stateful checks
 		// share it (#1681).
-		if ferr := eolGuardErrs(baseRaw, baseErr, yamlContent, tenantID, customalerts.EolExpansionViolations); len(ferr) > 0 {
+		if ferr := eolGuardErrs(baseRaw, baseErr, yamlContent, tenantID, replaceUnparseable, customalerts.EolExpansionViolations); len(ferr) > 0 {
 			return append(errs, ferr...), notices
 		}
 	}
@@ -1808,32 +1843,41 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 // production; it is a parameter only so a test can mark a recipe eol (the
 // embedded status map has none) without swapping a process global.
 //
-// ⛔ #2405 — AN UNPARSEABLE CURRENT FILE MEANS "BASELINE UNKNOWN", AND UNKNOWN
-// COUNTS AS ZERO. The guard used to refuse the whole write when the current
+// ⛔ #2405 — AN UNPARSEABLE CURRENT FILE IS REPLACEABLE ONLY WITH PLATFORM-WIDE
+// WRITE PERMISSION. The guard used to refuse the whole write when the current
 // file would not parse (a YAML syntax error, `tenants:` that is not a mapping,
 // duplicate keys, a top-level list). That made the whole-file PUT — the one
 // endpoint that REPLACES rather than merges, i.e. the repair path — unable to
-// repair exactly the files that need it. The fail-closed direction is kept by
-// taking the baseline as empty: EolExpansionViolations counts every eol
-// instance the body has above the baseline, so with an empty baseline ANY eol
-// recipe in the body is refused and a body without one passes. What must never
-// happen is the opposite reading — "cannot tell, so do not check" — which would
-// let a broken file launder new eol usage in. Pinned by
+// repair exactly the files that need it. Nothing in such a file can be read,
+// including which tenants it declares, so replacing it is a decision for a
+// caller whose write permission covers every tenant: replaceUnparseable is
+// that bit (the handler sets it from rbac.PlatformUnrestricted via
+// WithReplaceUnparseable). Without it the write is refused, as before #2405.
+//
+// With it, the baseline is UNKNOWN, and unknown counts as ZERO:
+// EolExpansionViolations counts every eol instance the body has above the
+// baseline, so with an empty baseline ANY eol recipe in the body is refused
+// and a body without one passes. What must never happen is the opposite
+// reading — "cannot tell, so do not check" — which would let a broken file
+// launder new eol usage in. Pinned by
 // TestEolGuard_UnparseableBaseForbidsEveryEolRecipe.
 //
 // Only a PARSE failure takes that path. A file that exists but cannot be READ
 // (permissions, I/O) still refuses the write: nothing about it is known, and
 // the write would land on the same unreadable path.
-func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string,
+func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, replaceUnparseable bool,
 	violations func(current, next []map[string]any) []string) []string {
 	var oldAlerts []map[string]any
 	switch {
 	case baseErr == nil:
 		cur, err := customalerts.Extract(string(baseRaw), tenantID)
-		if err == nil {
+		switch {
+		case err == nil:
 			oldAlerts = cur
+		case !replaceUnparseable:
+			return []string{MsgUnparseableBaseNeedsPlatformWrite}
 		}
-		// err != nil: baseline unknown ⇒ oldAlerts stays empty (see above).
+		// err != nil with the bit: baseline unknown ⇒ oldAlerts stays empty.
 	case !os.IsNotExist(baseErr):
 		return []string{"internal error: cannot read current custom alerts: " + pathlessErrText(baseErr)}
 	}

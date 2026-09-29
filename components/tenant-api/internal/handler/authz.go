@@ -30,6 +30,7 @@ import (
 	"os"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
@@ -183,6 +184,30 @@ func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
 	}
 	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, denyMsg)
 	return false
+}
+
+// withReplaceUnparseable returns r carrying gitops.WithReplaceUnparseable when
+// the caller may replace a current tenant file that cannot be parsed (#2405):
+// such a file's content — including which tenants it declares — cannot be
+// read, so replacing it needs write permission on ALL tenants, not only on the
+// URL's tenant.
+//
+// "All tenants" is rbac.PlatformUnrestricted(p, PermWrite): a matching rule
+// whose tenant list holds the literal "*" (a prefix pattern such as "svc-*" is
+// not all tenants) and that carries no org-scope, environments or domains. The
+// scope-axis flags (orgScopeEnforce / metadata*ScopeEnforce) are deliberately
+// NOT consulted: in shadow mode a scoped "*" rule still reaches unlabeled
+// tenants, but that is migration leniency on tenants whose labels are known,
+// and a file that cannot be parsed has no labels to check — so a scoped caller
+// never passes, in either mode. RequireOrgWrite has already authorized the URL
+// tenant; this only decides the extra bit. A Deps without an RBAC manager (a
+// test-only state, see requireOrgWriteWithMeta) does not get the bit — the
+// refusal is the fail-closed side.
+func withReplaceUnparseable(r *http.Request, d *Deps) *http.Request {
+	if d.RBAC == nil || !d.RBAC.PlatformUnrestricted(rbac.RequestPrincipal(r), rbac.PermWrite) {
+		return r
+	}
+	return r.WithContext(gitops.WithReplaceUnparseable(r.Context()))
 }
 
 // tenantsLackingPermission returns the subset of `tenantIDs` for

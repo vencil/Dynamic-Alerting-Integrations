@@ -70,7 +70,7 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			if wr == nil {
 				wr = gitops.NewWriter(d.ConfigDir, "")
 			}
-			errs, notices, err = wr.DryRunValidate(tenantID, string(body))
+			errs, notices, err = wr.DryRunValidate(withReplaceUnparseable(r, d).Context(), tenantID, string(body))
 		}
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err)}

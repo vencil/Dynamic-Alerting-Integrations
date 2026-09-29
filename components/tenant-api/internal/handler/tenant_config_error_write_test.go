@@ -321,63 +321,131 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 	}
 }
 
+// #2405 callers: write on the URL tenant only, write via a prefix pattern that
+// covers it, write via a "*" rule restricted to an environment (a scoped
+// caller — in shadow mode it still reaches the URL tenant), and write via an
+// unrestricted "*" rule. Only the last may replace a current file that cannot
+// be parsed.
+const repairRBACYAML = "groups:\n" +
+	"  - name: ops\n    tenants: [\"svc-alpha\"]\n    permissions: [read, write]\n" +
+	"  - name: svc-team\n    tenants: [\"svc-*\"]\n    permissions: [read, write]\n" +
+	"  - name: staging-ops\n    tenants: [\"*\"]\n    permissions: [read, write]\n    environments: [staging]\n" +
+	"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n"
+
+var repairCallers = []struct {
+	group           string
+	platformWritten bool
+}{
+	{"ops", false},
+	{"svc-team", false},
+	{"staging-ops", false},
+	{"platform", true},
+}
+
 // #2405: the whole-file PUT is the repair path for every file GET answers with
 // config_error — not only for the non-UTF-8 sibling id. Before the fix, a file
 // whose YAML does not parse, whose `tenants:` is not a mapping, or that
 // repeats a key was refused by the end-of-life guard's read of the current
 // file (400 "cannot read current custom alerts") and could only be fixed in
-// git. The body here carries no end-of-life recipe; that the guard still
-// refuses one over such a file is pinned in package gitops
-// (TestEolGuard_UnparseableBaseForbidsEveryEolRecipe) — the embedded recipe
-// status map has no end-of-life recipe to send through the handler.
+// git. Replacing such a file now needs write permission on ALL tenants (an
+// unrestricted "*" rule); any other caller is refused as before, file
+// untouched. A file the guard can parse (the non-UTF-8 sibling) is replaceable
+// by any caller with write on the tenant, as it was. The body here carries no
+// end-of-life recipe; that the guard still refuses one over such a file is
+// pinned in package gitops (TestEolGuard_UnparseableBaseForbidsEveryEolRecipe)
+// — the embedded recipe status map has no end-of-life recipe to send through
+// the handler.
 func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 	t.Parallel()
 	const id = "svc-alpha"
-	const rbacYAML = "groups:\n  - name: ops\n    tenants: [\"" + id + "\"]\n    permissions: [read, write]\n"
-	files := []struct{ name, body, reason string }{
-		{"unclosed_flow", "tenants:\n  " + id + ": [unclosed\n", "malformed_yaml"},
-		{"not_yaml", "{{not yaml\n", "malformed_yaml"},
-		{"top_level_list", "- a\n- b\n", "invalid_config"},
-		{"tenants_scalar", "tenants: oops\n", "invalid_config"},
-		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config"},
-		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config"},
-		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config"},
+	files := []struct {
+		name, body, reason string
+		parseable          bool // for the eol guard: replaceable without platform-wide write
+	}{
+		{"unclosed_flow", "tenants:\n  " + id + ": [unclosed\n", "malformed_yaml", false},
+		{"not_yaml", "{{not yaml\n", "malformed_yaml", false},
+		{"top_level_list", "- a\n- b\n", "invalid_config", false},
+		{"tenants_scalar", "tenants: oops\n", "invalid_config", false},
+		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config", false},
+		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config", false},
+		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config", true},
 	}
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, c := range files {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			dir := setupConfigDir(t, map[string]string{id + ".yaml": c.body, "_defaults.yaml": caDefaults})
-			initGitRepo(t, dir)
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, rbacYAML), WriteMode: WriteModeDirect}
-			getConfigError := func() string {
-				gw := httptest.NewRecorder()
-				GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/"+id, "id", id, nil))
-				if gw.Code != http.StatusOK {
-					t.Fatalf("GET status = %d; body: %s", gw.Code, gw.Body.String())
+		for _, caller := range repairCallers {
+			t.Run(c.name+"/"+caller.group, func(t *testing.T) {
+				t.Parallel()
+				dir := setupConfigDir(t, map[string]string{id + ".yaml": c.body, "_defaults.yaml": caDefaults})
+				initGitRepo(t, dir)
+				deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+				getConfigError := func() string {
+					gw := httptest.NewRecorder()
+					GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/"+id, "id", id, nil))
+					if gw.Code != http.StatusOK {
+						t.Fatalf("GET status = %d; body: %s", gw.Code, gw.Body.String())
+					}
+					var got struct {
+						ConfigError string `json:"config_error"`
+					}
+					if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil {
+						t.Fatal(err)
+					}
+					return got.ConfigError
 				}
-				var got struct {
-					ConfigError string `json:"config_error"`
+				if got := getConfigError(); got != c.reason {
+					t.Fatalf("before: GET config_error = %q, want %q", got, c.reason)
 				}
-				if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil {
-					t.Fatal(err)
-				}
-				return got.ConfigError
-			}
-			if got := getConfigError(); got != c.reason {
-				t.Fatalf("before: GET config_error = %q, want %q", got, c.reason)
-			}
 
-			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
-			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{"ops"})
-			if w.Code != http.StatusOK {
-				t.Fatalf("PUT status = %d, want 200; body: %s", w.Code, w.Body.String())
+				req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
+				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{caller.group})
+				after := mustRead(t, filepath.Join(dir, id+".yaml"))
+				if !c.parseable && !caller.platformWritten {
+					if w.Code != http.StatusBadRequest {
+						t.Fatalf("PUT status = %d, want 400; body: %s", w.Code, w.Body.String())
+					}
+					if !strings.Contains(w.Body.String(), "write permission on all tenants") {
+						t.Errorf("refusal does not name the permission it needs: %s", w.Body.String())
+					}
+					if after != c.body {
+						t.Errorf("file changed on a refused PUT:\n%s", after)
+					}
+					return
+				}
+				if w.Code != http.StatusOK {
+					t.Fatalf("PUT status = %d, want 200; body: %s", w.Code, w.Body.String())
+				}
+				if after != repaired {
+					t.Errorf("file after PUT:\n%s\nwant:\n%s", after, repaired)
+				}
+				if got := getConfigError(); got != "" {
+					t.Errorf("after: GET config_error = %q, want none", got)
+				}
+			})
+		}
+	}
+}
+
+// #2405: the dry-run (POST /validate) answers what this caller's PUT would:
+// over a file that cannot be parsed, invalid for a caller scoped to the
+// tenant, valid for a caller with write on all tenants.
+func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
+	t.Parallel()
+	const id = "svc-alpha"
+	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
+	for _, caller := range repairCallers {
+		t.Run(caller.group, func(t *testing.T) {
+			t.Parallel()
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+id+"/validate", "id", id, bytes.NewBufferString(repaired))
+			w := servePopulatingRBAC(t, ValidateTenant(deps), req, "alice@example.com", []string{caller.group})
+			var got ValidateResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+				t.Fatalf("status = %d, err = %v; body: %s", w.Code, err, w.Body.String())
 			}
-			if after := mustRead(t, filepath.Join(dir, id+".yaml")); after != repaired {
-				t.Errorf("file after PUT:\n%s\nwant:\n%s", after, repaired)
-			}
-			if got := getConfigError(); got != "" {
-				t.Errorf("after: GET config_error = %q, want none", got)
+			if got.Valid != caller.platformWritten {
+				t.Errorf("valid = %v, want %v; warnings: %q", got.Valid, caller.platformWritten, got.Warnings)
 			}
 		})
 	}
@@ -386,33 +454,34 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 // #2405 review: the limit of that repair, pinned so a change to it is a
 // decision rather than an accident. The added-section gate (addedTenantKeys)
 // grandfathers only the sections it can read in the current file. When
-// tenant-api cannot parse a broken file SHARED with another tenant, a body
-// that carries the co-resident section is refused as adding it (file
-// untouched), and a body without it replaces the file and the section is
-// gone. The gate is deliberately not relaxed (it fails closed); the documented
-// way to keep the section is fixing the file in git.
+// tenant-api cannot parse the current file, a caller scoped to the tenant
+// cannot replace it at all (the file is untouched); a caller with write on all
+// tenants can, with exactly the body sent — a body naming another section is
+// still refused as adding it. The gate is deliberately not relaxed (it fails
+// closed); the documented way to keep the sections is fixing the file in git.
 //
 // Control: a shared file that is invalid_config only because it also declares
 // a non-UTF-8 tenant id still parses for that gate, so the co-resident section
-// IS grandfathered and survives — which is why the docs say "may not keep",
-// not "cannot keep".
+// IS grandfathered and survives for a caller scoped to the tenant.
 func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	t.Parallel()
 	const id, other = "svc-alpha", "svc-beta"
-	const rbacYAML = "groups:\n  - name: ops\n    tenants: [\"" + id + "\"]\n    permissions: [read, write]\n"
 	const sections = "  " + id + ":\n    mysql_connections: \"70\"\n  " + other + ":\n    mysql_connections: \"60\"\n"
 	const unparseable = "tenants:\n" + sections + "  oops: [unclosed\n"
 	const nonUTF8 = "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" + sections
 	const ownOnly = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	const withOther = ownOnly + "  " + other + ":\n    mysql_connections: \"60\"\n"
 	cases := []struct {
-		name, base, body string
-		wantConfigError  string
-		wantCode         int
+		name, base, body, group string
+		wantConfigError         string
+		wantCode                int
+		wantRefusal             string
 	}{
-		{"unparseable_own_section_only_deletes_co_resident", unparseable, ownOnly, "malformed_yaml", http.StatusOK},
-		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "malformed_yaml", http.StatusBadRequest},
-		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, "invalid_config", http.StatusOK},
+		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusBadRequest, "write permission on all tenants"},
+		{"unparseable_own_section_only_platform_writer_replaces", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusOK, ""},
+		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusBadRequest, "adds tenant section(s) [" + other + "]"},
+		{"unparseable_with_co_resident_platform_writer_is_refused", unparseable, withOther, "platform", "malformed_yaml", http.StatusBadRequest, "adds tenant section(s) [" + other + "]"},
+		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, "ops", "invalid_config", http.StatusOK, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -420,7 +489,7 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 			broken := c.base
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": broken, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, rbacYAML), WriteMode: WriteModeDirect}
+			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 			// The base really is one GET flags (and with the reason this case
 			// is about), so a 200 below is a repair, not a healthy write.
 			gw := httptest.NewRecorder()
@@ -435,7 +504,7 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 				t.Fatalf("before: GET config_error = %q, want %q", got.ConfigError, c.wantConfigError)
 			}
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(c.body))
-			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{"ops"})
+			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{c.group})
 			if w.Code != c.wantCode {
 				t.Fatalf("PUT status = %d, want %d; body: %s", w.Code, c.wantCode, w.Body.String())
 			}
@@ -446,8 +515,8 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 				}
 				return
 			}
-			if !strings.Contains(w.Body.String(), "adds tenant section(s) ["+other+"]") {
-				t.Errorf("refusal does not name the co-resident section: %s", w.Body.String())
+			if !strings.Contains(w.Body.String(), c.wantRefusal) {
+				t.Errorf("refusal does not contain %q: %s", c.wantRefusal, w.Body.String())
 			}
 			if after != broken {
 				t.Errorf("file changed on a refused PUT:\n%s", after)

@@ -82,16 +82,15 @@ type tenantDetailNotLoadable struct {
 // @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-// @Description tenant file itself is repaired. A whole-file PUT can replace it: it is not refused merely because the current
-// @Description file is broken. When tenant-api cannot parse the current file, its end-of-life recipe usage counts as none, so a
-// @Description body with an end-of-life recipe is refused; a file it can parse is compared by its actual usage, and a file that
-// @Description exists but cannot be read at all (permissions, I/O, a directory) refuses the write. A broken file shared with
-// @Description other tenants may not keep their sections through that PUT: when tenant-api cannot parse the current file, other
-// @Description tenants' sections in the body count as added and are refused, and a body with only the tenant's own section
-// @Description overwrites them; to keep them, fix the file in git. The two checks each parse the current file their own way
-// @Description (the end-of-life check decodes only the tenants: block, though the whole file must still be valid YAML; the
-// @Description shared-file check decodes the whole file as a tenant config), and each applies the handling above only when it
-// @Description cannot parse the file; which broken files fall on which side is not guaranteed, so fix the file in git when needed.
+// @Description tenant file itself is repaired. A whole-file PUT can replace it. When tenant-api cannot parse the current file,
+// @Description that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting write and no
+// @Description org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused with 400, file
+// @Description unchanged — fix it in git then. When allowed, its end-of-life recipe usage counts as none, so a body with an
+// @Description end-of-life recipe is refused, and other tenants' sections in the body count as added and are refused. A file
+// @Description tenant-api can parse is compared by its actual usage; a file that exists but cannot be read at all (permissions,
+// @Description I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
+// @Description the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
+// @Description broken files each can parse is not guaranteed to match, so fix the file in git when needed.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"

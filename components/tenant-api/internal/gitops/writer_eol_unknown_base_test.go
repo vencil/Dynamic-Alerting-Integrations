@@ -12,9 +12,11 @@ import (
 
 // #2405: the eol-expansion guard reads the file a write replaces to learn how
 // many end-of-life recipe instances it already has. When that file does not
-// parse, the baseline is UNKNOWN, and unknown must count as zero — a body
-// without an eol recipe passes (so the whole-file PUT can repair the file),
-// a body with one is refused (so a broken file cannot launder new eol usage).
+// parse, replacing it needs platform-wide write permission (the
+// replaceUnparseable bit); without it the write is refused. With it the
+// baseline is UNKNOWN, and unknown must count as zero — a body without an eol
+// recipe passes (so the whole-file PUT can repair the file), a body with one
+// is refused (so a broken file cannot launder new eol usage).
 
 const eolTestTenant = "svc-alpha"
 
@@ -74,13 +76,29 @@ func TestEolGuard_UnparseableBaseForbidsEveryEolRecipe(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			// Without an eol recipe the replacement goes through: this is the repair.
-			if errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, fakeEolViolations); len(errs) > 0 {
+			if errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, true, fakeEolViolations); len(errs) > 0 {
 				t.Errorf("body without an eol recipe refused over a broken base: %q", errs)
 			}
 			// With one it is refused: the unknown baseline is zero, not "skip".
-			errs := eolGuardErrs([]byte(c.body), nil, eolBody("a"), eolTestTenant, fakeEolViolations)
+			errs := eolGuardErrs([]byte(c.body), nil, eolBody("a"), eolTestTenant, true, fakeEolViolations)
 			if len(errs) != 1 || !strings.Contains(errs[0], eolTestRecipe) {
 				t.Errorf("body adding an eol recipe over a broken base: errs = %q, want one eol violation", errs)
+			}
+		})
+	}
+}
+
+// Without platform-wide write permission the same replacement is refused, with
+// the permission message rather than an eol violation (must-trigger for the
+// #2405 permission rule at the guard itself).
+func TestEolGuard_UnparseableBaseNeedsPlatformWrite(t *testing.T) {
+	t.Parallel()
+	for _, c := range brokenTenantFiles {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, false, fakeEolViolations)
+			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+				t.Errorf("broken base without the bit: errs = %q, want the platform-write refusal", errs)
 			}
 		})
 	}
@@ -95,10 +113,10 @@ func TestEolGuard_NonUTF8SiblingBaseKeepsActualBaseline(t *testing.T) {
 	t.Parallel()
 	base := []byte("tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
 		strings.TrimPrefix(eolBody("a"), "tenants:\n"))
-	if errs := eolGuardErrs(base, nil, eolBody("a-renamed"), eolTestTenant, fakeEolViolations); len(errs) > 0 {
+	if errs := eolGuardErrs(base, nil, eolBody("a-renamed"), eolTestTenant, false, fakeEolViolations); len(errs) > 0 {
 		t.Errorf("keeping the one existing eol alert over a non-UTF-8 sibling base refused: %q", errs)
 	}
-	errs := eolGuardErrs(base, nil, eolBody("a", "b"), eolTestTenant, fakeEolViolations)
+	errs := eolGuardErrs(base, nil, eolBody("a", "b"), eolTestTenant, false, fakeEolViolations)
 	if len(errs) != 1 || !strings.Contains(errs[0], "have 1, write requests 2") {
 		t.Errorf("growing eol usage over a non-UTF-8 sibling base: errs = %q, want one violation against have 1", errs)
 	}
@@ -109,28 +127,30 @@ func TestEolGuard_NonUTF8SiblingBaseKeepsActualBaseline(t *testing.T) {
 func TestEolGuard_KnownBaselineUnchanged(t *testing.T) {
 	t.Parallel()
 	healthy := []byte(eolBody("a"))
-	if errs := eolGuardErrs(healthy, nil, eolBody("a-renamed"), eolTestTenant, fakeEolViolations); len(errs) > 0 {
+	if errs := eolGuardErrs(healthy, nil, eolBody("a-renamed"), eolTestTenant, false, fakeEolViolations); len(errs) > 0 {
 		t.Errorf("keeping the one existing eol alert refused: %q", errs)
 	}
-	if errs := eolGuardErrs(healthy, nil, eolBody("a", "b"), eolTestTenant, fakeEolViolations); len(errs) != 1 {
+	if errs := eolGuardErrs(healthy, nil, eolBody("a", "b"), eolTestTenant, false, fakeEolViolations); len(errs) != 1 {
 		t.Errorf("growing eol usage on a healthy base: errs = %q, want one violation", errs)
 	}
 	missing := &fs.PathError{Op: "open", Path: "x.yaml", Err: fs.ErrNotExist}
-	if errs := eolGuardErrs(nil, missing, eolBody("a"), eolTestTenant, fakeEolViolations); len(errs) != 1 {
+	if errs := eolGuardErrs(nil, missing, eolBody("a"), eolTestTenant, false, fakeEolViolations); len(errs) != 1 {
 		t.Errorf("new tenant adding an eol recipe: errs = %q, want one violation", errs)
 	}
-	if errs := eolGuardErrs(nil, missing, eolBody(), eolTestTenant, fakeEolViolations); len(errs) > 0 {
+	if errs := eolGuardErrs(nil, missing, eolBody(), eolTestTenant, false, fakeEolViolations); len(errs) > 0 {
 		t.Errorf("new tenant without an eol recipe refused: %q", errs)
 	}
 	unreadable := &fs.PathError{Op: "read", Path: "x.yaml", Err: errors.New("input/output error")}
-	errs := eolGuardErrs(nil, unreadable, eolBody(), eolTestTenant, fakeEolViolations)
+	errs := eolGuardErrs(nil, unreadable, eolBody(), eolTestTenant, false, fakeEolViolations)
 	if len(errs) != 1 || !strings.Contains(errs[0], "cannot read current custom alerts") {
 		t.Errorf("unreadable base: errs = %q, want the read-failure refusal", errs)
 	}
 }
 
 // End to end through validate (the write choke point every write gate calls):
-// a broken current file no longer blocks a legitimate replacement.
+// a broken current file no longer blocks a legitimate replacement by a caller
+// with the bit, and still blocks one without it (validate is the merge paths'
+// entry and never carries the bit).
 func TestValidate_BrokenBaseDoesNotBlockReplacement(t *testing.T) {
 	t.Parallel()
 	for _, c := range brokenTenantFiles {
@@ -145,8 +165,12 @@ func TestValidate_BrokenBaseDoesNotBlockReplacement(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte(defaults), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if errs, _ := validate(dir, eolTestTenant, path, eolBody()); len(errs) > 0 {
+			if errs, _ := validateReplacing(dir, eolTestTenant, path, eolBody(), true); len(errs) > 0 {
 				t.Errorf("validate refused a valid replacement of a broken file: %q", errs)
+			}
+			errs, _ := validate(dir, eolTestTenant, path, eolBody())
+			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+				t.Errorf("validate without the bit over a broken file: errs = %q, want the platform-write refusal", errs)
 			}
 		})
 	}
