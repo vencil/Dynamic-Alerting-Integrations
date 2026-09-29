@@ -323,23 +323,27 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 
 // #2405 callers: write on the URL tenant only, write via a prefix pattern that
 // covers it, write via a "*" rule restricted to an environment (a scoped
-// caller — in shadow mode it still reaches the URL tenant), and write via an
-// unrestricted "*" rule. Only the last may replace a current file that cannot
-// be parsed.
+// caller — in shadow mode it still reaches the URL tenant), read via an
+// unrestricted "*" rule plus write on the URL tenant only (all tenants are
+// reachable, but only for read), and write via an unrestricted "*" rule. Only
+// the last may replace a current file that cannot be parsed.
 const repairRBACYAML = "groups:\n" +
 	"  - name: ops\n    tenants: [\"svc-alpha\"]\n    permissions: [read, write]\n" +
 	"  - name: svc-team\n    tenants: [\"svc-*\"]\n    permissions: [read, write]\n" +
 	"  - name: staging-ops\n    tenants: [\"*\"]\n    permissions: [read, write]\n    environments: [staging]\n" +
+	"  - name: auditors\n    tenants: [\"*\"]\n    permissions: [read]\n" +
 	"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n"
 
 var repairCallers = []struct {
-	group           string
+	name            string
+	groups          []string
 	platformWritten bool
 }{
-	{"ops", false},
-	{"svc-team", false},
-	{"staging-ops", false},
-	{"platform", true},
+	{"ops", []string{"ops"}, false},
+	{"svc-team", []string{"svc-team"}, false},
+	{"staging-ops", []string{"staging-ops"}, false},
+	{"read-all-write-one", []string{"auditors", "ops"}, false},
+	{"platform", []string{"platform"}, true},
 }
 
 // #2405: the whole-file PUT is the repair path for every file GET answers with
@@ -373,7 +377,7 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, c := range files {
 		for _, caller := range repairCallers {
-			t.Run(c.name+"/"+caller.group, func(t *testing.T) {
+			t.Run(c.name+"/"+caller.name, func(t *testing.T) {
 				t.Parallel()
 				dir := setupConfigDir(t, map[string]string{id + ".yaml": c.body, "_defaults.yaml": caDefaults})
 				initGitRepo(t, dir)
@@ -397,7 +401,7 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				}
 
 				req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
-				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", []string{caller.group})
+				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
 				after := mustRead(t, filepath.Join(dir, id+".yaml"))
 				if !c.parseable && !caller.platformWritten {
 					if w.Code != http.StatusBadRequest {
@@ -425,27 +429,75 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 	}
 }
 
-// #2405: the dry-run (POST /validate) answers what this caller's PUT would:
-// over a file that cannot be parsed, invalid for a caller scoped to the
-// tenant, valid for a caller with write on all tenants.
+// #2405: in direct write mode the dry-run (POST /validate) answers what this
+// caller's PUT would: over a file that cannot be parsed, invalid for a caller
+// scoped to the tenant, valid for a caller with write on all tenants. (In PR
+// mode the dry-run checks only the body and cannot answer this.)
 func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
 	t.Parallel()
 	const id = "svc-alpha"
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, caller := range repairCallers {
-		t.Run(caller.group, func(t *testing.T) {
+		t.Run(caller.name, func(t *testing.T) {
 			t.Parallel()
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+id+"/validate", "id", id, bytes.NewBufferString(repaired))
-			w := servePopulatingRBAC(t, ValidateTenant(deps), req, "alice@example.com", []string{caller.group})
+			w := servePopulatingRBAC(t, ValidateTenant(deps), req, "alice@example.com", caller.groups)
 			var got ValidateResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
 				t.Fatalf("status = %d, err = %v; body: %s", w.Code, err, w.Body.String())
 			}
 			if got.Valid != caller.platformWritten {
 				t.Errorf("valid = %v, want %v; warnings: %q", got.Valid, caller.platformWritten, got.Warnings)
+			}
+		})
+	}
+}
+
+// #2405: the same rule in PR write mode — the caller's bit must reach
+// WritePR (local tree and origin hold the same file here, so this pins the
+// bit's path, not which of the two WritePR reads): over a
+// current file that cannot be parsed, a caller scoped to the tenant is refused
+// (400, no PR opened, no branch left behind); a caller with write on all
+// tenants gets the PR.
+func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
+	const id = "svc-alpha"
+	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
+	for _, caller := range repairCallers {
+		t.Run(caller.name, func(t *testing.T) {
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			runGit(t, dir, "branch", "-M", "main")
+			bare := t.TempDir()
+			runGit(t, bare, "init", "--bare", "-b", "main")
+			runGit(t, dir, "remote", "add", "origin", bare)
+			runGit(t, dir, "push", "origin", "main")
+			created := false
+			mc := &mockPlatformClient{providerName: "github", createPRFunc: func(title, body, head string, labels []string) (*platform.PRInfo, error) {
+				created = true
+				return &platform.PRInfo{Number: 7, WebURL: "https://example.invalid/pr/7", State: "open"}, nil
+			}}
+			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML),
+				WriteMode: WriteModePR, PRClient: mc, PRTracker: &mockPlatformTracker{}}
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
+			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
+			if caller.platformWritten {
+				if w.Code != http.StatusOK || !created {
+					t.Fatalf("status = %d, PR created = %v; want 200 and a PR; body: %s", w.Code, created, w.Body.String())
+				}
+				return
+			}
+			if w.Code != http.StatusBadRequest || created {
+				t.Fatalf("status = %d, PR created = %v; want 400 and no PR; body: %s", w.Code, created, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "write permission on all tenants") {
+				t.Errorf("refusal does not name the permission it needs: %s", w.Body.String())
+			}
+			branches, _ := exec.Command("git", "-C", dir, "branch", "--format=%(refname:short)").Output()
+			if strings.TrimSpace(string(branches)) != "main" {
+				t.Errorf("branch left behind:\n%s", branches)
 			}
 		})
 	}
